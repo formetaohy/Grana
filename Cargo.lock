@@ -3367,6 +3367,7 @@ dependencies = [
  "grana-mesh",
  "grana-model",
  "grana-object",
+ "grana-offline",
  "grana-optics",
  "grana-pipeline",
  "grana-project",
@@ -3423,6 +3424,7 @@ dependencies = [
  "grana-figure",
  "grana-gpu",
  "grana-image",
+ "grana-offline",
  "grana-pipeline",
  "grana-project",
  "grana-protocol",
@@ -3497,15 +3499,10 @@ version = "0.1.1"
 dependencies = [
  "glam",
  "grana-display",
- "grana-figure",
- "grana-gpu",
  "grana-object",
- "grana-raster",
  "grana-render",
  "grana-scene",
- "grana-tiff",
  "grana-ui",
- "grana-video",
  "grana-volume",
  "wgpu",
 ]
@@ -3618,6 +3615,25 @@ dependencies = [
  "grana-codec",
  "grana-geometry",
  "grana-volume",
+]
+
+[[package]]
+name = "grana-offline"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-display",
+ "grana-engine",
+ "grana-figure",
+ "grana-gpu",
+ "grana-raster",
+ "grana-render",
+ "grana-scene",
+ "grana-tiff",
+ "grana-ui",
+ "grana-video",
+ "grana-volume",
+ "wgpu",
 ]
 
 [[package]]

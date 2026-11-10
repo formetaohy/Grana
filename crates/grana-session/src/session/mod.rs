@@ -242,6 +242,11 @@ impl Session {
     pub(super) fn analysis_channels(&self) -> Option<Arc<grana_pipeline::Channels>> {
         self.channels.clone()
     }
+    pub fn image(&self) -> Option<Arc<grana_image::Image>> {
+        self.channels
+            .as_ref()
+            .map(|channels| channels.image_shared())
+    }
     pub fn measure(&self) -> &Measure {
         &self.measure
     }

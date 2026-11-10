@@ -77,6 +77,13 @@ impl Sequence {
         })?;
         Ok(self.directory.clone())
     }
+
+    pub fn discard(mut self) {
+        let Some(staging) = self.staging.take() else {
+            return;
+        };
+        let _ = std::fs::remove_dir_all(staging);
+    }
 }
 
 impl Drop for Sequence {

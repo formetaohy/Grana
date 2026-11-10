@@ -1,0 +1,25 @@
+[package]
+name = "grana-offline"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+grana-display = { workspace = true }
+grana-engine = { workspace = true }
+grana-figure = { workspace = true }
+grana-gpu = { workspace = true }
+grana-raster = { workspace = true }
+grana-render = { workspace = true }
+grana-scene = { workspace = true }
+grana-tiff = { workspace = true }
+grana-ui = { workspace = true }
+grana-video = { workspace = true }
+grana-volume = { workspace = true }
+wgpu = { workspace = true }
+
+[lints]
+workspace = true

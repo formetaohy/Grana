@@ -1,6 +1,8 @@
 mod app;
+mod bricks;
 mod cli;
 mod clipboard;
+mod export;
 mod snapshot;
 pub mod stream;
 

@@ -1,15 +1,33 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use glam::Vec3;
 use grana_display::{PaneKind, Panes};
-use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose};
+use grana_engine::Panels;
+use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, Scene};
-use grana_ui::{Rect, Ui, Vec2};
-use grana_volume::{BrickData, BrickGrid, Extent, Pyramid, Region, Spacing, Volume, VoxelData};
+use grana_ui::{Rect, Vec2};
+use grana_volume::{
+    BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
+};
 use wgpu::TextureFormat;
 
 use crate::support::{Gpu, Temp, gpu, spheres};
 
 const STAGE: [f32; 2] = [1000.0, 700.0];
 const WIDTH: u32 = 800;
+
+struct VolumeBricks {
+    volume: Volume,
+    pyramid: Pyramid,
+}
+
+impl Bricks for VolumeBricks {
+    fn read(&self, request: BrickRequest, _shift: [f32; 3]) -> Result<BrickData, String> {
+        let grid = BrickGrid::new(self.pyramid.level(request.level).extent());
+        Ok(self.volume.brick(&grid, request.coord))
+    }
+}
 
 fn export_volume() -> Volume {
     let extent = Extent::new(128, 128, 64);
@@ -33,22 +51,22 @@ fn panels() -> Panels {
     ])
 }
 
-fn upload(gpu: &Gpu, engine: &mut Engine, volume: &Volume, pyramid: &Pyramid) {
-    let Some(requests) = engine.poll_requests(gpu.device()) else {
-        return;
-    };
-    let mut bricks = Vec::new();
-    for request in requests
-        .volume
-        .iter()
-        .chain(&requests.section)
-        .chain(&requests.prefetch)
-    {
-        let grid = BrickGrid::new(pyramid.level(request.level).extent());
-        let data: BrickData = volume.brick(&grid, request.coord);
-        bricks.push((*request, data));
+fn offline(gpu: &Gpu) -> Offline {
+    Offline::new(
+        gpu.device().clone(),
+        gpu.queue().clone(),
+        TextureFormat::Rgba8Unorm,
+    )
+}
+
+fn task(volume: Volume, plan: Plan) -> Task {
+    let pyramid = volume.pyramid();
+    let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    Task {
+        plan,
+        scene,
+        bricks: Arc::new(VolumeBricks { volume, pyramid }),
     }
-    engine.upload(gpu.queue(), &bricks);
 }
 
 fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32; 2] {
@@ -63,36 +81,24 @@ fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32;
     );
     let panels = panels();
     let regions = panels.export(WIDTH, false);
-    let mut engine = Engine::new(gpu.device(), gpu.queue(), TextureFormat::Rgba8Unorm);
-    engine.set_dataset(gpu.device(), &pyramid);
-    engine
-        .start_export(
-            gpu.device(),
-            Plan {
-                destination,
-                panels,
-                width: WIDTH,
-                transparent,
-                poses: vec![Pose {
-                    time: 0,
-                    views: panes.views(),
-                }],
-                fps: 0,
-                region: Region::none(),
-            },
-        )
-        .expect("the export fits the device");
-    let mut ui: Ui<()> = Ui::new(gpu.device(), gpu.queue(), TextureFormat::Rgba8Unorm);
-    ui.resize(regions.size);
-    for _ in 0..4096 {
-        upload(gpu, &mut engine, &volume, &pyramid);
-        match engine.render_export(gpu.device(), gpu.queue(), &mut ui, &scene, 0) {
-            Outcome::Running => {}
-            Outcome::Complete { .. } => return regions.size,
-            Outcome::Failed { detail } => panic!("the export failed: {detail}"),
-        }
+    let plan = Plan {
+        destination,
+        panels,
+        width: WIDTH,
+        transparent,
+        poses: vec![Pose {
+            time: 0,
+            views: panes.views(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let mut context = offline(gpu);
+    match context.run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => regions.size,
+        Outcome::Failed { detail } => panic!("the export failed: {detail}"),
+        Outcome::Cancelled => panic!("the export was cancelled"),
     }
-    panic!("the export never completed");
 }
 
 fn read_plane(image: &grana_tiff::Image, channel: usize, size: [u32; 2]) -> Vec<u16> {
@@ -171,16 +177,7 @@ fn exports_a_transparent_sixteen_bit_ome_tiff() {
     );
 }
 
-#[test]
-fn rejects_a_sixteen_bit_still_beyond_the_texture_ceiling() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let temp = Temp::new("grana-export-huge");
-    let volume = export_volume();
-    let pyramid = volume.pyramid();
-    let mut engine = Engine::new(gpu.device(), gpu.queue(), TextureFormat::Rgba8Unorm);
-    engine.set_dataset(gpu.device(), &pyramid);
+fn still_plan(volume: &Volume, destination: Destination, width: u32) -> Plan {
     let mut panes = Panes::new();
     let spacing = volume.spacing();
     panes.fit(
@@ -188,25 +185,44 @@ fn rejects_a_sixteen_bit_still_beyond_the_texture_ceiling() {
         Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         [600.0 / STAGE[1], 400.0 / STAGE[1], 1.0, 1.0],
     );
-    let error = engine
-        .start_export(
-            gpu.device(),
-            Plan {
-                destination: Destination::Image {
-                    path: temp.path().join("huge.ome.tif"),
-                },
-                panels: panels(),
-                width: 16384,
-                transparent: false,
-                poses: vec![Pose {
-                    time: 0,
-                    views: panes.views(),
-                }],
-                fps: 0,
-                region: Region::none(),
-            },
-        )
-        .expect_err("a still beyond the wide texture ceiling is rejected");
+    Plan {
+        destination,
+        panels: panels(),
+        width,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            views: panes.views(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    }
+}
+
+fn rejects(gpu: &Gpu, plan: Plan, volume: Volume) -> String {
+    let mut context = offline(gpu);
+    match context.run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Failed { detail } => detail,
+        Outcome::Complete { .. } => panic!("the export was accepted"),
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+}
+
+#[test]
+fn rejects_a_sixteen_bit_still_beyond_the_texture_ceiling() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-huge");
+    let volume = export_volume();
+    let plan = still_plan(
+        &volume,
+        Destination::Image {
+            path: temp.path().join("huge.ome.tif"),
+        },
+        16384,
+    );
+    let error = rejects(&gpu, plan, volume);
     assert!(
         error.contains("texture memory"),
         "the rejection names the wide ceiling: {error}"
@@ -220,37 +236,139 @@ fn rejects_a_still_without_a_known_extension() {
     };
     let temp = Temp::new("grana-export-unknown");
     let volume = export_volume();
+    let plan = still_plan(
+        &volume,
+        Destination::Image {
+            path: temp.path().join("image.bmp"),
+        },
+        WIDTH,
+    );
+    let error = rejects(&gpu, plan, volume);
+    assert!(
+        error.contains("OME-TIFF"),
+        "the rejection names the supported stills: {error}"
+    );
+}
+
+#[test]
+fn cancels_an_export_without_leaving_a_partial_file() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-cancel");
+    let path = temp.path().join("movie.mp4");
+    let volume = export_volume();
     let pyramid = volume.pyramid();
     let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
-    let mut engine = Engine::new(gpu.device(), gpu.queue(), TextureFormat::Rgba8Unorm);
-    engine.set_dataset(gpu.device(), &pyramid);
     let mut panes = Panes::new();
     panes.fit(
         scene.dataset.world_size(),
         scene.dataset.voxel_size(),
         [1.0; 4],
     );
-    let error = engine
-        .start_export(
-            gpu.device(),
-            Plan {
-                destination: Destination::Image {
-                    path: temp.path().join("image.bmp"),
-                },
-                panels: panels(),
-                width: WIDTH,
-                transparent: false,
-                poses: vec![Pose {
-                    time: 0,
-                    views: panes.views(),
-                }],
-                fps: 0,
-                region: Region::none(),
+    let plan = Plan {
+        destination: Destination::Movie { path: path.clone() },
+        panels: panels(),
+        width: WIDTH,
+        transparent: false,
+        poses: vec![
+            Pose {
+                time: 0,
+                views: panes.views(),
             },
-        )
-        .expect_err("an unknown still extension is rejected");
+            Pose {
+                time: 0,
+                views: panes.views(),
+            },
+        ],
+        fps: 30,
+        region: Region::none(),
+    };
+    let cancel = AtomicBool::new(true);
+    let mut context = offline(&gpu);
+    match context.run(task(volume, plan), &cancel, &mut |_, _| {}) {
+        Outcome::Cancelled => {}
+        Outcome::Complete { .. } => panic!("the export was not cancelled"),
+        Outcome::Failed { detail } => panic!("the export failed: {detail}"),
+    }
     assert!(
-        error.contains("OME-TIFF"),
-        "the rejection names the supported stills: {error}"
+        !path.exists(),
+        "a cancelled movie leaves no partial file behind"
     );
+}
+
+#[test]
+fn runs_an_export_on_the_worker_thread() {
+    let temp = Temp::new("grana-export-worker");
+    let path = temp.path().join("image.png");
+    let volume = export_volume();
+    let pyramid = volume.pyramid();
+    let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    let mut panes = Panes::new();
+    panes.fit(
+        scene.dataset.world_size(),
+        scene.dataset.voxel_size(),
+        [1.0; 4],
+    );
+    let plan = Plan {
+        destination: Destination::Image { path: path.clone() },
+        panels: panels(),
+        width: 320,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            views: panes.views(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let mut worker = grana_offline::Worker::spawn();
+    let handle = worker.submit(task(volume, plan));
+    let started = std::time::Instant::now();
+    let mut progress = Vec::new();
+    let finished = loop {
+        let (events, alive) = worker.drain();
+        let mut finished = None;
+        for event in events {
+            match event {
+                grana_offline::Event::Progress { frame, total, .. } => {
+                    progress.push((frame, total));
+                }
+                grana_offline::Event::Finished { outcome, .. } => finished = Some(outcome),
+            }
+        }
+        if let Some(outcome) = finished {
+            break outcome;
+        }
+        assert!(alive, "the export worker stopped");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "the export worker never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(handle.id(), 1);
+    match finished {
+        Outcome::Complete { path: saved } => assert_eq!(saved, path),
+        Outcome::Failed { detail } => panic!("the export failed: {detail}"),
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+    assert!(path.exists(), "the worker writes the exported image");
+    assert!(
+        progress.contains(&(1, 1)),
+        "the worker reports the finished frame"
+    );
+}
+
+#[test]
+fn snapshots_a_scene_for_offline_rendering() {
+    let volume = export_volume();
+    let mut scene = Scene::new(Dataset::synthetic("export", volume.pyramid()));
+    scene.exposure = 1.5;
+    scene.shading.ambient = 0.6;
+    scene.set_window(0, 10.0, 4_000.0);
+    let restored = scene.snapshot().into_scene();
+    assert_eq!(restored.dataset.name(), "export");
+    assert_eq!(restored.exposure, 1.5);
+    assert_eq!(restored.state(), scene.state());
 }

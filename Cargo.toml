@@ -49,6 +49,7 @@ grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
 grana-glass = { version = "0.1.1", path = "crates/grana-glass" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
+grana-offline = { version = "0.1.1", path = "crates/grana-offline" }
 grana-app = { version = "0.1.1", path = "crates/grana-app" }
 grana-codec = { version = "0.1.1", path = "crates/grana-codec" }
 grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }
@@ -122,6 +123,7 @@ grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
 grana-model = { workspace = true }
 grana-object = { workspace = true }
+grana-offline = { workspace = true }
 grana-optics = { workspace = true }
 grana-pipeline = { workspace = true }
 grana-project = { workspace = true }

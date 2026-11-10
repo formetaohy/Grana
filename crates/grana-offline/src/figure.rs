@@ -3,21 +3,21 @@ use grana_display::{PANE_COUNT, PaneKind, PaneView};
 use grana_figure::{AnnotationItem, Caption, Label, Legend};
 use grana_ui::{Instance, Rect, Ui, Vec2};
 
-use crate::panels::Regions;
+use crate::plan::{camera, section};
 
 pub(crate) struct Figure<'a> {
-    pub regions: &'a Regions,
-    pub views: &'a [PaneView; PANE_COUNT],
-    pub labels: &'a [Label],
-    pub annotations: &'a [AnnotationItem],
-    pub world: Vec3,
-    pub voxel: Vec3,
-    pub legends: &'a [Legend],
-    pub caption: Option<&'a Caption>,
-    pub backdrop: bool,
+    pub(crate) regions: &'a grana_engine::Regions,
+    pub(crate) views: &'a [PaneView; PANE_COUNT],
+    pub(crate) labels: &'a [Label],
+    pub(crate) annotations: &'a [AnnotationItem],
+    pub(crate) world: Vec3,
+    pub(crate) voxel: Vec3,
+    pub(crate) legends: &'a [Legend],
+    pub(crate) caption: Option<&'a Caption>,
+    pub(crate) backdrop: bool,
 }
 
-pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Instance> {
+pub(crate) fn instances(ui: &mut Ui<()>, figure: Figure<'_>) -> Vec<Instance> {
     let scale = figure.regions.pixels_per_point;
     let first = figure
         .regions
@@ -40,7 +40,7 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
         let caption = if first { figure.caption } else { None };
         let mut built = match pane.kind {
             PaneKind::Volume => {
-                let camera = crate::output::restored_camera(&view);
+                let camera = camera(&view.camera);
                 let aspect = rect.width() / rect.height().max(1.0e-3);
                 let view_projection = camera.view_projection(aspect, 0.5 * figure.world.length());
                 let labels = grana_figure::volume_labels(
@@ -68,7 +68,7 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
                 )
             }
             PaneKind::Section => {
-                let section = crate::output::restored_section(&view);
+                let section = section(&view.section);
                 let labels = grana_figure::section_labels(figure.labels, &section, rect);
                 let annotations = grana_figure::section_annotations(
                     figure.annotations,

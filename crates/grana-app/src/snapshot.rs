@@ -1,23 +1,19 @@
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::{PANE_GAP, Panes};
-use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose};
-use grana_gpu::Headless;
+use grana_engine::Panels;
+use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
 use grana_scene::Scene;
-use grana_ui::{Rect, Ui, Vec2};
+use grana_ui::{Rect, Vec2};
+
+use crate::bricks::ImageBricks;
 
 const STAGE_WIDTH: f32 = 1000.0;
-const ATTEMPTS: usize = 4096;
 
 pub struct Snapshot {
-    state: Mutex<Option<State>>,
-}
-
-struct State {
-    gpu: Headless,
-    engine: Engine,
+    state: Mutex<Option<Offline>>,
 }
 
 impl Default for Snapshot {
@@ -33,12 +29,10 @@ impl Snapshot {
         }
     }
 
-    fn state(&self) -> Result<MutexGuard<'_, Option<State>>, String> {
+    fn state(&self) -> Result<MutexGuard<'_, Option<Offline>>, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.is_none() {
-            let gpu = Headless::new()?;
-            let engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
-            *state = Some(State { gpu, engine });
+            *state = Some(Offline::headless()?);
         }
         Ok(state)
     }
@@ -57,7 +51,7 @@ impl Snapshotter for Snapshot {
         path: &Path,
     ) -> Result<(), String> {
         let mut slot = self.state()?;
-        let State { gpu, engine } = slot.as_mut().expect("the snapshot state is ready");
+        let offline = slot.as_mut().expect("the offline context is ready");
         let mut panes = Panes::new();
         if let Some(view) = &request.view {
             panes.restore(view.panes);
@@ -76,12 +70,8 @@ impl Snapshotter for Snapshot {
                 }),
             );
         }
-        let mut ui: Ui<()> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
-        ui.resize(regions.size);
-        engine.set_dataset(&gpu.device, scene.dataset.pyramid());
-        engine.start_export(
-            &gpu.device,
-            Plan {
+        let task = Task {
+            plan: Plan {
                 destination: Destination::Image {
                     path: path.to_path_buf(),
                 },
@@ -95,36 +85,21 @@ impl Snapshotter for Snapshot {
                 fps: 0,
                 region: scene.region,
             },
-        )?;
-        let outcome = render(engine, gpu, &mut ui, channels, scene, path);
-        if outcome.is_err() {
-            engine.cancel_export();
-        }
-        engine.release_residency(&gpu.device);
-        outcome
-    }
-}
-
-fn render(
-    engine: &mut Engine,
-    gpu: &Headless,
-    ui: &mut Ui,
-    channels: &Channels,
-    scene: &Scene,
-    path: &Path,
-) -> Result<(), String> {
-    for _ in 0..ATTEMPTS {
-        pump(engine, gpu, channels, scene.drift())?;
-        match engine.render_export(&gpu.device, &gpu.queue, ui, scene, 0) {
-            Outcome::Running => {}
-            Outcome::Complete { .. } => return Ok(()),
-            Outcome::Failed { detail } => return Err(detail),
+            scene: scene.snapshot().into_scene(),
+            bricks: Arc::new(ImageBricks::new(Channels::render(
+                channels.image_shared(),
+                scene,
+            ))),
+        };
+        match offline.render(task) {
+            Outcome::Complete { .. } => Ok(()),
+            Outcome::Failed { detail } => Err(detail),
+            Outcome::Cancelled => Err(format!(
+                "the quality snapshot at {} was cancelled",
+                path.display()
+            )),
         }
     }
-    Err(format!(
-        "the quality snapshot at {} did not settle",
-        path.display()
-    ))
 }
 
 fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
@@ -149,36 +124,4 @@ fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
 
 fn aspect(region: [u32; 4]) -> f32 {
     region[2].max(1) as f32 / region[3].max(1) as f32
-}
-
-fn pump(
-    engine: &mut Engine,
-    gpu: &Headless,
-    channels: &Channels,
-    drift: &grana_scene::Drift,
-) -> Result<(), String> {
-    let Some(requests) = engine.poll_requests(&gpu.device) else {
-        return Ok(());
-    };
-    let mut bricks = Vec::with_capacity(
-        requests.volume.len() + requests.section.len() + requests.prefetch.len(),
-    );
-    for request in requests
-        .volume
-        .iter()
-        .chain(&requests.section)
-        .chain(&requests.prefetch)
-    {
-        let data = channels
-            .read_brick(
-                request.time,
-                request.level,
-                request.coord,
-                drift.offset(request.time),
-            )
-            .map_err(|error| error.to_string())?;
-        bricks.push((*request, data));
-    }
-    engine.upload(&gpu.queue, &bricks);
-    Ok(())
 }

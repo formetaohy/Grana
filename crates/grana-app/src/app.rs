@@ -9,8 +9,9 @@ use grana_editor::{
     AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Panel, Stage, ToolDrag, ViewStats,
     Workspace,
 };
-use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
+use grana_engine::{Engine, Panels, Picked, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
+use grana_offline::{Destination, Outcome, Plan, Pose};
 use grana_project::ViewState;
 use grana_render::FrameInfo;
 use grana_scene::{ObjectFrame, ObjectSetId, Revision};
@@ -26,9 +27,11 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::clipboard::SystemClipboard;
+use crate::export::{Export, Report};
 use crate::stream::{Stream, View as StreamView};
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
+const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
@@ -62,8 +65,7 @@ pub struct App {
     repaint_at: Option<Instant>,
     title: Option<String>,
     modifiers: ModifiersState,
-    message: Option<String>,
-    resume: Option<(u32, f32)>,
+    output: Option<String>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
     uploads: u64,
@@ -71,6 +73,7 @@ pub struct App {
     pick_toggle: bool,
     mask_path: Vec<[f32; 3]>,
     plate: Option<(String, usize)>,
+    export: Export,
 }
 
 impl App {
@@ -99,8 +102,7 @@ impl App {
             repaint_at: None,
             title: None,
             modifiers: ModifiersState::default(),
-            message: None,
-            resume: None,
+            output: None,
             ime: false,
             ime_area: None,
             uploads: 0,
@@ -108,6 +110,7 @@ impl App {
             pick_toggle: false,
             mask_path: Vec::new(),
             plate: None,
+            export: Export::new(),
         }
     }
 
@@ -156,6 +159,7 @@ impl App {
 
     fn redraw(&mut self) {
         self.session.poll();
+        self.poll_export();
         self.sync_plate_panel();
         if let Some(set) = self.workspace.seed
             && self
@@ -167,35 +171,20 @@ impl App {
         }
         self.exchange_bricks();
         self.poll_pick();
-        let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
-        if !exporting {
-            self.session.sync_measure();
-        }
-        let (mut commands, animating) = self.run_ui();
-        if exporting {
-            commands.retain(|command| matches!(command, grana_session::Command::CancelExport));
-        }
+        self.session.sync_measure();
+        let (commands, animating) = self.run_ui();
         self.sync_ime();
-        if !exporting {
-            self.interact_viewport();
-        }
+        self.interact_viewport();
         if self.apply(commands) {
             return;
         }
-        if !exporting {
-            self.session.apply_measure();
-        }
+        self.session.apply_measure();
         self.sync_title();
         self.advance_playback();
         self.advance_animation();
         self.fit_views();
-        let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
-        let mut delay = if exporting {
-            self.export_tick().unwrap_or(Duration::MAX)
-        } else {
-            self.render().unwrap_or(Duration::MAX)
-        };
-        if exporting || animating {
+        let mut delay = self.render().unwrap_or(Duration::MAX);
+        if animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
@@ -210,7 +199,23 @@ impl App {
         if self.workspace.playback.playing {
             delay = delay.min(PLAYBACK_INTERVAL);
         }
+        if self.export.running() {
+            delay = delay.min(EXPORT_POLL);
+        }
         self.schedule(delay);
+    }
+
+    fn poll_export(&mut self) {
+        for report in self.export.poll() {
+            self.output = Some(match report {
+                Report::Finished(Outcome::Complete { path }) => {
+                    format!("saved {}", grana_offline::name(&path))
+                }
+                Report::Finished(Outcome::Failed { detail }) => detail,
+                Report::Finished(Outcome::Cancelled) => "the export was cancelled".to_string(),
+                Report::Closed => "the export worker stopped".to_string(),
+            });
+        }
     }
 
     fn sync_plate_panel(&mut self) {
@@ -752,7 +757,7 @@ impl App {
                         },
                     },
                     Err(detail) => {
-                        self.message = Some(detail);
+                        self.output = Some(detail);
                         return;
                     }
                 };
@@ -938,18 +943,16 @@ impl App {
     fn run_ui(&mut self) -> (Vec<Command>, bool) {
         let App {
             surface,
-            engine,
             session,
             panes,
             stage,
             workspace,
             info,
+            export,
+            output,
             ..
         } = self;
         let Some(surface) = surface.as_mut() else {
-            return (Vec::new(), false);
-        };
-        let Some(engine) = engine.as_mut() else {
             return (Vec::new(), false);
         };
         let scale = surface.window.scale_factor() as f32;
@@ -960,8 +963,8 @@ impl App {
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());
         let adapter = surface.gpu.adapter.clone();
-        let exporting = engine.progress();
-        let export_message = engine.output_message();
+        let exporting = export.progress();
+        let export_message = output.clone();
         let view = SessionView {
             scene: session.scene(),
             measure: session.measure(),
@@ -1023,11 +1026,6 @@ impl App {
     }
 
     fn render(&mut self) -> Option<Duration> {
-        if self.engine.as_ref().is_some_and(Engine::exporting) {
-            let delay = self.export_tick();
-            self.present_ui();
-            return delay;
-        }
         let size = self.surface.as_ref()?.gpu.size();
         let scale = self.surface.as_ref()?.window.scale_factor() as f32;
         let regions = self.panels().screen(scale, size);
@@ -1038,6 +1036,7 @@ impl App {
             engine,
             session,
             panes,
+            output,
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
@@ -1061,7 +1060,7 @@ impl App {
             ) {
                 Ok(info) => info,
                 Err(detail) => {
-                    engine.set_output_message(Some(detail));
+                    *output = Some(detail);
                     return Some(Duration::ZERO);
                 }
             };
@@ -1116,46 +1115,9 @@ impl App {
         }
     }
 
-    fn export_tick(&mut self) -> Option<Duration> {
-        let Some(pose) = self.engine.as_ref().and_then(Engine::pose) else {
-            self.present_ui();
-            return Some(Duration::ZERO);
-        };
-        self.session.set_time(pose.time);
-        let outcome = {
-            let App {
-                surface,
-                engine,
-                session,
-                ..
-            } = self;
-            let (Some(surface), Some(engine), Some(scene)) =
-                (surface.as_mut(), engine.as_mut(), session.scene())
-            else {
-                return Some(Duration::ZERO);
-            };
-            engine.render_export(
-                &surface.gpu.device,
-                &surface.gpu.queue,
-                &mut surface.ui,
-                scene,
-                session.revision().raw(),
-            )
-        };
-        self.present_ui();
-        match outcome {
-            Outcome::Running => {}
-            Outcome::Complete { .. } => self.finish_export(),
-            Outcome::Failed { detail } => {
-                self.message = Some(detail);
-                self.finish_export();
-            }
-        }
-        Some(Duration::ZERO)
-    }
-
     fn export_ready(&mut self) -> bool {
-        if self.engine.as_ref().is_some_and(Engine::exporting) {
+        if self.export.running() {
+            self.set_output_message("wait for the running export to finish");
             return false;
         }
         if self.session.loading().is_some() {
@@ -1170,35 +1132,21 @@ impl App {
     }
 
     fn start_export(&mut self, plan: Plan) {
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(scene) = self.session.scene() else {
+            self.set_output_message("open a dataset before exporting");
             return;
         };
-        let Some(time) = self.session.scene().map(|scene| scene.time()) else {
+        let Some(image) = self.session.image() else {
+            self.set_output_message("the dataset is still opening");
             return;
         };
-        let position = self.workspace.playback.position;
-        let Some(engine) = self.engine.as_mut() else {
-            return;
-        };
-        match engine.start_export(&surface.gpu.device, plan) {
+        match self.export.start(plan, image, scene) {
             Ok(()) => {
-                self.resume = Some((time, position));
-                self.workspace.playback.previewing = false;
-                self.workspace.playback.playing = false;
-                self.last_advance = None;
-                self.last_animation = None;
-                self.message = None;
+                self.output = None;
                 self.repaint_at = Some(Instant::now());
             }
-            Err(detail) => self.message = Some(detail),
+            Err(detail) => self.output = Some(detail),
         }
-    }
-
-    fn finish_export(&mut self) {
-        if let Some((time, position)) = self.resume.take() {
-            self.restore_time(time, position);
-        }
-        self.repaint_at = Some(Instant::now());
     }
 
     fn begin_snapshot(&mut self) {
@@ -1337,24 +1285,12 @@ impl App {
     }
 
     fn cancel_export(&mut self) {
-        let Some(engine) = self.engine.as_mut() else {
-            return;
-        };
-        if engine.cancel_export() {
-            self.finish_export();
-        }
+        self.export.cancel();
         self.repaint_at = Some(Instant::now());
     }
 
     fn set_output_message(&mut self, message: &str) {
-        if let Some(engine) = self.engine.as_mut() {
-            engine.set_output_message(Some(message.to_string()));
-        }
-    }
-
-    fn restore_time(&mut self, time: u32, position: f32) {
-        self.session.set_time(time);
-        self.workspace.playback.position = position.clamp(0.0, self.session.timeline().duration());
+        self.output = Some(message.to_string());
     }
 
     fn present_ui(&mut self) {
@@ -1446,9 +1382,7 @@ impl App {
     }
 
     fn streaming(&self) -> bool {
-        let Some(engine) = self.engine.as_ref() else {
-            return false;
-        };
+        let engine = self.engine.as_ref();
         self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
             || self.session.loading().is_some()
@@ -1457,9 +1391,7 @@ impl App {
             || self.session.writing()
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
-            || engine.requests_pending()
-            || engine.pick_pending()
-            || engine.exporting()
+            || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
             || (self.session.scene().is_some()
                 && self
                     .info
@@ -1568,9 +1500,7 @@ impl App {
         let index = self.session.insert_keyframe(key);
         self.workspace.playback.position = at;
         self.workspace.playback.selected = Some(index);
-        if let Some(engine) = self.engine.as_mut() {
-            engine.set_output_message(None);
-        }
+        self.output = None;
         self.request_redraw();
     }
 
@@ -1762,10 +1692,8 @@ impl App {
                     .and_then(|scene| scene.annotations.selected());
                 if let Some(index) = annotation {
                     self.apply(vec![Command::RemoveAnnotation(index)]);
-                } else if self.session.delete_selected()
-                    && let Some(engine) = self.engine.as_mut()
-                {
-                    engine.set_output_message(None);
+                } else if self.session.delete_selected() {
+                    self.output = None;
                 }
             }
             Key::Character(ref text) if text.as_str().eq_ignore_ascii_case("h") => {
@@ -1780,14 +1708,15 @@ impl App {
         let commands = {
             let App {
                 surface,
-                engine,
                 session,
                 panes,
                 stage,
                 workspace,
+                export,
+                output,
                 ..
             } = self;
-            let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
+            let Some(surface) = surface.as_mut() else {
                 return false;
             };
             let adapter = surface.gpu.adapter.clone();
@@ -1796,7 +1725,7 @@ impl App {
                 measure: session.measure(),
                 timeline: session.timeline(),
                 jobs: session.progress(),
-                io: session.io(&adapter, engine.progress(), engine.output_message()),
+                io: session.io(&adapter, export.progress(), output.clone()),
                 batch: session.batch(),
                 history: session.history(),
                 series: session.series(),
@@ -1830,6 +1759,15 @@ impl App {
             .set_buttons(rfd::MessageButtons::YesNo)
             .show()
             == rfd::MessageDialogResult::Yes
+    }
+
+    fn confirm_export_close(&self) {
+        rfd::MessageDialog::new()
+            .set_title("Export running")
+            .set_description("An export is still writing its file. Cancel it before closing grana.")
+            .set_level(rfd::MessageLevel::Info)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
     }
 
     fn request_redraw(&self) {
@@ -2085,6 +2023,10 @@ impl ApplicationHandler for App {
         self.push_event(&event);
         match event {
             WindowEvent::CloseRequested => {
+                if self.export.running() {
+                    self.confirm_export_close();
+                    return;
+                }
                 if !self.dirty() || self.confirm_close() {
                     event_loop.exit();
                 }
@@ -2109,7 +2051,7 @@ impl ApplicationHandler for App {
                 } else if grana_session::is_image(&path) {
                     self.session.begin_load(path);
                 } else {
-                    self.message = Some(format!(
+                    self.output = Some(format!(
                         "{} is neither a supported image nor a grana project",
                         path.display()
                     ));
@@ -2141,6 +2083,8 @@ impl ApplicationHandler for App {
                 self.repaint_at = Some(Instant::now() + PLAYBACK_INTERVAL);
             } else if self.streaming() {
                 self.repaint_at = Some(Instant::now() + STREAM_POLL);
+            } else if self.export.running() {
+                self.repaint_at = Some(Instant::now() + EXPORT_POLL);
             }
         }
         let Some(deadline) = self.repaint_at else {
