@@ -765,6 +765,33 @@ pub fn apply(
                     camera.set_projection(projection);
                 }
             }
+            Message::ToggleSlice(enabled) => {
+                if let Some(scene) = view.scene {
+                    if enabled {
+                        let axis = camera.slice().map_or(2, |slice| slice.axis());
+                        crate::fitting::enter_slice(scene, camera, axis, stage.aspect());
+                    } else {
+                        camera.clear_slice();
+                    }
+                }
+            }
+            Message::SetSliceAxis(axis) => {
+                if let Some(scene) = view.scene
+                    && axis < 3
+                {
+                    crate::fitting::enter_slice(scene, camera, axis, stage.aspect());
+                }
+            }
+            Message::SetSliceDepth(at) => {
+                if let Some(scene) = view.scene {
+                    crate::fitting::set_slice_depth(scene, camera, at);
+                }
+            }
+            Message::StepSlice(steps) => {
+                if let Some(scene) = view.scene {
+                    crate::fitting::slice_step(scene, camera, steps);
+                }
+            }
             Message::SetAperture(value) => {
                 camera.set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
             }

@@ -61,6 +61,8 @@ impl Signature<'_> {
         let mut hasher = DefaultHasher::new();
         region.hash(&mut hasher);
         data.clip.map(f32::to_bits).hash(&mut hasher);
+        data.slice.map(f32::to_bits).hash(&mut hasher);
+        data.slice_view.map(f32::to_bits).hash(&mut hasher);
         data.region_center.map(f32::to_bits).hash(&mut hasher);
         for axis in data.region_axis {
             axis.map(f32::to_bits).hash(&mut hasher);

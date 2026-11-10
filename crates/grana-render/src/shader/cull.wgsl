@@ -111,7 +111,10 @@ fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let bounds = brick_box(volume_cell(index));
-    if (outside_frustum(bounds[0], bounds[1]) || outside_region_bounds(bounds[0], bounds[1])) {
+    if (outside_frustum(bounds[0], bounds[1])
+        || outside_region_bounds(bounds[0], bounds[1])
+        || outside_slice(bounds[0], bounds[1]))
+    {
         return;
     }
     if (!band_holds(bounds[0], bounds[1])) {
@@ -133,7 +136,10 @@ fn volume_scatter(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let bounds = brick_box(volume_cell(index));
-    if (outside_frustum(bounds[0], bounds[1]) || outside_region_bounds(bounds[0], bounds[1])) {
+    if (outside_frustum(bounds[0], bounds[1])
+        || outside_region_bounds(bounds[0], bounds[1])
+        || outside_slice(bounds[0], bounds[1]))
+    {
         return;
     }
     if (!band_holds(bounds[0], bounds[1])) {

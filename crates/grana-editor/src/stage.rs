@@ -40,6 +40,7 @@ pub struct Interaction {
     pub tool: Option<ToolDrag>,
     pub grab: Option<GrabDrag>,
     pub paint: Option<PaintDrag>,
+    pub slice: Option<i32>,
     pub modifiers: Modifiers,
 }
 
@@ -125,6 +126,7 @@ impl Stage {
             grabbed,
         } = intent;
         let mut interaction = Interaction::default();
+        let slice = camera.slice().is_some();
         let blocked = ui.pointer_over_chrome() || ui.pointer_over_widget() || ui.pointer_captured();
         let input = ui.input();
         self.modifiers = input.modifiers();
@@ -199,7 +201,7 @@ impl Stage {
                     Drag::Tool
                 } else if button == Button::Primary && grabbed {
                     Drag::Grab
-                } else if button == Button::Primary {
+                } else if button == Button::Primary && !slice {
                     Drag::Orbit
                 } else {
                     Drag::Pan
@@ -259,8 +261,14 @@ impl Stage {
             }
         }
         if !blocked && self.hovered && input.wheel().y != 0.0 {
-            camera.zoom(input.wheel().y);
-            interaction.camera = true;
+            let wheel = input.wheel().y;
+            if slice && (self.modifiers.control || self.modifiers.logo) {
+                interaction.slice = Some(if wheel > 0.0 { 1 } else { -1 });
+                interaction.camera = true;
+            } else {
+                camera.zoom(wheel);
+                interaction.camera = true;
+            }
         }
         if self.hovered && !blocked && (paint || tool.is_none()) && !grabbed {
             ui.set_cursor(if paint {

@@ -184,6 +184,20 @@ impl Timeline {
             hash = mix(hash, key.camera.projection.index() as u64);
             hash = mix(hash, u64::from(key.camera.aperture.to_bits()));
             hash = mix(hash, u64::from(key.camera.focus.to_bits()));
+            match key.camera.slice {
+                Some(slice) => {
+                    hash = mix(hash, 1);
+                    hash = mix(hash, slice.axis() as u64);
+                    for value in slice.right().to_array() {
+                        hash = mix(hash, u64::from(value.to_bits()));
+                    }
+                    for value in slice.up().to_array() {
+                        hash = mix(hash, u64::from(value.to_bits()));
+                    }
+                    hash = mix(hash, u64::from(slice.step().to_bits()));
+                }
+                None => hash = mix(hash, 0),
+            }
         }
         hash
     }
@@ -219,6 +233,23 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
         },
         aperture: lerp(from.camera.aperture, to.camera.aperture),
         focus: lerp(from.camera.focus, to.camera.focus),
+        slice: match (from.camera.slice, to.camera.slice) {
+            (Some(start), Some(end)) if start.axis() == end.axis() => {
+                Some(grana_display::Slice::new(
+                    start.axis(),
+                    start.right().to_array(),
+                    start.up().to_array(),
+                    lerp(start.step(), end.step()),
+                ))
+            }
+            (start, end) => {
+                if eased < 0.5 {
+                    start
+                } else {
+                    end
+                }
+            }
+        },
     };
     let time = lerp(from.time as f32, to.time as f32)
         .round()

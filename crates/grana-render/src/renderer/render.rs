@@ -32,11 +32,13 @@ impl Renderer {
         self.time = time;
         self.prefetch = prefetch;
         self.viewport = Some(viewport);
-        let translucent = scene
-            .styles
-            .iter()
-            .any(|style| style.visible() && style.transparent())
-            || scene.markers.iter().any(|marker| marker.transparent());
+        let slice = camera.slice().is_some();
+        let translucent = !slice
+            && (scene
+                .styles
+                .iter()
+                .any(|style| style.visible() && style.transparent())
+                || scene.markers.iter().any(|marker| marker.transparent()));
         let motion = view_motion(camera, viewport, bounds, time, exposure);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
@@ -356,10 +358,12 @@ impl Renderer {
                 *resident = Some(content);
             }
             markers.rewind(queue);
-            meshes.cull_volume(&mut encoder, scene_table.group());
-            markers.cull_volume(&mut encoder, scene_table.group());
-            if scene.shading.shadows > 0.0 {
-                meshes.cull_shadow(&mut encoder, scene_table.group());
+            if !slice {
+                meshes.cull_volume(&mut encoder, scene_table.group());
+                markers.cull_volume(&mut encoder, scene_table.group());
+                if scene.shading.shadows > 0.0 {
+                    meshes.cull_shadow(&mut encoder, scene_table.group());
+                }
             }
         }
         let sample_index = if reset && !assured && temporal.is_some() {
@@ -442,28 +446,30 @@ impl Renderer {
                     ao.clear_volume(&mut encoder);
                 }
                 ao.clear(&mut encoder);
-                meshes.draw_gbuffer(
-                    &mut encoder,
-                    ao.normal(),
-                    ao.depth(),
-                    viewport,
-                    scene_table.group(),
-                );
-                markers.draw_gbuffer(
-                    &mut encoder,
-                    ao.normal(),
-                    ao.depth(),
-                    viewport,
-                    scene_table.group(),
-                );
-                ao.evaluate(
-                    queue,
-                    &mut encoder,
-                    &data,
-                    AMBIENT_REACH,
-                    AMBIENT_STRENGTH,
-                    sample_index,
-                );
+                if !slice {
+                    meshes.draw_gbuffer(
+                        &mut encoder,
+                        ao.normal(),
+                        ao.depth(),
+                        viewport,
+                        scene_table.group(),
+                    );
+                    markers.draw_gbuffer(
+                        &mut encoder,
+                        ao.normal(),
+                        ao.depth(),
+                        viewport,
+                        scene_table.group(),
+                    );
+                    ao.evaluate(
+                        queue,
+                        &mut encoder,
+                        &data,
+                        AMBIENT_REACH,
+                        AMBIENT_STRENGTH,
+                        sample_index,
+                    );
+                }
             }
             scene_table.write_shadow_frame(queue, data);
             let channel_key = channel_style(scene.channels);
@@ -473,7 +479,7 @@ impl Renderer {
                     level: level_group,
                     atlas: atlas.group(),
                 };
-                if scene.shading.shadows > 0.0 {
+                if !slice && scene.shading.shadows > 0.0 {
                     let object = digest(&[content, space.digest()]);
                     if *object_key != Some(object) {
                         *object_key = Some(object);
@@ -503,31 +509,33 @@ impl Renderer {
             let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
             let oit = target.oit.as_ref().filter(|_| translucent);
             let oit_group: &BindGroup = oit.map_or(dummy_oit.read_group(), Oit::read_group);
-            meshes.draw_volume(
-                &mut encoder,
-                VolumeTargets {
-                    color: target.scene.color(),
-                    depth: target.scene.depth(),
-                },
-                viewport,
-                Lighting {
-                    shadow: shadow_group,
-                    ao: ao_group,
-                },
-            );
-            markers.draw_volume(
-                &mut encoder,
-                VolumeTargets {
-                    color: target.scene.color(),
-                    depth: target.scene.depth(),
-                },
-                viewport,
-                group,
-                Lighting {
-                    shadow: shadow_group,
-                    ao: ao_group,
-                },
-            );
+            if !slice {
+                meshes.draw_volume(
+                    &mut encoder,
+                    VolumeTargets {
+                        color: target.scene.color(),
+                        depth: target.scene.depth(),
+                    },
+                    viewport,
+                    Lighting {
+                        shadow: shadow_group,
+                        ao: ao_group,
+                    },
+                );
+                markers.draw_volume(
+                    &mut encoder,
+                    VolumeTargets {
+                        color: target.scene.color(),
+                        depth: target.scene.depth(),
+                    },
+                    viewport,
+                    group,
+                    Lighting {
+                        shadow: shadow_group,
+                        ao: ao_group,
+                    },
+                );
+            }
             if let Some(oit) = oit {
                 oit.clear(&mut encoder);
                 {

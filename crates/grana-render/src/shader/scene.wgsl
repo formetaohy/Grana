@@ -31,6 +31,8 @@ struct FrameData {
     projection: vec4<f32>,
     lens: vec4<f32>,
     sampling: vec4<f32>,
+    slice: vec4<f32>,
+    slice_view: vec4<f32>,
 }
 
 struct ChannelData {
@@ -291,4 +293,40 @@ fn clip_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
         return vec2<f32>(-1.0e20, crossing);
     }
     return vec2<f32>(crossing, 1.0e20);
+}
+
+fn slice_active() -> bool {
+    return frame.slice_view.y > 0.5;
+}
+
+fn slice_crossing(origin: vec3<f32>, direction: vec3<f32>) -> vec4<f32> {
+    let normal = frame.slice.xyz;
+    let rate = dot(normal, direction);
+    if (abs(rate) < 1.0e-9) {
+        return vec4<f32>(0.0);
+    }
+    let distance = (frame.slice.w - dot(normal, origin)) / rate;
+    if (distance <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let point = origin + direction * distance;
+    let local = level_local(0u, point);
+    if (any(local < vec3<f32>(0.0)) || any(local > vec3<f32>(1.0))) {
+        return vec4<f32>(0.0);
+    }
+    if (outside_region(point) || outside_clip(point)) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(point, 1.0);
+}
+
+fn outside_slice(low: vec3<f32>, high: vec3<f32>) -> bool {
+    if (!slice_active()) {
+        return false;
+    }
+    let normal = frame.slice.xyz;
+    let middle = dot(normal, 0.5 * (low + high)) - frame.slice.w;
+    let reach = dot(abs(normal), 0.5 * (high - low));
+    let half = frame.slice_view.x;
+    return middle + reach < -half || middle - reach > half;
 }

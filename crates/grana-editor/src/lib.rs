@@ -23,6 +23,7 @@ mod view;
 pub use grana_ui::widget;
 
 pub use command::shortcut;
+pub use fitting::slice_step;
 pub use message::{Message, PlotEvent};
 pub use panel::{Panel, apply, build};
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};

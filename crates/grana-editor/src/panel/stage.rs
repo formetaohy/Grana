@@ -32,7 +32,9 @@ pub(super) fn view<'a>(
     .layer(Layer::Content);
     elements.push(content);
     elements.push(overlay_view(state, layout));
-    elements.extend(region_handles(state, layout));
+    if state.camera.slice().is_none() {
+        elements.extend(region_handles(state, layout));
+    }
     elements.extend(recording_chip(ctx, layout, state));
     elements.extend(mask_bar(ctx, state, layout));
     elements
@@ -174,8 +176,17 @@ fn viewport<'a>(
 
 fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
-    let labels = overlay::labels(state.scene, state.scene.time());
-    let annotations = overlay::annotations(state.scene, state.scene.time());
+    let sliced = state.camera.slice().is_some();
+    let labels = if sliced {
+        Vec::new()
+    } else {
+        overlay::labels(state.scene, state.scene.time())
+    };
+    let annotations = if sliced {
+        Vec::new()
+    } else {
+        overlay::annotations(state.scene, state.scene.time())
+    };
     let layout = *layout;
     grana_ui::canvas(
         Length::Fill,

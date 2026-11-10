@@ -198,6 +198,20 @@ impl Encode for CameraState {
         writer.u8(self.projection.index() as u8);
         writer.f32(self.aperture);
         writer.f32(self.focus);
+        match self.slice {
+            Some(slice) => {
+                writer.bool(true);
+                writer.u8(slice.axis() as u8);
+                for value in slice.right().to_array() {
+                    writer.f32(value);
+                }
+                for value in slice.up().to_array() {
+                    writer.f32(value);
+                }
+                writer.f32(slice.step());
+            }
+            None => writer.bool(false),
+        }
     }
 }
 

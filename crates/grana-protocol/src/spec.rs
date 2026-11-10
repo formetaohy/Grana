@@ -213,6 +213,17 @@ pub struct CameraSpec {
     pub projection: String,
     pub aperture: f32,
     pub focus: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<SliceSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SliceSpec {
+    pub axis: u8,
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub step: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1974,6 +1985,7 @@ impl CameraSpec {
             projection: camera.projection.name().to_string(),
             aperture: camera.aperture,
             focus: camera.focus,
+            slice: SliceSpec::of(camera.slice),
         }
     }
 
@@ -1987,6 +1999,7 @@ impl CameraSpec {
             projection: self.mode().expect("a checked camera names a projection"),
             aperture: self.aperture,
             focus: self.focus,
+            slice: self.slice.and_then(SliceSpec::slice),
         }
     }
 
@@ -2009,12 +2022,30 @@ impl CameraSpec {
             || self.focus <= 0.0
             || self.focus > grana_display::APERTURE_LIMIT
             || self.mode().is_none()
+            || self.slice.is_some_and(|slice| slice.slice().is_none())
+            || (self.slice.is_some()
+                && self.mode() != Some(grana_display::CameraProjection::Orthographic))
         {
             return Err(ProtocolError::Invalid(
                 "a view describes a plausible camera".to_string(),
             ));
         }
         Ok(())
+    }
+}
+
+impl SliceSpec {
+    pub fn of(slice: Option<grana_display::Slice>) -> Option<Self> {
+        slice.map(|slice| Self {
+            axis: slice.axis() as u8,
+            right: slice.right().to_array(),
+            up: slice.up().to_array(),
+            step: slice.step(),
+        })
+    }
+
+    pub fn slice(self) -> Option<grana_display::Slice> {
+        grana_display::Slice::restore(self.axis as usize, self.right, self.up, self.step)
     }
 }
 

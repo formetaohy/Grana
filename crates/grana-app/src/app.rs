@@ -474,10 +474,11 @@ impl App {
                 .annotation_tool
                 .filter(|_| workspace.seed.is_none() && workspace.mask.is_none());
             let paint = workspace.mask.is_some();
+            let slice = camera.slice().is_some();
             let blocked = surface.ui.pointer_over_chrome()
                 || surface.ui.pointer_over_widget()
                 || surface.ui.pointer_captured();
-            let hovered = (!blocked && tool.is_none() && workspace.seed.is_none())
+            let hovered = (!blocked && !slice && tool.is_none() && workspace.seed.is_none())
                 .then(|| annotation_hit(surface, session, camera, stage))
                 .flatten();
             let pressed = surface.ui.input().button(UiButton::Primary).pressed;
@@ -495,6 +496,12 @@ impl App {
                 if let Some(scene) = session.scene() {
                     camera.clamp_focus(0.5 * scene.dataset.world_size());
                 }
+                surface.window.request_redraw();
+            }
+            if let Some(steps) = interaction.slice
+                && let Some(scene) = session.scene()
+            {
+                grana_editor::slice_step(scene, camera, steps);
                 surface.window.request_redraw();
             }
             let cursor = if paint || workspace.seed.is_some() || tool.is_some() {
@@ -516,16 +523,22 @@ impl App {
             self.workspace.annotation_drag = Some((index, part));
             self.apply(vec![Command::SelectAnnotation(Some(index))]);
         }
-        if let Some(tool) = interaction.tool {
+        if let Some(tool) = interaction.tool
+            && self.camera.slice().is_none()
+        {
             self.use_tool(tool);
         }
         if let Some(grab) = interaction.grab {
             self.drag_annotation(grab);
         }
-        if let Some(drag) = interaction.paint {
+        if let Some(drag) = interaction.paint
+            && self.camera.slice().is_none()
+        {
             self.paint_mask(drag);
         }
-        if let Some(point) = interaction.pick {
+        if let Some(point) = interaction.pick
+            && self.camera.slice().is_none()
+        {
             match self.workspace.seed {
                 Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
                 None => {
@@ -1581,6 +1594,13 @@ impl App {
         }
     }
 
+    fn step_slice(&mut self, steps: i32) {
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        grana_editor::slice_step(scene, &mut self.camera, steps);
+    }
+
     fn step_time(&mut self, delta: i64) {
         let Some(scene) = self.session.scene() else {
             return;
@@ -1691,6 +1711,9 @@ impl App {
             Key::Named(NamedKey::Space) => self.toggle_play(),
             Key::Named(NamedKey::ArrowRight) => self.step_time(1),
             Key::Named(NamedKey::ArrowLeft) => self.step_time(-1),
+            Key::Named(NamedKey::ArrowUp) if self.camera.slice().is_some() => self.step_slice(1),
+            Key::Named(NamedKey::ArrowDown) if self.camera.slice().is_some() => self.step_slice(-1),
+            Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => return,
             Key::Named(NamedKey::Escape) => {
                 if self.workspace.annotation_pending.take().is_none()
                     && self.workspace.annotation_tool.take().is_none()

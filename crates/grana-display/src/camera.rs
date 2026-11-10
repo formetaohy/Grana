@@ -1,4 +1,6 @@
-﻿use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
+
+use crate::slice::Slice;
 
 const PITCH_LIMIT: f32 = 1.45;
 const ORBIT_SENSITIVITY: f32 = 0.007;
@@ -66,6 +68,7 @@ pub struct CameraState {
     pub projection: CameraProjection,
     pub aperture: f32,
     pub focus: f32,
+    pub slice: Option<Slice>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +81,7 @@ pub struct Camera {
     projection: CameraProjection,
     aperture: f32,
     focus: f32,
+    slice: Option<Slice>,
 }
 
 impl Camera {
@@ -95,6 +99,7 @@ impl Camera {
             projection: CameraProjection::Perspective,
             aperture: 0.0,
             focus: 1.0,
+            slice: None,
         }
     }
 
@@ -115,7 +120,44 @@ impl Camera {
     }
 
     pub fn set_projection(&mut self, projection: CameraProjection) {
-        self.projection = projection;
+        if self.slice.is_none() {
+            self.projection = projection;
+        }
+    }
+
+    pub fn slice(&self) -> Option<Slice> {
+        self.slice
+    }
+
+    pub fn set_slice(&mut self, slice: Slice) {
+        self.slice = Some(slice);
+        self.projection = CameraProjection::Orthographic;
+    }
+
+    pub fn clear_slice(&mut self) {
+        self.slice = None;
+    }
+
+    pub fn fit_slice(&mut self, center: Vec3, half_width: f32, half_height: f32, aspect: f32) {
+        assert!(self.slice.is_some(), "a slice view holds a plane frame");
+        assert!(aspect > 0.0, "aspect ratio must be positive");
+        assert!(
+            center.is_finite() && half_width.is_finite() && half_height.is_finite(),
+            "a slice view fits a finite plane"
+        );
+        assert!(
+            half_width > 0.0 && half_height > 0.0,
+            "a slice view fits a positive plane"
+        );
+        let reach = half_height.max(half_width / aspect);
+        self.pivot = center;
+        self.distance = (reach / (self.fov_y * 0.5).tan() * 1.06).max(1.0e-4);
+    }
+
+    pub fn place_slice(&mut self, center: Vec3) {
+        assert!(self.slice.is_some(), "a slice view holds a plane frame");
+        assert!(center.is_finite(), "a slice plane sits at a finite point");
+        self.pivot = center;
     }
 
     pub fn aperture(&self) -> f32 {
@@ -147,20 +189,32 @@ impl Camera {
     }
 
     pub fn eye(&self) -> Vec3 {
+        if let Some(slice) = self.slice {
+            return self.pivot + slice.normal() * self.distance;
+        }
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
         self.pivot + Vec3::new(cos_pitch * sin_yaw, sin_pitch, cos_pitch * cos_yaw) * self.distance
     }
 
     pub fn forward(&self) -> Vec3 {
+        if let Some(slice) = self.slice {
+            return slice.forward();
+        }
         (self.pivot - self.eye()).normalize()
     }
 
     pub fn right(&self) -> Vec3 {
+        if let Some(slice) = self.slice {
+            return slice.right();
+        }
         self.forward().cross(Vec3::Y).normalize()
     }
 
     pub fn up(&self) -> Vec3 {
+        if let Some(slice) = self.slice {
+            return slice.up();
+        }
         self.right().cross(self.forward())
     }
 
@@ -191,6 +245,14 @@ impl Camera {
     pub fn view_projection(&self, aspect: f32, scene_radius: f32) -> Mat4 {
         assert!(aspect > 0.0, "aspect ratio must be positive");
         assert!(scene_radius > 0.0, "scene radius must be positive");
+        if let Some(slice) = self.slice {
+            let half = self.half_height();
+            let near = (self.distance - 0.5 * slice.step()).max(1.0e-6);
+            let far = self.distance + 0.5 * slice.step();
+            let projection =
+                Mat4::orthographic_rh(-half * aspect, half * aspect, -half, half, near, far);
+            return projection * Mat4::look_at_rh(self.eye(), self.pivot, self.up());
+        }
         let far = self.distance + scene_radius * 4.0;
         let projection = match self.projection {
             CameraProjection::Perspective => {
@@ -242,6 +304,9 @@ impl Camera {
     }
 
     pub fn fit(&mut self, world_size: Vec3, aspect: f32) {
+        if self.slice.is_some() {
+            return;
+        }
         assert!(world_size.length() > 0.0, "world size must be positive");
         assert!(aspect > 0.0, "aspect ratio must be positive");
         let half = 0.5 * world_size;
@@ -268,6 +333,9 @@ impl Camera {
     }
 
     pub fn orbit(&mut self, delta: Vec2) {
+        if self.slice.is_some() {
+            return;
+        }
         self.yaw -= delta.x * ORBIT_SENSITIVITY;
         self.pitch = (self.pitch + delta.y * ORBIT_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
@@ -299,6 +367,7 @@ impl Camera {
             projection: self.projection,
             aperture: self.aperture,
             focus: self.focus,
+            slice: self.slice,
         }
     }
 
@@ -312,6 +381,7 @@ impl Camera {
             projection,
             aperture,
             focus,
+            slice,
         } = state;
         assert!(
             pivot.iter().all(|value| value.is_finite())
@@ -333,8 +403,13 @@ impl Camera {
         self.pitch = pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
         self.distance = distance;
         self.fov_y = fov_y;
-        self.projection = projection;
+        self.projection = if slice.is_some() {
+            CameraProjection::Orthographic
+        } else {
+            projection
+        };
         self.aperture = aperture;
         self.focus = focus;
+        self.slice = slice;
     }
 }

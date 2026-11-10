@@ -301,7 +301,7 @@ impl Decode for CameraState {
         for value in &mut pivot {
             *value = finite(reader.f32()?)?;
         }
-        let state = Self {
+        let mut state = Self {
             pivot,
             yaw: finite(reader.f32()?)?,
             pitch: finite(reader.f32()?)?,
@@ -311,11 +311,28 @@ impl Decode for CameraState {
                 .ok_or(FAULT_VALUE)?,
             aperture: non_negative(reader.f32()?)?,
             focus: positive(reader.f32()?)?,
+            slice: None,
         };
+        if reader.bool()? {
+            let axis = reader.u8()? as usize;
+            let mut right = [0.0; 3];
+            for value in &mut right {
+                *value = finite(reader.f32()?)?;
+            }
+            let mut up = [0.0; 3];
+            for value in &mut up {
+                *value = finite(reader.f32()?)?;
+            }
+            let step = positive(reader.f32()?)?;
+            state.slice =
+                Some(grana_display::Slice::restore(axis, right, up, step).ok_or(FAULT_VALUE)?);
+        }
         if state.fov_y <= 1.0f32.to_radians()
             || state.fov_y >= 179.0f32.to_radians()
             || state.aperture > grana_display::APERTURE_LIMIT
             || state.focus > grana_display::APERTURE_LIMIT
+            || (state.slice.is_some()
+                && state.projection != grana_display::CameraProjection::Orthographic)
         {
             return Err(FAULT_VALUE);
         }

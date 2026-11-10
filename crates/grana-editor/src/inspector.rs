@@ -255,6 +255,7 @@ pub fn view_body<'a>(
         views(ctx, state),
         display(ctx, state),
         camera(ctx, state),
+        slice(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
     ]);
@@ -271,14 +272,21 @@ fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         Some(projection.label()),
     )];
     let modes = grana_display::CameraProjection::ALL.map(grana_display::CameraProjection::label);
-    let selector = view::segmented_fill(
-        ctx,
-        "camera.projection",
-        &modes,
-        projection.index(),
-        Message::SetCameraProjection,
-    );
-    children.push(view::form_row(ctx, "Projection", selector));
+    if camera.slice().is_some() {
+        children.push(view::caption(
+            ctx,
+            "A slice view samples one plane orthographically.",
+        ));
+    } else {
+        let selector = view::segmented_fill(
+            ctx,
+            "camera.projection",
+            &modes,
+            projection.index(),
+            Message::SetCameraProjection,
+        );
+        children.push(view::form_row(ctx, "Projection", selector));
+    }
     if projection.orthographic() {
         children.push(view::caption(
             ctx,
@@ -1423,6 +1431,63 @@ fn unit_step(field: RelationField) -> f32 {
         | RelationField::Contact
         | RelationField::Partner
         | RelationField::Overlapping => 1.0,
+    }
+}
+
+fn slice<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let key = Key::new("slice");
+    let open = state.workspace.disclosures.is_open(key);
+    let active = crate::fitting::slice_position(state.scene, state.camera());
+    let detail = active
+        .map(|(axis, index, count, _)| format!("{} · {} / {}", axis_name(axis), index + 1, count));
+    let mut children = Vec::new();
+    if open {
+        children.push(
+            grana_ui::widget::toggle_row(&theme, "Slice View", active.is_some())
+                .named("slice.enabled")
+                .on_toggle(Message::ToggleSlice),
+        );
+        if let Some((axis, _, _, at)) = active {
+            children.push(view::segmented_fill(
+                ctx,
+                "slice.axis",
+                &["X", "Y", "Z"],
+                axis,
+                Message::SetSliceAxis,
+            ));
+            let readout = detail.clone().unwrap_or_default();
+            children.push(view::slider_event(
+                ctx,
+                "slice.depth",
+                Some("Depth"),
+                at,
+                0.0..=1.0,
+                &readout,
+                Message::SetSliceDepth,
+            ));
+            children.push(view::caption(
+                ctx,
+                "One unlit voxel layer; drag pans, scroll zooms, ↑↓ or Ctrl-scroll steps.",
+            ));
+        }
+    }
+    view::disclosure_card(
+        ctx,
+        key,
+        Icon::Layers,
+        "Slice View",
+        Some(detail.as_deref().unwrap_or("Off")),
+        children,
+        open,
+    )
+}
+
+fn axis_name(axis: usize) -> &'static str {
+    match axis {
+        0 => "X",
+        1 => "Y",
+        _ => "Z",
     }
 }
 

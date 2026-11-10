@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_display::{Camera, OutputSize};
+use grana_display::{Camera, OutputSize, Slice};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, Scene};
 use grana_volume::{
@@ -359,4 +359,77 @@ fn snapshots_a_scene_for_offline_rendering() {
     assert_eq!(restored.dataset.name(), "export");
     assert_eq!(restored.exposure, 1.5);
     assert_eq!(restored.state(), scene.state());
+}
+
+#[test]
+fn exports_a_slice_view() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = export_volume();
+    let pyramid = volume.pyramid();
+    let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    let size = output(WIDTH, false);
+    let level = pyramid.level(0);
+    let frame = level.slice_frame(2);
+    let mut camera = Camera::new(35.0);
+    camera.set_slice(Slice::new(2, frame.right(), frame.up(), frame.step()));
+    camera.fit_slice(
+        Vec3::from(level.slice_center(2, 32)),
+        frame.half_width(),
+        frame.half_height(),
+        aspect(size),
+    );
+    let temp = Temp::new("grana-export-slice");
+    let path = temp.path().join("slice.png");
+    let plan = Plan {
+        destination: Destination::Image { path: path.clone() },
+        size,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            camera: camera.state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let task = Task {
+        plan,
+        scene,
+        bricks: Arc::new(VolumeBricks { volume, pyramid }),
+    };
+    match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => {}
+        Outcome::Failed { detail } => panic!("the slice export failed: {detail}"),
+        Outcome::Cancelled => panic!("the slice export was cancelled"),
+    }
+    let image = grana_raster::read(&path).expect("the slice export writes an image");
+    assert_eq!(image.size(), size.to_array());
+    let [width, height] = size.to_array();
+    let total = (width * height) as usize;
+    let bright = |pixel: &[u8]| pixel[..3].iter().any(|value| *value > 120);
+    let painted = image
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| bright(&pixel[..]))
+        .count();
+    assert!(
+        painted > total / 200,
+        "the slice export paints {painted} of {total} pixels"
+    );
+    assert!(
+        painted < total / 2,
+        "the slice export paints {painted} of {total} pixels"
+    );
+    let centre = 4 * ((height / 2) * width + width / 2) as usize;
+    assert!(
+        bright(&image.pixels()[centre..]),
+        "the slice export misses the middle of the volume"
+    );
+    assert!(
+        !bright(&image.pixels()[..4]),
+        "the slice export fills the corner of the frame"
+    );
 }

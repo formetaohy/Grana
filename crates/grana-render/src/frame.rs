@@ -42,6 +42,8 @@ pub(crate) struct FrameData {
     pub projection: [f32; 4],
     pub lens: [f32; 4],
     pub sampling: [f32; 4],
+    pub slice: [f32; 4],
+    pub slice_view: [f32; 4],
 }
 
 #[repr(C)]
@@ -62,7 +64,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1312);
+    assert!(size_of::<FrameData>() == 1344);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -76,6 +78,8 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, projection) == 1264);
     assert!(std::mem::offset_of!(FrameData, lens) == 1280);
     assert!(std::mem::offset_of!(FrameData, sampling) == 1296);
+    assert!(std::mem::offset_of!(FrameData, slice) == 1312);
+    assert!(std::mem::offset_of!(FrameData, slice_view) == 1328);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -115,6 +119,17 @@ impl FrameData {
         } = view;
         let first = tables[0];
         let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
+        let (slice, slice_view) = match camera.slice() {
+            Some(frame) => {
+                let plane = frame.plane(camera.pivot());
+                let normal = plane.normal();
+                (
+                    [normal.x, normal.y, normal.z, plane.offset()],
+                    [0.5 * plane.thickness(), 1.0, 0.0, 0.0],
+                )
+            }
+            None => ([0.0; 4], [0.0; 4]),
+        };
         let step = step_length(camera, first, step_scale);
         let pixel_scale = camera.pixels_per_world(height);
         let sampling = pixel_scale;
@@ -197,6 +212,8 @@ impl FrameData {
             ],
             lens: [0.0, 0.0, camera.focus(), camera.aperture()],
             sampling: [sampling, 0.0, 0.0, 0.0],
+            slice,
+            slice_view,
         }
     }
 }

@@ -17,9 +17,9 @@ pub use spec::{
     EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec,
     MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, NodeSpec,
     PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RelationSpec,
-    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec,
-    SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
-    VolumeSpec, WindowSpec,
+    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec,
+    SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec,
+    TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;

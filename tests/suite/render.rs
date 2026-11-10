@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Camera, Shading, TransferFunction, VolumeStyle};
+use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
@@ -1624,5 +1624,172 @@ fn rebuilds_the_scene_only_when_its_content_changes() {
     assert!(
         changed_info.rebuilt,
         "a new content revision kept the previous scene"
+    );
+}
+
+fn slice_camera(pyramid: &Pyramid, index: u32) -> Camera {
+    let level = pyramid.level(0);
+    let frame = level.slice_frame(2);
+    let mut camera = Camera::new(35.0);
+    camera.set_slice(Slice::new(2, frame.right(), frame.up(), frame.step()));
+    camera.fit_slice(
+        Vec3::from(level.slice_center(2, index)),
+        frame.half_width(),
+        frame.half_height(),
+        1.0,
+    );
+    camera
+}
+
+#[test]
+fn samples_one_unlit_slice_and_rejects_other_planes() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let target = texture(&gpu, SIDE);
+    let view = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let camera = slice_camera(&pyramid, 16);
+    let taken = snapshot(
+        &gpu,
+        &mut renderer,
+        &View {
+            target: &view,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            assured: true,
+        },
+        &target,
+        &volume,
+    );
+    let coverage = taken.coverage(WHOLE);
+    assert!(
+        (0.04..0.2).contains(&coverage),
+        "the slice covers {coverage} of the target"
+    );
+    let centre = [SIDE / 2 - 2, SIDE / 2 - 2, SIDE / 2 + 2, SIDE / 2 + 2];
+    assert_eq!(
+        taken.painted(centre),
+        16,
+        "the slice misses the middle of the sphere"
+    );
+    assert_eq!(
+        taken.painted([2, 2, 12, 12]),
+        0,
+        "the slice paints outside the sphere"
+    );
+    let empty = slice_camera(&pyramid, 0);
+    let blank = snapshot(
+        &gpu,
+        &mut renderer,
+        &View {
+            target: &view,
+            camera: &empty,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            assured: true,
+        },
+        &target,
+        &volume,
+    );
+    assert_eq!(
+        blank.painted(WHOLE),
+        0,
+        "a plane away from the sphere samples it anyway"
+    );
+}
+
+#[test]
+fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let single = volume.pyramid();
+    let pyramid = Pyramid::new(
+        single.levels().to_vec(),
+        single.stored(),
+        single.channels().to_vec(),
+        2,
+        1.0,
+    );
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let target = texture(&gpu, SIDE);
+    let camera = slice_camera(&pyramid, 16);
+    let mut panned = camera.clone();
+    panned.pan(glam::Vec2::new(6.0, -4.0), SIDE as f32);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let (_, first) = take(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &Take {
+            texture: &target,
+            camera: &camera,
+            scene: &scene,
+            time: 0,
+            samples: 8,
+            history: None,
+        },
+    );
+    assert!(!first.seeded, "the first take invents a history");
+    let (_, second) = take(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &Take {
+            texture: &target,
+            camera: &panned,
+            scene: &scene,
+            time: 1,
+            samples: 1,
+            history: Some(TEMPORAL),
+        },
+    );
+    assert!(second.seeded, "a panned slice discards its history");
+    assert!(second.history, "the panned slice holds no history");
+    let moved = slice_camera(&pyramid, 18);
+    let (_, third) = take(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &Take {
+            texture: &target,
+            camera: &moved,
+            scene: &scene,
+            time: 1,
+            samples: 1,
+            history: Some(TEMPORAL),
+        },
+    );
+    assert!(
+        !third.seeded,
+        "another plane reuses the history of the old one"
     );
 }

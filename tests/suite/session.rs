@@ -450,10 +450,60 @@ fn view_state() -> ViewState {
             projection: grana_display::CameraProjection::Perspective,
             aperture: 0.0,
             focus: 10.0,
+            slice: None,
         },
         timeline: Timeline::default(),
         export: Export::NATIVE,
     }
+}
+
+#[test]
+fn round_trips_a_slice_camera_through_project_and_protocol() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    let level = session
+        .scene()
+        .expect("the series opens")
+        .dataset
+        .pyramid()
+        .level(0);
+    let frame = level.slice_frame(2);
+    let slice = grana_display::Slice::new(2, frame.right(), frame.up(), frame.step());
+    let mut view = view_state();
+    view.camera.slice = Some(slice);
+    view.camera.projection = grana_display::CameraProjection::Orthographic;
+    let spec = ViewSpec::of(&view, 0);
+    let text = serde_json::to_string(&spec).expect("the view serializes");
+    let restored: ViewSpec = serde_json::from_str(&text).expect("the view parses");
+    assert_eq!(
+        restored.camera().slice,
+        Some(slice),
+        "the protocol drops the slice plane"
+    );
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "nuclei".to_string(),
+        },
+        view,
+        Vec::new(),
+        Fingerprint::new([11; 32]),
+    );
+    let temp = Temp::new("suite-slice");
+    let path = temp.path().join("slice.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the slice project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the slice project reads");
+    assert_eq!(loaded, project, "the slice camera survives a project");
 }
 
 #[test]
