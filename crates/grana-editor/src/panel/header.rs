@@ -554,8 +554,5 @@ fn frame_budget(profile: crate::state::ProfileStats) -> String {
         return "measuring".to_string();
     }
     let marker = if profile.over_budget() { "over" } else { "of" };
-    format!(
-        "{:.2} ms {marker} {:.0} ms · ×{:.2}",
-        profile.total, profile.target, profile.penalty
-    )
+    format!("{:.2} ms {marker} {:.0} ms", profile.total, profile.target)
 }

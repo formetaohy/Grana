@@ -16,7 +16,6 @@ use grana_volume::{
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
 
 const SIDE: u32 = 128;
-const WIDE: u32 = 1536;
 const SAMPLES: u32 = 4;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
@@ -79,43 +78,6 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         prefetch: false,
         level_cap: usize::MAX,
         assured: view.assured,
-        temporal: None,
-    }
-}
-
-fn wide<'a, 'b>(
-    target: &'a wgpu::TextureView,
-    camera: &'a Camera,
-    scene: &'a SceneFrame<'b>,
-    assured: bool,
-) -> Frame<'a, 'b> {
-    Frame {
-        target,
-        size: [WIDE, WIDE],
-        panes: [
-            Some(PaneFrame::Volume {
-                camera,
-                lens: Lens {
-                    camera,
-                    aspect: 1.0,
-                },
-                region: [0, 0, WIDE, WIDE],
-            }),
-            None,
-            None,
-            None,
-        ],
-        time: 0,
-        region: Region::none(),
-        clip: Clip::none(),
-        exposure: 1.0,
-        samples: SAMPLES,
-        scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
-        prefetch: false,
-        level_cap: usize::MAX,
-        assured,
         temporal: None,
     }
 }
@@ -475,7 +437,6 @@ fn streams_and_shades_two_channels() {
     );
     let profile = profile(&gpu, &mut renderer, &view);
     assert!(profile.target > 0.0, "the frame carries no budget");
-    assert!(profile.penalty >= 1.0, "the sampling is finer than asked");
     if renderer.profiled() {
         assert!(profile.measured(), "the frame is not timed");
         assert!(profile.stage(grana_render::Stage::Volume) > 0.0);
@@ -619,33 +580,6 @@ fn follows_the_refresh_rate_of_the_display() {
         grana_render::frame_target(Some(1_000)),
         40.0,
         "a one hertz display keeps a ceiling"
-    );
-}
-
-#[test]
-fn fits_the_volume_sampling_to_the_frame_budget() {
-    let mut governor = grana_render::Governor::new(16.0);
-    assert_eq!(
-        governor.decide(true, true),
-        1.0,
-        "a fresh governor samples as asked"
-    );
-    for _ in 0..8 {
-        governor.observe(30.0, 32.0, 1.0);
-    }
-    assert!(
-        governor.decide(true, true) > 1.0,
-        "a sustained overrun coarsens the samples"
-    );
-    assert_eq!(
-        governor.decide(true, false),
-        1.0,
-        "a frozen frame samples as asked"
-    );
-    assert_eq!(
-        governor.decide(false, true),
-        1.0,
-        "a resting view samples as asked"
     );
 }
 
@@ -1245,133 +1179,6 @@ fn clips_an_oriented_region() {
         shot.hue(shot.right(), Hue::Green) < 20,
         "the oriented region kept the dropped ball: {} pixels",
         shot.hue(shot.right(), Hue::Green)
-    );
-}
-
-fn stream_wide(
-    gpu: &Gpu,
-    renderer: &mut Renderer,
-    volume: &Volume,
-    target: &wgpu::TextureView,
-    scene: &SceneFrame<'_>,
-    camera: &Camera,
-    assured: bool,
-) -> grana_render::FrameInfo {
-    let grid = BrickGrid::new(volume.extent());
-    renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        wide(target, camera, scene, assured),
-    );
-    for _ in 0..64 {
-        if let Some(requests) = next_demand(gpu, renderer) {
-            let bricks = requests
-                .volume
-                .iter()
-                .chain(&requests.section)
-                .map(|request| (*request, volume.brick(&grid, request.coord)))
-                .collect::<Vec<_>>();
-            renderer.upload(gpu.queue(), &bricks);
-        }
-        let info = renderer.draw(
-            gpu.device(),
-            gpu.queue(),
-            wide(target, camera, scene, assured),
-        );
-        if !renderer.requests_pending() && info.samples >= SAMPLES && info.settled {
-            return info;
-        }
-    }
-    panic!("the wide frame never settled");
-}
-
-fn wide_brightness(pixels: &[[u8; 4]]) -> f64 {
-    let total = pixels
-        .iter()
-        .map(|pixel| pixel[0] as u64 + pixel[1] as u64 + pixel[2] as u64)
-        .sum::<u64>();
-    total as f64 / pixels.len() as f64
-}
-
-#[test]
-fn lowers_the_volume_sampling_to_fit_the_budget() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let scene = SceneFrame {
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, WIDE);
-    let view = target.create_view(&Default::default());
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let resting = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &camera, true);
-    assert_eq!(
-        resting.profile.penalty, 1.0,
-        "a view inside the frame budget samples as asked"
-    );
-    let settled = read_pixels(&gpu, &target, [WIDE, WIDE]);
-    assert!(
-        wide_brightness(&settled) > 1.0,
-        "the resting volume rendered nothing"
-    );
-    let mut moved = Camera::new(35.0);
-    moved.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mut state = moved.state();
-    state.yaw = 0.35;
-    moved.restore(state);
-    let mut penalty = 1.0;
-    renderer.set_frame_target(0.5);
-    for _ in 0..24 {
-        let mut state = moved.state();
-        state.yaw += 0.01;
-        moved.restore(state);
-        penalty = renderer
-            .draw(
-                gpu.device(),
-                gpu.queue(),
-                wide(&view, &moved, &scene, false),
-            )
-            .profile
-            .penalty;
-        gpu.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("failed to wait for the gpu");
-    }
-    assert!(
-        penalty > 1.0,
-        "a moving view that overruns its budget coarsens its samples"
-    );
-    let returning = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &moved, true);
-    assert_eq!(
-        returning.profile.penalty, 1.0,
-        "an assured frame samples as asked"
-    );
-    let fine = read_pixels(&gpu, &target, [WIDE, WIDE]);
-    let fine_mean = wide_brightness(&fine);
-    assert!(
-        fine_mean > 1.0,
-        "the settled volume rendered nothing: {fine_mean}"
-    );
-    let mut other = Camera::new(35.0);
-    other.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mut state = other.state();
-    state.yaw = -0.4;
-    other.restore(state);
-    let assured = renderer.draw(gpu.device(), gpu.queue(), wide(&view, &other, &scene, true));
-    assert_eq!(
-        assured.profile.penalty, 1.0,
-        "an assured frame samples as asked"
     );
 }
 

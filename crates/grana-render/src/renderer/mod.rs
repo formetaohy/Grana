@@ -1,5 +1,4 @@
 mod feedback;
-mod quality;
 mod render;
 mod residency;
 mod signature;
@@ -72,8 +71,6 @@ const RECORD_SHARE: u64 = 8;
 const FADE_DRAWS: f32 = 10.0;
 
 const UNIT: f32 = 65535.0;
-
-pub use quality::Governor;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -275,10 +272,8 @@ pub struct Renderer {
     oit_readback: [Readback; PANE_COUNT],
     dropped: [u32; PANE_COUNT],
     profile: Option<Profiler>,
-    governor: Governor,
     measured: [f32; STAGE_COUNT],
-    sampled: bool,
-    interactive: bool,
+    frame_target: f32,
     sequence: u64,
     info: FrameInfo,
 }
@@ -366,10 +361,8 @@ impl Renderer {
             }),
             dropped: [0; PANE_COUNT],
             profile: Profiler::new(device, queue),
-            governor: Governor::new(crate::profile::frame_target(None)),
             measured: [0.0; STAGE_COUNT],
-            sampled: false,
-            interactive: false,
+            frame_target: crate::profile::frame_target(None),
             sequence: 0,
             info: FrameInfo::default(),
         }
@@ -405,7 +398,11 @@ impl Renderer {
     }
 
     pub fn set_frame_target(&mut self, target: f32) {
-        self.governor.retarget(target);
+        assert!(
+            target.is_finite() && target > 0.0,
+            "a frame budget is a positive duration"
+        );
+        self.frame_target = target;
     }
 
     pub fn reserve(
@@ -455,7 +452,6 @@ impl Renderer {
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.prefetch_rate = 1.0;
-        self.sampled = false;
         self.frames.fill(None);
         self.motion = [None; PANE_COUNT];
         self.info = FrameInfo::default();
@@ -599,7 +595,6 @@ impl Renderer {
         {
             self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
             self.convergence.forget();
-            self.governor.forget();
             self.settled = None;
         }
         let mut target = self.target.take().expect("the frame target is ready");
@@ -609,20 +604,12 @@ impl Renderer {
         if let Some(profile) = self.profile.as_mut()
             && let Some(measured) = profile.poll(device)
         {
-            if self.sampled && self.interactive && !self.exporting {
-                self.governor.observe(
-                    measured.stage(Stage::Volume),
-                    measured.total,
-                    measured.penalty,
-                );
-            }
             self.measured = measured.stages;
         }
         info.profile = FrameProfile {
             stages: self.measured,
             total: self.measured.iter().sum(),
-            target: self.governor.target(),
-            penalty: info.profile.penalty,
+            target: self.frame_target,
         };
         info
     }

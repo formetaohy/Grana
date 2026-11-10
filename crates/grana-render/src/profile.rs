@@ -81,7 +81,6 @@ pub struct FrameProfile {
     pub stages: [f32; STAGE_COUNT],
     pub total: f32,
     pub target: f32,
-    pub penalty: f32,
 }
 
 impl FrameProfile {
@@ -111,7 +110,6 @@ pub struct Profiler {
     readback: Readback,
     period: f32,
     frames: VecDeque<Vec<Stage>>,
-    penalties: VecDeque<f32>,
 }
 
 impl Profiler {
@@ -142,7 +140,6 @@ impl Profiler {
             readback,
             period: queue.get_timestamp_period(),
             frames: VecDeque::new(),
-            penalties: VecDeque::new(),
         })
     }
 
@@ -154,7 +151,7 @@ impl Profiler {
         marks.phases.push(stage);
     }
 
-    pub fn finish(&mut self, encoder: &mut CommandEncoder, marks: Marks, penalty: f32) {
+    pub fn finish(&mut self, encoder: &mut CommandEncoder, marks: Marks) {
         let count = marks.phases.len();
         if count < 2 {
             return;
@@ -172,7 +169,6 @@ impl Profiler {
             (count as u64 + 1) * STAMP_BYTES,
         );
         self.frames.push_back(marks.phases);
-        self.penalties.push_back(penalty);
     }
 
     fn stamp(&self, encoder: &mut CommandEncoder, index: u32) {
@@ -193,7 +189,6 @@ impl Profiler {
     pub fn poll(&mut self, device: &Device) -> Option<FrameProfile> {
         let (_, bytes) = self.readback.take(device)?;
         let phases = self.frames.pop_front()?;
-        let penalty = self.penalties.pop_front()?;
         let (stamps, _) = bytes.as_chunks::<8>();
         let stamps = stamps
             .iter()
@@ -212,7 +207,6 @@ impl Profiler {
             stages,
             total,
             target: 0.0,
-            penalty,
         })
     }
 }

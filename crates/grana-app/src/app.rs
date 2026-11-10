@@ -1875,7 +1875,6 @@ fn profile_stats(profile: grana_render::FrameProfile) -> grana_editor::ProfileSt
     let mut stats = grana_editor::ProfileStats {
         total: profile.total,
         target: profile.target,
-        penalty: profile.penalty,
         measured: profile.measured(),
         ..Default::default()
     };

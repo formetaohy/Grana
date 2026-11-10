@@ -34,7 +34,7 @@ pub use marker::Marker;
 pub use pick::PickId;
 pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage, frame_target};
 pub use renderer::{
-    CutInfo, Frame, FrameInfo, Governor, Lens, OitInfo, PaneFrame, Renderer, Requests, ViewInfo,
+    CutInfo, Frame, FrameInfo, Lens, OitInfo, PaneFrame, Renderer, Requests, ViewInfo,
 };
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};
 pub use temporal::Temporal;

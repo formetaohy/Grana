@@ -70,16 +70,9 @@ impl Renderer {
                 )
             })
         });
-        let moved: [bool; PANE_COUNT] =
-            std::array::from_fn(|index| motion[index] != self.motion[index]);
-        let interactive = moved.iter().any(|moved| *moved);
-        self.interactive = interactive;
-        let frozen = self.exporting || assured;
-        let penalty = self.governor.decide(interactive, !frozen);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = motion;
-        self.info.profile.penalty = penalty;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
@@ -127,7 +120,6 @@ impl Renderer {
             dummy_ao,
             budget,
             profile,
-            sampled,
             oit_readback,
             dropped,
             ..
@@ -172,7 +164,7 @@ impl Renderer {
         let limits = Limits { first, ceiling };
         let allowed = limits.count(pyramid);
         let steps: [f32; PANE_COUNT] =
-            std::array::from_fn(|index| scene.step_scale * pane_quality[index].scale() * penalty);
+            std::array::from_fn(|index| scene.step_scale * pane_quality[index].scale());
         let active = panes.iter().flatten().count();
         assert!(active > 0, "a frame draws at least one pane");
         let share = (slots / active).max(1);
@@ -555,7 +547,6 @@ impl Renderer {
             convergence.reset();
         }
         info.samples = target.samples;
-        *sampled = false;
         let mut marks = Marks::new();
         let first_pane = panes
             .iter()
@@ -752,7 +743,6 @@ impl Renderer {
         if target.samples < samples && ready {
             target.samples += 1;
             info.samples = target.samples;
-            *sampled = true;
             let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
             let volume_visible: [bool; PANE_COUNT] = std::array::from_fn(|index| {
                 rows[index]
@@ -1235,7 +1225,7 @@ impl Renderer {
             frames[slot] = Some(residency);
         }
         if let Some(profiler) = profile.as_mut() {
-            profiler.finish(&mut encoder, marks, penalty);
+            profiler.finish(&mut encoder, marks);
         }
         queue.submit([encoder.finish()]);
         convergence.register();

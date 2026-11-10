@@ -40,7 +40,6 @@ pub struct ProfileStats {
     pub rows: [(&'static str, f32); PROFILE_ROWS],
     pub total: f32,
     pub target: f32,
-    pub penalty: f32,
     pub measured: bool,
 }
 
@@ -50,7 +49,6 @@ impl Default for ProfileStats {
             rows: [("", 0.0); PROFILE_ROWS],
             total: 0.0,
             target: 0.0,
-            penalty: 1.0,
             measured: false,
         }
     }
