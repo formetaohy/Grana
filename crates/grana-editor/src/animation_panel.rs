@@ -212,7 +212,7 @@ fn keyframe_track<'a>(
                     Vec2::new(rect.min.x, rect.min.y),
                     Vec2::new(rect.max.x, rect.max.y - 12.0),
                 ),
-                "Add a keyframe to animate the camera and section",
+                "Add a keyframe to animate the camera and time",
                 empty,
                 Align::Center,
             );
@@ -250,8 +250,8 @@ fn keyframe_list<'a>(
             "{:>6.2}s · F{:>2} · Yaw {:>5.2} · Dist {:>6.1}",
             key.at,
             key.time + 1,
-            key.views[0].camera.yaw,
-            key.views[0].camera.distance
+            key.camera.yaw,
+            key.camera.distance
         );
         let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, move |painter, info| {
             if active {
@@ -306,9 +306,9 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let interval = state.io.frame_interval;
     let running = state.io.exporting;
     let theme = *ctx.theme();
-    let rects = state.stage.rects();
-    let stage_width = (rects[1].max.x - rects[0].min.x).max(1.0);
-    let stage_height = rects[0].height().max(1.0);
+    let rects = state.stage.viewport();
+    let stage_width = rects.width().max(1.0);
+    let stage_height = rects.height().max(1.0);
     let movie_size = [
         width,
         even((width as f32 * stage_height / stage_width).round() as u32),
@@ -419,8 +419,8 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let running = state.io.exporting;
     let frames = state.io.frames;
     let message = state.io.export_message.clone();
-    let rects = state.stage.rects();
-    let stage_width = (rects[1].max.x - rects[0].min.x).max(1.0);
+    let rects = state.stage.viewport();
+    let stage_width = rects.width().max(1.0);
     let resolved_width = if image_width == 0 {
         (stage_width * ctx.scale()).round() as u32
     } else {

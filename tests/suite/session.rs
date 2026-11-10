@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use grana_animation::Timeline;
-use grana_display::{CameraState, SectionState};
+use grana_display::CameraState;
 use grana_geometry::GeometryStore;
 use grana_measure::MeasureView;
 use grana_object::{
@@ -440,7 +440,7 @@ fn measures_imported_objects_without_statistics() {
 }
 
 fn view_state() -> ViewState {
-    let view = grana_display::PaneView {
+    ViewState {
         camera: CameraState {
             pivot: [0.0, 0.0, 0.0],
             yaw: 0.0,
@@ -451,39 +451,6 @@ fn view_state() -> ViewState {
             aperture: 0.0,
             focus: 10.0,
         },
-        section: SectionState {
-            center: [0.0, 0.0, 0.0],
-            azimuth: 0.0,
-            elevation: 0.0,
-            span: 20.0,
-            projection: grana_display::SectionProjection::Plane,
-            thickness: 2.0,
-        },
-        channels: grana_display::ChannelMask::of(0b10),
-        quality: grana_display::Quality::High,
-    };
-    ViewState {
-        panes: [
-            grana_display::PaneState {
-                kind: grana_display::PaneKind::Volume,
-                view,
-            },
-            grana_display::PaneState {
-                kind: grana_display::PaneKind::Section,
-                view,
-            },
-            grana_display::PaneState {
-                kind: grana_display::PaneKind::Section,
-                view,
-            },
-            grana_display::PaneState {
-                kind: grana_display::PaneKind::Section,
-                view,
-            },
-        ],
-        layout: grana_display::PaneLayout::Split,
-        split: 0.5,
-        row: 0.5,
         timeline: Timeline::default(),
         export: Export::NATIVE,
     }
@@ -741,9 +708,8 @@ fn round_trips_a_project() {
     scene.set_volume_mode(0, grana_display::VolumeMode::Isosurface);
     scene.set_isovalue(0, 0.35);
     let mut view = view_state();
-    view.layout = grana_display::PaneLayout::Quad;
-    view.split = 0.55;
-    view.row = 0.45;
+    view.camera.yaw = 0.55;
+    view.camera.distance = 12.0;
     let project = Project::capture(
         &scene,
         &Measure::new(),
@@ -780,18 +746,14 @@ fn saves_and_applies_named_views() {
     assert_eq!(session.views().len(), 1, "the view is saved");
     assert_eq!(session.views()[0].name, "View 1");
     let mut moved = view_state();
-    moved.panes[0].view.camera.yaw = 0.5;
-    moved.split = 0.4;
+    moved.camera.yaw = 0.5;
     session.observe_view(moved.clone());
     session.execute(Command::SaveView);
     assert_eq!(session.views()[1].name, "View 2");
     session.execute(Command::ApplyView(0));
     let applied = session.take_view().expect("the saved view restores");
-    assert_eq!(
-        applied.panes[0].view.camera.yaw, 0.0,
-        "the first view keeps its camera"
-    );
-    assert_eq!(applied.split, view_state().split);
+    assert_eq!(applied.camera.yaw, 0.0, "the first view keeps its camera");
+    assert_eq!(applied.camera.focus, view_state().camera.focus);
     session.execute(Command::RemoveView(0));
     assert_eq!(session.views().len(), 1, "the view is removed");
     assert_eq!(session.views()[0].name, "View 2");
@@ -1016,9 +978,8 @@ fn keeps_each_well_scene_until_the_well_returns() {
     let view = session
         .take_view()
         .expect("the first well keeps its camera");
-    assert_eq!(view.panes[0].view.camera.distance, 10.0);
-    assert_eq!(view.panes[0].view.section.span, 20.0);
-    assert_eq!(view.split, 0.5);
+    assert_eq!(view.camera.distance, 10.0);
+    assert_eq!(view.camera.focus, 10.0);
     assert!(
         session.history().undo.is_some(),
         "the first well keeps its history"

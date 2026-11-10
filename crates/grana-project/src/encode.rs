@@ -1,7 +1,5 @@
 use grana_animation::{Keyframe, Timeline};
-use grana_display::{
-    CameraState, Palette, PaneState, PaneView, SectionState, Shading, Stop, TransferFunction,
-};
+use grana_display::{CameraState, Palette, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{
     ChildField, ChildMetric, ClassifierState, Filter, Measurement, TrackMeasurement,
@@ -158,30 +156,9 @@ impl Encode for Source {
 
 impl Encode for ViewState {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        for pane in &self.panes {
-            pane.encode(writer);
-        }
-        writer.u8(self.layout.index() as u8);
-        writer.f32(self.split);
-        writer.f32(self.row);
+        self.camera.encode(writer);
         self.timeline.encode(writer);
         self.export.encode(writer);
-    }
-}
-
-impl Encode for PaneState {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.u8(self.kind.index() as u8);
-        self.view.encode(writer);
-    }
-}
-
-impl Encode for PaneView {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        self.camera.encode(writer);
-        self.section.encode(writer);
-        writer.u32(self.channels.hidden());
-        writer.u8(self.quality.index() as u8);
     }
 }
 
@@ -205,9 +182,7 @@ impl Encode for Keyframe {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.at);
         writer.u32(self.time);
-        for view in &self.views {
-            view.encode(writer);
-        }
+        self.camera.encode(writer);
     }
 }
 
@@ -223,19 +198,6 @@ impl Encode for CameraState {
         writer.u8(self.projection.index() as u8);
         writer.f32(self.aperture);
         writer.f32(self.focus);
-    }
-}
-
-impl Encode for SectionState {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        for value in self.center {
-            writer.f32(value);
-        }
-        writer.f32(self.azimuth);
-        writer.f32(self.elevation);
-        writer.f32(self.span);
-        writer.u8(self.projection.index() as u8);
-        writer.f32(self.thickness);
     }
 }
 

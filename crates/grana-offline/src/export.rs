@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use grana_display::{Camera, PaneKind};
-use grana_render::{FrameInfo, Lens, PaneFrame, Renderer};
+use grana_display::Camera;
+use grana_render::{FrameInfo, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -9,7 +9,7 @@ use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, Textur
 use crate::capture;
 use crate::compose::Composer;
 use crate::figure::{self, Figure};
-use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, section, still};
+use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
 
 const DEVIATION_TO_SIGMA: f32 = 1.2533;
@@ -46,7 +46,7 @@ pub(crate) struct Export {
     history: bool,
     temporal: Option<grana_render::Temporal>,
     deviations: std::collections::VecDeque<f32>,
-    regions: grana_engine::Regions,
+    viewport: grana_engine::Viewport,
     lens: Option<(Camera, u32)>,
     transparent: bool,
     draw: (Texture, TextureView),
@@ -61,7 +61,6 @@ impl Export {
     ) -> Result<Self, String> {
         let Plan {
             destination,
-            panels,
             size,
             transparent,
             poses,
@@ -84,26 +83,21 @@ impl Export {
             !movie || size.height().is_multiple_of(2) && size.width().is_multiple_of(2),
             "a movie frame holds an even number of pixels"
         );
-        let regions = panels.export(size);
-        assert_eq!(
-            regions.size,
-            size.to_array(),
-            "the exported regions cover the planned size"
-        );
+        let viewport = grana_engine::Viewport::export(size);
         let limit = device.limits().max_texture_dimension_2d;
-        if regions.size[0] > limit || regions.size[1] > limit {
+        if viewport.size[0] > limit || viewport.size[1] > limit {
             return Err(format!(
                 "a {} × {} export exceeds the {limit} pixel limit of this device",
-                regions.size[0], regions.size[1]
+                viewport.size[0], viewport.size[1]
             ));
         }
         let kind = match &destination {
             Destination::Image { path } => Some(still(path)?),
             _ => None,
         };
-        let draw = capture::texture(device, "grana.export", format, regions.size);
+        let draw = capture::texture(device, "grana.export", format, viewport.size);
         let draw_view = draw.create_view(&TextureViewDescriptor::default());
-        let overlay = capture::texture(device, "grana.export.overlay", format, regions.size);
+        let overlay = capture::texture(device, "grana.export.overlay", format, viewport.size);
         let overlay_view = overlay.create_view(&TextureViewDescriptor::default());
         let sink = match destination {
             Destination::Image { path } => match kind.expect("the still was classified") {
@@ -111,7 +105,7 @@ impl Export {
                 Still::Tiff => Sink::Tiff { path },
             },
             Destination::Movie { path } => Sink::Movie {
-                recorder: grana_video::Recorder::start(&path, regions.size, fps, transparent)
+                recorder: grana_video::Recorder::start(&path, viewport.size, fps, transparent)
                     .map_err(|error| error.to_string())?,
                 path,
             },
@@ -131,7 +125,7 @@ impl Export {
             IMAGE_SAMPLE_FLOOR
         };
         let error = if movie { MOVIE_ERROR } else { IMAGE_ERROR };
-        let lens = detail_lens(&poses, &regions);
+        let lens = detail_lens(&poses, viewport.size[1]);
         let temporal = movie.then(|| grana_render::Temporal::new(TEMPORAL_HISTORY));
         Ok(Self {
             sink: Some(sink),
@@ -147,7 +141,7 @@ impl Export {
             history: false,
             temporal,
             deviations: std::collections::VecDeque::new(),
-            regions,
+            viewport,
             lens,
             transparent,
             draw: (draw, draw_view),
@@ -173,7 +167,7 @@ impl Export {
     }
 
     pub(crate) fn size(&self) -> [u32; 2] {
-        self.regions.size
+        self.viewport.size
     }
 
     pub(crate) fn render(
@@ -190,25 +184,7 @@ impl Export {
             composer,
         } = context;
         let pose = self.poses[self.frame];
-        let cameras = pose.views.map(|view| camera(&view.camera));
-        let sections = pose.views.map(|view| section(&view.section));
-        let panes = std::array::from_fn(|index| {
-            let pane = self.regions.panes[index]?;
-            match pane.kind {
-                PaneKind::Volume => Some(PaneFrame::Volume {
-                    camera: &cameras[index],
-                    lens: Lens {
-                        camera: &cameras[index],
-                        aspect: pane.region[2].max(1) as f32 / pane.region[3].max(1) as f32,
-                    },
-                    region: pane.region,
-                }),
-                PaneKind::Section => Some(PaneFrame::Section {
-                    section: &sections[index],
-                    region: pane.region,
-                }),
-            }
-        });
+        let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
         let frame = rendered.frame();
         let info = renderer.draw(
@@ -216,16 +192,15 @@ impl Export {
             queue,
             grana_render::Frame {
                 target: &self.draw.1,
-                size: self.regions.size,
-                panes,
+                size: self.viewport.size,
+                camera: &camera,
+                viewport: self.viewport.region,
                 time: scene.time(),
                 region: scene.region,
                 clip: scene.clip,
                 exposure: scene.exposure,
                 samples: self.samples,
                 scene: &frame,
-                pane_channels: pose.views.map(|view| view.channels),
-                pane_quality: pose.views.map(|view| view.quality),
                 prefetch: false,
                 level_cap: usize::MAX,
                 assured: true,
@@ -242,7 +217,7 @@ impl Export {
             self.floor = self.base_floor;
         }
         if info.truncated {
-            return self.fail(truncation(&info, &self.regions));
+            return self.fail(truncation(&info));
         }
         if let Some((samples, deviation)) = renderer.convergence(device) {
             self.deviations.push_back(deviation);
@@ -311,19 +286,18 @@ impl Export {
         let instances = figure::instances(
             ui,
             Figure {
-                regions: &self.regions,
-                views: &drawn.pose.views,
+                viewport: &self.viewport,
+                camera: &camera(&drawn.pose.camera),
                 world: drawn.scene.dataset.world_size(),
                 labels: &labels,
                 annotations: &annotations,
-                voxel: drawn.scene.dataset.voxel_size(),
                 legends: &legends,
                 caption: Some(&caption),
                 backdrop: !self.transparent,
             },
         );
-        let size = self.regions.size;
-        let scale = self.regions.pixels_per_point;
+        let size = self.viewport.size;
+        let scale = self.viewport.pixels_per_point;
         let overlay = &self.overlay.1;
         ui.flush(drawn.queue);
         let mut encoder = drawn
@@ -404,15 +378,8 @@ struct Drawn<'a> {
     pose: Pose,
 }
 
-fn truncation(info: &FrameInfo, regions: &grana_engine::Regions) -> String {
-    let held = info
-        .panes
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| regions.panes[*index].is_some())
-        .map(|(_, pane)| *pane)
-        .max_by_key(|pane| pane.visible.saturating_sub(pane.demand))
-        .unwrap_or_default();
+fn truncation(info: &FrameInfo) -> String {
+    let held = info.view;
     format!(
         "an export at this size needs {} bricks at level {} but only {} fit in the residency budget; lower the export width or zoom in",
         held.visible, held.level, held.demand

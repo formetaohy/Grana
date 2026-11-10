@@ -85,7 +85,6 @@ pub(crate) struct Atlas {
     identity: HashMap<(u32, usize, usize), u32>,
     hollow: HashSet<(u32, usize, usize)>,
     pruned: Option<u32>,
-    bytes: u64,
 }
 
 impl Atlas {
@@ -163,12 +162,6 @@ impl Atlas {
                 },
             ],
         });
-        let bytes = capacity as u64
-            * (slot_side as u64).pow(3)
-            * components
-                .iter()
-                .map(|count| pack_bytes(pack_texels(*count)))
-                .sum::<u64>();
         Self {
             textures,
             components,
@@ -179,7 +172,6 @@ impl Atlas {
             identity: HashMap::new(),
             hollow: HashSet::new(),
             pruned: None,
-            bytes,
         }
     }
 
@@ -195,23 +187,12 @@ impl Atlas {
         self.slots.len()
     }
 
-    pub fn bytes(&self) -> u64 {
-        self.bytes
-    }
-
     pub fn slot(&self, time: u32, level: usize, index: usize) -> Option<u32> {
         self.identity.get(&(time, level, index)).copied()
     }
 
     pub fn is_hollow(&self, time: u32, level: usize, index: usize) -> bool {
         self.hollow.contains(&(time, level, index))
-    }
-
-    pub fn hollow_count(&self, time: u32, level: usize) -> usize {
-        self.hollow
-            .iter()
-            .filter(|(hollow_time, hollow_level, _)| *hollow_time == time && *hollow_level == level)
-            .count()
     }
 
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {

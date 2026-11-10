@@ -1,10 +1,7 @@
+use grana_display::Camera;
 use grana_volume::{PADDED_SIDE, Pyramid, Region};
 
-use crate::PANE_COUNT;
-use crate::PaneFrame;
-use crate::planner::{
-    LadderView, Limits, section_brick_count, select_section_level, volume_counts, volume_ladder,
-};
+use crate::planner::{LadderView, Limits, volume_counts, volume_ladder};
 
 pub const EXPORT_CEILING: u64 = 4 << 30;
 
@@ -16,30 +13,11 @@ pub struct Detail {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Residency {
-    pub panes: [Option<Detail>; PANE_COUNT],
+    pub detail: Detail,
     pub slots: usize,
 }
 
-#[derive(Clone, Copy, Default)]
-struct Spread {
-    count: usize,
-    total: usize,
-    widest: usize,
-}
-
-impl Spread {
-    fn push(&mut self, bricks: usize) {
-        self.count += 1;
-        self.total += bricks;
-        self.widest = self.widest.max(bricks);
-    }
-}
-
-pub fn residency(
-    pyramid: &Pyramid,
-    panes: &[Option<PaneFrame<'_>>; PANE_COUNT],
-    region: Region,
-) -> Residency {
+pub fn residency(pyramid: &Pyramid, camera: &Camera, height: u32, region: Region) -> Residency {
     assert!(
         pyramid.level_count() > 0,
         "a pyramid holds at least one level"
@@ -48,56 +26,30 @@ pub fn residency(
         first: 0,
         ceiling: pyramid.level_count() - 1,
     };
-    let mut details = [None; PANE_COUNT];
-    let mut sections = Spread::default();
-    let mut volumes = Spread::default();
-    for (index, pane) in panes.iter().enumerate() {
-        let Some(pane) = pane else {
-            continue;
-        };
-        let [_, _, width, height] = pane.region();
-        let height = height.max(1);
-        let aspect = width.max(1) as f32 / height as f32;
-        let detail = match pane {
-            PaneFrame::Volume { camera, .. } => {
-                let ladder = volume_ladder(LadderView {
-                    pyramid,
-                    camera,
-                    height: height as f32,
-                    current: None,
-                    limits,
-                });
-                let counts = volume_counts(
-                    pyramid,
-                    ladder.base,
-                    ladder.count,
-                    camera,
-                    aspect,
-                    height as f32,
-                    region,
-                );
-                let bricks = counts[..ladder.count].iter().sum();
-                volumes.push(bricks);
-                Detail {
-                    level: ladder.base,
-                    bricks,
-                }
-            }
-            PaneFrame::Section { section, .. } => {
-                let level = select_section_level(pyramid, section, height as f32, None, limits);
-                let bricks = section_brick_count(pyramid, level, section, aspect, region);
-                sections.push(bricks);
-                Detail { level, bricks }
-            }
-        };
-        details[index] = Some(detail);
-    }
-    let slots = (sections.count * sections.widest)
-        .max(sections.total + volumes.count * volumes.widest + 1)
-        .max(1);
+    let height = height.max(1);
+    let ladder = volume_ladder(LadderView {
+        pyramid,
+        camera,
+        height: height as f32,
+        current: None,
+        limits,
+    });
+    let counts = volume_counts(
+        pyramid,
+        ladder.base,
+        ladder.count,
+        camera,
+        1.0,
+        height as f32,
+        region,
+    );
+    let bricks = counts[..ladder.count].iter().sum();
     Residency {
-        panes: details,
-        slots,
+        detail: Detail {
+            level: ladder.base,
+            bricks,
+        },
+        slots: (bricks + 1).max(1),
     }
 }
 

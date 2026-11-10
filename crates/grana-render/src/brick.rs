@@ -190,10 +190,6 @@ impl BrickTable {
         )
     }
 
-    pub fn level(&self) -> usize {
-        self.level
-    }
-
     pub fn record_base(&self) -> u32 {
         self.base
     }

@@ -1,23 +1,15 @@
 use glam::Vec2;
-use grana_display::{PANE_GAP, PaneKind, PaneLayout, SectionCamera};
-use grana_figure::{self as overlay, Handle, Label, Legend, Pane};
+use grana_figure::{self as overlay, Handle, Label, Legend, Viewport};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Layer, Length, Level, Rect,
-    TextStyle, TypeStyle, icon,
+    BuildContext, Color, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, TextStyle,
+    TypeStyle, icon,
 };
 
 use crate::message::Message;
 use crate::panel::{Layout, STAGE_INSET};
 use crate::state::View;
-use crate::view::scene_uv;
 
-const PANE_CONTROL: f32 = 26.0;
-const LAYOUT_CONTROL: f32 = 30.0;
-const SWATCH: f32 = 14.0;
-const SWATCH_STRIDE: f32 = 18.0;
-const SWATCH_COLUMNS: usize = 8;
-const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
 const RECORD: Color = Color::rgba(1.0, 0.52, 0.44, 1.0);
@@ -30,33 +22,19 @@ pub(super) fn view<'a>(
 ) -> Vec<Element<'a, Message>> {
     let mut elements = Vec::new();
     let palette = ctx.theme().palette;
-    let size = full.size();
-    let rects = layout.panes;
-    let stage_backdrop = palette.scene_backdrop;
+    let backdrop = palette.scene_backdrop;
     let content = grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, stage_backdrop);
-        for rect in rects {
-            if rect.width() > 0.0 && rect.height() > 0.0 {
-                painter.scene(rect, Corners::ZERO, scene_uv(rect, size));
-            }
-        }
+        painter.rect(info.rect, Corners::ZERO, backdrop);
+        painter.scene(info.rect, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
     })
     .named("stage.content")
     .at(full)
     .layer(Layer::Content);
     elements.push(content);
-    elements.push(overlay_view(state, layout, full));
+    elements.push(overlay_view(state, layout));
     elements.extend(region_handles(state, layout));
-    for index in 0..state.panes.count() {
-        let safe = layout.panes[index].shrink(STAGE_INSET);
-        elements.push(pane_fit(ctx, safe, index));
-        elements.extend(pane_chip(ctx, layout, state, index));
-        elements.extend(channel_swatches(state, safe, index));
-    }
-    elements.extend(dividers(ctx, layout, state));
     elements.extend(recording_chip(ctx, layout, state));
     elements.extend(mask_bar(ctx, state, layout));
-    elements.extend(layout_control(ctx, layout, state));
     elements
 }
 
@@ -116,10 +94,9 @@ fn mask_bar<'a>(
     );
     let width = 240.0;
     let height = 34.0 + 30.0 + 34.0 + 6.0 + 30.0 + 12.0;
-    let safe = layout.panes[state.active()].shrink(STAGE_INSET);
-    let floor = safe.max.y;
+    let safe = layout.content().shrink(STAGE_INSET);
     let rect = Rect::from_min_size(
-        Vec2::new(safe.min.x, (floor - height).max(safe.min.y)),
+        Vec2::new(safe.min.x, (safe.max.y - height).max(safe.min.y)),
         Vec2::new(width, height),
     );
     vec![
@@ -173,95 +150,57 @@ pub(crate) fn remote<'a>(
     vec![sheet.at(rect).layer(Layer::Popup)]
 }
 
-fn plane_label(section: &SectionCamera) -> &'static str {
-    let normal = section.normal().abs();
-    if normal.z >= normal.y && normal.z >= normal.x {
-        "XY"
-    } else if normal.y >= normal.x {
-        "XZ"
-    } else {
-        "YZ"
-    }
-}
-
-fn pane<'a>(
+fn viewport<'a>(
     state: &'a View<'a>,
     layout: &Layout,
-    index: usize,
-    planes: &'a [SectionCamera],
     legends: &'a [Legend],
     labels: &'a [Label],
     annotations: &'a [grana_figure::AnnotationItem],
-) -> Pane<'a> {
-    let pane = state.panes.pane(index);
-    Pane {
-        kind: pane.kind(),
-        camera: pane.camera(),
-        section: pane.section(),
-        plane: if pane.kind().volume() { planes } else { &[] },
+) -> Viewport<'a> {
+    let rect = layout.viewport;
+    Viewport {
+        camera: state.camera,
         world: state.scene.dataset.world_size(),
-        voxel: state.scene.dataset.voxel_size(),
-        rect: layout.panes[index],
-        safe: layout.panes[index].shrink(STAGE_INSET),
+        rect,
+        safe: layout.content().shrink(STAGE_INSET),
         region: &state.scene.region,
         clip: state.scene.clip,
         legends,
         labels,
         annotations,
         pending: state.workspace.annotation_pending,
-        recording: state.io.exporting,
     }
 }
 
-fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout, full: Rect) -> Element<'a, Message> {
+fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
     let annotations = overlay::annotations(state.scene, state.scene.time());
-    let sections = sections(state);
     let layout = *layout;
-    grana_ui::canvas(Length::Fill, full.height(), move |painter, _info| {
-        for index in 0..state.panes.count() {
-            let pane = pane(
-                state,
-                &layout,
-                index,
-                &sections,
-                if index == 0 { &legends } else { &[] },
-                &labels,
-                &annotations,
-            );
-            overlay::paint(painter, &pane);
-        }
-    })
+    grana_ui::canvas(
+        Length::Fill,
+        layout.viewport.height(),
+        move |painter, _info| {
+            let viewport = viewport(state, &layout, &legends, &labels, &annotations);
+            overlay::paint(painter, &viewport);
+        },
+    )
     .named("stage.overlay")
-    .at(full)
+    .at(layout.viewport)
     .layer(Layer::Content)
 }
 
-fn sections(state: &View<'_>) -> Vec<SectionCamera> {
-    (0..state.panes.count())
-        .filter(|index| state.panes.pane(*index).kind() == PaneKind::Section)
-        .map(|index| state.panes.pane(index).section().clone())
-        .collect()
-}
-
 fn region_handles<'a>(state: &'a View<'a>, layout: &Layout) -> Vec<Element<'a, Message>> {
-    let sections = sections(state);
     let labels: [Label; 0] = [];
     let annotations: [grana_figure::AnnotationItem; 0] = [];
-    let Some(index) =
-        (0..state.panes.count()).find(|index| state.panes.pane(*index).kind().volume())
-    else {
-        return Vec::new();
-    };
-    let pane = pane(state, layout, index, &sections, &[], &labels, &annotations);
-    overlay::handles(&pane)
+    let viewport = viewport(state, layout, &[], &labels, &annotations);
+    overlay::handles(&viewport)
         .into_iter()
-        .map(|handle| region_handle(index, handle))
+        .map(region_handle)
         .collect()
 }
 
-fn region_handle<'a>(pane: usize, handle: Handle) -> Element<'a, Message> {
+fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
     let Handle {
         axis,
         side,
@@ -282,10 +221,7 @@ fn region_handle<'a>(pane: usize, handle: Handle) -> Element<'a, Message> {
             );
         },
     )
-    .key(Key::new(format!(
-        "region.handle.{pane}.{}",
-        axis * 2 + side
-    )))
+    .key(Key::new(format!("region.handle.{}.{side}", axis)))
     .at(rect)
     .layer(Layer::Content)
     .on_pointer(move |pointer| {
@@ -297,453 +233,6 @@ fn region_handle<'a>(pane: usize, handle: Handle) -> Element<'a, Message> {
     })
 }
 
-fn pane_fit<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    safe: Rect,
-    index: usize,
-) -> Element<'a, Message> {
-    let rect = Rect::from_min_size(
-        Vec2::new((safe.max.x - PANE_CONTROL).max(safe.min.x), safe.min.y),
-        Vec2::splat(PANE_CONTROL),
-    );
-    crate::view::glass_icon_button(
-        ctx,
-        &format!("pane.fit.{index}"),
-        Icon::Fit,
-        PANE_CONTROL,
-        GlassStyle::stage_control(),
-        "Fit this view",
-        Message::FitPane(index),
-    )
-    .at(rect)
-}
-
-fn dividers<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
-    state: &'a View<'a>,
-) -> Vec<Element<'a, Message>> {
-    let mut elements = Vec::new();
-    let stage = layout.stage;
-    let palette = ctx.theme().palette;
-    let count = state.panes.count();
-    if count < 2 {
-        return elements;
-    }
-    let vertical = (layout.panes[0].max.x + layout.panes[1].min.x) * 0.5;
-    elements.extend(divider(
-        palette.text_primary,
-        Vec2::new(vertical, stage.center().y),
-        Vec2::new(16.0, stage.height()),
-        Cursor::ResizeHorizontal,
-        "split.vertical",
-        {
-            let origin = stage.min.x;
-            let total = (stage.width() - PANE_GAP).max(1.0);
-            move |position| ((position - origin - PANE_GAP * 0.5) / total).clamp(0.0, 1.0)
-        },
-    ));
-    if count > 2 {
-        let horizontal = (layout.panes[0].max.y + layout.panes[2].min.y) * 0.5;
-        elements.extend(divider(
-            palette.text_primary,
-            Vec2::new(stage.center().x, horizontal),
-            Vec2::new(stage.width(), 16.0),
-            Cursor::ResizeVertical,
-            "split.horizontal",
-            {
-                let origin = stage.min.y;
-                let total = (stage.height() - PANE_GAP).max(1.0);
-                move |position| ((position - origin - PANE_GAP * 0.5) / total).clamp(0.0, 1.0)
-            },
-        ));
-    }
-    elements
-}
-
-#[allow(clippy::too_many_arguments)]
-fn divider<'a>(
-    tint: Color,
-    center: Vec2,
-    size: Vec2,
-    cursor: Cursor,
-    name: &'static str,
-    fraction: impl Fn(f32) -> f32 + 'static,
-) -> Vec<Element<'a, Message>> {
-    let grab = Rect::from_center_size(center, size);
-    let vertical = size.x < size.y;
-    let line = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
-        let rect = info.rect;
-        let body = if vertical {
-            Rect::from_center_size(rect.center(), Vec2::new(1.0, rect.height()))
-        } else {
-            Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 1.0))
-        };
-        painter.rect(body, Corners::ZERO, tint.with_alpha(0.18));
-    })
-    .at(grab)
-    .named(name);
-    let lens = grana_ui::canvas(Length::Fill, 36.0, |_painter, _info| {})
-        .at(Rect::from_center_size(
-            center,
-            if vertical {
-                Vec2::new(8.0, 36.0)
-            } else {
-                Vec2::new(36.0, 8.0)
-            },
-        ))
-        .named(if vertical {
-            "split.lens.vertical"
-        } else {
-            "split.lens.horizontal"
-        })
-        .glass(GlassStyle::lens());
-    let bar = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
-        let rect = info.rect;
-        let engaged = info.hover.max(info.press);
-        let extent = if vertical {
-            Vec2::new(8.0 + engaged * 4.0, 36.0 + engaged * 18.0)
-        } else {
-            Vec2::new(36.0 + engaged * 18.0, 8.0 + engaged * 4.0)
-        };
-        let body = Rect::from_center_size(rect.center(), extent);
-        painter.rect(
-            if vertical {
-                Rect::from_center_size(body.center(), Vec2::new(1.4, extent.y * 0.34))
-            } else {
-                Rect::from_center_size(body.center(), Vec2::new(extent.x * 0.34, 1.4))
-            },
-            Corners::capsule(),
-            tint.with_alpha(0.30 + engaged * 0.40),
-        );
-        if engaged > 0.01 {
-            painter.rect(
-                if vertical {
-                    Rect::from_center_size(body.center(), Vec2::new(1.0, 26.0 + 10.0 * engaged))
-                } else {
-                    Rect::from_center_size(body.center(), Vec2::new(26.0 + 10.0 * engaged, 1.0))
-                },
-                Corners::capsule(),
-                Color::white_alpha(0.12 * engaged),
-            );
-        }
-    })
-    .at(grab)
-    .named(if vertical {
-        "split.bar.vertical"
-    } else {
-        "split.bar.horizontal"
-    })
-    .cursor(cursor)
-    .on_pointer(move |pointer| {
-        (pointer.phase == grana_ui::Phase::Move).then_some(if vertical {
-            Message::SetSplit(fraction(pointer.position.x))
-        } else {
-            Message::SetRow(fraction(pointer.position.y))
-        })
-    })
-    .layer(Layer::Labels);
-    vec![line, lens, bar]
-}
-
-fn layout_control<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
-    state: &'a View<'a>,
-) -> Vec<Element<'a, Message>> {
-    let palette = ctx.theme().palette;
-    let count = PaneLayout::ALL.len();
-    let width = LAYOUT_CONTROL * count as f32 + 8.0;
-    let stage = layout.stage;
-    let rect = Rect::from_min_size(
-        Vec2::new(
-            stage.center().x - width * 0.5,
-            stage.max.y - LAYOUT_CONTROL - 8.0,
-        ),
-        Vec2::new(width, LAYOUT_CONTROL),
-    );
-    let active = state.panes.layout();
-    let mut segments = Vec::with_capacity(count);
-    for (index, option) in PaneLayout::ALL.into_iter().enumerate() {
-        let engaged = option == active;
-        let key = format!("layout.{}", option.name());
-        let segment = grana_ui::canvas(
-            Length::Fixed(LAYOUT_CONTROL),
-            LAYOUT_CONTROL - 8.0,
-            move |painter, info| {
-                let body = info.rect.shrink(3.0);
-                if engaged {
-                    painter.rect(body, Corners::all(6.0), palette.accent.with_alpha(0.85));
-                } else if info.hover > 0.01 {
-                    painter.rect(
-                        body,
-                        Corners::all(6.0),
-                        Color::white_alpha(0.10 * info.hover),
-                    );
-                }
-                let tint = if engaged {
-                    palette.text_on_accent
-                } else {
-                    palette.text_secondary
-                };
-                let edge = body.width().min(body.height()) - 10.0;
-                let inner = Rect::from_center_size(body.center(), Vec2::splat(edge));
-                let gap = 1.6;
-                match option {
-                    PaneLayout::Single => {
-                        painter.rect(inner, Corners::all(1.6), tint);
-                    }
-                    PaneLayout::Split => {
-                        let column = (inner.width() - gap) * 0.5;
-                        painter.rect(
-                            Rect::from_min_size(inner.min, Vec2::new(column, inner.height())),
-                            Corners::all(1.6),
-                            tint,
-                        );
-                        painter.rect(
-                            Rect::from_min_size(
-                                Vec2::new(inner.min.x + column + gap, inner.min.y),
-                                Vec2::new(column, inner.height()),
-                            ),
-                            Corners::all(1.6),
-                            tint,
-                        );
-                    }
-                    PaneLayout::Quad => {
-                        let column = (inner.width() - gap) * 0.5;
-                        let row = (inner.height() - gap) * 0.5;
-                        for (column_index, row_index) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                            painter.rect(
-                                Rect::from_min_size(
-                                    Vec2::new(
-                                        inner.min.x + column_index as f32 * (column + gap),
-                                        inner.min.y + row_index as f32 * (row + gap),
-                                    ),
-                                    Vec2::new(column, row),
-                                ),
-                                Corners::all(1.6),
-                                tint,
-                            );
-                        }
-                    }
-                }
-            },
-        )
-        .named(&key)
-        .cursor(Cursor::Pointing)
-        .on_pointer(move |pointer| {
-            (pointer.phase == grana_ui::Phase::Up).then_some(Message::SetLayout(option))
-        });
-        let _ = index;
-        segments.push(segment);
-    }
-    vec![
-        grana_ui::row()
-            .gap(0.0)
-            .padding(Edges::all(4.0))
-            .glass(GlassStyle::hud_chip())
-            .children(segments)
-            .at(rect)
-            .layer(Layer::Hud),
-    ]
-}
-
-fn pane_chip<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
-    state: &'a View<'a>,
-    index: usize,
-) -> Vec<Element<'a, Message>> {
-    let pane = state.panes.pane(index);
-    let rect = layout.panes[index];
-    let safe = rect.shrink(STAGE_INSET);
-    let active = state.active() == index;
-    let title = match pane.kind() {
-        PaneKind::Volume => "3D".to_string(),
-        PaneKind::Section => format!("Slice · {}", plane_label(pane.section())),
-    };
-    let tint = if active {
-        LABEL
-    } else {
-        Color::rgba(1.0, 1.0, 1.0, 0.62)
-    };
-    let key = format!("pane.menu.{index}");
-    let open = state.workspace.sections.is_open(Key::new(&key));
-    chip_control(
-        ctx,
-        &key,
-        index,
-        Chip {
-            pane: rect,
-            safe,
-            kind: pane.kind(),
-            quality: pane.quality(),
-        },
-        &title,
-        tint,
-        open,
-    )
-}
-
-fn channel_swatches<'a>(
-    state: &'a View<'a>,
-    safe: Rect,
-    index: usize,
-) -> Vec<Element<'a, Message>> {
-    let channels = state.scene.channels.len();
-    if channels < 2 {
-        return Vec::new();
-    }
-    let pane = state.panes.pane(index);
-    let columns = channels.min(SWATCH_COLUMNS);
-    let origin = Vec2::new(
-        safe.max.x - (columns as f32 * SWATCH_STRIDE - (SWATCH_STRIDE - SWATCH)),
-        safe.min.y + PANE_CONTROL + 6.0,
-    );
-    let mut elements = Vec::with_capacity(channels);
-    for channel in 0..channels {
-        let shown = pane.channels().shown(channel);
-        let info = &state.scene.dataset.channels()[channel];
-        let tint = Color::from_rgb_f32(info.tint());
-        let name = info.name().to_string();
-        let column = channel % SWATCH_COLUMNS;
-        let row = channel / SWATCH_COLUMNS;
-        let rect = Rect::from_min_size(
-            origin + Vec2::new(column as f32 * SWATCH_STRIDE, row as f32 * SWATCH_STRIDE),
-            Vec2::splat(SWATCH),
-        );
-        let tooltip = if shown {
-            format!("Hide {name} in this view")
-        } else {
-            format!("Show {name} in this view")
-        };
-        let corners = Corners::all(4.0);
-        elements.push(
-            grana_ui::canvas(Length::Fixed(SWATCH), SWATCH, move |painter, info| {
-                let engaged = info.hover.max(info.press);
-                if shown {
-                    painter.rect(info.rect, corners, tint.with_alpha(0.62 + 0.3 * engaged));
-                } else {
-                    painter.outlined(
-                        info.rect,
-                        corners,
-                        grana_ui::Fill::Solid(tint.with_alpha(0.1)),
-                        grana_ui::Border {
-                            width: 1.0,
-                            color: tint.with_alpha(0.55 + 0.3 * engaged),
-                        },
-                        grana_ui::Shadow::NONE,
-                    );
-                }
-            })
-            .key(Key::index(format!("pane.channel.{index}"), channel))
-            .at(rect)
-            .layer(Layer::Hud)
-            .cursor(Cursor::Pointing)
-            .tooltip(&tooltip)
-            .press(Message::SetPaneChannel {
-                index,
-                channel,
-                shown: !shown,
-            }),
-        );
-    }
-    elements
-}
-
-#[derive(Clone, Copy)]
-struct Chip {
-    pane: Rect,
-    safe: Rect,
-    kind: PaneKind,
-    quality: grana_display::Quality,
-}
-
-fn chip_control<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    key: &str,
-    index: usize,
-    chip: Chip,
-    title: &str,
-    tint: Color,
-    open: bool,
-) -> Vec<Element<'a, Message>> {
-    let style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
-    let maximum = (chip.pane.width() - 64.0).max(96.0);
-    let layout = ctx.layout_text(title, style, maximum);
-    let width = (layout.size.x + 46.0).min(maximum + 24.0);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
-        let rect = info.rect;
-        icon::paint(
-            match chip.kind {
-                PaneKind::Volume => Icon::Cube,
-                PaneKind::Section => Icon::Section,
-            },
-            painter,
-            Vec2::new(rect.min.x + 15.0, rect.center().y),
-            13.0,
-            tint,
-            1.5,
-        );
-        painter.text(
-            &layout,
-            Vec2::new(rect.min.x + 25.0, rect.min.y + 5.5),
-            tint,
-        );
-        icon::chevron(
-            painter,
-            Vec2::new(rect.max.x - 12.0, rect.center().y),
-            4.0,
-            std::f32::consts::FRAC_PI_2,
-            tint,
-            1.5,
-        );
-    })
-    .named(key)
-    .at(Rect::from_min_size(chip.safe.min, Vec2::new(width, 26.0)))
-    .glass(GlassStyle::hud_chip())
-    .cursor(Cursor::Pointing)
-    .press(Message::ToggleOpen(Key::new(key)));
-    if !open {
-        return vec![anchor];
-    }
-    let theme = *ctx.theme();
-    let options = [
-        (
-            "3D Volume",
-            Message::SetPaneKind {
-                index,
-                kind: PaneKind::Volume,
-            },
-        ),
-        ("XY Slice", Message::SetPaneSlice { index, preset: 0 }),
-        ("XZ Slice", Message::SetPaneSlice { index, preset: 1 }),
-        ("YZ Slice", Message::SetPaneSlice { index, preset: 2 }),
-    ];
-    let mut rows = Vec::new();
-    let kinds = options.len();
-    for (slot, (label, message)) in options.into_iter().enumerate() {
-        rows.push(
-            grana_ui::widget::menu_row(&theme, label, false)
-                .key(Key::index(key, slot))
-                .press(message),
-        );
-    }
-    let quality_start = kinds + 1;
-    rows.push(crate::view::menu_separator(ctx));
-    for (slot, option) in grana_display::Quality::ALL.into_iter().enumerate() {
-        rows.push(
-            grana_ui::widget::menu_row(&theme, option.label(), chip.quality == option)
-                .key(Key::index(key, quality_start + slot))
-                .press(Message::SetPaneQuality {
-                    index,
-                    quality: option,
-                }),
-        );
-    }
-    let popup = grana_ui::popover::popup(Key::new(key), width.max(170.0), rows);
-    vec![anchor, popup]
-}
 fn recording_chip<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
@@ -752,12 +241,12 @@ fn recording_chip<'a>(
     let Some((frame, frames)) = state.io.exporting else {
         return Vec::new();
     };
-    let safe = layout.panes[0].shrink(STAGE_INSET);
+    let origin = layout.content().shrink(STAGE_INSET).min;
     vec![chip(
         ctx,
         "figure.recording",
-        layout.panes[0],
-        safe.min + Vec2::new(0.0, 34.0),
+        layout.viewport,
+        origin,
         Icon::Record,
         &format!("REC · frame {frame} of {frames}"),
         RECORD,
@@ -807,8 +296,8 @@ pub(super) fn toast<'a>(
         return Vec::new();
     };
     let palette = ctx.theme().palette;
-    let stage = layout.stage;
-    let ceiling = stage.max.y - 24.0;
+    let stage = layout.content().shrink(STAGE_INSET);
+    let ceiling = stage.max.y;
     let width = (stage.width() - 32.0).min(420.0);
     let style = TextStyle::new(
         ctx.theme().font(grana_ui::Level::Callout),

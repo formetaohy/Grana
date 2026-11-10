@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Palette, PaneState, PaneView, SectionState, Shading, Stop, TransferFunction,
-    VolumeMode, VolumeStyle,
+    CameraState, Palette, Shading, Stop, TransferFunction, VolumeMode, VolumeStyle,
 };
 use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
@@ -253,48 +252,15 @@ impl Decode for Source {
 
 impl Decode for ViewState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut panes = Vec::with_capacity(grana_display::PANE_COUNT);
-        for _ in 0..grana_display::PANE_COUNT {
-            panes.push(PaneState::decode(reader)?);
-        }
         let view = Self {
-            panes: panes.try_into().map_err(|_| FAULT_VALUE)?,
-            layout: grana_display::PaneLayout::from_index(reader.u8()? as usize)
-                .ok_or(FAULT_VALUE)?,
-            split: finite(reader.f32()?)?,
-            row: finite(reader.f32()?)?,
+            camera: CameraState::decode(reader)?,
             timeline: Timeline::decode(reader)?,
             export: Export::decode(reader)?,
         };
-        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&view.split)
-            || !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&view.row)
-            || !view.export.matches()
-        {
+        if !view.export.matches() {
             return Err(FAULT_VALUE);
         }
         Ok(view)
-    }
-}
-
-impl Decode for PaneState {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let kind = grana_display::PaneKind::from_index(reader.u8()? as usize).ok_or(FAULT_VALUE)?;
-        Ok(Self {
-            kind,
-            view: PaneView::decode(reader)?,
-        })
-    }
-}
-
-impl Decode for PaneView {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        Ok(Self {
-            camera: CameraState::decode(reader)?,
-            section: SectionState::decode(reader)?,
-            channels: grana_display::ChannelMask::of(reader.u32()?),
-            quality: grana_display::Quality::from_index(reader.u8()? as usize)
-                .ok_or(FAULT_VALUE)?,
-        })
     }
 }
 
@@ -321,14 +287,10 @@ impl Decode for Keyframe {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let at = finite(reader.f32()?)?;
         let time = reader.u32()?;
-        let mut views = Vec::with_capacity(grana_display::PANE_COUNT);
-        for _ in 0..grana_display::PANE_COUNT {
-            views.push(PaneView::decode(reader)?);
-        }
         Ok(Self {
             at,
             time,
-            views: views.try_into().map_err(|_| FAULT_VALUE)?,
+            camera: CameraState::decode(reader)?,
         })
     }
 }
@@ -355,36 +317,6 @@ impl Decode for CameraState {
             || state.aperture > grana_display::APERTURE_LIMIT
             || state.focus > grana_display::APERTURE_LIMIT
         {
-            return Err(FAULT_VALUE);
-        }
-        Ok(state)
-    }
-}
-
-impl Decode for SectionState {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut center = [0.0f32; 3];
-        for value in &mut center {
-            *value = finite(reader.f32()?)?;
-        }
-        let azimuth = finite(reader.f32()?)?;
-        let elevation = finite(reader.f32()?)?;
-        let span = positive(reader.f32()?)?;
-        let projection = grana_display::SectionProjection::from_index(reader.u8()? as usize)
-            .ok_or(FAULT_VALUE)?;
-        let thickness = non_negative(reader.f32()?)?;
-        if thickness > grana_display::THICKNESS_LIMIT {
-            return Err(FAULT_VALUE);
-        }
-        let state = Self {
-            center,
-            azimuth,
-            elevation,
-            span,
-            projection,
-            thickness,
-        };
-        if state.elevation.abs() > std::f32::consts::FRAC_PI_2 {
             return Err(FAULT_VALUE);
         }
         Ok(state)

@@ -1,8 +1,6 @@
 use glam::Vec3;
-use grana_display::{
-    Camera, CameraProjection, SectionCamera, Shading, TransferFunction, VolumeStyle,
-};
-use grana_render::{ChannelRow, Frame, Lens, Marker, PaneFrame, Renderer, Requests, SceneFrame};
+use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
+use grana_render::{ChannelRow, Frame, Marker, Renderer, Requests, SceneFrame};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
@@ -12,7 +10,6 @@ use crate::support::{Gpu, gpu, read_pixels, revision, spheres};
 const SIDE: u32 = 384;
 const SAMPLES: u32 = 48;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
-const CORNER: [u32; 4] = [0, 0, 1, 1];
 
 #[test]
 fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
@@ -22,7 +19,6 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
     let volume = volume();
     let pyramid = volume.pyramid();
     let channels = hidden(&pyramid);
-    let section = SectionCamera::new();
     let mut renderer = Renderer::new(
         gpu.device(),
         gpu.queue(),
@@ -78,15 +74,14 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         let frame = Frame {
             target: &view,
             size: [SIDE, SIDE],
-            panes: panes(camera, &section, WHOLE, CORNER),
+            camera,
+            viewport: WHOLE,
             time: 0,
             region: Region::none(),
             clip: Clip::none(),
             exposure: 1.0,
             samples: SAMPLES,
             scene: &scene,
-            pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-            pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
             prefetch: false,
             level_cap: usize::MAX,
             assured: true,
@@ -174,7 +169,6 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
             let bricks = requests
                 .volume
                 .iter()
-                .chain(&requests.section)
                 .map(|request| (*request, volume.brick(&grid, request.coord)))
                 .collect::<Vec<(BrickRequest, BrickData)>>();
             renderer.upload(gpu.queue(), &bricks);
@@ -183,43 +177,18 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
     panic!("the optics view never settled");
 }
 
-fn panes<'a>(
-    camera: &'a Camera,
-    section: &'a SectionCamera,
-    volume_region: [u32; 4],
-    section_region: [u32; 4],
-) -> [Option<PaneFrame<'a>>; grana_render::PANE_COUNT] {
-    [
-        Some(PaneFrame::Volume {
-            camera,
-            lens: Lens {
-                camera,
-                aspect: volume_region[2].max(1) as f32 / volume_region[3].max(1) as f32,
-            },
-            region: volume_region,
-        }),
-        Some(PaneFrame::Section {
-            section,
-            region: section_region,
-        }),
-        None,
-        None,
-    ]
-}
-
 fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
     Frame {
         target: frame.target,
         size: frame.size,
-        panes: frame.panes,
+        camera: frame.camera,
+        viewport: frame.viewport,
         time: frame.time,
         region: frame.region,
         clip: frame.clip,
         exposure: frame.exposure,
         samples: frame.samples,
         scene: frame.scene,
-        pane_channels: frame.pane_channels,
-        pane_quality: frame.pane_quality,
         prefetch: frame.prefetch,
         level_cap: frame.level_cap,
         assured: frame.assured,

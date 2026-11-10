@@ -1,16 +1,14 @@
 use glam::Vec2;
-use grana_display::{PANE_COUNT, PANE_GAP, PaneKind, Panes};
-use grana_scene::{Item, Selection};
 use grana_session::{Command, SessionView};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
     Axis, BuildContext, Corners, Edges, Element, Icon, Key, Layout as UiLayout, Length, Motion,
-    Rect, Role, Ui,
+    Rect, Role,
 };
 
 use crate::message::Message;
 use crate::stage::Stage;
-use crate::state::{FrameStats, View, Workspace};
+use crate::state::{View, Workspace};
 
 mod header;
 mod stage;
@@ -25,6 +23,7 @@ pub const FORM_LABEL: f32 = 72.0;
 pub const TOOLBAR_HEIGHT: f32 = 36.0;
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 pub const SIDEBAR_PAD: f32 = 14.0;
+pub const SIDEBAR_FOOTER: f32 = 88.0;
 pub const TRANSPORT_HEIGHT: f32 = 44.0;
 pub const DOCK_HEADER: f32 = 36.0;
 pub const DOCK_DEFAULT: f32 = 340.0;
@@ -33,8 +32,6 @@ pub const ANALYSIS_WIDTH: f32 = 114.0;
 pub const TOOLBAR_LEFT: f32 = 320.0;
 pub const TOOLBAR_RIGHT: f32 = 168.0;
 pub const STAGE_INSET: f32 = 12.0;
-const MINIMUM_STAGE_WIDTH: f32 = 240.0;
-const MINIMUM_STAGE_HEIGHT: f32 = 160.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -75,20 +72,20 @@ impl Panel {
 }
 
 pub fn build(
-    ui: &mut Ui<Message>,
+    ui: &mut grana_ui::Ui<Message>,
     actions: Vec<Message>,
     view: &SessionView<'_>,
-    panes: &mut Panes,
+    camera: &mut grana_display::Camera,
     stage: &mut Stage,
     workspace: &mut Workspace,
-    frame: FrameStats,
 ) -> Vec<Command> {
     let mut commands = Vec::new();
-    apply(ui, actions, view, panes, stage, workspace, &mut commands);
+    apply(ui, actions, view, camera, stage, workspace, &mut commands);
     if let Some(panel) = workspace.panel {
         workspace.last_panel = panel;
     }
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
+    stage.set_viewport(full);
     let Some(scene) = view.scene else {
         let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
@@ -124,20 +121,17 @@ pub fn build(
         recent: view.recent,
         import: view.import,
         palette: palette.as_ref(),
-        panes: &*panes,
+        camera: &*camera,
         stage: &*stage,
         workspace: &*workspace,
         export: view.export,
-        frame,
     };
-    let (rects, elements) = {
+    let elements = {
         let mut ctx = ui.build();
         let layout = Layout::new(&mut ctx, &state, full);
-        let elements = view_elements(&mut ctx, &layout, &state, full);
-        (layout.panes, elements)
+        view_elements(&mut ctx, &layout, &state, full)
     };
     ui.present(grana_ui::place(full, elements));
-    stage.set_rects(rects);
     commands
 }
 
@@ -161,7 +155,7 @@ fn view_elements<'a>(
     elements.extend(stage::toast(ctx, layout, state));
     elements.extend(crate::panel::remote(
         ctx,
-        layout.stage,
+        layout.viewport,
         state.workspace.remote_open,
     ));
     if let Some(palette) = state.palette {
@@ -176,8 +170,9 @@ pub struct Layout {
     pub toolbar_right: Rect,
     pub analysis: Rect,
     pub sidebar: Rect,
-    pub stage: Rect,
-    pub panes: [Rect; PANE_COUNT],
+    pub viewport: Rect,
+    pub left: f32,
+    pub right: f32,
     pub transport: Option<Rect>,
     pub dock: Option<Rect>,
     pub sidebar_visible: bool,
@@ -266,52 +261,36 @@ impl Layout {
                 Vec2::new(right, dock_bottom + slide),
             )
         });
-        let stage_bottom = if dock_open {
-            dock_bottom - dock_height - GAP
-        } else {
-            dock_bottom
-        };
-        let stage = Rect::from_min_max(
-            Vec2::new(left, toolbar_left.max.y + GAP),
-            Vec2::new(
-                right.max(left + MINIMUM_STAGE_WIDTH),
-                stage_bottom.max(toolbar_left.max.y + GAP + MINIMUM_STAGE_HEIGHT),
-            ),
-        );
-        let split_ratio = ctx.animate(
-            Key::new("panes.split.spring").id(),
-            state.panes.split(),
-            Motion::response(0.18, 0.06),
-        );
-        let row_ratio = ctx.animate(
-            Key::new("panes.row.spring").id(),
-            state.panes.row(),
-            Motion::response(0.18, 0.06),
-        );
-        let mut preview = state.panes.clone();
-        preview.set_split(split_ratio);
-        preview.set_row(row_ratio);
-        let rects = preview.rects(
-            [stage.min.x, stage.min.y, stage.width(), stage.height()],
-            PANE_GAP,
-        );
-        let panes = std::array::from_fn(|index| {
-            Rect::from_min_size(
-                Vec2::new(rects[index][0], rects[index][1]),
-                Vec2::new(rects[index][2], rects[index][3]),
-            )
-        });
         Self {
             toolbar_left,
             toolbar_right,
             analysis,
             sidebar,
-            stage,
-            panes,
+            viewport: full,
+            left,
+            right,
             transport,
             dock,
             sidebar_visible,
         }
+    }
+
+    pub fn overlay_top(&self) -> f32 {
+        self.toolbar_left.max.y + GAP
+    }
+
+    pub fn content(&self) -> Rect {
+        Rect::from_min_max(
+            Vec2::new(self.left, self.overlay_top() + GAP),
+            Vec2::new(self.right, self.floor()),
+        )
+    }
+
+    pub fn floor(&self) -> f32 {
+        let transport = self
+            .transport
+            .map_or(self.viewport.max.y - MARGIN, |rect| rect.min.y - GAP);
+        self.dock.map_or(transport, |rect| rect.min.y - GAP)
     }
 }
 
@@ -343,9 +322,10 @@ fn sidebar<'a>(
         painter.rect(info.rect, Corners::ZERO, palette.separator);
     })
     .at(separator_rect);
+    let footer_top = rect.max.y - SIDEBAR_PAD - SIDEBAR_FOOTER;
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, tabs_rect.max.y + 9.0),
-        Vec2::new(rect.max.x, rect.max.y - 4.0),
+        Vec2::new(rect.max.x, footer_top - 6.0),
     );
     let mut content = vec![crate::inspector::source(ctx, state)];
     match active {
@@ -367,11 +347,60 @@ fn sidebar<'a>(
         .scroll(Axis::Column, Length::Fill, None)
         .clipped()
         .children([column]);
+    let mut children = vec![tabs, separator, scroll];
+    children.extend(appearance(ctx, layout, state));
     Element::new(UiLayout::column())
         .named("sidebar")
         .at(rect)
         .glass(GlassStyle::panel())
-        .children([tabs, separator, scroll])
+        .children(children)
+}
+
+fn appearance<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    let rect = layout.sidebar;
+    let palette = ctx.theme().palette;
+    let width = SIDEBAR_WIDTH - SIDEBAR_PAD * 2.0;
+    let separator_rect = Rect::from_min_size(
+        Vec2::new(
+            rect.min.x + SIDEBAR_PAD,
+            rect.max.y - SIDEBAR_PAD - SIDEBAR_FOOTER,
+        ),
+        Vec2::new(width, 1.0),
+    );
+    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
+        painter.rect(info.rect, Corners::ZERO, palette.separator);
+    })
+    .at(separator_rect);
+    let modes = grana_ui::Appearance::ALL.map(grana_ui::Appearance::label);
+    let selected = grana_ui::Appearance::ALL
+        .iter()
+        .position(|mode| *mode == state.workspace.appearance)
+        .unwrap_or(0);
+    let modes_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + SIDEBAR_PAD, separator_rect.max.y + 10.0),
+        Vec2::new(width, 28.0),
+    );
+    let modes = crate::view::segmented_fill(ctx, "appearance.mode", &modes, selected, |index| {
+        match grana_ui::Appearance::ALL.get(index) {
+            Some(mode) => Message::SetAppearance(*mode),
+            None => Message::Noop,
+        }
+    })
+    .at(modes_rect);
+    let contrast_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + SIDEBAR_PAD, modes_rect.max.y + 6.0),
+        Vec2::new(width, 26.0),
+    );
+    let contrast =
+        grana_ui::widget::toggle_row(ctx.theme(), "Increase Contrast", state.workspace.contrast)
+            .named("appearance.contrast")
+            .at(contrast_rect)
+            .on_toggle(Message::SetContrast);
+    vec![separator, modes, contrast]
 }
 
 fn dock<'a>(
@@ -488,10 +517,10 @@ fn clipped<'a>(rect: Rect, children: Vec<Element<'a, Message>>) -> Element<'a, M
 }
 
 pub fn apply(
-    ui: &mut Ui<Message>,
+    ui: &mut grana_ui::Ui<Message>,
     actions: Vec<Message>,
     view: &SessionView<'_>,
-    panes: &mut Panes,
+    camera: &mut grana_display::Camera,
     stage: &mut Stage,
     workspace: &mut Workspace,
     commands: &mut Vec<Command>,
@@ -569,30 +598,10 @@ pub fn apply(
                 };
                 workspace.dock_height = (height + value).max(DOCK_MINIMUM);
             }
-            Message::SetSplit(value) => panes.set_split(value),
-            Message::SetRow(value) => panes.set_row(value),
-            Message::SetLayout(layout) => {
-                let previous = panes.count();
-                panes.set_layout(layout);
-                if let Some(scene) = view.scene {
-                    let area = stage.area();
-                    if area.width() > 0.0 && area.height() > 0.0 {
-                        let rects = panes.rects(
-                            [area.min.x, area.min.y, area.width(), area.height()],
-                            PANE_GAP,
-                        );
-                        for (index, rect) in rects.into_iter().enumerate().skip(previous) {
-                            let aspect = rect[2].max(1.0) / rect[3].max(1.0);
-                            crate::fitting::fit_pane(scene, panes, index, aspect);
-                        }
-                    }
-                }
-                workspace.active = workspace.active.min(layout.count() - 1);
-            }
             Message::SetColumnWidth { index, width } => {
                 workspace.column_widths.insert(index, width);
             }
-            Message::ToggleOpen(key) => workspace.sections.toggle(key),
+            Message::ToggleOpen(key) => workspace.disclosures.toggle(key),
             Message::ExpandObject { set, open } => {
                 if open {
                     workspace.expanded.insert(set);
@@ -653,13 +662,13 @@ pub fn apply(
                 target,
                 objects,
             } => {
-                let first = Selection {
+                let first = grana_scene::Selection {
                     set: source,
-                    item: Item::Object(objects.0),
+                    item: grana_scene::Item::Object(objects.0),
                 };
-                let second = Selection {
+                let second = grana_scene::Selection {
                     set: target,
-                    item: Item::Object(objects.1),
+                    item: grana_scene::Item::Object(objects.1),
                 };
                 commands.push(Command::Select(Some(first)));
                 if first != second {
@@ -746,103 +755,23 @@ pub fn apply(
             Message::SetClassifierFeatures { set, features } => {
                 workspace.classifier.insert(set, features);
             }
-            Message::SetActivePane(index) => workspace.active = index.min(PANE_COUNT - 1),
-            Message::SetPaneKind { index, kind } => {
-                let aspect = pane_aspect(stage, index);
-                panes.pane_mut(index).set_kind(kind);
+            Message::FitView => {
                 if let Some(scene) = view.scene {
-                    crate::fitting::fit_pane(scene, panes, index, aspect);
-                }
-                workspace.active = index.min(PANE_COUNT - 1);
-            }
-            Message::SetPaneSlice { index, preset } => {
-                let aspect = pane_aspect(stage, index);
-                let pane = panes.pane_mut(index);
-                pane.set_kind(PaneKind::Section);
-                if let Some(preset) = grana_display::SectionPreset::from_index(preset) {
-                    preset.apply(pane.section_mut());
-                }
-                if let Some(scene) = view.scene {
-                    crate::fitting::fit_pane(scene, panes, index, aspect);
-                }
-                workspace.active = index.min(PANE_COUNT - 1);
-            }
-            Message::SetPaneChannel {
-                index,
-                channel,
-                shown,
-            } => {
-                panes.pane_mut(index).set_channel(channel, shown);
-                workspace.active = index.min(PANE_COUNT - 1);
-            }
-            Message::SetPaneQuality { index, quality } => {
-                panes.pane_mut(index).set_quality(quality);
-                workspace.active = index.min(PANE_COUNT - 1);
-            }
-            Message::SetSectionPreset(index) => {
-                let active = workspace.active.min(PANE_COUNT - 1);
-                let aspect = pane_aspect(stage, active);
-                if let Some(preset) = grana_display::SectionPreset::from_index(index) {
-                    preset.apply(panes.pane_mut(active).section_mut());
-                }
-                if let Some(scene) = view.scene {
-                    crate::fitting::fit_pane(scene, panes, active, aspect);
-                }
-            }
-            Message::SetSectionProjection(index) => {
-                if let Some(projection) = grana_display::SectionProjection::from_index(index) {
-                    let section = panes.pane_mut(workspace.active).section_mut();
-                    section.set_projection(projection);
-                    if section.projected() && section.thickness() <= 0.0 {
-                        section.set_thickness(grana_display::PROJECTION_THICKNESS);
-                    }
+                    crate::fitting::fit_camera(scene, camera, stage.aspect());
                 }
             }
             Message::SetCameraProjection(index) => {
                 if let Some(projection) = grana_display::CameraProjection::from_index(index) {
-                    panes
-                        .pane_mut(workspace.active)
-                        .camera_mut()
-                        .set_projection(projection);
+                    camera.set_projection(projection);
                 }
             }
             Message::SetAperture(value) => {
-                panes
-                    .pane_mut(workspace.active)
-                    .camera_mut()
-                    .set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
+                camera.set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
             }
             Message::SetFocus(value) => {
-                panes
-                    .pane_mut(workspace.active)
-                    .camera_mut()
-                    .set_focus(value.clamp(1.0e-3, grana_display::APERTURE_LIMIT));
+                camera.set_focus(value.clamp(1.0e-3, grana_display::APERTURE_LIMIT));
             }
-            Message::FocusCamera => panes
-                .pane_mut(workspace.active)
-                .camera_mut()
-                .focus_at_pivot(),
-            Message::SetSectionThickness(value) => {
-                let section = panes.pane_mut(workspace.active).section_mut();
-                section.set_thickness(value.clamp(0.0, grana_display::THICKNESS_LIMIT));
-            }
-            Message::SetSectionOrientation { azimuth, elevation } => {
-                panes
-                    .pane_mut(workspace.active)
-                    .section_mut()
-                    .set_orientation(azimuth, elevation);
-            }
-            Message::SetSectionDepth(position) => {
-                if let Some(scene) = view.scene {
-                    let world = scene.dataset.world_size();
-                    let section = panes.pane_mut(workspace.active).section_mut();
-                    let normal = section.normal();
-                    let extent = world.abs().dot(normal.abs());
-                    let target = position.clamp(0.0, extent) - 0.5 * extent;
-                    let center = section.center();
-                    section.set_center(center + normal * (target - center.dot(normal)));
-                }
-            }
+            Message::FocusCamera => camera.focus_at_pivot(),
             Message::SetPsfThreshold(value) => {
                 workspace.psf_threshold = value.clamp(1.0, 64.0);
             }
@@ -851,11 +780,6 @@ pub fn apply(
             }
             Message::SetExport(export) => {
                 commands.push(Command::SetExport(export));
-            }
-            Message::FitPane(index) => {
-                if let Some(scene) = view.scene {
-                    crate::fitting::fit_pane(scene, panes, index, pane_aspect(stage, index));
-                }
             }
             Message::Plot(event) => {
                 if let Some(scene) = view.scene {
@@ -892,8 +816,4 @@ pub fn apply(
             }
         }
     }
-}
-fn pane_aspect(stage: &Stage, index: usize) -> f32 {
-    let rect = stage.rect(index);
-    rect.width().max(1.0) / rect.height().max(1.0)
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use grana_animation::Timeline;
+use grana_display::Camera;
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
@@ -1274,25 +1275,15 @@ fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
     let fitted = || Timeline::new(30, duration);
     match view {
         Some(view) => ViewState {
-            panes: view.panes(),
-            layout: view.layout(),
-            split: view.split,
-            row: view.row,
+            camera: view.camera(),
             timeline: view.timeline().unwrap_or_else(fitted),
             export: view.export().unwrap_or(Export::NATIVE),
         },
         None => {
-            let mut panes = grana_display::Panes::new();
-            panes.fit(
-                scene.dataset.world_size(),
-                scene.dataset.voxel_size(),
-                [1.6; grana_display::PANE_COUNT],
-            );
+            let mut camera = Camera::new(35.0);
+            camera.fit(scene.dataset.world_size(), 1.6);
             ViewState {
-                panes: panes.states(),
-                layout: panes.layout(),
-                split: panes.split(),
-                row: panes.row(),
+                camera: camera.state(),
                 timeline: fitted(),
                 export: Export::NATIVE,
             }

@@ -2,7 +2,6 @@ mod ao;
 mod atlas;
 mod brick;
 mod converge;
-mod cut;
 mod detail;
 mod frame;
 mod image;
@@ -13,28 +12,20 @@ mod oit;
 mod pick;
 mod planner;
 mod present;
-mod profile;
 mod renderer;
 mod sample;
 mod schema;
-mod section;
 mod shadow;
-mod slice;
 mod summary;
 mod table;
 mod target;
 mod temporal;
 mod volume;
 
-pub use grana_display::PANE_COUNT;
-
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
 pub use image::{Image16, read16 as read_image16};
 pub use marker::Marker;
 pub use pick::PickId;
-pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage, frame_target};
-pub use renderer::{
-    CutInfo, Frame, FrameInfo, Lens, OitInfo, PaneFrame, Renderer, Requests, ViewInfo,
-};
+pub use renderer::{Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};
 pub use temporal::Temporal;

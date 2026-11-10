@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+﻿use std::path::PathBuf;
 
 use grana_display::{Coloring, Material, Shading, TransferFunction, VolumeMode};
 use grana_measure::{
@@ -31,7 +31,6 @@ pub enum Command {
     SaveProject,
     SaveProjectAs,
     SaveSnapshot,
-    ClearCache,
     SetTime(u32),
     SelectSeries(usize),
     SelectField(usize),

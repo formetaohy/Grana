@@ -267,23 +267,17 @@ fn actions<'a>(
     .glass_group(group);
     let palette = ctx.theme().palette;
     let pending = state.io.pending > 0 || !state.jobs.is_empty();
-    let diagnostics = crate::view::glass_icon_button(
+    let fit = crate::view::glass_icon_button(
         ctx,
-        "header.diagnostics",
-        Icon::Info,
+        "view.fit",
+        Icon::Fit,
         36.0,
         GlassStyle::button(),
-        "Streaming diagnostics",
-        Message::Noop,
+        "Frame the volume",
+        Message::FitView,
     )
     .glass_group(group);
-    let mut children = vec![
-        palette_button(ctx, group),
-        undo_element,
-        redo_element,
-        diagnostics,
-        diagnostics_menu(ctx, state),
-    ];
+    let mut children = vec![palette_button(ctx, group), undo_element, redo_element, fit];
     if pending {
         let dot_rect = Rect::from_center_size(
             Vec2::new(
@@ -439,143 +433,4 @@ fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a,
         shortcut.as_deref(),
         spec.action.message(),
     )
-}
-
-fn diagnostics_menu<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    state: &'a View<'a>,
-) -> Element<'a, Message> {
-    let key = Key::new("header.diagnostics");
-    if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 304.0, std::iter::empty());
-    }
-    let frame = state.frame;
-    let mut rows = Vec::new();
-    rows.push(crate::view::section_header(
-        ctx,
-        "Streaming",
-        Some(state.io.adapter),
-    ));
-    for (index, view) in frame.panes.iter().enumerate() {
-        rows.push(crate::view::labelled(
-            ctx,
-            &format!("Pane {}", index + 1),
-            &bricks(*view),
-        ));
-    }
-    rows.push(crate::view::labelled(
-        ctx,
-        "Levels",
-        &format!(
-            "{} · {} stored",
-            state.scene.dataset.level_count(),
-            state.scene.dataset.stored_levels()
-        ),
-    ));
-    rows.push(crate::view::labelled(
-        ctx,
-        "Geometry",
-        &format!(
-            "{:.0} MiB · {:.0} MiB disk",
-            state.scene.geometry_bytes() as f64 / (1024.0 * 1024.0),
-            state.io.store.spilled as f64 / (1024.0 * 1024.0)
-        ),
-    ));
-    rows.push(crate::view::labelled(
-        ctx,
-        "Bricks",
-        &format!("{:.0} MiB", frame.bytes as f64 / (1024.0 * 1024.0)),
-    ));
-    rows.push(crate::view::labelled(
-        ctx,
-        "Transparent",
-        &format!(
-            "{:.0} MiB · {} layers · {} dropped",
-            frame.fragments as f64 / (1024.0 * 1024.0),
-            frame.oit_layers,
-            frame.oit_dropped
-        ),
-    ));
-    if state.io.pending > 0 {
-        rows.push(grana_ui::row().gap(8.0).align(Align::Center).children([
-            crate::view::spinner(ctx, 12.0),
-            crate::view::caption(ctx, &format!("{} bricks in flight", state.io.pending)),
-        ]));
-    }
-    rows.push(menu_separator(ctx));
-    rows.push(crate::view::section_header(ctx, "Frame", None));
-    rows.push(crate::view::labelled(
-        ctx,
-        "Graphics",
-        &frame_budget(frame.profile),
-    ));
-    for (label, millis) in frame
-        .profile
-        .rows
-        .iter()
-        .filter(|(_, millis)| *millis > 0.0)
-    {
-        rows.push(crate::view::labelled(
-            ctx,
-            label,
-            &format!("{millis:.2} ms"),
-        ));
-    }
-    rows.push(menu_separator(ctx));
-    rows.push(crate::view::section_header(ctx, "Appearance", None));
-    for appearance in grana_ui::Appearance::ALL {
-        let key = match appearance {
-            grana_ui::Appearance::System => "appearance.system",
-            grana_ui::Appearance::Light => "appearance.light",
-            grana_ui::Appearance::Dark => "appearance.dark",
-        };
-        rows.push(crate::view::menu_row(
-            ctx,
-            key,
-            appearance.label(),
-            state.workspace.appearance == appearance,
-            Some(Message::SetAppearance(appearance)),
-        ));
-    }
-    rows.push(crate::view::menu_row(
-        ctx,
-        "appearance.contrast",
-        "Increase Contrast",
-        state.workspace.contrast,
-        Some(Message::SetContrast(!state.workspace.contrast)),
-    ));
-    rows.push(menu_separator(ctx));
-    rows.push(
-        crate::view::button_with(
-            ctx,
-            "Clear Derived Cache",
-            grana_ui::Role::Danger,
-            Length::Fill,
-        )
-        .named("cache.clear")
-        .press(Message::Command(Command::ClearCache)),
-    );
-    menu(ctx, key, 304.0, rows)
-}
-
-fn bricks(view: crate::state::ViewStats) -> String {
-    if view.demand == view.visible {
-        format!("L{} · {}/{}", view.level + 1, view.resident, view.demand)
-    } else {
-        format!(
-            "L{} · {}/{} of {}",
-            view.level + 1,
-            view.resident,
-            view.demand,
-            view.visible
-        )
-    }
-}
-
-fn frame_budget(profile: crate::state::ProfileStats) -> String {
-    if !profile.measured {
-        return "measuring".to_string();
-    }
-    let marker = if profile.over_budget() { "over" } else { "of" };
-    format!("{:.2} ms {marker} {:.0} ms", profile.total, profile.target)
 }

@@ -4,22 +4,17 @@ mod residency;
 mod signature;
 mod upload;
 
-use residency::{
-    Content, FrameTarget, LevelKey, Levels, Mode, PaneLevels, PaneRegion, PaneResidency, Regions,
-    Residency, SectionLevels, VolumeLevels,
-};
-use signature::{PaneSignature, Signature};
+use residency::{Content, FrameTarget, LevelKey, Levels, Mode, Residency, ViewState};
+use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::cast_slice;
 use glam::Vec3;
-use grana_display::{Camera, ChannelMask, PANE_COUNT, PaneKind, Quality, SectionCamera};
+use grana_display::Camera;
 use grana_gpu::Readback;
-use grana_volume::{
-    BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
-};
+use grana_volume::{BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
     Operations, Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
@@ -31,28 +26,23 @@ use wgpu::{
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::brick::{BrickArena, BrickTable};
 use crate::converge::Convergence;
-use crate::cut::CutLayer;
-use crate::frame::{FrameData, SectionData, SharedView, VolumeView};
+use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, SectionKey, SectionMeasure,
-    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan, fit_measured,
-    fit_volume, resolve_section_level, section_range, select_section_level, volume_dispatch,
+    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, bucket_scale, capacities,
+    decode_plan, fit_measured, fit_volume, volume_dispatch,
 };
 use crate::present::Present;
-use crate::profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
 use crate::sample;
 use crate::schema::SceneFrame;
-use crate::section::SectionPass;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
-use crate::slice::SlicePass;
 use crate::summary::Summary;
 use crate::target::{self, SceneTarget};
-use crate::temporal::{FramePanes, Temporal, TemporalPass};
+use crate::temporal::{FrameView, Temporal, TemporalPass};
 use crate::volume::VolumePass;
 use grana_volume::CHANNEL_LIMIT;
 
@@ -86,26 +76,8 @@ pub struct ViewInfo {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct CutInfo {
-    pub objects: u32,
-    pub draws: u32,
-    pub indices: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct OitInfo {
-    pub layers: u32,
-    pub dropped: u32,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct FrameInfo {
-    pub panes: [ViewInfo; PANE_COUNT],
-    pub cut: CutInfo,
-    pub oit: OitInfo,
-    pub bytes: u64,
-    pub geometry: u64,
-    pub fragments: u64,
+    pub view: ViewInfo,
     pub samples: u32,
     pub seeded: bool,
     pub history: bool,
@@ -113,37 +85,14 @@ pub struct FrameInfo {
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
-    pub profile: FrameProfile,
-}
-
-impl Default for FrameInfo {
-    fn default() -> Self {
-        Self {
-            panes: [ViewInfo::default(); PANE_COUNT],
-            cut: CutInfo::default(),
-            oit: OitInfo::default(),
-            bytes: 0,
-            geometry: 0,
-            fragments: 0,
-            samples: 0,
-            seeded: false,
-            history: false,
-            rebuilt: false,
-            settled: false,
-            truncated: false,
-            fading: false,
-            profile: FrameProfile::default(),
-        }
-    }
 }
 
 #[derive(Default)]
 pub struct Requests {
     pub time: u32,
     pub volume: Vec<BrickRequest>,
-    pub section: Vec<BrickRequest>,
     pub prefetch: Vec<BrickRequest>,
-    pub panes: [ViewInfo; PANE_COUNT],
+    pub view: ViewInfo,
 }
 
 #[derive(Clone, Copy)]
@@ -158,52 +107,17 @@ pub(crate) struct Lighting<'a> {
     pub(crate) ao: &'a BindGroup,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Lens<'a> {
-    pub camera: &'a Camera,
-    pub aspect: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum PaneFrame<'a> {
-    Volume {
-        camera: &'a Camera,
-        lens: Lens<'a>,
-        region: [u32; 4],
-    },
-    Section {
-        section: &'a SectionCamera,
-        region: [u32; 4],
-    },
-}
-
-impl PaneFrame<'_> {
-    pub fn kind(&self) -> PaneKind {
-        match self {
-            Self::Volume { .. } => PaneKind::Volume,
-            Self::Section { .. } => PaneKind::Section,
-        }
-    }
-
-    pub fn region(&self) -> [u32; 4] {
-        match self {
-            Self::Volume { region, .. } | Self::Section { region, .. } => *region,
-        }
-    }
-}
-
 pub struct Frame<'a, 'b> {
     pub target: &'a TextureView,
     pub size: [u32; 2],
-    pub panes: [Option<PaneFrame<'a>>; PANE_COUNT],
+    pub camera: &'a Camera,
+    pub viewport: [u32; 4],
     pub time: u32,
     pub region: Region,
     pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
     pub scene: &'a SceneFrame<'b>,
-    pub pane_channels: [ChannelMask; PANE_COUNT],
-    pub pane_quality: [Quality; PANE_COUNT],
     pub prefetch: bool,
     pub level_cap: usize,
     pub assured: bool,
@@ -225,9 +139,6 @@ pub struct Renderer {
     shadow: Option<Shadow>,
     volume: VolumePass,
     gtao: crate::ao::AoPipeline,
-    section: SectionPass,
-    cut: [CutLayer; PANE_COUNT],
-    slice: [SlicePass; PANE_COUNT],
     meshes: MeshPasses,
     markers: MarkerPasses,
     dummy: TextureView,
@@ -237,15 +148,10 @@ pub struct Renderer {
     pyramid: Option<Pyramid>,
     channels: usize,
     time: u32,
-    volume_level: [Option<usize>; PANE_COUNT],
-    volume_measure: [Vec<Option<usize>>; PANE_COUNT],
-    volume_rejection: [Option<(u64, usize)>; PANE_COUNT],
-    section_level: [Option<usize>; PANE_COUNT],
-    motion: [Option<u64>; PANE_COUNT],
-    section_probe: [SectionProbe; PANE_COUNT],
-    section_measure: [Option<(u64, SectionMeasure)>; PANE_COUNT],
-    section_sequence: u64,
-    probe_mark: [u64; PANE_COUNT],
+    volume_level: Option<usize>,
+    volume_measure: Vec<Option<usize>>,
+    volume_rejection: Option<(u64, usize)>,
+    motion: Option<u64>,
     level_cap: Option<usize>,
     budget: u64,
     slot_bytes: u64,
@@ -270,15 +176,11 @@ pub struct Renderer {
     object_key: Option<u64>,
     settled: Option<Residency>,
     planned: Option<Residency>,
-    regions: Option<Regions>,
+    viewport: Option<[u32; 4]>,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
-    oit_readback: [Readback; PANE_COUNT],
-    dropped: [u32; PANE_COUNT],
-    profile: Option<Profiler>,
-    measured: [f32; STAGE_COUNT],
-    frame_target: f32,
+    oit_readback: Readback,
     sequence: u64,
     info: FrameInfo,
 }
@@ -314,9 +216,6 @@ impl Renderer {
             shadow: None,
             volume: VolumePass::new(device, &layouts),
             gtao: crate::ao::AoPipeline::new(device, &layouts),
-            section: SectionPass::new(device, &layouts),
-            cut: std::array::from_fn(|_| CutLayer::new(device, &layouts)),
-            slice: std::array::from_fn(|_| SlicePass::new(device, &layouts)),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),
             layouts,
@@ -327,15 +226,10 @@ impl Renderer {
             pyramid: None,
             channels: 0,
             time: 0,
-            volume_level: [None; PANE_COUNT],
-            volume_measure: std::array::from_fn(|_| Vec::new()),
-            volume_rejection: [None; PANE_COUNT],
-            section_level: [None; PANE_COUNT],
-            motion: [None; PANE_COUNT],
-            section_probe: std::array::from_fn(|_| SectionProbe::default()),
-            section_measure: std::array::from_fn(|_| None),
-            section_sequence: 0,
-            probe_mark: [0; PANE_COUNT],
+            volume_level: None,
+            volume_measure: Vec::new(),
+            volume_rejection: None,
+            motion: None,
             level_cap: None,
             budget,
             slot_bytes: 0,
@@ -360,24 +254,14 @@ impl Renderer {
             object_key: None,
             settled: None,
             planned: None,
-            regions: None,
+            viewport: None,
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
-            oit_readback: std::array::from_fn(|_| {
-                Readback::new(device, "grana.oit.dropped", 4, FEEDBACK_SLOTS)
-            }),
-            dropped: [0; PANE_COUNT],
-            profile: Profiler::new(device, queue),
-            measured: [0.0; STAGE_COUNT],
-            frame_target: crate::profile::frame_target(None),
+            oit_readback: Readback::new(device, "grana.oit.dropped", 4, FEEDBACK_SLOTS),
             sequence: 0,
             info: FrameInfo::default(),
         }
-    }
-
-    pub fn profiled(&self) -> bool {
-        self.profile.is_some()
     }
 
     pub fn format(&self) -> TextureFormat {
@@ -403,14 +287,6 @@ impl Renderer {
     pub fn set_budget(&mut self, budget: u64) {
         assert!(budget > 0, "a renderer needs a residency budget");
         self.budget = budget;
-    }
-
-    pub fn set_frame_target(&mut self, target: f32) {
-        assert!(
-            target.is_finite() && target > 0.0,
-            "a frame budget is a positive duration"
-        );
-        self.frame_target = target;
     }
 
     pub fn reserve(
@@ -450,20 +326,15 @@ impl Renderer {
         self.exporting = true;
         self.fade = None;
         self.level_cap = None;
-        self.volume_level = [None; PANE_COUNT];
-        self.volume_rejection = [None; PANE_COUNT];
-        self.section_level = [None; PANE_COUNT];
-        self.section_probe = std::array::from_fn(|_| SectionProbe::default());
-        self.section_measure = std::array::from_fn(|_| None);
-        self.section_sequence = 0;
-        self.probe_mark = [0; PANE_COUNT];
+        self.volume_level = None;
+        self.volume_rejection = None;
         self.planned = None;
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
-        self.motion = [None; PANE_COUNT];
+        self.motion = None;
         self.info = FrameInfo::default();
     }
 
@@ -523,7 +394,7 @@ impl Renderer {
         self.feedback = Some(Readback::new(
             device,
             "grana.feedback",
-            (PANE_COUNT * (BAND + 1) * self.view_words) as u64 * size_of::<u32>() as u64,
+            ((BAND + 1) * self.view_words) as u64 * size_of::<u32>() as u64,
             FEEDBACK_SLOTS,
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
@@ -554,20 +425,12 @@ impl Renderer {
         self.channels = channels;
         self.slot_bytes = slot_bytes;
         self.time = 0;
-        self.volume_level = [None; PANE_COUNT];
-        self.volume_measure = std::array::from_fn(|_| vec![None; pyramid.level_count()]);
-        self.volume_rejection = [None; PANE_COUNT];
-        self.section_level = [None; PANE_COUNT];
-        self.section_probe = std::array::from_fn(|_| SectionProbe::default());
-        self.section_measure = std::array::from_fn(|_| None);
-        self.section_sequence = 0;
-        self.probe_mark = [0; PANE_COUNT];
+        self.volume_level = None;
+        self.volume_measure = vec![None; pyramid.level_count()];
+        self.volume_rejection = None;
         self.meshes.clear();
-        for slice in &mut self.slice {
-            slice.reset();
-        }
         self.target = None;
-        self.regions = None;
+        self.viewport = None;
         self.convergence.forget();
         self.pick_readback = None;
         self.pick_pending = false;
@@ -582,7 +445,7 @@ impl Renderer {
         self.planned = None;
         self.exporting = false;
         self.fade = None;
-        self.motion = [None; PANE_COUNT];
+        self.motion = None;
         self.info = FrameInfo::default();
     }
 
@@ -596,10 +459,6 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         assert!(frame.samples > 0, "a target resolves at least one sample");
-        assert!(
-            frame.panes.iter().any(Option::is_some),
-            "a frame draws at least one pane"
-        );
         let size = frame.size;
         if self
             .target
@@ -612,39 +471,18 @@ impl Renderer {
         }
         let mut target = self.target.take().expect("the frame target is ready");
         self.level_cap = Some(frame.level_cap);
-        let mut info = self.render(device, queue, &mut target, frame);
+        let info = self.render(device, queue, &mut target, frame);
         self.target = Some(target);
-        if let Some(profile) = self.profile.as_mut()
-            && let Some(measured) = profile.poll(device)
-        {
-            self.measured = measured.stages;
-        }
-        info.profile = FrameProfile {
-            stages: self.measured,
-            total: self.measured.iter().sum(),
-            target: self.frame_target,
-        };
         info
     }
 
-    pub fn request_pick(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        pane: usize,
-        point: [u32; 2],
-    ) -> bool {
-        assert!(pane < PANE_COUNT, "a pick names one of the panes");
+    pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {
         if self.pick_pending {
             return false;
         }
-        let Some(regions) = self.regions else {
+        let Some(region) = self.viewport else {
             return false;
         };
-        let Some(placed) = regions.panes[pane] else {
-            return false;
-        };
-        let region = placed.region;
         let inside = point[0] >= region[0]
             && point[0] < region[0] + region[2]
             && point[1] >= region[1]
@@ -657,7 +495,6 @@ impl Renderer {
             scene,
             meshes,
             markers,
-            slice,
             pick_target,
             pick_readback,
             pick_pending,
@@ -686,17 +523,14 @@ impl Renderer {
                     store: StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: match placed.kind {
-                PaneKind::Volume => Some(RenderPassDepthStencilAttachment {
-                    view: target.depth(),
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Clear(1.0),
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: target.depth(),
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
                 }),
-                PaneKind::Section => None,
-            },
+                stencil_ops: None,
+            }),
             ..Default::default()
         });
         pass.set_viewport(
@@ -708,18 +542,9 @@ impl Renderer {
             1.0,
         );
         pass.set_scissor_rect(0, 0, 1, 1);
-        let group = scene.group(pane);
-        match placed.kind {
-            PaneKind::Volume => {
-                meshes.draw_pick(pane, &mut pass);
-                markers.draw_pick_volume(pane, &mut pass, group);
-            }
-            PaneKind::Section => {
-                markers.draw_pick_section_behind(pane, &mut pass, group);
-                slice[pane].draw_pick(&mut pass, group);
-                markers.draw_pick_section_front(pane, &mut pass, group);
-            }
-        }
+        let group = scene.group();
+        meshes.draw_pick(&mut pass);
+        markers.draw_pick_volume(&mut pass, group);
         drop(pass);
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);
@@ -791,15 +616,6 @@ impl Renderer {
     ) -> crate::image::Image16 {
         let (texture, size) = self.wide_picture(device, queue, exposure, transparent);
         crate::image::read16(device, queue, &texture, size)
-    }
-}
-
-pub(super) fn neighbour(rendered: Option<usize>, level: usize, levels: usize) -> usize {
-    match rendered {
-        Some(rendered) if rendered != level => rendered,
-        _ if level + 1 < levels => level + 1,
-        _ if level > 0 => level - 1,
-        _ => level,
     }
 }
 

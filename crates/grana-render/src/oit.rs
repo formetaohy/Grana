@@ -11,12 +11,11 @@ const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
 const COLOR_BYTES: u64 = 8;
 const TAIL_BYTES: u64 = 20;
-const COVERAGE_BYTES: u64 = 4;
 const DROPPED_BYTES: u64 = 4;
 const BYTES_PER_PIXEL: u64 = 76;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
-const PANE_PIXELS_STEP: u64 = 1 << 17;
+const PIXEL_STEP: u64 = 1 << 17;
 const TAIL_PIXELS: u64 = 1 << 20;
 const TAIL_PIXELS_COARSE: u64 = 1 << 22;
 
@@ -100,7 +99,6 @@ pub(crate) struct Oit {
     size: [u32; 2],
     capacity: u64,
     tail_scale: u32,
-    tail_size: [u32; 2],
 }
 
 impl Oit {
@@ -113,12 +111,12 @@ impl Oit {
     ) -> Self {
         assert!(
             pixels > 0 && size[0] > 0 && size[1] > 0,
-            "a fragment store covers a non empty pane of a non empty surface"
+            "a fragment store covers a non empty view of a non empty surface"
         );
         let capacity = pixels
-            .div_ceil(PANE_PIXELS_STEP)
-            .checked_mul(PANE_PIXELS_STEP)
-            .expect("a fragment store holds a finite pane");
+            .div_ceil(PIXEL_STEP)
+            .checked_mul(PIXEL_STEP)
+            .expect("a fragment store holds a finite view");
         let surface = u64::from(size[0]) * u64::from(size[1]);
         let tail_scale = tail_scale(surface);
         let tail_size = [size[0].div_ceil(tail_scale), size[1].div_ceil(tail_scale)];
@@ -230,7 +228,6 @@ impl Oit {
             size,
             capacity,
             tail_scale,
-            tail_size,
         }
     }
 
@@ -238,7 +235,7 @@ impl Oit {
         self.size == size && pixels <= self.capacity
     }
 
-    pub fn tail_pane(&self, region: [u32; 4]) -> [u32; 2] {
+    pub fn tail_size(&self, region: [u32; 4]) -> [u32; 2] {
         [
             region[2].div_ceil(self.tail_scale),
             region[3].div_ceil(self.tail_scale),
@@ -255,13 +252,6 @@ impl Oit {
 
     pub fn dropped(&self) -> &Buffer {
         &self.dropped
-    }
-
-    pub fn bytes(&self) -> u64 {
-        let store = self.keys.size() + self.colors.size() + self.counts.size();
-        let tail = u64::from(self.tail_size[0]) * u64::from(self.tail_size[1]) * TAIL_BYTES;
-        let coverage = u64::from(self.size[0]) * u64::from(self.size[1]) * COVERAGE_BYTES;
-        store + tail + coverage
     }
 
     pub fn write_group(&self) -> &BindGroup {

@@ -4,8 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use grana_animation::Timeline;
-use grana_display::{OutputSize, PaneLayout, Panes};
-use grana_engine::Panels;
+use grana_display::{Camera, OutputSize};
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::Channels;
 use grana_project::ViewState;
@@ -56,16 +55,11 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
     let view = named(&mut session, request.view.as_deref(), &request.input)?;
     let scene = session.scene().expect("the opened session holds a scene");
     let image = session.image().expect("the opened session holds an image");
-    let mut panes = Panes::new();
+    let mut camera = Camera::new(35.0);
     let mut timeline = session.timeline().clone();
     if let Some(view) = &view {
-        panes.restore(view.panes);
-        panes.set_layout(view.layout);
-        panes.set_split(view.split);
-        panes.set_row(view.row);
+        camera.restore(view.camera);
         timeline = view.timeline.clone();
-    } else {
-        panes.set_layout(PaneLayout::Single);
     }
     let width = request.width.unwrap_or_else(|| default_width(&view, kind));
     let even = kind == DestinationKind::Movie;
@@ -74,25 +68,16 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         None => OutputSize::of_width(width),
     };
     let size = if even { size.even() } else { size };
-    let panels = Panels::of(&panes, size.to_array());
-    let regions = panels.export(size);
     if view.is_none() {
-        panes.fit(
-            scene.dataset.world_size(),
-            scene.dataset.voxel_size(),
-            std::array::from_fn(|index| {
-                regions.panes[index].map_or(1.0, |pane| aspect(pane.region))
-            }),
-        );
+        camera.fit(scene.dataset.world_size(), aspect(size.to_array()));
     }
     let plan = Job {
         kind,
         output: &request.output,
-        panes: &panes,
+        camera: &camera,
         timeline: &timeline,
         scene,
         request,
-        panels,
         size,
     }
     .plan()?;
@@ -125,17 +110,16 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
 struct Job<'a> {
     kind: DestinationKind,
     output: &'a Path,
-    panes: &'a Panes,
+    camera: &'a Camera,
     timeline: &'a Timeline,
     scene: &'a Scene,
     request: &'a Request,
-    panels: Panels,
     size: OutputSize,
 }
 
 impl Job<'_> {
     fn plan(&self) -> Result<Plan, String> {
-        let views = self.panes.views();
+        let camera = self.camera.state();
         let (destination, poses, fps) = match self.kind {
             DestinationKind::Image => {
                 let frames = self.scene.frame_count();
@@ -149,7 +133,7 @@ impl Job<'_> {
                     Destination::Image {
                         path: self.output.to_path_buf(),
                     },
-                    vec![Pose { time, views }],
+                    vec![Pose { time, camera }],
                     0,
                 )
             }
@@ -171,7 +155,7 @@ impl Job<'_> {
                 if frames == 0 {
                     return Err("the dataset holds no frame to render".to_string());
                 }
-                let poses = (0..frames).map(|time| Pose { time, views }).collect();
+                let poses = (0..frames).map(|time| Pose { time, camera }).collect();
                 (
                     Destination::Sequence {
                         directory: self.output.to_path_buf(),
@@ -184,7 +168,6 @@ impl Job<'_> {
         };
         Ok(Plan {
             destination,
-            panels: self.panels,
             size: self.size,
             transparent: self.request.transparent,
             poses,
@@ -279,6 +262,6 @@ fn default_width(view: &Option<ViewState>, kind: DestinationKind) -> u32 {
     })
 }
 
-fn aspect(region: [u32; 4]) -> f32 {
-    region[2].max(1) as f32 / region[3].max(1) as f32
+fn aspect(size: [u32; 2]) -> f32 {
+    size[0].max(1) as f32 / size[1].max(1) as f32
 }

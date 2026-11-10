@@ -1,5 +1,5 @@
-use grana_display::{PANE_COUNT, PaneKind, Panes};
-use grana_render::{FrameInfo, PaneFrame, PickId, Renderer, Requests};
+use grana_display::Camera;
+use grana_render::{FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Scene, Selection};
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
@@ -13,9 +13,9 @@ pub const SAMPLE_LIMIT: u32 = 32;
 pub struct ViewportFrame<'a> {
     pub target: &'a TextureView,
     pub scene: &'a Scene,
-    pub panes: &'a Panes,
+    pub camera: &'a Camera,
     pub size: [u32; 2],
-    pub regions: [Option<[u32; 4]>; PANE_COUNT],
+    pub viewport: [u32; 4],
     pub revision: u64,
     pub prefetch: bool,
     pub level_cap: usize,
@@ -62,10 +62,6 @@ impl Engine {
         self.prepared = None;
     }
 
-    pub fn set_frame_target(&mut self, target: f32) {
-        self.renderer.set_frame_target(target);
-    }
-
     pub fn requests_pending(&self) -> bool {
         self.renderer.requests_pending()
     }
@@ -85,20 +81,11 @@ impl Engine {
         frame: ViewportFrame<'_>,
     ) -> Result<FrameInfo, String> {
         self.renderer.set_exporting(false);
-        let lens = frame
-            .panes
-            .panes()
-            .iter()
-            .enumerate()
-            .filter(|(index, pane)| frame.regions[*index].is_some() && pane.kind().volume())
-            .find_map(|(index, pane)| {
-                let region = frame.regions[index]?;
-                Some(crate::view::Lens {
-                    camera: pane.camera(),
-                    height: region[3],
-                })
-            });
-        let detail = view::detail(frame.scene, lens);
+        let lens = view::Lens {
+            camera: frame.camera,
+            height: frame.viewport[3].max(1),
+        };
+        let detail = view::detail(frame.scene, Some(lens));
         if self
             .prepared
             .as_ref()
@@ -115,37 +102,25 @@ impl Engine {
             renderer, prepared, ..
         } = self;
         let prepared = prepared.as_ref().expect("the rendered scene is ready");
-        let rendered = &prepared.scene;
-        let panes = pane_frames(frame.panes, frame.regions);
-        let channels = std::array::from_fn(|index| frame.panes.pane(index).channels());
-        let quality = std::array::from_fn(|index| frame.panes.pane(index).quality());
-        let info = frame::draw(
+        Ok(frame::draw(
             renderer,
             device,
             queue,
             View {
                 target: frame.target,
                 scene: frame.scene,
-                panes,
-                channels,
-                quality,
+                camera: frame.camera,
+                viewport: frame.viewport,
                 size: frame.size,
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,
                 level_cap: frame.level_cap,
             },
-            rendered,
-        );
-        Ok(info)
+            &prepared.scene,
+        ))
     }
 
-    pub fn request_pick(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        pane: usize,
-        point: [u32; 2],
-    ) -> bool {
+    pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {
         if self.pending_pick.is_some() {
             return false;
         }
@@ -157,7 +132,7 @@ impl Engine {
         let Some(prepared) = prepared.as_ref() else {
             return false;
         };
-        if !renderer.request_pick(device, queue, pane, point) {
+        if !renderer.request_pick(device, queue, point) {
             return false;
         }
         *pending_pick = Some(Identities {
@@ -189,28 +164,4 @@ impl Engine {
     pub fn pick_pending(&self) -> bool {
         self.pending_pick.is_some()
     }
-}
-
-fn pane_frames<'a>(
-    panes: &'a Panes,
-    regions: [Option<[u32; 4]>; PANE_COUNT],
-) -> [Option<PaneFrame<'a>>; PANE_COUNT] {
-    std::array::from_fn(|index| {
-        let region = regions[index]?;
-        let pane = panes.pane(index);
-        match pane.kind() {
-            PaneKind::Volume => Some(PaneFrame::Volume {
-                camera: pane.camera(),
-                lens: grana_render::Lens {
-                    camera: pane.camera(),
-                    aspect: region[2].max(1) as f32 / region[3].max(1) as f32,
-                },
-                region,
-            }),
-            PaneKind::Section => Some(PaneFrame::Section {
-                section: pane.section(),
-                region,
-            }),
-        }
-    })
 }

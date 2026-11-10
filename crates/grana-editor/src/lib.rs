@@ -27,8 +27,8 @@ pub use message::{Message, PlotEvent};
 pub use panel::{Panel, apply, build};
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
-    AnnotationTool, ComparisonMetric, FrameStats, MaskBrush, MaskBrushTool, Palette, Playback,
-    ProfileStats, RelationMetric, Sections, View, ViewStats, Workspace,
+    AnnotationTool, ComparisonMetric, Disclosures, MaskBrush, MaskBrushTool, Palette, Playback,
+    RelationMetric, View, Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;

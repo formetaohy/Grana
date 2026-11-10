@@ -1,8 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_display::{OutputSize, Panes};
-use grana_engine::Panels;
+use grana_display::OutputSize;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::{Capture, CaptureKind, CaptureRequest, Channels};
 use grana_scene::Scene;
@@ -49,24 +48,18 @@ impl Capture for OfflineCapture {
     ) -> Result<(), String> {
         let mut slot = self.state()?;
         let offline = slot.as_mut().expect("the offline context is ready");
-        let mut panes = Panes::new();
-        panes.restore(request.view.panes);
-        panes.set_layout(request.view.layout);
-        panes.set_split(request.view.split);
-        panes.set_row(request.view.row);
         let size = OutputSize::of(request.size[0], request.size[1]);
         let size = match request.kind {
             CaptureKind::Movie => size.even(),
             CaptureKind::Still { .. } | CaptureKind::Sequence => size,
         };
-        let panels = Panels::of(&panes, size.to_array());
-        let views = panes.views();
+        let camera = request.view.camera;
         let (destination, poses, fps) = match request.kind {
             CaptureKind::Still { time } => (
                 Destination::Image {
                     path: path.to_path_buf(),
                 },
-                vec![Pose { time, views }],
+                vec![Pose { time, camera }],
                 0,
             ),
             CaptureKind::Movie => {
@@ -90,7 +83,7 @@ impl Capture for OfflineCapture {
                 if frames == 0 {
                     return Err(format!("{} holds no frame to render", path.display()));
                 }
-                let poses = (0..frames).map(|time| Pose { time, views }).collect();
+                let poses = (0..frames).map(|time| Pose { time, camera }).collect();
                 (
                     Destination::Sequence {
                         directory: path.to_path_buf(),
@@ -104,7 +97,6 @@ impl Capture for OfflineCapture {
         let task = Task {
             plan: Plan {
                 destination,
-                panels,
                 size,
                 transparent: request.transparent,
                 poses,

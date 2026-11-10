@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 
 use grana_scene::{SegmentModel, SegmentParams};
 
@@ -36,7 +36,6 @@ impl Session {
             Command::SaveProject => effects.save_project = Some(false),
             Command::SaveProjectAs => effects.save_project = Some(true),
             Command::SaveSnapshot => effects.snapshot = true,
-            Command::ClearCache => self.clear_cache(),
             Command::SetTime(time) => self.set_time(time),
             Command::SelectSeries(index) => {
                 if index != self.series_index && !self.select_series(index) {

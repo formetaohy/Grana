@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+﻿use std::collections::HashMap;
 
 use glam::{Mat4, Vec2, Vec3};
 use grana_scene::Scene;
@@ -105,7 +105,7 @@ fn text(metric: Option<grana_scene::ObjectColor>, value: Option<f32>, index: usi
     };
     match value {
         Some(value) if value.is_finite() => crate::value(value, metric.unit(), metric.decimals()),
-        _ => "–".to_string(),
+        _ => "\u{2026}".to_string(),
     }
 }
 
@@ -134,50 +134,6 @@ pub fn volume_labels(
         },
     );
     place(near.into_iter().map(|(_, _, at, label)| (at, label)))
-}
-
-pub fn section_labels(
-    labels: &[Label],
-    section: &grana_display::SectionCamera,
-    rect: Rect,
-) -> Vec<Placed> {
-    let normal = section.normal();
-    let offset = section.offset();
-    let center = section.center();
-    let right = section.right();
-    let up = section.up();
-    let points_per_micron = rect.height() / section.span();
-    let mut inside = labels
-        .iter()
-        .filter(|label| straddles(label, normal, offset))
-        .filter_map(|label| {
-            let position = Vec3::from(label.position);
-            let at = Vec2::new(
-                rect.center().x + (position.dot(right) - center.dot(right)) * points_per_micron,
-                rect.center().y - (position.dot(up) - center.dot(up)) * points_per_micron,
-            );
-            self::inside(rect, at).then_some((!label.selected, at, label))
-        })
-        .collect::<Vec<_>>();
-    inside.sort_unstable_by(|(left_selected, left, _), (right_selected, right, _)| {
-        left_selected
-            .cmp(right_selected)
-            .then(left.y.total_cmp(&right.y))
-            .then(left.x.total_cmp(&right.x))
-    });
-    place(inside.into_iter().map(|(_, at, label)| (at, label)))
-}
-
-fn straddles(label: &Label, normal: Vec3, offset: f32) -> bool {
-    let mut low = 0.0f32;
-    let mut high = 0.0f32;
-    for axis in 0..3 {
-        let below = normal[axis] * label.low[axis];
-        let above = normal[axis] * label.high[axis];
-        low += below.min(above);
-        high += below.max(above);
-    }
-    low <= offset && offset <= high
 }
 
 fn place<'a>(labels: impl Iterator<Item = (Vec2, &'a Label)>) -> Vec<Placed> {

@@ -6,11 +6,10 @@ use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferUsages, Device,
     Queue, Sampler, SamplerDescriptor, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
     TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor,
+    TextureViewDescriptor, util::DeviceExt,
 };
 
-use crate::PANE_COUNT;
-use crate::frame::{FrameData, SectionData};
+use crate::frame::FrameData;
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
 use grana_display::{TransferFunction, VolumeMode};
@@ -21,6 +20,8 @@ const LUT_SIZE: usize = 1024;
 const TRANSPARENT_ALPHA: f32 = 0.999;
 
 const MINIMUM_ALPHA: f32 = 1.0e-4;
+
+const NEUTRAL_WORDS: usize = 108;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,21 +35,28 @@ struct ChannelData {
     pad: [f32; 2],
 }
 
-const _: () = assert!(size_of::<ChannelData>() == 32);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct NeutralData {
+    words: [u32; NEUTRAL_WORDS],
+}
+
+const _: () = {
+    assert!(size_of::<ChannelData>() == 32);
+    assert!(size_of::<NeutralData>() == 432);
+};
 
 pub(crate) struct SceneTable {
-    frames: [Buffer; PANE_COUNT],
-    sections: [Buffer; PANE_COUNT],
-    channels: [Table<ChannelData>; PANE_COUNT],
+    frame: Buffer,
+    channels: Table<ChannelData>,
     shadow_frame: Buffer,
     shadow_channels: Table<ChannelData>,
     shadow_group: BindGroup,
     lut: Texture,
     extinction: Texture,
-    section: Texture,
     transfers: Vec<Option<TransferFunction>>,
     thresholds: Vec<Option<f32>>,
-    groups: [BindGroup; PANE_COUNT],
+    group: BindGroup,
     channels_count: usize,
 }
 
@@ -59,37 +67,24 @@ impl SceneTable {
             "a scene binds one to {} channels",
             CHANNEL_LIMIT
         );
-        let frames = std::array::from_fn(|_| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("grana.frame.uniforms"),
-                size: size_of::<FrameData>() as u64,
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+        let frame = uniform_buffer(device, "grana.frame.uniforms", size_of::<FrameData>());
+        let neutral = NeutralData {
+            words: [0; NEUTRAL_WORDS],
+        };
+        let neutral = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grana.neutral.uniforms"),
+            contents: bytemuck::bytes_of(&neutral),
+            usage: BufferUsages::UNIFORM,
         });
-        let sections = std::array::from_fn(|_| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("grana.section.uniforms"),
-                size: size_of::<SectionData>() as u64,
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        });
-        let table =
-            std::array::from_fn(|_| Table::with_capacity(device, "grana.channels", CHANNEL_LIMIT));
+        let table = Table::with_capacity(device, "grana.channels", CHANNEL_LIMIT);
         let lut = transfer_texture(device, "grana.transfer.lut", channels);
         let extinction = transfer_texture(device, "grana.transfer.extinction", channels);
-        let section = transfer_texture(device, "grana.transfer.section", channels);
         let lut_view = lut.create_view(&TextureViewDescriptor {
             label: Some("grana.transfer.lut.view"),
             ..Default::default()
         });
         let extinction_view = extinction.create_view(&TextureViewDescriptor {
             label: Some("grana.transfer.extinction.view"),
-            ..Default::default()
-        });
-        let section_view = section.create_view(&TextureViewDescriptor {
-            label: Some("grana.transfer.section.view"),
             ..Default::default()
         });
         let lut_sampler = device.create_sampler(&SamplerDescriptor {
@@ -101,61 +96,47 @@ impl SceneTable {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let groups = std::array::from_fn(|index| {
-            scene_group(
-                device,
-                layouts,
-                SceneBinding {
-                    frame: &frames[index],
-                    section: &sections[index],
-                    channels: table[index].buffer(),
-                    lut: &lut_view,
-                    sampler: &lut_sampler,
-                    extinction: &extinction_view,
-                    section_lut: &section_view,
-                },
-            )
-        });
-        let shadow_frame = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.shadow.frame.uniforms"),
-            size: size_of::<FrameData>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let shadow_channels = Table::with_capacity(device, "grana.shadow.channels", CHANNEL_LIMIT);
-        let shadow_group = scene_group(
+        let binding = SceneBinding {
+            frame: &frame,
+            neutral: &neutral,
+            channels: table.buffer(),
+            lut: &lut_view,
+            sampler: &lut_sampler,
+            extinction: &extinction_view,
+        };
+        let group = scene_group(device, layouts, &binding);
+        let shadow_frame = uniform_buffer(
             device,
-            layouts,
-            SceneBinding {
-                frame: &shadow_frame,
-                section: &sections[0],
-                channels: shadow_channels.buffer(),
-                lut: &lut_view,
-                sampler: &lut_sampler,
-                extinction: &extinction_view,
-                section_lut: &section_view,
-            },
+            "grana.shadow.frame.uniforms",
+            size_of::<FrameData>(),
         );
+        let shadow_channels = Table::with_capacity(device, "grana.shadow.channels", CHANNEL_LIMIT);
+        let shadow_binding = SceneBinding {
+            frame: &shadow_frame,
+            neutral: &neutral,
+            channels: shadow_channels.buffer(),
+            lut: &lut_view,
+            sampler: &lut_sampler,
+            extinction: &extinction_view,
+        };
+        let shadow_group = scene_group(device, layouts, &shadow_binding);
         Self {
-            frames,
-            sections,
+            frame,
             channels: table,
             shadow_frame,
             shadow_channels,
             shadow_group,
             lut,
             extinction,
-            section,
             transfers: vec![None; channels],
             thresholds: vec![None; channels],
-            groups,
+            group,
             channels_count: channels,
         }
     }
 
-    pub fn group(&self, pane: usize) -> &BindGroup {
-        assert!(pane < PANE_COUNT, "a scene table names one of the panes");
-        &self.groups[pane]
+    pub fn group(&self) -> &BindGroup {
+        &self.group
     }
 
     pub fn shadow_group(&self) -> &BindGroup {
@@ -189,50 +170,30 @@ impl SceneTable {
         device: &Device,
         queue: &Queue,
         pyramid: &Pyramid,
-        pane: usize,
         rows: &[ChannelRow],
     ) {
-        assert!(pane < PANE_COUNT, "a scene table names one of the panes");
         assert_eq!(
             rows.len(),
             self.channels_count,
             "the scene carries one row per channel"
         );
         let data = channel_data(rows, &self.thresholds, pyramid);
-        self.channels[pane].write(device, queue, &data);
+        self.channels.write(device, queue, &data);
     }
 
     pub fn write_shadow_frame(&mut self, queue: &Queue, frame: FrameData) {
         queue.write_buffer(&self.shadow_frame, 0, bytemuck::bytes_of(&frame));
     }
 
-    pub fn write_frame(
-        &mut self,
-        pane: usize,
-        queue: &Queue,
-        frame: Option<FrameData>,
-        section: Option<SectionData>,
-    ) {
-        assert!(pane < PANE_COUNT, "a scene table names one of the panes");
-        if let Some(frame) = frame {
-            queue.write_buffer(&self.frames[pane], 0, bytemuck::bytes_of(&frame));
-        }
-        if let Some(section) = section {
-            queue.write_buffer(&self.sections[pane], 0, bytemuck::bytes_of(&section));
-        }
+    pub fn write_frame(&self, queue: &Queue, frame: FrameData) {
+        queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(&frame));
     }
 
     fn write_transfer(&mut self, queue: &Queue, row: usize, transfer: &TransferFunction) {
         let lut = transfer.lut(LUT_SIZE);
-        let section = transfer.section_lut(LUT_SIZE);
         let mut straight = Vec::with_capacity(lut.len() * 4);
         let mut extinction = Vec::with_capacity(lut.len() * 4);
-        let mut coverage = Vec::with_capacity(lut.len() * 4);
-        for (
-            [red, green, blue, alpha],
-            [section_red, section_green, section_blue, section_alpha],
-        ) in lut.iter().zip(&section)
-        {
+        for [red, green, blue, alpha] in lut.iter() {
             for channel in [*red, *green, *blue, *alpha] {
                 straight.push(f16::from_f32(channel).to_bits());
             }
@@ -240,13 +201,9 @@ impl SceneTable {
             for channel in [*red, *green, *blue, -(1.0 - opacity).ln()] {
                 extinction.push(f16::from_f32(channel).to_bits());
             }
-            for channel in [*section_red, *section_green, *section_blue, *section_alpha] {
-                coverage.push(f16::from_f32(channel).to_bits());
-            }
         }
         write_row(queue, &self.lut, row, &straight);
         write_row(queue, &self.extinction, row, &extinction);
-        write_row(queue, &self.section, row, &coverage);
         self.thresholds[row] = lut
             .iter()
             .position(|stop| stop[3] > MINIMUM_ALPHA)
@@ -256,15 +213,14 @@ impl SceneTable {
 
 struct SceneBinding<'a> {
     frame: &'a Buffer,
-    section: &'a Buffer,
+    neutral: &'a Buffer,
     channels: &'a Buffer,
     lut: &'a TextureView,
     sampler: &'a Sampler,
     extinction: &'a TextureView,
-    section_lut: &'a TextureView,
 }
 
-fn scene_group(device: &Device, layouts: &Layouts, binding: SceneBinding<'_>) -> BindGroup {
+fn scene_group(device: &Device, layouts: &Layouts, binding: &SceneBinding<'_>) -> BindGroup {
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("grana.scene.group"),
         layout: &layouts.scene,
@@ -275,7 +231,7 @@ fn scene_group(device: &Device, layouts: &Layouts, binding: SceneBinding<'_>) ->
             },
             BindGroupEntry {
                 binding: 1,
-                resource: binding.section.as_entire_binding(),
+                resource: binding.neutral.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 2,
@@ -293,11 +249,16 @@ fn scene_group(device: &Device, layouts: &Layouts, binding: SceneBinding<'_>) ->
                 binding: 5,
                 resource: BindingResource::TextureView(binding.extinction),
             },
-            BindGroupEntry {
-                binding: 6,
-                resource: BindingResource::TextureView(binding.section_lut),
-            },
         ],
+    })
+}
+
+fn uniform_buffer(device: &Device, label: &'static str, size: usize) -> Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: size as u64,
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 

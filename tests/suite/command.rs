@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use grana_animation::Timeline;
-use grana_display::{PaneLayout, Panes};
+use grana_display::Camera;
 use grana_pipeline::{Capture as CapturePort, CaptureKind, CaptureRequest, Channels};
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Measure, Scene};
@@ -56,13 +56,8 @@ fn renders_a_dataset_and_a_project_without_a_window() {
         image.name().to_string(),
         image.pyramid().clone(),
     ));
-    let mut panes = Panes::new();
-    panes.set_layout(PaneLayout::Single);
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [96.0 / 64.0, 1.0, 1.0, 1.0],
-    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), 96.0 / 64.0);
     let project = Project::capture(
         &scene,
         &Measure::new(),
@@ -72,10 +67,7 @@ fn renders_a_dataset_and_a_project_without_a_window() {
             series: 0,
         },
         ViewState {
-            panes: panes.states(),
-            layout: panes.layout(),
-            split: panes.split(),
-            row: panes.row(),
+            camera: camera.state(),
             timeline: Timeline::new(30, 1.0),
             export: Export::new(96, 320, false),
         },
@@ -107,24 +99,16 @@ fn captures_a_movie_and_a_sequence_without_a_window() {
     ));
     scene.set_time(0);
     let channels = Channels::render(Arc::clone(&image), &scene);
-    let mut panes = Panes::new();
-    panes.set_layout(PaneLayout::Single);
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [1.0; grana_display::PANE_COUNT],
-    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), 1.0);
     let mut timeline = Timeline::new(4, 0.5);
     timeline.insert(grana_animation::Keyframe {
         at: 0.0,
         time: 0,
-        views: panes.views(),
+        camera: camera.state(),
     });
     let view = ViewState {
-        panes: panes.states(),
-        layout: panes.layout(),
-        split: panes.split(),
-        row: panes.row(),
+        camera: camera.state(),
         timeline,
         export: Export::new(96, 96, false),
     };
@@ -212,24 +196,16 @@ fn captures_a_protocol_film_without_a_window() {
         .set_params(grana_scene::ObjectParams::Spots(
             grana_object::SpotParams::new(0.5, 0.1),
         ));
-    let mut panes = Panes::new();
-    panes.set_layout(PaneLayout::Single);
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [1.0; grana_display::PANE_COUNT],
-    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), 1.0);
     let mut timeline = Timeline::new(4, 0.5);
     timeline.insert(grana_animation::Keyframe {
         at: 0.0,
         time: 0,
-        views: panes.views(),
+        camera: camera.state(),
     });
     let view = ViewState {
-        panes: panes.states(),
-        layout: panes.layout(),
-        split: panes.split(),
-        row: panes.row(),
+        camera: camera.state(),
         timeline,
         export: Export::new(96, 96, false),
     };

@@ -1,6 +1,5 @@
 mod analysis;
 mod batch;
-mod cache;
 mod dataset;
 mod edit;
 mod execute;
@@ -371,7 +370,6 @@ impl Session {
     }
     pub fn io<'a>(
         &'a self,
-        adapter: &'a str,
         exporting: Option<(u32, u32)>,
         export_message: Option<String>,
     ) -> IoView<'a> {
@@ -389,7 +387,6 @@ impl Session {
             )
         });
         IoView {
-            adapter,
             loading: self.loading.as_deref(),
             document,
             message: self.message.as_ref(),

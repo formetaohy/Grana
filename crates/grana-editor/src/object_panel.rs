@@ -1038,7 +1038,7 @@ fn children_section<'a>(
     }
     let salt = format!("object.{}.children", id.raw());
     let key = Key::new(&salt);
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut elements = Vec::new();
     if open {
         for child in children {
@@ -1515,7 +1515,7 @@ fn classifier<'a>(
     let salt = format!("object.{}.classifier", id.raw());
     let features_key = format!("{salt}.features");
     let key = Key::new(&salt);
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let features = state.workspace.classifier_features(set);
     let current = set.classifier();
     let gated = state.measure.set() == Some(id)
@@ -1703,7 +1703,7 @@ fn appearance<'a>(
     let coloring = set.object_coloring().clone();
     let salt = format!("object.{}.coloring", id.raw());
     let key = Key::new(&salt);
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         children.extend(crate::coloring::edit(
@@ -1746,7 +1746,7 @@ fn relations<'a>(
         .collect::<Vec<_>>();
     let salt = format!("object.{}.relations", id.raw());
     let key = Key::new(&salt);
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         for entry in relations.iter().copied() {

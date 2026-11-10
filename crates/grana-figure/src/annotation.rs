@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec2, Vec3};
+﻿use glam::{Mat4, Vec2, Vec3};
 use grana_measure::Unit;
 use grana_scene::Scene;
 use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, TypeStyle};
@@ -57,7 +57,7 @@ pub fn collect(scene: &Scene, time: u32) -> Vec<Item> {
 
 fn label(name: &str, length: Option<f32>) -> String {
     match length {
-        Some(length) => format!("{name} · {}", crate::value(length, Unit::Micrometer, 2)),
+        Some(length) => format!("{name} 路 {}", crate::value(length, Unit::Micrometer, 2)),
         None => name.to_string(),
     }
 }
@@ -72,45 +72,6 @@ pub fn volume(items: &[Item], view_projection: Mat4, rect: Rect) -> Vec<Placed> 
                 None => None,
             };
             Some(placed(item, at, to))
-        })
-        .collect()
-}
-
-pub fn section(
-    items: &[Item],
-    section: &grana_display::SectionCamera,
-    rect: Rect,
-    tolerance: f32,
-) -> Vec<Placed> {
-    let normal = section.normal();
-    let offset = section.offset();
-    let center = section.center();
-    let right = section.right();
-    let up = section.up();
-    let points_per_micron = rect.height() / section.span();
-    let screen = |point: [f32; 3]| {
-        let point = Vec3::from(point);
-        Vec2::new(
-            rect.center().x + (point.dot(right) - center.dot(right)) * points_per_micron,
-            rect.center().y - (point.dot(up) - center.dot(up)) * points_per_micron,
-        )
-    };
-    items
-        .iter()
-        .filter_map(|item| {
-            if (Vec3::from(item.anchor).dot(normal) - offset).abs() > tolerance {
-                return None;
-            }
-            let to = match item.end {
-                Some(end) => {
-                    if (Vec3::from(end).dot(normal) - offset).abs() > tolerance {
-                        return None;
-                    }
-                    Some(screen(end))
-                }
-                None => None,
-            };
-            Some(placed(item, screen(item.anchor), to))
         })
         .collect()
 }

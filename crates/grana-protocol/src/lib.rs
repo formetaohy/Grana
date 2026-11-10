@@ -16,10 +16,10 @@ pub use spec::{
     ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec,
     EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec,
     MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, NodeSpec,
-    PairSpec, PaneSpec, PaneViewSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec,
-    RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec,
-    ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec,
-    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
+    PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RelationSpec,
+    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec,
+    SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
+    VolumeSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;

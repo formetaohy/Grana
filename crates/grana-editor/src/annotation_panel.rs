@@ -50,8 +50,8 @@ fn tools_card<'a>(
     let detail = match active {
         Some(AnnotationTool::Point) => "Click a surface to drop a measurement point.",
         Some(AnnotationTool::Distance) => "Click two surfaces to measure their distance.",
-        Some(AnnotationTool::Roi) => "Drag in the section to draw the region of interest.",
-        None => "Choose a tool, then click the volume or the section.",
+        Some(AnnotationTool::Roi) => "Click the volume to place the region of interest.",
+        None => "Choose a tool, then click the volume.",
     };
     let caption = view::weak(ctx, detail);
     view::card(ctx, 8.0, vec![title, buttons, caption])
@@ -449,7 +449,7 @@ fn region_card<'a>(
     let mut children = vec![title];
     children.push(view::weak(
         ctx,
-        "Statistics, detection, drift and batch stay inside an enabled region. Drag in the section to draw one.",
+        "Statistics, detection, drift and batch stay inside an enabled region. Click the volume to draw one.",
     ));
     children.push(view::toggle_row(
         ctx,

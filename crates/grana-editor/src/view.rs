@@ -618,12 +618,3 @@ pub fn progress_caption(
         format!("{prefix}Preparing")
     }
 }
-
-pub fn scene_uv(rect: Rect, size: Vec2) -> [f32; 4] {
-    [
-        rect.min.x / size.x,
-        rect.min.y / size.y,
-        rect.max.x / size.x,
-        rect.max.y / size.y,
-    ]
-}

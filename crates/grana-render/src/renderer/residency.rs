@@ -1,59 +1,9 @@
 use super::*;
 
-#[derive(Clone, Copy, PartialEq)]
-pub(super) struct VolumeLevels {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Levels {
     pub(super) ladder: Ladder,
     pub(super) capacity: [usize; BAND],
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) struct SectionLevels {
-    pub(super) level: usize,
-    pub(super) fallback: usize,
-    pub(super) capacity: usize,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum PaneLevels {
-    Volume(VolumeLevels),
-    Section(SectionLevels),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) struct Levels {
-    pub(super) panes: [Option<PaneLevels>; PANE_COUNT],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PaneRegion {
-    pub(super) kind: PaneKind,
-    pub(super) region: [u32; 4],
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Regions {
-    pub(super) panes: [Option<PaneRegion>; PANE_COUNT],
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum PaneResidency {
-    Volume {
-        eye: [f32; 3],
-        focus: [f32; 3],
-        field_of_view: f32,
-        size: [u32; 2],
-        levels: VolumeLevels,
-    },
-    Section {
-        center: [f32; 3],
-        normal: [f32; 3],
-        right: [f32; 3],
-        thickness: f32,
-        projection: u8,
-        span: f32,
-        size: [u32; 2],
-        levels: SectionLevels,
-    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -65,7 +15,11 @@ pub(super) struct Residency {
     pub(super) assured: bool,
     pub(super) time: u32,
     pub(super) region: Region,
-    pub(super) panes: [Option<PaneResidency>; PANE_COUNT],
+    pub(super) eye: [f32; 3],
+    pub(super) focus: [f32; 3],
+    pub(super) field_of_view: f32,
+    pub(super) size: [u32; 2],
+    pub(super) levels: Levels,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -80,40 +34,27 @@ pub(super) struct Mode {
     pub(super) assured: bool,
 }
 
+pub(super) struct ViewState<'a> {
+    pub(super) camera: &'a Camera,
+    pub(super) size: [u32; 2],
+    pub(super) region: Region,
+    pub(super) levels: Levels,
+}
+
 impl Residency {
     pub(super) fn of(
         epoch: u64,
         content: Content,
         mode: Mode,
         time: u32,
-        frames: &[Option<PaneFrame<'_>>; PANE_COUNT],
-        region: Region,
-        levels: Levels,
+        view: ViewState<'_>,
     ) -> Self {
-        let panes = std::array::from_fn(|index| match (frames[index], levels.panes[index]) {
-            (Some(PaneFrame::Volume { camera, region, .. }), Some(PaneLevels::Volume(levels))) => {
-                Some(PaneResidency::Volume {
-                    eye: camera.eye().to_array(),
-                    focus: camera.pivot().to_array(),
-                    field_of_view: camera.fov_y(),
-                    size: [region[2], region[3]],
-                    levels,
-                })
-            }
-            (Some(PaneFrame::Section { section, region }), Some(PaneLevels::Section(levels))) => {
-                Some(PaneResidency::Section {
-                    center: section.center().to_array(),
-                    normal: section.normal().to_array(),
-                    right: section.right().to_array(),
-                    thickness: section.thickness(),
-                    projection: section.projection().index() as u8,
-                    span: section.span(),
-                    size: [region[2], region[3]],
-                    levels,
-                })
-            }
-            _ => None,
-        });
+        let ViewState {
+            camera,
+            size,
+            region,
+            levels,
+        } = view;
         Self {
             epoch,
             content: content.content,
@@ -122,37 +63,26 @@ impl Residency {
             assured: mode.assured,
             time,
             region,
-            panes,
+            eye: camera.eye().to_array(),
+            focus: camera.pivot().to_array(),
+            field_of_view: camera.fov_y(),
+            size,
+            levels,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PaneLevelKey {
-    pub(super) volume: Option<(usize, usize)>,
-    pub(super) section: Option<usize>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct LevelKey {
-    pub(super) panes: [Option<PaneLevelKey>; PANE_COUNT],
+    pub(super) base: usize,
+    pub(super) count: usize,
 }
 
 impl LevelKey {
     pub(super) fn of(levels: Levels) -> Self {
         Self {
-            panes: std::array::from_fn(|index| {
-                levels.panes[index].map(|levels| match levels {
-                    PaneLevels::Volume(volume) => PaneLevelKey {
-                        volume: Some((volume.ladder.base, volume.ladder.count)),
-                        section: None,
-                    },
-                    PaneLevels::Section(section) => PaneLevelKey {
-                        volume: None,
-                        section: Some(section.level),
-                    },
-                })
-            }),
+            base: levels.ladder.base,
+            count: levels.ladder.count,
         }
     }
 }
@@ -166,15 +96,15 @@ pub(super) struct FrameTarget {
     pub(super) accumulate_group: BindGroup,
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
-    pub(super) oit: [Option<Oit>; PANE_COUNT],
-    pub(super) ao: [Option<crate::ao::Ao>; PANE_COUNT],
+    pub(super) oit: Option<Oit>,
+    pub(super) ao: Option<crate::ao::Ao>,
     pub(super) size: [u32; 2],
     pub(super) samples: u32,
     pub(super) signature: Option<u64>,
     pub(super) transition: Option<u64>,
     pub(super) levels: Option<LevelKey>,
     pub(super) shot: Option<u64>,
-    pub(super) panes: FramePanes,
+    pub(super) view: FrameView,
     pub(super) history: Option<crate::temporal::History>,
     pub(super) seeded: bool,
     pub(super) holds: bool,
@@ -221,15 +151,15 @@ impl FrameTarget {
             accumulate_group,
             present_group,
             fade: None,
-            oit: std::array::from_fn(|_| None),
-            ao: std::array::from_fn(|_| None),
+            oit: None,
+            ao: None,
             size,
             samples: 0,
             signature: None,
             transition: None,
             levels: None,
             shot: None,
-            panes: FramePanes::default(),
+            view: FrameView::default(),
             history: None,
             seeded: false,
             holds: false,

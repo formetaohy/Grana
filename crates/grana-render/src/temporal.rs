@@ -1,5 +1,4 @@
 use bytemuck::{Pod, Zeroable};
-use grana_display::PANE_COUNT;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
@@ -54,7 +53,7 @@ impl Temporal {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PaneCamera {
+pub(crate) struct ViewCamera {
     view_projection: [[f32; 4]; 4],
     inverse: [[f32; 4]; 4],
     eye: [f32; 4],
@@ -62,7 +61,7 @@ pub(crate) struct PaneCamera {
     projection: [f32; 4],
 }
 
-impl PaneCamera {
+impl ViewCamera {
     fn of(data: &FrameData) -> Self {
         Self {
             view_projection: data.view_projection,
@@ -75,24 +74,16 @@ impl PaneCamera {
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct FramePanes {
-    pub(crate) cameras: [Option<PaneCamera>; PANE_COUNT],
-    pub(crate) regions: [[u32; 4]; PANE_COUNT],
+pub(crate) struct FrameView {
+    pub(crate) camera: Option<ViewCamera>,
+    pub(crate) region: [u32; 4],
 }
 
-impl FramePanes {
-    pub(crate) fn collect(
-        &mut self,
-        panes: &[Option<crate::PaneFrame<'_>>; PANE_COUNT],
-        data: &[Option<FrameData>; PANE_COUNT],
-    ) {
-        for index in 0..PANE_COUNT {
-            let volume = matches!(panes[index], Some(crate::PaneFrame::Volume { .. }));
-            self.cameras[index] = match (volume, &data[index]) {
-                (true, Some(data)) => Some(PaneCamera::of(data)),
-                _ => None,
-            };
-            self.regions[index] = panes[index].map_or([0; 4], |pane| pane.region());
+impl FrameView {
+    pub(crate) fn of(data: &FrameData, region: [u32; 4]) -> Self {
+        Self {
+            camera: Some(ViewCamera::of(data)),
+            region,
         }
     }
 }
@@ -100,8 +91,7 @@ impl FramePanes {
 pub(crate) struct History {
     color_view: TextureView,
     geometry_view: TextureView,
-    panes: [Option<PaneCamera>; PANE_COUNT],
-    regions: [[u32; 4]; PANE_COUNT],
+    camera: Option<ViewCamera>,
     size: [u32; 2],
     valid: bool,
 }
@@ -119,8 +109,7 @@ impl History {
         Self {
             color_view,
             geometry_view,
-            panes: [None; PANE_COUNT],
-            regions: [[0; 4]; PANE_COUNT],
+            camera: None,
             size,
             valid: false,
         }
@@ -128,8 +117,7 @@ impl History {
 
     fn invalidate(&mut self) {
         self.valid = false;
-        self.panes = [None; PANE_COUNT];
-        self.regions = [[0; 4]; PANE_COUNT];
+        self.camera = None;
     }
 
     pub(crate) fn ready(&self) -> bool {
@@ -161,15 +149,15 @@ pub(crate) struct Inputs<'a> {
     pub(crate) counts: &'a TextureView,
     pub(crate) fresh: &'a TextureView,
     pub(crate) depth: &'a TextureView,
-    pub(crate) volumes: [Option<&'a TextureView>; PANE_COUNT],
-    pub(crate) normals: [Option<&'a TextureView>; PANE_COUNT],
+    pub(crate) volume: Option<&'a TextureView>,
+    pub(crate) normal: Option<&'a TextureView>,
 }
 
 pub(crate) struct Reuse<'a> {
     pub(crate) history: &'a History,
-    pub(crate) panes: &'a FramePanes,
+    pub(crate) view: &'a FrameView,
     pub(crate) length: f32,
-    pub(crate) tolerances: [f32; PANE_COUNT],
+    pub(crate) tolerance: f32,
     pub(crate) inputs: &'a Inputs<'a>,
 }
 
@@ -178,8 +166,8 @@ pub(crate) struct TemporalPass {
     seed: RenderPipeline,
     capture_layout: BindGroupLayout,
     seed_layout: BindGroupLayout,
-    capture_uniforms: [Buffer; PANE_COUNT],
-    seed_uniforms: [Buffer; PANE_COUNT],
+    capture_uniforms: Buffer,
+    seed_uniforms: Buffer,
     dummy_float: TextureView,
 }
 
@@ -233,20 +221,16 @@ impl TemporalPass {
             &seed_pipeline,
             [(ACCUMULATION_FORMAT, Some(ADD)), (COUNT_FORMAT, Some(ADD))],
         );
-        let capture_uniforms = std::array::from_fn(|_| {
-            buffer(
-                device,
-                "grana.temporal.capture.uniforms",
-                size_of::<CaptureData>(),
-            )
-        });
-        let seed_uniforms = std::array::from_fn(|_| {
-            buffer(
-                device,
-                "grana.temporal.seed.uniforms",
-                size_of::<SeedData>(),
-            )
-        });
+        let capture_uniforms = buffer(
+            device,
+            "grana.temporal.capture.uniforms",
+            size_of::<CaptureData>(),
+        );
+        let seed_uniforms = buffer(
+            device,
+            "grana.temporal.seed.uniforms",
+            size_of::<SeedData>(),
+        );
         let dummy_float = dummy(device, queue, "grana.temporal.dummy", ACCUMULATION_FORMAT);
         Self {
             capture,
@@ -280,26 +264,23 @@ impl TemporalPass {
         queue: &Queue,
         encoder: &mut CommandEncoder,
         history: &mut History,
-        panes: &FramePanes,
+        view: &FrameView,
         inputs: &Inputs<'_>,
     ) {
-        for (index, region) in panes.regions.iter().enumerate() {
-            if panes.cameras[index].is_none() || region[2] == 0 || region[3] == 0 {
-                continue;
-            }
-            let region = *region;
+        let region = view.region;
+        if view.camera.is_some() && region[2] > 0 && region[3] > 0 {
             let data = CaptureData {
                 region,
                 local: [region[2], region[3], 0, 0],
             };
-            queue.write_buffer(&self.capture_uniforms[index], 0, bytemuck::bytes_of(&data));
+            queue.write_buffer(&self.capture_uniforms, 0, bytemuck::bytes_of(&data));
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("grana.temporal.capture.group"),
                 layout: &self.capture_layout,
                 entries: &[
                     BindGroupEntry {
                         binding: 0,
-                        resource: self.capture_uniforms[index].as_entire_binding(),
+                        resource: self.capture_uniforms.as_entire_binding(),
                     },
                     BindGroupEntry {
                         binding: 1,
@@ -316,13 +297,13 @@ impl TemporalPass {
                     BindGroupEntry {
                         binding: 4,
                         resource: BindingResource::TextureView(
-                            inputs.volumes[index].unwrap_or(&self.dummy_float),
+                            inputs.volume.unwrap_or(&self.dummy_float),
                         ),
                     },
                     BindGroupEntry {
                         binding: 5,
                         resource: BindingResource::TextureView(
-                            inputs.normals[index].unwrap_or(&self.dummy_float),
+                            inputs.normal.unwrap_or(&self.dummy_float),
                         ),
                     },
                 ],
@@ -336,8 +317,7 @@ impl TemporalPass {
                 region,
             );
         }
-        history.panes = panes.cameras;
-        history.regions = panes.regions;
+        history.camera = view.camera;
         history.valid = true;
     }
 
@@ -350,87 +330,83 @@ impl TemporalPass {
     ) {
         let Reuse {
             history,
-            panes,
+            view,
             length,
-            tolerances,
+            tolerance,
             inputs,
         } = reuse;
-        for (index, region) in panes.regions.iter().enumerate() {
-            let (Some(current), Some(previous)) = (panes.cameras[index], history.panes[index])
-            else {
-                continue;
-            };
-            if region[2] == 0 || region[3] == 0 {
-                continue;
-            }
-            let tolerance = tolerances[index];
-            assert!(
-                tolerance.is_finite() && tolerance > 0.0,
-                "a temporal pane reprojects within a positive reach"
-            );
-            let region = *region;
-            let data = SeedData {
-                current: current.view_projection,
-                current_inverse: current.inverse,
-                previous: previous.view_projection,
-                previous_inverse: previous.inverse,
-                region,
-                local: [region[2], region[3], 0, 0],
-                flags: [
-                    length,
-                    if current == previous { 1.0 } else { 0.0 },
-                    tolerance,
-                    MOTION_REACH,
-                ],
-            };
-            queue.write_buffer(&self.seed_uniforms[index], 0, bytemuck::bytes_of(&data));
-            let group = device.create_bind_group(&BindGroupDescriptor {
-                label: Some("grana.temporal.seed.group"),
-                layout: &self.seed_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: self.seed_uniforms[index].as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::TextureView(&history.color_view),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: BindingResource::TextureView(&history.geometry_view),
-                    },
-                    BindGroupEntry {
-                        binding: 3,
-                        resource: BindingResource::TextureView(inputs.fresh),
-                    },
-                    BindGroupEntry {
-                        binding: 4,
-                        resource: BindingResource::TextureView(inputs.depth),
-                    },
-                    BindGroupEntry {
-                        binding: 5,
-                        resource: BindingResource::TextureView(
-                            inputs.volumes[index].unwrap_or(&self.dummy_float),
-                        ),
-                    },
-                    BindGroupEntry {
-                        binding: 6,
-                        resource: BindingResource::TextureView(
-                            inputs.normals[index].unwrap_or(&self.dummy_float),
-                        ),
-                    },
-                ],
-            });
-            target_pass(
-                encoder,
-                "grana.temporal.seed.pass",
-                &self.seed,
-                &group,
-                [inputs.accumulated, inputs.counts],
-                region,
-            );
+        let (Some(current), Some(previous)) = (view.camera, history.camera) else {
+            return;
+        };
+        let region = view.region;
+        if region[2] == 0 || region[3] == 0 {
+            return;
         }
+        assert!(
+            tolerance.is_finite() && tolerance > 0.0,
+            "a view reprojects within a positive reach"
+        );
+        let data = SeedData {
+            current: current.view_projection,
+            current_inverse: current.inverse,
+            previous: previous.view_projection,
+            previous_inverse: previous.inverse,
+            region,
+            local: [region[2], region[3], 0, 0],
+            flags: [
+                length,
+                if current == previous { 1.0 } else { 0.0 },
+                tolerance,
+                MOTION_REACH,
+            ],
+        };
+        queue.write_buffer(&self.seed_uniforms, 0, bytemuck::bytes_of(&data));
+        let group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.temporal.seed.group"),
+            layout: &self.seed_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.seed_uniforms.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&history.color_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&history.geometry_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(inputs.fresh),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(inputs.depth),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::TextureView(
+                        inputs.volume.unwrap_or(&self.dummy_float),
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(
+                        inputs.normal.unwrap_or(&self.dummy_float),
+                    ),
+                },
+            ],
+        });
+        target_pass(
+            encoder,
+            "grana.temporal.seed.pass",
+            &self.seed,
+            &group,
+            [inputs.accumulated, inputs.counts],
+            region,
+        );
     }
 }
 

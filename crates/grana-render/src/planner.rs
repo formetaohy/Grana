@@ -11,7 +11,7 @@ use crate::ViewInfo;
 use crate::brick::BrickArena;
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
-use grana_display::{Camera, CameraProjection, SectionCamera, SectionState};
+use grana_display::{Camera, CameraProjection};
 use grana_volume::BrickRequest;
 
 pub(crate) const BAND: usize = 4;
@@ -68,28 +68,11 @@ impl Ladder {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct SectionRange {
-    pub x0: u32,
-    pub y0: u32,
-    pub z0: u32,
-    pub x_count: u32,
-    pub y_count: u32,
-    pub z_count: u32,
-}
-
-impl SectionRange {
-    pub fn dispatch(&self) -> u32 {
-        self.x_count * self.y_count * self.z_count
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct Schedule {
     pub time: u32,
     pub band: u32,
     pub capacity: u32,
-    pub range: SectionRange,
     pub dispatch: u32,
     pub bucket_scale: f32,
     pub base: u32,
@@ -211,14 +194,14 @@ impl Plan {
             time: schedule.time,
             band: schedule.band,
             capacity: schedule.capacity.min(self.capacity as u32),
-            x0: schedule.range.x0,
-            y0: schedule.range.y0,
-            z0: schedule.range.z0,
-            x_count: schedule.range.x_count,
-            y_count: schedule.range.y_count,
+            x0: 0,
+            y0: 0,
+            z0: 0,
+            x_count: 0,
+            y_count: 0,
             bucket_scale: schedule.bucket_scale,
             base: schedule.base,
-            z_count: schedule.range.z_count,
+            z_count: 0,
             reserved: 0,
         };
         queue.write_buffer(&self.uniform, 0, bytes_of(&data));
@@ -247,18 +230,15 @@ impl Plan {
     }
 }
 
-pub(crate) struct PanePlans {
+pub(crate) struct Plans {
     pub bands: [Plan; BAND],
-    pub section: Plan,
 }
 
 pub(crate) struct Planner {
     plan: ComputePipeline,
     volume_count: ComputePipeline,
     volume_scatter: ComputePipeline,
-    section_count: ComputePipeline,
-    section_scatter: ComputePipeline,
-    pub panes: [PanePlans; crate::PANE_COUNT],
+    pub view: Plans,
 }
 
 impl Planner {
@@ -293,41 +273,29 @@ impl Planner {
             plan: plan_pipeline,
             volume_count: pipeline("grana.volume.count", &cull, "volume_count"),
             volume_scatter: pipeline("grana.volume.scatter", &cull, "volume_scatter"),
-            section_count: pipeline("grana.section.count", &cull, "section_count"),
-            section_scatter: pipeline("grana.section.scatter", &cull, "section_scatter"),
-            panes: std::array::from_fn(|_| PanePlans {
+            view: Plans {
                 bands: std::array::from_fn(|_| {
                     Plan::new(device, layouts, "grana.band.plan", capacity)
                 }),
-                section: Plan::new(device, layouts, "grana.section.plan", capacity),
-            }),
+            },
         }
     }
 
     pub fn bind_arena(&mut self, device: &Device, layouts: &Layouts, arena: &BrickArena) {
-        for pane in &mut self.panes {
-            for plan in pane
-                .bands
-                .iter_mut()
-                .chain(std::iter::once(&mut pane.section))
-            {
-                plan.bind_arena(device, layouts, arena);
-            }
+        for plan in &mut self.view.bands {
+            plan.bind_arena(device, layouts, arena);
         }
     }
 
-    pub fn encode(&self, encoder: &mut CommandEncoder, scenes: &[&BindGroup; crate::PANE_COUNT]) {
+    pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("grana.plan.count"),
                 timestamp_writes: None,
             });
-            for (index, pane) in self.panes.iter().enumerate() {
-                pass.set_bind_group(0, scenes[index], &[]);
-                for plan in &pane.bands {
-                    dispatch(&mut pass, &self.volume_count, plan);
-                }
-                dispatch(&mut pass, &self.section_count, &pane.section);
+            pass.set_bind_group(0, scene, &[]);
+            for plan in &self.view.bands {
+                dispatch(&mut pass, &self.volume_count, plan);
             }
         }
         {
@@ -336,11 +304,9 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.plan);
-            for pane in &self.panes {
-                for plan in pane.bands.iter().chain(std::iter::once(&pane.section)) {
-                    pass.set_bind_group(0, plan.data_group(), &[]);
-                    pass.dispatch_workgroups(1, 1, 1);
-                }
+            for plan in &self.view.bands {
+                pass.set_bind_group(0, plan.data_group(), &[]);
+                pass.dispatch_workgroups(1, 1, 1);
             }
         }
         {
@@ -348,12 +314,9 @@ impl Planner {
                 label: Some("grana.plan.scatter"),
                 timestamp_writes: None,
             });
-            for (index, pane) in self.panes.iter().enumerate() {
-                pass.set_bind_group(0, scenes[index], &[]);
-                for plan in &pane.bands {
-                    dispatch(&mut pass, &self.volume_scatter, plan);
-                }
-                dispatch(&mut pass, &self.section_scatter, &pane.section);
+            pass.set_bind_group(0, scene, &[]);
+            for plan in &self.view.bands {
+                dispatch(&mut pass, &self.volume_scatter, plan);
             }
         }
     }
@@ -472,162 +435,6 @@ pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -
     BUCKET_COUNT as f32 / far.max(1.0e-6)
 }
 
-pub(crate) fn section_range(
-    pyramid: &Pyramid,
-    level_index: usize,
-    section: &SectionCamera,
-    aspect: f32,
-    region: Region,
-) -> SectionRange {
-    let Some((first, last)) = section_cells(pyramid, level_index, section, aspect, region) else {
-        return SectionRange::default();
-    };
-    SectionRange {
-        x0: first[0],
-        y0: first[1],
-        z0: first[2],
-        x_count: last[0] - first[0] + 1,
-        y_count: last[1] - first[1] + 1,
-        z_count: last[2] - first[2] + 1,
-    }
-}
-
-fn section_cells(
-    pyramid: &Pyramid,
-    level_index: usize,
-    section: &SectionCamera,
-    aspect: f32,
-    region: Region,
-) -> Option<([u32; 3], [u32; 3])> {
-    let level = pyramid.level(level_index);
-    let extent = level.extent();
-    let (box_low, box_high) = level.bounds();
-    let box_low = Vec3::from(box_low);
-    let box_high = Vec3::from(box_high);
-    let (mut low, mut high) = section_bounds(section, aspect);
-    low = low.max(box_low);
-    high = high.min(box_high);
-    if region.enabled() {
-        let (region_low, region_high) = region.bounds();
-        low = low.max(region_low);
-        high = high.min(region_high);
-    }
-    if !(0..3).all(|axis| low[axis] <= high[axis]) {
-        return None;
-    }
-    let counts = BrickGrid::new(extent).counts();
-    let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
-    let mut first = [u32::MAX; 3];
-    let mut last = [0u32; 3];
-    for corner in 0..8u32 {
-        let point = Vec3::new(
-            if corner & 1 == 0 { low.x } else { high.x },
-            if corner & 2 == 0 { low.y } else { high.y },
-            if corner & 4 == 0 { low.z } else { high.z },
-        );
-        let voxel = level.voxel_of(point.to_array());
-        for axis in 0..3 {
-            let cell = (voxel[axis].clamp(0.0, dims[axis]) / BRICK_SIDE as f32)
-                .floor()
-                .clamp(0.0, (counts[axis] - 1) as f32) as u32;
-            first[axis] = first[axis].min(cell);
-            last[axis] = last[axis].max(cell);
-        }
-    }
-    Some((first, last))
-}
-
-fn section_bounds(section: &SectionCamera, aspect: f32) -> (Vec3, Vec3) {
-    assert!(aspect > 0.0, "a section pane has a positive aspect");
-    let center = section.center();
-    let right = section.right() * (0.5 * section.span() * aspect);
-    let up = section.up() * (0.5 * section.span());
-    let normal = if section.projected() {
-        section.normal().abs() * (0.5 * section.thickness())
-    } else {
-        Vec3::ZERO
-    };
-    let mut low = Vec3::splat(f32::INFINITY);
-    let mut high = Vec3::splat(f32::NEG_INFINITY);
-    for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-        let corner = center + right * across + up * down;
-        low = low.min(corner - normal);
-        high = high.max(corner + normal);
-    }
-    (low, high)
-}
-
-pub(crate) fn section_brick_count(
-    pyramid: &Pyramid,
-    level_index: usize,
-    section: &SectionCamera,
-    aspect: f32,
-    region: Region,
-) -> usize {
-    let Some((first, last)) = section_cells(pyramid, level_index, section, aspect, region) else {
-        return 0;
-    };
-    let level = pyramid.level(level_index);
-    let extent = level.extent();
-    let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
-    let normal = section.normal();
-    let offset = section.center().dot(normal);
-    let half = if section.projected() {
-        0.5 * section.thickness()
-    } else {
-        0.0
-    };
-    let across = section.right();
-    let down = section.up();
-    let across_center = section.center().dot(across);
-    let down_center = section.center().dot(down);
-    let across_half = 0.5 * section.span() * aspect;
-    let down_half = 0.5 * section.span();
-    let (region_low, region_high) = region.bounds();
-    let mut count = 0;
-    for z in first[2]..=last[2] {
-        for y in first[1]..=last[1] {
-            for x in first[0]..=last[0] {
-                let cell = Vec3::new(x as f32, y as f32, z as f32) * BRICK_SIDE as f32;
-                let size = (Vec3::from(dims) - cell).min(Vec3::splat(BRICK_SIDE as f32));
-                let (low, high) = brick_bounds(level, cell, size);
-                if region.enabled()
-                    && (high.cmplt(region_low).any() || low.cmpgt(region_high).any())
-                {
-                    continue;
-                }
-                if !slab_overlaps(low, high, normal, offset, half) {
-                    continue;
-                }
-                let across_span = interval(low, high, across);
-                let down_span = interval(low, high, down);
-                if across_span.1 < across_center - across_half
-                    || across_span.0 > across_center + across_half
-                    || down_span.1 < down_center - down_half
-                    || down_span.0 > down_center + down_half
-                {
-                    continue;
-                }
-                count += 1;
-            }
-        }
-    }
-    count
-}
-
-fn slab_overlaps(low: Vec3, high: Vec3, normal: Vec3, offset: f32, half: f32) -> bool {
-    let (low, high) = interval(low, high, normal);
-    low <= offset + half && offset - half <= high
-}
-
-fn interval(low: Vec3, high: Vec3, direction: Vec3) -> (f32, f32) {
-    let near = direction * low;
-    let far = direction * high;
-    let low = near.min(far);
-    let high = near.max(far);
-    (low.x + low.y + low.z, high.x + high.y + high.z)
-}
-
 fn brick_bounds(level: grana_volume::Level, low: Vec3, size: Vec3) -> (Vec3, Vec3) {
     let basis = level.basis();
     let mut low_world = Vec3::from(level.origin());
@@ -658,162 +465,6 @@ impl Limits {
             .level_count()
             .min(self.ceiling + 1)
             .max(self.first + 1)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SectionMeasure {
-    pub level: usize,
-    pub visible: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SectionKey {
-    pub state: SectionState,
-    pub aspect: f32,
-    pub region: Region,
-    pub first: usize,
-    pub ceiling: usize,
-    pub capacity: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SectionPick {
-    pub level: usize,
-    pub probing: bool,
-    pub measured: Option<usize>,
-    pub started: bool,
-}
-
-impl SectionPick {
-    pub fn settled(level: usize) -> Self {
-        Self {
-            level,
-            probing: false,
-            measured: None,
-            started: false,
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct SectionProbe {
-    key: Option<SectionKey>,
-    candidate: Option<usize>,
-    accepted: Option<usize>,
-    rejected: Option<(usize, usize)>,
-}
-
-impl SectionProbe {
-    pub fn enter(&mut self, key: SectionKey) {
-        if self.key != Some(key) {
-            let key = Some(key);
-            *self = Self {
-                key,
-                ..Self::default()
-            };
-        }
-    }
-
-    pub fn level(
-        &mut self,
-        target: usize,
-        resolved: usize,
-        measure: Option<SectionMeasure>,
-        fresh: bool,
-        capacity: usize,
-        hollow: impl Fn(usize) -> usize,
-    ) -> SectionPick {
-        if let Some(accepted) = self.accepted {
-            let exceeded = measure
-                .is_some_and(|measure| measure.level == accepted && measure.visible > capacity);
-            if accepted < target || accepted >= resolved || exceeded {
-                self.accepted = None;
-                if exceeded {
-                    self.rejected = Some((accepted, hollow(accepted)));
-                }
-            }
-        }
-        let desired = match self.accepted {
-            Some(accepted) => {
-                let headroom = measure.is_some_and(|measure| {
-                    measure.level == accepted && measure.visible.saturating_mul(2) <= capacity
-                });
-                if accepted > target && headroom {
-                    accepted - 1
-                } else {
-                    self.candidate = None;
-                    return SectionPick {
-                        level: accepted,
-                        probing: false,
-                        measured: measure
-                            .filter(|measure| measure.level == accepted)
-                            .map(|measure| measure.visible.max(1)),
-                        started: false,
-                    };
-                }
-            }
-            None if resolved > target => resolved - 1,
-            None => {
-                self.candidate = None;
-                return SectionPick::settled(resolved);
-            }
-        };
-        if let Some((level, count)) = self.rejected
-            && level == desired
-        {
-            let known = hollow(desired);
-            if known >= count && known < count.saturating_add(capacity) {
-                self.candidate = None;
-                return self.settled(resolved, measure);
-            }
-            self.rejected = None;
-        }
-        if self.candidate != Some(desired) {
-            self.candidate = Some(desired);
-            return SectionPick {
-                level: desired,
-                probing: true,
-                measured: None,
-                started: true,
-            };
-        }
-        let measured = measure.filter(|measure| fresh && measure.level == desired);
-        let Some(measured) = measured else {
-            return SectionPick {
-                level: desired,
-                probing: true,
-                measured: None,
-                started: false,
-            };
-        };
-        self.candidate = None;
-        if measured.visible > capacity {
-            self.rejected = Some((desired, hollow(desired)));
-            self.settled(resolved, measure)
-        } else {
-            self.accepted = Some(desired);
-            SectionPick {
-                level: desired,
-                probing: false,
-                measured: Some(measured.visible.max(1)),
-                started: false,
-            }
-        }
-    }
-
-    fn settled(&self, resolved: usize, measure: Option<SectionMeasure>) -> SectionPick {
-        match self.accepted {
-            Some(accepted) => SectionPick {
-                level: accepted,
-                probing: false,
-                measured: measure
-                    .filter(|measure| measure.level == accepted)
-                    .map(|measure| measure.visible.max(1)),
-                started: false,
-            },
-            None => SectionPick::settled(resolved),
-        }
     }
 }
 
@@ -890,7 +541,7 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         current,
     } = view;
     assert!(capacity > 0, "a volume fit reserves at least one brick");
-    assert!(aspect > 0.0, "a volume pane has a positive aspect");
+    assert!(aspect > 0.0, "a view has a positive aspect");
     let levels = limits.count(pyramid);
     let desired = volume_ladder(LadderView {
         pyramid,
@@ -1108,31 +759,6 @@ fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
     (eye.clamp(low, high) - eye).length()
 }
 
-pub(crate) fn select_section_level(
-    pyramid: &Pyramid,
-    section: &SectionCamera,
-    height: f32,
-    current: Option<usize>,
-    limits: Limits,
-) -> usize {
-    let first = limits.first;
-    let levels = limits.count(pyramid);
-    let pixel_world = section.span() / height.max(1.0);
-    let mut level = first;
-    for index in first..levels {
-        if section_spacing(pyramid, index, section) <= pixel_world {
-            level = index;
-        } else {
-            break;
-        }
-    }
-    hold_level(levels, level, current, pixel_world, |index| {
-        section_spacing(pyramid, index, section)
-    })
-    .max(first)
-    .min(levels - 1)
-}
-
 fn hold_level(
     levels: usize,
     target: usize,
@@ -1152,40 +778,7 @@ fn hold_level(
     target
 }
 
-pub(crate) fn resolve_section_level(
-    pyramid: &Pyramid,
-    section: &SectionCamera,
-    aspect: f32,
-    target: usize,
-    capacity: usize,
-    region: Region,
-    limits: Limits,
-) -> (usize, usize) {
-    let levels = limits.count(pyramid);
-    let mut level = target.min(levels - 1);
-    loop {
-        let count = section_brick_count(pyramid, level, section, aspect, region);
-        if count <= capacity || level + 1 == levels {
-            return (level, count);
-        }
-        level += 1;
-    }
-}
-
 fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
     let spacing = pyramid.level(level).spacing();
     spacing.x().min(spacing.y()).min(spacing.z())
-}
-
-fn section_spacing(pyramid: &Pyramid, level: usize, section: &SectionCamera) -> f32 {
-    let basis = pyramid.level(level).basis();
-    let projection = |direction: Vec3| {
-        let direction = direction.abs();
-        (0..3)
-            .map(|axis| direction.dot(Vec3::from(basis.column(axis)).abs()))
-            .sum::<f32>()
-    };
-    let across = projection(section.right());
-    let down = projection(section.up());
-    across.max(down)
 }

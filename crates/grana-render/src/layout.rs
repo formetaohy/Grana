@@ -31,14 +31,13 @@ pub(crate) struct Layouts {
     pub ao_read: BindGroupLayout,
     pub ao_compute: BindGroupLayout,
     pub volume: PipelineLayout,
-    pub section: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
     pub marker_volume: PipelineLayout,
     pub marker_oit: PipelineLayout,
     pub marker_tail: PipelineLayout,
-    pub marker_section: PipelineLayout,
+    pub marker_pick: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub ao_pipeline: PipelineLayout,
@@ -63,7 +62,6 @@ impl Layouts {
                 texture(3, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 sampler(4, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 texture(5, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
-                texture(6, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
             ],
         });
         let level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -195,12 +193,8 @@ impl Layouts {
                 storage(0, ShaderStages::COMPUTE, true),
                 storage(1, ShaderStages::COMPUTE, false),
                 storage(2, ShaderStages::COMPUTE, false),
-                storage(3, ShaderStages::COMPUTE, false),
-                storage(4, ShaderStages::COMPUTE, false),
                 storage(5, ShaderStages::COMPUTE, false),
                 storage(6, ShaderStages::COMPUTE, false),
-                storage(7, ShaderStages::COMPUTE, false),
-                storage(8, ShaderStages::COMPUTE, false),
             ],
         });
         let marker_render = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -298,7 +292,6 @@ impl Layouts {
             "grana.volume.layout",
             &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &ao_read],
         );
-        let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
             device,
             "grana.cull.layout",
@@ -339,9 +332,9 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
-        let marker_section = pipeline_layout(
+        let marker_pick = pipeline_layout(
             device,
-            "grana.marker.section.layout",
+            "grana.marker.pick.layout",
             &[&scene, &marker_render],
         );
         let marker_cull_pipeline = pipeline_layout(
@@ -385,14 +378,13 @@ impl Layouts {
             ao_read,
             ao_compute,
             volume,
-            section,
             cull,
             plan_pipeline,
             mesh_cull,
             marker_volume,
             marker_oit,
             marker_tail,
-            marker_section,
+            marker_pick,
             marker_cull_pipeline,
             shadow_pipeline,
             ao_pipeline,

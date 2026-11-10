@@ -7,7 +7,7 @@ use grana_ui::{
     Align, Border, BuildContext, Color, Corners, Edges, Element, Fill, Icon, Key, Length, Level,
     Motion, Rect, Role, Shadow, State, TextStyle, icon,
 };
-use grana_volume::{Axis, Clip, Intensity};
+use grana_volume::{Clip, Intensity};
 
 use crate::message::Message;
 use crate::state::View;
@@ -255,7 +255,6 @@ pub fn view_body<'a>(
         views(ctx, state),
         display(ctx, state),
         camera(ctx, state),
-        section(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
     ]);
@@ -263,7 +262,7 @@ pub fn view_body<'a>(
 }
 
 fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let camera = state.pane().camera();
+    let camera = state.camera();
     let projection = camera.projection();
     let mut children = vec![view::card_title(
         ctx,
@@ -367,10 +366,7 @@ fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         );
     }
     if count == 0 {
-        children.push(view::caption(
-            ctx,
-            "Keep this camera, section and timeline.",
-        ));
+        children.push(view::caption(ctx, "Keep this camera and timeline."));
     }
     view::card(ctx, 6.0, children)
 }
@@ -882,7 +878,7 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         let depth = scene.dataset.world_size().z * 0.5;
         let button = (width - 6.0) * 0.5;
         let psf_key = Key::new("display.psf");
-        let psf_open = state.workspace.sections.is_open(psf_key);
+        let psf_open = state.workspace.disclosures.is_open(psf_key);
         let mut calibration = Vec::new();
         if psf_open {
             calibration.push(view::slider_event(
@@ -942,7 +938,7 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     }
     children.push(view::divider(ctx));
     let key = Key::new("display.transfer");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut curve = Vec::new();
     if open {
         curve.extend(crate::transfer::edit(
@@ -965,117 +961,6 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     view::card(ctx, 7.0, children)
 }
 
-fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let camera = state.pane().section();
-    let azimuth = camera.azimuth();
-    let elevation = camera.elevation();
-    let normal = camera.normal();
-    let axis = if normal.z.abs() >= normal.y.abs() && normal.z.abs() >= normal.x.abs() {
-        Axis::Z
-    } else if normal.y.abs() >= normal.x.abs() {
-        Axis::Y
-    } else {
-        Axis::X
-    };
-    let current = match axis {
-        Axis::Z => 0,
-        Axis::Y => 1,
-        Axis::X => 2,
-    };
-    let spacing = state.scene.dataset.spacing();
-    let step =
-        spacing.x() * normal.x.abs() + spacing.y() * normal.y.abs() + spacing.z() * normal.z.abs();
-    let detail = format!("{step:.3} µm step");
-    let mut children = Vec::new();
-    children.push(view::card_title(
-        ctx,
-        Icon::Section,
-        "Section",
-        Some(&detail),
-    ));
-    let options = ["XY", "XZ", "YZ"];
-    let plane = view::segmented_fill(ctx, "section.plane", &options, current, |index| {
-        Message::SetSectionPreset(index)
-    });
-    children.push(view::form_row(ctx, "Plane", plane));
-    let world = state.scene.dataset.world_size();
-    let extent = world.abs().dot(normal.abs());
-    let projection = camera.projection();
-    let modes = grana_display::SectionProjection::ALL.map(grana_display::SectionProjection::label);
-    let view = view::segmented_fill(
-        ctx,
-        "section.projection",
-        &modes,
-        projection.index(),
-        Message::SetSectionProjection,
-    );
-    children.push(view::form_row(ctx, "View", view));
-    if projection.projected() {
-        let thickness = camera.thickness();
-        let maximum = extent.max(thickness).max(1.0e-3);
-        children.push(
-            grana_ui::widget::slider_readout(
-                &theme,
-                Some("Thickness"),
-                thickness,
-                0.0..=maximum,
-                false,
-                &format!("{thickness:.2} µm"),
-            )
-            .named("section.thickness")
-            .on_slide(Message::SetSectionThickness),
-        );
-    }
-    let elevation_degrees = elevation.to_degrees();
-    children.push(
-        grana_ui::widget::slider_readout(
-            &theme,
-            Some("Elevation"),
-            elevation_degrees,
-            -90.0..=90.0,
-            false,
-            &format!("{elevation_degrees:.0}°"),
-        )
-        .named("section.elevation")
-        .on_slide(move |value| Message::SetSectionOrientation {
-            azimuth,
-            elevation: value.to_radians(),
-        }),
-    );
-    let azimuth_degrees = azimuth.to_degrees();
-    children.push(
-        grana_ui::widget::slider_readout(
-            &theme,
-            Some("Azimuth"),
-            azimuth_degrees,
-            -180.0..=180.0,
-            false,
-            &format!("{azimuth_degrees:.0}°"),
-        )
-        .named("section.azimuth")
-        .on_slide(move |value| Message::SetSectionOrientation {
-            azimuth: value.to_radians(),
-            elevation,
-        }),
-    );
-    let position = state.pane().section().center().dot(normal) + 0.5 * extent;
-    let readout = format!("{position:.2} µm");
-    children.push(
-        grana_ui::widget::slider_readout(
-            &theme,
-            Some("Depth"),
-            position,
-            0.0..=extent,
-            false,
-            &readout,
-        )
-        .named("section.depth")
-        .on_slide(Message::SetSectionDepth),
-    );
-    view::card(ctx, 8.0, children)
-}
-
 fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let current = state.scene.region;
@@ -1086,7 +971,7 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         "Whole volume".to_string()
     };
     let key = Key::new("region");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         let world = state.scene.dataset.world_size();
@@ -1147,14 +1032,13 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             );
         }
         let align = {
-            let section = state.pane().section();
-            let axes = [section.right(), section.up(), section.normal()];
+            let axes = [Vec3::X, Vec3::Y, Vec3::Z];
             let region = grana_volume::Region::new(current.center(), axes, current.half());
             Message::Command(Command::SetRegion(region))
         };
         let fill = Message::Command(Command::SetRegion(grana_volume::Region::full(-half, half)));
         let buttons = grana_ui::row().gap(8.0).children([
-            view::button_with(ctx, "Align to Section", Role::Control, Length::Fill).press(align),
+            view::button_with(ctx, "Align to Axes", Role::Control, Length::Fill).press(align),
             view::button_with(ctx, "Fill Volume", Role::Control, Length::Fill).press(fill),
         ]);
         children.push(buttons);
@@ -1182,7 +1066,7 @@ fn drift<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         format!("{} frames", drift.frames())
     };
     let key = Key::new("drift");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         match running {
@@ -1329,7 +1213,7 @@ fn mask<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
         .and_then(|id| sources.iter().find(|(set, _, _)| *set == id))
         .map_or_else(|| "Whole volume".to_string(), |(_, name, _)| name.clone());
     let key = Key::new("mask.card");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         let mut options = vec![(None, "Whole Volume".to_string())];
@@ -1547,7 +1431,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
     let current = state.scene.clip;
     let status = if current.enabled() { "Active" } else { "Off" };
     let key = Key::new("clip");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         let world = state.scene.dataset.world_size();
@@ -1646,7 +1530,7 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     let scene = state.scene;
     let shading = scene.shading;
     let key = Key::new("rendering");
-    let open = state.workspace.sections.is_open(key);
+    let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
         let exposure = format!("{:.2}", scene.exposure);
@@ -1659,17 +1543,6 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
             true,
             &exposure,
             Command::SetExposure,
-        ));
-        let step = format!("{:.2}", scene.step_scale);
-        children.push(view::slider_readout(
-            ctx,
-            "step",
-            Some("Sampling"),
-            scene.step_scale,
-            0.25..=2.0,
-            true,
-            &step,
-            Command::SetStepScale,
         ));
         let shadows = format!("{:.2}", shading.shadows);
         children.push(view::slider_readout(
@@ -1689,7 +1562,7 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         ));
         children.push(view::divider(ctx));
         let lighting = Key::new("rendering.lighting");
-        let lighting_open = state.workspace.sections.is_open(lighting);
+        let lighting_open = state.workspace.disclosures.is_open(lighting);
         let mut light = Vec::new();
         if lighting_open {
             let azimuth = format!("{:.0}°", shading.azimuth);

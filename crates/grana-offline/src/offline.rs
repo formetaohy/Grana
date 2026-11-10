@@ -157,15 +157,8 @@ impl Offline {
         if requests.time != scene.time() {
             return Ok(());
         }
-        let mut uploaded = Vec::with_capacity(
-            requests.volume.len() + requests.section.len() + requests.prefetch.len(),
-        );
-        for request in requests
-            .volume
-            .iter()
-            .chain(&requests.section)
-            .chain(&requests.prefetch)
-        {
+        let mut uploaded = Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
+        for request in requests.volume.iter().chain(&requests.prefetch) {
             let data = bricks.read(*request, scene.drift().offset(request.time))?;
             uploaded.push((*request, data));
         }

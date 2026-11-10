@@ -1,24 +1,11 @@
 use super::*;
-use grana_display::{CameraState, ChannelMask, SectionState};
-
-#[derive(Clone, Copy)]
-pub(super) enum PaneSignature<'a> {
-    Volume {
-        data: &'a FrameData,
-        camera: CameraState,
-        region: [u32; 4],
-    },
-    Section {
-        data: &'a SectionData,
-        view: SectionState,
-        region: [u32; 4],
-    },
-}
+use grana_display::CameraState;
 
 #[derive(Clone, Copy)]
 pub(super) struct Signature<'a> {
-    pub(super) panes: &'a [Option<PaneSignature<'a>>; PANE_COUNT],
-    pub(super) pane_channels: [ChannelMask; PANE_COUNT],
+    pub(super) data: &'a FrameData,
+    pub(super) camera: CameraState,
+    pub(super) region: [u32; 4],
     pub(super) levels: Levels,
     pub(super) content: u64,
     pub(super) uploads: u64,
@@ -31,8 +18,9 @@ pub(super) struct Signature<'a> {
 impl Signature<'_> {
     pub(super) fn digest(self) -> u64 {
         let Self {
-            panes,
-            pane_channels,
+            data,
+            camera,
+            region,
             levels,
             content,
             uploads,
@@ -42,43 +30,15 @@ impl Signature<'_> {
             size,
         } = self;
         let mut hasher = DefaultHasher::new();
-        for (index, pane) in panes.iter().enumerate() {
-            pane_channels[index].hidden().hash(&mut hasher);
-            match pane {
-                Some(PaneSignature::Volume {
-                    data,
-                    camera,
-                    region,
-                }) => {
-                    let mut data = **data;
-                    data.jitter = [0.0; 4];
-                    data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
-                    bytemuck::bytes_of(&data).hash(&mut hasher);
-                    camera.projection.index().hash(&mut hasher);
-                    region.hash(&mut hasher);
-                }
-                Some(PaneSignature::Section { data, region, .. }) => {
-                    let mut data = **data;
-                    data.jitter = [0.0; 4];
-                    bytemuck::bytes_of(&data).hash(&mut hasher);
-                    region.hash(&mut hasher);
-                }
-                None => {}
-            }
-            match levels.panes[index] {
-                Some(PaneLevels::Volume(volume)) => {
-                    volume.ladder.base.hash(&mut hasher);
-                    volume.ladder.count.hash(&mut hasher);
-                    volume.capacity.hash(&mut hasher);
-                }
-                Some(PaneLevels::Section(section)) => {
-                    section.level.hash(&mut hasher);
-                    section.fallback.hash(&mut hasher);
-                    section.capacity.hash(&mut hasher);
-                }
-                None => {}
-            }
-        }
+        let mut data = *data;
+        data.jitter = [0.0; 4];
+        data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
+        bytemuck::bytes_of(&data).hash(&mut hasher);
+        camera.projection.index().hash(&mut hasher);
+        region.hash(&mut hasher);
+        levels.ladder.base.hash(&mut hasher);
+        levels.ladder.count.hash(&mut hasher);
+        levels.capacity.hash(&mut hasher);
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
@@ -90,8 +50,8 @@ impl Signature<'_> {
 
     pub(super) fn shot(self) -> u64 {
         let Self {
-            panes,
-            pane_channels,
+            data,
+            region,
             content,
             exposure,
             epoch,
@@ -99,24 +59,11 @@ impl Signature<'_> {
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        for (index, pane) in panes.iter().enumerate() {
-            pane_channels[index].hidden().hash(&mut hasher);
-            match pane {
-                Some(PaneSignature::Volume { data, region, .. }) => {
-                    1u8.hash(&mut hasher);
-                    region.hash(&mut hasher);
-                    data.clip.map(f32::to_bits).hash(&mut hasher);
-                    data.region_center.map(f32::to_bits).hash(&mut hasher);
-                    for axis in data.region_axis {
-                        axis.map(f32::to_bits).hash(&mut hasher);
-                    }
-                }
-                Some(PaneSignature::Section { region, .. }) => {
-                    2u8.hash(&mut hasher);
-                    region.hash(&mut hasher);
-                }
-                None => 0u8.hash(&mut hasher),
-            }
+        region.hash(&mut hasher);
+        data.clip.map(f32::to_bits).hash(&mut hasher);
+        data.region_center.map(f32::to_bits).hash(&mut hasher);
+        for axis in data.region_axis {
+            axis.map(f32::to_bits).hash(&mut hasher);
         }
         exposure.to_bits().hash(&mut hasher);
         epoch.hash(&mut hasher);
@@ -127,8 +74,9 @@ impl Signature<'_> {
 
     pub(super) fn transition(self) -> u64 {
         let Self {
-            panes,
-            pane_channels,
+            data,
+            camera,
+            region,
             content,
             time,
             exposure,
@@ -137,38 +85,19 @@ impl Signature<'_> {
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        for (index, pane) in panes.iter().enumerate() {
-            pane_channels[index].hidden().hash(&mut hasher);
-            let Some(pane) = pane else {
-                continue;
-            };
-            match pane {
-                PaneSignature::Volume {
-                    data,
-                    camera,
-                    region,
-                } => {
-                    hash_camera(*camera, &mut hasher);
-                    data.light.map(f32::to_bits).hash(&mut hasher);
-                    data.region_center.map(f32::to_bits).hash(&mut hasher);
-                    for axis in data.region_axis {
-                        axis.map(f32::to_bits).hash(&mut hasher);
-                    }
-                    data.shading.map(f32::to_bits).hash(&mut hasher);
-                    for value in &data.march[1..] {
-                        value.to_bits().hash(&mut hasher);
-                    }
-                    data.clip.map(f32::to_bits).hash(&mut hasher);
-                    data.tag.hash(&mut hasher);
-                    region.hash(&mut hasher);
-                }
-                PaneSignature::Section { view, data, region } => {
-                    hash_section(*view, &mut hasher);
-                    data.projection.map(f32::to_bits).hash(&mut hasher);
-                    region.hash(&mut hasher);
-                }
-            }
+        hash_camera(camera, &mut hasher);
+        data.light.map(f32::to_bits).hash(&mut hasher);
+        data.region_center.map(f32::to_bits).hash(&mut hasher);
+        for axis in data.region_axis {
+            axis.map(f32::to_bits).hash(&mut hasher);
         }
+        data.shading.map(f32::to_bits).hash(&mut hasher);
+        for value in &data.march[1..] {
+            value.to_bits().hash(&mut hasher);
+        }
+        data.clip.map(f32::to_bits).hash(&mut hasher);
+        data.tag.hash(&mut hasher);
+        region.hash(&mut hasher);
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
@@ -186,15 +115,6 @@ pub(super) fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
     camera.projection.index().hash(hasher);
     camera.aperture.to_bits().hash(hasher);
     camera.focus.to_bits().hash(hasher);
-}
-
-pub(super) fn hash_section(view: SectionState, hasher: &mut DefaultHasher) {
-    view.center.map(f32::to_bits).hash(hasher);
-    view.azimuth.to_bits().hash(hasher);
-    view.elevation.to_bits().hash(hasher);
-    view.span.to_bits().hash(hasher);
-    view.projection.index().hash(hasher);
-    view.thickness.to_bits().hash(hasher);
 }
 
 pub(super) fn digest(words: &[u64]) -> u64 {
@@ -224,14 +144,6 @@ pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3)
         high = high.max(center + radius);
     }
     (low, high)
-}
-
-pub(super) fn channel_style_panes(rows: &[Vec<crate::ChannelRow>; PANE_COUNT]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for row in rows {
-        channel_style(row).hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {

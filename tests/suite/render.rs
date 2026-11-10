@@ -1,16 +1,11 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{
-    Camera, SectionCamera, SectionProjection, Shading, TransferFunction, VolumeStyle,
-};
+use grana_display::{Camera, Shading, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
-use grana_render::{
-    Frame, Layer, LayerKey, Lens, PaneFrame, Renderer, Requests, SceneFrame, Style,
-};
+use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
-    Basis, BrickCoord, BrickData, BrickGrid, BrickRequest, Channel, Clip, Extent, Level,
-    PADDED_SIDE, Pyramid, Region, Spacing, Volume, VoxelData,
+    Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres};
@@ -19,41 +14,14 @@ const SIDE: u32 = 128;
 const SAMPLES: u32 = 4;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
-const CORNER: [u32; 4] = [0, 0, 1, 1];
 const EMPTY: Extent = Extent::new(16, 16, 16);
-
-fn panes<'a>(
-    camera: &'a Camera,
-    section: &'a SectionCamera,
-    volume_region: [u32; 4],
-    section_region: [u32; 4],
-) -> [Option<PaneFrame<'a>>; grana_render::PANE_COUNT] {
-    [
-        Some(PaneFrame::Volume {
-            camera,
-            lens: Lens {
-                camera,
-                aspect: volume_region[2].max(1) as f32 / volume_region[3].max(1) as f32,
-            },
-            region: volume_region,
-        }),
-        Some(PaneFrame::Section {
-            section,
-            region: section_region,
-        }),
-        None,
-        None,
-    ]
-}
 
 struct View<'a> {
     target: &'a wgpu::TextureView,
     camera: &'a Camera,
-    section: &'a SectionCamera,
     region: Region,
     scene: &'a SceneFrame<'a>,
-    volume_region: [u32; 4],
-    section_region: [u32; 4],
+    viewport: [u32; 4],
     assured: bool,
 }
 
@@ -61,20 +29,14 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
     Frame {
         target: view.target,
         size: [SIDE, SIDE],
-        panes: panes(
-            view.camera,
-            view.section,
-            view.volume_region,
-            view.section_region,
-        ),
+        camera: view.camera,
+        viewport: view.viewport,
         time: 0,
         region: view.region,
         clip: Clip::none(),
         exposure: 1.0,
         samples: SAMPLES,
         scene: view.scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: view.assured,
@@ -184,7 +146,6 @@ fn settle_with<'a, 'b: 'a>(
             let bricks = requests
                 .volume
                 .iter()
-                .chain(&requests.section)
                 .map(|request| (*request, volume.brick(&grid, request.coord)))
                 .collect::<Vec<_>>();
             renderer.upload(gpu.queue(), &bricks);
@@ -192,20 +153,6 @@ fn settle_with<'a, 'b: 'a>(
         }
     }
     panic!("the stream never settled");
-}
-
-fn lit(pixels: &[[u8; 4]], rect: [u32; 4]) -> usize {
-    let [left, top, right, bottom] = rect;
-    let mut count = 0;
-    for y in top..bottom {
-        for x in left..right {
-            let pixel = pixels[(y * SIDE + x) as usize];
-            if pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 200 {
-                count += 1;
-            }
-        }
-    }
-    count
 }
 
 fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
@@ -253,11 +200,9 @@ fn background(
     let blank = View {
         target: view.target,
         camera: view.camera,
-        section: view.section,
         region: view.region,
         scene: &scene,
-        volume_region: view.volume_region,
-        section_region: view.section_region,
+        viewport: view.viewport,
         assured: view.assured,
     };
     settle(gpu, renderer, &blank, volume);
@@ -277,19 +222,6 @@ fn snapshot(
     Snapshot::new([SIDE, SIDE], reference, image)
 }
 
-fn profile(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) -> grana_render::FrameProfile {
-    let mut profile = grana_render::FrameProfile::default();
-    for _ in 0..16 {
-        profile = renderer
-            .draw(gpu.device(), gpu.queue(), frame(view))
-            .profile;
-        if profile.measured() {
-            break;
-        }
-    }
-    profile
-}
-
 #[test]
 fn measures_the_convergence_of_a_volume() {
     let Some(gpu) = gpu() else {
@@ -301,7 +233,6 @@ fn measures_the_convergence_of_a_volume() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -317,11 +248,9 @@ fn measures_the_convergence_of_a_volume() {
     let view = View {
         target: &view_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: true,
     };
     settle(&gpu, &mut renderer, &view, &volume);
@@ -391,7 +320,6 @@ fn streams_and_shades_two_channels() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -407,17 +335,15 @@ fn streams_and_shades_two_channels() {
     let view = View {
         target: &view_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
-    assert!(requests.panes[0].visible > 0, "the view sees no brick");
+    assert!(requests.view.visible > 0, "the view sees no brick");
     assert_eq!(
-        requests.panes[0].resident, requests.panes[0].demand,
+        requests.view.resident, requests.view.demand,
         "the stream never completed"
     );
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
@@ -428,7 +354,7 @@ fn streams_and_shades_two_channels() {
     );
     assert!(
         shot.painted(shot.middle()) * 2 > shot.painted(shot.all()),
-        "the volume lands outside its pane"
+        "the volume lands outside its view"
     );
     assert!(
         shot.hue(shot.all(), Hue::Blue) > 100,
@@ -438,12 +364,6 @@ fn streams_and_shades_two_channels() {
         shot.hue(shot.all(), Hue::Green) > 100,
         "the green channel barely rendered"
     );
-    let profile = profile(&gpu, &mut renderer, &view);
-    assert!(profile.target > 0.0, "the frame carries no budget");
-    if renderer.profiled() {
-        assert!(profile.measured(), "the frame is not timed");
-        assert!(profile.stage(grana_render::Stage::Volume) > 0.0);
-    }
 }
 
 #[test]
@@ -482,11 +402,8 @@ fn renders_a_rotated_placement() {
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(level.world_extent());
-    let voxel = Vec3::from(level.voxel());
     let mut camera = Camera::new(35.0);
     camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.fit(world, voxel, 0.5);
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -502,28 +419,21 @@ fn renders_a_rotated_placement() {
     let view = View {
         target: &view_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: [0, 0, SIDE / 2, SIDE],
-        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+        viewport: WHOLE,
         assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
-        requests.panes[0].visible > 0,
+        requests.view.visible > 0,
         "the rotated volume sees no brick"
     );
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
-        shot.painted(shot.left()) > (SIDE * SIDE / 64) as usize,
+        shot.painted(shot.all()) > (SIDE * SIDE / 64) as usize,
         "the rotated volume barely rendered: {} painted pixels",
-        shot.painted(shot.left())
-    );
-    assert!(
-        shot.painted(shot.right()) > (SIDE * SIDE / 64) as usize,
-        "the rotated section barely rendered: {} painted pixels",
-        shot.painted(shot.right())
+        shot.painted(shot.all())
     );
     let mut aligned_renderer = build_renderer(&gpu, &aligned);
     let aligned_target = texture(&gpu, SIDE);
@@ -531,11 +441,9 @@ fn renders_a_rotated_placement() {
     let aligned_view = View {
         target: &aligned_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: [0, 0, SIDE / 2, SIDE],
-        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+        viewport: WHOLE,
         assured: false,
     };
     let aligned_shot = snapshot(
@@ -550,424 +458,6 @@ fn renders_a_rotated_placement() {
     assert!(
         rotated * 10 > reference * 9 && rotated * 9 < reference * 10,
         "the quarter turn changed the sphere: {rotated} against {reference} painted pixels"
-    );
-}
-
-#[test]
-fn follows_the_refresh_rate_of_the_display() {
-    let sixty = grana_render::frame_target(Some(60_000));
-    let hundred_forty_four = grana_render::frame_target(Some(144_000));
-    assert!(
-        (sixty - 16.6667).abs() < 0.001,
-        "a sixty hertz display budgets a sixtieth of a second: {sixty}"
-    );
-    assert!(
-        (hundred_forty_four - 6.9444).abs() < 0.001,
-        "a fast display budgets a shorter frame: {hundred_forty_four}"
-    );
-    assert_eq!(
-        grana_render::frame_target(None),
-        sixty,
-        "an unknown display assumes sixty hertz"
-    );
-    assert_eq!(
-        grana_render::frame_target(Some(0)),
-        sixty,
-        "a monitor that reports no rate falls back to sixty hertz"
-    );
-    assert_eq!(
-        grana_render::frame_target(Some(1_000_000)),
-        4.0,
-        "an absurd refresh rate keeps a floor"
-    );
-    assert_eq!(
-        grana_render::frame_target(Some(1_000)),
-        40.0,
-        "a one hertz display keeps a ceiling"
-    );
-}
-
-#[test]
-fn reveals_a_section_plane() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = pyramid
-        .channels()
-        .iter()
-        .zip(&transfers)
-        .map(|(channel, transfer)| grana_render::ChannelRow {
-            visible: true,
-            opacity: 1.0,
-            window: grana_volume::Intensity::new(
-                channel.window().min(),
-                channel.window().max() * 2.0,
-            ),
-            transfer: transfer.clone(),
-            volume: VolumeStyle::default(),
-        })
-        .collect::<Vec<_>>();
-    let world = Vec3::from(volume.world_extent());
-    let voxel = Vec3::new(
-        volume.spacing().x(),
-        volume.spacing().y(),
-        volume.spacing().z(),
-    );
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.fit(world, voxel, 1.0);
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        section: &section,
-        region: Region::none(),
-        scene: &scene,
-        volume_region: CORNER,
-        section_region: WHOLE,
-        assured: false,
-    };
-    let requests = settle(&gpu, &mut renderer, &view, &volume);
-    assert!(requests.panes[1].visible > 0, "the section sees no brick");
-    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
-    assert!(
-        shot.coverage(shot.middle()) > 0.3,
-        "the section barely covers its centre: {:.2}",
-        shot.coverage(shot.middle())
-    );
-    assert!(
-        shot.contrast(shot.middle()) > 30.0,
-        "the section transfer is not calibrated: {:.1}",
-        shot.contrast(shot.middle())
-    );
-    assert_eq!(
-        shot.painted([0, 0, SIDE / 8, SIDE / 8]),
-        1,
-        "the section spills outside its disc"
-    );
-}
-
-#[test]
-fn reveals_an_oblique_section_plane() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let world = Vec3::from(volume.world_extent());
-    let voxel = Vec3::new(
-        volume.spacing().x(),
-        volume.spacing().y(),
-        volume.spacing().z(),
-    );
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.set_orientation(0.7, 0.45);
-    section.fit(world, voxel, 1.0);
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        section: &section,
-        region: Region::none(),
-        scene: &scene,
-        volume_region: CORNER,
-        section_region: WHOLE,
-        assured: false,
-    };
-    let requests = settle(&gpu, &mut renderer, &view, &volume);
-    assert!(
-        requests.panes[1].visible > 0,
-        "the oblique section sees no brick"
-    );
-    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
-    assert!(
-        shot.painted(shot.all()) > 500,
-        "the oblique section barely rendered: {} painted pixels",
-        shot.painted(shot.all())
-    );
-    assert!(
-        shot.coverage(shot.middle()) > 0.15,
-        "the oblique section lands outside its centre: {:.2}",
-        shot.coverage(shot.middle())
-    );
-}
-
-#[test]
-fn projects_a_slab_through_the_section() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let extent = Extent::new(48, 48, 48);
-    let spacing = Spacing::new(0.5, 0.5, 0.5);
-    let volume = spheres(
-        extent,
-        spacing,
-        &[([24.0, 24.0, 17.5], 4.0), ([24.0, 24.0, 29.5], 4.0)],
-        60_000,
-    );
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = pyramid
-        .channels()
-        .iter()
-        .zip(&transfers)
-        .map(|(channel, transfer)| grana_render::ChannelRow {
-            visible: true,
-            opacity: 1.0,
-            window: grana_volume::Intensity::new(
-                channel.window().min(),
-                channel.window().max() * 2.0,
-            ),
-            transfer: transfer.clone(),
-            volume: VolumeStyle::default(),
-        })
-        .collect::<Vec<_>>();
-    let world = Vec3::from(volume.world_extent());
-    let voxel = Vec3::new(
-        volume.spacing().x(),
-        volume.spacing().y(),
-        volume.spacing().z(),
-    );
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.fit(world, voxel, 1.0);
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    macro_rules! view {
-        () => {
-            View {
-                target: &view_texture,
-                camera: &camera,
-                section: &section,
-                region: Region::none(),
-                scene: &scene,
-                volume_region: CORNER,
-                section_region: WHOLE,
-                assured: false,
-            }
-        };
-    }
-    let plane = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
-    assert!(
-        plane.painted(plane.all()) < 64,
-        "the empty plane painted {} pixels",
-        plane.painted(plane.all())
-    );
-    section.set_projection(SectionProjection::Maximum);
-    section.set_thickness(10.0);
-    let maximum = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
-    assert!(
-        maximum.painted(maximum.all()) > 200,
-        "the projection lost the slab: {} painted pixels",
-        maximum.painted(maximum.all())
-    );
-    assert!(
-        maximum.coverage(maximum.middle()) > 0.04,
-        "the projection lands outside its centre: {:.2}",
-        maximum.coverage(maximum.middle())
-    );
-    section.set_projection(SectionProjection::Average);
-    let average = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
-    assert!(
-        average.painted(average.all()) > 100,
-        "the average lost the slab: {} painted pixels",
-        average.painted(average.all())
-    );
-    assert!(
-        maximum.contrast(maximum.all()) > 1.5 * average.contrast(average.all()),
-        "the average is as bright as the maximum"
-    );
-    section.set_projection(SectionProjection::Maximum);
-    let assured = View {
-        target: &view_texture,
-        camera: &camera,
-        section: &section,
-        region: Region::none(),
-        scene: &scene,
-        volume_region: CORNER,
-        section_region: WHOLE,
-        assured: true,
-    };
-    let info = assure(
-        &gpu,
-        &mut renderer,
-        &assured,
-        &volume,
-        &BrickGrid::new(volume.extent()),
-    );
-    assert_eq!(
-        info.samples, SAMPLES,
-        "the assured projection stopped short"
-    );
-}
-
-fn empty_brick(channels: usize) -> BrickData {
-    BrickData::new(
-        (0..channels)
-            .map(|_| VoxelData::U16(vec![0; (PADDED_SIDE as usize).pow(3)]))
-            .collect(),
-    )
-}
-
-#[test]
-fn probes_a_finer_section_level_for_a_sparse_slab() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let extent = Extent::new(128, 128, 64);
-    let volume = spheres(
-        extent,
-        Spacing::new(1.0, 1.0, 1.0),
-        &[([64.0, 64.0, 32.0], 10.0)],
-        60_000,
-    );
-    let base = volume.pyramid();
-    let fine = base.level(0);
-    let pyramid = Pyramid::placed(
-        vec![fine, fine.coarser(), fine.coarser().coarser()],
-        3,
-        base.channels().to_vec(),
-        1,
-        1.0,
-        [0.0; 3],
-    );
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let world = Vec3::from(fine.world_extent());
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.set_center(Vec3::ZERO);
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = Renderer::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        25_000,
-    );
-    renderer.set_dataset(gpu.device(), &pyramid);
-    let grid = BrickGrid::new(extent);
-    let occupied = BrickCoord::new(2, 2, 1);
-    let mut bricks = (0..grid.count())
-        .map(|index| {
-            let coord = grid.coord(index);
-            let data = if coord == occupied {
-                volume.brick(&grid, coord)
-            } else {
-                empty_brick(1)
-            };
-            (
-                BrickRequest {
-                    time: 0,
-                    level: 0,
-                    coord,
-                },
-                data,
-            )
-        })
-        .collect::<Vec<_>>();
-    let coarse = BrickGrid::new(pyramid.level(1).extent());
-    bricks.extend((0..coarse.count()).map(|index| {
-        (
-            BrickRequest {
-                time: 0,
-                level: 1,
-                coord: coarse.coord(index),
-            },
-            empty_brick(1),
-        )
-    }));
-    renderer.upload(gpu.queue(), &bricks);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        section: &section,
-        region: Region::none(),
-        scene: &scene,
-        volume_region: [0, 0, SIDE / 2, SIDE],
-        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
-        assured: false,
-    };
-    let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
-    for _ in 0..64 {
-        if let Some(requests) = next_demand(&gpu, &mut renderer) {
-            let bricks = requests
-                .volume
-                .iter()
-                .chain(&requests.section)
-                .map(|request| {
-                    let data = if request.level == 0 {
-                        volume.brick(&grid, request.coord)
-                    } else {
-                        empty_brick(1)
-                    };
-                    (*request, data)
-                })
-                .collect::<Vec<_>>();
-            renderer.upload(gpu.queue(), &bricks);
-        }
-        info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
-    }
-    assert_eq!(
-        info.panes[1].level, 0,
-        "the sparse slab settled at level {}",
-        info.panes[1].level
-    );
-    assert!(
-        info.panes[1].visible <= 1,
-        "the probed slab measures {} visible bricks",
-        info.panes[1].visible
     );
 }
 
@@ -990,7 +480,6 @@ fn composites_a_mesh_layer() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let mesh = PackedMesh::new(quad(8.0));
     let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
     let layers = [Layer {
@@ -1014,11 +503,9 @@ fn composites_a_mesh_layer() {
     let view = View {
         target: &view_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: false,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
@@ -1035,7 +522,7 @@ fn composites_a_mesh_layer() {
 }
 
 #[test]
-fn keeps_a_translucent_layer_across_pane_layouts() {
+fn keeps_a_translucent_layer() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -1049,7 +536,6 @@ fn keeps_a_translucent_layer_across_pane_layouts() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let mesh = PackedMesh::new(quad(8.0));
     let styles = [Style::new([1.0, 0.1, 0.1], true, false, 0.5)];
     let layers = [Layer {
@@ -1070,39 +556,30 @@ fn keeps_a_translucent_layer_across_pane_layouts() {
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
-    for (index, region) in [WHOLE, [0, 0, SIDE, SIDE / 2], [0, 0, SIDE / 2, SIDE / 2]]
-        .into_iter()
-        .enumerate()
-    {
-        let view = View {
-            target: &view_texture,
-            camera: &camera,
-            section: &section,
-            region: Region::none(),
-            scene: &scene,
-            volume_region: region,
-            section_region: CORNER,
-            assured: false,
-        };
-        let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
-        let painted = shot.painted(region);
-        assert!(
-            painted > 400,
-            "the translucent layer faded at {region:?}: {painted} painted pixels"
-        );
-        let info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
-        assert!(
-            info.oit.layers > 0,
-            "the translucent layer does not reach the fragment store"
-        );
-        if index > 0 {
-            assert_eq!(
-                shot.painted([SIDE - 1, SIDE - 1, SIDE, SIDE]),
-                0,
-                "the translucent layer spilled outside its pane"
-            );
-        }
-    }
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        assured: false,
+    };
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    let painted = shot.painted(WHOLE);
+    assert!(
+        painted > 400,
+        "the translucent layer faded: {painted} painted pixels"
+    );
+    assert!(
+        shot.coverage(shot.middle()) > 0.5,
+        "the translucent layer barely covers its centre: {:.2}",
+        shot.coverage(shot.middle())
+    );
+    assert!(
+        shot.contrast(shot.middle()) > 10.0,
+        "the translucent layer is invisible against the background: {:.1}",
+        shot.contrast(shot.middle())
+    );
 }
 
 fn far_pair_volume() -> Volume {
@@ -1135,7 +612,6 @@ fn clips_an_oriented_region() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -1151,11 +627,9 @@ fn clips_an_oriented_region() {
     let open = View {
         target: &view_texture,
         camera: &camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: false,
     };
     let shot = snapshot(&gpu, &mut renderer, &open, &target, &volume);
@@ -1174,12 +648,7 @@ fn clips_an_oriented_region() {
         [across, Vec3::Y, down],
         Vec3::new(1.1, 2.4, 4.8),
     );
-    let clipped = View {
-        region,
-        volume_region: WHOLE,
-        section_region: CORNER,
-        ..open
-    };
+    let clipped = View { region, ..open };
     let shot = snapshot(&gpu, &mut renderer, &clipped, &target, &volume);
     assert!(
         shot.hue(shot.left(), Hue::Blue) > 50,
@@ -1213,7 +682,6 @@ fn assure(
             let bricks = requests
                 .volume
                 .iter()
-                .chain(&requests.section)
                 .map(|request| (*request, volume.brick(grid, request.coord)))
                 .collect::<Vec<_>>();
             renderer.upload(gpu.queue(), &bricks);
@@ -1229,7 +697,6 @@ fn assured_pixels(
     volume: &Volume,
     channels: &[grana_render::ChannelRow],
     camera: &Camera,
-    section: &SectionCamera,
 ) -> Vec<[u8; 4]> {
     let scene = SceneFrame {
         revision: revision(),
@@ -1246,11 +713,9 @@ fn assured_pixels(
     let view = View {
         target: &view_texture,
         camera,
-        section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: true,
     };
     for _ in 0..4 {
@@ -1281,9 +746,8 @@ fn assures_complete_reproducible_frames() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
-    let first = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera, &section);
-    let second = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera, &section);
+    let first = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera);
+    let second = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera);
     assert_eq!(first, second, "two assured exports of one pose diverge");
     let lit = first
         .iter()
@@ -1392,18 +856,15 @@ fn render_volume(
         layers: &[],
         markers: &[],
     };
-    let section = SectionCamera::new();
     let mut renderer = build_renderer(gpu, &pyramid);
     let target = texture(gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let view = View {
         target: &view_texture,
         camera,
-        section: &section,
         region: Region::none(),
         scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: false,
     };
     settle(gpu, &mut renderer, &view, volume);
@@ -1540,7 +1001,6 @@ fn stream_levels(
             let bricks = requests
                 .volume
                 .iter()
-                .chain(&requests.section)
                 .map(|request| {
                     let volume = &volumes[request.level];
                     let grid = BrickGrid::new(volume.extent());
@@ -1556,17 +1016,14 @@ fn stream_levels(
 fn ladder_view<'a>(
     target: &'a wgpu::TextureView,
     camera: &'a Camera,
-    section: &'a SectionCamera,
     scene: &'a SceneFrame<'a>,
 ) -> View<'a> {
     View {
         target,
         camera,
-        section,
         region: Region::none(),
         scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
+        viewport: WHOLE,
         assured: false,
     }
 }
@@ -1582,7 +1039,6 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -1601,15 +1057,15 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     renderer.set_dataset(gpu.device(), &pyramid);
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
-    let view = ladder_view(&view_texture, &camera, &section, &scene);
+    let view = ladder_view(&view_texture, &camera, &scene);
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the constrained view never resolved");
     assert!(
-        info.panes[0].level > 0,
+        info.view.level > 0,
         "the budget still asks for the finest level"
     );
     assert_eq!(
-        info.panes[0].visible, info.panes[0].demand,
+        info.view.visible, info.view.demand,
         "the fitting level still truncates its bricks"
     );
     assert!(!info.truncated, "the fitting level reports truncation");
@@ -1643,7 +1099,6 @@ fn sizes_the_export_residency_to_the_finest_level() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -1653,23 +1108,9 @@ fn sizes_the_export_residency_to_the_finest_level() {
         layers: &[],
         markers: &[],
     };
-    let panes = [
-        Some(PaneFrame::Volume {
-            camera: &camera,
-            lens: Lens {
-                camera: &camera,
-                aspect: 1.0,
-            },
-            region: WHOLE,
-        }),
-        None,
-        None,
-        None,
-    ];
-    let detail = grana_render::residency(&pyramid, &panes, Region::none());
+    let detail = grana_render::residency(&pyramid, &camera, SIDE, Region::none());
     assert_eq!(
-        detail.panes[0].expect("the volume is scheduled").level,
-        0,
+        detail.detail.level, 0,
         "a fitted export keeps the finest level"
     );
     let mut renderer = Renderer::new(
@@ -1694,16 +1135,13 @@ fn sizes_the_export_residency_to_the_finest_level() {
     );
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
-    let mut view = ladder_view(&view_texture, &camera, &section, &scene);
+    let mut view = ladder_view(&view_texture, &camera, &scene);
     view.assured = true;
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the sized export never resolved");
+    assert_eq!(info.view.level, 0, "the sized export coarsens its level");
     assert_eq!(
-        info.panes[0].level, 0,
-        "the sized export coarsens its level"
-    );
-    assert_eq!(
-        info.panes[0].visible, info.panes[0].demand,
+        info.view.visible, info.view.demand,
         "the sized export still truncates its bricks"
     );
     assert!(!info.truncated, "the sized export reports truncation");
@@ -1720,7 +1158,6 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -1733,14 +1170,15 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
-    let view = ladder_view(&view_texture, &camera, &section, &scene);
+    let view = ladder_view(&view_texture, &camera, &scene);
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the roomy view never resolved");
-    assert_eq!(info.panes[0].level, 0, "a roomy budget coarsens the volume");
-    assert_eq!(info.panes[0].visible, info.panes[0].demand);
+    assert_eq!(info.view.level, 0, "a roomy budget coarsens the volume");
+    assert_eq!(info.view.visible, info.view.demand);
     assert!(!info.truncated);
     holds_a_settled_frame(&gpu, &mut renderer, &view);
 }
+
 fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
     for _ in 0..4 {
         let info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
@@ -1748,284 +1186,6 @@ fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
         assert_eq!(info.samples, SAMPLES, "an idle fitted frame resamples");
         assert!(!info.truncated, "an idle fitted frame truncates");
     }
-}
-
-#[test]
-fn renders_a_section_pane_without_a_volume() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = pyramid
-        .channels()
-        .iter()
-        .map(|channel| TransferFunction::tinted(channel.tint()))
-        .collect::<Vec<_>>();
-    let channels = channels(&pyramid, &transfers);
-    let mut section = SectionCamera::new();
-    section.fit(
-        Vec3::from(volume.world_extent()),
-        Vec3::from(pyramid.level(0).voxel()),
-        1.0,
-    );
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let panes = [
-        None,
-        Some(PaneFrame::Section {
-            section: &section,
-            region: WHOLE,
-        }),
-        None,
-        None,
-    ];
-    let build = || Frame {
-        target: &view_texture,
-        size: [SIDE, SIDE],
-        panes,
-        time: 0,
-        region: Region::none(),
-        clip: Clip::none(),
-        exposure: 1.0,
-        samples: SAMPLES,
-        scene: &scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
-        prefetch: false,
-        level_cap: usize::MAX,
-        assured: false,
-        temporal: None,
-    };
-    let requests = settle_with(&gpu, &mut renderer, build, &volume);
-    assert!(
-        requests.panes[1].visible > 0,
-        "the section pane sees no brick"
-    );
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    let centre = pixels[(SIDE * SIDE / 2 + SIDE / 2) as usize];
-    let corner = pixels[12 * SIDE as usize + 12];
-    let centre = centre[0] as u32 + centre[1] as u32 + centre[2] as u32;
-    let corner = corner[0] as u32 + corner[1] as u32 + corner[2] as u32;
-    assert!(
-        centre > corner + 90,
-        "the lone section pane paints nothing at its centre: {centre} against {corner}"
-    );
-}
-
-fn hue_pixels(pixels: &[[u8; 4]], rect: [u32; 4], channel: usize) -> usize {
-    let [left, top, right, bottom] = rect;
-    let mut count = 0;
-    for y in top..bottom {
-        for x in left..right {
-            let pixel = pixels[(y * SIDE + x) as usize];
-            let value = u32::from(pixel[channel]);
-            if value > 24
-                && (0..3).all(|other| other == channel || value > u32::from(pixel[other]) * 2)
-            {
-                count += 1;
-            }
-        }
-    }
-    count
-}
-
-#[test]
-fn keeps_pane_channel_sets_independent() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = two_channel_volume();
-    let pyramid = volume.pyramid();
-    let transfers = pyramid
-        .channels()
-        .iter()
-        .map(|channel| TransferFunction::tinted(channel.tint()))
-        .collect::<Vec<_>>();
-    let channels = channels(&pyramid, &transfers);
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let left_region = [0, 0, SIDE / 2, SIDE];
-    let right_region = [SIDE / 2, 0, SIDE / 2, SIDE];
-    let left_probe = [0, 0, SIDE / 2, SIDE];
-    let right_probe = [SIDE / 2, 0, SIDE, SIDE];
-    let lens = Lens {
-        camera: &camera,
-        aspect: 0.5,
-    };
-    let panes = [
-        Some(PaneFrame::Volume {
-            camera: &camera,
-            lens,
-            region: left_region,
-        }),
-        Some(PaneFrame::Volume {
-            camera: &camera,
-            lens,
-            region: right_region,
-        }),
-        None,
-        None,
-    ];
-    let mut left = grana_display::ChannelMask::NONE;
-    left.set(1, false);
-    let mut right = grana_display::ChannelMask::NONE;
-    right.set(0, false);
-    let build = || Frame {
-        target: &view_texture,
-        size: [SIDE, SIDE],
-        panes,
-        time: 0,
-        region: Region::none(),
-        clip: Clip::none(),
-        exposure: 1.0,
-        samples: SAMPLES,
-        scene: &scene,
-        pane_channels: [
-            left,
-            right,
-            grana_display::ChannelMask::NONE,
-            grana_display::ChannelMask::NONE,
-        ],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
-        prefetch: false,
-        level_cap: usize::MAX,
-        assured: false,
-        temporal: None,
-    };
-    settle_with(&gpu, &mut renderer, build, &volume);
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    let blue_left = hue_pixels(&pixels, left_probe, 2);
-    let green_left = hue_pixels(&pixels, left_probe, 1);
-    let blue_right = hue_pixels(&pixels, right_probe, 2);
-    let green_right = hue_pixels(&pixels, right_probe, 1);
-    assert!(
-        blue_left > green_left * 4,
-        "the left pane hides its green channel: {blue_left} blue against {green_left} green"
-    );
-    assert!(
-        green_right > blue_right * 4,
-        "the right pane hides its blue channel: {green_right} green against {blue_right} blue"
-    );
-}
-
-#[test]
-fn keeps_two_volume_panes_independent() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = pyramid
-        .channels()
-        .iter()
-        .map(|channel| TransferFunction::tinted(channel.tint()))
-        .collect::<Vec<_>>();
-    let channels = channels(&pyramid, &transfers);
-    let world = Vec3::from(volume.world_extent());
-    let mut left = Camera::new(35.0);
-    left.fit(world, 1.0);
-    let mut right = Camera::new(35.0);
-    right.restore(grana_display::CameraState {
-        pivot: [10.0, 0.0, 0.0],
-        yaw: 0.0,
-        pitch: 0.0,
-        distance: 1.0,
-        fov_y: 0.6,
-        projection: grana_display::CameraProjection::Perspective,
-        aperture: 0.0,
-        focus: 1.0,
-    });
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let left_region = [0, 0, SIDE / 2, SIDE];
-    let right_region = [SIDE / 2, 0, SIDE / 2, SIDE];
-    let panes = [
-        Some(PaneFrame::Volume {
-            camera: &left,
-            lens: Lens {
-                camera: &left,
-                aspect: left_region[2] as f32 / left_region[3] as f32,
-            },
-            region: left_region,
-        }),
-        Some(PaneFrame::Volume {
-            camera: &right,
-            lens: Lens {
-                camera: &right,
-                aspect: right_region[2] as f32 / right_region[3] as f32,
-            },
-            region: right_region,
-        }),
-        None,
-        None,
-    ];
-    let build = || Frame {
-        target: &view_texture,
-        size: [SIDE, SIDE],
-        panes,
-        time: 0,
-        region: Region::none(),
-        clip: Clip::none(),
-        exposure: 1.0,
-        samples: SAMPLES,
-        scene: &scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
-        prefetch: false,
-        level_cap: usize::MAX,
-        assured: false,
-        temporal: None,
-    };
-    settle_with(&gpu, &mut renderer, build, &volume);
-    let info = renderer.draw(gpu.device(), gpu.queue(), build());
-    println!(
-        "info {:?} settled {} truncated {}",
-        info.panes, info.settled, info.truncated
-    );
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    let lit_left = lit(&pixels, [0, 0, SIDE / 2, SIDE]);
-    let lit_right = lit(&pixels, [SIDE / 2, 0, SIDE, SIDE]);
-    assert!(
-        lit_left > (SIDE * SIDE / 64) as usize,
-        "the left pane is empty"
-    );
-    assert!(
-        lit_right * 8 < lit_left,
-        "the second pane reuses the first camera: {lit_left} against {lit_right}"
-    );
 }
 
 const TEMPORAL: f32 = 16.0;
@@ -2050,7 +1210,6 @@ fn deviation(first: &[[u8; 4]], second: &[[u8; 4]]) -> f64 {
 struct Take<'a, 'b> {
     texture: &'a wgpu::Texture,
     camera: &'a Camera,
-    section: &'a SectionCamera,
     scene: &'a SceneFrame<'b>,
     time: u32,
     samples: u32,
@@ -2067,15 +1226,14 @@ fn take(
     let build = || Frame {
         target: &target,
         size: [SIDE, SIDE],
-        panes: panes(view.camera, view.section, WHOLE, CORNER),
+        camera: view.camera,
+        viewport: WHOLE,
         time: view.time,
         region: Region::none(),
         clip: Clip::none(),
         exposure: 1.0,
         samples: view.samples,
         scene: view.scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: true,
@@ -2090,7 +1248,6 @@ fn take(
                 let bricks = requests
                     .volume
                     .iter()
-                    .chain(&requests.section)
                     .map(|request| (*request, volume.brick(&grid, request.coord)))
                     .collect::<Vec<_>>();
                 renderer.upload(gpu.queue(), &bricks);
@@ -2122,7 +1279,6 @@ fn reuses_the_history_of_a_still_camera() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -2141,7 +1297,6 @@ fn reuses_the_history_of_a_still_camera() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &scene,
             time: 0,
             samples: 8,
@@ -2156,7 +1311,6 @@ fn reuses_the_history_of_a_still_camera() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 1,
@@ -2173,7 +1327,6 @@ fn reuses_the_history_of_a_still_camera() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 32,
@@ -2188,7 +1341,6 @@ fn reuses_the_history_of_a_still_camera() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 1,
@@ -2226,7 +1378,6 @@ fn reprojects_the_history_of_a_moving_camera() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let mut moved = camera.clone();
     moved.orbit(glam::Vec2::new(0.1, 0.05));
-    let section = SectionCamera::new();
     let scene = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -2245,7 +1396,6 @@ fn reprojects_the_history_of_a_moving_camera() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &scene,
             time: 0,
             samples: 8,
@@ -2260,7 +1410,6 @@ fn reprojects_the_history_of_a_moving_camera() {
         &Take {
             texture: &target,
             camera: &moved,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 1,
@@ -2276,7 +1425,6 @@ fn reprojects_the_history_of_a_moving_camera() {
         &Take {
             texture: &target,
             camera: &moved,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 32,
@@ -2291,7 +1439,6 @@ fn reprojects_the_history_of_a_moving_camera() {
         &Take {
             texture: &target,
             camera: &moved,
-            section: &section,
             scene: &scene,
             time: 1,
             samples: 1,
@@ -2322,7 +1469,6 @@ fn drops_the_history_of_another_shot() {
     );
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new();
     let first_transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let first_channels = channels(&pyramid, &first_transfers);
     let first = SceneFrame {
@@ -2354,7 +1500,6 @@ fn drops_the_history_of_another_shot() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &first,
             time: 0,
             samples: 8,
@@ -2369,7 +1514,6 @@ fn drops_the_history_of_another_shot() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &second,
             time: 1,
             samples: 1,
@@ -2385,7 +1529,6 @@ fn drops_the_history_of_another_shot() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &second,
             time: 1,
             samples: 1,
@@ -2400,147 +1543,22 @@ fn drops_the_history_of_another_shot() {
     );
 }
 
-fn cube(half: f32) -> Mesh {
-    let corners = [
-        [-half, -half, -half],
-        [half, -half, -half],
-        [half, half, -half],
-        [-half, half, -half],
-        [-half, -half, half],
-        [half, -half, half],
-        [half, half, half],
-        [-half, half, half],
-    ];
-    let faces = [
-        ([0.0, 0.0, -1.0], [0, 3, 2, 1]),
-        ([0.0, 0.0, 1.0], [4, 5, 6, 7]),
-        ([0.0, -1.0, 0.0], [0, 1, 5, 4]),
-        ([0.0, 1.0, 0.0], [3, 2, 6, 7]),
-        ([-1.0, 0.0, 0.0], [0, 4, 7, 3]),
-        ([1.0, 0.0, 0.0], [1, 2, 6, 5]),
-    ];
-    let mut vertices = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-    for (normal, face) in faces {
-        let first = vertices.len() as u32;
-        for corner in face {
-            vertices.push(MeshVertex::new(corners[corner], normal, 0));
-        }
-        indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
-    }
-    Mesh::new(vertices, indices)
-}
-
-#[test]
-fn cuts_a_closed_solid_on_the_section_plane() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let extent = Extent::new(16, 16, 16);
-    let volume = Volume::new(
-        extent,
-        Spacing::new(1.0, 1.0, 1.0),
-        vec![Channel::new(
-            "empty",
-            [0.3, 0.6, 1.0],
-            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
-        )],
-    );
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let world = Vec3::from(volume.world_extent());
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, 1.0);
-    let mut section = SectionCamera::new();
-    section.fit(world, Vec3::ONE, 1.0);
-    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
-    let layers = [Layer {
-        key: LayerKey::stable(2, 0, 1),
-        mesh: Arc::new(PackedMesh::new(cube(4.0))),
-        style_start: 0,
-        style_count: 1,
-    }];
-    let scene = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &styles,
-        layers: &layers,
-        markers: &[],
-    };
-    let target = texture(&gpu, SIDE);
-    let target_view = target.create_view(&Default::default());
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let view = View {
-        target: &target_view,
-        camera: &camera,
-        section: &section,
-        region: Region::none(),
-        scene: &scene,
-        volume_region: CORNER,
-        section_region: WHOLE,
-        assured: false,
-    };
-    let (pixels, info) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            section: &section,
-            scene: &scene,
-            time: 0,
-            samples: 8,
-            history: None,
-        },
-    );
-    assert_eq!(info.cut.objects, 1, "the section misses the solid");
-    assert!(
-        info.cut.draws >= 2,
-        "the section does not outline its cut face"
-    );
-    let shot = Snapshot::new(
-        [SIDE, SIDE],
-        background(&gpu, &mut renderer, &view, &target, &volume),
-        pixels,
-    );
-    assert!(
-        shot.coverage(shot.middle()) > 0.25,
-        "the cut face barely covers the section: {:.2}",
-        shot.coverage(shot.middle())
-    );
-    assert!(
-        shot.hue(shot.middle(), Hue::Red) > 1_000,
-        "the cut face lost the colour of its solid: {} red pixels",
-        shot.hue(shot.middle(), Hue::Red)
-    );
-    assert!(
-        shot.painted([0, 0, SIDE / 8, SIDE / 8]) <= 1,
-        "the cut face spills outside the solid"
-    );
-}
-
 fn drawn<'a, 'b>(
     target: &'a wgpu::TextureView,
     camera: &'a Camera,
-    section: &'a SectionCamera,
     scene: &'a SceneFrame<'b>,
 ) -> Frame<'a, 'b> {
     Frame {
         target,
         size: [SIDE, SIDE],
-        panes: panes(camera, section, WHOLE, CORNER),
+        camera,
+        viewport: WHOLE,
         time: 0,
         region: Region::none(),
         clip: Clip::none(),
         exposure: 1.0,
         samples: 8,
         scene,
-        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
-        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: false,
@@ -2561,7 +1579,6 @@ fn rebuilds_the_scene_only_when_its_content_changes() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let mut moved = camera.clone();
     moved.orbit(glam::Vec2::new(0.2, 0.1));
-    let section = SectionCamera::new();
     let settled = SceneFrame {
         revision: revision(),
         channels: &channels,
@@ -2583,11 +1600,7 @@ fn rebuilds_the_scene_only_when_its_content_changes() {
     let target = texture(&gpu, SIDE);
     let view = target.create_view(&Default::default());
     let mut renderer = build_renderer(&gpu, &pyramid);
-    let first = renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        drawn(&view, &camera, &section, &settled),
-    );
+    let first = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &settled));
     assert!(first.rebuilt, "the first frame reused an empty scene");
     take(
         &gpu,
@@ -2596,27 +1609,18 @@ fn rebuilds_the_scene_only_when_its_content_changes() {
         &Take {
             texture: &target,
             camera: &camera,
-            section: &section,
             scene: &settled,
             time: 0,
             samples: 8,
             history: None,
         },
     );
-    let moved_info = renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        drawn(&view, &moved, &section, &settled),
-    );
+    let moved_info = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &moved, &settled));
     assert!(
         !moved_info.rebuilt,
         "a moved camera rebuilt the scene it still shows"
     );
-    let changed_info = renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        drawn(&view, &camera, &section, &changed),
-    );
+    let changed_info = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &changed));
     assert!(
         changed_info.rebuilt,
         "a new content revision kept the previous scene"

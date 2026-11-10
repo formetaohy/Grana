@@ -81,7 +81,7 @@ impl Ao {
         );
         assert!(
             volume_size[0] >= size[0] && volume_size[1] >= size[1],
-            "the volume target holds the volume pane"
+            "the volume target holds the volume view"
         );
         let normal = attachment(
             device,

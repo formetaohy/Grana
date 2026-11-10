@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 use grana_animation::Timeline;
-use grana_display::{PANE_COUNT, Pane, Panes};
+use grana_display::Camera;
 use grana_measure::{MeasureView, Measurement};
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
@@ -11,54 +11,6 @@ use grana_ui::Key;
 use crate::message::Message;
 use crate::panel::Panel;
 use crate::stage::Stage;
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ViewStats {
-    pub level: usize,
-    pub visible: usize,
-    pub demand: usize,
-    pub resident: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FrameStats {
-    pub panes: [ViewStats; PANE_COUNT],
-    pub bytes: u64,
-    pub geometry: u64,
-    pub fragments: u64,
-    pub indices: u64,
-    pub samples: u32,
-    pub oit_layers: u32,
-    pub oit_dropped: u32,
-    pub profile: ProfileStats,
-}
-
-pub const PROFILE_ROWS: usize = 4;
-
-#[derive(Clone, Copy, Debug)]
-pub struct ProfileStats {
-    pub rows: [(&'static str, f32); PROFILE_ROWS],
-    pub total: f32,
-    pub target: f32,
-    pub measured: bool,
-}
-
-impl Default for ProfileStats {
-    fn default() -> Self {
-        Self {
-            rows: [("", 0.0); PROFILE_ROWS],
-            total: 0.0,
-            target: 0.0,
-            measured: false,
-        }
-    }
-}
-
-impl ProfileStats {
-    pub fn over_budget(self) -> bool {
-        self.measured && self.total > self.target
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Playback {
@@ -95,11 +47,11 @@ pub(crate) struct PlotDrag {
 }
 
 #[derive(Default)]
-pub struct Sections {
+pub struct Disclosures {
     open: HashSet<Key>,
 }
 
-impl Sections {
+impl Disclosures {
     pub fn is_open(&self, key: Key) -> bool {
         self.open.contains(&key)
     }
@@ -252,7 +204,6 @@ pub struct Palette {
 
 pub struct Workspace {
     pub panel: Option<Panel>,
-    pub active: usize,
     pub last_panel: Panel,
     pub sidebar_hidden: bool,
     pub sidebar_tab: usize,
@@ -269,7 +220,7 @@ pub struct Workspace {
     pub renaming: Option<ObjectSetId>,
     pub remote_open: bool,
     pub expanded: HashSet<ObjectSetId>,
-    pub sections: Sections,
+    pub disclosures: Disclosures,
     pub psf_threshold: f32,
     pub psf_separation: f32,
     pub classifier: HashMap<ObjectSetId, Vec<Measurement>>,
@@ -291,7 +242,6 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             panel: None,
-            active: 0,
             last_panel: Panel::Statistics,
             sidebar_hidden: false,
             sidebar_tab: 0,
@@ -308,7 +258,7 @@ impl Default for Workspace {
             renaming: None,
             remote_open: false,
             expanded: HashSet::new(),
-            sections: Sections::default(),
+            disclosures: Disclosures::default(),
             psf_threshold: 8.0,
             psf_separation: 1.5,
             classifier: HashMap::new(),
@@ -360,20 +310,15 @@ pub struct View<'a> {
     pub recent: &'a [grana_session::RecentEntry],
     pub import: &'a [grana_session::ImportNote],
     pub palette: Option<&'a crate::palette::PaletteView>,
-    pub panes: &'a Panes,
+    pub camera: &'a Camera,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,
     pub export: Export,
-    pub frame: FrameStats,
 }
 
 impl<'a> View<'a> {
-    pub fn pane(&self) -> &'a Pane {
-        self.panes.pane(self.active())
-    }
-
-    pub fn active(&self) -> usize {
-        self.workspace.active.min(self.panes.count() - 1)
+    pub fn camera(&self) -> &'a Camera {
+        self.camera
     }
 
     pub fn batch_protocol(&self) -> Option<&str> {

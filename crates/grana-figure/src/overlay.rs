@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec2, Vec3};
-use grana_display::{Camera, Palette, SectionCamera};
+use grana_display::{Camera, Palette};
 use grana_measure::Unit;
 use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
@@ -14,7 +14,6 @@ use crate::labels::{self, Label};
 use crate::value;
 
 const BAR: Color = Color::rgba(1.0, 1.0, 1.0, 0.90);
-const PLANE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
 const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const CUT: Color = Color::rgba(1.00, 0.48, 0.44, 0.60);
@@ -140,13 +139,9 @@ fn height_of(title: &TextLayout, detail: &TextLayout, lines: &[Arc<TextLayout>])
         + lines.len() as f32 * 3.0
 }
 
-pub struct Pane<'a> {
-    pub kind: grana_display::PaneKind,
+pub struct Viewport<'a> {
     pub camera: &'a Camera,
-    pub section: &'a SectionCamera,
-    pub plane: &'a [SectionCamera],
     pub world: Vec3,
-    pub voxel: Vec3,
     pub rect: Rect,
     pub safe: Rect,
     pub region: &'a Region,
@@ -155,7 +150,6 @@ pub struct Pane<'a> {
     pub labels: &'a [Label],
     pub annotations: &'a [AnnotationItem],
     pub pending: Option<[f32; 3]>,
-    pub recording: Option<(u32, u32)>,
 }
 
 pub struct Handle {
@@ -166,14 +160,7 @@ pub struct Handle {
     pub world_per_point: f32,
 }
 
-pub fn paint(painter: &mut Painter, overlay: &Pane<'_>) {
-    match overlay.kind {
-        grana_display::PaneKind::Volume => paint_volume(painter, overlay),
-        grana_display::PaneKind::Section => paint_section(painter, overlay),
-    }
-}
-
-fn paint_volume(painter: &mut Painter, overlay: &Pane<'_>) {
+pub fn paint(painter: &mut Painter, overlay: &Viewport<'_>) {
     let rect = overlay.rect;
     let aspect = rect.width() / rect.height();
     let view_projection = overlay
@@ -181,15 +168,6 @@ fn paint_volume(painter: &mut Painter, overlay: &Pane<'_>) {
         .view_projection(aspect, 0.5 * overlay.world.length());
     let clip = painter.clip();
     painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
-    for plane in overlay.plane {
-        let corners = plane_corners(plane, rect.width() / rect.height().max(1.0));
-        let projected = corners.map(|corner| project(view_projection, corner, rect));
-        if let [Some(a), Some(b), Some(c), Some(d)] = projected {
-            for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
-                painter.segment(from, to, 1.0, PLANE);
-            }
-        }
-    }
     region_box(painter, view_projection, *overlay.region, rect);
     clip_plane(painter, view_projection, overlay.clip, overlay.world, rect);
     let world_per_point = overlay
@@ -221,11 +199,8 @@ fn paint_volume(painter: &mut Painter, overlay: &Pane<'_>) {
     painter.pop_clip(clip);
 }
 
-pub fn handles(overlay: &Pane<'_>) -> Vec<Handle> {
+pub fn handles(overlay: &Viewport<'_>) -> Vec<Handle> {
     let mut handles = Vec::new();
-    if overlay.kind != grana_display::PaneKind::Volume {
-        return handles;
-    }
     let rect = overlay.rect;
     let aspect = rect.width() / rect.height();
     let view_projection = overlay
@@ -266,97 +241,6 @@ pub fn handles(overlay: &Pane<'_>) -> Vec<Handle> {
     handles
 }
 
-fn paint_section(painter: &mut Painter, overlay: &Pane<'_>) {
-    let rect = overlay.rect;
-    let world_per_point = overlay.section.span() / rect.height();
-    let clip = painter.clip();
-    painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
-    let stage = section_stage(overlay.section, overlay.world, rect);
-    painter.outlined(
-        stage,
-        Corners::all(2.0),
-        Fill::None,
-        grana_ui::Border {
-            width: 1.0,
-            color: Color::white_alpha(0.12),
-        },
-        grana_ui::Shadow::NONE,
-    );
-    scale_bar(painter, overlay.safe, world_per_point, true);
-    region_outline(painter, overlay, rect);
-    if !overlay.labels.is_empty() {
-        let placed = labels::section_labels(overlay.labels, overlay.section, rect);
-        labels::paint(painter, rect, &placed);
-    }
-    let tolerance = 1.5 * overlay.voxel.dot(overlay.section.normal().abs());
-    let placed = annotation::section(overlay.annotations, overlay.section, rect, tolerance);
-    annotation::paint(painter, rect, &placed);
-    painter.pop_clip(clip);
-}
-
-fn section_screen(section: &SectionCamera, point: Vec3, rect: Rect) -> Vec2 {
-    let points_per_micron = rect.height() / section.span();
-    let center = section.center();
-    Vec2::new(
-        rect.center().x
-            + (point.dot(section.right()) - center.dot(section.right())) * points_per_micron,
-        rect.center().y - (point.dot(section.up()) - center.dot(section.up())) * points_per_micron,
-    )
-}
-
-fn section_stage(section: &SectionCamera, world: Vec3, rect: Rect) -> Rect {
-    let points_per_micron = rect.height() / section.span();
-    let width = world.abs().dot(section.right().abs()) * points_per_micron;
-    let height = world.abs().dot(section.up().abs()) * points_per_micron;
-    let center = section_screen(section, Vec3::ZERO, rect);
-    Rect::from_center_size(center, Vec2::new(width, height)).intersect(rect)
-}
-
-fn region_outline(painter: &mut Painter, overlay: &Pane<'_>, rect: Rect) {
-    let region = *overlay.region;
-    if !region.enabled() {
-        return;
-    }
-    let normal = overlay.section.normal();
-    let offset = overlay.section.offset();
-    let mut points: Vec<Vec2> = Vec::new();
-    for (from, to) in REGION_EDGES {
-        let from = region.corner(from);
-        let to = region.corner(to);
-        let start = normal.dot(from) - offset;
-        let end = normal.dot(to) - offset;
-        let crossing = if start == 0.0 {
-            Some(from)
-        } else if end == 0.0 {
-            Some(to)
-        } else if (start < 0.0) != (end < 0.0) {
-            Some(from + (to - from) * (start / (start - end)))
-        } else {
-            None
-        };
-        let Some(crossing) = crossing else {
-            continue;
-        };
-        let screen = section_screen(overlay.section, crossing, rect);
-        if !points.iter().any(|other| (*other - screen).length() < 0.5) {
-            points.push(screen);
-        }
-    }
-    if points.len() < 3 {
-        return;
-    }
-    let centroid = points.iter().copied().sum::<Vec2>() / points.len() as f32;
-    points.sort_by(|left, right| {
-        let left = *left - centroid;
-        let right = *right - centroid;
-        left.y.atan2(left.x).total_cmp(&right.y.atan2(right.x))
-    });
-    for index in 0..points.len() {
-        let to = points[(index + 1) % points.len()];
-        painter.segment(points[index], to, 1.0, REGION);
-    }
-}
-
 pub(crate) fn figure(
     painter: &mut Painter,
     rect: Rect,
@@ -374,7 +258,7 @@ pub fn caption(scene: &Scene, time: u32) -> Caption {
     let frames = scene.frame_count();
     let detail = if frames > 1 {
         let seconds = time as f32 * scene.dataset.frame_interval();
-        format!("frame {} of {frames} · {seconds:.2} s", time + 1)
+        format!("frame {} of {frames} 路 {seconds:.2} s", time + 1)
     } else {
         "single frame".to_string()
     };
@@ -384,7 +268,7 @@ pub fn caption(scene: &Scene, time: u32) -> Caption {
         .filter(|set| scene.shown(set) && set.detected() > 0)
         .map(|set| {
             let count = set.frame(time).map_or(0, |frame| frame.object_count());
-            format!("{} · {count} {}", set.name(), set.kind().count_noun())
+            format!("{} 路 {count} {}", set.name(), set.kind().count_noun())
         })
         .collect();
     Caption {
@@ -454,7 +338,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             && let Some(extent) = scene.object_extent(set)
         {
             legends.push(Legend {
-                title: format!("{} · {}", set.name(), metric_label(scene, metric, &names)),
+                title: format!("{} 路 {}", set.name(), metric_label(scene, metric, &names)),
                 palette: set.object_coloring().palette(),
                 reversed: set.object_coloring().reversed(),
                 extent,
@@ -467,7 +351,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             && let Some(extent) = set.track_extent()
         {
             legends.push(Legend {
-                title: format!("{} tracks · {}", set.name(), track_label(scene, metric)),
+                title: format!("{} tracks 路 {}", set.name(), track_label(scene, metric)),
                 palette: set.track_coloring().palette(),
                 reversed: set.track_coloring().reversed(),
                 extent,
@@ -494,16 +378,16 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
             let offset = if shift == 0 {
                 String::new()
             } else {
-                format!(" · t{shift:+}")
+                format!(" 路 t{shift:+}")
             };
-            format!("{target}{offset} · {}", field.label())
+            format!("{target}{offset} 路 {}", field.label())
         }
         ObjectColor::Child { target, field } => {
             let target = scene
                 .objects
                 .get(target)
                 .map_or_else(|| "children".to_string(), |set| set.name().to_string());
-            format!("{target} · {}", field.label(channels))
+            format!("{target} 路 {}", field.label(channels))
         }
         ObjectColor::Score => grana_measure::SCORE_LABEL.to_string(),
         ObjectColor::Coloc { pair, metric } => {
@@ -533,9 +417,9 @@ fn track_label(scene: &Scene, metric: TrackColor) -> String {
             let offset = if shift == 0 {
                 String::new()
             } else {
-                format!(" · t{shift:+}")
+                format!(" 路 t{shift:+}")
             };
-            format!("{target}{offset} {} · {}", field.label(), aggregate.name())
+            format!("{target}{offset} {} 路 {}", field.label(), aggregate.name())
         }
     }
 }
@@ -610,19 +494,6 @@ fn clipped(points: Vec<Vec3>, normal: Vec3, offset: f32) -> Vec<Vec3> {
         }
     }
     kept
-}
-
-fn plane_corners(section: &SectionCamera, aspect: f32) -> [Vec3; 4] {
-    assert!(aspect > 0.0, "a section pane has a positive aspect");
-    let center = section.center();
-    let right = section.right() * (0.5 * section.span() * aspect);
-    let up = section.up() * (0.5 * section.span());
-    [
-        center - right - up,
-        center + right - up,
-        center + right + up,
-        center - right + up,
-    ]
 }
 
 fn project(view_projection: Mat4, point: Vec3, rect: Rect) -> Option<Vec2> {
@@ -820,10 +691,10 @@ fn nice_length(target: f32) -> f32 {
 
 fn format_length(length: f32) -> String {
     if length >= 10.0 {
-        format!("{length:.0} µm")
+        format!("{length:.0} 碌m")
     } else if length >= 1.0 {
-        format!("{length:.1} µm")
+        format!("{length:.1} 碌m")
     } else {
-        format!("{length:.3} µm")
+        format!("{length:.3} 碌m")
     }
 }

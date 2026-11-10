@@ -2,11 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_display::{PaneKind, Panes};
-use grana_engine::Panels;
+use grana_display::{Camera, OutputSize};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, Scene};
-use grana_ui::{Rect, Vec2};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
 };
@@ -14,7 +12,7 @@ use wgpu::TextureFormat;
 
 use crate::support::{Gpu, Temp, gpu, spheres};
 
-const STAGE: [f32; 2] = [1000.0, 700.0];
+const ASPECT: f32 = 0.7;
 const WIDTH: u32 = 800;
 
 struct VolumeBricks {
@@ -40,15 +38,14 @@ fn export_volume() -> Volume {
     )
 }
 
-fn panels() -> Panels {
-    let rect =
-        |x: f32, width: f32| Rect::from_min_size(Vec2::new(x, 0.0), Vec2::new(width, STAGE[1]));
-    Panels::new([
-        Some((rect(0.0, 600.0), PaneKind::Volume)),
-        Some((rect(600.0, 400.0), PaneKind::Section)),
-        None,
-        None,
-    ])
+fn output(width: u32, even: bool) -> OutputSize {
+    let height = ((width as f32 * ASPECT).round() as u32).max(1);
+    let size = OutputSize::of(width, height);
+    if even { size.even() } else { size }
+}
+
+fn aspect(size: OutputSize) -> f32 {
+    size.width() as f32 / size.height().max(1) as f32
 }
 
 fn offline(gpu: &Gpu) -> Offline {
@@ -73,30 +70,23 @@ fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32;
     let volume = export_volume();
     let pyramid = volume.pyramid();
     let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
-    let mut panes = Panes::new();
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [600.0 / STAGE[1], 400.0 / STAGE[1], 1.0, 1.0],
-    );
-    let panels = panels();
-    let size = panels.output(WIDTH, false);
-    let regions = panels.export(size);
+    let size = output(WIDTH, false);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
     let plan = Plan {
         destination,
-        panels,
         size,
         transparent,
         poses: vec![Pose {
             time: 0,
-            views: panes.views(),
+            camera: camera.state(),
         }],
         fps: 0,
         region: Region::none(),
     };
     let mut context = offline(gpu);
     match context.run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
-        Outcome::Complete { .. } => regions.size,
+        Outcome::Complete { .. } => size.to_array(),
         Outcome::Failed { detail } => panic!("the export failed: {detail}"),
         Outcome::Cancelled => panic!("the export was cancelled"),
     }
@@ -179,23 +169,16 @@ fn exports_a_transparent_sixteen_bit_ome_tiff() {
 }
 
 fn still_plan(volume: &Volume, destination: Destination, width: u32) -> Plan {
-    let mut panes = Panes::new();
-    let spacing = volume.spacing();
-    panes.fit(
-        Vec3::from(volume.world_extent()),
-        Vec3::new(spacing.x(), spacing.y(), spacing.z()),
-        [600.0 / STAGE[1], 400.0 / STAGE[1], 1.0, 1.0],
-    );
-    let panels = panels();
-    let size = panels.output(width, false);
+    let size = output(width, false);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), aspect(size));
     Plan {
         destination,
-        panels,
         size,
         transparent: false,
         poses: vec![Pose {
             time: 0,
-            views: panes.views(),
+            camera: camera.state(),
         }],
         fps: 0,
         region: Region::none(),
@@ -263,26 +246,22 @@ fn cancels_an_export_without_leaving_a_partial_file() {
     let volume = export_volume();
     let pyramid = volume.pyramid();
     let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
-    let mut panes = Panes::new();
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [1.0; 4],
-    );
-    let panels = panels();
+    let size = output(WIDTH, true);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let view = camera.state();
     let plan = Plan {
         destination: Destination::Movie { path: path.clone() },
-        size: panels.output(WIDTH, true),
-        panels,
+        size,
         transparent: false,
         poses: vec![
             Pose {
                 time: 0,
-                views: panes.views(),
+                camera: view,
             },
             Pose {
                 time: 0,
-                views: panes.views(),
+                camera: view,
             },
         ],
         fps: 30,
@@ -317,21 +296,16 @@ fn runs_an_export_on_the_worker_thread() {
     let volume = export_volume();
     let pyramid = volume.pyramid();
     let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
-    let mut panes = Panes::new();
-    panes.fit(
-        scene.dataset.world_size(),
-        scene.dataset.voxel_size(),
-        [1.0; 4],
-    );
-    let panels = panels();
+    let size = output(320, false);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
     let plan = Plan {
         destination: Destination::Image { path: path.clone() },
-        size: panels.output(320, false),
-        panels,
+        size,
         transparent: false,
         poses: vec![Pose {
             time: 0,
-            views: panes.views(),
+            camera: camera.state(),
         }],
         fps: 0,
         region: Region::none(),

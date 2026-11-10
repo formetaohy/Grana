@@ -1,8 +1,8 @@
-use glam::Vec3;
+﻿use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Material, OutputSize, Palette, PaneState, PaneView, SectionState, Shading, Stop,
-    TransferFunction, VolumeMode, VolumeStyle,
+    CameraState, Material, OutputSize, Palette, Shading, Stop, TransferFunction, VolumeMode,
+    VolumeStyle,
 };
 use grana_measure::{
     Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
@@ -153,10 +153,7 @@ pub struct NamedViewSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
-    pub panes: [PaneSpec; grana_display::PANE_COUNT],
-    pub layout: String,
-    pub split: f32,
-    pub row: f32,
+    pub camera: CameraSpec,
     #[serde(default)]
     pub time: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,47 +196,10 @@ pub struct TimelineSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PaneSpec {
-    pub kind: String,
-    pub camera: CameraSpec,
-    pub section: SectionSpec,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hidden: Vec<u32>,
-    #[serde(
-        default = "default_quality",
-        skip_serializing_if = "is_balanced_quality"
-    )]
-    pub quality: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PaneViewSpec {
-    pub camera: CameraSpec,
-    pub section: SectionSpec,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hidden: Vec<u32>,
-    #[serde(
-        default = "default_quality",
-        skip_serializing_if = "is_balanced_quality"
-    )]
-    pub quality: String,
-}
-
-fn default_quality() -> String {
-    grana_display::Quality::Balanced.name().to_string()
-}
-
-fn is_balanced_quality(value: &str) -> bool {
-    grana_display::Quality::from_name(value) == Some(grana_display::Quality::Balanced)
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct KeySpec {
     pub at: f32,
     pub time: u32,
-    pub panes: [PaneViewSpec; grana_display::PANE_COUNT],
+    pub camera: CameraSpec,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -253,25 +213,6 @@ pub struct CameraSpec {
     pub projection: String,
     pub aperture: f32,
     pub focus: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SectionSpec {
-    pub center: [f32; 3],
-    pub azimuth: f32,
-    pub elevation: f32,
-    pub span: f32,
-    #[serde(default = "default_projection")]
-    pub projection: String,
-    #[serde(default)]
-    pub thickness: f32,
-}
-
-fn default_projection() -> String {
-    grana_display::SectionProjection::default()
-        .name()
-        .to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1838,22 +1779,15 @@ impl MetricSpec {
 impl ViewSpec {
     pub fn of(view: &ViewState, time: u32) -> Self {
         Self {
-            panes: view.panes.map(PaneSpec::of),
-            layout: view.layout.name().to_string(),
-            split: view.split,
-            row: view.row,
+            camera: CameraSpec::of(view.camera),
             time,
             timeline: Some(TimelineSpec::of(&view.timeline)),
             export: Some(ExportSpec::of(view.export)),
         }
     }
 
-    pub fn layout(&self) -> grana_display::PaneLayout {
-        grana_display::PaneLayout::from_name(&self.layout).expect("the view layout was checked")
-    }
-
-    pub fn panes(&self) -> [PaneState; grana_display::PANE_COUNT] {
-        std::array::from_fn(|index| self.panes[index].state())
+    pub fn camera(&self) -> CameraState {
+        self.camera.camera()
     }
 
     pub fn timeline(&self) -> Option<Timeline> {
@@ -1869,32 +1803,11 @@ impl ViewSpec {
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
-        for pane in &self.panes {
-            pane.checked()?;
-        }
+        self.camera.checked()?;
         if let Some(timeline) = &self.timeline {
             for key in &timeline.keys {
-                for pane in &key.panes {
-                    pane.checked()?;
-                }
+                key.camera.checked()?;
             }
-        }
-        if grana_display::PaneLayout::from_name(&self.layout).is_none() {
-            return Err(ProtocolError::Invalid(
-                "a view names a known pane layout".to_string(),
-            ));
-        }
-        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.split) {
-            return Err(ProtocolError::Invalid(
-                "a view splits the viewport at a unit fraction".to_string(),
-            ));
-        }
-        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.row) {
-            return Err(ProtocolError::Invalid(
-                "a view rows the viewport at a unit fraction".to_string(),
-            ));
-        }
-        if let Some(timeline) = &self.timeline {
             timeline
                 .timeline()
                 .map_err(|detail| ProtocolError::Invalid(format!("a view {detail}")))?;
@@ -1908,108 +1821,6 @@ impl ViewSpec {
         }
         Ok(())
     }
-}
-
-impl PaneSpec {
-    pub fn of(pane: PaneState) -> Self {
-        Self {
-            kind: pane.kind.name().to_string(),
-            camera: CameraSpec::of(pane.view.camera),
-            section: SectionSpec::of(pane.view.section),
-            hidden: hidden(pane.view.channels),
-            quality: pane.view.quality.name().to_string(),
-        }
-    }
-
-    pub fn state(&self) -> PaneState {
-        PaneState {
-            kind: grana_display::PaneKind::from_name(&self.kind)
-                .expect("the pane kind was checked"),
-            view: PaneView {
-                camera: self.camera.camera(),
-                section: self.section.section(),
-                channels: self.mask(),
-                quality: grana_display::Quality::from_name(&self.quality)
-                    .expect("the pane quality was checked"),
-            },
-        }
-    }
-
-    fn mask(&self) -> grana_display::ChannelMask {
-        masked(&self.hidden)
-    }
-
-    fn checked(&self) -> Result<(), ProtocolError> {
-        if grana_display::PaneKind::from_name(&self.kind).is_none() {
-            return Err(ProtocolError::Invalid(
-                "a pane names a known view kind".to_string(),
-            ));
-        }
-        self.camera.checked()?;
-        self.section.checked()?;
-        hidden_checked(&self.hidden)?;
-        quality_checked(&self.quality)
-    }
-}
-
-impl PaneViewSpec {
-    pub fn of(view: PaneView) -> Self {
-        Self {
-            camera: CameraSpec::of(view.camera),
-            section: SectionSpec::of(view.section),
-            hidden: hidden(view.channels),
-            quality: view.quality.name().to_string(),
-        }
-    }
-
-    pub fn view(&self) -> PaneView {
-        PaneView {
-            camera: self.camera.camera(),
-            section: self.section.section(),
-            channels: masked(&self.hidden),
-            quality: grana_display::Quality::from_name(&self.quality)
-                .expect("the pane quality was checked"),
-        }
-    }
-
-    fn checked(&self) -> Result<(), ProtocolError> {
-        self.camera.checked()?;
-        self.section.checked()?;
-        hidden_checked(&self.hidden)?;
-        quality_checked(&self.quality)
-    }
-}
-
-fn hidden(mask: grana_display::ChannelMask) -> Vec<u32> {
-    (0..u32::BITS)
-        .filter(|channel| !mask.shown(*channel as usize))
-        .collect()
-}
-
-fn masked(hidden: &[u32]) -> grana_display::ChannelMask {
-    let mut mask = grana_display::ChannelMask::NONE;
-    for channel in hidden {
-        mask.set(*channel as usize, false);
-    }
-    mask
-}
-
-fn hidden_checked(hidden: &[u32]) -> Result<(), ProtocolError> {
-    if hidden.iter().any(|channel| *channel >= u32::BITS) {
-        return Err(ProtocolError::Invalid(
-            "a pane hides only channels the mask addresses".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn quality_checked(quality: &str) -> Result<(), ProtocolError> {
-    if grana_display::Quality::from_name(quality).is_none() {
-        return Err(ProtocolError::Invalid(
-            "a pane names a known render quality".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 impl NamedViewSpec {
@@ -2198,52 +2009,6 @@ impl CameraSpec {
     }
 }
 
-impl SectionSpec {
-    pub fn of(section: SectionState) -> Self {
-        Self {
-            center: section.center,
-            azimuth: section.azimuth,
-            elevation: section.elevation,
-            span: section.span,
-            projection: section.projection.name().to_string(),
-            thickness: section.thickness,
-        }
-    }
-
-    pub fn section(&self) -> SectionState {
-        SectionState {
-            center: self.center,
-            azimuth: self.azimuth,
-            elevation: self.elevation,
-            span: self.span,
-            projection: self.mode().expect("a checked section names a projection"),
-            thickness: self.thickness,
-        }
-    }
-
-    pub fn mode(&self) -> Option<grana_display::SectionProjection> {
-        grana_display::SectionProjection::from_name(&self.projection)
-    }
-
-    fn checked(&self) -> Result<(), ProtocolError> {
-        if !self.center.iter().all(|value| value.is_finite())
-            || !self.azimuth.is_finite()
-            || !self.elevation.is_finite()
-            || self.elevation.abs() > std::f32::consts::FRAC_PI_2
-            || !self.span.is_finite()
-            || self.span <= 0.0
-            || !self.thickness.is_finite()
-            || !(0.0..=grana_display::THICKNESS_LIMIT).contains(&self.thickness)
-            || self.mode().is_none()
-        {
-            return Err(ProtocolError::Invalid(
-                "a view describes a plausible section plane".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
 impl TimelineSpec {
     pub fn of(timeline: &Timeline) -> Self {
         Self {
@@ -2255,7 +2020,7 @@ impl TimelineSpec {
                 .map(|key| KeySpec {
                     at: key.at,
                     time: key.time,
-                    panes: key.views.map(PaneViewSpec::of),
+                    camera: CameraSpec::of(key.camera),
                 })
                 .collect(),
         }
@@ -2270,7 +2035,7 @@ impl TimelineSpec {
                 .map(|key| Keyframe {
                     at: key.at,
                     time: key.time,
-                    views: std::array::from_fn(|index| key.panes[index].view()),
+                    camera: key.camera.camera(),
                 })
                 .collect(),
         )
