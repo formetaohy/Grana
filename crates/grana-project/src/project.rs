@@ -103,7 +103,7 @@ pub struct Export {
 impl Export {
     pub const NATIVE: Self = Self {
         image: 0,
-        movie: 1920,
+        movie: grana_display::OutputSize::DEFAULT_WIDTH,
         transparent: false,
     };
 
@@ -116,8 +116,11 @@ impl Export {
     }
 
     pub fn matches(&self) -> bool {
-        (self.image == 0 || (64..=16384).contains(&self.image))
-            && (64..=16384).contains(&self.movie)
+        (self.image == 0
+            || (grana_display::OutputSize::MIN..=grana_display::OutputSize::MAX)
+                .contains(&self.image))
+            && (grana_display::OutputSize::MIN..=grana_display::OutputSize::MAX)
+                .contains(&self.movie)
     }
 }
 

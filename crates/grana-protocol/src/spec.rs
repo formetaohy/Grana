@@ -1,7 +1,7 @@
 use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Material, Palette, PaneState, PaneView, SectionState, Shading, Stop,
+    CameraState, Material, OutputSize, Palette, PaneState, PaneView, SectionState, Shading, Stop,
     TransferFunction, VolumeMode, VolumeStyle,
 };
 use grana_measure::{
@@ -2040,18 +2040,21 @@ impl NamedViewSpec {
 }
 
 impl SnapshotSpec {
-    pub const WIDTH: u32 = 1600;
-    pub const MIN: u32 = 64;
-    pub const MAX: u32 = 16384;
+    pub const WIDTH: u32 = OutputSize::DEFAULT_WIDTH;
+    pub const MIN: u32 = OutputSize::MIN;
+    pub const MAX: u32 = OutputSize::MAX;
 
     pub fn of(export: Option<Export>, views: Vec<String>) -> Self {
-        let (width, transparent) = match export {
-            Some(export) if export.image >= Self::MIN => (export.image, export.transparent),
-            _ => (Self::WIDTH, false),
+        let (size, transparent) = match export {
+            Some(export) if export.image >= Self::MIN => (
+                OutputSize::of_width(export.image).clamped(),
+                export.transparent,
+            ),
+            _ => (OutputSize::of_width(Self::WIDTH).clamped(), false),
         };
         Self {
-            width,
-            height: (width * 5 / 8).max(Self::MIN),
+            width: size.width(),
+            height: size.height(),
             transparent,
             views,
             movies: false,
@@ -2075,25 +2078,28 @@ impl SnapshotSpec {
         self.sequences
     }
 
+    fn output(&self) -> OutputSize {
+        OutputSize::of(self.width, self.height)
+    }
+
     pub fn size_for(&self, export: Option<Export>) -> [u32; 2] {
         match export {
             Some(export) if (Self::MIN..=Self::MAX).contains(&export.image) => {
-                let height = (u64::from(export.image) * u64::from(self.height)
-                    / u64::from(self.width.max(1))) as u32;
-                [export.image, height.clamp(Self::MIN, Self::MAX)]
+                self.output().scaled(export.image).clamped().to_array()
             }
-            _ => [self.width, self.height],
+            _ => self.size(),
         }
     }
 
     pub fn film_size_for(&self, export: Option<Export>) -> [u32; 2] {
         match export {
-            Some(export) if (Self::MIN..=Self::MAX).contains(&export.movie) => {
-                let height = (u64::from(export.movie) * u64::from(self.height)
-                    / u64::from(self.width.max(1))) as u32;
-                [export.movie, height.clamp(Self::MIN, Self::MAX)]
-            }
-            _ => [self.width, self.height],
+            Some(export) if (Self::MIN..=Self::MAX).contains(&export.movie) => self
+                .output()
+                .scaled(export.movie)
+                .clamped()
+                .even()
+                .to_array(),
+            _ => self.size(),
         }
     }
 

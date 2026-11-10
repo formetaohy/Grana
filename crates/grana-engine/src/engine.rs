@@ -54,6 +54,10 @@ impl Engine {
         self.pending_pick = None;
     }
 
+    pub fn set_frame_target(&mut self, target: f32) {
+        self.renderer.set_frame_target(target);
+    }
+
     pub fn requests_pending(&self) -> bool {
         self.renderer.requests_pending()
     }

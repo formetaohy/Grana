@@ -1,4 +1,4 @@
-use grana_display::{PANE_COUNT, PANE_GAP, PaneKind, Panes};
+use grana_display::{OutputSize, PANE_COUNT, PANE_GAP, PaneKind, Panes};
 use grana_ui::{Rect, Vec2};
 
 const STAGE_WIDTH: f32 = 1000.0;
@@ -79,23 +79,32 @@ impl Panels {
         (self.stage().width() * scale).round().max(1.0) as u32
     }
 
-    pub fn screen(&self, scale: f32, size: [u32; 2]) -> Regions {
-        self.regions(scale, [0.0, 0.0], size)
-    }
-
-    pub fn export(&self, width: u32, even: bool) -> Regions {
+    pub fn output(&self, width: u32, even: bool) -> OutputSize {
         assert!(width > 0, "an export names a positive image width");
         let stage = self.stage();
         assert!(
             stage.width() > 0.0 && stage.height() > 0.0,
             "an export covers at least one pane"
         );
-        let width = if even { even_size(width) } else { width };
-        let scale = width as f32 / self.stage().width().max(1.0);
-        let height = (self.stage().height() * scale).round().max(1.0) as u32;
-        let height = if even { even_size(height) } else { height };
+        let height = (f64::from(width) * f64::from(stage.height()) / f64::from(stage.width()))
+            .round()
+            .max(1.0) as u32;
+        let size = OutputSize::of(width, height);
+        if even { size.even() } else { size }
+    }
+
+    pub fn screen(&self, scale: f32, size: [u32; 2]) -> Regions {
+        self.regions(scale, [0.0, 0.0], size)
+    }
+
+    pub fn export(&self, size: OutputSize) -> Regions {
         let stage = self.stage();
-        self.regions(scale, [stage.min.x, stage.min.y], [width, height])
+        assert!(
+            stage.width() > 0.0 && stage.height() > 0.0,
+            "an export covers at least one pane"
+        );
+        let scale = size.width() as f32 / stage.width();
+        self.regions(scale, [stage.min.x, stage.min.y], size.to_array())
     }
 
     fn regions(&self, scale: f32, origin: [f32; 2], size: [u32; 2]) -> Regions {
@@ -132,8 +141,4 @@ fn region(rect: Rect, scale: f32, origin: [f32; 2], size: [u32; 2]) -> [u32; 4] 
         .min(size[1] - y)
         .max(1);
     [x, y, width, height]
-}
-
-fn even_size(value: u32) -> u32 {
-    (value.max(2) / 2) * 2
 }

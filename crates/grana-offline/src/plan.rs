@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use grana_display::{
-    Camera, CameraState, PANE_COUNT, PaneKind, PaneView, SectionCamera, SectionState,
+    Camera, CameraState, OutputSize, PANE_COUNT, PaneKind, PaneView, SectionCamera, SectionState,
 };
 use grana_render::{Lens, PaneFrame};
 use grana_volume::{Pyramid, Region};
@@ -34,7 +34,7 @@ pub fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
 pub struct Plan {
     pub destination: Destination,
     pub panels: grana_engine::Panels,
-    pub width: u32,
+    pub size: OutputSize,
     pub transparent: bool,
     pub poses: Vec<Pose>,
     pub fps: u32,
@@ -53,7 +53,7 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     if let Destination::Image { path } = &plan.destination
         && still(path)? == Still::Tiff
     {
-        let size = plan.panels.export(plan.width, false).size;
+        let size = plan.panels.export(plan.size).size;
         let bytes = u64::from(size[0]) * u64::from(size[1]) * WIDE_BYTES;
         if bytes > WIDE_CEILING {
             return Err(format!(
@@ -72,7 +72,11 @@ pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<Residency, Str
         return Err("an export holds at least one pose".to_string());
     }
     let movie = matches!(plan.destination, Destination::Movie { .. });
-    let regions = plan.panels.export(plan.width, movie);
+    assert!(
+        !movie || plan.size.height().is_multiple_of(2) && plan.size.width().is_multiple_of(2),
+        "a movie frame holds an even number of pixels"
+    );
+    let regions = plan.panels.export(plan.size);
     let mut slots = 1usize;
     let mut level = pyramid.level_count() - 1;
     for pose in &plan.poses {

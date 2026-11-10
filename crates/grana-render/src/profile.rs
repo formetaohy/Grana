@@ -13,8 +13,22 @@ const SMOOTHING: f32 = 0.3;
 const OVERRUN: f32 = 1.1;
 const HEADROOM: f32 = 0.7;
 const NANOSECONDS: f32 = 1.0e6;
+const SEVERE: f32 = 2.5;
+const TARGET_FLOOR: f32 = 4.0;
+const TARGET_CEILING: f32 = 40.0;
+const MILLIHERTZ_PER_HERTZ: f32 = 1000.0;
+const MILLISECONDS_PER_SECOND: f32 = 1000.0;
+const REFRESH_FALLBACK: u32 = 60_000;
 
 const FEATURES: Features = Features::TIMESTAMP_QUERY;
+
+pub fn frame_target(refresh_rate_millihertz: Option<u32>) -> f32 {
+    let refresh = refresh_rate_millihertz
+        .filter(|rate| *rate >= MILLIHERTZ_PER_HERTZ as u32)
+        .unwrap_or(REFRESH_FALLBACK);
+    let interval = MILLISECONDS_PER_SECOND * MILLIHERTZ_PER_HERTZ / refresh as f32;
+    interval.clamp(TARGET_FLOOR, TARGET_CEILING)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -92,13 +106,16 @@ pub struct Budget {
 
 impl Budget {
     pub fn new(target: f32) -> Self {
-        assert!(
-            target.is_finite() && target > 0.0,
-            "a frame budget is a positive duration"
-        );
         Self {
-            target,
-            measured: target,
+            target: validated(target),
+            measured: validated(target),
+        }
+    }
+
+    pub fn retarget(self, target: f32) -> Self {
+        Self {
+            target: validated(target),
+            measured: self.measured,
         }
     }
 
@@ -114,6 +131,10 @@ impl Budget {
         self.measured < self.target * HEADROOM
     }
 
+    pub fn severe(self) -> bool {
+        self.measured > self.target * SEVERE
+    }
+
     pub fn observe(&mut self, elapsed: f32) {
         assert!(
             elapsed.is_finite() && elapsed >= 0.0,
@@ -121,6 +142,14 @@ impl Budget {
         );
         self.measured += SMOOTHING * (elapsed - self.measured);
     }
+}
+
+fn validated(target: f32) -> f32 {
+    assert!(
+        target.is_finite() && target > 0.0,
+        "a frame budget is a positive duration"
+    );
+    target
 }
 
 #[derive(Default)]

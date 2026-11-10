@@ -3,6 +3,7 @@ use grana_display::PANE_COUNT;
 use crate::profile::Budget;
 
 const SCALE: u32 = 2;
+const QUARTER: u32 = 4;
 const MOTION_FLOOR: u64 = 1 << 21;
 const OVERRUN_FLOOR: u64 = 1 << 20;
 const RECOVERY: u8 = 8;
@@ -93,6 +94,11 @@ impl Governor {
         self.penalty
     }
 
+    pub fn retarget(&mut self, target: f32) {
+        self.budget = self.budget.retarget(target);
+        self.forget();
+    }
+
     pub fn observe(&mut self, elapsed: f32) {
         self.budget.observe(elapsed);
         self.observed = true;
@@ -106,6 +112,7 @@ impl Governor {
         let observed = std::mem::take(&mut self.observed);
         let overrun = self.budget.overrun();
         let headroom = self.budget.headroom();
+        let severe = self.budget.severe();
         let mut escalated = false;
         for (index, load) in loads.iter().enumerate() {
             let motion = load.motion();
@@ -173,9 +180,12 @@ impl Governor {
             }
         }
         Resolution {
-            scale: self
-                .cause
-                .map(|cause| if cause == Cause::None { 1 } else { SCALE }),
+            scale: self.cause.map(|cause| match (cause, severe) {
+                (Cause::None, _) => 1,
+                (Cause::Motion, _) => SCALE,
+                (Cause::Overrun, true) => QUARTER,
+                (Cause::Overrun, false) => SCALE,
+            }),
             penalty: self.penalty,
         }
     }

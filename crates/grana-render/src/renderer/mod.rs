@@ -73,8 +73,6 @@ const FADE_DRAWS: f32 = 10.0;
 
 const UNIT: f32 = 65535.0;
 
-const FRAME_TARGET: f32 = 14.0;
-
 pub use resolution::{Governor, Load, Resolution};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -364,7 +362,7 @@ impl Renderer {
             }),
             dropped: [0; PANE_COUNT],
             profile: Profiler::new(device, queue),
-            governor: Governor::new(FRAME_TARGET),
+            governor: Governor::new(crate::profile::frame_target(None)),
             measured: [0.0; STAGE_COUNT],
             sampled: false,
             info: FrameInfo::default(),
@@ -398,6 +396,10 @@ impl Renderer {
     pub fn set_budget(&mut self, budget: u64) {
         assert!(budget > 0, "a renderer needs a residency budget");
         self.budget = budget;
+    }
+
+    pub fn set_frame_target(&mut self, target: f32) {
+        self.governor.retarget(target);
     }
 
     pub fn reserve(

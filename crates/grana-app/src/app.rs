@@ -155,6 +155,18 @@ impl App {
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
         self.engine = Some(engine);
+        self.sync_frame_target();
+    }
+
+    fn sync_frame_target(&mut self) {
+        let (Some(surface), Some(engine)) = (self.surface.as_ref(), self.engine.as_mut()) else {
+            return;
+        };
+        let refresh = surface
+            .window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz());
+        engine.set_frame_target(grana_render::frame_target(refresh));
     }
 
     fn redraw(&mut self) {
@@ -1181,11 +1193,12 @@ impl App {
             return;
         };
         let panels = self.panels();
+        let size = panels.output(width, false);
         let poses = vec![self.pose()];
         self.start_export(Plan {
             destination: Destination::Image { path },
             panels,
-            width,
+            size,
             transparent: export.transparent,
             poses,
             fps: 0,
@@ -1232,10 +1245,11 @@ impl App {
         let poses = grana_offline::poses(self.session.timeline());
         let fps = self.session.timeline().fps();
         let panels = self.panels();
+        let size = panels.output(width, true);
         self.start_export(Plan {
             destination: Destination::Movie { path },
             panels,
-            width,
+            size,
             transparent,
             poses,
             fps,
@@ -1276,10 +1290,11 @@ impl App {
         let directory = parent.join(format!("{stem}-sequence"));
         let poses = (0..frames).map(|time| Pose { time, views }).collect();
         let panels = self.panels();
+        let size = panels.output(width, false);
         self.start_export(Plan {
             destination: Destination::Sequence { directory, stem },
             panels,
-            width,
+            size,
             transparent: export.transparent,
             poses,
             fps: 0,
@@ -2036,6 +2051,7 @@ impl ApplicationHandler for App {
                     surface.window.request_redraw();
                 }
             }
+            WindowEvent::Moved(_) => self.sync_frame_target(),
             WindowEvent::DroppedFile(path) => {
                 if path
                     .extension()

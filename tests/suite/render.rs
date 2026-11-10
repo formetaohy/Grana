@@ -587,6 +587,75 @@ fn renders_a_rotated_placement() {
 }
 
 #[test]
+fn follows_the_refresh_rate_of_the_display() {
+    let sixty = grana_render::frame_target(Some(60_000));
+    let hundred_forty_four = grana_render::frame_target(Some(144_000));
+    assert!(
+        (sixty - 16.6667).abs() < 0.001,
+        "a sixty hertz display budgets a sixtieth of a second: {sixty}"
+    );
+    assert!(
+        (hundred_forty_four - 6.9444).abs() < 0.001,
+        "a fast display budgets a shorter frame: {hundred_forty_four}"
+    );
+    assert_eq!(
+        grana_render::frame_target(None),
+        sixty,
+        "an unknown display assumes sixty hertz"
+    );
+    assert_eq!(
+        grana_render::frame_target(Some(0)),
+        sixty,
+        "a monitor that reports no rate falls back to sixty hertz"
+    );
+    assert_eq!(
+        grana_render::frame_target(Some(1_000_000)),
+        4.0,
+        "an absurd refresh rate keeps a floor"
+    );
+    assert_eq!(
+        grana_render::frame_target(Some(1_000)),
+        40.0,
+        "a one hertz display keeps a ceiling"
+    );
+}
+
+#[test]
+fn quarters_the_volume_for_a_severe_overrun() {
+    let mut governor = grana_render::Governor::new(8.0);
+    let large = [grana_render::Load::volume(4 << 20, true, false); grana_render::PANE_COUNT];
+    for _ in 0..64 {
+        governor.observe(32.0);
+    }
+    let severe = governor.decide(&large, false);
+    assert_eq!(
+        severe.scale, [4; 4],
+        "a frame that misses the budget threefold quarters the volume"
+    );
+    for _ in 0..64 {
+        governor.observe(4.0);
+    }
+    let mut recovered = governor.decide(&large, false);
+    for _ in 0..16 {
+        governor.observe(4.0);
+        recovered = governor.decide(&large, false);
+    }
+    assert_eq!(
+        recovered.scale, [1; 4],
+        "a budget that fits restores the full volume"
+    );
+    governor.retarget(16.0);
+    for _ in 0..64 {
+        governor.observe(16.0);
+    }
+    let retargeted = governor.decide(&large, false);
+    assert_eq!(
+        retargeted.scale, [1; 4],
+        "a slower budget keeps the volume whole"
+    );
+}
+
+#[test]
 fn trades_volume_resolution_for_frame_time() {
     let mut governor = grana_render::Governor::new(16.0);
     let large = [grana_render::Load::volume(4 << 20, true, false); grana_render::PANE_COUNT];

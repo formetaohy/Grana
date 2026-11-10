@@ -4,6 +4,7 @@ mod material;
 mod palette;
 mod panes;
 mod shading;
+mod size;
 mod transfer;
 mod volume;
 
@@ -19,6 +20,7 @@ pub use panes::{
     Quality, SPLIT_MAX, SPLIT_MIN,
 };
 pub use shading::{AZIMUTH_LIMIT, DEFAULT_AZIMUTH, DEFAULT_ELEVATION, ELEVATION_LIMIT, Shading};
+pub use size::OutputSize;
 pub use transfer::{
     Stop, TransferFunction, linear_to_srgb, srgb_component_to_linear, srgb_to_linear,
 };

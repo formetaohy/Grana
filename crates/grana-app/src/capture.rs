@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_display::Panes;
+use grana_display::{OutputSize, Panes};
 use grana_engine::Panels;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::{Capture, CaptureKind, CaptureRequest, Channels};
@@ -54,7 +54,12 @@ impl Capture for OfflineCapture {
         panes.set_layout(request.view.layout);
         panes.set_split(request.view.split);
         panes.set_row(request.view.row);
-        let panels = Panels::of(&panes, request.size);
+        let size = OutputSize::of(request.size[0], request.size[1]);
+        let size = match request.kind {
+            CaptureKind::Movie => size.even(),
+            CaptureKind::Still { .. } | CaptureKind::Sequence => size,
+        };
+        let panels = Panels::of(&panes, size.to_array());
         let views = panes.views();
         let (destination, poses, fps) = match request.kind {
             CaptureKind::Still { time } => (
@@ -100,7 +105,7 @@ impl Capture for OfflineCapture {
             plan: Plan {
                 destination,
                 panels,
-                width: request.size[0],
+                size,
                 transparent: request.transparent,
                 poses,
                 fps,

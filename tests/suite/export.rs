@@ -80,11 +80,12 @@ fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32;
         [600.0 / STAGE[1], 400.0 / STAGE[1], 1.0, 1.0],
     );
     let panels = panels();
-    let regions = panels.export(WIDTH, false);
+    let size = panels.output(WIDTH, false);
+    let regions = panels.export(size);
     let plan = Plan {
         destination,
         panels,
-        width: WIDTH,
+        size,
         transparent,
         poses: vec![Pose {
             time: 0,
@@ -185,10 +186,12 @@ fn still_plan(volume: &Volume, destination: Destination, width: u32) -> Plan {
         Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         [600.0 / STAGE[1], 400.0 / STAGE[1], 1.0, 1.0],
     );
+    let panels = panels();
+    let size = panels.output(width, false);
     Plan {
         destination,
-        panels: panels(),
-        width,
+        panels,
+        size,
         transparent: false,
         poses: vec![Pose {
             time: 0,
@@ -266,10 +269,11 @@ fn cancels_an_export_without_leaving_a_partial_file() {
         scene.dataset.voxel_size(),
         [1.0; 4],
     );
+    let panels = panels();
     let plan = Plan {
         destination: Destination::Movie { path: path.clone() },
-        panels: panels(),
-        width: WIDTH,
+        size: panels.output(WIDTH, true),
+        panels,
         transparent: false,
         poses: vec![
             Pose {
@@ -310,10 +314,11 @@ fn runs_an_export_on_the_worker_thread() {
         scene.dataset.voxel_size(),
         [1.0; 4],
     );
+    let panels = panels();
     let plan = Plan {
         destination: Destination::Image { path: path.clone() },
-        panels: panels(),
-        width: 320,
+        size: panels.output(320, false),
+        panels,
         transparent: false,
         poses: vec![Pose {
             time: 0,

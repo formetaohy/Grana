@@ -57,7 +57,7 @@ impl Export {
         let Plan {
             destination,
             panels,
-            width,
+            size,
             transparent,
             poses,
             fps,
@@ -75,7 +75,16 @@ impl Export {
         }
         let movie = matches!(destination, Destination::Movie { .. });
         assert!(!movie || fps > 0, "a movie holds a positive frame rate");
-        let regions = panels.export(width, movie);
+        assert!(
+            !movie || size.height().is_multiple_of(2) && size.width().is_multiple_of(2),
+            "a movie frame holds an even number of pixels"
+        );
+        let regions = panels.export(size);
+        assert_eq!(
+            regions.size,
+            size.to_array(),
+            "the exported regions cover the planned size"
+        );
         let limit = device.limits().max_texture_dimension_2d;
         if regions.size[0] > limit || regions.size[1] > limit {
             return Err(format!(

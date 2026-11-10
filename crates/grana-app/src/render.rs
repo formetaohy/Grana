@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use grana_animation::Timeline;
-use grana_display::{PaneLayout, Panes};
+use grana_display::{OutputSize, PaneLayout, Panes};
 use grana_engine::Panels;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::Channels;
@@ -16,8 +16,6 @@ use crate::bricks::ImageBricks;
 
 const OPEN_LIMIT: Duration = Duration::from_secs(600);
 const OPEN_POLL: Duration = Duration::from_millis(10);
-const DEFAULT_WIDTH: u32 = 1920;
-const ASPECT: [u32; 2] = [16, 9];
 
 pub struct Request {
     pub input: PathBuf,
@@ -70,12 +68,14 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         panes.set_layout(PaneLayout::Single);
     }
     let width = request.width.unwrap_or_else(|| default_width(&view, kind));
-    let height = request.height.unwrap_or_else(|| default_height(width));
-    if width == 0 || height == 0 {
-        return Err("a render covers at least one pixel".to_string());
-    }
-    let panels = Panels::of(&panes, [width, height]);
-    let regions = panels.export(width, kind == DestinationKind::Movie);
+    let even = kind == DestinationKind::Movie;
+    let size = match request.height {
+        Some(height) => OutputSize::of(width, height),
+        None => OutputSize::of_width(width),
+    };
+    let size = if even { size.even() } else { size };
+    let panels = Panels::of(&panes, size.to_array());
+    let regions = panels.export(size);
     if view.is_none() {
         panes.fit(
             scene.dataset.world_size(),
@@ -93,7 +93,7 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         scene,
         request,
         panels,
-        width,
+        size,
     }
     .plan()?;
     let channels = Channels::render(image, scene);
@@ -130,7 +130,7 @@ struct Job<'a> {
     scene: &'a Scene,
     request: &'a Request,
     panels: Panels,
-    width: u32,
+    size: OutputSize,
 }
 
 impl Job<'_> {
@@ -185,7 +185,7 @@ impl Job<'_> {
         Ok(Plan {
             destination,
             panels: self.panels,
-            width: self.width,
+            size: self.size,
             transparent: self.request.transparent,
             poses,
             fps,
@@ -266,17 +266,17 @@ fn named(
 }
 
 fn default_width(view: &Option<ViewState>, kind: DestinationKind) -> u32 {
-    view.as_ref().map_or(DEFAULT_WIDTH, |view| {
+    view.as_ref().map_or(OutputSize::DEFAULT_WIDTH, |view| {
         let width = match kind {
             DestinationKind::Movie => view.export.movie,
             DestinationKind::Image | DestinationKind::Sequence => view.export.image,
         };
-        if width == 0 { DEFAULT_WIDTH } else { width }
+        if width == 0 {
+            OutputSize::DEFAULT_WIDTH
+        } else {
+            width
+        }
     })
-}
-
-fn default_height(width: u32) -> u32 {
-    (u64::from(width) * u64::from(ASPECT[1]) / u64::from(ASPECT[0])).max(1) as u32
 }
 
 fn aspect(region: [u32; 4]) -> f32 {

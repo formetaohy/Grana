@@ -32,7 +32,7 @@ pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget}
 pub use image::{Image, Image16, read as read_image};
 pub use marker::Marker;
 pub use pick::PickId;
-pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
+pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage, frame_target};
 pub use renderer::{
     CutInfo, Frame, FrameInfo, Governor, Lens, Load, OitInfo, PaneFrame, Renderer, Requests,
     Resolution, ViewInfo,
