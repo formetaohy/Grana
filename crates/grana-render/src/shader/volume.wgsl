@@ -167,28 +167,9 @@ fn brick_visible(record: BrickRecord, channels_active: u32) -> bool {
     return false;
 }
 
-fn cell_visible(band: u32, slot: u32, cell: u32, channels_active: u32) -> bool {
+fn cell_reach(band: u32, slot: u32, cell: u32, channels_active: u32) -> vec2<f32> {
     let planes = (channels_active + PACK - 1u) / PACK;
-    for (var plane = 0u; plane < planes; plane += 1u) {
-        let maxima = level_maxima(band, slot, cell, plane);
-        for (var component = 0u; component < PACK; component += 1u) {
-            let channel = plane * PACK + component;
-            if (channel >= channels_active) {
-                break;
-            }
-            if (channel_opacity(channel) <= 0.0) {
-                continue;
-            }
-            if (maxima[component] >= channel_threshold(channel)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-fn cell_extinction(band: u32, slot: u32, cell: u32, channels_active: u32) -> f32 {
-    let planes = (channels_active + PACK - 1u) / PACK;
+    var visible = 0.0;
     var extinction = 0.0;
     for (var plane = 0u; plane < planes; plane += 1u) {
         let maxima = level_maxima(band, slot, cell, plane);
@@ -201,10 +182,11 @@ fn cell_extinction(band: u32, slot: u32, cell: u32, channels_active: u32) -> f32
             if (opacity <= 0.0 || maxima[component] < channel_threshold(channel)) {
                 continue;
             }
+            visible = 1.0;
             extinction = max(extinction, channel_tau(channel, maxima[component]).a * opacity);
         }
     }
-    return extinction;
+    return vec2<f32>(visible, extinction);
 }
 
 fn sight(
@@ -325,6 +307,12 @@ fn march(
     for (var channel = 0u; channel < CHANNEL_LIMIT; channel += 1u) {
         peak[channel] = -1.0;
     }
+    var pack_mask = 0u;
+    for (var pack = 0u; pack < pack_count; pack += 1u) {
+        if (pack_active(pack, channel_count)) {
+            pack_mask |= 1u << pack;
+        }
+    }
     var finished = 0u;
     var t = begin;
     var samples = 0u;
@@ -361,12 +349,13 @@ fn march(
             let local = ray_uvw(origin, band, cursor, direction);
             let subcell = cell_index(cell_coord(cell_voxel(band, local, brick)));
             let limit = min(cursor + cell_delta(band, local, brick, direction_uvw, step * 0.25), boundary);
-            if (!cell_visible(band, slot, subcell, channel_count)) {
+            let reach = cell_reach(band, slot, subcell, channel_count);
+            if (reach.x <= 0.5) {
                 texel += texel_rate * (limit - cursor);
                 cursor = limit;
                 continue;
             }
-            let extinction = cell_extinction(band, slot, subcell, channel_count);
+            let extinction = reach.y;
             let adaptive = clamp(
                 SAMPLING_ERROR / max(extinction * voxels_per_world, 1.0e-9),
                 step,
@@ -380,7 +369,7 @@ fn march(
                 var optical_depth = 0.0;
                 var emission = vec3<f32>(0.0);
                 for (var pack = 0u; pack < pack_count; pack += 1u) {
-                    if (!pack_active(pack, channel_count)) {
+                    if ((pack_mask & (1u << pack)) == 0u) {
                         continue;
                     }
                     let values = sample_atlas(pack, texel);
@@ -558,7 +547,6 @@ fn clip_depth(world: vec3<f32>) -> f32 {
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
     let ndc = input.ndc + frame.jitter.xy;
-    let pixel = vec2<i32>(input.clip_position.xy);
     let scene_pixel = vec2<i32>(floor(volume_target_pixel(input.clip_position.xy)));
     let ao = ambient_occlusion(input.clip_position.xy);
     let ray = camera_ray(ndc);
@@ -593,7 +581,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     if (frame.oit.x > 0u) {
         let origin = vec2<i32>(frame.viewport.xy);
         let size = vec2<i32>(frame.viewport.zw);
-        let local = pixel - origin;
+        let local = scene_pixel - origin;
         if (local.x >= 0 && local.y >= 0 && local.x < size.x && local.y < size.y) {
             let index = u32(local.y) * u32(size.x) + u32(local.x);
             let base = index * frame.oit.y;

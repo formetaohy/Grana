@@ -73,11 +73,11 @@ impl Renderer {
         });
         let moved: [bool; PANE_COUNT] =
             std::array::from_fn(|index| motion[index] != self.motion[index]);
+        self.interactive = moved.iter().any(|moved| *moved);
         let frozen = self.exporting || assured;
         let loads: [Load; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
-            Some(PaneFrame::Volume { region, .. }) => Load::volume(
-                u64::from(region[2].max(1)) * u64::from(region[3].max(1)),
-                !frozen && !translucent && pane_quality[index] != Quality::High,
+            Some(PaneFrame::Volume { .. }) => Load::volume(
+                !frozen && pane_quality[index] != Quality::High,
                 moved[index],
             ),
             _ => Load::IDLE,

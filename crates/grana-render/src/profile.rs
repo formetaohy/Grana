@@ -10,10 +10,9 @@ const MARK_LIMIT: usize = 16;
 const STAMP_BYTES: u64 = size_of::<u64>() as u64;
 const SLOTS: usize = 4;
 const SMOOTHING: f32 = 0.3;
-const OVERRUN: f32 = 1.1;
-const HEADROOM: f32 = 0.7;
+const OVERRUN: f32 = 0.85;
+const HEADROOM: f32 = 0.5;
 const NANOSECONDS: f32 = 1.0e6;
-const SEVERE: f32 = 2.5;
 const TARGET_FLOOR: f32 = 4.0;
 const TARGET_CEILING: f32 = 40.0;
 const MILLIHERTZ_PER_HERTZ: f32 = 1000.0;
@@ -129,10 +128,6 @@ impl Budget {
 
     pub fn headroom(self) -> bool {
         self.measured < self.target * HEADROOM
-    }
-
-    pub fn severe(self) -> bool {
-        self.measured > self.target * SEVERE
     }
 
     pub fn observe(&mut self, elapsed: f32) {

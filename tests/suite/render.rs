@@ -623,105 +623,47 @@ fn follows_the_refresh_rate_of_the_display() {
 }
 
 #[test]
-fn quarters_the_volume_for_a_severe_overrun() {
-    let mut governor = grana_render::Governor::new(8.0);
-    let large = [grana_render::Load::volume(4 << 20, true, false); grana_render::PANE_COUNT];
-    for _ in 0..64 {
-        governor.observe(32.0);
-    }
-    let severe = governor.decide(&large, false);
-    assert_eq!(
-        severe.scale, [4; 4],
-        "a frame that misses the budget threefold quarters the volume"
-    );
-    for _ in 0..64 {
-        governor.observe(4.0);
-    }
-    let mut recovered = governor.decide(&large, false);
-    for _ in 0..16 {
-        governor.observe(4.0);
-        recovered = governor.decide(&large, false);
-    }
-    assert_eq!(
-        recovered.scale, [1; 4],
-        "a budget that fits restores the full volume"
-    );
-    governor.retarget(16.0);
-    for _ in 0..64 {
-        governor.observe(16.0);
-    }
-    let retargeted = governor.decide(&large, false);
-    assert_eq!(
-        retargeted.scale, [1; 4],
-        "a slower budget keeps the volume whole"
-    );
-}
-
-#[test]
 fn trades_volume_resolution_for_frame_time() {
     let mut governor = grana_render::Governor::new(16.0);
-    let large = [grana_render::Load::volume(4 << 20, true, false); grana_render::PANE_COUNT];
-    let moving = [grana_render::Load::volume(4 << 20, true, true); grana_render::PANE_COUNT];
-    let fresh = governor.decide(&large, false);
+    let resting = [grana_render::Load::volume(true, false); grana_render::PANE_COUNT];
+    let moving = [grana_render::Load::volume(true, true); grana_render::PANE_COUNT];
+    let fresh = governor.decide(&moving, false);
     assert_eq!(
         fresh.scale, [1; 4],
         "a fresh governor renders at full resolution"
     );
     assert_eq!(fresh.penalty, 1.0, "a fresh governor samples as asked");
-    for _ in 0..64 {
+    let mut scale = 1;
+    for _ in 0..32 {
         governor.observe(32.0);
+        scale = governor.decide(&moving, false).scale[0];
     }
-    let coarsened = governor.decide(&large, false);
     assert_eq!(
-        coarsened.scale, [2; 4],
-        "an overrun halves the volume first"
+        scale, 4,
+        "a sustained overrun coarsens the volume until the budget fits"
     );
-    assert_eq!(coarsened.penalty, 1.0, "halving keeps the sampling step");
-    governor.observe(32.0);
-    let stepped = governor.decide(&large, false);
     assert!(
-        stepped.penalty > 1.0,
-        "a remaining overrun coarsens the samples"
+        governor.decide(&moving, false).penalty > 1.0,
+        "an overrun that survives the coarsest volume coarsens the samples"
     );
-    for _ in 0..64 {
+    let mut restored = 4;
+    for _ in 0..128 {
         governor.observe(1.0);
-    }
-    let mut refined = governor.decide(&large, false);
-    assert_eq!(refined.penalty, 1.0, "spare budget refines the sampling");
-    for _ in 0..8 {
-        governor.observe(1.0);
-        refined = governor.decide(&large, false);
+        restored = governor.decide(&moving, false).scale[0];
     }
     assert_eq!(
-        refined.scale, [1; 4],
-        "spare budget restores the resolution"
+        restored, 1,
+        "spare budget restores the full resolution and the sampling step"
     );
-    for _ in 0..16 {
-        governor.observe(32.0);
-    }
-    let reprobed = governor.decide(&large, false);
     assert_eq!(
-        reprobed.scale, [2; 4],
-        "the restored resolution is halved again by an overrun"
+        governor.decide(&moving, false).penalty,
+        1.0,
+        "spare budget refines the sampling"
     );
-    for _ in 0..64 {
-        governor.observe(1.0);
-    }
-    let mut latched = governor.decide(&large, false);
-    for _ in 0..16 {
-        governor.observe(1.0);
-        latched = governor.decide(&large, false);
-    }
     assert_eq!(
-        latched.scale, [2; 4],
-        "a probe that overran keeps the volume halved"
-    );
-    let dragging = governor.decide(&moving, false);
-    assert_eq!(dragging.scale, [2; 4], "a moving view halves the volume");
-    let resting = governor.decide(&large, false);
-    assert_eq!(
-        resting.scale, [1; 4],
-        "a settled view probes the full resolution again"
+        governor.decide(&resting, false).scale,
+        [1; 4],
+        "a settled view renders at full resolution"
     );
 }
 
@@ -1406,14 +1348,26 @@ fn scales_a_moving_volume_to_lower_resolution() {
     let mut state = moved.state();
     state.yaw = 0.35;
     moved.restore(state);
-    let moving = renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        wide(&view, &moved, &scene, false),
-    );
-    assert_eq!(
-        moving.volume_scale[0], 2,
-        "a moving view halves its volume resolution"
+    let mut scale = 1;
+    renderer.set_frame_target(0.5);
+    for _ in 0..24 {
+        let mut state = moved.state();
+        state.yaw += 0.01;
+        moved.restore(state);
+        scale = renderer
+            .draw(
+                gpu.device(),
+                gpu.queue(),
+                wide(&view, &moved, &scene, false),
+            )
+            .volume_scale[0];
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+    }
+    assert!(
+        scale > 1,
+        "a moving view that overruns its budget lowers the volume resolution"
     );
     let coarse = read_pixels(&gpu, &target, [WIDE, WIDE]);
     let returning = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &moved, true);

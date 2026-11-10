@@ -282,6 +282,7 @@ pub struct Renderer {
     governor: Governor,
     measured: [f32; STAGE_COUNT],
     sampled: bool,
+    interactive: bool,
     info: FrameInfo,
 }
 
@@ -372,6 +373,7 @@ impl Renderer {
             governor: Governor::new(crate::profile::frame_target(None)),
             measured: [0.0; STAGE_COUNT],
             sampled: false,
+            interactive: false,
             info: FrameInfo::default(),
         }
     }
@@ -609,7 +611,7 @@ impl Renderer {
         if let Some(profile) = self.profile.as_mut()
             && let Some(measured) = profile.poll(device)
         {
-            if self.sampled && info.settled && !self.exporting {
+            if self.sampled && self.interactive && !self.exporting {
                 self.governor.observe(measured.total);
             }
             self.measured = measured.stages;
