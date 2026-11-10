@@ -557,7 +557,7 @@ fn section_bounds(section: &SectionCamera, aspect: f32) -> (Vec3, Vec3) {
     (low, high)
 }
 
-fn section_brick_count(
+pub(crate) fn section_brick_count(
     pyramid: &Pyramid,
     level_index: usize,
     section: &SectionCamera,
@@ -936,7 +936,7 @@ fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usi
     }
 }
 
-fn volume_counts(
+pub(crate) fn volume_counts(
     pyramid: &Pyramid,
     base: usize,
     count: usize,

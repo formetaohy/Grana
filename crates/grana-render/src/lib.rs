@@ -2,6 +2,7 @@ mod ao;
 mod atlas;
 mod brick;
 mod cut;
+mod detail;
 mod frame;
 mod image;
 mod layout;
@@ -25,6 +26,7 @@ mod volume;
 
 pub use grana_display::PANE_COUNT;
 
+pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
 pub use image::{Image, read as read_image};
 pub use marker::Marker;
 pub use pick::PickId;

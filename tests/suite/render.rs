@@ -76,7 +76,6 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         prefetch: false,
         level_cap: usize::MAX,
         assured: view.assured,
-        coarsen: 0,
     }
 }
 
@@ -1506,6 +1505,98 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
 }
 
 #[test]
+fn rejects_a_residency_beyond_the_device() {
+    let error = grana_render::residency_budget(64, 1 << 20, 128, 1 << 40)
+        .expect_err("a tiny device holds no export at this size");
+    assert!(
+        error.contains("this device holds at most"),
+        "the rejection names the device limit: {error}"
+    );
+    let error = grana_render::residency_budget(4096, 1 << 20, 2048, 1 << 30)
+        .expect_err("a ceiling bounds the export residency");
+    assert!(
+        error.contains("export ceiling"),
+        "the rejection names the export ceiling: {error}"
+    );
+}
+
+#[test]
+fn sizes_the_export_residency_to_the_finest_level() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volumes = ladder_volumes();
+    let pyramid = ladder_pyramid(&volumes);
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let panes = [
+        Some(PaneFrame::Volume {
+            camera: &camera,
+            lens: Lens {
+                camera: &camera,
+                aspect: 1.0,
+            },
+            region: WHOLE,
+        }),
+        None,
+        None,
+        None,
+    ];
+    let detail = grana_render::residency(&pyramid, &panes, Region::none());
+    assert_eq!(
+        detail.panes[0].expect("the volume is scheduled").level,
+        0,
+        "a fitted export keeps the finest level"
+    );
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        1 << 20,
+    );
+    renderer.set_dataset(gpu.device(), &pyramid);
+    let budget = grana_render::residency_budget(
+        detail.slots,
+        renderer.slot_bytes(),
+        gpu.device().limits().max_texture_dimension_3d,
+        grana_render::EXPORT_CEILING,
+    )
+    .expect("the device holds the export");
+    renderer.set_budget(budget);
+    renderer.set_dataset(gpu.device(), &pyramid);
+    assert!(
+        renderer.slots() >= detail.slots,
+        "the reserved atlas holds every brick of the export"
+    );
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut view = ladder_view(&view_texture, &camera, &section, &scene);
+    view.assured = true;
+    let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
+    assert_eq!(info.samples, SAMPLES, "the sized export never resolved");
+    assert_eq!(
+        info.panes[0].level, 0,
+        "the sized export coarsens its level"
+    );
+    assert_eq!(
+        info.panes[0].visible, info.panes[0].demand,
+        "the sized export still truncates its bricks"
+    );
+    assert!(!info.truncated, "the sized export reports truncation");
+}
+
+#[test]
 fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let Some(gpu) = gpu() else {
         return;
@@ -1597,7 +1688,6 @@ fn renders_a_section_pane_without_a_volume() {
         prefetch: false,
         level_cap: usize::MAX,
         assured: false,
-        coarsen: 0,
     };
     let requests = settle_with(&gpu, &mut renderer, build, &volume);
     assert!(
@@ -1688,7 +1778,6 @@ fn keeps_two_volume_panes_independent() {
         prefetch: false,
         level_cap: usize::MAX,
         assured: false,
-        coarsen: 0,
     };
     settle_with(&gpu, &mut renderer, build, &volume);
     let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);

@@ -182,7 +182,6 @@ pub struct Frame<'a, 'b> {
     pub prefetch: bool,
     pub level_cap: usize,
     pub assured: bool,
-    pub coarsen: usize,
 }
 
 pub struct Renderer {
@@ -219,6 +218,7 @@ pub struct Renderer {
     probe_mark: [u64; PANE_COUNT],
     level_cap: Option<usize>,
     budget: u64,
+    slot_bytes: u64,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
     view_words: usize,
@@ -301,6 +301,7 @@ impl Renderer {
             probe_mark: [0; PANE_COUNT],
             level_cap: None,
             budget,
+            slot_bytes: 0,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
             view_words: 0,
@@ -341,6 +342,52 @@ impl Renderer {
 
     pub fn format(&self) -> TextureFormat {
         self.present.format()
+    }
+
+    pub fn budget(&self) -> u64 {
+        self.budget
+    }
+
+    pub fn slot_bytes(&self) -> u64 {
+        self.slot_bytes
+    }
+
+    pub fn slots(&self) -> usize {
+        self.atlas.as_ref().map_or(0, Atlas::slots)
+    }
+
+    pub fn first_level(&self) -> usize {
+        self.arena.as_ref().map_or(0, BrickArena::first)
+    }
+
+    pub fn set_budget(&mut self, budget: u64) {
+        assert!(budget > 0, "a renderer needs a residency budget");
+        self.budget = budget;
+    }
+
+    pub fn reserve(
+        &mut self,
+        device: &Device,
+        pyramid: &Pyramid,
+        slots: usize,
+        ceiling: u64,
+    ) -> Result<(), String> {
+        if self.slots() >= slots {
+            return Ok(());
+        }
+        assert!(
+            self.slot_bytes > 0,
+            "the dataset is resident before a reserve"
+        );
+        let budget = crate::detail::residency_budget(
+            slots,
+            self.slot_bytes,
+            device.limits().max_texture_dimension_3d,
+            ceiling,
+        )?;
+        self.set_budget(budget);
+        self.set_dataset(device, pyramid);
+        Ok(())
     }
 
     pub fn set_transparent(&mut self, transparent: bool) {
@@ -454,6 +501,7 @@ impl Renderer {
         self.level_group = Some(level_group);
         self.pyramid = Some(pyramid.clone());
         self.channels = channels;
+        self.slot_bytes = slot_bytes;
         self.time = 0;
         self.volume_level = [None; PANE_COUNT];
         self.section_level = [None; PANE_COUNT];

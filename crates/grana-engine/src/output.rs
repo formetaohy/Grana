@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 
 use grana_display::{Camera, PANE_COUNT, PaneKind, PaneView, SectionCamera};
 use grana_raster::Raster;
-use grana_render::{Lens, PaneFrame, Renderer};
+use grana_render::{FrameInfo, Lens, PaneFrame, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use grana_video::{Recorder, Sequence};
+use grana_volume::{Pyramid, Region};
 use wgpu::{
     CommandEncoder, CommandEncoderDescriptor, Device, Extent3d, LoadOp, Operations, Queue,
     RenderPassColorAttachment, RenderPassDescriptor, StoreOp, Texture, TextureDescriptor,
@@ -40,6 +41,7 @@ pub struct Plan {
     pub transparent: bool,
     pub poses: Vec<Pose>,
     pub fps: u32,
+    pub region: Region,
 }
 
 pub enum Outcome {
@@ -81,14 +83,72 @@ impl Sink {
     }
 }
 
+pub(crate) struct ExportResidency {
+    pub(crate) slots: usize,
+    pub(crate) level: usize,
+}
+
+pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<ExportResidency, String> {
+    if plan.poses.is_empty() {
+        return Err("an export holds at least one pose".to_string());
+    }
+    let movie = matches!(plan.destination, Destination::Movie { .. });
+    let regions = plan.panels.export(plan.width, movie);
+    let mut slots = 1usize;
+    let mut level = pyramid.level_count() - 1;
+    for pose in &plan.poses {
+        let cameras = pose.views.map(|view| frame::restored_camera(&view.camera));
+        let sections = pose
+            .views
+            .map(|view| frame::restored_section(&view.section));
+        let panes = std::array::from_fn(|index| {
+            let pane = regions.panes[index]?;
+            let aspect = pane.region[2].max(1) as f32 / pane.region[3].max(1) as f32;
+            Some(match pane.kind {
+                PaneKind::Volume => PaneFrame::Volume {
+                    camera: &cameras[index],
+                    lens: Lens {
+                        camera: &cameras[index],
+                        aspect,
+                    },
+                    region: pane.region,
+                },
+                PaneKind::Section => PaneFrame::Section {
+                    section: &sections[index],
+                    region: pane.region,
+                },
+            })
+        });
+        let held = grana_render::residency(pyramid, &panes, plan.region);
+        slots = slots.max(held.slots);
+        for detail in held.panes.iter().flatten() {
+            level = level.min(detail.level);
+        }
+    }
+    Ok(ExportResidency { slots, level })
+}
+
+fn truncation(info: &FrameInfo, regions: &Regions) -> String {
+    let held = info
+        .panes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| regions.panes[*index].is_some())
+        .map(|(_, pane)| *pane)
+        .max_by_key(|pane| pane.visible.saturating_sub(pane.demand))
+        .unwrap_or_default();
+    format!(
+        "an export at this size needs {} bricks at level {} but only {} fit in the residency budget; lower the export width or zoom in",
+        held.visible, held.level, held.demand
+    )
+}
+
 pub struct Export {
     sink: Option<Sink>,
     poses: Vec<Pose>,
     frame: usize,
     attempts: u32,
     samples: u32,
-    coarsen: usize,
-    truncated: bool,
     regions: Regions,
     lens: Option<(Camera, u32)>,
     transparent: bool,
@@ -107,6 +167,7 @@ impl Export {
             transparent,
             poses,
             fps,
+            region: _,
         } = plan;
         assert!(!poses.is_empty(), "an export holds at least one pose");
         if !matches!(
@@ -155,8 +216,6 @@ impl Export {
             frame: 0,
             attempts: 0,
             samples,
-            coarsen: 0,
-            truncated: false,
             regions,
             lens,
             transparent,
@@ -224,15 +283,15 @@ impl Export {
                 transparent: self.transparent,
                 level_cap: usize::MAX,
                 assured: true,
-                coarsen: self.coarsen,
             },
             rendered,
         );
         self.attempts += 1;
-        if info.truncated && !self.truncated {
-            self.coarsen += 1;
+        if info.truncated {
+            return Outcome::Failed {
+                detail: truncation(&info, &self.regions),
+            };
         }
-        self.truncated = info.truncated;
         if info.samples < self.samples || !info.settled {
             if self.attempts > self.attempts_limit() {
                 return Outcome::Failed {
@@ -287,8 +346,6 @@ impl Export {
         sink.push(pose.time, size, &pixels)?;
         self.frame += 1;
         self.attempts = 0;
-        self.coarsen = 0;
-        self.truncated = false;
         if self.frame < self.poses.len() {
             self.sink = Some(sink);
             return Ok(None);

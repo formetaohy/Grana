@@ -93,12 +93,14 @@ impl Snapshotter for Snapshot {
                     views: panes.views(),
                 }],
                 fps: 0,
+                region: scene.region,
             },
         )?;
         let outcome = render(engine, gpu, &mut ui, channels, scene, path);
         if outcome.is_err() {
             engine.cancel_export();
         }
+        engine.release_residency(&gpu.device);
         outcome
     }
 }

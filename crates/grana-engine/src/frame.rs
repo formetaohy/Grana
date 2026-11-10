@@ -15,7 +15,6 @@ pub(crate) struct View<'a> {
     pub transparent: bool,
     pub level_cap: usize,
     pub assured: bool,
-    pub coarsen: usize,
 }
 
 pub(crate) fn draw(
@@ -43,7 +42,6 @@ pub(crate) fn draw(
             prefetch: frame.prefetch,
             level_cap: frame.level_cap,
             assured: frame.assured,
-            coarsen: frame.coarsen,
         },
     )
 }

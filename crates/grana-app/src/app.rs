@@ -1237,6 +1237,7 @@ impl App {
             transparent: export.transparent,
             poses,
             fps: 0,
+            region: scene.region,
         });
     }
 
@@ -1286,6 +1287,7 @@ impl App {
             transparent,
             poses,
             fps,
+            region: scene.region,
         });
     }
 
@@ -1329,6 +1331,7 @@ impl App {
             transparent: export.transparent,
             poses,
             fps: 0,
+            region: scene.region,
         });
     }
 

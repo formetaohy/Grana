@@ -1,5 +1,5 @@
 use grana_display::{PANE_COUNT, PaneKind, Panes};
-use grana_render::{FrameInfo, Lens, PaneFrame, PickId, Renderer, Requests};
+use grana_render::{EXPORT_CEILING, FrameInfo, Lens, PaneFrame, PickId, Renderer, Requests};
 use grana_scene::{Scene, Selection};
 use grana_ui::Ui;
 use grana_volume::{BrickData, BrickRequest, Pyramid};
@@ -43,6 +43,7 @@ struct Prepared {
 
 pub struct Engine {
     renderer: Renderer,
+    dataset: Option<Pyramid>,
     export: Option<Export>,
     output_message: Option<String>,
     identities: Identities,
@@ -54,6 +55,7 @@ impl Engine {
     pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         Self {
             renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET),
+            dataset: None,
             export: None,
             output_message: None,
             identities: Identities::default(),
@@ -63,7 +65,9 @@ impl Engine {
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
+        self.renderer.set_budget(TEXTURE_BUDGET);
         self.renderer.set_dataset(device, pyramid);
+        self.dataset = Some(pyramid.clone());
         self.identities = Identities::default();
         self.pending_pick = None;
         self.prepared = None;
@@ -71,6 +75,23 @@ impl Engine {
 
     pub fn requests_pending(&self) -> bool {
         self.renderer.requests_pending()
+    }
+
+    fn restore_viewport(&mut self, device: &Device) {
+        if self.renderer.budget() == TEXTURE_BUDGET {
+            return;
+        }
+        let Some(pyramid) = self.dataset.clone() else {
+            return;
+        };
+        self.renderer.set_budget(TEXTURE_BUDGET);
+        self.renderer.set_dataset(device, &pyramid);
+        self.identities = Identities::default();
+        self.prepared = None;
+    }
+
+    pub fn release_residency(&mut self, device: &Device) {
+        self.restore_viewport(device);
     }
 
     pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
@@ -87,6 +108,7 @@ impl Engine {
         queue: &Queue,
         frame: ViewportFrame<'_>,
     ) -> Result<FrameInfo, String> {
+        self.restore_viewport(device);
         self.renderer.set_exporting(false);
         let lens = frame
             .panes
@@ -117,7 +139,6 @@ impl Engine {
                 transparent: false,
                 level_cap: frame.level_cap,
                 assured: false,
-                coarsen: 0,
             },
             &rendered,
         );
@@ -168,6 +189,19 @@ impl Engine {
     pub fn start_export(&mut self, device: &Device, plan: Plan) -> Result<(), String> {
         if self.export.is_some() {
             return Err("an export is already running".to_string());
+        }
+        let Some(pyramid) = self.dataset.clone() else {
+            return Err("the dataset is still opening".to_string());
+        };
+        let needed = crate::output::residency(&plan, &pyramid)?;
+        self.renderer
+            .reserve(device, &pyramid, needed.slots, EXPORT_CEILING)?;
+        let first = self.renderer.first_level();
+        if first > needed.level {
+            return Err(format!(
+                "an export at this size needs level {} but the renderer addresses levels {first} and coarser",
+                needed.level
+            ));
         }
         self.renderer.begin_export();
         self.export = Some(Export::start(device, self.renderer.format(), plan)?);

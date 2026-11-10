@@ -25,7 +25,6 @@ impl Renderer {
             prefetch,
             level_cap: _,
             assured,
-            coarsen,
         } = frame;
         for pane in panes.iter().flatten() {
             assert!(inside(pane.region(), size), "the panes lie on the surface");
@@ -166,7 +165,7 @@ impl Renderer {
                 bounds,
                 limits,
             );
-            let pick = if coarsen == 0 && !assured && !*exporting {
+            let pick = if !assured && !*exporting {
                 section_probe[index].enter(SectionKey {
                     state: section.state(),
                     aspect,
@@ -193,7 +192,7 @@ impl Renderer {
             if pick.started {
                 probe_mark[index] = *section_sequence;
             }
-            let level = (pick.level + coarsen).min(allowed - 1);
+            let level = pick.level.min(allowed - 1);
             let needed = info.panes[index].visible.max(info.panes[index].demand);
             let hint = if needed == 0 { visible } else { needed };
             let capacity = if pick.probing {
@@ -237,7 +236,7 @@ impl Renderer {
                 current: if assured { None } else { volume_level[index] },
                 penalty,
             });
-            let base = (fit.ladder.base + coarsen).min(allowed - 1);
+            let base = fit.ladder.base.min(allowed - 1);
             let count = BAND.min(allowed - base);
             let ladder = Ladder { base, count };
             let capacity = if base == fit.ladder.base && count == fit.ladder.count {

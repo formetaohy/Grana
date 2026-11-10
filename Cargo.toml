@@ -114,6 +114,7 @@ serde_json = { workspace = true }
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-display = { workspace = true }
+grana-engine = { workspace = true }
 grana-geometry = { workspace = true }
 grana-gpu = { workspace = true }
 grana-image = { workspace = true }
@@ -133,6 +134,7 @@ grana-scene = { workspace = true }
 grana-segment = { workspace = true }
 grana-session = { workspace = true }
 grana-tiff = { workspace = true }
+grana-ui = { workspace = true }
 grana-volume = { workspace = true }
 grana-weight = { workspace = true }
 grana-zarr = { workspace = true }
