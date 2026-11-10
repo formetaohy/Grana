@@ -15,6 +15,7 @@ mod present;
 mod renderer;
 mod sample;
 mod schema;
+mod section;
 mod shadow;
 mod summary;
 mod table;

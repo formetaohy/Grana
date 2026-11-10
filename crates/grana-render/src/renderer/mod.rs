@@ -39,6 +39,7 @@ use crate::planner::{
 use crate::present::Present;
 use crate::sample;
 use crate::schema::SceneFrame;
+use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::summary::Summary;
 use crate::target::{self, SceneTarget};
@@ -174,6 +175,8 @@ pub struct Renderer {
     temporal: TemporalPass,
     fade: Option<Fade>,
     object_key: Option<u64>,
+    sections: Sections,
+    sliced: bool,
     settled: Option<Residency>,
     planned: Option<Residency>,
     viewport: Option<[u32; 4]>,
@@ -202,6 +205,7 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
+        let sections = Sections::new(device, &layouts);
         Self {
             present: Present::new(device, format),
             target: None,
@@ -252,6 +256,8 @@ impl Renderer {
             temporal: TemporalPass::new(device, queue),
             fade: None,
             object_key: None,
+            sections,
+            sliced: false,
             settled: None,
             planned: None,
             viewport: None,
@@ -429,6 +435,8 @@ impl Renderer {
         self.volume_measure = vec![None; pyramid.level_count()];
         self.volume_rejection = None;
         self.meshes.clear();
+        self.sections.clear();
+        self.sliced = false;
         self.target = None;
         self.viewport = None;
         self.convergence.forget();
@@ -495,9 +503,11 @@ impl Renderer {
             scene,
             meshes,
             markers,
+            sections,
             pick_target,
             pick_readback,
             pick_pending,
+            sliced,
             ..
         } = self;
         let Some(scene) = scene.as_ref() else {
@@ -512,40 +522,101 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.pick"),
         });
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.pick.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target.view(),
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: target.depth(),
-                depth_ops: Some(Operations {
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        pass.set_viewport(
-            -(offset[0] as f32),
-            -(offset[1] as f32),
-            region[2] as f32,
-            region[3] as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(0, 0, 1, 1);
         let group = scene.group();
-        meshes.draw_pick(&mut pass);
-        markers.draw_pick_volume(&mut pass, group);
-        drop(pass);
+        if *sliced {
+            {
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("grana.pick.section.pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: target.view(),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_viewport(
+                    -(offset[0] as f32),
+                    -(offset[1] as f32),
+                    region[2] as f32,
+                    region[3] as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(0, 0, 1, 1);
+                sections.draw_pick(&mut pass, group);
+            }
+            {
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("grana.pick.pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: target.view(),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                        view: target.depth(),
+                        depth_ops: Some(Operations {
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                pass.set_viewport(
+                    -(offset[0] as f32),
+                    -(offset[1] as f32),
+                    region[2] as f32,
+                    region[3] as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(0, 0, 1, 1);
+                markers.draw_pick_volume(&mut pass, group);
+            }
+        } else {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("grana.pick.pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: target.view(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: target.depth(),
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_viewport(
+                -(offset[0] as f32),
+                -(offset[1] as f32),
+                region[2] as f32,
+                region[3] as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(0, 0, 1, 1);
+            meshes.draw_pick(&mut pass);
+            markers.draw_pick_volume(&mut pass, group);
+        }
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);
         readback.register();

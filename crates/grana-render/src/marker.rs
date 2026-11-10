@@ -478,6 +478,29 @@ impl MarkerPasses {
         scene: &BindGroup,
         lighting: Lighting<'_>,
     ) {
+        self.draw_markers(encoder, targets, region, scene, lighting, false);
+    }
+
+    pub fn draw_slice(
+        &self,
+        encoder: &mut CommandEncoder,
+        targets: VolumeTargets<'_>,
+        region: [u32; 4],
+        scene: &BindGroup,
+        lighting: Lighting<'_>,
+    ) {
+        self.draw_markers(encoder, targets, region, scene, lighting, true);
+    }
+
+    fn draw_markers(
+        &self,
+        encoder: &mut CommandEncoder,
+        targets: VolumeTargets<'_>,
+        region: [u32; 4],
+        scene: &BindGroup,
+        lighting: Lighting<'_>,
+        layered: bool,
+    ) {
         if self.count == 0 {
             return;
         }
@@ -518,6 +541,10 @@ impl MarkerPasses {
         pass.set_bind_group(1, &self.opaque_group, &[]);
         pass.set_bind_group(2, lighting.ao, &[]);
         pass.draw_indirect(self.args.opaque.buffer(), 0);
+        if layered {
+            pass.set_bind_group(1, &self.layer_group, &[]);
+            pass.draw_indirect(self.args.layer.buffer(), 0);
+        }
     }
 
     pub fn draw_oit<'a>(

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use glam::Vec3;
+use glam::{Vec3, Vec4};
 use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
-use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
+use grana_render::{Frame, Layer, LayerKey, Marker, PickId, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
     Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
 };
@@ -1713,6 +1713,152 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         0,
         "a plane away from the sphere samples it anyway"
     );
+}
+
+fn box_mesh(center: [f32; 3], half: f32) -> Mesh {
+    let mut vertices = Vec::new();
+    for corner in 0..8u32 {
+        let position = [
+            center[0] + if corner & 1 == 0 { -half } else { half },
+            center[1] + if corner & 2 == 0 { -half } else { half },
+            center[2] + if corner & 4 == 0 { -half } else { half },
+        ];
+        vertices.push(MeshVertex::new(position, [0.0, 0.0, 1.0], 0));
+    }
+    let indices = vec![
+        0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6, 2,
+        1, 3, 7, 1, 7, 5,
+    ];
+    Mesh::new(vertices, indices)
+}
+
+fn project(camera: &Camera, point: [f32; 3]) -> [u32; 2] {
+    let clip = camera.view_projection(1.0, 1.0) * Vec4::new(point[0], point[1], point[2], 1.0);
+    let x = (clip.x / clip.w * 0.5 + 0.5) * SIDE as f32;
+    let y = (0.5 - clip.y / clip.w * 0.5) * SIDE as f32;
+    [x.floor() as u32, y.floor() as u32]
+}
+
+fn picked(gpu: &Gpu, renderer: &mut Renderer) -> PickId {
+    for _ in 0..64 {
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+        if let Some(picked) = renderer.poll_pick(gpu.device()) {
+            return picked;
+        }
+    }
+    panic!("the pick never resolved");
+}
+
+#[test]
+fn cuts_the_object_surfaces_of_a_slice() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers)
+        .into_iter()
+        .map(|row| grana_render::ChannelRow {
+            visible: false,
+            ..row
+        })
+        .collect::<Vec<_>>();
+    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
+    let layers = [Layer {
+        key: LayerKey::stable(1, 0, 1),
+        mesh: Arc::new(PackedMesh::new(box_mesh([0.0, 0.0, 0.1], 1.0))),
+        style_start: 0,
+        style_count: 1,
+    }];
+    let scene = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let camera = slice_camera(&pyramid, 16);
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        assured: false,
+    };
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    let painted = shot.painted(WHOLE);
+    assert!(
+        (400..4_000).contains(&painted),
+        "the section paints {painted} pixels of the slice"
+    );
+    assert!(
+        shot.hue(WHOLE, Hue::Red) > 300,
+        "the section lost the surface colour"
+    );
+    let middle = [SIDE / 2 - 1, SIDE / 2 - 1, SIDE / 2 + 1, SIDE / 2 + 1];
+    assert_eq!(
+        shot.painted(middle),
+        4,
+        "the section leaves its interior open"
+    );
+    let inside = project(&camera, [0.0, 0.0, 0.1]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), inside));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::Style(0));
+    let outside = project(&camera, [2.5, 2.5, 0.1]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), outside));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::None);
+}
+
+#[test]
+fn picks_only_the_objects_of_the_slice_plane() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let markers = [
+        Marker::new([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
+        Marker::new([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
+    ];
+    let scene = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &markers,
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let camera = slice_camera(&pyramid, 16);
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        assured: false,
+    };
+    settle(&gpu, &mut renderer, &view, &volume);
+    let on_plane = project(&camera, [0.0, 0.0, 0.1]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), on_plane));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::Marker(0));
+    let off_plane = project(&camera, [-1.0, 0.0, -1.0]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), off_plane));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::None);
 }
 
 #[test]

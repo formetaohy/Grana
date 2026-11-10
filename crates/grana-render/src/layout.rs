@@ -43,6 +43,8 @@ pub(crate) struct Layouts {
     pub ao_pipeline: PipelineLayout,
     pub ao_surface: PipelineLayout,
     pub ao_marker: PipelineLayout,
+    pub section: BindGroupLayout,
+    pub section_pipeline: PipelineLayout,
 }
 
 impl Layouts {
@@ -356,6 +358,12 @@ impl Layouts {
         let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
         let ao_marker =
             pipeline_layout(device, "grana.ao.marker.layout", &[&scene, &marker_render]);
+        let section = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.section.layout"),
+            entries: &[storage(0, ShaderStages::VERTEX, true)],
+        });
+        let section_pipeline =
+            pipeline_layout(device, "grana.section.pipeline.layout", &[&scene, &section]);
         Self {
             scene,
             level,
@@ -390,6 +398,8 @@ impl Layouts {
             ao_pipeline,
             ao_surface,
             ao_marker,
+            section,
+            section_pipeline,
         }
     }
 }

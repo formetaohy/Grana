@@ -536,12 +536,11 @@ impl App {
         {
             self.paint_mask(drag);
         }
-        if let Some(point) = interaction.pick
-            && self.camera.slice().is_none()
-        {
-            match self.workspace.seed {
-                Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
-                None => {
+        if let Some(point) = interaction.pick {
+            match (self.workspace.seed, self.camera.slice().is_some()) {
+                (Some(set), false) => self.place_seed(set, point, interaction.modifiers.alt),
+                (Some(_), true) => {}
+                (None, _) => {
                     self.pick_toggle = interaction.modifiers.shift || interaction.modifiers.control;
                     self.pick(point);
                 }

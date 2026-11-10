@@ -55,18 +55,32 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     );
     let local = corners[index];
     let data = markers[order[instance]];
-    let center = data.center_radius.xyz;
-    let clip_center = frame.view_projection * vec4<f32>(center, 1.0);
+    var center = data.center_radius.xyz;
+    var clip_center = frame.view_projection * vec4<f32>(center, 1.0);
     let world_per_pixel = clip_center.w / max(frame.march.w, 1.0e-6);
-    let radius = max(data.center_radius.w, 1.25 * world_per_pixel);
+    var radius = max(data.center_radius.w, 1.25 * world_per_pixel);
+    var output: MarkerOutput;
+    output.marker = order[instance];
+    output.color_alpha = data.color_alpha;
+    if (slice_active()) {
+        let normal = frame.slice.xyz;
+        let distance = dot(normal, center) - frame.slice.w;
+        let cut = data.center_radius.w * data.center_radius.w - distance * distance;
+        if (cut <= 0.0) {
+            output.clip_position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+            output.center_radius = vec4<f32>(center, 0.0);
+            output.local = vec2<f32>(2.0, 2.0);
+            return output;
+        }
+        radius = max(sqrt(cut), 1.25 * world_per_pixel);
+        center = center - normal * distance;
+        clip_center = frame.view_projection * vec4<f32>(center, 1.0);
+    }
     let world = center + (frame.right.xyz * local.x + frame.up.xyz * local.y) * radius;
     let clip = frame.view_projection * vec4<f32>(world, 1.0);
-    var output: MarkerOutput;
     output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
     output.center_radius = vec4<f32>(center, radius);
-    output.color_alpha = data.color_alpha;
     output.local = local;
-    output.marker = order[instance];
     return output;
 }
 
@@ -88,8 +102,23 @@ fn shade(input: MarkerOutput, occlusion: f32) -> Shaded {
     if (squared > 1.0) {
         discard;
     }
-    let depth = sqrt(max(0.0, 1.0 - squared));
     let radius = input.center_radius.w;
+    let pixel = max(fwidth(local.x), fwidth(local.y));
+    if (slice_active()) {
+        let surface = input.center_radius.xyz
+            + (frame.right.xyz * local.x + frame.up.xyz * local.y) * radius;
+        if (outside_region(surface) || outside_clip(surface)) {
+            discard;
+        }
+        let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
+        let clip = frame.view_projection * vec4<f32>(surface, 1.0);
+        var output: Shaded;
+        output.color = vec4<f32>(input.color_alpha.rgb, input.color_alpha.a * coverage);
+        output.depth = clip.z / clip.w;
+        output.surface = surface;
+        return output;
+    }
+    let depth = sqrt(max(0.0, 1.0 - squared));
     let surface = input.center_radius.xyz
         + (frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth) * radius;
     if (outside_region(surface) || outside_clip(surface)) {
@@ -111,7 +140,6 @@ fn shade(input: MarkerOutput, occlusion: f32) -> Shaded {
         frame.shading.y,
         occlusion,
     );
-    let pixel = max(fwidth(local.x), fwidth(local.y));
     let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
     let clip = frame.view_projection * vec4<f32>(surface, 1.0);
     var output: Shaded;

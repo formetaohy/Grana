@@ -33,6 +33,8 @@ impl Renderer {
         self.prefetch = prefetch;
         self.viewport = Some(viewport);
         let slice = camera.slice().is_some();
+        let slice_objects = slice && (!scene.layers.is_empty() || !scene.markers.is_empty());
+        let temporal = temporal.filter(|_| !slice_objects);
         let translucent = !slice
             && (scene
                 .styles
@@ -85,6 +87,8 @@ impl Renderer {
             dummy_ao,
             budget,
             oit_readback,
+            sections,
+            sliced,
             ..
         } = self;
         let (
@@ -115,6 +119,13 @@ impl Renderer {
         assert!(
             time < pyramid.frame_count(),
             "the requested frame lies inside the time series"
+        );
+        *sliced = slice;
+        sections.prepare(
+            device,
+            layouts,
+            scene,
+            camera.slice().map(|frame| frame.plane(camera.pivot())),
         );
         atlas.prune(time);
         let slots = atlas.slots();
@@ -358,9 +369,9 @@ impl Renderer {
                 *resident = Some(content);
             }
             markers.rewind(queue);
+            markers.cull_volume(&mut encoder, scene_table.group());
             if !slice {
                 meshes.cull_volume(&mut encoder, scene_table.group());
-                markers.cull_volume(&mut encoder, scene_table.group());
                 if scene.shading.shadows > 0.0 {
                     meshes.cull_shadow(&mut encoder, scene_table.group());
                 }
@@ -509,7 +520,70 @@ impl Renderer {
             let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
             let oit = target.oit.as_ref().filter(|_| translucent);
             let oit_group: &BindGroup = oit.map_or(dummy_oit.read_group(), Oit::read_group);
-            if !slice {
+            if slice {
+                if volume_visible {
+                    let normal = target
+                        .ao
+                        .as_ref()
+                        .expect("the ambient occlusion target is ready")
+                        .volume_normal();
+                    volume.draw(
+                        &mut encoder,
+                        crate::volume::VolumeFrame {
+                            target: target.scene.color(),
+                            normal,
+                            region: viewport,
+                            clear: false,
+                            scene: group,
+                            level: level_group,
+                            atlas: atlas.group(),
+                            depth_group: target.scene.depth_group(),
+                            shadow: shadow_group,
+                            oit: oit_group,
+                            ao: ao_group,
+                        },
+                    );
+                }
+                {
+                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("grana.section.pass"),
+                        color_attachments: &[Some(RenderPassColorAttachment {
+                            view: target.scene.color(),
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: Operations {
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
+                    pass.set_viewport(
+                        viewport[0] as f32,
+                        viewport[1] as f32,
+                        width as f32,
+                        height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.set_scissor_rect(viewport[0], viewport[1], width, height);
+                    sections.draw(&mut pass, group);
+                }
+                markers.draw_slice(
+                    &mut encoder,
+                    VolumeTargets {
+                        color: target.scene.color(),
+                        depth: target.scene.depth(),
+                    },
+                    viewport,
+                    group,
+                    Lighting {
+                        shadow: shadow_group,
+                        ao: ao_group,
+                    },
+                );
+            } else {
                 meshes.draw_volume(
                     &mut encoder,
                     VolumeTargets {
@@ -672,7 +746,7 @@ impl Renderer {
                     oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
                 }
             }
-            if volume_visible {
+            if volume_visible && !slice {
                 let normal = target
                     .ao
                     .as_ref()
