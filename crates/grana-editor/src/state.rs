@@ -212,6 +212,9 @@ pub struct Workspace {
     pub column_widths: HashMap<usize, f32>,
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
+    pub divide: Option<(u32, usize)>,
+    pub divide_daughters: Vec<(u32, usize)>,
+    pub reparent: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
     pub mask: Option<MaskBrush>,
     pub annotation_tool: Option<AnnotationTool>,
@@ -250,6 +253,9 @@ impl Default for Workspace {
             column_widths: HashMap::new(),
             track_set: None,
             join: None,
+            divide: None,
+            divide_daughters: Vec::new(),
+            reparent: None,
             seed: None,
             mask: None,
             annotation_tool: None,
@@ -285,6 +291,13 @@ impl Workspace {
 
     pub fn expanded(&self, set: ObjectSetId) -> bool {
         self.expanded.contains(&set)
+    }
+
+    pub fn cancel_lineage(&mut self) {
+        self.join = None;
+        self.divide = None;
+        self.divide_daughters.clear();
+        self.reparent = None;
     }
 
     pub fn classifier_features(&self, set: &ObjectSet) -> Vec<Measurement> {

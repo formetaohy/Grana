@@ -50,6 +50,17 @@ pub enum Message {
     SetPlaybackSelected(Option<usize>),
     SetTrackSet(Option<ObjectSetId>),
     SetJoin(Option<(u32, usize)>),
+    SetDivide(Option<(u32, usize)>),
+    PickDivide {
+        set: ObjectSetId,
+        daughter: (u32, usize),
+    },
+    SetReparent(Option<(u32, usize)>),
+    PickReparent {
+        set: ObjectSetId,
+        parent: (u32, usize),
+    },
+    CancelLineage,
     SetSeed(Option<ObjectSetId>),
     ArmMask(ObjectSetId),
     DisarmMask,

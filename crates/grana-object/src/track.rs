@@ -183,8 +183,8 @@ impl TrackSet {
             }
         }
         for count in &children {
-            if !(*count == 0 || *count == 2) {
-                return Err("a division produces exactly two daughter tracks".to_string());
+            if *count > 2 {
+                return Err("a track leads to at most two daughter tracks".to_string());
             }
         }
         let divisions = children.iter().filter(|count| **count == 2).count();
@@ -395,6 +395,82 @@ impl TrackSet {
         Some(graph.into_set(self.frame_interval))
     }
 
+    pub fn can_divide(
+        &self,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+    ) -> bool {
+        let graph = TrackGraph::from_set(self);
+        let Some(parent) = graph.node_at(parent.0, parent.1) else {
+            return false;
+        };
+        let Some(first) = graph.node_at(first.0, first.1) else {
+            return false;
+        };
+        let Some(second) = graph.node_at(second.0, second.1) else {
+            return false;
+        };
+        graph.can_divide(parent, first, second)
+    }
+
+    pub fn divide(
+        &self,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+    ) -> Option<Self> {
+        let mut graph = TrackGraph::from_set(self);
+        let parent = graph.node_at(parent.0, parent.1)?;
+        let first = graph.node_at(first.0, first.1)?;
+        let second = graph.node_at(second.0, second.1)?;
+        if !graph.can_divide(parent, first, second) {
+            return None;
+        }
+        graph.divide(parent, first, second);
+        Some(graph.into_set(self.frame_interval))
+    }
+
+    pub fn can_reparent(&self, child: (u32, usize), parent: (u32, usize)) -> bool {
+        let graph = TrackGraph::from_set(self);
+        let Some(child) = graph.node_at(child.0, child.1) else {
+            return false;
+        };
+        let Some(parent) = graph.node_at(parent.0, parent.1) else {
+            return false;
+        };
+        graph.can_reparent(child, parent)
+    }
+
+    pub fn reparent(&self, child: (u32, usize), parent: (u32, usize)) -> Option<Self> {
+        let mut graph = TrackGraph::from_set(self);
+        let child = graph.node_at(child.0, child.1)?;
+        let parent = graph.node_at(parent.0, parent.1)?;
+        if !graph.can_reparent(child, parent) {
+            return None;
+        }
+        graph.reparent(child, parent);
+        Some(graph.into_set(self.frame_interval))
+    }
+
+    pub fn can_detach(&self, child: (u32, usize)) -> bool {
+        let graph = TrackGraph::from_set(self);
+        let Some(child) = graph.node_at(child.0, child.1) else {
+            return false;
+        };
+        graph.can_detach(child)
+    }
+
+    pub fn detach(&self, child: (u32, usize)) -> Option<Self> {
+        let mut graph = TrackGraph::from_set(self);
+        let child = graph.node_at(child.0, child.1)?;
+        if !graph.can_detach(child) {
+            return None;
+        }
+        graph.detach(child);
+        Some(graph.into_set(self.frame_interval))
+    }
+
     pub fn without(&self, time: u32, object: usize) -> Option<Self> {
         self.without_objects(time, &[object])
     }
@@ -477,28 +553,10 @@ impl TrackSet {
             index[old] = Some(kept.len());
             kept.push((parent, nodes));
         }
-        let mut parents = kept
+        let parents = kept
             .iter()
             .map(|(parent, _)| parent.and_then(|parent| index[parent as usize]))
             .collect::<Vec<_>>();
-        loop {
-            let mut children = vec![0usize; kept.len()];
-            for parent in parents.iter().flatten() {
-                children[*parent] += 1;
-            }
-            let mut detached = false;
-            for parent in parents.iter_mut() {
-                if let Some(slot) = *parent
-                    && children[slot] != 2
-                {
-                    *parent = None;
-                    detached = true;
-                }
-            }
-            if !detached {
-                break;
-            }
-        }
         let tracks = kept
             .into_iter()
             .zip(parents)

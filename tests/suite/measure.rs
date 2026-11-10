@@ -1,5 +1,6 @@
 use grana_measure::{Aggregate, Frame, Group, Objects, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
+use grana_scene::{Curation, TrackAnchor, TrackEdit};
 
 const CHANNEL: &str = "EGFP 488";
 
@@ -231,4 +232,92 @@ fn tracks() -> TrackSet {
         ],
     );
     TrackSet::new(1.0, vec![first, second])
+}
+
+#[test]
+fn edits_a_lineage_between_divisions_and_parents() {
+    let mother = Track::new(
+        None,
+        vec![
+            TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
+            TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
+        ],
+    );
+    let left = Track::new(
+        None,
+        vec![
+            TrackNode::new(2, 1, [2.0, 0.0, 0.0]),
+            TrackNode::new(3, 1, [3.0, 0.0, 0.0]),
+        ],
+    );
+    let right = Track::new(
+        None,
+        vec![
+            TrackNode::new(2, 2, [2.0, 1.0, 0.0]),
+            TrackNode::new(3, 2, [3.0, 1.0, 0.0]),
+        ],
+    );
+    let later = Track::new(
+        None,
+        vec![
+            TrackNode::new(4, 3, [4.0, 0.0, 0.0]),
+            TrackNode::new(5, 3, [5.0, 0.0, 0.0]),
+        ],
+    );
+    let set = TrackSet::new(1.0, vec![mother, left, right, later]);
+    assert!(set.can_divide((1, 0), (2, 1), (2, 2)));
+    let divided = set
+        .divide((1, 0), (2, 1), (2, 2))
+        .expect("a division joins two daughter tracks");
+    assert_eq!(divided.divisions(), 1);
+    assert_eq!(divided.children(0).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(divided.track(1).and_then(Track::parent), Some(0));
+
+    let adopted = divided
+        .reparent((4, 3), (3, 1))
+        .expect("a root track adopts an earlier end");
+    assert_eq!(adopted.track(3).and_then(Track::parent), Some(1));
+    assert_eq!(adopted.divisions(), 1);
+    assert_eq!(adopted.children(1).collect::<Vec<_>>(), vec![3]);
+
+    let detached = adopted
+        .detach((4, 3))
+        .expect("an adopted track returns to a lineage start");
+    assert_eq!(detached.track(3).and_then(Track::parent), None);
+    assert_eq!(detached.divisions(), 1);
+
+    let opened = divided
+        .detach((2, 2))
+        .expect("a division opens into separate lineages");
+    assert_eq!(opened.divisions(), 0);
+    assert_eq!(opened.track(2).and_then(Track::parent), None);
+    assert_eq!(opened.track(1).and_then(Track::parent), Some(0));
+}
+
+#[test]
+fn restores_lineage_edits_that_cross_frames() {
+    let at = |time: u32, object: usize| {
+        TrackAnchor::new(time, object, [time as f32, object as f32, 0.0])
+    };
+    let removed = vec![Vec::new(); 8];
+    let edits = vec![
+        TrackEdit::Join {
+            source: at(1, 0),
+            target: at(3, 1),
+        },
+        TrackEdit::Divide {
+            parent: at(2, 1),
+            first: at(4, 2),
+            second: at(4, 3),
+        },
+        TrackEdit::Reparent {
+            child: at(5, 4),
+            parent: at(3, 1),
+        },
+        TrackEdit::Detach { child: at(6, 5) },
+    ];
+    let curation = Curation::restored(8, &removed, &[], &edits)
+        .expect("lineage edits name detections at their own frames");
+    assert_eq!(curation.edit_count(), 4);
+    assert_eq!(curation.edits(), edits.as_slice());
 }

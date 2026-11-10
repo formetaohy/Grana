@@ -258,7 +258,7 @@ pub fn caption(scene: &Scene, time: u32) -> Caption {
     let frames = scene.frame_count();
     let detail = if frames > 1 {
         let seconds = time as f32 * scene.dataset.frame_interval();
-        format!("frame {} of {frames} 路 {seconds:.2} s", time + 1)
+        format!("frame {} of {frames} · {seconds:.2} s", time + 1)
     } else {
         "single frame".to_string()
     };
@@ -268,7 +268,7 @@ pub fn caption(scene: &Scene, time: u32) -> Caption {
         .filter(|set| scene.shown(set) && set.detected() > 0)
         .map(|set| {
             let count = set.frame(time).map_or(0, |frame| frame.object_count());
-            format!("{} 路 {count} {}", set.name(), set.kind().count_noun())
+            format!("{} · {count} {}", set.name(), set.kind().count_noun())
         })
         .collect();
     Caption {
@@ -338,7 +338,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             && let Some(extent) = scene.object_extent(set)
         {
             legends.push(Legend {
-                title: format!("{} 路 {}", set.name(), metric_label(scene, metric, &names)),
+                title: format!("{} · {}", set.name(), metric_label(scene, metric, &names)),
                 palette: set.object_coloring().palette(),
                 reversed: set.object_coloring().reversed(),
                 extent,
@@ -351,7 +351,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             && let Some(extent) = set.track_extent()
         {
             legends.push(Legend {
-                title: format!("{} tracks 路 {}", set.name(), track_label(scene, metric)),
+                title: format!("{} tracks · {}", set.name(), track_label(scene, metric)),
                 palette: set.track_coloring().palette(),
                 reversed: set.track_coloring().reversed(),
                 extent,
@@ -378,16 +378,16 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
             let offset = if shift == 0 {
                 String::new()
             } else {
-                format!(" 路 t{shift:+}")
+                format!(" · t{shift:+}")
             };
-            format!("{target}{offset} 路 {}", field.label())
+            format!("{target}{offset} · {}", field.label())
         }
         ObjectColor::Child { target, field } => {
             let target = scene
                 .objects
                 .get(target)
                 .map_or_else(|| "children".to_string(), |set| set.name().to_string());
-            format!("{target} 路 {}", field.label(channels))
+            format!("{target} · {}", field.label(channels))
         }
         ObjectColor::Score => grana_measure::SCORE_LABEL.to_string(),
         ObjectColor::Coloc { pair, metric } => {
@@ -417,9 +417,9 @@ fn track_label(scene: &Scene, metric: TrackColor) -> String {
             let offset = if shift == 0 {
                 String::new()
             } else {
-                format!(" 路 t{shift:+}")
+                format!(" · t{shift:+}")
             };
-            format!("{target}{offset} {} 路 {}", field.label(), aggregate.name())
+            format!("{target}{offset} {} · {}", field.label(), aggregate.name())
         }
     }
 }

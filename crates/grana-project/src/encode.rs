@@ -511,6 +511,25 @@ impl Encode for TrackEdit {
                 encode_node(*source, writer);
                 encode_node(*target, writer);
             }
+            Self::Divide {
+                parent,
+                first,
+                second,
+            } => {
+                writer.u8(2);
+                encode_node(*parent, writer);
+                encode_node(*first, writer);
+                encode_node(*second, writer);
+            }
+            Self::Reparent { child, parent } => {
+                writer.u8(3);
+                encode_node(*child, writer);
+                encode_node(*parent, writer);
+            }
+            Self::Detach { child } => {
+                writer.u8(4);
+                encode_node(*child, writer);
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ mod pipeline;
 mod profile;
 mod quality;
 mod resume;
+mod ro_crate;
 mod sheet;
 mod significance;
 
@@ -318,6 +319,9 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         let _ = events.send(Event::Failed(detail));
     }
     if let Err(detail) = sheet::significance(&plan, &report.tests) {
+        let _ = events.send(Event::Failed(detail));
+    }
+    if let Err(detail) = ro_crate::write(&plan, &rows) {
         let _ = events.send(Event::Failed(detail));
     }
     let _ = events.send(Event::Comparison(report));

@@ -42,13 +42,32 @@ pub enum TrackEdit {
         source: TrackAnchor,
         target: TrackAnchor,
     },
+    Divide {
+        parent: TrackAnchor,
+        first: TrackAnchor,
+        second: TrackAnchor,
+    },
+    Reparent {
+        child: TrackAnchor,
+        parent: TrackAnchor,
+    },
+    Detach {
+        child: TrackAnchor,
+    },
 }
 
 impl TrackEdit {
-    fn nodes(self) -> [TrackAnchor; 2] {
+    fn anchors(self) -> Vec<TrackAnchor> {
         match self {
-            Self::Cut(node) => [node, node],
-            Self::Join { source, target } => [source, target],
+            Self::Cut(node) => vec![node],
+            Self::Join { source, target } => vec![source, target],
+            Self::Divide {
+                parent,
+                first,
+                second,
+            } => vec![parent, first, second],
+            Self::Reparent { child, parent } => vec![child, parent],
+            Self::Detach { child } => vec![child],
         }
     }
 }
@@ -88,18 +107,37 @@ impl Curation {
             return Err("the hidden objects cover another set of frames".to_string());
         }
         for edit in edits {
-            let [first, second] = edit.nodes();
-            if let TrackEdit::Join { .. } = edit
-                && (first.time != second.time || first.object == second.object)
-            {
-                return Err("a track join names two objects of one frame".to_string());
-            }
-            for node in [first, second] {
+            for node in edit.anchors() {
                 if node.time as usize >= frames {
                     return Err(format!(
                         "a track edit names the frame {} of {frames}",
                         node.time
                     ));
+                }
+            }
+            match edit {
+                TrackEdit::Cut(_) | TrackEdit::Detach { .. } => {}
+                TrackEdit::Join { source, target } => {
+                    if target.time <= source.time {
+                        return Err("a track join follows the time axis".to_string());
+                    }
+                }
+                TrackEdit::Divide {
+                    parent,
+                    first,
+                    second,
+                } => {
+                    if first.time <= parent.time || second.time <= parent.time {
+                        return Err("a division follows the time axis".to_string());
+                    }
+                    if first.time == second.time && first.object == second.object {
+                        return Err("a division names two daughter tracks".to_string());
+                    }
+                }
+                TrackEdit::Reparent { child, parent } => {
+                    if child.time <= parent.time {
+                        return Err("a parent track ends before its daughter starts".to_string());
+                    }
                 }
             }
         }
@@ -264,6 +302,15 @@ impl Curation {
         self.edits.clear();
         self.dropped += dropped;
         dropped
+    }
+
+    pub(crate) fn remove_edit(&mut self, index: usize) -> bool {
+        if index >= self.edits.len() {
+            return false;
+        }
+        self.edits.remove(index);
+        self.dropped += 1;
+        true
     }
 
     pub(crate) fn combined(&self, other: &Self) -> Self {

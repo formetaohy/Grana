@@ -572,8 +572,16 @@ pub fn apply(
                             | Command::SaveProjectAs
                             | Command::SaveSnapshot
                     );
-                if matches!(command, Command::Track(_) | Command::CutTrack { .. }) {
-                    workspace.join = None;
+                if matches!(
+                    command,
+                    Command::Track(_)
+                        | Command::CutTrack { .. }
+                        | Command::JoinTracks { .. }
+                        | Command::DivideTracks { .. }
+                        | Command::ReparentTrack { .. }
+                        | Command::DetachTrack { .. }
+                ) {
+                    workspace.cancel_lineage();
                 }
                 if !busy {
                     commands.push(command);
@@ -699,9 +707,48 @@ pub fn apply(
             Message::SetPlaybackSelected(selected) => workspace.playback.selected = selected,
             Message::SetTrackSet(set) => {
                 workspace.track_set = set;
-                workspace.join = None;
+                workspace.cancel_lineage();
             }
-            Message::SetJoin(join) => workspace.join = join,
+            Message::SetJoin(join) => {
+                workspace.cancel_lineage();
+                workspace.join = join;
+            }
+            Message::SetDivide(parent) => {
+                workspace.cancel_lineage();
+                workspace.divide = parent;
+            }
+            Message::PickDivide { set, daughter } => {
+                let Some(parent) = workspace.divide else {
+                    continue;
+                };
+                if daughter == parent || workspace.divide_daughters.contains(&daughter) {
+                    continue;
+                }
+                workspace.divide_daughters.push(daughter);
+                if workspace.divide_daughters.len() == 2 {
+                    let first = workspace.divide_daughters[0];
+                    let second = workspace.divide_daughters[1];
+                    commands.push(Command::DivideTracks {
+                        set,
+                        parent,
+                        first,
+                        second,
+                    });
+                    workspace.cancel_lineage();
+                }
+            }
+            Message::SetReparent(child) => {
+                workspace.cancel_lineage();
+                workspace.reparent = child;
+            }
+            Message::PickReparent { set, parent } => {
+                let Some(child) = workspace.reparent.take() else {
+                    continue;
+                };
+                workspace.divide_daughters.clear();
+                commands.push(Command::ReparentTrack { set, child, parent });
+            }
+            Message::CancelLineage => workspace.cancel_lineage(),
             Message::SetSeed(seed) => {
                 workspace.seed = seed;
                 if seed.is_some() {

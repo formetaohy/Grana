@@ -340,6 +340,21 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
             "the run record keeps the input evidence {field}"
         );
     }
+    let metadata = std::fs::read_to_string(output.join("ro-crate-metadata.json"))
+        .expect("the provenance crate lands");
+    for field in [
+        "\"@context\"",
+        "\"#input-1\"",
+        "\"#output-1\"",
+        "\"protocol.json\"",
+        "\"sha256\"",
+        "\"CreateAction\"",
+    ] {
+        assert!(
+            metadata.contains(field),
+            "the provenance crate records {field}"
+        );
+    }
 
     let truncated = std::fs::read(fixture("ome.tif")).expect("the fixture reads");
     std::fs::write(datasets.join("second.tif"), &truncated[..8]).expect("the dataset truncates");

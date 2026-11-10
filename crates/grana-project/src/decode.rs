@@ -770,6 +770,18 @@ impl Decode for TrackEdit {
                 source: node(reader)?,
                 target: node(reader)?,
             },
+            2 => Self::Divide {
+                parent: node(reader)?,
+                first: node(reader)?,
+                second: node(reader)?,
+            },
+            3 => Self::Reparent {
+                child: node(reader)?,
+                parent: node(reader)?,
+            },
+            4 => Self::Detach {
+                child: node(reader)?,
+            },
             _ => return Err(FAULT_TAG),
         })
     }

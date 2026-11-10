@@ -774,6 +774,35 @@ impl Objects {
             .is_some_and(|set| set.join_tracks(source, target, stamp))
     }
 
+    pub fn divide_tracks(
+        &mut self,
+        id: ObjectSetId,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+    ) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.divide_tracks(parent, first, second, stamp))
+    }
+
+    pub fn reparent_track(
+        &mut self,
+        id: ObjectSetId,
+        child: (u32, usize),
+        parent: (u32, usize),
+    ) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.reparent_track(child, parent, stamp))
+    }
+
+    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, usize)) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.detach_track(child, stamp))
+    }
+
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
         let stamp = self.revisions.mint();
         if let Some(set) = self.get_mut(id) {

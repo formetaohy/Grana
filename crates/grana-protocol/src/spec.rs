@@ -1031,8 +1031,25 @@ pub struct NodeSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum EditSpec {
-    Cut { node: NodeSpec },
-    Join { source: NodeSpec, target: NodeSpec },
+    Cut {
+        node: NodeSpec,
+    },
+    Join {
+        source: NodeSpec,
+        target: NodeSpec,
+    },
+    Divide {
+        parent: NodeSpec,
+        first: NodeSpec,
+        second: NodeSpec,
+    },
+    Reparent {
+        child: NodeSpec,
+        parent: NodeSpec,
+    },
+    Detach {
+        child: NodeSpec,
+    },
 }
 
 impl CurationSpec {
@@ -1137,6 +1154,22 @@ impl EditSpec {
                 source: node(*source),
                 target: node(*target),
             },
+            grana_scene::TrackEdit::Divide {
+                parent,
+                first,
+                second,
+            } => Self::Divide {
+                parent: node(*parent),
+                first: node(*first),
+                second: node(*second),
+            },
+            grana_scene::TrackEdit::Reparent { child, parent } => Self::Reparent {
+                child: node(*child),
+                parent: node(*parent),
+            },
+            grana_scene::TrackEdit::Detach { child } => Self::Detach {
+                child: node(*child),
+            },
         }
     }
 
@@ -1149,6 +1182,20 @@ impl EditSpec {
                 source: node(source),
                 target: node(target),
             },
+            Self::Divide {
+                parent,
+                first,
+                second,
+            } => grana_scene::TrackEdit::Divide {
+                parent: node(parent),
+                first: node(first),
+                second: node(second),
+            },
+            Self::Reparent { child, parent } => grana_scene::TrackEdit::Reparent {
+                child: node(child),
+                parent: node(parent),
+            },
+            Self::Detach { child } => grana_scene::TrackEdit::Detach { child: node(child) },
         }
     }
 }
@@ -3063,13 +3110,33 @@ impl CurationSpec {
         }
         for edit in &self.edits {
             let nodes = match edit {
-                EditSpec::Cut { node } => [*node, *node],
+                EditSpec::Cut { node } => vec![*node],
                 EditSpec::Join { source, target } => {
-                    if source.frame != target.frame || source.object == target.object {
-                        return invalid("join two objects of another frame".to_string());
+                    if target.frame <= source.frame {
+                        return invalid("join a later track that starts a lineage".to_string());
                     }
-                    [*source, *target]
+                    vec![*source, *target]
                 }
+                EditSpec::Divide {
+                    parent,
+                    first,
+                    second,
+                } => {
+                    if first.frame <= parent.frame || second.frame <= parent.frame {
+                        return invalid("divide a track into later daughter tracks".to_string());
+                    }
+                    if first.frame == second.frame && first.object == second.object {
+                        return invalid("divide a track into two daughter tracks".to_string());
+                    }
+                    vec![*parent, *first, *second]
+                }
+                EditSpec::Reparent { child, parent } => {
+                    if child.frame <= parent.frame {
+                        return invalid("parent a track on an earlier track".to_string());
+                    }
+                    vec![*child, *parent]
+                }
+                EditSpec::Detach { child } => vec![*child],
             };
             for node in nodes {
                 if node.position.iter().any(|value| !value.is_finite()) {

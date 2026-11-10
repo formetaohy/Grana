@@ -293,6 +293,21 @@ pub enum Command {
         source: (u32, usize),
         target: (u32, usize),
     },
+    DivideTracks {
+        set: ObjectSetId,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+    },
+    ReparentTrack {
+        set: ObjectSetId,
+        child: (u32, usize),
+        parent: (u32, usize),
+    },
+    DetachTrack {
+        set: ObjectSetId,
+        child: (u32, usize),
+    },
     SetRegion(Region),
     SetClip(Clip),
     SetExposure(f32),
@@ -429,6 +444,9 @@ pub enum Action {
     ClearTracks,
     CutTrack,
     JoinTracks,
+    DivideTracks,
+    ReparentTrack,
+    DetachTrack,
     ChannelEnabled,
     ChannelOpacity,
     Window,
@@ -509,6 +527,9 @@ impl Action {
             Self::ClearTracks => "clear tracks",
             Self::CutTrack => "track cut",
             Self::JoinTracks => "track join",
+            Self::DivideTracks => "track division",
+            Self::ReparentTrack => "track parent",
+            Self::DetachTrack => "track detach",
             Self::ChannelEnabled => "channel visibility",
             Self::ChannelOpacity => "channel opacity",
             Self::Window => "intensity window",
@@ -685,6 +706,9 @@ impl Command {
             Self::ClearTracks(_) => Edit::new(Action::ClearTracks),
             Self::CutTrack { .. } => Edit::new(Action::CutTrack),
             Self::JoinTracks { .. } => Edit::new(Action::JoinTracks),
+            Self::DivideTracks { .. } => Edit::new(Action::DivideTracks),
+            Self::ReparentTrack { .. } => Edit::new(Action::ReparentTrack),
+            Self::DetachTrack { .. } => Edit::new(Action::DetachTrack),
             Self::SetChannelEnabled { channel, .. } => {
                 Edit::targeted(Action::ChannelEnabled, *channel as u64)
             }

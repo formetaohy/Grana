@@ -527,6 +527,36 @@ impl Session {
                 self.message = (!joined)
                     .then(|| Message::error("a track joins a later track that starts a lineage"));
             }
+            Command::DivideTracks {
+                set,
+                parent,
+                first,
+                second,
+            } => {
+                let divided = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.divide_tracks(set, parent, first, second));
+                self.message = (!divided).then(|| {
+                    Message::error("a division links a track end to two later lineage starts")
+                });
+            }
+            Command::ReparentTrack { set, child, parent } => {
+                let adopted = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.reparent_track(set, child, parent));
+                self.message = (!adopted)
+                    .then(|| Message::error("a parent track ends before its daughter starts"));
+            }
+            Command::DetachTrack { set, child } => {
+                let detached = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.detach_track(set, child));
+                self.message = (!detached)
+                    .then(|| Message::error("the track starts a lineage and has no parent"));
+            }
             Command::SetRegion(region) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_region(region);

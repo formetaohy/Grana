@@ -1484,21 +1484,17 @@ impl ObjectSet {
             self.document = self.document.next();
             return dropped;
         }
-        let edits = self.curation.edits().to_vec();
-        let mut resolved = Vec::with_capacity(edits.len());
-        for edit in &edits {
-            let Some(edit) = self.resolve_edit(*edit) else {
-                let dropped = self.curation.forget_edits();
-                self.document = self.document.next();
-                return dropped;
-            };
-            resolved.push(edit);
-        }
-        let mut applied = 0usize;
         let Some(thickness) = self.track_thickness() else {
             return 0;
         };
-        for edit in resolved {
+        let edits = self.curation.edits().to_vec();
+        let mut applied = 0usize;
+        let mut dropped = Vec::new();
+        for (index, edit) in edits.into_iter().enumerate() {
+            let Some(edit) = self.resolve_edit(edit) else {
+                dropped.push(index);
+                continue;
+            };
             let Some(layer) = self.tracks.as_mut() else {
                 break;
             };
@@ -1510,18 +1506,40 @@ impl ObjectSet {
                     thickness,
                     stamp,
                 ),
+                TrackEdit::Divide {
+                    parent,
+                    first,
+                    second,
+                } => layer.divide(
+                    (parent.time(), parent.object()),
+                    (first.time(), first.object()),
+                    (second.time(), second.object()),
+                    thickness,
+                    stamp,
+                ),
+                TrackEdit::Reparent { child, parent } => layer.reparent(
+                    (child.time(), child.object()),
+                    (parent.time(), parent.object()),
+                    thickness,
+                    stamp,
+                ),
+                TrackEdit::Detach { child } => {
+                    layer.detach((child.time(), child.object()), thickness, stamp)
+                }
             };
-            if !done {
-                let dropped = self.curation.forget_edits();
-                self.document = self.document.next();
-                return dropped;
+            if done {
+                applied += 1;
+            } else {
+                dropped.push(index);
             }
-            applied += 1;
         }
-        if applied > 0 {
+        for index in dropped.into_iter().rev() {
+            self.curation.remove_edit(index);
+        }
+        if applied > 0 || self.curation.dropped() > 0 {
             self.document = self.document.next();
         }
-        0
+        applied
     }
 
     fn resolve_edit(&self, edit: TrackEdit) -> Option<TrackEdit> {
@@ -1535,6 +1553,22 @@ impl ObjectSet {
             TrackEdit::Join { source, target } => Some(TrackEdit::Join {
                 source: resolve(source)?,
                 target: resolve(target)?,
+            }),
+            TrackEdit::Divide {
+                parent,
+                first,
+                second,
+            } => Some(TrackEdit::Divide {
+                parent: resolve(parent)?,
+                first: resolve(first)?,
+                second: resolve(second)?,
+            }),
+            TrackEdit::Reparent { child, parent } => Some(TrackEdit::Reparent {
+                child: resolve(child)?,
+                parent: resolve(parent)?,
+            }),
+            TrackEdit::Detach { child } => Some(TrackEdit::Detach {
+                child: resolve(child)?,
             }),
         }
     }
@@ -1554,6 +1588,26 @@ impl ObjectSet {
                 thickness,
                 stamp,
             ),
+            TrackEdit::Divide {
+                parent,
+                first,
+                second,
+            } => layer.divide(
+                (parent.time(), parent.object()),
+                (first.time(), first.object()),
+                (second.time(), second.object()),
+                thickness,
+                stamp,
+            ),
+            TrackEdit::Reparent { child, parent } => layer.reparent(
+                (child.time(), child.object()),
+                (parent.time(), parent.object()),
+                thickness,
+                stamp,
+            ),
+            TrackEdit::Detach { child } => {
+                layer.detach((child.time(), child.object()), thickness, stamp)
+            }
         };
         if !done {
             return false;
@@ -2065,6 +2119,63 @@ impl ObjectSet {
             TrackEdit::Join {
                 source: TrackAnchor::new(source.0, source.1, source_position),
                 target: TrackAnchor::new(target.0, target.1, target_position),
+            },
+            stamp,
+        )
+    }
+
+    pub(crate) fn divide_tracks(
+        &mut self,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+        stamp: Revision,
+    ) -> bool {
+        let (Some(parent_position), Some(first_position), Some(second_position)) = (
+            self.anchor_at(parent.0, parent.1),
+            self.anchor_at(first.0, first.1),
+            self.anchor_at(second.0, second.1),
+        ) else {
+            return false;
+        };
+        self.edit_track(
+            TrackEdit::Divide {
+                parent: TrackAnchor::new(parent.0, parent.1, parent_position),
+                first: TrackAnchor::new(first.0, first.1, first_position),
+                second: TrackAnchor::new(second.0, second.1, second_position),
+            },
+            stamp,
+        )
+    }
+
+    pub(crate) fn reparent_track(
+        &mut self,
+        child: (u32, usize),
+        parent: (u32, usize),
+        stamp: Revision,
+    ) -> bool {
+        let (Some(child_position), Some(parent_position)) = (
+            self.anchor_at(child.0, child.1),
+            self.anchor_at(parent.0, parent.1),
+        ) else {
+            return false;
+        };
+        self.edit_track(
+            TrackEdit::Reparent {
+                child: TrackAnchor::new(child.0, child.1, child_position),
+                parent: TrackAnchor::new(parent.0, parent.1, parent_position),
+            },
+            stamp,
+        )
+    }
+
+    pub(crate) fn detach_track(&mut self, child: (u32, usize), stamp: Revision) -> bool {
+        let Some(child_position) = self.anchor_at(child.0, child.1) else {
+            return false;
+        };
+        self.edit_track(
+            TrackEdit::Detach {
+                child: TrackAnchor::new(child.0, child.1, child_position),
             },
             stamp,
         )

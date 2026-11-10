@@ -1,4 +1,4 @@
-﻿use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use grana_measure::Unit;
 use grana_scene::Scene;
 use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, TypeStyle};
@@ -57,7 +57,7 @@ pub fn collect(scene: &Scene, time: u32) -> Vec<Item> {
 
 fn label(name: &str, length: Option<f32>) -> String {
     match length {
-        Some(length) => format!("{name} 路 {}", crate::value(length, Unit::Micrometer, 2)),
+        Some(length) => format!("{name} · {}", crate::value(length, Unit::Micrometer, 2)),
         None => name.to_string(),
     }
 }

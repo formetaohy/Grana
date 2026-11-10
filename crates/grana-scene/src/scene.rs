@@ -1653,6 +1653,41 @@ impl Scene {
         true
     }
 
+    pub fn divide_tracks(
+        &mut self,
+        id: ObjectSetId,
+        parent: (u32, usize),
+        first: (u32, usize),
+        second: (u32, usize),
+    ) -> bool {
+        if !self.objects.divide_tracks(id, parent, first, second) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
+    pub fn reparent_track(
+        &mut self,
+        id: ObjectSetId,
+        child: (u32, usize),
+        parent: (u32, usize),
+    ) -> bool {
+        if !self.objects.reparent_track(id, child, parent) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
+    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, usize)) -> bool {
+        if !self.objects.detach_track(id, child) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
         self.objects.set_track_thickness(id, thickness);
     }

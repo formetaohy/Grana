@@ -352,6 +352,18 @@ fn header<'a>(
             ctx.theme().palette.accent,
         ));
     }
+    if state.workspace.divide.is_some() {
+        left_items.push(grana_ui::widget::badge(
+            "Select two daughter tracks",
+            ctx.theme().palette.accent,
+        ));
+    }
+    if state.workspace.reparent.is_some() {
+        left_items.push(grana_ui::widget::badge(
+            "Select the parent track",
+            ctx.theme().palette.accent,
+        ));
+    }
     let left_row = grana_ui::row()
         .gap(8.0)
         .align(Align::Center)
@@ -439,6 +451,8 @@ fn lineage<'a>(
     let x = move |time: u32| inner.min.x + (time as f32 / span as f32) * inner.width();
     let lane_y = move |lane: usize| inner.min.y + lane as f32 * ROW + ROW * 0.5 - offset;
     let source = state.workspace.join;
+    let divide = state.workspace.divide;
+    let reparent = state.workspace.reparent;
     let colors = (0..set.len())
         .map(|index| object.track_color(index))
         .collect::<Vec<_>>();
@@ -524,7 +538,10 @@ fn lineage<'a>(
                     Align::Center,
                 );
             }
-            if let (Some(lane), true) = (hovered, source.is_none()) {
+            if let (Some(lane), true) = (
+                hovered,
+                source.is_none() && divide.is_none() && reparent.is_none(),
+            ) {
                 painter.text_in(
                     Rect::from_min_size(
                         Vec2::new(pointer.x + 10.0, lane_y(lane) - ROW * 0.5),
@@ -539,45 +556,82 @@ fn lineage<'a>(
     })
     .at(rect);
     let click = hovered.and_then(|lane| order.get(lane).copied());
-    let (down_message, up_message) = match (source, click) {
-        (Some(source), Some(index)) => {
-            let target = set
-                .track(index)
-                .and_then(|track| track.nodes().first())
-                .map(|node| (node.time(), node.object()))
-                .filter(|target| set.can_join(source, *target));
-            match target {
-                Some(target) => (
-                    Some(Message::Command(Command::JoinTracks {
+    let select = |index: usize| {
+        Some(Message::Command(Command::SelectTrack {
+            set: id,
+            index: Some(index),
+        }))
+    };
+    let (down_message, up_message) = match click {
+        Some(index) => {
+            if let Some(parent) = divide {
+                let daughters = state.workspace.divide_daughters.as_slice();
+                let daughter = set
+                    .track(index)
+                    .and_then(|track| track.nodes().first())
+                    .map(|node| (node.time(), node.object()))
+                    .filter(|daughter| {
+                        if *daughter == parent {
+                            return false;
+                        }
+                        match daughters {
+                            [] => daughter.0 > parent.0,
+                            [first] => set.can_divide(parent, *first, *daughter),
+                            _ => false,
+                        }
+                    });
+                (
+                    daughter.map(|daughter| Message::PickDivide { set: id, daughter }),
+                    select(index),
+                )
+            } else if let Some(child) = reparent {
+                let parent = set
+                    .track(index)
+                    .and_then(|track| track.nodes().last())
+                    .map(|node| (node.time(), node.object()))
+                    .filter(|parent| set.can_reparent(child, *parent));
+                (
+                    parent.map(|parent| Message::PickReparent { set: id, parent }),
+                    select(index),
+                )
+            } else if let Some(source) = source {
+                let target = set
+                    .track(index)
+                    .and_then(|track| track.nodes().first())
+                    .map(|node| (node.time(), node.object()))
+                    .filter(|target| set.can_join(source, *target));
+                match target {
+                    Some(target) => (
+                        Some(Message::Command(Command::JoinTracks {
+                            set: id,
+                            source,
+                            target,
+                        })),
+                        Some(Message::SetJoin(None)),
+                    ),
+                    None => (None, Some(Message::SetJoin(None))),
+                }
+            } else {
+                let target = ((pointer.x - inner.min.x) / inner.width() * span as f32)
+                    .clamp(0.0, span as f32)
+                    .round() as u32;
+                let time = set.track(index).and_then(|track| {
+                    track
+                        .nodes()
+                        .iter()
+                        .min_by_key(|node| node.time().abs_diff(target))
+                        .map(|node| node.time())
+                });
+                (
+                    Some(Message::Command(Command::SelectTrack {
                         set: id,
-                        source,
-                        target,
+                        index: Some(index),
                     })),
-                    Some(Message::SetJoin(None)),
-                ),
-                None => (None, Some(Message::SetJoin(None))),
+                    time.map(|time| Message::Command(Command::SetTime(time))),
+                )
             }
         }
-        (None, Some(index)) => {
-            let target = ((pointer.x - inner.min.x) / inner.width() * span as f32)
-                .clamp(0.0, span as f32)
-                .round() as u32;
-            let time = set.track(index).and_then(|track| {
-                track
-                    .nodes()
-                    .iter()
-                    .min_by_key(|node| node.time().abs_diff(target))
-                    .map(|node| node.time())
-            });
-            (
-                Some(Message::Command(Command::SelectTrack {
-                    set: id,
-                    index: Some(index),
-                })),
-                time.map(|time| Message::Command(Command::SetTime(time))),
-            )
-        }
-        (Some(_), None) | (None, None) => (None, None),
+        None => (None, None),
     };
     let tracks = grana_ui::canvas(Length::Fill, content.max(1.0), {
         let order = order.clone();
@@ -730,7 +784,7 @@ fn inspector<'a>(
 ) -> Element<'a, Message> {
     let mut cards = Vec::new();
     if let Some(set) = object.tracks().map(|layer| layer.set()) {
-        cards.push(summary(ctx, set, selected));
+        cards.push(summary(ctx, state, set, selected, id));
     }
     cards.push(parameters(ctx, state, id, object));
     if let Some(card) = appearance(ctx, state, id, object) {
@@ -746,8 +800,10 @@ fn inspector<'a>(
 
 fn summary<'a>(
     ctx: &mut BuildContext<'_, Message>,
+    state: &View<'_>,
     set: &TrackSet,
     selected: Option<usize>,
+    id: ObjectSetId,
 ) -> Element<'a, Message> {
     let Some(index) = selected else {
         let title = view::card_title(ctx, Icon::Target, "Selected Track", Some("None"));
@@ -778,6 +834,72 @@ fn summary<'a>(
         &format!("Track #{}", index + 1),
         Some(&detail),
     );
+    let parented = track.parent().is_some();
+    let first = track
+        .nodes()
+        .first()
+        .map(|node| (node.time(), node.object()));
+    let last = track
+        .nodes()
+        .last()
+        .map(|node| (node.time(), node.object()));
+    let mut actions = Vec::new();
+    if let Some(last) = last {
+        actions.push(enabled_button(
+            ctx,
+            "tracks.summary.divide",
+            if state.workspace.divide.is_some() {
+                "Cancel"
+            } else {
+                "Divide"
+            },
+            if state.workspace.divide.is_some() {
+                Role::Tinted
+            } else {
+                Role::Control
+            },
+            true,
+            Some(if state.workspace.divide.is_some() {
+                Message::CancelLineage
+            } else {
+                Message::SetDivide(Some(last))
+            }),
+        ));
+    }
+    if let Some(first) = first {
+        actions.push(enabled_button(
+            ctx,
+            "tracks.summary.parent",
+            if state.workspace.reparent.is_some() {
+                "Cancel"
+            } else {
+                "Parent"
+            },
+            if state.workspace.reparent.is_some() {
+                Role::Tinted
+            } else {
+                Role::Control
+            },
+            !parented,
+            Some(if state.workspace.reparent.is_some() {
+                Message::CancelLineage
+            } else {
+                Message::SetReparent(Some(first))
+            }),
+        ));
+        actions.push(enabled_button(
+            ctx,
+            "tracks.summary.detach",
+            "Detach",
+            Role::Quiet,
+            parented,
+            Some(Message::Command(Command::DetachTrack {
+                set: id,
+                child: first,
+            })),
+        ));
+    }
+    let actions = grana_ui::row().gap(6.0).children(actions);
     let rows = vec![
         title,
         view::labelled(ctx, "Parent", &parent),
@@ -795,6 +917,7 @@ fn summary<'a>(
             "Straightness",
             &format!("{:.3}", statistics.straightness()),
         ),
+        actions,
     ];
     view::card(ctx, 3.0, rows)
 }
