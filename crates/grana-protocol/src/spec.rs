@@ -1,8 +1,8 @@
 use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Material, Palette, SectionState, Shading, Stop, TransferFunction, VolumeMode,
-    VolumeStyle,
+    CameraState, Material, Palette, PaneState, PaneView, SectionState, Shading, Stop,
+    TransferFunction, VolumeMode, VolumeStyle,
 };
 use grana_measure::{
     Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
@@ -153,8 +153,7 @@ pub struct NamedViewSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
-    pub camera: CameraSpec,
-    pub section: SectionSpec,
+    pub panes: [PaneSpec; grana_display::PANE_COUNT],
     pub split: f32,
     #[serde(default)]
     pub time: u32,
@@ -194,11 +193,25 @@ pub struct TimelineSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PaneSpec {
+    pub kind: String,
+    pub camera: CameraSpec,
+    pub section: SectionSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneViewSpec {
+    pub camera: CameraSpec,
+    pub section: SectionSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeySpec {
     pub at: f32,
     pub time: u32,
-    pub camera: CameraSpec,
-    pub section: SectionSpec,
+    pub panes: [PaneViewSpec; grana_display::PANE_COUNT],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1797,8 +1810,7 @@ impl MetricSpec {
 impl ViewSpec {
     pub fn of(view: &ViewState, time: u32) -> Self {
         Self {
-            camera: CameraSpec::of(view.camera),
-            section: SectionSpec::of(view.section),
+            panes: view.panes.map(PaneSpec::of),
             split: view.split,
             time,
             timeline: Some(TimelineSpec::of(&view.timeline)),
@@ -1806,12 +1818,8 @@ impl ViewSpec {
         }
     }
 
-    pub fn camera(&self) -> CameraState {
-        self.camera.camera()
-    }
-
-    pub fn section(&self) -> SectionState {
-        self.section.section()
+    pub fn panes(&self) -> [PaneState; grana_display::PANE_COUNT] {
+        std::array::from_fn(|index| self.panes[index].state())
     }
 
     pub fn timeline(&self) -> Option<Timeline> {
@@ -1827,12 +1835,14 @@ impl ViewSpec {
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
-        self.camera.checked()?;
-        self.section.checked()?;
+        for pane in &self.panes {
+            pane.checked()?;
+        }
         if let Some(timeline) = &self.timeline {
             for key in &timeline.keys {
-                key.camera.checked()?;
-                key.section.checked()?;
+                for pane in &key.panes {
+                    pane.checked()?;
+                }
             }
         }
         if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.split) {
@@ -1853,6 +1863,58 @@ impl ViewSpec {
             ));
         }
         Ok(())
+    }
+}
+
+impl PaneSpec {
+    pub fn of(pane: PaneState) -> Self {
+        Self {
+            kind: pane.kind.name().to_string(),
+            camera: CameraSpec::of(pane.view.camera),
+            section: SectionSpec::of(pane.view.section),
+        }
+    }
+
+    pub fn state(&self) -> PaneState {
+        PaneState {
+            kind: grana_display::PaneKind::from_name(&self.kind)
+                .expect("the pane kind was checked"),
+            view: PaneView {
+                camera: self.camera.camera(),
+                section: self.section.section(),
+            },
+        }
+    }
+
+    fn checked(&self) -> Result<(), ProtocolError> {
+        if grana_display::PaneKind::from_name(&self.kind).is_none() {
+            return Err(ProtocolError::Invalid(
+                "a pane names a known view kind".to_string(),
+            ));
+        }
+        self.camera.checked()?;
+        self.section.checked()
+    }
+}
+
+impl PaneViewSpec {
+    pub fn of(view: PaneView) -> Self {
+        Self {
+            camera: CameraSpec::of(view.camera),
+            section: SectionSpec::of(view.section),
+        }
+    }
+
+    pub fn view(&self) -> PaneView {
+        PaneView {
+            camera: self.camera.camera(),
+            section: self.section.section(),
+        }
+    }
+
+    fn checked(&self) -> Result<(), ProtocolError> {
+        self.camera.checked()?;
+        self.section.checked()
     }
 }
 
@@ -2072,8 +2134,7 @@ impl TimelineSpec {
                 .map(|key| KeySpec {
                     at: key.at,
                     time: key.time,
-                    camera: CameraSpec::of(key.camera),
-                    section: SectionSpec::of(key.section),
+                    panes: key.views.map(PaneViewSpec::of),
                 })
                 .collect(),
         }
@@ -2088,8 +2149,7 @@ impl TimelineSpec {
                 .map(|key| Keyframe {
                     at: key.at,
                     time: key.time,
-                    camera: key.camera.camera(),
-                    section: key.section.section(),
+                    views: std::array::from_fn(|index| key.panes[index].view()),
                 })
                 .collect(),
         )

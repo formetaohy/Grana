@@ -83,8 +83,16 @@ pub enum Message {
         set: ObjectSetId,
         features: Vec<grana_measure::Measurement>,
     },
-    FitVolume,
-    FitSection,
+    FitPane(usize),
+    SetActivePane(usize),
+    SetPaneKind {
+        index: usize,
+        kind: grana_display::PaneKind,
+    },
+    SetPaneSlice {
+        index: usize,
+        preset: usize,
+    },
     Plot(PlotEvent),
     Locate(usize),
     ClearGates,

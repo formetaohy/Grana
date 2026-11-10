@@ -336,8 +336,7 @@ impl Session {
                 self.export = export;
             }
             self.view = Some(ViewState {
-                camera: view.camera(),
-                section: view.section(),
+                panes: view.panes(),
                 split: view.split,
                 timeline: self.timeline.clone(),
                 export: self.export,
@@ -351,8 +350,7 @@ impl Session {
                     NamedView::new(
                         named.name.clone(),
                         ViewState {
-                            camera: named.view().camera(),
-                            section: named.view().section(),
+                            panes: named.view().panes(),
                             split: named.view().split,
                             timeline: named
                                 .view()

@@ -1,4 +1,3 @@
-use super::residency::ResidencyView;
 use super::signature::{channel_style, digest, scene_styles, shadow_bounds, shadow_geometry};
 use super::*;
 
@@ -16,12 +15,9 @@ impl Renderer {
         let Frame {
             target: surface,
             size,
-            volume_region,
-            section_region,
+            panes,
             time,
-            camera,
-            section,
-            region,
+            region: bounds,
             clip,
             exposure,
             samples,
@@ -31,15 +27,18 @@ impl Renderer {
             assured,
             coarsen,
         } = frame;
-        assert!(
-            inside(volume_region, size) && inside(section_region, size),
-            "the panes lie on the surface"
-        );
+        for pane in panes.iter().flatten() {
+            assert!(inside(pane.region(), size), "the panes lie on the surface");
+        }
         self.time = time;
         self.prefetch = prefetch;
         self.regions = Some(Regions {
-            volume: volume_region,
-            section: section_region,
+            panes: std::array::from_fn(|index| {
+                panes[index].map(|pane| PaneRegion {
+                    kind: pane.kind(),
+                    region: pane.region(),
+                })
+            }),
         });
         self.info.cut.objects = 0;
         self.info.cut.draws = 0;
@@ -63,8 +62,8 @@ impl Renderer {
             markers,
             pyramid,
             channels,
-            volume_level: volume_rendered,
-            section_level: section_rendered,
+            volume_level,
+            section_level,
             section_probe,
             section_measure,
             section_sequence,
@@ -123,13 +122,6 @@ impl Renderer {
             "the requested frame lies inside the time series"
         );
         atlas.prune(time);
-        let volume_width = volume_region[2].max(1);
-        let volume_height = volume_region[3].max(1);
-        let section_width = section_region[2].max(1);
-        let section_height = section_region[3].max(1);
-        let volume_aspect = volume_width as f32 / volume_height as f32;
-        let section_aspect = section_width as f32 / section_height as f32;
-        let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
         let first = arena.first();
@@ -144,148 +136,179 @@ impl Renderer {
         } else {
             frame_budget.penalty()
         };
-        let share = (slots / SECTION_BUDGET_DIVISOR).max(1);
-        let section_target_level = select_section_level(
-            pyramid,
-            section,
-            section_height as f32,
-            if assured { None } else { *section_rendered },
-            limits,
-            penalty,
-        );
-        let (resolved_level, section_count) = resolve_section_level(
-            pyramid,
-            section,
-            section_aspect,
-            section_target_level,
-            share,
-            region,
-            limits,
-        );
-        let pick = if coarsen == 0 && !assured && !*exporting {
-            section_probe.enter(SectionKey {
-                state: section.state(),
-                aspect: section_aspect,
-                region,
-                first: limits.first,
-                ceiling: limits.ceiling,
-                capacity: share,
-            });
-            let measure = section_measure.as_ref().map(|(_, measure)| *measure);
-            let fresh = section_measure
-                .as_ref()
-                .is_some_and(|(sequence, _)| *sequence > *probe_mark);
-            section_probe.level(
-                section_target_level,
-                resolved_level,
-                measure,
-                fresh,
+        let active = panes.iter().flatten().count();
+        assert!(active > 0, "a frame draws at least one pane");
+        let share = (slots / active).max(1);
+        let mut levels = Levels {
+            panes: [None; PANE_COUNT],
+        };
+        let mut section_used = 0usize;
+        for (index, pane) in panes.iter().enumerate() {
+            let Some(PaneFrame::Section { section, region }) = pane else {
+                continue;
+            };
+            let height = region[3].max(1);
+            let aspect = region[2].max(1) as f32 / height as f32;
+            let section_target = select_section_level(
+                pyramid,
+                section,
+                height as f32,
+                if assured { None } else { section_level[index] },
+                limits,
+                penalty,
+            );
+            let (resolved, visible) = resolve_section_level(
+                pyramid,
+                section,
+                aspect,
+                section_target,
                 share,
-                |level| atlas.hollow_count(time, level),
-            )
-        } else {
-            SectionPick::settled(resolved_level)
-        };
-        if pick.started {
-            *probe_mark = *section_sequence;
+                bounds,
+                limits,
+            );
+            let pick = if coarsen == 0 && !assured && !*exporting {
+                section_probe[index].enter(SectionKey {
+                    state: section.state(),
+                    aspect,
+                    region: bounds,
+                    first: limits.first,
+                    ceiling: limits.ceiling,
+                    capacity: share,
+                });
+                let measure = section_measure[index].as_ref().map(|(_, measure)| *measure);
+                let fresh = section_measure[index]
+                    .as_ref()
+                    .is_some_and(|(sequence, _)| *sequence > probe_mark[index]);
+                section_probe[index].level(
+                    section_target,
+                    resolved,
+                    measure,
+                    fresh,
+                    share,
+                    |level| atlas.hollow_count(time, level),
+                )
+            } else {
+                SectionPick::settled(resolved)
+            };
+            if pick.started {
+                probe_mark[index] = *section_sequence;
+            }
+            let level = (pick.level + coarsen).min(allowed - 1);
+            let needed = info.panes[index].visible.max(info.panes[index].demand);
+            let hint = if needed == 0 { visible } else { needed };
+            let capacity = if pick.probing {
+                share
+            } else {
+                pick.measured.unwrap_or(hint)
+            }
+            .clamp(1, share)
+            .min(slots.saturating_sub(1).max(1));
+            section_used += capacity;
+            let fallback =
+                neighbour(section_level[index], level, level_count).clamp(first, ceiling);
+            levels.panes[index] = Some(PaneLevels::Section(SectionLevels {
+                level,
+                fallback,
+                capacity,
+            }));
+            section_level[index] = Some(level);
         }
-        let section_level = (pick.level + coarsen).min(allowed - 1);
-        let needed = info.section.visible.max(info.section.demand);
-        let hint = if needed == 0 { section_count } else { needed };
-        let section_capacity = if pick.probing {
-            share
-        } else {
-            pick.measured.unwrap_or(hint)
+        let section_used = section_used.min(slots.saturating_sub(1).max(1));
+        let volume_count = panes
+            .iter()
+            .filter(|pane| matches!(pane, Some(PaneFrame::Volume { .. })))
+            .count();
+        let volume_slots = slots.saturating_sub(section_used).max(1);
+        let volume_share = volume_slots.checked_div(volume_count).unwrap_or(1).max(1);
+        for (index, pane) in panes.iter().enumerate() {
+            let Some(PaneFrame::Volume { camera, region, .. }) = pane else {
+                continue;
+            };
+            let height = region[3].max(1);
+            let aspect = region[2].max(1) as f32 / height as f32;
+            let fit = fit_volume(FitView {
+                pyramid,
+                camera,
+                region: bounds,
+                aspect,
+                height,
+                limits,
+                capacity: volume_share,
+                current: if assured { None } else { volume_level[index] },
+                penalty,
+            });
+            let base = (fit.ladder.base + coarsen).min(allowed - 1);
+            let count = BAND.min(allowed - base);
+            let ladder = Ladder { base, count };
+            let capacity = if base == fit.ladder.base && count == fit.ladder.count {
+                fit.capacity
+            } else {
+                capacities(volume_share, &fit.capacity, count)
+            };
+            levels.panes[index] = Some(PaneLevels::Volume(VolumeLevels { ladder, capacity }));
+            volume_level[index] = Some(base);
         }
-        .clamp(1, share)
-        .min(slots.saturating_sub(1).max(1));
-        let volume_capacity = slots.saturating_sub(section_capacity).max(1);
-        let fit = fit_volume(FitView {
-            pyramid,
-            camera,
-            region,
-            aspect: volume_aspect,
-            height: volume_height,
-            limits,
-            capacity: volume_capacity,
-            current: if assured { None } else { *volume_rendered },
-            penalty,
-        });
-        let base = (fit.ladder.base + coarsen).min(allowed - 1);
-        let count = BAND.min(allowed - base);
-        let ladder = Ladder { base, count };
-        let capacity = if base == fit.ladder.base && count == fit.ladder.count {
-            fit.capacity
-        } else {
-            capacities(volume_capacity, &fit.capacity, count)
-        };
-        let levels = Levels {
-            ladder,
-            capacity,
-            section: section_level,
-            section_fallback: neighbour(*section_rendered, section_level, level_count)
-                .clamp(first, ceiling),
-            section_capacity,
-        };
-        *volume_rendered = Some(ladder.base);
-        *section_rendered = Some(section_level);
         let residency = Residency::of(
             *epoch,
-            *content,
-            channel_style(scene.channels),
-            super::Mode { prefetch, assured },
-            time,
-            ResidencyView {
-                camera,
-                section,
-                volume_region,
-                section_region,
-                region,
+            Content {
+                content: *content,
+                style: channel_style(scene.channels),
             },
+            Mode { prefetch, assured },
+            time,
+            &panes,
+            bounds,
             levels,
         );
         let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
         info.settled = !replan;
-        let decoded = info.volume.level == ladder.base && info.section.level == section_level;
+        let decoded =
+            panes
+                .iter()
+                .enumerate()
+                .all(|(index, pane)| match (pane, levels.panes[index]) {
+                    (Some(PaneFrame::Volume { .. }), Some(PaneLevels::Volume(levels))) => {
+                        info.panes[index].level == levels.ladder.base
+                    }
+                    (Some(PaneFrame::Section { .. }), Some(PaneLevels::Section(levels))) => {
+                        info.panes[index].level == levels.level
+                    }
+                    _ => true,
+                });
         info.truncated = decoded
-            && (info.volume.visible > info.volume.demand
-                || info.section.visible > info.section.demand);
+            && panes.iter().enumerate().any(|(index, pane)| {
+                pane.is_some() && info.panes[index].visible > info.panes[index].demand
+            });
         let ready = !assured || (info.settled && !info.truncated);
         let slot_grid = atlas.slot_grid();
-        let mut prepared = [usize::MAX; BAND + 2];
-        let mut count = 0;
-        for level in ladder
-            .levels()
-            .chain([section_level, levels.section_fallback])
-        {
-            if prepared[..count].contains(&level) {
+        let mut prepared = [usize::MAX; PANE_COUNT * (BAND + 2)];
+        let mut prepared_count = 0;
+        for (index, pane) in panes.iter().enumerate() {
+            let Some(pane) = pane else {
                 continue;
-            }
-            prepared[count] = level;
-            count += 1;
-            ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
-            let table = bricks[level].as_mut().expect("the brick table exists");
-            if table.time() != Some(time) {
-                table.rebase(queue, time, atlas, arena);
+            };
+            let needed: Vec<usize> = match (pane, levels.panes[index]) {
+                (PaneFrame::Volume { .. }, Some(PaneLevels::Volume(levels))) => {
+                    levels.ladder.levels().collect()
+                }
+                (PaneFrame::Section { .. }, Some(PaneLevels::Section(levels))) => {
+                    vec![levels.level, levels.fallback]
+                }
+                _ => Vec::new(),
+            };
+            for level in needed {
+                if prepared[..prepared_count].contains(&level) {
+                    continue;
+                }
+                prepared[prepared_count] = level;
+                prepared_count += 1;
+                ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
+                let table = bricks[level].as_mut().expect("the brick table exists");
+                if table.time() != Some(time) {
+                    table.rebase(queue, time, atlas, arena);
+                }
             }
         }
-        let tables = ladder
-            .levels()
-            .map(|level| bricks[level].as_ref().expect("the band table exists"))
-            .collect::<Vec<&BrickTable>>();
-        let section_table = bricks[section_level]
-            .as_ref()
-            .expect("the section level table exists");
-        let section_fallback = bricks[levels.section_fallback]
-            .as_ref()
-            .expect("the section fallback table exists");
-        let mut section_data = SectionData::new(
-            section,
-            section_aspect,
-            section_table,
-            Some(section_fallback),
-            *channels,
-        );
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
         let spacing = finest.spacing();
@@ -297,70 +320,145 @@ impl Renderer {
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
         let step_scale = scene.step_scale * penalty;
-        let mut frame_data = FrameData::new(
-            VolumeView {
-                camera,
-                region,
-                clip,
-                aspect: volume_aspect,
-                height: volume_height,
-                time,
-            },
-            ladder,
-            &tables,
-            scene.shading,
-            step_scale,
-            *channels,
-            space,
-        );
         let translucent = scene
             .styles
             .iter()
             .any(|style| style.visible() && style.transparent())
             || scene.markers.iter().any(|marker| marker.transparent());
-        frame_data.viewport = [
-            volume_region[0] as f32,
-            volume_region[1] as f32,
-            volume_region[2] as f32,
-            volume_region[3] as f32,
-        ];
-        frame_data.oit = [u32::from(translucent), 0, 0, 0];
-        let pane_pixels = u64::from(volume_width) * u64::from(volume_height);
-        if translucent
-            && target
-                .oit
-                .as_ref()
-                .is_none_or(|oit| !oit.fits(size, pane_pixels))
-        {
-            target.oit = Some(Oit::new(
-                device,
-                layouts,
+        let mut volume_data: [Option<FrameData>; PANE_COUNT] = [None; PANE_COUNT];
+        let mut section_data: [Option<SectionData>; PANE_COUNT] = [None; PANE_COUNT];
+        let mut section_frame: [Option<FrameData>; PANE_COUNT] = [None; PANE_COUNT];
+        let mut lenses: [Option<Lens<'_>>; PANE_COUNT] = [None; PANE_COUNT];
+        for (index, pane) in panes.iter().enumerate() {
+            let Some(pane) = pane else {
+                continue;
+            };
+            match (pane, levels.panes[index]) {
+                (
+                    PaneFrame::Volume {
+                        camera,
+                        lens,
+                        region,
+                    },
+                    Some(PaneLevels::Volume(levels)),
+                ) => {
+                    let tables = levels
+                        .ladder
+                        .levels()
+                        .map(|level| bricks[level].as_ref().expect("the band table exists"))
+                        .collect::<Vec<&BrickTable>>();
+                    let mut data = FrameData::new(
+                        VolumeView {
+                            camera,
+                            region: bounds,
+                            clip,
+                            aspect: region[2].max(1) as f32 / region[3].max(1) as f32,
+                            height: region[3].max(1),
+                            time,
+                        },
+                        levels.ladder,
+                        &tables,
+                        scene.shading,
+                        step_scale,
+                        *channels,
+                        space,
+                    );
+                    data.viewport = [
+                        region[0] as f32,
+                        region[1] as f32,
+                        region[2] as f32,
+                        region[3] as f32,
+                    ];
+                    data.oit = [u32::from(translucent), 0, 0, 0];
+
+                    volume_data[index] = Some(data);
+                    lenses[index] = Some(*lens);
+                }
+                (PaneFrame::Section { section, region }, Some(PaneLevels::Section(levels))) => {
+                    let table = bricks[levels.level]
+                        .as_ref()
+                        .expect("the section level table exists");
+                    let fallback = bricks[levels.fallback]
+                        .as_ref()
+                        .expect("the section fallback table exists");
+                    section_data[index] = Some(SectionData::new(
+                        section,
+                        region[2].max(1) as f32 / region[3].max(1) as f32,
+                        table,
+                        Some(fallback),
+                        *channels,
+                    ));
+                    section_frame[index] = Some(FrameData::shared(SharedView {
+                        shading: scene.shading,
+                        channels: *channels,
+                        region: bounds,
+                        clip,
+                        time,
+                        space,
+                    }));
+                }
+                _ => {}
+            }
+        }
+        for (index, slot) in volume_data.iter_mut().enumerate() {
+            let Some(data) = slot else {
+                continue;
+            };
+            let extent = panes[index].as_ref().map_or([1, 1], |pane| {
+                [pane.region()[2].max(1), pane.region()[3].max(1)]
+            });
+            let pane_pixels = u64::from(extent[0]) * u64::from(extent[1]);
+            if translucent
+                && target.oit[index]
+                    .as_ref()
+                    .is_none_or(|oit| !oit.fits(size, pane_pixels))
+            {
+                target.oit[index] = Some(Oit::new(
+                    device,
+                    layouts,
+                    size,
+                    pane_pixels,
+                    *budget / FRAGMENT_BUDGET_DIVISOR,
+                ));
+            }
+            if let Some(oit) = target.oit[index].as_ref().filter(|_| translucent) {
+                data.oit[1] = oit.layers();
+                data.oit[3] = oit.tail_scale();
+            }
+        }
+        let (structure, transition) = {
+            let signatures: [Option<PaneSignature<'_>>; PANE_COUNT] =
+                std::array::from_fn(|index| match (panes[index], &volume_data[index]) {
+                    (Some(PaneFrame::Volume { camera, region, .. }), Some(data)) => {
+                        Some(PaneSignature::Volume {
+                            data,
+                            camera: camera.state(),
+                            region,
+                        })
+                    }
+                    _ => match (panes[index], &section_data[index]) {
+                        (Some(PaneFrame::Section { section, region }), Some(data)) => {
+                            Some(PaneSignature::Section {
+                                data,
+                                view: section.state(),
+                                region,
+                            })
+                        }
+                        _ => None,
+                    },
+                });
+            let signature = Signature {
+                scene,
+                panes: &signatures,
+                levels,
+                time,
+                exposure,
+                epoch: *epoch,
+                content: *content,
                 size,
-                pane_pixels,
-                *budget / FRAGMENT_BUDGET_DIVISOR,
-            ));
-        }
-        if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
-            frame_data.oit[1] = oit.layers();
-            frame_data.oit[3] = oit.tail_scale();
-        }
-        let signature = Signature {
-            scene,
-            data: &frame_data,
-            section: &section_data,
-            camera: camera.state(),
-            view: section.state(),
-            levels,
-            time,
-            exposure,
-            epoch: *epoch,
-            content: *content,
-            size,
-            volume_region,
-            section_region,
+            };
+            (signature.digest(), signature.transition())
         };
-        let structure = signature.digest();
-        let transition = signature.transition();
         let key = LevelKey::of(levels);
         let moved = target.transition != Some(transition);
         if moved {
@@ -386,138 +484,221 @@ impl Renderer {
             target.signature = Some(structure);
             target.samples = 0;
         }
-        let oit_group = match target.oit.as_ref() {
-            Some(oit) if translucent => oit.read_group(),
-            _ => dummy_oit.read_group(),
-        };
         let reset = target.samples == 0;
         info.samples = target.samples;
         *sampled = false;
         let mut marks = Marks::new();
+        let first_pane = panes
+            .iter()
+            .position(Option::is_some)
+            .expect("a frame draws a pane");
         if reset {
             meshes.set(device, queue, layouts, scene);
-            slice.prepare(
-                device,
-                queue,
-                layouts,
-                scene,
-                crate::slice::CutView {
-                    section: &section_data,
-                    size: cut_size,
-                    camera,
-                },
-            );
-            markers.prepare(device, queue, layouts, scene.markers);
-            mark(profile, &mut encoder, Stage::Cull, &mut marks);
-            meshes.cull_volume(&mut encoder, scene_table.group());
-            markers.cull_volume(&mut encoder, scene_table.group());
-            markers.cull_section(&mut encoder, scene_table.group());
-            if scene.shading.shadows > 0.0 {
-                meshes.cull_shadow(&mut encoder, scene_table.group());
-            }
-        }
-        let sample_index = target.samples.min(samples - 1);
-        let offset = sample::offset(sample_index, [volume_width, volume_height]);
-        frame_data.jitter = [
-            offset.x,
-            offset.y,
-            sample_index as f32,
-            step_scale.max(1.0e-3),
-        ];
-        frame_data.lens = crate::frame::lens(camera, sample_index, samples, volume_aspect);
-        let cut_offset = sample::offset(sample_index, cut_size);
-        section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
-        scene_table.write(
-            device,
-            queue,
-            pyramid,
-            scene.channels,
-            frame_data,
-            section_data,
-        );
-        let scene_group = scene_table.group();
-        if replan {
-            let scale = bucket_scale(
-                camera,
-                tables[0].bounds.0.to_array(),
-                tables[0].world.to_array(),
-            );
-            let range = section_range(pyramid, section_level, section, section_aspect, region);
-            for band in 0..BAND {
-                let plan = &mut planner.bands[band];
-                if band < ladder.count {
-                    let table = tables[band];
-                    plan.prepare(
+            for (index, pane) in panes.iter().enumerate() {
+                if let (Some(PaneFrame::Section { section, region }), Some(data)) =
+                    (pane, &section_data[index])
+                {
+                    let (eye, forward) = cut_view(&panes, section);
+                    slice[index].prepare(
+                        device,
                         queue,
-                        Schedule {
-                            time,
-                            band: band as u32,
-                            capacity: capacity[band] as u32,
-                            range: SectionRange::default(),
-                            dispatch: volume_dispatch(table),
-                            bucket_scale: scale,
-                            base: table.record_base(),
-                        },
-                    );
-                } else {
-                    plan.prepare(
-                        queue,
-                        Schedule {
-                            time,
-                            band: band as u32,
-                            capacity: 0,
-                            range: SectionRange::default(),
-                            dispatch: 0,
-                            bucket_scale: scale,
-                            base: 0,
+                        layouts,
+                        scene,
+                        crate::slice::CutView {
+                            section: data,
+                            size: [region[2].max(1), region[3].max(1)],
+                            eye,
+                            forward,
                         },
                     );
                 }
             }
-            planner.section.prepare(
-                queue,
-                Schedule {
-                    time,
-                    band: 0,
-                    capacity: section_capacity as u32,
-                    range,
-                    dispatch: range.dispatch(),
-                    bucket_scale: 0.0,
-                    base: section_table.record_base(),
-                },
-            );
+            markers.prepare(device, queue, layouts, scene.markers);
+            mark(profile, &mut encoder, Stage::Cull, &mut marks);
+            for (index, pane) in panes.iter().enumerate() {
+                match pane {
+                    Some(PaneFrame::Volume { .. }) => {
+                        meshes.cull_volume(index, &mut encoder, scene_table.group(index));
+                        markers.cull_volume(index, &mut encoder, scene_table.group(index));
+                    }
+                    Some(PaneFrame::Section { .. }) => {
+                        markers.cull_section(index, &mut encoder, scene_table.group(index));
+                    }
+                    None => {}
+                }
+            }
+            if scene.shading.shadows > 0.0 {
+                meshes.cull_shadow(&mut encoder, scene_table.group(first_pane));
+            }
+        }
+        let sample_index = target.samples.min(samples - 1);
+        for (index, slot) in volume_data.iter_mut().enumerate() {
+            let Some(data) = slot else {
+                continue;
+            };
+            let extent = panes[index].as_ref().map_or([1, 1], |pane| {
+                [pane.region()[2].max(1), pane.region()[3].max(1)]
+            });
+            let offset = sample::offset(sample_index, extent);
+            data.jitter = [
+                offset.x,
+                offset.y,
+                sample_index as f32,
+                step_scale.max(1.0e-3),
+            ];
+            if let Some(lens) = lenses[index] {
+                data.lens = crate::frame::lens(lens.camera, sample_index, samples, lens.aspect);
+            }
+        }
+        for (index, slot) in section_data.iter_mut().enumerate() {
+            let Some(data) = slot else {
+                continue;
+            };
+            let extent = panes[index].as_ref().map_or([1, 1], |pane| {
+                [pane.region()[2].max(1), pane.region()[3].max(1)]
+            });
+            let offset = sample::offset(sample_index, extent);
+            data.jitter = [offset.x, offset.y, 0.0, 0.0];
+        }
+        scene_table.update(device, queue, pyramid, scene.channels);
+        for index in 0..PANE_COUNT {
+            if volume_data[index].is_some() || section_data[index].is_some() {
+                scene_table.write(
+                    index,
+                    queue,
+                    volume_data[index].or(section_frame[index]),
+                    section_data[index],
+                );
+            }
+        }
+        if replan {
+            for (index, pane) in panes.iter().enumerate() {
+                let Some(pane) = pane else {
+                    continue;
+                };
+                let panes_plan = &mut planner.panes[index];
+                match (pane, levels.panes[index]) {
+                    (
+                        PaneFrame::Volume { camera, region, .. },
+                        Some(PaneLevels::Volume(levels)),
+                    ) => {
+                        let tables = levels
+                            .ladder
+                            .levels()
+                            .map(|level| bricks[level].as_ref().expect("the band table exists"))
+                            .collect::<Vec<&BrickTable>>();
+                        let scale = bucket_scale(
+                            camera,
+                            tables[0].bounds.0.to_array(),
+                            tables[0].world.to_array(),
+                        );
+                        for band in 0..BAND {
+                            let (capacity, dispatch, base) = match tables.get(band) {
+                                Some(table) => (
+                                    levels.capacity.get(band).copied().unwrap_or(0) as u32,
+                                    volume_dispatch(table),
+                                    table.record_base(),
+                                ),
+                                None => (0, 0, 0),
+                            };
+                            panes_plan.bands[band].prepare(
+                                queue,
+                                Schedule {
+                                    time,
+                                    band: band as u32,
+                                    capacity,
+                                    range: SectionRange::default(),
+                                    dispatch,
+                                    bucket_scale: scale,
+                                    base,
+                                },
+                            );
+                        }
+                        panes_plan.section.prepare(
+                            queue,
+                            Schedule {
+                                time,
+                                band: 0,
+                                capacity: 0,
+                                range: SectionRange::default(),
+                                dispatch: 0,
+                                bucket_scale: 0.0,
+                                base: 0,
+                            },
+                        );
+                        let _ = region;
+                    }
+                    (PaneFrame::Section { section, region }, Some(PaneLevels::Section(levels))) => {
+                        let table = bricks[levels.level]
+                            .as_ref()
+                            .expect("the section table exists");
+                        let range = section_range(
+                            pyramid,
+                            levels.level,
+                            section,
+                            region[2].max(1) as f32 / region[3].max(1) as f32,
+                            bounds,
+                        );
+                        panes_plan.section.prepare(
+                            queue,
+                            Schedule {
+                                time,
+                                band: 0,
+                                capacity: levels.capacity as u32,
+                                range,
+                                dispatch: range.dispatch(),
+                                bucket_scale: 0.0,
+                                base: table.record_base(),
+                            },
+                        );
+                        for band in 0..BAND {
+                            panes_plan.bands[band].prepare(
+                                queue,
+                                Schedule {
+                                    time,
+                                    band: band as u32,
+                                    capacity: 0,
+                                    range: SectionRange::default(),
+                                    dispatch: 0,
+                                    bucket_scale: 0.0,
+                                    base: 0,
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
             mark(profile, &mut encoder, Stage::Plan, &mut marks);
-            planner.encode(&mut encoder, scene_group);
+            let groups = [scene_table.group(0), scene_table.group(1)];
+            planner.encode(&mut encoder, &groups);
             *planned = Some(residency);
         }
         if target.samples < samples && ready {
             target.samples += 1;
             info.samples = target.samples;
             *sampled = true;
-            meshes.write_uniforms(queue, &frame_data, scene.shading);
             let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
             let volume_visible = scene
                 .channels
                 .iter()
                 .any(|row| row.visible && row.opacity > 0.0);
             let ambient = surfaces || volume_visible;
-            if ambient
-                && target.ao.as_ref().is_none_or(|ao| {
-                    ao.size() != [volume_width, volume_height] || ao.volume_size() != size
-                })
-            {
-                target.ao = Some(crate::ao::Ao::new(
-                    device,
-                    layouts,
-                    [volume_width, volume_height],
-                    size,
-                ));
-            }
-            let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
-            if ambient {
-                mark(profile, &mut encoder, Stage::Ambient, &mut marks);
-                let ao = target
-                    .ao
+            for (index, pane) in panes.iter().enumerate() {
+                let Some(PaneFrame::Volume { region, .. }) = pane else {
+                    continue;
+                };
+                if !ambient {
+                    continue;
+                }
+                let extent = [region[2].max(1), region[3].max(1)];
+                if target.ao[index]
+                    .as_ref()
+                    .is_none_or(|ao| ao.size() != extent || ao.volume_size() != size)
+                {
+                    target.ao[index] = Some(crate::ao::Ao::new(device, layouts, extent, size));
+                }
+                let ao = target.ao[index]
                     .as_ref()
                     .expect("the ambient occlusion target is ready");
                 if reset {
@@ -525,23 +706,25 @@ impl Renderer {
                 }
                 ao.clear(&mut encoder);
                 meshes.draw_gbuffer(
+                    index,
                     &mut encoder,
                     ao.normal(),
                     ao.depth(),
-                    volume_region,
-                    scene_group,
+                    *region,
+                    scene_table.group(index),
                 );
                 markers.draw_gbuffer(
+                    index,
                     &mut encoder,
                     ao.normal(),
                     ao.depth(),
-                    volume_region,
-                    scene_group,
+                    *region,
+                    scene_table.group(index),
                 );
                 ao.evaluate(
                     queue,
                     &mut encoder,
-                    &frame_data,
+                    &volume_data[index].expect("the volume data is ready"),
                     AMBIENT_REACH,
                     AMBIENT_STRENGTH,
                     sample_index,
@@ -551,7 +734,7 @@ impl Renderer {
             mark(profile, &mut encoder, Stage::Shadow, &mut marks);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
-                    scene: scene_group,
+                    scene: scene_table.group(first_pane),
                     level: level_group,
                     atlas: atlas.group(),
                 };
@@ -560,8 +743,25 @@ impl Renderer {
                     if *object_key != Some(object) {
                         *object_key = Some(object);
                         meshes.draw_shadow(&mut encoder, shadow.objects());
-                        markers.draw_shadow(&mut encoder, shadow.objects(), scene_group);
+                        markers.draw_shadow(
+                            &mut encoder,
+                            shadow.objects(),
+                            scene_table.group(first_pane),
+                        );
                     }
+                    let ladder = panes
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, pane)| match (pane, levels.panes[index]) {
+                            (Some(PaneFrame::Volume { .. }), Some(PaneLevels::Volume(levels))) => {
+                                Some(levels.ladder)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(Ladder {
+                            base: first,
+                            count: 0,
+                        });
                     shadow.encode_tau(
                         &mut encoder,
                         groups,
@@ -581,215 +781,268 @@ impl Renderer {
                 .as_ref()
                 .map(Shadow::group)
                 .expect("the shadow is ready");
-            meshes.draw_volume(
-                &mut encoder,
-                target.scene.color(),
-                target.scene.depth(),
-                volume_region,
-                shadow_group,
-                ao_group,
-            );
-            markers.draw_volume(
-                &mut encoder,
-                target.scene.color(),
-                target.scene.depth(),
-                volume_region,
-                scene_group,
-                ao_group,
-            );
-            if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
-                mark(profile, &mut encoder, Stage::Oit, &mut marks);
-                oit.clear(&mut encoder);
-                {
-                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                        label: Some("grana.oit.key.pass"),
-                        color_attachments: &[Some(RenderPassColorAttachment {
-                            view: oit.coverage(),
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: Operations {
-                                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: StoreOp::Store,
+            for (index, pane) in panes.iter().enumerate() {
+                let Some(pane) = pane else {
+                    continue;
+                };
+                let group = scene_table.group(index);
+                match pane {
+                    PaneFrame::Volume { region, .. } => {
+                        let data = volume_data[index].expect("the volume data is ready");
+                        meshes.write_uniforms(index, queue, &data, scene.shading);
+                        let ao_group: &BindGroup = target.ao[index]
+                            .as_ref()
+                            .map_or(dummy_ao, crate::ao::Ao::group);
+                        let oit = target.oit[index].as_ref().filter(|_| translucent);
+                        let oit_group: &BindGroup =
+                            oit.map_or(dummy_oit.read_group(), Oit::read_group);
+                        let (width, height) = (region[2].max(1), region[3].max(1));
+                        meshes.draw_volume(
+                            index,
+                            &mut encoder,
+                            VolumeTargets {
+                                color: target.scene.color(),
+                                depth: target.scene.depth(),
                             },
-                        })],
-                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                            view: target.scene.depth(),
-                            depth_ops: Some(Operations {
-                                load: LoadOp::Load,
-                                store: StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        ..Default::default()
-                    });
-                    pass.set_viewport(
-                        volume_region[0] as f32,
-                        volume_region[1] as f32,
-                        volume_width as f32,
-                        volume_height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    pass.set_scissor_rect(
-                        volume_region[0],
-                        volume_region[1],
-                        volume_width,
-                        volume_height,
-                    );
-                    meshes.draw_oit(&mut pass, shadow_group, oit.write_group(), ao_group);
-                    markers.draw_oit(&mut pass, scene_group, oit.write_group(), ao_group);
-                }
-                {
-                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                        label: Some("grana.oit.color.pass"),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                            view: target.scene.depth(),
-                            depth_ops: Some(Operations {
-                                load: LoadOp::Load,
-                                store: StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        ..Default::default()
-                    });
-                    pass.set_viewport(
-                        volume_region[0] as f32,
-                        volume_region[1] as f32,
-                        volume_width as f32,
-                        volume_height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    pass.set_scissor_rect(
-                        volume_region[0],
-                        volume_region[1],
-                        volume_width,
-                        volume_height,
-                    );
-                    meshes.draw_color(
-                        &mut pass,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                    markers.draw_color(
-                        &mut pass,
-                        scene_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                }
-                {
-                    let tail = oit.tail_pane(volume_region);
-                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                        label: Some("grana.oit.pass"),
-                        color_attachments: &[
-                            Some(RenderPassColorAttachment {
-                                view: oit.accumulate(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: StoreOp::Store,
+                            *region,
+                            Lighting {
+                                shadow: shadow_group,
+                                ao: ao_group,
+                            },
+                        );
+                        markers.draw_volume(
+                            index,
+                            &mut encoder,
+                            VolumeTargets {
+                                color: target.scene.color(),
+                                depth: target.scene.depth(),
+                            },
+                            *region,
+                            group,
+                            Lighting {
+                                shadow: shadow_group,
+                                ao: ao_group,
+                            },
+                        );
+                        if let Some(oit) = oit {
+                            mark(profile, &mut encoder, Stage::Oit, &mut marks);
+                            oit.clear(&mut encoder);
+                            {
+                                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                                    label: Some("grana.oit.key.pass"),
+                                    color_attachments: &[Some(RenderPassColorAttachment {
+                                        view: oit.coverage(),
+                                        depth_slice: None,
+                                        resolve_target: None,
+                                        ops: Operations {
+                                            load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                            store: StoreOp::Store,
+                                        },
+                                    })],
+                                    depth_stencil_attachment: Some(
+                                        RenderPassDepthStencilAttachment {
+                                            view: target.scene.depth(),
+                                            depth_ops: Some(Operations {
+                                                load: LoadOp::Load,
+                                                store: StoreOp::Store,
+                                            }),
+                                            stencil_ops: None,
+                                        },
+                                    ),
+                                    ..Default::default()
+                                });
+                                pass.set_viewport(
+                                    region[0] as f32,
+                                    region[1] as f32,
+                                    width as f32,
+                                    height as f32,
+                                    0.0,
+                                    1.0,
+                                );
+                                pass.set_scissor_rect(region[0], region[1], width, height);
+                                meshes.draw_oit(
+                                    index,
+                                    &mut pass,
+                                    shadow_group,
+                                    oit.write_group(),
+                                    ao_group,
+                                );
+                                markers.draw_oit(
+                                    index,
+                                    &mut pass,
+                                    group,
+                                    oit.write_group(),
+                                    ao_group,
+                                );
+                            }
+                            {
+                                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                                    label: Some("grana.oit.color.pass"),
+                                    color_attachments: &[],
+                                    depth_stencil_attachment: Some(
+                                        RenderPassDepthStencilAttachment {
+                                            view: target.scene.depth(),
+                                            depth_ops: Some(Operations {
+                                                load: LoadOp::Load,
+                                                store: StoreOp::Store,
+                                            }),
+                                            stencil_ops: None,
+                                        },
+                                    ),
+                                    ..Default::default()
+                                });
+                                pass.set_viewport(
+                                    region[0] as f32,
+                                    region[1] as f32,
+                                    width as f32,
+                                    height as f32,
+                                    0.0,
+                                    1.0,
+                                );
+                                pass.set_scissor_rect(region[0], region[1], width, height);
+                                meshes.draw_color(
+                                    index,
+                                    &mut pass,
+                                    shadow_group,
+                                    oit.write_group(),
+                                    oit.coverage_group(),
+                                    ao_group,
+                                );
+                                markers.draw_color(
+                                    index,
+                                    &mut pass,
+                                    group,
+                                    oit.write_group(),
+                                    oit.coverage_group(),
+                                    ao_group,
+                                );
+                            }
+                            {
+                                let tail = oit.tail_pane(*region);
+                                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                                    label: Some("grana.oit.pass"),
+                                    color_attachments: &[
+                                        Some(RenderPassColorAttachment {
+                                            view: oit.accumulate(),
+                                            depth_slice: None,
+                                            resolve_target: None,
+                                            ops: Operations {
+                                                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                                store: StoreOp::Store,
+                                            },
+                                        }),
+                                        Some(RenderPassColorAttachment {
+                                            view: oit.reveal(),
+                                            depth_slice: None,
+                                            resolve_target: None,
+                                            ops: Operations {
+                                                load: LoadOp::Clear(wgpu::Color::WHITE),
+                                                store: StoreOp::Store,
+                                            },
+                                        }),
+                                        Some(RenderPassColorAttachment {
+                                            view: oit.tail_depth(),
+                                            depth_slice: None,
+                                            resolve_target: None,
+                                            ops: Operations {
+                                                load: LoadOp::Clear(wgpu::Color {
+                                                    r: 1.0,
+                                                    g: 1.0,
+                                                    b: 1.0,
+                                                    a: 1.0,
+                                                }),
+                                                store: StoreOp::Store,
+                                            },
+                                        }),
+                                    ],
+                                    depth_stencil_attachment: None,
+                                    ..Default::default()
+                                });
+                                pass.set_viewport(
+                                    0.0,
+                                    0.0,
+                                    tail[0] as f32,
+                                    tail[1] as f32,
+                                    0.0,
+                                    1.0,
+                                );
+                                pass.set_scissor_rect(0, 0, tail[0], tail[1]);
+                                meshes.draw_tail(
+                                    index,
+                                    &mut pass,
+                                    shadow_group,
+                                    oit.write_group(),
+                                    oit.coverage_group(),
+                                    ao_group,
+                                );
+                                markers.draw_tail(
+                                    index,
+                                    &mut pass,
+                                    group,
+                                    oit.write_group(),
+                                    oit.coverage_group(),
+                                    ao_group,
+                                );
+                            }
+                            if let Some(slot) = oit_readback[index].reserve() {
+                                oit_readback[index].stage(&mut encoder, slot, 0, oit.dropped(), 4);
+                            }
+                        }
+                        mark(profile, &mut encoder, Stage::Volume, &mut marks);
+                        if volume_visible {
+                            volume.draw(
+                                &mut encoder,
+                                crate::volume::VolumeFrame {
+                                    target: target.scene.color(),
+                                    normal: target.ao[index]
+                                        .as_ref()
+                                        .expect("the ambient occlusion target is ready")
+                                        .volume_normal(),
+                                    region: *region,
+                                    scene: group,
+                                    level: level_group,
+                                    atlas: atlas.group(),
+                                    depth_group: target.scene.depth_group(),
+                                    shadow: shadow_group,
+                                    oit: oit_group,
+                                    ao: ao_group,
                                 },
-                            }),
-                            Some(RenderPassColorAttachment {
-                                view: oit.reveal(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color::WHITE),
-                                    store: StoreOp::Store,
-                                },
-                            }),
-                            Some(RenderPassColorAttachment {
-                                view: oit.tail_depth(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color {
-                                        r: 1.0,
-                                        g: 1.0,
-                                        b: 1.0,
-                                        a: 1.0,
-                                    }),
-                                    store: StoreOp::Store,
-                                },
-                            }),
-                        ],
-                        depth_stencil_attachment: None,
-                        ..Default::default()
-                    });
-                    pass.set_viewport(0.0, 0.0, tail[0] as f32, tail[1] as f32, 0.0, 1.0);
-                    pass.set_scissor_rect(0, 0, tail[0], tail[1]);
-                    meshes.draw_tail(
-                        &mut pass,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                    markers.draw_tail(
-                        &mut pass,
-                        scene_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                }
-                if let Some(slot) = oit_readback.reserve() {
-                    oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
+                            );
+                        }
+                    }
+                    PaneFrame::Section { region, .. } => {
+                        let (width, height) = (region[2].max(1), region[3].max(1));
+                        mark(profile, &mut encoder, Stage::Section, &mut marks);
+                        section_pass.draw(
+                            &mut encoder,
+                            crate::section::SectionFrame {
+                                target: target.scene.color(),
+                                region: *region,
+                                scene: group,
+                                level: level_group,
+                                atlas: atlas.group(),
+                            },
+                        );
+                        mark(profile, &mut encoder, Stage::Cut, &mut marks);
+                        cut[index].draw(device, &mut encoder, [width, height], |pass| {
+                            markers.draw_section_behind(index, pass, group);
+                            slice[index].draw(pass, group);
+                            markers.draw_section_front(index, pass, group);
+                        });
+                        if slice[index].objects() > 0 {
+                            cut[index].outline(
+                                &mut encoder,
+                                [width, height],
+                                slice[index].style_group(),
+                            );
+                        }
+                        cut[index].composite(&mut encoder, target.scene.color(), *region);
+                        info.cut.objects += slice[index].objects();
+                        info.cut.draws +=
+                            slice[index].draws() + 1 + u32::from(slice[index].objects() > 0);
+                    }
                 }
             }
-            mark(profile, &mut encoder, Stage::Volume, &mut marks);
-            if volume_visible {
-                let ao = target
-                    .ao
-                    .as_ref()
-                    .expect("a visible volume carries an ambient occlusion target");
-                volume.draw(
-                    &mut encoder,
-                    crate::volume::VolumeFrame {
-                        target: target.scene.color(),
-                        normal: ao.volume_normal(),
-                        region: volume_region,
-                        scene: scene_group,
-                        level: level_group,
-                        atlas: atlas.group(),
-                        depth_group: target.scene.depth_group(),
-                        shadow: shadow_group,
-                        oit: oit_group,
-                        ao: ao.group(),
-                    },
-                );
-            }
-            mark(profile, &mut encoder, Stage::Section, &mut marks);
-            section_pass.draw(
-                &mut encoder,
-                crate::section::SectionFrame {
-                    target: target.scene.color(),
-                    region: section_region,
-                    scene: scene_group,
-                    level: level_group,
-                    atlas: atlas.group(),
-                },
-            );
-            mark(profile, &mut encoder, Stage::Cut, &mut marks);
-            cut.draw(device, &mut encoder, cut_size, |pass| {
-                markers.draw_section_behind(pass, scene_group);
-                slice.draw(pass, scene_group);
-                markers.draw_section_front(pass, scene_group);
-            });
-            if slice.objects() > 0 {
-                cut.outline(&mut encoder, cut_size, slice.style_group());
-            }
-            cut.composite(&mut encoder, target.scene.color(), section_region);
-            info.cut.objects = slice.objects();
-            info.cut.draws = slice.draws() + 1 + u32::from(slice.objects() > 0);
-            info.cut.indices = slice.index_bytes();
             mark(profile, &mut encoder, Stage::Present, &mut marks);
             present.accumulate(
                 &mut encoder,
@@ -822,22 +1075,25 @@ impl Renderer {
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()
         {
-            for band in 0..BAND {
+            for index in 0..PANE_COUNT {
+                let base = (index * (BAND + 1)) as u64 * *view_bytes;
+                for band in 0..BAND {
+                    feedback.stage(
+                        &mut encoder,
+                        slot,
+                        base + band as u64 * *view_bytes,
+                        planner.panes[index].bands[band].buffer(),
+                        *view_bytes,
+                    );
+                }
                 feedback.stage(
                     &mut encoder,
                     slot,
-                    band as u64 * *view_bytes,
-                    planner.bands[band].buffer(),
+                    base + BAND as u64 * *view_bytes,
+                    planner.panes[index].section.buffer(),
                     *view_bytes,
                 );
             }
-            feedback.stage(
-                &mut encoder,
-                slot,
-                BAND as u64 * *view_bytes,
-                planner.section.buffer(),
-                *view_bytes,
-            );
             frames[slot] = Some(residency);
         }
         if let Some(profiler) = profile.as_mut() {
@@ -850,15 +1106,46 @@ impl Renderer {
         if let Some(profiler) = profile.as_mut() {
             profiler.register();
         }
-        oit_readback.register();
-        info.volume.level = ladder.base;
-        info.section.level = section_level;
+        for readback in oit_readback.iter_mut() {
+            readback.register();
+        }
+        for (index, pane) in panes.iter().enumerate() {
+            match (pane, levels.panes[index]) {
+                (Some(PaneFrame::Volume { .. }), Some(PaneLevels::Volume(levels))) => {
+                    info.panes[index].level = levels.ladder.base;
+                }
+                (Some(PaneFrame::Section { .. }), Some(PaneLevels::Section(levels))) => {
+                    info.panes[index].level = levels.level;
+                }
+                _ => {}
+            }
+        }
         info.bytes = atlas.bytes();
         info.geometry = meshes.bytes();
-        info.fragments = target.oit.as_ref().map_or(0, Oit::bytes);
-        info.oit.layers = target.oit.as_ref().map_or(0, Oit::layers);
-        info.oit.dropped = *dropped;
+        info.fragments = target.oit.iter().flatten().map(Oit::bytes).sum::<u64>();
+        info.oit.layers = target
+            .oit
+            .iter()
+            .flatten()
+            .map(Oit::layers)
+            .max()
+            .unwrap_or(0);
+        info.oit.dropped = dropped.iter().sum();
+        info.cut.indices = slice.iter().map(SlicePass::index_bytes).sum();
         *info
+    }
+}
+
+fn cut_view(panes: &[Option<PaneFrame<'_>>; PANE_COUNT], section: &SectionCamera) -> (Vec3, Vec3) {
+    if let Some(PaneFrame::Volume { camera, .. }) =
+        panes.iter().flatten().find(|pane| pane.kind().volume())
+    {
+        (camera.eye(), camera.forward())
+    } else {
+        (
+            section.center() + section.normal() * 1.0e3,
+            -section.normal(),
+        )
     }
 }
 

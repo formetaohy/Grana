@@ -1,4 +1,4 @@
-use grana_display::{CameraState, SectionState};
+use grana_display::{CameraState, PANE_COUNT, PaneView, SectionState};
 
 const KEY_EPSILON: f32 = 1.0e-3;
 const MAX_FPS: u32 = 240;
@@ -10,15 +10,13 @@ const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 pub struct Keyframe {
     pub at: f32,
     pub time: u32,
-    pub camera: CameraState,
-    pub section: SectionState,
+    pub views: [PaneView; PANE_COUNT],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
     pub time: u32,
-    pub camera: CameraState,
-    pub section: SectionState,
+    pub views: [PaneView; PANE_COUNT],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,7 +63,7 @@ impl Timeline {
             if !key.at.is_finite() || !(0.0..=MAX_DURATION).contains(&key.at) {
                 return Err("a keyframe lies outside the timeline");
             }
-            if !plausible_camera(&key.camera) || !plausible_section(&key.section) {
+            if !key.views.iter().all(plausible_view) {
                 return Err("a keyframe describes a view outside its domain");
             }
         }
@@ -125,7 +123,7 @@ impl Timeline {
             "a keyframe lies on the timeline"
         );
         assert!(
-            plausible_camera(&key.camera) && plausible_section(&key.section),
+            key.views.iter().all(plausible_view),
             "a keyframe describes a plausible view"
         );
         let index = self
@@ -176,24 +174,26 @@ impl Timeline {
         for key in &self.keys {
             hash = mix(hash, u64::from(key.at.to_bits()));
             hash = mix(hash, u64::from(key.time));
-            for value in key.camera.pivot {
-                hash = mix(hash, u64::from(value.to_bits()));
+            for view in &key.views {
+                for value in view.camera.pivot {
+                    hash = mix(hash, u64::from(value.to_bits()));
+                }
+                hash = mix(hash, u64::from(view.camera.yaw.to_bits()));
+                hash = mix(hash, u64::from(view.camera.pitch.to_bits()));
+                hash = mix(hash, u64::from(view.camera.distance.to_bits()));
+                hash = mix(hash, u64::from(view.camera.fov_y.to_bits()));
+                hash = mix(hash, view.camera.projection.index() as u64);
+                hash = mix(hash, u64::from(view.camera.aperture.to_bits()));
+                hash = mix(hash, u64::from(view.camera.focus.to_bits()));
+                for value in view.section.center {
+                    hash = mix(hash, u64::from(value.to_bits()));
+                }
+                hash = mix(hash, u64::from(view.section.azimuth.to_bits()));
+                hash = mix(hash, u64::from(view.section.elevation.to_bits()));
+                hash = mix(hash, u64::from(view.section.span.to_bits()));
+                hash = mix(hash, view.section.projection.index() as u64);
+                hash = mix(hash, u64::from(view.section.thickness.to_bits()));
             }
-            hash = mix(hash, u64::from(key.camera.yaw.to_bits()));
-            hash = mix(hash, u64::from(key.camera.pitch.to_bits()));
-            hash = mix(hash, u64::from(key.camera.distance.to_bits()));
-            hash = mix(hash, u64::from(key.camera.fov_y.to_bits()));
-            hash = mix(hash, key.camera.projection.index() as u64);
-            hash = mix(hash, u64::from(key.camera.aperture.to_bits()));
-            hash = mix(hash, u64::from(key.camera.focus.to_bits()));
-            for value in key.section.center {
-                hash = mix(hash, u64::from(value.to_bits()));
-            }
-            hash = mix(hash, u64::from(key.section.azimuth.to_bits()));
-            hash = mix(hash, u64::from(key.section.elevation.to_bits()));
-            hash = mix(hash, u64::from(key.section.span.to_bits()));
-            hash = mix(hash, key.section.projection.index() as u64);
-            hash = mix(hash, u64::from(key.section.thickness.to_bits()));
         }
         hash
     }
@@ -202,8 +202,7 @@ impl Timeline {
 fn held(key: Keyframe) -> Sample {
     Sample {
         time: key.time,
-        camera: key.camera,
-        section: key.section,
+        views: key.views,
     }
 }
 
@@ -212,49 +211,55 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
     assert!(span > 0.0, "a blended segment spans a positive moment");
     let t = ((at - from.at) / span).clamp(0.0, 1.0);
     let eased = t * t * (3.0 - 2.0 * t);
-    let lerp = |start: f32, end: f32| start + (end - start) * eased;
-    let camera = CameraState {
-        pivot: [
-            lerp(from.camera.pivot[0], to.camera.pivot[0]),
-            lerp(from.camera.pivot[1], to.camera.pivot[1]),
-            lerp(from.camera.pivot[2], to.camera.pivot[2]),
-        ],
-        yaw: lerp(from.camera.yaw, to.camera.yaw),
-        pitch: lerp(from.camera.pitch, to.camera.pitch),
-        distance: lerp(from.camera.distance, to.camera.distance),
-        fov_y: lerp(from.camera.fov_y, to.camera.fov_y),
-        projection: if eased < 0.5 {
-            from.camera.projection
-        } else {
-            to.camera.projection
-        },
-        aperture: lerp(from.camera.aperture, to.camera.aperture),
-        focus: lerp(from.camera.focus, to.camera.focus),
-    };
-    let section = SectionState {
-        center: [
-            lerp(from.section.center[0], to.section.center[0]),
-            lerp(from.section.center[1], to.section.center[1]),
-            lerp(from.section.center[2], to.section.center[2]),
-        ],
-        azimuth: lerp_angle(from.section.azimuth, to.section.azimuth, eased),
-        elevation: lerp(from.section.elevation, to.section.elevation),
-        span: lerp(from.section.span, to.section.span),
-        projection: if eased < 0.5 {
-            from.section.projection
-        } else {
-            to.section.projection
-        },
-        thickness: lerp(from.section.thickness, to.section.thickness),
-    };
-    let time = lerp(from.time as f32, to.time as f32)
+    let views = std::array::from_fn(|index| blend_view(from.views[index], to.views[index], eased));
+    let time = lerp(from.time as f32, to.time as f32, eased)
         .round()
         .clamp(from.time.min(to.time) as f32, from.time.max(to.time) as f32) as u32;
-    Sample {
-        time,
-        camera,
-        section,
+    Sample { time, views }
+}
+
+fn blend_view(from: PaneView, to: PaneView, eased: f32) -> PaneView {
+    let lerp = |start: f32, end: f32| start + (end - start) * eased;
+    PaneView {
+        camera: CameraState {
+            pivot: [
+                lerp(from.camera.pivot[0], to.camera.pivot[0]),
+                lerp(from.camera.pivot[1], to.camera.pivot[1]),
+                lerp(from.camera.pivot[2], to.camera.pivot[2]),
+            ],
+            yaw: lerp(from.camera.yaw, to.camera.yaw),
+            pitch: lerp(from.camera.pitch, to.camera.pitch),
+            distance: lerp(from.camera.distance, to.camera.distance),
+            fov_y: lerp(from.camera.fov_y, to.camera.fov_y),
+            projection: if eased < 0.5 {
+                from.camera.projection
+            } else {
+                to.camera.projection
+            },
+            aperture: lerp(from.camera.aperture, to.camera.aperture),
+            focus: lerp(from.camera.focus, to.camera.focus),
+        },
+        section: SectionState {
+            center: [
+                lerp(from.section.center[0], to.section.center[0]),
+                lerp(from.section.center[1], to.section.center[1]),
+                lerp(from.section.center[2], to.section.center[2]),
+            ],
+            azimuth: lerp_angle(from.section.azimuth, to.section.azimuth, eased),
+            elevation: lerp(from.section.elevation, to.section.elevation),
+            span: lerp(from.section.span, to.section.span),
+            projection: if eased < 0.5 {
+                from.section.projection
+            } else {
+                to.section.projection
+            },
+            thickness: lerp(from.section.thickness, to.section.thickness),
+        },
     }
+}
+
+fn lerp(from: f32, to: f32, eased: f32) -> f32 {
+    from + (to - from) * eased
 }
 
 fn lerp_angle(from: f32, to: f32, eased: f32) -> f32 {
@@ -265,6 +270,10 @@ fn lerp_angle(from: f32, to: f32, eased: f32) -> f32 {
         delta += std::f32::consts::TAU;
     }
     from + delta * eased
+}
+
+fn plausible_view(view: &PaneView) -> bool {
+    plausible_camera(&view.camera) && plausible_section(&view.section)
 }
 
 fn plausible_camera(camera: &CameraState) -> bool {

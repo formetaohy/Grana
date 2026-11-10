@@ -456,12 +456,13 @@ fn diagnostics_menu<'a>(
         "Streaming",
         Some(state.io.adapter),
     ));
-    rows.push(crate::view::labelled(ctx, "Volume", &bricks(frame.volume)));
-    rows.push(crate::view::labelled(
-        ctx,
-        "Section",
-        &bricks(frame.section),
-    ));
+    for (index, view) in frame.panes.iter().enumerate() {
+        rows.push(crate::view::labelled(
+            ctx,
+            &format!("Pane {}", index + 1),
+            &bricks(*view),
+        ));
+    }
     rows.push(crate::view::labelled(
         ctx,
         "Levels",

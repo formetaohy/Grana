@@ -6,7 +6,6 @@ use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use grana_display::Camera;
 use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, SectionPlane, is_closed};
 use grana_gpu::Table;
 use wgpu::{
@@ -86,7 +85,8 @@ struct FaceRun {
 pub(crate) struct CutView<'a> {
     pub section: &'a SectionData,
     pub size: [u32; 2],
-    pub camera: &'a Camera,
+    pub eye: Vec3,
+    pub forward: Vec3,
 }
 
 pub(crate) struct SlicePass {
@@ -279,7 +279,8 @@ impl SlicePass {
         let CutView {
             section,
             size,
-            camera,
+            eye,
+            forward,
         } = view;
         if section.right[3] <= 0.0 || section.up[3] <= 0.0 {
             self.objects = 0;
@@ -298,7 +299,7 @@ impl SlicePass {
             self.upload(device, queue);
             self.span_key = Some(key);
         }
-        self.pose(device, queue, scene, &plane, camera);
+        self.pose(device, queue, scene, &plane, eye, forward);
     }
 
     fn write_styles(
@@ -514,11 +515,10 @@ impl SlicePass {
         queue: &Queue,
         scene: &SceneFrame<'_>,
         plane: &SectionPlane,
-        camera: &Camera,
+        eye: Vec3,
+        forward: Vec3,
     ) {
         let normal = Vec3::from(plane.normal);
-        let eye = camera.eye();
-        let forward = camera.forward();
         let mut order = self
             .runs
             .iter()

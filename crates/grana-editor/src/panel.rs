@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_display::Viewport;
+use grana_display::{PANE_COUNT, PaneKind, Panes};
 use grana_scene::{Item, Selection};
 use grana_session::{Command, SessionView};
 use grana_ui::glass::GlassStyle;
@@ -78,13 +78,13 @@ pub fn build(
     ui: &mut Ui<Message>,
     actions: Vec<Message>,
     view: &SessionView<'_>,
-    viewport: &mut Viewport,
+    panes: &mut Panes,
     stage: &mut Stage,
     workspace: &mut Workspace,
     frame: FrameStats,
 ) -> Vec<Command> {
     let mut commands = Vec::new();
-    apply(ui, actions, view, viewport, stage, workspace, &mut commands);
+    apply(ui, actions, view, panes, stage, workspace, &mut commands);
     if let Some(panel) = workspace.panel {
         workspace.last_panel = panel;
     }
@@ -124,20 +124,20 @@ pub fn build(
         recent: view.recent,
         import: view.import,
         palette: palette.as_ref(),
-        viewport: &*viewport,
+        panes: &*panes,
         stage: &*stage,
         workspace: &*workspace,
         export: view.export,
         frame,
     };
-    let (volume, section, elements) = {
+    let (rects, elements) = {
         let mut ctx = ui.build();
         let layout = Layout::new(&mut ctx, &state, full);
         let elements = view_elements(&mut ctx, &layout, &state, full);
-        (layout.volume, layout.section, elements)
+        (layout.panes, elements)
     };
     ui.present(grana_ui::place(full, elements));
-    stage.set_rects(volume, section);
+    stage.set_rects(rects);
     commands
 }
 
@@ -177,8 +177,7 @@ pub struct Layout {
     pub analysis: Rect,
     pub sidebar: Rect,
     pub stage: Rect,
-    pub volume: Rect,
-    pub section: Rect,
+    pub panes: [Rect; PANE_COUNT],
     pub transport: Option<Rect>,
     pub dock: Option<Rect>,
     pub sidebar_visible: bool,
@@ -280,21 +279,22 @@ impl Layout {
             ),
         );
         let split_ratio = ctx.animate(
-            Key::new("viewport.split.spring").id(),
-            state.viewport.split(),
+            Key::new("panes.split.spring").id(),
+            state.panes.split(),
             Motion::response(0.18, 0.06),
         );
         let split = (stage.min.x + stage.width() * split_ratio).round();
-        let volume = Rect::from_min_max(stage.min, Vec2::new(split, stage.max.y));
-        let section = Rect::from_min_max(Vec2::new(split, stage.min.y), stage.max);
+        let panes = [
+            Rect::from_min_max(stage.min, Vec2::new(split, stage.max.y)),
+            Rect::from_min_max(Vec2::new(split, stage.min.y), stage.max),
+        ];
         Self {
             toolbar_left,
             toolbar_right,
             analysis,
             sidebar,
             stage,
-            volume,
-            section,
+            panes,
             transport,
             dock,
             sidebar_visible,
@@ -478,7 +478,7 @@ pub fn apply(
     ui: &mut Ui<Message>,
     actions: Vec<Message>,
     view: &SessionView<'_>,
-    viewport: &mut Viewport,
+    panes: &mut Panes,
     stage: &mut Stage,
     workspace: &mut Workspace,
     commands: &mut Vec<Command>,
@@ -553,7 +553,7 @@ pub fn apply(
                 };
                 workspace.dock_height = (height + value).max(DOCK_MINIMUM);
             }
-            Message::SetSplit(value) => viewport.set_split(value),
+            Message::SetSplit(value) => panes.set_split(value),
             Message::SetColumnWidth { index, width } => {
                 workspace.column_widths.insert(index, width);
             }
@@ -711,16 +711,41 @@ pub fn apply(
             Message::SetClassifierFeatures { set, features } => {
                 workspace.classifier.insert(set, features);
             }
+            Message::SetActivePane(index) => workspace.active = index.min(PANE_COUNT - 1),
+            Message::SetPaneKind { index, kind } => {
+                let aspect = pane_aspect(stage, index);
+                panes.pane_mut(index).set_kind(kind);
+                if let Some(scene) = view.scene {
+                    crate::fitting::fit_pane(scene, panes, index, aspect);
+                }
+                workspace.active = index.min(PANE_COUNT - 1);
+            }
+            Message::SetPaneSlice { index, preset } => {
+                let aspect = pane_aspect(stage, index);
+                let (azimuth, elevation) = crate::section_preset(preset);
+                let pane = panes.pane_mut(index);
+                pane.set_kind(PaneKind::Section);
+                pane.section_mut().set_orientation(azimuth, elevation);
+                if let Some(scene) = view.scene {
+                    crate::fitting::fit_pane(scene, panes, index, aspect);
+                }
+                workspace.active = index.min(PANE_COUNT - 1);
+            }
             Message::SetSectionPreset(index) => {
                 let (azimuth, elevation) = crate::section_preset(index);
-                viewport.section_mut().set_orientation(azimuth, elevation);
+                let active = workspace.active.min(PANE_COUNT - 1);
+                let aspect = pane_aspect(stage, active);
+                panes
+                    .pane_mut(active)
+                    .section_mut()
+                    .set_orientation(azimuth, elevation);
                 if let Some(scene) = view.scene {
-                    crate::fitting::fit_section(scene, viewport, stage);
+                    crate::fitting::fit_pane(scene, panes, active, aspect);
                 }
             }
             Message::SetSectionProjection(index) => {
                 if let Some(projection) = grana_display::SectionProjection::from_index(index) {
-                    let section = viewport.section_mut();
+                    let section = panes.pane_mut(workspace.active).section_mut();
                     section.set_projection(projection);
                     if section.projected() && section.thickness() <= 0.0 {
                         section.set_thickness(grana_display::PROJECTION_THICKNESS);
@@ -729,31 +754,42 @@ pub fn apply(
             }
             Message::SetCameraProjection(index) => {
                 if let Some(projection) = grana_display::CameraProjection::from_index(index) {
-                    viewport.camera_mut().set_projection(projection);
+                    panes
+                        .pane_mut(workspace.active)
+                        .camera_mut()
+                        .set_projection(projection);
                 }
             }
             Message::SetAperture(value) => {
-                viewport
+                panes
+                    .pane_mut(workspace.active)
                     .camera_mut()
                     .set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
             }
             Message::SetFocus(value) => {
-                viewport
+                panes
+                    .pane_mut(workspace.active)
                     .camera_mut()
                     .set_focus(value.clamp(1.0e-3, grana_display::APERTURE_LIMIT));
             }
-            Message::FocusCamera => viewport.camera_mut().focus_at_pivot(),
+            Message::FocusCamera => panes
+                .pane_mut(workspace.active)
+                .camera_mut()
+                .focus_at_pivot(),
             Message::SetSectionThickness(value) => {
-                let section = viewport.section_mut();
+                let section = panes.pane_mut(workspace.active).section_mut();
                 section.set_thickness(value.clamp(0.0, grana_display::THICKNESS_LIMIT));
             }
             Message::SetSectionOrientation { azimuth, elevation } => {
-                viewport.section_mut().set_orientation(azimuth, elevation);
+                panes
+                    .pane_mut(workspace.active)
+                    .section_mut()
+                    .set_orientation(azimuth, elevation);
             }
             Message::SetSectionDepth(position) => {
                 if let Some(scene) = view.scene {
                     let world = scene.dataset.world_size();
-                    let section = viewport.section_mut();
+                    let section = panes.pane_mut(workspace.active).section_mut();
                     let normal = section.normal();
                     let extent = world.abs().dot(normal.abs());
                     let target = position.clamp(0.0, extent) - 0.5 * extent;
@@ -770,14 +806,9 @@ pub fn apply(
             Message::SetExport(export) => {
                 commands.push(Command::SetExport(export));
             }
-            Message::FitVolume => {
+            Message::FitPane(index) => {
                 if let Some(scene) = view.scene {
-                    crate::fitting::fit_volume(scene, viewport, stage);
-                }
-            }
-            Message::FitSection => {
-                if let Some(scene) = view.scene {
-                    crate::fitting::fit_section(scene, viewport, stage);
+                    crate::fitting::fit_pane(scene, panes, index, pane_aspect(stage, index));
                 }
             }
             Message::Plot(event) => {
@@ -815,4 +846,8 @@ pub fn apply(
             }
         }
     }
+}
+fn pane_aspect(stage: &Stage, index: usize) -> f32 {
+    let rect = stage.rect(index);
+    rect.width().max(1.0) / rect.height().max(1.0)
 }

@@ -9,12 +9,6 @@ use crate::target::PICK_FORMAT;
 pub(crate) const PICK_ROW: u64 = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PickPane {
-    Volume,
-    Section,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickId {
     None,
     Style(u32),

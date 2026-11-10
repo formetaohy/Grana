@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Palette, SectionState, Shading, Stop, TransferFunction, VolumeMode, VolumeStyle,
+    CameraState, Palette, PaneState, PaneView, SectionState, Shading, Stop, TransferFunction,
+    VolumeMode, VolumeStyle,
 };
 use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
@@ -252,9 +253,12 @@ impl Decode for Source {
 
 impl Decode for ViewState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let mut panes = Vec::with_capacity(grana_display::PANE_COUNT);
+        for _ in 0..grana_display::PANE_COUNT {
+            panes.push(PaneState::decode(reader)?);
+        }
         let view = Self {
-            camera: CameraState::decode(reader)?,
-            section: SectionState::decode(reader)?,
+            panes: panes.try_into().map_err(|_| FAULT_VALUE)?,
             split: finite(reader.f32()?)?,
             timeline: Timeline::decode(reader)?,
             export: Export::decode(reader)?,
@@ -265,6 +269,19 @@ impl Decode for ViewState {
             return Err(FAULT_VALUE);
         }
         Ok(view)
+    }
+}
+
+impl Decode for PaneState {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let kind = grana_display::PaneKind::from_index(reader.u8()? as usize).ok_or(FAULT_VALUE)?;
+        Ok(Self {
+            kind,
+            view: PaneView {
+                camera: CameraState::decode(reader)?,
+                section: SectionState::decode(reader)?,
+            },
+        })
     }
 }
 
@@ -289,11 +306,19 @@ impl Decode for Timeline {
 
 impl Decode for Keyframe {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let at = finite(reader.f32()?)?;
+        let time = reader.u32()?;
+        let mut views = Vec::with_capacity(grana_display::PANE_COUNT);
+        for _ in 0..grana_display::PANE_COUNT {
+            views.push(PaneView {
+                camera: CameraState::decode(reader)?,
+                section: SectionState::decode(reader)?,
+            });
+        }
         Ok(Self {
-            at: finite(reader.f32()?)?,
-            time: reader.u32()?,
-            camera: CameraState::decode(reader)?,
-            section: SectionState::decode(reader)?,
+            at,
+            time,
+            views: views.try_into().map_err(|_| FAULT_VALUE)?,
         })
     }
 }

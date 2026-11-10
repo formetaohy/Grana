@@ -25,7 +25,7 @@ pub use grana_ui::widget;
 pub use command::shortcut;
 pub use message::{Message, PlotEvent};
 pub use panel::{Panel, apply, build};
-pub use stage::{GrabDrag, Interaction, PaintDrag, Pane, Stage, ToolDrag};
+pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
     AnnotationTool, ComparisonMetric, FrameStats, MaskBrush, MaskBrushTool, Palette, Playback,
     ProfileStats, RelationMetric, Sections, View, ViewStats, Workspace,

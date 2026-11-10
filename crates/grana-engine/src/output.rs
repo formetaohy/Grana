@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use grana_display::{CameraState, SectionState};
+use grana_display::{Camera, PANE_COUNT, PaneKind, PaneView, SectionCamera};
 use grana_raster::Raster;
-use grana_render::Renderer;
+use grana_render::{Lens, PaneFrame, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use grana_video::{Recorder, Sequence};
@@ -14,7 +14,7 @@ use wgpu::{
 
 use crate::frame::{self, View};
 use crate::overlay;
-use crate::panels::{Panels, Panes};
+use crate::panels::{Panels, Regions};
 
 pub const IMAGE_SAMPLES: u32 = 64;
 pub const MOVIE_SAMPLES: u32 = 32;
@@ -24,8 +24,7 @@ const MOVIE_ATTEMPTS: u32 = 4096;
 #[derive(Clone, Copy, Debug)]
 pub struct Pose {
     pub time: u32,
-    pub camera: CameraState,
-    pub section: SectionState,
+    pub views: [PaneView; PANE_COUNT],
 }
 
 pub enum Destination {
@@ -90,7 +89,7 @@ pub struct Export {
     samples: u32,
     coarsen: usize,
     truncated: bool,
-    panes: Panes,
+    regions: Regions,
     transparent: bool,
     format: TextureFormat,
     texture: Texture,
@@ -120,25 +119,25 @@ impl Export {
         }
         let movie = matches!(destination, Destination::Movie { .. });
         assert!(!movie || fps > 0, "a movie holds a positive frame rate");
-        let panes = panels.export(width, movie);
+        let regions = panels.export(width, movie);
         let limit = device.limits().max_texture_dimension_2d;
-        if panes.size[0] > limit || panes.size[1] > limit {
+        if regions.size[0] > limit || regions.size[1] > limit {
             return Err(format!(
                 "a {} × {} export exceeds the {limit} pixel limit of this device",
-                panes.size[0], panes.size[1]
+                regions.size[0], regions.size[1]
             ));
         }
-        let texture = create_texture(device, "grana.export", format, panes.size);
+        let texture = create_texture(device, "grana.export", format, regions.size);
         let view = texture.create_view(&TextureViewDescriptor::default());
         let layer = transparent.then(|| {
-            let layer = create_texture(device, "grana.export.overlay", format, panes.size);
+            let layer = create_texture(device, "grana.export.overlay", format, regions.size);
             let view = layer.create_view(&TextureViewDescriptor::default());
             (layer, view)
         });
         let sink = match destination {
             Destination::Image { path } => Sink::Image { path },
             Destination::Movie { path } => Sink::Movie {
-                recorder: Recorder::start(&path, panes.size, fps, transparent)
+                recorder: Recorder::start(&path, regions.size, fps, transparent)
                     .map_err(|error| error.to_string())?,
                 path,
             },
@@ -156,7 +155,7 @@ impl Export {
             samples,
             coarsen: 0,
             truncated: false,
-            panes,
+            regions,
             transparent,
             format,
             texture,
@@ -183,8 +182,27 @@ impl Export {
         rendered: &crate::view::RenderedScene,
     ) -> Outcome {
         let pose = self.poses[self.frame];
-        let camera = frame::restored_camera(&pose.camera);
-        let section = frame::restored_section(&pose.section);
+        let cameras = pose.views.map(|view| frame::restored_camera(&view.camera));
+        let sections = pose
+            .views
+            .map(|view| frame::restored_section(&view.section));
+        let panes = std::array::from_fn(|index| {
+            let pane = self.regions.panes[index];
+            match pane.kind {
+                PaneKind::Volume => Some(PaneFrame::Volume {
+                    camera: &cameras[index],
+                    lens: Lens {
+                        camera: &cameras[index],
+                        aspect: pane.region[2].max(1) as f32 / pane.region[3].max(1) as f32,
+                    },
+                    region: pane.region,
+                }),
+                PaneKind::Section => Some(PaneFrame::Section {
+                    section: &sections[index],
+                    region: pane.region,
+                }),
+            }
+        });
         let info = frame::draw(
             renderer,
             device,
@@ -192,11 +210,8 @@ impl Export {
             View {
                 target: &self.view,
                 scene,
-                camera: &camera,
-                section: &section,
-                size: self.panes.size,
-                volume_region: self.panes.volume,
-                section_region: self.panes.section,
+                panes,
+                size: self.regions.size,
                 samples: self.samples,
                 prefetch: false,
                 transparent: self.transparent,
@@ -243,23 +258,15 @@ impl Export {
     ) -> Result<Option<PathBuf>, String> {
         let legends = grana_figure::legends(scene);
         let caption = grana_figure::caption(scene, pose.time);
-        let camera = frame::restored_camera(&pose.camera);
-        let world = scene.dataset.world_size();
-        let aspect = self.panes.volume_points[2] / self.panes.volume_points[3].max(1.0e-3);
         let labels = grana_figure::labels(scene, pose.time);
         let annotations = grana_figure::annotations(scene, pose.time);
-        let label = overlay::LabelView {
-            labels: &labels,
-            view_projection: camera.view_projection(aspect, 0.5 * world.length()),
-            depth: grana_figure::Depth::new(&camera),
-        };
         let instances = overlay::instances(
             ui,
             overlay::Figure {
-                panes: &self.panes,
-                camera: &pose.camera,
-                section: &pose.section,
-                labels: &label,
+                regions: &self.regions,
+                views: &pose.views,
+                world: scene.dataset.world_size(),
+                labels: &labels,
                 annotations: &annotations,
                 voxel: scene.dataset.voxel_size(),
                 legends: &legends,
@@ -268,7 +275,7 @@ impl Export {
             },
         );
         let pixels = self.capture(device, queue, ui, &instances)?;
-        let size = self.panes.size;
+        let size = self.regions.size;
         let mut sink = self.sink.take().expect("the export is alive");
         sink.push(pose.time, size, &pixels)?;
         self.frame += 1;
@@ -289,8 +296,8 @@ impl Export {
         ui: &mut Ui<A>,
         instances: &[grana_ui::Instance],
     ) -> Result<Vec<u8>, String> {
-        let size = self.panes.size;
-        let scale = self.panes.pixels_per_point;
+        let size = self.regions.size;
+        let scale = self.regions.pixels_per_point;
         ui.flush(queue);
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("grana.export.figure"),
@@ -380,4 +387,12 @@ fn clear(encoder: &mut CommandEncoder, target: &TextureView) {
         })],
         ..Default::default()
     });
+}
+
+pub(crate) fn restored_camera(view: &PaneView) -> Camera {
+    frame::restored_camera(&view.camera)
+}
+
+pub(crate) fn restored_section(view: &PaneView) -> SectionCamera {
+    frame::restored_section(&view.section)
 }

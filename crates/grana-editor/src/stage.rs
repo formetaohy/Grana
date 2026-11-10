@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_display::Viewport;
+use grana_display::{PANE_COUNT, PaneKind, Panes};
 use grana_ui::{Button, Cursor, Modifiers, Rect, Ui};
 use grana_volume::Spacing;
 
@@ -8,16 +8,9 @@ use crate::state::AnnotationTool;
 const SECTION_STEP_VOXELS: f32 = 1.0;
 const CLICK_SLOP: f32 = 3.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Pane {
-    #[default]
-    Volume,
-    Section,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ToolDrag {
-    pub pane: Pane,
+    pub pane: usize,
     pub start: Vec2,
     pub position: Vec2,
     pub finished: bool,
@@ -25,7 +18,7 @@ pub struct ToolDrag {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GrabDrag {
-    pub pane: Pane,
+    pub pane: usize,
     pub position: Vec2,
     pub delta: Vec2,
     pub finished: bool,
@@ -33,15 +26,22 @@ pub struct GrabDrag {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PaintDrag {
-    pub pane: Pane,
+    pub pane: usize,
     pub position: Vec2,
     pub finished: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct Intent {
+    pub tool: Option<AnnotationTool>,
+    pub paint: bool,
+    pub grabbed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Interaction {
     pub camera: bool,
-    pub pick: Option<(Pane, Vec2)>,
+    pub pick: Option<(usize, Vec2)>,
     pub tool: Option<ToolDrag>,
     pub grab: Option<GrabDrag>,
     pub paint: Option<PaintDrag>,
@@ -60,7 +60,7 @@ enum Drag {
 
 #[derive(Clone, Copy, Debug)]
 struct Press {
-    pane: Pane,
+    pane: usize,
     cursor: Vec2,
     dragged: bool,
 }
@@ -70,11 +70,9 @@ pub struct Stage {
     drag_button: Option<Button>,
     press: Option<Press>,
 
-    hovered: Option<Pane>,
-    volume_region: [u32; 4],
-    section_region: [u32; 4],
-    volume_rect: Rect,
-    section_rect: Rect,
+    hovered: Option<usize>,
+    rects: [Rect; PANE_COUNT],
+    regions: [[u32; 4]; PANE_COUNT],
     modifiers: Modifiers,
 }
 
@@ -92,55 +90,55 @@ impl Stage {
             press: None,
 
             hovered: None,
-            volume_region: [0, 0, 1, 1],
-            section_region: [0, 0, 1, 1],
-            volume_rect: Rect::ZERO,
-            section_rect: Rect::ZERO,
+            rects: [Rect::ZERO; PANE_COUNT],
+            regions: [[0, 0, 1, 1]; PANE_COUNT],
             modifiers: Modifiers::default(),
         }
     }
 
-    pub fn set_rects(&mut self, volume: Rect, section: Rect) {
-        self.volume_rect = volume;
-        self.section_rect = section;
+    pub fn set_rects(&mut self, rects: [Rect; PANE_COUNT]) {
+        self.rects = rects;
     }
 
-    pub fn volume_rect(&self) -> Rect {
-        self.volume_rect
+    pub fn rects(&self) -> [Rect; PANE_COUNT] {
+        self.rects
     }
 
-    pub fn section_rect(&self) -> Rect {
-        self.section_rect
+    pub fn rect(&self, index: usize) -> Rect {
+        self.rects[index]
     }
 
-    pub fn set_regions(&mut self, volume: [u32; 4], section: [u32; 4]) {
-        self.volume_region = volume;
-        self.section_region = section;
+    pub fn set_regions(&mut self, regions: [[u32; 4]; PANE_COUNT]) {
+        self.regions = regions;
     }
 
-    pub fn volume_region(&self) -> [u32; 4] {
-        self.volume_region
+    pub fn regions(&self) -> [[u32; 4]; PANE_COUNT] {
+        self.regions
     }
 
-    pub fn pane_at(&self, point: Vec2) -> Option<Pane> {
-        if self.volume_rect.contains(point) {
-            Some(Pane::Volume)
-        } else if self.section_rect.contains(point) {
-            Some(Pane::Section)
-        } else {
-            None
-        }
+    pub fn region(&self, index: usize) -> [u32; 4] {
+        self.regions[index]
+    }
+
+    pub fn pane_at(&self, point: Vec2) -> Option<usize> {
+        self.rects
+            .iter()
+            .position(|rect| rect.width() > 0.0 && rect.contains(point))
     }
 
     pub fn input<A: Clone>(
         &mut self,
         ui: &mut Ui<A>,
-        viewport: &mut Viewport,
+        panes: &mut Panes,
+        active: &mut usize,
         spacing: Spacing,
-        tool: Option<AnnotationTool>,
-        paint: bool,
-        grabbed: bool,
+        intent: Intent,
     ) -> Interaction {
+        let Intent {
+            tool,
+            paint,
+            grabbed,
+        } = intent;
         let mut interaction = Interaction::default();
         let blocked = ui.pointer_over_chrome() || ui.pointer_over_widget() || ui.pointer_captured();
         let input = ui.input();
@@ -154,24 +152,34 @@ impl Stage {
             let moving = delta.length_squared() > 0.0;
             match drag {
                 Drag::Orbit => {
-                    if moving {
-                        viewport.camera_mut().orbit(delta);
+                    if let Some(press) = self.press
+                        && moving
+                    {
+                        panes.pane_mut(press.pane).camera_mut().orbit(delta);
                         interaction.camera = true;
                     }
                 }
                 Drag::Pan => {
-                    if moving {
-                        viewport
+                    if let Some(press) = self.press
+                        && moving
+                    {
+                        let height = self.rects[press.pane].height();
+                        panes
+                            .pane_mut(press.pane)
                             .camera_mut()
-                            .pan(delta, self.volume_region[3] as f32 / ui.scale());
+                            .pan(delta, height / ui.scale());
                         interaction.camera = true;
                     }
                 }
                 Drag::Section => {
-                    if moving {
-                        let span = viewport.section().span();
-                        let world_per_pixel = span / self.section_rect.height();
-                        viewport.section_mut().pan(delta, world_per_pixel);
+                    if let Some(press) = self.press
+                        && moving
+                    {
+                        let height = self.rects[press.pane].height();
+                        let pane = panes.pane_mut(press.pane);
+                        let span = pane.section().span();
+                        let world_per_pixel = span / height.max(1.0);
+                        pane.section_mut().pan(delta, world_per_pixel);
                         interaction.camera = true;
                     }
                 }
@@ -226,6 +234,7 @@ impl Stage {
                 if !state.pressed {
                     continue;
                 }
+                let kind = panes.pane(pane).kind();
                 let drag = if button == Button::Primary && paint {
                     Drag::Paint
                 } else if button == Button::Primary && tool.is_some() {
@@ -233,12 +242,13 @@ impl Stage {
                 } else if button == Button::Primary && grabbed {
                     Drag::Grab
                 } else {
-                    match (pane, button) {
-                        (Pane::Volume, Button::Primary) => Drag::Orbit,
-                        (Pane::Volume, _) => Drag::Pan,
-                        (Pane::Section, _) => Drag::Section,
+                    match (kind, button) {
+                        (PaneKind::Volume, Button::Primary) => Drag::Orbit,
+                        (PaneKind::Volume, _) => Drag::Pan,
+                        (PaneKind::Section, _) => Drag::Section,
                     }
                 };
+                *active = pane;
                 self.drag = Some(drag);
                 self.drag_button = Some(button);
                 self.press = Some(Press {
@@ -298,26 +308,33 @@ impl Stage {
                 }
             }
         }
-        if !blocked && self.hovered.is_some() && input.wheel().y != 0.0 {
+        if !blocked
+            && let Some(hovered) = self.hovered
+            && input.wheel().y != 0.0
+        {
             let scroll = input.wheel().y;
-            match self.hovered {
-                Some(Pane::Volume) => viewport.camera_mut().zoom(scroll),
-                Some(Pane::Section) => {
+            let pane = panes.pane_mut(hovered);
+            match pane.kind() {
+                PaneKind::Volume => pane.camera_mut().zoom(scroll),
+                PaneKind::Section => {
                     if self.modifiers.control {
-                        viewport.section_mut().zoom(scroll);
+                        pane.section_mut().zoom(scroll);
                     } else {
-                        let step = section_step(viewport, spacing);
-                        viewport.section_mut().shift(scroll * step);
+                        let step = section_step(pane.section().normal(), spacing);
+                        pane.section_mut().shift(scroll * step);
                     }
                 }
-                None => {}
             }
             interaction.camera = true;
         }
-        if self.hovered.is_some() && !blocked && (paint || tool.is_none()) && !grabbed {
+        if let Some(hovered) = self.hovered
+            && !blocked
+            && (paint || tool.is_none())
+            && !grabbed
+        {
             ui.set_cursor(if paint {
                 Cursor::Crosshair
-            } else if self.hovered == Some(Pane::Section) {
+            } else if panes.pane(hovered).kind() == PaneKind::Section {
                 Cursor::Move
             } else {
                 Cursor::Grab
@@ -327,7 +344,7 @@ impl Stage {
     }
 }
 
-fn section_step(viewport: &Viewport, spacing: Spacing) -> f32 {
-    let normal = viewport.section().normal().abs();
+fn section_step(normal: glam::Vec3, spacing: Spacing) -> f32 {
+    let normal = normal.abs();
     (spacing.x() * normal.x + spacing.y() * normal.y + spacing.z() * normal.z) * SECTION_STEP_VOXELS
 }

@@ -4,15 +4,15 @@ use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
-use grana_display::Viewport;
+use grana_display::{PANE_COUNT, PaneKind, Panes};
 use grana_editor::{
-    AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Pane, Panel, Stage, ToolDrag,
-    ViewStats, Workspace,
+    AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Panel, Stage, ToolDrag, ViewStats,
+    Workspace,
 };
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
-use grana_render::{FrameInfo, PickPane};
+use grana_render::FrameInfo;
 use grana_scene::{ObjectFrame, ObjectSetId, Revision};
 use grana_session::{Command, Effects, MaskMode, MaskTool, ObjectAnchor, Session, SessionView};
 use grana_ui::{
@@ -50,14 +50,13 @@ pub struct App {
     startup: Option<String>,
     elapsed_frames: u32,
     exiting: bool,
-    viewport: Viewport,
+    panes: Panes,
     stage: Stage,
     workspace: Workspace,
     info: FrameInfo,
     replaced: Revision,
     content: Revision,
     needs_fit: bool,
-    fit_section: bool,
     last_advance: Option<Instant>,
     last_animation: Option<Instant>,
     repaint_at: Option<Instant>,
@@ -88,14 +87,13 @@ impl App {
             startup,
             elapsed_frames: 0,
             exiting: false,
-            viewport: Viewport::new(),
+            panes: Panes::new(),
             stage: Stage::new(),
             workspace: Workspace::default(),
             info: FrameInfo::default(),
             replaced: Revision::ZERO,
             content: Revision::ZERO,
             needs_fit: true,
-            fit_section: false,
             last_advance: None,
             last_animation: None,
             repaint_at: None,
@@ -248,8 +246,7 @@ impl App {
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
             if current {
-                info.volume = requests.volume_view;
-                info.section = requests.section_view;
+                info.panes = requests.panes;
                 let mut bricks = Vec::with_capacity(
                     requests.volume.len() + requests.section.len() + requests.prefetch.len(),
                 );
@@ -275,7 +272,6 @@ impl App {
         }
         if replaced {
             self.needs_fit = true;
-            self.fit_section = false;
             self.workspace.playback.playing = false;
             self.workspace.playback.previewing = false;
             self.last_advance = None;
@@ -293,27 +289,27 @@ impl App {
         };
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
-        let panes =
-            Panels::new(self.stage.volume_rect(), self.stage.section_rect()).screen(scale, size);
-        self.stage.set_regions(panes.volume, panes.section);
-        let volume_aspect = panes.volume[2] as f32 / panes.volume[3] as f32;
-        let section_aspect = panes.section[2] as f32 / panes.section[3] as f32;
-        let sized = panes.volume[2] > 64
-            && panes.volume[3] > 64
-            && panes.section[2] > 64
-            && panes.section[3] > 64;
+        let panels = self.panels();
+        let regions = panels.screen(scale, size);
+        self.stage
+            .set_regions(std::array::from_fn(|index| regions.panes[index].region));
+        let sized = regions
+            .panes
+            .iter()
+            .all(|pane| pane.region[2] > 64 && pane.region[3] > 64);
         let Some(scene) = self.session.scene() else {
             return;
         };
-        let world = scene.dataset.world_size();
-        let voxel = scene.dataset.voxel_size();
-        if self.fit_section && sized {
-            self.viewport.fit_section(world, voxel, section_aspect);
-            self.fit_section = false;
-        }
         if self.needs_fit && sized {
-            self.viewport
-                .fit(world, voxel, volume_aspect, section_aspect);
+            let aspects = std::array::from_fn(|index| {
+                let region = regions.panes[index].region;
+                region[2] as f32 / region[3].max(1) as f32
+            });
+            self.panes.fit(
+                scene.dataset.world_size(),
+                scene.dataset.voxel_size(),
+                aspects,
+            );
             self.needs_fit = false;
         }
     }
@@ -321,8 +317,11 @@ impl App {
     fn schedule(&mut self, delay: Duration) {
         self.elapsed_frames += 1;
         let loaded = self.session.scene().is_some();
-        let streamed = self.info.volume.resident >= self.info.volume.demand
-            && self.info.section.resident >= self.info.section.demand;
+        let streamed = self
+            .info
+            .panes
+            .iter()
+            .all(|pane| pane.resident >= pane.demand);
         let settled = loaded
             && streamed
             && self.info.samples >= SAMPLE_LIMIT
@@ -380,7 +379,7 @@ impl App {
             let App {
                 surface,
                 session,
-                viewport,
+                panes,
                 stage,
                 workspace,
                 ..
@@ -401,14 +400,24 @@ impl App {
                 || surface.ui.pointer_over_widget()
                 || surface.ui.pointer_captured();
             let hovered = (!blocked && tool.is_none() && workspace.seed.is_none())
-                .then(|| annotation_hit(surface, session, viewport, stage))
+                .then(|| annotation_hit(surface, session, panes, stage))
                 .flatten();
             let pressed = surface.ui.input().button(UiButton::Primary).pressed;
             let grabbed = hovered.is_some() && pressed;
-            let interaction = stage.input(&mut surface.ui, viewport, spacing, tool, paint, grabbed);
+            let interaction = stage.input(
+                &mut surface.ui,
+                panes,
+                &mut workspace.active,
+                spacing,
+                grana_editor::Intent {
+                    tool,
+                    paint,
+                    grabbed,
+                },
+            );
             if interaction.camera {
                 if let Some(scene) = session.scene() {
-                    viewport.clamp_focus(0.5 * scene.dataset.world_size());
+                    panes.clamp_focus(0.5 * scene.dataset.world_size());
                 }
                 surface.window.request_redraw();
             }
@@ -468,25 +477,25 @@ impl App {
     }
 
     fn draw_region(&mut self, drag: ToolDrag) {
-        match drag.pane {
-            Pane::Section => {
+        match self.panes.pane(drag.pane).kind() {
+            PaneKind::Section => {
                 if (drag.position - drag.start).length() <= TOOL_CLICK_SLOP {
                     if drag.finished {
-                        self.default_region(Pane::Section, drag.start);
+                        self.default_region(drag.pane, drag.start);
                     }
                     return;
                 }
-                let Some(from) = self.annotation_point(Pane::Section, drag.start) else {
+                let Some(from) = self.annotation_point(drag.pane, drag.start) else {
                     return;
                 };
-                let Some(to) = self.annotation_point(Pane::Section, drag.position) else {
+                let Some(to) = self.annotation_point(drag.pane, drag.position) else {
                     return;
                 };
                 let Some(scene) = self.session.scene() else {
                     return;
                 };
                 let voxel = scene.dataset.voxel_size();
-                let section = self.viewport.section();
+                let section = self.panes.pane(drag.pane).section();
                 let axes = [section.right(), section.up(), section.normal()];
                 let from = Vec3::from(from);
                 let to = Vec3::from(to);
@@ -503,13 +512,21 @@ impl App {
                     half,
                 ))]);
             }
-            Pane::Volume => {
+            PaneKind::Volume => {
                 if !drag.finished {
                     return;
                 }
-                self.default_region(Pane::Volume, drag.start);
+                self.default_region(drag.pane, drag.start);
             }
         }
+    }
+
+    fn region_axes(&self) -> [Vec3; 3] {
+        let index = (0..PANE_COUNT)
+            .find(|index| self.panes.pane(*index).kind() == PaneKind::Section)
+            .unwrap_or(0);
+        let section = self.panes.pane(index).section();
+        [section.right(), section.up(), section.normal()]
     }
 
     fn section_depth(&self, scene: &grana_scene::Scene, normal: Vec3) -> f32 {
@@ -518,7 +535,7 @@ impl App {
         (0.5 * world.abs().dot(normal.abs())).max(voxel)
     }
 
-    fn default_region(&mut self, pane: Pane, point: Vec2) {
+    fn default_region(&mut self, pane: usize, point: Vec2) {
         let Some(centre) = self.annotation_point(pane, point) else {
             return;
         };
@@ -527,8 +544,7 @@ impl App {
         };
         let half = 0.5 * scene.dataset.world_size();
         let voxel = scene.dataset.voxel_size();
-        let section = self.viewport.section();
-        let axes = [section.right(), section.up(), section.normal()];
+        let axes = self.region_axes();
         let reach = (0.06 * half.min_element()).max(voxel.min_element());
         let extent = Vec3::new(reach, reach, self.section_depth(scene, axes[2]));
         let centre = Vec3::from(centre).clamp(-half, half);
@@ -577,26 +593,22 @@ impl App {
         }
     }
 
-    fn annotation_offset(&self, pane: Pane, index: usize, delta: Vec2) -> Option<Vec3> {
+    fn annotation_offset(&self, pane: usize, index: usize, delta: Vec2) -> Option<Vec3> {
         let scene = self.session.scene()?;
         let anchor = scene.annotations.get(index)?.kind().anchor();
-        match pane {
-            Pane::Volume => {
-                let rect = self.stage.volume_rect();
-                if rect.height() <= 0.0 {
-                    return None;
-                }
-                let camera = self.viewport.camera();
+        let rect = self.stage.rect(pane);
+        if rect.height() <= 0.0 {
+            return None;
+        }
+        match self.panes.pane(pane).kind() {
+            PaneKind::Volume => {
+                let camera = self.panes.pane(pane).camera();
                 let depth = (Vec3::from(anchor) - camera.eye()).dot(camera.forward());
                 let per_point = camera.world_per_point(rect.height(), depth);
                 Some(camera.right() * delta.x * per_point - camera.up() * delta.y * per_point)
             }
-            Pane::Section => {
-                let rect = self.stage.section_rect();
-                if rect.height() <= 0.0 {
-                    return None;
-                }
-                let section = self.viewport.section();
+            PaneKind::Section => {
+                let section = self.panes.pane(pane).section();
                 let per_point = section.span() / rect.height();
                 Some(section.right() * delta.x * per_point - section.up() * delta.y * per_point)
             }
@@ -704,7 +716,7 @@ impl App {
         });
     }
 
-    fn place_seed(&mut self, set: ObjectSetId, pane: Pane, point: Vec2, remove: bool) {
+    fn place_seed(&mut self, set: ObjectSetId, pane: usize, point: Vec2, remove: bool) {
         if self
             .session
             .scene()
@@ -712,17 +724,17 @@ impl App {
         {
             return;
         }
-        let (position, radius) = match pane {
-            Pane::Section => {
-                let rect = self.stage.section_rect();
-                let Some(position) = self.annotation_point(Pane::Section, point) else {
+        let (position, radius) = match self.panes.pane(pane).kind() {
+            PaneKind::Section => {
+                let rect = self.stage.rect(pane);
+                let Some(position) = self.annotation_point(pane, point) else {
                     return;
                 };
-                let span = self.viewport.section().span();
+                let span = self.panes.pane(pane).section().span();
                 (position, 6.0 * span / rect.height().max(1.0))
             }
-            Pane::Volume => {
-                let Some((origin, direction)) = self.volume_ray(point) else {
+            PaneKind::Volume => {
+                let Some((origin, direction)) = self.volume_ray(pane, point) else {
                     return;
                 };
                 let Some(scene) = self.session.scene() else {
@@ -733,7 +745,7 @@ impl App {
                     Ok(Some(hit)) => hit.to_array(),
                     Ok(None) => match self.session.seed_peak(channel, origin, direction) {
                         Some(peak) => peak,
-                        None => match self.annotation_point(Pane::Volume, point) {
+                        None => match self.annotation_point(pane, point) {
                             Some(position) => position,
                             None => return,
                         },
@@ -766,9 +778,9 @@ impl App {
         self.apply(vec![Command::AddSeed { set, position }]);
     }
 
-    fn volume_ray(&self, point: Vec2) -> Option<(Vec3, Vec3)> {
+    fn volume_ray(&self, pane: usize, point: Vec2) -> Option<(Vec3, Vec3)> {
         let surface = self.surface.as_ref()?;
-        let region = self.stage.volume_region();
+        let region = self.stage.region(pane);
         if region[2] == 0 || region[3] == 0 {
             return None;
         }
@@ -780,19 +792,19 @@ impl App {
             1.0 - 2.0 * (y - region[1] as f32) / region[3] as f32,
         );
         let aspect = region[2] as f32 / region[3] as f32;
-        let ray = self.viewport.camera().ray(ndc, aspect);
+        let ray = self.panes.pane(pane).camera().ray(ndc, aspect);
         Some((ray.origin, ray.direction))
     }
 
-    fn annotation_point(&self, pane: Pane, point: Vec2) -> Option<[f32; 3]> {
+    fn annotation_point(&self, pane: usize, point: Vec2) -> Option<[f32; 3]> {
         let scene = self.session.scene()?;
-        match pane {
-            Pane::Volume => {
-                let (origin, direction) = self.volume_ray(point)?;
+        match self.panes.pane(pane).kind() {
+            PaneKind::Volume => {
+                let (origin, direction) = self.volume_ray(pane, point)?;
                 if let Ok(Some(hit)) = scene.surface_hit(origin, direction) {
                     return Some(hit.to_array());
                 }
-                let section = self.viewport.section();
+                let section = self.panes.pane(pane).section();
                 let normal = section.normal();
                 let component = direction.dot(normal);
                 if component.abs() <= 1.0e-6 {
@@ -809,12 +821,12 @@ impl App {
                 let position = position + normal * (offset - normal.dot(position));
                 Some(position.to_array())
             }
-            Pane::Section => {
-                let rect = self.stage.section_rect();
+            PaneKind::Section => {
+                let rect = self.stage.rect(pane);
                 if rect.height() <= 0.0 {
                     return None;
                 }
-                let section = self.viewport.section();
+                let section = self.panes.pane(pane).section();
                 let ndc = Vec2::new(
                     2.0 * (point.x - rect.center().x) / rect.width(),
                     -2.0 * (point.y - rect.center().y) / rect.height(),
@@ -830,7 +842,7 @@ impl App {
         }
     }
 
-    fn place_annotation(&mut self, tool: AnnotationTool, pane: Pane, point: Vec2) {
+    fn place_annotation(&mut self, tool: AnnotationTool, pane: usize, point: Vec2) {
         let Some(position) = self.annotation_point(pane, point) else {
             return;
         };
@@ -927,7 +939,7 @@ impl App {
             surface,
             engine,
             session,
-            viewport,
+            panes,
             stage,
             workspace,
             info,
@@ -970,7 +982,7 @@ impl App {
             &mut surface.ui,
             actions,
             &view,
-            viewport,
+            panes,
             stage,
             workspace,
             frame,
@@ -1017,14 +1029,14 @@ impl App {
         }
         let size = self.surface.as_ref()?.gpu.size();
         let scale = self.surface.as_ref()?.window.scale_factor() as f32;
-        let panes = self.panels().screen(scale, size);
+        let regions = self.panels().screen(scale, size);
         let playing = self.workspace.playback.playing;
         let cap = self.level_cap();
         let App {
             surface,
             engine,
             session,
-            viewport,
+            panes,
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
@@ -1037,10 +1049,9 @@ impl App {
                 grana_engine::ViewportFrame {
                     target: surface.ui.scene_view(),
                     scene,
-                    viewport,
+                    panes,
                     size,
-                    volume_region: panes.volume,
-                    section_region: panes.section,
+                    regions: std::array::from_fn(|index| regions.panes[index].region),
                     prefetch: playing,
                     level_cap: cap,
                 },
@@ -1072,8 +1083,14 @@ impl App {
             remote: self.session.remote(),
             levels,
             rate: self.session.throughput(),
-            bricks: self.info.volume.demand + self.info.section.demand,
-            rendered: self.info.section.level.max(self.info.volume.level),
+            bricks: self.info.panes.iter().map(|pane| pane.demand).sum(),
+            rendered: self
+                .info
+                .panes
+                .iter()
+                .map(|pane| pane.level)
+                .max()
+                .unwrap_or(0),
             brick_bytes,
             now: Instant::now(),
         };
@@ -1081,14 +1098,16 @@ impl App {
     }
 
     fn panels(&self) -> Panels {
-        Panels::new(self.stage.volume_rect(), self.stage.section_rect())
+        let rects = self.stage.rects();
+        Panels::new(std::array::from_fn(|index| {
+            (rects[index], self.panes.pane(index).kind())
+        }))
     }
 
     fn pose(&self) -> Pose {
         Pose {
             time: self.session.scene().map_or(0, |scene| scene.time()),
-            camera: self.viewport.camera_state(),
-            section: self.viewport.section_state(),
+            views: self.panes.views(),
         }
     }
 
@@ -1279,8 +1298,7 @@ impl App {
             return;
         }
         let stem = grana_session::slug(scene.dataset.name());
-        let camera = self.viewport.camera_state();
-        let section = self.viewport.section_state();
+        let views = self.panes.views();
         let Some(parent) = rfd::FileDialog::new()
             .set_title("Choose a folder for the frame sequence")
             .pick_folder()
@@ -1297,13 +1315,7 @@ impl App {
             export.image
         };
         let directory = parent.join(format!("{stem}-sequence"));
-        let poses = (0..frames)
-            .map(|time| Pose {
-                time,
-                camera,
-                section,
-            })
-            .collect();
+        let poses = (0..frames).map(|time| Pose { time, views }).collect();
         let panels = self.panels();
         self.start_export(Plan {
             destination: Destination::Sequence { directory, stem },
@@ -1345,8 +1357,8 @@ impl App {
             .surface
             .as_ref()
             .map_or([1, 1], |surface| surface.gpu.size());
-        let panes = self.panels().screen(scale, size);
-        let revision = self.frame_revision(&panes);
+        let regions = self.panels().screen(scale, size);
+        let revision = self.frame_revision(&regions);
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
@@ -1369,39 +1381,43 @@ impl App {
         surface.gpu.queue.present(frame);
     }
 
-    fn frame_revision(&self, panes: &grana_engine::Panes) -> u64 {
-        let camera = self.viewport.camera_state();
-        let section = self.viewport.section_state();
+    fn frame_revision(&self, regions: &grana_engine::Regions) -> u64 {
         let mut stamp = Stamp::new();
         stamp.u64(self.session.revision().raw());
         stamp.u64(self.uploads);
-        stamp.u64(u64::from(self.viewport.split().to_bits()));
-        for value in camera.pivot.into_iter().chain([
-            camera.yaw,
-            camera.pitch,
-            camera.distance,
-            camera.fov_y,
-            camera.aperture,
-            camera.focus,
-        ]) {
-            stamp.f32(value);
-        }
-        stamp.u64(camera.projection.index() as u64);
-        for value in
-            section
-                .center
-                .into_iter()
-                .chain([section.azimuth, section.elevation, section.span])
-        {
-            stamp.f32(value);
-        }
-        for value in panes.volume.into_iter().chain(panes.section) {
-            stamp.u64(u64::from(value));
+        stamp.u64(u64::from(self.panes.split().to_bits()));
+        for index in 0..PANE_COUNT {
+            let pane = self.panes.pane(index);
+            let camera = pane.camera().state();
+            let section = pane.section().state();
+            stamp.u64(pane.kind().index() as u64);
+            for value in camera.pivot.into_iter().chain([
+                camera.yaw,
+                camera.pitch,
+                camera.distance,
+                camera.fov_y,
+                camera.aperture,
+                camera.focus,
+            ]) {
+                stamp.f32(value);
+            }
+            stamp.u64(camera.projection.index() as u64);
+            for value in
+                section
+                    .center
+                    .into_iter()
+                    .chain([section.azimuth, section.elevation, section.span])
+            {
+                stamp.f32(value);
+            }
+            for value in regions.panes[index].region {
+                stamp.u64(u64::from(value));
+            }
         }
         let info = self.info;
         stamp.u64(u64::from(info.samples));
         stamp.u64(u64::from(u8::from(info.settled)) << 1 | u64::from(u8::from(info.fading)));
-        for view in [info.volume, info.section] {
+        for view in info.panes {
             for value in [view.level, view.visible, view.demand, view.resident] {
                 stamp.u64(value as u64);
             }
@@ -1432,23 +1448,25 @@ impl App {
             || engine.pick_pending()
             || engine.exporting()
             || (self.session.scene().is_some()
-                && (self.info.volume.resident < self.info.volume.demand
-                    || self.info.section.resident < self.info.section.demand))
+                && self
+                    .info
+                    .panes
+                    .iter()
+                    .any(|pane| pane.resident < pane.demand))
     }
 
     fn view_state(&self) -> ViewState {
         ViewState {
-            camera: self.viewport.camera_state(),
-            section: self.viewport.section_state(),
-            split: self.viewport.split(),
+            panes: self.panes.states(),
+            split: self.panes.split(),
             timeline: self.session.timeline().clone(),
             export: self.session.export(),
         }
     }
 
     fn apply_view(&mut self, view: &ViewState) {
-        self.viewport.restore(view.camera, view.section);
-        self.viewport.set_split(view.split);
+        self.panes.restore(view.panes);
+        self.panes.set_split(view.split);
         self.session.restore_timeline(view.timeline.clone());
         self.workspace.playback.selected = None;
         self.workspace.playback.position = 0.0;
@@ -1475,7 +1493,7 @@ impl App {
         }
     }
 
-    fn pick(&mut self, pane: Pane, point: Vec2) {
+    fn pick(&mut self, pane: usize, point: Vec2) {
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
@@ -1487,10 +1505,6 @@ impl App {
             (point.x * scale).max(0.0).round() as u32,
             (point.y * scale).max(0.0).round() as u32,
         ];
-        let pane = match pane {
-            Pane::Volume => PickPane::Volume,
-            Pane::Section => PickPane::Section,
-        };
         engine.request_pick(&surface.gpu.device, &surface.gpu.queue, pane, point);
     }
 
@@ -1531,8 +1545,7 @@ impl App {
         let key = Keyframe {
             at,
             time: scene.time(),
-            camera: self.viewport.camera_state(),
-            section: self.viewport.section_state(),
+            views: self.panes.views(),
         };
         let index = self.session.insert_keyframe(key);
         self.workspace.playback.position = at;
@@ -1585,7 +1598,7 @@ impl App {
     fn pose_animation(&mut self) {
         let position = self.workspace.playback.position;
         if let Some(sample) = self.session.timeline().sample(position) {
-            self.viewport.restore(sample.camera, sample.section);
+            self.panes.restore_views(sample.views);
             self.session.set_time(sample.time);
         }
     }
@@ -1751,7 +1764,7 @@ impl App {
                 surface,
                 engine,
                 session,
-                viewport,
+                panes,
                 stage,
                 workspace,
                 ..
@@ -1781,7 +1794,7 @@ impl App {
                 &mut surface.ui,
                 vec![message],
                 &view,
-                viewport,
+                panes,
                 stage,
                 workspace,
                 &mut commands,
@@ -1832,35 +1845,30 @@ impl App {
 fn annotation_hit(
     surface: &Surface,
     session: &Session,
-    viewport: &Viewport,
+    panes: &Panes,
     stage: &Stage,
 ) -> Option<(usize, grana_figure::AnnotationPart)> {
     let pointer = surface.ui.input().position();
-    let pane = stage.pane_at(pointer)?;
+    let index = stage.pane_at(pointer)?;
     let scene = session.scene()?;
     let items = grana_figure::annotations(scene, scene.time());
     if items.is_empty() {
         return None;
     }
-    let placed = match pane {
-        Pane::Volume => {
-            let rect = stage.volume_rect();
-            if rect.height() <= 0.0 {
-                return None;
-            }
+    let rect = stage.rect(index);
+    if rect.height() <= 0.0 {
+        return None;
+    }
+    let pane = panes.pane(index);
+    let placed = match pane.kind() {
+        PaneKind::Volume => {
             let world = scene.dataset.world_size();
             let aspect = rect.width() / rect.height();
-            let view_projection = viewport
-                .camera()
-                .view_projection(aspect, 0.5 * world.length());
+            let view_projection = pane.camera().view_projection(aspect, 0.5 * world.length());
             grana_figure::volume_annotations(&items, view_projection, rect)
         }
-        Pane::Section => {
-            let rect = stage.section_rect();
-            if rect.height() <= 0.0 {
-                return None;
-            }
-            let section = viewport.section();
+        PaneKind::Section => {
+            let section = pane.section();
             let tolerance = 1.5 * scene.dataset.voxel_size().dot(section.normal().abs());
             grana_figure::section_annotations(&items, section, rect, tolerance)
         }
@@ -1873,16 +1881,14 @@ fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
         .filter_map(|frame| timeline.sample_frame(frame))
         .map(|sample| Pose {
             time: sample.time,
-            camera: sample.camera,
-            section: sample.section,
+            views: sample.views,
         })
         .collect()
 }
 
 fn frame_stats(info: FrameInfo) -> FrameStats {
     FrameStats {
-        volume: view_stats(info.volume),
-        section: view_stats(info.section),
+        panes: std::array::from_fn(|index| view_stats(info.panes[index])),
         bytes: info.bytes,
         geometry: info.geometry,
         fragments: info.fragments,

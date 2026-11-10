@@ -2,7 +2,7 @@ use glam::Vec3;
 use grana_display::{
     Camera, CameraProjection, SectionCamera, Shading, TransferFunction, VolumeStyle,
 };
-use grana_render::{ChannelRow, Frame, Marker, Renderer, Requests, SceneFrame};
+use grana_render::{ChannelRow, Frame, Lens, Marker, PaneFrame, Renderer, Requests, SceneFrame};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
@@ -77,11 +77,8 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         let frame = Frame {
             target: &view,
             size: [SIDE, SIDE],
-            volume_region: WHOLE,
-            section_region: CORNER,
+            panes: panes(camera, &section, WHOLE, CORNER),
             time: 0,
-            camera,
-            section: &section,
             region: Region::none(),
             clip: Clip::none(),
             exposure: 1.0,
@@ -183,15 +180,34 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
     panic!("the optics view never settled");
 }
 
+fn panes<'a>(
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+) -> [Option<PaneFrame<'a>>; grana_render::PANE_COUNT] {
+    [
+        Some(PaneFrame::Volume {
+            camera,
+            lens: Lens {
+                camera,
+                aspect: volume_region[2].max(1) as f32 / volume_region[3].max(1) as f32,
+            },
+            region: volume_region,
+        }),
+        Some(PaneFrame::Section {
+            section,
+            region: section_region,
+        }),
+    ]
+}
+
 fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
     Frame {
         target: frame.target,
         size: frame.size,
-        volume_region: frame.volume_region,
-        section_region: frame.section_region,
+        panes: frame.panes,
         time: frame.time,
-        camera: frame.camera,
-        section: frame.section,
         region: frame.region,
         clip: frame.clip,
         exposure: frame.exposure,

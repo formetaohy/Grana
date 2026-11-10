@@ -1,5 +1,5 @@
-use grana_display::Viewport;
-use grana_render::{FrameInfo, PickId, PickPane, Renderer, Requests};
+use grana_display::{PANE_COUNT, PaneKind, Panes};
+use grana_render::{FrameInfo, Lens, PaneFrame, PickId, Renderer, Requests};
 use grana_scene::{Scene, Selection};
 use grana_ui::Ui;
 use grana_volume::{BrickData, BrickRequest, Pyramid};
@@ -15,10 +15,9 @@ pub const SAMPLE_LIMIT: u32 = 32;
 pub struct ViewportFrame<'a> {
     pub target: &'a TextureView,
     pub scene: &'a Scene,
-    pub viewport: &'a Viewport,
+    pub panes: &'a Panes,
     pub size: [u32; 2],
-    pub volume_region: [u32; 4],
-    pub section_region: [u32; 4],
+    pub regions: [[u32; 4]; PANE_COUNT],
     pub prefetch: bool,
     pub level_cap: usize,
 }
@@ -89,13 +88,18 @@ impl Engine {
         frame: ViewportFrame<'_>,
     ) -> Result<FrameInfo, String> {
         self.renderer.set_exporting(false);
-        let rendered = crate::view::frame(
-            frame.scene,
-            Some(crate::view::Lens {
-                camera: frame.viewport.camera(),
-                height: frame.volume_region[3],
-            }),
-        )?;
+        let lens = frame
+            .panes
+            .panes()
+            .iter()
+            .enumerate()
+            .find(|(_, pane)| pane.kind().volume())
+            .map(|(index, pane)| crate::view::Lens {
+                camera: pane.camera(),
+                height: frame.regions[index][3],
+            });
+        let rendered = crate::view::frame(frame.scene, lens)?;
+        let panes = pane_frames(frame.panes, frame.regions);
         let info = frame::draw(
             &mut self.renderer,
             device,
@@ -103,11 +107,8 @@ impl Engine {
             View {
                 target: frame.target,
                 scene: frame.scene,
-                camera: frame.viewport.camera(),
-                section: frame.viewport.section(),
+                panes,
                 size: frame.size,
-                volume_region: frame.volume_region,
-                section_region: frame.section_region,
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,
                 transparent: false,
@@ -128,7 +129,7 @@ impl Engine {
         &mut self,
         device: &Device,
         queue: &Queue,
-        pane: PickPane,
+        pane: usize,
         point: [u32; 2],
     ) -> bool {
         if self.pending_pick.is_some() || !self.renderer.request_pick(device, queue, pane, point) {
@@ -257,4 +258,28 @@ impl Engine {
         self.output_message = Some("the export was cancelled".to_string());
         true
     }
+}
+
+fn pane_frames<'a>(
+    panes: &'a Panes,
+    regions: [[u32; 4]; PANE_COUNT],
+) -> [Option<PaneFrame<'a>>; PANE_COUNT] {
+    std::array::from_fn(|index| {
+        let pane = panes.pane(index);
+        let region = regions[index];
+        match pane.kind() {
+            PaneKind::Volume => Some(PaneFrame::Volume {
+                camera: pane.camera(),
+                lens: Lens {
+                    camera: pane.camera(),
+                    aspect: region[2].max(1) as f32 / region[3].max(1) as f32,
+                },
+                region,
+            }),
+            PaneKind::Section => Some(PaneFrame::Section {
+                section: pane.section(),
+                region,
+            }),
+        }
+    })
 }

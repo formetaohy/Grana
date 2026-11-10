@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use grana_display::{Camera, CameraState, SectionCamera, SectionState, Viewport};
-use grana_engine::{Destination, Engine, Outcome, Panels, Panes, Plan, Pose};
+use grana_display::{PANE_COUNT, PaneKind, Panes};
+use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose};
 use grana_gpu::Headless;
 use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
 use grana_scene::Scene;
@@ -59,18 +59,23 @@ impl Snapshotter for Snapshot {
     ) -> Result<(), String> {
         let mut slot = self.state()?;
         let State { gpu, engine } = slot.as_mut().expect("the snapshot state is ready");
-        let split = request
-            .view
-            .as_ref()
-            .map_or_else(|| Viewport::new().split(), |view| view.split);
-        let panels = panels(split, request.size);
-        let panes = panels.export(request.size[0], false);
-        let (camera, section) = match &request.view {
-            Some(view) => (view.camera, view.section),
-            None => fitted(scene, &panes),
-        };
+        let mut panes = Panes::new();
+        if let Some(view) = &request.view {
+            panes.restore(view.panes);
+            panes.set_split(view.split);
+        }
+        let kinds: [PaneKind; PANE_COUNT] = std::array::from_fn(|index| panes.pane(index).kind());
+        let panels = panels(panes.split(), kinds, request.size);
+        let regions = panels.export(request.size[0], false);
+        if request.view.is_none() {
+            panes.fit(
+                scene.dataset.world_size(),
+                scene.dataset.voxel_size(),
+                std::array::from_fn(|index| aspect(regions.panes[index].region)),
+            );
+        }
         let mut ui: Ui<()> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
-        ui.resize(panes.size);
+        ui.resize(regions.size);
         engine.set_dataset(&gpu.device, scene.dataset.pyramid());
         engine.start_export(
             &gpu.device,
@@ -83,8 +88,7 @@ impl Snapshotter for Snapshot {
                 transparent: request.transparent,
                 poses: vec![Pose {
                     time: request.time,
-                    camera,
-                    section,
+                    views: panes.views(),
                 }],
                 fps: 0,
             },
@@ -119,29 +123,22 @@ fn render(
     ))
 }
 
-fn panels(split: f32, size: [u32; 2]) -> Panels {
+fn panels(split: f32, kinds: [PaneKind; PANE_COUNT], size: [u32; 2]) -> Panels {
     assert!(
         size[0] > 0 && size[1] > 0,
         "a quality snapshot covers at least one pixel"
     );
     let split = split.clamp(grana_display::SPLIT_MIN, grana_display::SPLIT_MAX);
     let height = STAGE_WIDTH * size[1] as f32 / size[0] as f32;
-    let volume_width = (STAGE_WIDTH - STAGE_GAP) * split;
-    let volume = Rect::from_min_max(Vec2::ZERO, Vec2::new(volume_width, height));
-    let section = Rect::from_min_max(
-        Vec2::new(volume_width + STAGE_GAP, 0.0),
-        Vec2::new(STAGE_WIDTH, height),
-    );
-    Panels::new(volume, section)
-}
-
-fn fitted(scene: &Scene, panes: &Panes) -> (CameraState, SectionState) {
-    let world = scene.dataset.world_size();
-    let mut camera = Camera::new(35.0);
-    camera.fit(world, aspect(panes.volume));
-    let mut section = SectionCamera::new();
-    section.fit(world, scene.dataset.voxel_size(), aspect(panes.section));
-    (camera.state(), section.state())
+    let left = (STAGE_WIDTH - STAGE_GAP) * split;
+    let rects = [
+        Rect::from_min_max(Vec2::ZERO, Vec2::new(left, height)),
+        Rect::from_min_max(
+            Vec2::new(left + STAGE_GAP, 0.0),
+            Vec2::new(STAGE_WIDTH, height),
+        ),
+    ];
+    Panels::new(std::array::from_fn(|index| (rects[index], kinds[index])))
 }
 
 fn aspect(region: [u32; 4]) -> f32 {

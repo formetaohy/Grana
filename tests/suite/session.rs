@@ -440,7 +440,7 @@ fn measures_imported_objects_without_statistics() {
 }
 
 fn view_state() -> ViewState {
-    ViewState {
+    let view = grana_display::PaneView {
         camera: CameraState {
             pivot: [0.0, 0.0, 0.0],
             yaw: 0.0,
@@ -459,6 +459,18 @@ fn view_state() -> ViewState {
             projection: grana_display::SectionProjection::Plane,
             thickness: 2.0,
         },
+    };
+    ViewState {
+        panes: [
+            grana_display::PaneState {
+                kind: grana_display::PaneKind::Volume,
+                view,
+            },
+            grana_display::PaneState {
+                kind: grana_display::PaneKind::Section,
+                view,
+            },
+        ],
         split: 0.5,
         timeline: Timeline::default(),
         export: Export::NATIVE,
@@ -752,14 +764,17 @@ fn saves_and_applies_named_views() {
     assert_eq!(session.views().len(), 1, "the view is saved");
     assert_eq!(session.views()[0].name, "View 1");
     let mut moved = view_state();
-    moved.camera.yaw = 0.5;
+    moved.panes[0].view.camera.yaw = 0.5;
     moved.split = 0.4;
     session.observe_view(moved.clone());
     session.execute(Command::SaveView);
     assert_eq!(session.views()[1].name, "View 2");
     session.execute(Command::ApplyView(0));
     let applied = session.take_view().expect("the saved view restores");
-    assert_eq!(applied.camera.yaw, 0.0, "the first view keeps its camera");
+    assert_eq!(
+        applied.panes[0].view.camera.yaw, 0.0,
+        "the first view keeps its camera"
+    );
     assert_eq!(applied.split, view_state().split);
     session.execute(Command::RemoveView(0));
     assert_eq!(session.views().len(), 1, "the view is removed");
@@ -976,8 +991,8 @@ fn keeps_each_well_scene_until_the_well_returns() {
     let view = session
         .take_view()
         .expect("the first well keeps its camera");
-    assert_eq!(view.camera.distance, 10.0);
-    assert_eq!(view.section.span, 20.0);
+    assert_eq!(view.panes[0].view.camera.distance, 10.0);
+    assert_eq!(view.panes[0].view.section.span, 20.0);
     assert_eq!(view.split, 0.5);
     assert!(
         session.history().undo.is_some(),

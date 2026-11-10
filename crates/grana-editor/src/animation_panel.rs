@@ -250,8 +250,8 @@ fn keyframe_list<'a>(
             "{:>6.2}s · F{:>2} · Yaw {:>5.2} · Dist {:>6.1}",
             key.at,
             key.time + 1,
-            key.camera.yaw,
-            key.camera.distance
+            key.views[0].camera.yaw,
+            key.views[0].camera.distance
         );
         let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, move |painter, info| {
             if active {
@@ -306,8 +306,9 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let interval = state.io.frame_interval;
     let running = state.io.exporting;
     let theme = *ctx.theme();
-    let stage_width = (state.stage.section_rect().max.x - state.stage.volume_rect().min.x).max(1.0);
-    let stage_height = (state.stage.volume_rect().max.y - state.stage.volume_rect().min.y).max(1.0);
+    let rects = state.stage.rects();
+    let stage_width = (rects[1].max.x - rects[0].min.x).max(1.0);
+    let stage_height = rects[0].height().max(1.0);
     let movie_size = [
         width,
         even((width as f32 * stage_height / stage_width).round() as u32),
@@ -418,7 +419,8 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let running = state.io.exporting;
     let frames = state.io.frames;
     let message = state.io.export_message.clone();
-    let stage_width = (state.stage.section_rect().max.x - state.stage.volume_rect().min.x).max(1.0);
+    let rects = state.stage.rects();
+    let stage_width = (rects[1].max.x - rects[0].min.x).max(1.0);
     let resolved_width = if image_width == 0 {
         (stage_width * ctx.scale()).round() as u32
     } else {

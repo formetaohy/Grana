@@ -23,11 +23,15 @@ mod table;
 mod target;
 mod volume;
 
+pub use grana_display::PANE_COUNT;
+
 pub const DEPTH_BUCKETS: usize = planner::BUCKET_COUNT;
 
 pub use image::{Image, read as read_image};
 pub use marker::Marker;
-pub use pick::{PickId, PickPane};
+pub use pick::PickId;
 pub use profile::{Budget, FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
-pub use renderer::{CutInfo, Frame, FrameInfo, OitInfo, Renderer, Requests, ViewInfo};
+pub use renderer::{
+    CutInfo, Frame, FrameInfo, Lens, OitInfo, PaneFrame, Renderer, Requests, ViewInfo,
+};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};

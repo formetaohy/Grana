@@ -5,7 +5,9 @@ use grana_display::{
     Camera, SectionCamera, SectionProjection, Shading, TransferFunction, VolumeStyle,
 };
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
-use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
+use grana_render::{
+    Frame, Layer, LayerKey, Lens, PaneFrame, Renderer, Requests, SceneFrame, Style,
+};
 use grana_volume::{
     Basis, BrickCoord, BrickData, BrickGrid, BrickRequest, Channel, Clip, Extent, Level,
     PADDED_SIDE, Pyramid, Region, Spacing, Volume, VoxelData,
@@ -19,6 +21,28 @@ const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const CORNER: [u32; 4] = [0, 0, 1, 1];
 const EMPTY: Extent = Extent::new(16, 16, 16);
+
+fn panes<'a>(
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+) -> [Option<PaneFrame<'a>>; grana_render::PANE_COUNT] {
+    [
+        Some(PaneFrame::Volume {
+            camera,
+            lens: Lens {
+                camera,
+                aspect: volume_region[2].max(1) as f32 / volume_region[3].max(1) as f32,
+            },
+            region: volume_region,
+        }),
+        Some(PaneFrame::Section {
+            section,
+            region: section_region,
+        }),
+    ]
+}
 
 struct View<'a> {
     target: &'a wgpu::TextureView,
@@ -35,11 +59,13 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
     Frame {
         target: view.target,
         size: [SIDE, SIDE],
-        volume_region: view.volume_region,
-        section_region: view.section_region,
+        panes: panes(
+            view.camera,
+            view.section,
+            view.volume_region,
+            view.section_region,
+        ),
         time: 0,
-        camera: view.camera,
-        section: view.section,
         region: view.region,
         clip: Clip::none(),
         exposure: 1.0,
@@ -131,12 +157,21 @@ fn quad(half: f32) -> Mesh {
 }
 
 fn settle(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume) -> Requests {
+    settle_with(gpu, renderer, || frame(view), volume)
+}
+
+fn settle_with<'a, 'b: 'a>(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    build: impl Fn() -> Frame<'a, 'b>,
+    volume: &Volume,
+) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..64 {
-        let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        let mut info = renderer.draw(gpu.device(), gpu.queue(), build());
         if !renderer.requests_pending() {
             while info.samples < SAMPLES || info.fading {
-                info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+                info = renderer.draw(gpu.device(), gpu.queue(), build());
             }
             return latest;
         }
@@ -153,6 +188,20 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume) 
         }
     }
     panic!("the stream never settled");
+}
+
+fn lit(pixels: &[[u8; 4]], rect: [u32; 4]) -> usize {
+    let [left, top, right, bottom] = rect;
+    let mut count = 0;
+    for y in top..bottom {
+        for x in left..right {
+            let pixel = pixels[(y * SIDE + x) as usize];
+            if pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 200 {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
@@ -277,9 +326,9 @@ fn streams_and_shades_two_channels() {
         assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
-    assert!(requests.volume_view.visible > 0, "the view sees no brick");
+    assert!(requests.panes[0].visible > 0, "the view sees no brick");
     assert_eq!(
-        requests.volume_view.resident, requests.volume_view.demand,
+        requests.panes[0].resident, requests.panes[0].demand,
         "the stream never completed"
     );
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
@@ -373,7 +422,7 @@ fn renders_a_rotated_placement() {
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
-        requests.volume_view.visible > 0,
+        requests.panes[0].visible > 0,
         "the rotated volume sees no brick"
     );
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
@@ -487,10 +536,7 @@ fn reveals_a_section_plane() {
         assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
-    assert!(
-        requests.section_view.visible > 0,
-        "the section sees no brick"
-    );
+    assert!(requests.panes[1].visible > 0, "the section sees no brick");
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
         shot.coverage(shot.middle()) > 0.3,
@@ -552,7 +598,7 @@ fn reveals_an_oblique_section_plane() {
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
-        requests.section_view.visible > 0,
+        requests.panes[1].visible > 0,
         "the oblique section sees no brick"
     );
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
@@ -804,14 +850,14 @@ fn probes_a_finer_section_level_for_a_sparse_slab() {
         info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
     }
     assert_eq!(
-        info.section.level, 0,
+        info.panes[1].level, 0,
         "the sparse slab settled at level {}",
-        info.section.level
+        info.panes[1].level
     );
     assert!(
-        info.section.visible <= 1,
+        info.panes[1].visible <= 1,
         "the probed slab measures {} visible bricks",
-        info.section.visible
+        info.panes[1].visible
     );
 }
 
@@ -1446,11 +1492,11 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the constrained view never resolved");
     assert!(
-        info.volume.level > 0,
+        info.panes[0].level > 0,
         "the budget still asks for the finest level"
     );
     assert_eq!(
-        info.volume.visible, info.volume.demand,
+        info.panes[0].visible, info.panes[0].demand,
         "the fitting level still truncates its bricks"
     );
     assert!(!info.truncated, "the fitting level reports truncation");
@@ -1483,8 +1529,8 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let view = ladder_view(&view_texture, &camera, &section, &scene);
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the roomy view never resolved");
-    assert_eq!(info.volume.level, 0, "a roomy budget coarsens the volume");
-    assert_eq!(info.volume.visible, info.volume.demand);
+    assert_eq!(info.panes[0].level, 0, "a roomy budget coarsens the volume");
+    assert_eq!(info.panes[0].visible, info.panes[0].demand);
     assert!(!info.truncated);
     holds_a_settled_frame(&gpu, &mut renderer, &view);
 }
@@ -1495,4 +1541,159 @@ fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
         assert_eq!(info.samples, SAMPLES, "an idle fitted frame resamples");
         assert!(!info.truncated, "an idle fitted frame truncates");
     }
+}
+
+#[test]
+fn renders_a_section_pane_without_a_volume() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut section = SectionCamera::new();
+    section.fit(
+        Vec3::from(volume.world_extent()),
+        Vec3::from(pyramid.level(0).voxel()),
+        1.0,
+    );
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let panes = [
+        None,
+        Some(PaneFrame::Section {
+            section: &section,
+            region: WHOLE,
+        }),
+    ];
+    let build = || Frame {
+        target: &view_texture,
+        size: [SIDE, SIDE],
+        panes,
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        samples: SAMPLES,
+        scene: &scene,
+        prefetch: false,
+        level_cap: usize::MAX,
+        assured: false,
+        coarsen: 0,
+    };
+    let requests = settle_with(&gpu, &mut renderer, build, &volume);
+    assert!(
+        requests.panes[1].visible > 0,
+        "the section pane sees no brick"
+    );
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let centre = pixels[(SIDE * SIDE / 2 + SIDE / 2) as usize];
+    let corner = pixels[12 * SIDE as usize + 12];
+    let centre = centre[0] as u32 + centre[1] as u32 + centre[2] as u32;
+    let corner = corner[0] as u32 + corner[1] as u32 + corner[2] as u32;
+    assert!(
+        centre > corner + 90,
+        "the lone section pane paints nothing at its centre: {centre} against {corner}"
+    );
+}
+
+#[test]
+fn keeps_two_volume_panes_independent() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let world = Vec3::from(volume.world_extent());
+    let mut left = Camera::new(35.0);
+    left.fit(world, 1.0);
+    let mut right = Camera::new(35.0);
+    right.restore(grana_display::CameraState {
+        pivot: [10.0, 0.0, 0.0],
+        yaw: 0.0,
+        pitch: 0.0,
+        distance: 1.0,
+        fov_y: 0.6,
+        projection: grana_display::CameraProjection::Perspective,
+        aperture: 0.0,
+        focus: 1.0,
+    });
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let left_region = [0, 0, SIDE / 2, SIDE];
+    let right_region = [SIDE / 2, 0, SIDE / 2, SIDE];
+    let panes = [
+        Some(PaneFrame::Volume {
+            camera: &left,
+            lens: Lens {
+                camera: &left,
+                aspect: left_region[2] as f32 / left_region[3] as f32,
+            },
+            region: left_region,
+        }),
+        Some(PaneFrame::Volume {
+            camera: &right,
+            lens: Lens {
+                camera: &right,
+                aspect: right_region[2] as f32 / right_region[3] as f32,
+            },
+            region: right_region,
+        }),
+    ];
+    let build = || Frame {
+        target: &view_texture,
+        size: [SIDE, SIDE],
+        panes,
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        samples: SAMPLES,
+        scene: &scene,
+        prefetch: false,
+        level_cap: usize::MAX,
+        assured: false,
+        coarsen: 0,
+    };
+    settle_with(&gpu, &mut renderer, build, &volume);
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let lit_left = lit(&pixels, left_region);
+    let lit_right = lit(&pixels, right_region);
+    assert!(
+        lit_left > (SIDE * SIDE / 64) as usize,
+        "the left pane is empty"
+    );
+    assert!(
+        lit_right * 8 < lit_left,
+        "the second pane reuses the first camera: {lit_left} against {lit_right}"
+    );
 }

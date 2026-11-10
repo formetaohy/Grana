@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use grana_animation::Timeline;
-use grana_display::{CameraState, SectionState};
+use grana_display::{PANE_COUNT, PaneState};
 use grana_geometry::GeometryStore;
 use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneShape, SceneState};
 use grana_volume::Fingerprint;
@@ -85,8 +85,7 @@ pub enum Source {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
-    pub camera: CameraState,
-    pub section: SectionState,
+    pub panes: [PaneState; PANE_COUNT],
     pub split: f32,
     pub timeline: Timeline,
     pub export: Export,

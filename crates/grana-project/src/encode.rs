@@ -1,5 +1,7 @@
 use grana_animation::{Keyframe, Timeline};
-use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
+use grana_display::{
+    CameraState, Palette, PaneState, SectionState, Shading, Stop, TransferFunction,
+};
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{
     ChildField, ChildMetric, ClassifierState, Filter, Measurement, TrackMeasurement,
@@ -156,11 +158,20 @@ impl Encode for Source {
 
 impl Encode for ViewState {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        self.camera.encode(writer);
-        self.section.encode(writer);
+        for pane in &self.panes {
+            pane.encode(writer);
+        }
         writer.f32(self.split);
         self.timeline.encode(writer);
         self.export.encode(writer);
+    }
+}
+
+impl Encode for PaneState {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u8(self.kind.index() as u8);
+        self.view.camera.encode(writer);
+        self.view.section.encode(writer);
     }
 }
 
@@ -184,8 +195,10 @@ impl Encode for Keyframe {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.at);
         writer.u32(self.time);
-        self.camera.encode(writer);
-        self.section.encode(writer);
+        for view in &self.views {
+            view.camera.encode(writer);
+            view.section.encode(writer);
+        }
     }
 }
 

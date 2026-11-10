@@ -13,6 +13,7 @@ use wgpu::{
 
 use crate::cut;
 use crate::layout::Layouts;
+use crate::renderer::{Lighting, VolumeTargets};
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::srgb_to_linear;
@@ -119,11 +120,8 @@ pub(crate) struct MarkerPasses {
     behind_group: BindGroup,
     front_group: BindGroup,
     shadow_group: BindGroup,
-    cull_group: BindGroup,
-    opaque_args: InstanceCommands,
-    layer_args: InstanceCommands,
-    behind_args: InstanceCommands,
-    front_args: InstanceCommands,
+    args: [MarkerArgs; crate::PANE_COUNT],
+    cull_groups: [BindGroup; crate::PANE_COUNT],
     volume_cull: ComputePipeline,
     behind_cull: ComputePipeline,
     front_cull: ComputePipeline,
@@ -139,6 +137,13 @@ pub(crate) struct MarkerPasses {
     count: u32,
 }
 
+struct MarkerArgs {
+    opaque: InstanceCommands,
+    layer: InstanceCommands,
+    behind: InstanceCommands,
+    front: InstanceCommands,
+}
+
 impl MarkerPasses {
     pub fn new(device: &Device, layouts: &Layouts) -> Self {
         let markers = Table::new(device, "grana.markers");
@@ -146,10 +151,12 @@ impl MarkerPasses {
         let layer_order = Table::new(device, "grana.marker.layer.order");
         let behind_order = Table::new(device, "grana.marker.behind.order");
         let front_order = Table::new(device, "grana.marker.front.order");
-        let opaque_args = InstanceCommands::new(device, "grana.marker.opaque.args");
-        let layer_args = InstanceCommands::new(device, "grana.marker.layer.args");
-        let behind_args = InstanceCommands::new(device, "grana.marker.behind.args");
-        let front_args = InstanceCommands::new(device, "grana.marker.front.args");
+        let args: [MarkerArgs; crate::PANE_COUNT] = std::array::from_fn(|_| MarkerArgs {
+            opaque: InstanceCommands::new(device, "grana.marker.opaque.args"),
+            layer: InstanceCommands::new(device, "grana.marker.layer.args"),
+            behind: InstanceCommands::new(device, "grana.marker.behind.args"),
+            front: InstanceCommands::new(device, "grana.marker.front.args"),
+        });
         let groups = groups(
             device,
             layouts,
@@ -160,13 +167,21 @@ impl MarkerPasses {
                 behind_order.buffer(),
                 front_order.buffer(),
             ],
-            [
-                opaque_args.buffer(),
-                layer_args.buffer(),
-                behind_args.buffer(),
-                front_args.buffer(),
-            ],
         );
+        let cull_groups = std::array::from_fn(|index| {
+            cull_group(
+                device,
+                layouts,
+                markers.buffer(),
+                [
+                    opaque_order.buffer(),
+                    layer_order.buffer(),
+                    behind_order.buffer(),
+                    front_order.buffer(),
+                ],
+                &args[index],
+            )
+        });
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.marker.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -466,11 +481,8 @@ impl MarkerPasses {
             behind_group: groups.behind_render,
             front_group: groups.front_render,
             shadow_group: groups.shadow_render,
-            cull_group: groups.cull,
-            opaque_args,
-            layer_args,
-            behind_args,
-            front_args,
+            args,
+            cull_groups,
             volume_cull,
             behind_cull,
             front_cull,
@@ -515,49 +527,58 @@ impl MarkerPasses {
                     self.behind_order.buffer(),
                     self.front_order.buffer(),
                 ],
-                [
-                    self.opaque_args.buffer(),
-                    self.layer_args.buffer(),
-                    self.behind_args.buffer(),
-                    self.front_args.buffer(),
-                ],
             );
             self.opaque_group = groups.opaque_render;
             self.layer_group = groups.layer_render;
             self.behind_group = groups.behind_render;
             self.front_group = groups.front_render;
             self.shadow_group = groups.shadow_render;
-            self.cull_group = groups.cull;
+            self.cull_groups = std::array::from_fn(|index| {
+                cull_group(
+                    device,
+                    layouts,
+                    self.markers.buffer(),
+                    [
+                        self.opaque_order.buffer(),
+                        self.layer_order.buffer(),
+                        self.behind_order.buffer(),
+                        self.front_order.buffer(),
+                    ],
+                    &self.args[index],
+                )
+            });
         }
-        self.opaque_args.reset(queue, 6);
-        self.layer_args.reset(queue, 6);
-        self.behind_args.reset(queue, 6);
-        self.front_args.reset(queue, 6);
+        for args in &self.args {
+            args.opaque.reset(queue, 6);
+            args.layer.reset(queue, 6);
+            args.behind.reset(queue, 6);
+            args.front.reset(queue, 6);
+        }
     }
 
-    pub fn cull_volume(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
+    pub fn cull_volume(&self, pane: usize, encoder: &mut CommandEncoder, scene: &BindGroup) {
         self.cull(
             encoder,
             scene,
             &self.volume_cull,
-            &self.cull_group,
+            &self.cull_groups[pane],
             "grana.marker.cull.volume.pass",
         );
     }
 
-    pub fn cull_section(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
+    pub fn cull_section(&self, pane: usize, encoder: &mut CommandEncoder, scene: &BindGroup) {
         self.cull(
             encoder,
             scene,
             &self.behind_cull,
-            &self.cull_group,
+            &self.cull_groups[pane],
             "grana.marker.cull.section.behind.pass",
         );
         self.cull(
             encoder,
             scene,
             &self.front_cull,
-            &self.cull_group,
+            &self.cull_groups[pane],
             "grana.marker.cull.section.front.pass",
         );
     }
@@ -585,6 +606,7 @@ impl MarkerPasses {
 
     pub fn draw_gbuffer(
         &self,
+        pane: usize,
         encoder: &mut CommandEncoder,
         normal: &TextureView,
         depth: &TextureView,
@@ -622,17 +644,17 @@ impl MarkerPasses {
         pass.set_pipeline(&self.ao_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
-        pass.draw_indirect(self.opaque_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].opaque.buffer(), 0);
     }
 
     pub fn draw_volume(
         &self,
+        pane: usize,
         encoder: &mut CommandEncoder,
-        target: &TextureView,
-        depth: &TextureView,
+        targets: VolumeTargets<'_>,
         region: [u32; 4],
         scene: &BindGroup,
-        ao: &BindGroup,
+        lighting: Lighting<'_>,
     ) {
         if self.count == 0 {
             return;
@@ -642,7 +664,7 @@ impl MarkerPasses {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.marker.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
+                view: targets.color,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -651,7 +673,7 @@ impl MarkerPasses {
                 },
             })],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: depth,
+                view: targets.depth,
                 depth_ops: Some(Operations {
                     load: LoadOp::Load,
                     store: StoreOp::Store,
@@ -672,12 +694,13 @@ impl MarkerPasses {
         pass.set_pipeline(&self.volume_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
-        pass.set_bind_group(2, ao, &[]);
-        pass.draw_indirect(self.opaque_args.buffer(), 0);
+        pass.set_bind_group(2, lighting.ao, &[]);
+        pass.draw_indirect(self.args[pane].opaque.buffer(), 0);
     }
 
     pub fn draw_oit<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
@@ -691,11 +714,12 @@ impl MarkerPasses {
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].layer.buffer(), 0);
     }
 
     pub fn draw_color<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
@@ -711,11 +735,12 @@ impl MarkerPasses {
         pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].layer.buffer(), 0);
     }
 
     pub fn draw_tail<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
@@ -731,7 +756,7 @@ impl MarkerPasses {
         pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].layer.buffer(), 0);
     }
 
     pub fn draw_shadow(
@@ -762,32 +787,57 @@ impl MarkerPasses {
         pass.draw(0..6, 0..self.count);
     }
 
-    pub fn draw_section_behind<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        self.draw_section(pass, scene, &self.behind_group, &self.behind_args);
+    pub fn draw_section_behind<'a>(
+        &'a self,
+        pane: usize,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+    ) {
+        self.draw_section(pass, scene, &self.behind_group, &self.args[pane].behind);
     }
 
-    pub fn draw_section_front<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        self.draw_section(pass, scene, &self.front_group, &self.front_args);
+    pub fn draw_section_front<'a>(
+        &'a self,
+        pane: usize,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+    ) {
+        self.draw_section(pass, scene, &self.front_group, &self.args[pane].front);
     }
 
-    pub fn draw_pick_volume<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+    pub fn draw_pick_volume<'a>(
+        &'a self,
+        pane: usize,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+    ) {
         if self.count == 0 {
             return;
         }
         pass.set_pipeline(&self.volume_pick_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
-        pass.draw_indirect(self.opaque_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].opaque.buffer(), 0);
         pass.set_bind_group(1, &self.layer_group, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
+        pass.draw_indirect(self.args[pane].layer.buffer(), 0);
     }
 
-    pub fn draw_pick_section_behind<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        self.draw_section_pick(pass, scene, &self.behind_group, &self.behind_args);
+    pub fn draw_pick_section_behind<'a>(
+        &'a self,
+        pane: usize,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+    ) {
+        self.draw_section_pick(pass, scene, &self.behind_group, &self.args[pane].behind);
     }
 
-    pub fn draw_pick_section_front<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        self.draw_section_pick(pass, scene, &self.front_group, &self.front_args);
+    pub fn draw_pick_section_front<'a>(
+        &'a self,
+        pane: usize,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+    ) {
+        self.draw_section_pick(pass, scene, &self.front_group, &self.args[pane].front);
     }
 
     fn draw_section_pick<'a>(
@@ -829,7 +879,6 @@ struct Groups {
     behind_render: BindGroup,
     front_render: BindGroup,
     shadow_render: BindGroup,
-    cull: BindGroup,
 }
 
 fn groups(
@@ -837,10 +886,8 @@ fn groups(
     layouts: &Layouts,
     markers: &wgpu::Buffer,
     orders: [&wgpu::Buffer; 4],
-    args: [&wgpu::Buffer; 4],
 ) -> Groups {
     let [opaque_order, layer_order, behind_order, front_order] = orders;
-    let [opaque_args, layer_args, behind_args, front_args] = args;
     let render = |label: &str, order: &wgpu::Buffer| {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some(label),
@@ -857,7 +904,24 @@ fn groups(
             ],
         })
     };
-    let cull = device.create_bind_group(&BindGroupDescriptor {
+    Groups {
+        opaque_render: render("grana.marker.opaque.render.group", opaque_order),
+        layer_render: render("grana.marker.layer.render.group", layer_order),
+        behind_render: render("grana.marker.behind.render.group", behind_order),
+        front_render: render("grana.marker.front.render.group", front_order),
+        shadow_render: render("grana.marker.shadow.render.group", opaque_order),
+    }
+}
+
+fn cull_group(
+    device: &Device,
+    layouts: &Layouts,
+    markers: &wgpu::Buffer,
+    orders: [&wgpu::Buffer; 4],
+    args: &MarkerArgs,
+) -> BindGroup {
+    let [opaque_order, layer_order, behind_order, front_order] = orders;
+    device.create_bind_group(&BindGroupDescriptor {
         label: Some("grana.marker.cull.group"),
         layout: &layouts.marker_cull,
         entries: &[
@@ -883,28 +947,20 @@ fn groups(
             },
             BindGroupEntry {
                 binding: 5,
-                resource: opaque_args.as_entire_binding(),
+                resource: args.opaque.buffer().as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 6,
-                resource: layer_args.as_entire_binding(),
+                resource: args.layer.buffer().as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 7,
-                resource: behind_args.as_entire_binding(),
+                resource: args.behind.buffer().as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 8,
-                resource: front_args.as_entire_binding(),
+                resource: args.front.buffer().as_entire_binding(),
             },
         ],
-    });
-    Groups {
-        opaque_render: render("grana.marker.opaque.render.group", opaque_order),
-        layer_render: render("grana.marker.layer.render.group", layer_order),
-        behind_render: render("grana.marker.behind.render.group", behind_order),
-        front_render: render("grana.marker.front.render.group", front_order),
-        shadow_render: render("grana.marker.shadow.render.group", opaque_order),
-        cull,
-    }
+    })
 }

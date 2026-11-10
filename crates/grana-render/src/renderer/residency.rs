@@ -1,18 +1,59 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
-pub(super) struct Levels {
+pub(super) struct VolumeLevels {
     pub(super) ladder: Ladder,
     pub(super) capacity: [usize; BAND],
-    pub(super) section: usize,
-    pub(super) section_fallback: usize,
-    pub(super) section_capacity: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct SectionLevels {
+    pub(super) level: usize,
+    pub(super) fallback: usize,
+    pub(super) capacity: usize,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum PaneLevels {
+    Volume(VolumeLevels),
+    Section(SectionLevels),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Levels {
+    pub(super) panes: [Option<PaneLevels>; PANE_COUNT],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PaneRegion {
+    pub(super) kind: PaneKind,
+    pub(super) region: [u32; 4],
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Regions {
-    pub(super) volume: [u32; 4],
-    pub(super) section: [u32; 4],
+    pub(super) panes: [Option<PaneRegion>; PANE_COUNT],
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum PaneResidency {
+    Volume {
+        eye: [f32; 3],
+        focus: [f32; 3],
+        field_of_view: f32,
+        size: [u32; 2],
+        levels: VolumeLevels,
+    },
+    Section {
+        center: [f32; 3],
+        normal: [f32; 3],
+        right: [f32; 3],
+        thickness: f32,
+        projection: u8,
+        span: f32,
+        size: [u32; 2],
+        levels: SectionLevels,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,19 +64,14 @@ pub(super) struct Residency {
     pub(super) prefetch: bool,
     pub(super) assured: bool,
     pub(super) time: u32,
-    pub(super) eye: [f32; 3],
-    pub(super) focus: [f32; 3],
-    pub(super) field_of_view: f32,
-    pub(super) section_center: [f32; 3],
-    pub(super) section_normal: [f32; 3],
-    pub(super) section_right: [f32; 3],
-    pub(super) section_thickness: f32,
-    pub(super) section_projection: u8,
-    pub(super) span: f32,
-    pub(super) volume: [u32; 2],
-    pub(super) section: [u32; 2],
     pub(super) region: Region,
-    pub(super) levels: Levels,
+    pub(super) panes: [Option<PaneResidency>; PANE_COUNT],
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Content {
+    pub(super) content: u64,
+    pub(super) style: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -44,61 +80,79 @@ pub(super) struct Mode {
     pub(super) assured: bool,
 }
 
-pub(super) struct ResidencyView<'a> {
-    pub(super) camera: &'a Camera,
-    pub(super) section: &'a SectionCamera,
-    pub(super) volume_region: [u32; 4],
-    pub(super) section_region: [u32; 4],
-    pub(super) region: Region,
-}
-
 impl Residency {
     pub(super) fn of(
         epoch: u64,
-        content: u64,
-        style: u64,
+        content: Content,
         mode: Mode,
         time: u32,
-        view: ResidencyView<'_>,
+        frames: &[Option<PaneFrame<'_>>; PANE_COUNT],
+        region: Region,
         levels: Levels,
     ) -> Self {
+        let panes = std::array::from_fn(|index| match (frames[index], levels.panes[index]) {
+            (Some(PaneFrame::Volume { camera, region, .. }), Some(PaneLevels::Volume(levels))) => {
+                Some(PaneResidency::Volume {
+                    eye: camera.eye().to_array(),
+                    focus: camera.pivot().to_array(),
+                    field_of_view: camera.fov_y(),
+                    size: [region[2], region[3]],
+                    levels,
+                })
+            }
+            (Some(PaneFrame::Section { section, region }), Some(PaneLevels::Section(levels))) => {
+                Some(PaneResidency::Section {
+                    center: section.center().to_array(),
+                    normal: section.normal().to_array(),
+                    right: section.right().to_array(),
+                    thickness: section.thickness(),
+                    projection: section.projection().index() as u8,
+                    span: section.span(),
+                    size: [region[2], region[3]],
+                    levels,
+                })
+            }
+            _ => None,
+        });
         Self {
             epoch,
-            content,
-            style,
+            content: content.content,
+            style: content.style,
             prefetch: mode.prefetch,
             assured: mode.assured,
             time,
-            eye: view.camera.eye().to_array(),
-            focus: view.camera.pivot().to_array(),
-            field_of_view: view.camera.fov_y(),
-            section_center: view.section.center().to_array(),
-            section_normal: view.section.normal().to_array(),
-            section_right: view.section.right().to_array(),
-            section_thickness: view.section.thickness(),
-            section_projection: view.section.projection().index() as u8,
-            span: view.section.span(),
-            volume: [view.volume_region[2], view.volume_region[3]],
-            section: [view.section_region[2], view.section_region[3]],
-            region: view.region,
-            levels,
+            region,
+            panes,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PaneLevelKey {
+    pub(super) volume: Option<(usize, usize)>,
+    pub(super) section: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct LevelKey {
-    pub(super) base: usize,
-    pub(super) count: usize,
-    pub(super) section: usize,
+    pub(super) panes: [Option<PaneLevelKey>; PANE_COUNT],
 }
 
 impl LevelKey {
     pub(super) fn of(levels: Levels) -> Self {
         Self {
-            base: levels.ladder.base,
-            count: levels.ladder.count,
-            section: levels.section,
+            panes: std::array::from_fn(|index| {
+                levels.panes[index].map(|levels| match levels {
+                    PaneLevels::Volume(volume) => PaneLevelKey {
+                        volume: Some((volume.ladder.base, volume.ladder.count)),
+                        section: None,
+                    },
+                    PaneLevels::Section(section) => PaneLevelKey {
+                        volume: None,
+                        section: Some(section.level),
+                    },
+                })
+            }),
         }
     }
 }
@@ -110,8 +164,8 @@ pub(super) struct FrameTarget {
     pub(super) accumulate_group: BindGroup,
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
-    pub(super) oit: Option<Oit>,
-    pub(super) ao: Option<crate::ao::Ao>,
+    pub(super) oit: [Option<Oit>; PANE_COUNT],
+    pub(super) ao: [Option<crate::ao::Ao>; PANE_COUNT],
     pub(super) size: [u32; 2],
     pub(super) samples: u32,
     pub(super) signature: Option<u64>,
@@ -143,8 +197,8 @@ impl FrameTarget {
             accumulate_group,
             present_group,
             fade: None,
-            oit: None,
-            ao: None,
+            oit: std::array::from_fn(|_| None),
+            ao: std::array::from_fn(|_| None),
             size,
             samples: 0,
             signature: None,

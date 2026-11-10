@@ -2,61 +2,85 @@ use super::*;
 use grana_display::{CameraState, SectionState};
 
 #[derive(Clone, Copy)]
+pub(super) enum PaneSignature<'a> {
+    Volume {
+        data: &'a FrameData,
+        camera: CameraState,
+        region: [u32; 4],
+    },
+    Section {
+        data: &'a SectionData,
+        view: SectionState,
+        region: [u32; 4],
+    },
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct Signature<'a, 'b> {
     pub(super) scene: &'a SceneFrame<'b>,
-    pub(super) data: &'a FrameData,
-    pub(super) section: &'a SectionData,
-    pub(super) camera: CameraState,
-    pub(super) view: SectionState,
+    pub(super) panes: &'a [Option<PaneSignature<'a>>; PANE_COUNT],
     pub(super) levels: Levels,
     pub(super) time: u32,
     pub(super) exposure: f32,
     pub(super) epoch: u64,
     pub(super) content: u64,
     pub(super) size: [u32; 2],
-    pub(super) volume_region: [u32; 4],
-    pub(super) section_region: [u32; 4],
 }
 
 impl Signature<'_, '_> {
     pub(super) fn digest(self) -> u64 {
         let Self {
             scene,
-            data,
-            section,
-            camera,
+            panes,
             levels,
             time,
             exposure,
             epoch,
             content,
             size,
-            volume_region,
-            section_region,
-            ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        let mut data = *data;
-        data.jitter = [0.0; 4];
-        data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
-        bytemuck::bytes_of(&data).hash(&mut hasher);
-        camera.projection.index().hash(&mut hasher);
-        let mut section = *section;
-        section.jitter = [0.0; 4];
-        bytemuck::bytes_of(&section).hash(&mut hasher);
+        for (index, pane) in panes.iter().enumerate() {
+            match pane {
+                Some(PaneSignature::Volume {
+                    data,
+                    camera,
+                    region,
+                }) => {
+                    let mut data = **data;
+                    data.jitter = [0.0; 4];
+                    data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
+                    bytemuck::bytes_of(&data).hash(&mut hasher);
+                    camera.projection.index().hash(&mut hasher);
+                    region.hash(&mut hasher);
+                }
+                Some(PaneSignature::Section { data, region, .. }) => {
+                    let mut data = **data;
+                    data.jitter = [0.0; 4];
+                    bytemuck::bytes_of(&data).hash(&mut hasher);
+                    region.hash(&mut hasher);
+                }
+                None => {}
+            }
+            match levels.panes[index] {
+                Some(PaneLevels::Volume(volume)) => {
+                    volume.ladder.base.hash(&mut hasher);
+                    volume.ladder.count.hash(&mut hasher);
+                    volume.capacity.hash(&mut hasher);
+                }
+                Some(PaneLevels::Section(section)) => {
+                    section.level.hash(&mut hasher);
+                    section.fallback.hash(&mut hasher);
+                    section.capacity.hash(&mut hasher);
+                }
+                None => {}
+            }
+        }
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         content.hash(&mut hasher);
         size.hash(&mut hasher);
-        volume_region.hash(&mut hasher);
-        section_region.hash(&mut hasher);
-        levels.ladder.base.hash(&mut hasher);
-        levels.ladder.count.hash(&mut hasher);
-        levels.capacity.hash(&mut hasher);
-        levels.section.hash(&mut hasher);
-        levels.section_fallback.hash(&mut hasher);
-        levels.section_capacity.hash(&mut hasher);
         content_digest(scene, &mut hasher);
         hasher.finish()
     }
@@ -64,50 +88,69 @@ impl Signature<'_, '_> {
     pub(super) fn transition(self) -> u64 {
         let Self {
             scene,
-            data,
-            camera,
-            view,
+            panes,
             time,
             exposure,
             epoch,
             size,
-            volume_region,
-            section_region,
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        camera.pivot.map(f32::to_bits).hash(&mut hasher);
-        camera.yaw.to_bits().hash(&mut hasher);
-        camera.pitch.to_bits().hash(&mut hasher);
-        camera.fov_y.to_bits().hash(&mut hasher);
-        camera.projection.index().hash(&mut hasher);
-        camera.aperture.to_bits().hash(&mut hasher);
-        camera.focus.to_bits().hash(&mut hasher);
-        view.center.map(f32::to_bits).hash(&mut hasher);
-        view.azimuth.to_bits().hash(&mut hasher);
-        view.elevation.to_bits().hash(&mut hasher);
-        view.span.to_bits().hash(&mut hasher);
-        data.light.map(f32::to_bits).hash(&mut hasher);
-        data.region_center.map(f32::to_bits).hash(&mut hasher);
-        for axis in data.region_axis {
-            axis.map(f32::to_bits).hash(&mut hasher);
+        for pane in &panes.iter().flatten().collect::<Vec<_>>() {
+            match pane {
+                PaneSignature::Volume {
+                    data,
+                    camera,
+                    region,
+                } => {
+                    hash_camera(*camera, &mut hasher);
+                    data.light.map(f32::to_bits).hash(&mut hasher);
+                    data.region_center.map(f32::to_bits).hash(&mut hasher);
+                    for axis in data.region_axis {
+                        axis.map(f32::to_bits).hash(&mut hasher);
+                    }
+                    data.shading.map(f32::to_bits).hash(&mut hasher);
+                    for value in &data.march[1..] {
+                        value.to_bits().hash(&mut hasher);
+                    }
+                    data.clip.map(f32::to_bits).hash(&mut hasher);
+                    data.tag.hash(&mut hasher);
+                    region.hash(&mut hasher);
+                }
+                PaneSignature::Section { view, data, region } => {
+                    hash_section(*view, &mut hasher);
+                    data.projection.map(f32::to_bits).hash(&mut hasher);
+                    region.hash(&mut hasher);
+                }
+            }
         }
-        data.shading.map(f32::to_bits).hash(&mut hasher);
-        for value in &data.march[1..] {
-            value.to_bits().hash(&mut hasher);
-        }
-        data.clip.map(f32::to_bits).hash(&mut hasher);
-        data.tag.hash(&mut hasher);
         scene.step_scale.to_bits().hash(&mut hasher);
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        volume_region.hash(&mut hasher);
-        section_region.hash(&mut hasher);
         content_digest(scene, &mut hasher);
         hasher.finish()
     }
+}
+
+fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
+    camera.pivot.map(f32::to_bits).hash(hasher);
+    camera.yaw.to_bits().hash(hasher);
+    camera.pitch.to_bits().hash(hasher);
+    camera.fov_y.to_bits().hash(hasher);
+    camera.projection.index().hash(hasher);
+    camera.aperture.to_bits().hash(hasher);
+    camera.focus.to_bits().hash(hasher);
+}
+
+fn hash_section(view: SectionState, hasher: &mut DefaultHasher) {
+    view.center.map(f32::to_bits).hash(hasher);
+    view.azimuth.to_bits().hash(hasher);
+    view.elevation.to_bits().hash(hasher);
+    view.span.to_bits().hash(hasher);
+    view.projection.index().hash(hasher);
+    view.thickness.to_bits().hash(hasher);
 }
 
 fn content_digest(scene: &SceneFrame<'_>, hasher: &mut DefaultHasher) {

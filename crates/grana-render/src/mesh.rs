@@ -15,6 +15,7 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
+use crate::renderer::{Lighting, VolumeTargets};
 use crate::schema::{LayerKey, SceneFrame, Style};
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
@@ -126,8 +127,12 @@ pub(crate) struct MeshPasses {
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     ao_pipeline: RenderPipeline,
+    views: [MeshView; crate::PANE_COUNT],
+}
+
+struct MeshView {
     uniforms: Buffer,
-    uniform_group: BindGroup,
+    group: BindGroup,
 }
 
 impl MeshPasses {
@@ -394,19 +399,22 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.mesh.uniforms"),
-            size: size_of::<MeshUniforms>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.mesh.uniform.group"),
-            layout: &uniform_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            }],
+        let views = std::array::from_fn(|_| {
+            let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("grana.mesh.uniforms"),
+                size: size_of::<MeshUniforms>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("grana.mesh.uniform.group"),
+                layout: &uniform_layout,
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                }],
+            });
+            MeshView { uniforms, group }
         });
         Self {
             slots: HashMap::new(),
@@ -423,8 +431,7 @@ impl MeshPasses {
             pick_pipeline,
             shadow_pipeline,
             ao_pipeline,
-            uniforms,
-            uniform_group,
+            views,
         }
     }
 
@@ -502,7 +509,13 @@ impl MeshPasses {
         }
     }
 
-    pub fn write_uniforms(&self, queue: &Queue, frame: &crate::frame::FrameData, shading: Shading) {
+    pub fn write_uniforms(
+        &self,
+        pane: usize,
+        queue: &Queue,
+        frame: &crate::frame::FrameData,
+        shading: Shading,
+    ) {
         let uniforms = MeshUniforms {
             view_projection: frame.view_projection,
             eye: frame.eye,
@@ -521,15 +534,22 @@ impl MeshPasses {
             projection: frame.projection,
             lens: frame.lens,
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.views[pane].uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    pub fn cull_volume(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
-        self.cull_pass(encoder, scene, &self.cull, "grana.mesh.cull.volume.pass");
+    pub fn cull_volume(&self, pane: usize, encoder: &mut CommandEncoder, scene: &BindGroup) {
+        self.cull_pass(
+            pane,
+            encoder,
+            scene,
+            &self.cull,
+            "grana.mesh.cull.volume.pass",
+        );
     }
 
     pub fn cull_shadow(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
         self.cull_pass(
+            0,
             encoder,
             scene,
             &self.shadow_cull,
@@ -539,6 +559,7 @@ impl MeshPasses {
 
     fn cull_pass(
         &self,
+        pane: usize,
         encoder: &mut CommandEncoder,
         scene: &BindGroup,
         pipeline: &ComputePipeline,
@@ -554,13 +575,14 @@ impl MeshPasses {
             let slot = &self.slots[key];
             pass.set_bind_group(1, &slot.object_group, &[]);
             pass.set_bind_group(2, &slot.style_group, &[]);
-            pass.set_bind_group(3, &slot.command_group, &[]);
+            pass.set_bind_group(3, &slot.command_group[pane], &[]);
             pass.dispatch_workgroups(slot.object_count.div_ceil(WORKGROUP), 1, 1);
         }
     }
 
     pub fn draw_gbuffer(
         &self,
+        pane: usize,
         encoder: &mut CommandEncoder,
         normal: &TextureView,
         depth: &TextureView,
@@ -598,7 +620,7 @@ impl MeshPasses {
         pass.set_pipeline(&self.ao_pipeline);
         pass.set_bind_group(0, scene, &[]);
         for key in &self.active {
-            self.slots[key].draw_gbuffer(&mut pass);
+            self.slots[key].draw_gbuffer(&mut pass, pane);
         }
     }
 
@@ -617,27 +639,26 @@ impl MeshPasses {
             ..Default::default()
         });
         pass.set_pipeline(&self.shadow_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(0, &self.views[0].group, &[]);
         for key in &self.active {
-            self.slots[key].draw(&mut pass, SHADOW_NARROW, SHADOW_WIDE);
+            self.slots[key].draw(&mut pass, 0, SHADOW_NARROW, SHADOW_WIDE);
         }
     }
 
     pub fn draw_volume(
         &self,
+        pane: usize,
         encoder: &mut CommandEncoder,
-        target: &TextureView,
-        depth: &TextureView,
+        targets: VolumeTargets<'_>,
         region: [u32; 4],
-        shadow: &BindGroup,
-        ao: &BindGroup,
+        lighting: Lighting<'_>,
     ) {
         let width = region[2].max(1);
         let height = region[3].max(1);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.mesh.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
+                view: targets.color,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -646,7 +667,7 @@ impl MeshPasses {
                 },
             })],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: depth,
+                view: targets.depth,
                 depth_ops: Some(Operations {
                     load: LoadOp::Load,
                     store: StoreOp::Store,
@@ -665,16 +686,17 @@ impl MeshPasses {
         );
         pass.set_scissor_rect(region[0], region[1], width, height);
         pass.set_pipeline(&self.volume_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
-        pass.set_bind_group(3, shadow, &[]);
-        pass.set_bind_group(7, ao, &[]);
+        pass.set_bind_group(0, &self.views[pane].group, &[]);
+        pass.set_bind_group(3, lighting.shadow, &[]);
+        pass.set_bind_group(7, lighting.ao, &[]);
         for key in &self.active {
-            self.slots[key].draw(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
+            self.slots[key].draw(&mut pass, pane, OPAQUE_NARROW, OPAQUE_WIDE);
         }
     }
 
     pub fn draw_oit<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
@@ -684,17 +706,18 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.oit_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(0, &self.views[pane].group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(7, ao, &[]);
         for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+            self.slots[key].draw(pass, pane, LAYER_NARROW, LAYER_WIDE);
         }
     }
 
     pub fn draw_color<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
@@ -705,18 +728,19 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.color_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(0, &self.views[pane].group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.set_bind_group(7, ao, &[]);
         for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+            self.slots[key].draw(pass, pane, LAYER_NARROW, LAYER_WIDE);
         }
     }
 
     pub fn draw_tail<'a>(
         &'a self,
+        pane: usize,
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
@@ -727,24 +751,24 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.tail_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(0, &self.views[pane].group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.set_bind_group(7, ao, &[]);
         for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+            self.slots[key].draw(pass, pane, LAYER_NARROW, LAYER_WIDE);
         }
     }
 
-    pub fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
+    pub fn draw_pick<'a>(&'a self, pane: usize, pass: &mut RenderPass<'a>) {
         if self.active.is_empty() {
             return;
         }
         pass.set_pipeline(&self.pick_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(0, &self.views[pane].group, &[]);
         for key in &self.active {
-            self.slots[key].draw_pick(pass);
+            self.slots[key].draw_pick(pass, pane);
         }
     }
 }
@@ -758,8 +782,8 @@ struct MeshSlot {
     style_group: BindGroup,
     pick: Table<u32>,
     pick_group: BindGroup,
-    commands: IndexedCommands,
-    command_group: BindGroup,
+    commands: [IndexedCommands; crate::PANE_COUNT],
+    command_group: [BindGroup; crate::PANE_COUNT],
     object_count: u32,
     style_start: u32,
     cached_styles: Vec<StyleData>,
@@ -840,20 +864,27 @@ impl MeshSlot {
         let style_group = bind_group(device, &layouts.styles, styles.buffer());
         let pick = Table::with_capacity(device, "grana.mesh.pick", object_count as usize);
         let pick_group = bind_group(device, &layouts.pick, pick.buffer());
-        let commands = IndexedCommands::new(
-            device,
-            "grana.mesh.commands",
-            object_count as usize,
-            REGIONS,
-        );
-        let command_group = bind_group(device, &layouts.commands, commands.buffer());
+        let commands = std::array::from_fn(|_| {
+            IndexedCommands::new(
+                device,
+                "grana.mesh.commands",
+                object_count as usize,
+                REGIONS,
+            )
+        });
+        let command_group = std::array::from_fn(|index| {
+            bind_group(device, &layouts.commands, commands[index].buffer())
+        });
         let bytes = (points.len() * size_of::<PointData>()
             + size_of_val(mesh.narrow())
             + size_of_val(mesh.wide())
             + object_count as usize * size_of::<ObjectData>()
             + object_count as usize * size_of::<StyleData>()
             + object_count as usize * size_of::<u32>()) as u64
-            + commands.buffer().size();
+            + commands
+                .iter()
+                .map(|commands| commands.buffer().size())
+                .sum::<u64>();
         Self {
             vertices,
             narrow,
@@ -907,28 +938,28 @@ impl MeshSlot {
         self.pick_base = Some(style_start);
     }
 
-    fn draw_gbuffer<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    fn draw_gbuffer<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, pane: usize) {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         if let Some(indices) = &self.narrow {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
             pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(OPAQUE_NARROW),
+                self.commands[pane].buffer(),
+                self.commands[pane].offset(OPAQUE_NARROW),
                 self.object_count,
             );
         }
         if let Some(indices) = &self.wide {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
             pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(OPAQUE_WIDE),
+                self.commands[pane].buffer(),
+                self.commands[pane].offset(OPAQUE_WIDE),
                 self.object_count,
             );
         }
     }
 
-    fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
+    fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>, pane: usize) {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_bind_group(5, &self.pick_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
@@ -936,8 +967,8 @@ impl MeshSlot {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
             for region in [OPAQUE_NARROW, LAYER_NARROW] {
                 pass.multi_draw_indexed_indirect(
-                    self.commands.buffer(),
-                    self.commands.offset(region),
+                    self.commands[pane].buffer(),
+                    self.commands[pane].offset(region),
                     self.object_count,
                 );
             }
@@ -946,15 +977,21 @@ impl MeshSlot {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
             for region in [OPAQUE_WIDE, LAYER_WIDE] {
                 pass.multi_draw_indexed_indirect(
-                    self.commands.buffer(),
-                    self.commands.offset(region),
+                    self.commands[pane].buffer(),
+                    self.commands[pane].offset(region),
                     self.object_count,
                 );
             }
         }
     }
 
-    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, narrow: usize, wide: usize) -> u32 {
+    fn draw<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        pane: usize,
+        narrow: usize,
+        wide: usize,
+    ) -> u32 {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_bind_group(2, &self.style_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
@@ -962,8 +999,8 @@ impl MeshSlot {
         if let Some(indices) = &self.narrow {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
             pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(narrow),
+                self.commands[pane].buffer(),
+                self.commands[pane].offset(narrow),
                 self.object_count,
             );
             draws += 1;
@@ -971,8 +1008,8 @@ impl MeshSlot {
         if let Some(indices) = &self.wide {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
             pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(wide),
+                self.commands[pane].buffer(),
+                self.commands[pane].offset(wide),
                 self.object_count,
             );
             draws += 1;

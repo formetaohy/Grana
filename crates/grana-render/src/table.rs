@@ -8,6 +8,7 @@ use wgpu::{
     TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
 };
 
+use crate::PANE_COUNT;
 use crate::frame::{FrameData, SectionData};
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
@@ -35,15 +36,15 @@ struct ChannelData {
 const _: () = assert!(size_of::<ChannelData>() == 32);
 
 pub(crate) struct SceneTable {
-    uniforms: Buffer,
-    section_uniforms: Buffer,
+    frames: [Buffer; PANE_COUNT],
+    sections: [Buffer; PANE_COUNT],
     channels: Table<ChannelData>,
     lut: Texture,
     extinction: Texture,
     section: Texture,
     transfers: Vec<Option<TransferFunction>>,
     thresholds: Vec<Option<f32>>,
-    group: BindGroup,
+    groups: [BindGroup; PANE_COUNT],
     channels_count: usize,
 }
 
@@ -54,17 +55,21 @@ impl SceneTable {
             "a scene binds one to {} channels",
             CHANNEL_LIMIT
         );
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.frame.uniforms"),
-            size: size_of::<FrameData>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let frames = std::array::from_fn(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("grana.frame.uniforms"),
+                size: size_of::<FrameData>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
-        let section_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.section.uniforms"),
-            size: size_of::<SectionData>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let sections = std::array::from_fn(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("grana.section.uniforms"),
+                size: size_of::<SectionData>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
         let table = Table::with_capacity(device, "grana.channels", CHANNEL_LIMIT);
         let lut = transfer_texture(device, "grana.transfer.lut", channels);
@@ -91,74 +96,73 @@ impl SceneTable {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.scene.group"),
-            layout: &layouts.scene,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: section_uniforms.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: table.buffer().as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(&lut_view),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Sampler(&lut_sampler),
-                },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: BindingResource::TextureView(&extinction_view),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: BindingResource::TextureView(&section_view),
-                },
-            ],
+        let groups = std::array::from_fn(|index| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("grana.scene.group"),
+                layout: &layouts.scene,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: frames[index].as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: sections[index].as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: table.buffer().as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: BindingResource::TextureView(&lut_view),
+                    },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::Sampler(&lut_sampler),
+                    },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: BindingResource::TextureView(&extinction_view),
+                    },
+                    BindGroupEntry {
+                        binding: 6,
+                        resource: BindingResource::TextureView(&section_view),
+                    },
+                ],
+            })
         });
         Self {
-            uniforms,
-            section_uniforms,
+            frames,
+            sections,
             channels: table,
             lut,
             extinction,
             section,
             transfers: vec![None; channels],
             thresholds: vec![None; channels],
-            group,
+            groups,
             channels_count: channels,
         }
     }
 
-    pub fn group(&self) -> &BindGroup {
-        &self.group
+    pub fn group(&self, pane: usize) -> &BindGroup {
+        assert!(pane < PANE_COUNT, "a scene table names one of the panes");
+        &self.groups[pane]
     }
 
-    pub fn write(
+    pub fn update(
         &mut self,
         device: &Device,
         queue: &Queue,
         pyramid: &Pyramid,
         rows: &[ChannelRow],
-        frame: FrameData,
-        section: SectionData,
     ) {
         assert_eq!(
             rows.len(),
             self.channels_count,
             "the scene carries one row per channel"
         );
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&frame));
-        queue.write_buffer(&self.section_uniforms, 0, bytemuck::bytes_of(&section));
         let mut data = Vec::with_capacity(rows.len());
         for (index, row) in rows.iter().enumerate() {
             assert!(
@@ -192,6 +196,22 @@ impl SceneTable {
             });
         }
         let _ = self.channels.write(device, queue, &data);
+    }
+
+    pub fn write(
+        &mut self,
+        pane: usize,
+        queue: &Queue,
+        frame: Option<FrameData>,
+        section: Option<SectionData>,
+    ) {
+        assert!(pane < PANE_COUNT, "a scene table names one of the panes");
+        if let Some(frame) = frame {
+            queue.write_buffer(&self.frames[pane], 0, bytemuck::bytes_of(&frame));
+        }
+        if let Some(section) = section {
+            queue.write_buffer(&self.sections[pane], 0, bytemuck::bytes_of(&section));
+        }
     }
 
     fn write_transfer(&mut self, queue: &Queue, row: usize, transfer: &TransferFunction) {

@@ -263,7 +263,7 @@ pub fn view_body<'a>(
 }
 
 fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let camera = state.viewport.camera();
+    let camera = state.pane().camera();
     let projection = camera.projection();
     let mut children = vec![view::card_title(
         ctx,
@@ -967,7 +967,7 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
 
 fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let camera = state.viewport.section();
+    let camera = state.pane().section();
     let azimuth = camera.azimuth();
     let elevation = camera.elevation();
     let normal = camera.normal();
@@ -1059,7 +1059,7 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             elevation,
         }),
     );
-    let position = state.viewport.section().center().dot(normal) + 0.5 * extent;
+    let position = state.pane().section().center().dot(normal) + 0.5 * extent;
     let readout = format!("{position:.2} µm");
     children.push(
         grana_ui::widget::slider_readout(
@@ -1147,7 +1147,7 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             );
         }
         let align = {
-            let section = state.viewport.section();
+            let section = state.pane().section();
             let axes = [section.right(), section.up(), section.normal()];
             let region = grana_volume::Region::new(current.center(), axes, current.half());
             Message::Command(Command::SetRegion(region))

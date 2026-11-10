@@ -140,21 +140,21 @@ fn height_of(title: &TextLayout, detail: &TextLayout, lines: &[Arc<TextLayout>])
         + lines.len() as f32 * 3.0
 }
 
-pub struct Overlay<'a> {
+pub struct Pane<'a> {
+    pub kind: grana_display::PaneKind,
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
+    pub plane: &'a [SectionCamera],
     pub world: Vec3,
-    pub volume_safe: Rect,
-    pub section_safe: Rect,
-    pub volume_rect: Rect,
-    pub section_rect: Rect,
+    pub voxel: Vec3,
+    pub rect: Rect,
+    pub safe: Rect,
     pub region: &'a Region,
     pub clip: Clip,
     pub legends: &'a [Legend],
     pub labels: &'a [Label],
     pub annotations: &'a [AnnotationItem],
     pub pending: Option<[f32; 3]>,
-    pub voxel: Vec3,
     pub recording: Option<(u32, u32)>,
 }
 
@@ -166,24 +166,28 @@ pub struct Handle {
     pub world_per_point: f32,
 }
 
-pub fn paint(painter: &mut Painter, overlay: &Overlay<'_>) {
-    paint_volume(painter, overlay);
-    paint_section(painter, overlay);
+pub fn paint(painter: &mut Painter, overlay: &Pane<'_>) {
+    match overlay.kind {
+        grana_display::PaneKind::Volume => paint_volume(painter, overlay),
+        grana_display::PaneKind::Section => paint_section(painter, overlay),
+    }
 }
 
-fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
-    let rect = overlay.volume_rect;
+fn paint_volume(painter: &mut Painter, overlay: &Pane<'_>) {
+    let rect = overlay.rect;
     let aspect = rect.width() / rect.height();
     let view_projection = overlay
         .camera
         .view_projection(aspect, 0.5 * overlay.world.length());
-    let corners = plane_corners(overlay.section, rect.width() / rect.height().max(1.0));
-    let projected = corners.map(|corner| project(view_projection, corner, rect));
     let clip = painter.clip();
     painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
-    if let [Some(a), Some(b), Some(c), Some(d)] = projected {
-        for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
-            painter.segment(from, to, 1.0, PLANE);
+    for plane in overlay.plane {
+        let corners = plane_corners(plane, rect.width() / rect.height().max(1.0));
+        let projected = corners.map(|corner| project(view_projection, corner, rect));
+        if let [Some(a), Some(b), Some(c), Some(d)] = projected {
+            for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
+                painter.segment(from, to, 1.0, PLANE);
+            }
         }
     }
     region_box(painter, view_projection, *overlay.region, rect);
@@ -193,13 +197,13 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
         .world_per_point(rect.height(), overlay.camera.distance());
     figure(
         painter,
-        overlay.volume_safe,
+        overlay.safe,
         world_per_point,
         overlay.legends,
         None,
         true,
     );
-    orientation(painter, overlay.volume_safe, overlay.camera);
+    orientation(painter, overlay.safe, overlay.camera);
     if !overlay.labels.is_empty() {
         let placed = labels::volume_labels(
             overlay.labels,
@@ -217,14 +221,17 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
     painter.pop_clip(clip);
 }
 
-pub fn handles(overlay: &Overlay<'_>) -> Vec<Handle> {
-    let rect = overlay.volume_rect;
+pub fn handles(overlay: &Pane<'_>) -> Vec<Handle> {
+    let mut handles = Vec::new();
+    if overlay.kind != grana_display::PaneKind::Volume {
+        return handles;
+    }
+    let rect = overlay.rect;
     let aspect = rect.width() / rect.height();
     let view_projection = overlay
         .camera
         .view_projection(aspect, 0.5 * overlay.world.length());
     let minimum = (HANDLE_MINIMUM * overlay.world.min_element()).max(1.0e-5);
-    let mut handles = Vec::new();
     if !overlay.region.enabled() {
         return handles;
     }
@@ -259,8 +266,8 @@ pub fn handles(overlay: &Overlay<'_>) -> Vec<Handle> {
     handles
 }
 
-fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
-    let rect = overlay.section_rect;
+fn paint_section(painter: &mut Painter, overlay: &Pane<'_>) {
+    let rect = overlay.rect;
     let world_per_point = overlay.section.span() / rect.height();
     let clip = painter.clip();
     painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
@@ -275,7 +282,7 @@ fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
         },
         grana_ui::Shadow::NONE,
     );
-    scale_bar(painter, overlay.section_safe, world_per_point, true);
+    scale_bar(painter, overlay.safe, world_per_point, true);
     region_outline(painter, overlay, rect);
     if !overlay.labels.is_empty() {
         let placed = labels::section_labels(overlay.labels, overlay.section, rect);
@@ -305,7 +312,7 @@ fn section_stage(section: &SectionCamera, world: Vec3, rect: Rect) -> Rect {
     Rect::from_center_size(center, Vec2::new(width, height)).intersect(rect)
 }
 
-fn region_outline(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect) {
+fn region_outline(painter: &mut Painter, overlay: &Pane<'_>, rect: Rect) {
     let region = *overlay.region;
     if !region.enabled() {
         return;

@@ -11,15 +11,21 @@ impl Renderer {
                 latest = Some(requests);
             }
         }
-        let mut dropped = None;
-        while let Some((_, bytes)) = self.oit_readback.take(device) {
-            let (words, _) = bytes.as_chunks::<4>();
-            if let Some(word) = words.first() {
-                dropped = Some(u32::from_ne_bytes(*word));
+        let mut dropped = [None; PANE_COUNT];
+        for (index, readback) in self.oit_readback.iter_mut().enumerate() {
+            let mut last = None;
+            while let Some((_, bytes)) = readback.take(device) {
+                let (words, _) = bytes.as_chunks::<4>();
+                if let Some(word) = words.first() {
+                    last = Some(u32::from_ne_bytes(*word));
+                }
             }
+            dropped[index] = last;
         }
-        if let Some(dropped) = dropped {
-            self.dropped = dropped;
+        for (slot, value) in dropped.iter().enumerate() {
+            if let Some(value) = value {
+                self.dropped[slot] = *value;
+            }
         }
         latest
     }
@@ -59,67 +65,131 @@ impl Renderer {
         let planner = planner.as_ref()?;
         let atlas = atlas.as_mut()?;
         let words = feedback_words(bytes);
-        if words.len() < (BAND + 1) * *view_words {
+        if words.len() < PANE_COUNT * (BAND + 1) * *view_words {
             return None;
         }
-        let ladder = meta.levels.ladder;
-        let mut demands = Vec::with_capacity(ladder.count);
-        for band in 0..ladder.count {
-            let slice = &words[band * *view_words..(band + 1) * *view_words];
-            let held = decode_plan(
-                slice,
-                planner.bands[band].capacity(),
-                meta.time,
-                ladder.level(band),
-                pyramid,
-            )?;
-            demands.push(held);
-        }
-        let section = decode_plan(
-            &words[BAND * *view_words..(BAND + 1) * *view_words],
-            planner.section.capacity(),
-            meta.time,
-            meta.levels.section,
-            pyramid,
-        )?;
         *pin += 1;
         atlas.clear_holds();
-        for (band, demand) in demands.iter().enumerate() {
-            atlas.touch(
-                meta.time,
-                ladder.level(band),
-                demand.indices.iter().copied(),
-                *pin,
-            );
-        }
-        atlas.touch(
-            meta.time,
-            meta.levels.section,
-            section.indices.iter().copied(),
-            *pin,
-        );
-        info.section = section.info;
-        *section_sequence += 1;
-        *section_measure = Some((
-            *section_sequence,
-            SectionMeasure {
-                level: meta.levels.section,
-                visible: section.info.visible,
-            },
-        ));
+        let mut requests = Requests {
+            time: meta.time,
+            ..Default::default()
+        };
         let mut demanded = HashSet::new();
-        for (band, demand) in demands.iter().enumerate() {
-            let level = ladder.level(band);
-            demanded.extend(demand.indices.iter().map(|index| (level, *index)));
+        let mut issued = Vec::new();
+        let mut complete = true;
+        for (index, pane) in meta.panes.iter().enumerate() {
+            let Some(pane) = pane else {
+                continue;
+            };
+            let base = index * (BAND + 1) * *view_words;
+            match pane {
+                PaneResidency::Volume { levels, .. } => {
+                    let ladder = levels.ladder;
+                    let mut demands = Vec::with_capacity(ladder.count);
+                    for band in 0..ladder.count {
+                        let slice =
+                            &words[base + band * *view_words..base + (band + 1) * *view_words];
+                        let held = decode_plan(
+                            slice,
+                            planner.panes[index].bands[band].capacity(),
+                            meta.time,
+                            ladder.level(band),
+                            pyramid,
+                        )?;
+                        demands.push(held);
+                    }
+                    for (band, demand) in demands.iter().enumerate() {
+                        atlas.touch(
+                            meta.time,
+                            ladder.level(band),
+                            demand.indices.iter().copied(),
+                            *pin,
+                        );
+                    }
+                    let empty = Demand::default();
+                    issued.extend(prefetch_requests(
+                        &Prefetch {
+                            enabled: *prefetch,
+                            rate: *prefetch_rate,
+                            atlas,
+                            time: meta.time,
+                            ladder,
+                            demands: &demands,
+                            section: &empty,
+                            section_level: 0,
+                            section_fallback: 0,
+                            pyramid,
+                        },
+                        prefetched,
+                    ));
+                    for (band, demand) in demands.iter().enumerate() {
+                        let level = ladder.level(band);
+                        demanded.extend(demand.indices.iter().map(|index| (level, *index)));
+                        complete &= demands_complete(demand, meta.assured);
+                    }
+                    let mut merged = Demand::default();
+                    for demand in demands {
+                        merged.merge(demand);
+                    }
+                    merged.info.level = ladder.base;
+                    info.panes[index] = merged.info;
+                    requests.panes[index] = merged.info;
+                    requests.volume.extend(merged.requests.iter().copied());
+                    for request in &merged.requests {
+                        prefetched.remove(request);
+                    }
+                }
+                PaneResidency::Section { levels, .. } => {
+                    let slice = &words[base + BAND * *view_words..base + (BAND + 1) * *view_words];
+                    let demand = decode_plan(
+                        slice,
+                        planner.panes[index].section.capacity(),
+                        meta.time,
+                        levels.level,
+                        pyramid,
+                    )?;
+                    atlas.touch(
+                        meta.time,
+                        levels.level,
+                        demand.indices.iter().copied(),
+                        *pin,
+                    );
+                    *section_sequence += 1;
+                    section_measure[index] = Some((
+                        *section_sequence,
+                        SectionMeasure {
+                            level: levels.level,
+                            visible: demand.info.visible,
+                        },
+                    ));
+                    demanded.extend(demand.indices.iter().map(|index| (levels.level, *index)));
+                    complete &= demands_complete(&demand, meta.assured);
+                    issued.extend(prefetch_requests(
+                        &Prefetch {
+                            enabled: *prefetch,
+                            rate: *prefetch_rate,
+                            atlas,
+                            time: meta.time,
+                            ladder: Ladder { base: 0, count: 0 },
+                            demands: &[],
+                            section: &demand,
+                            section_level: levels.level,
+                            section_fallback: levels.fallback,
+                            pyramid,
+                        },
+                        prefetched,
+                    ));
+                    info.panes[index] = demand.info;
+                    requests.panes[index] = demand.info;
+                    requests.section.extend(demand.requests.iter().copied());
+                    for request in &demand.requests {
+                        prefetched.remove(request);
+                    }
+                }
+            }
         }
-        demanded.extend(
-            section
-                .indices
-                .iter()
-                .map(|index| (meta.levels.section, *index)),
-        );
         if !prefetch_issued.is_empty() {
-            let issued = prefetch_issued
+            let issued_count = prefetch_issued
                 .iter()
                 .filter(|request| request.time == meta.time)
                 .count();
@@ -130,8 +200,8 @@ impl Renderer {
                         && demanded.contains(&(request.level, index_of(request, pyramid)))
                 })
                 .count();
-            if issued > 0 {
-                let rate = hit as f32 / issued as f32;
+            if issued_count > 0 {
+                let rate = hit as f32 / issued_count as f32;
                 *prefetch_rate = 0.7 * *prefetch_rate + 0.3 * rate.clamp(0.25, 1.0);
             }
         }
@@ -141,49 +211,18 @@ impl Renderer {
             *prefetch_key = Some(key);
             prefetched.clear();
         }
-        let issued = prefetch_requests(
-            &Prefetch {
-                enabled: *prefetch,
-                rate: *prefetch_rate,
-                atlas,
-                time: meta.time,
-                ladder,
-                demands: &demands,
-                section: &section,
-                section_level: meta.levels.section,
-                section_fallback: meta.levels.section_fallback,
-                pyramid,
-            },
-            prefetched,
-        );
         prefetch_issued.extend_from_slice(&issued);
-        let complete = demands.iter().all(|demand| {
-            demand.requests.is_empty()
-                && demand.info.resident == demand.info.demand
-                && (!meta.assured || demand.info.visible == demand.info.demand)
-        }) && section.requests.is_empty()
-            && section.info.resident == section.info.demand
-            && (!meta.assured || section.info.visible == section.info.demand);
         let settled_now = complete && (!meta.assured || issued.is_empty());
         *settled = settled_now.then_some(meta);
-        let mut merged = Demand::default();
-        for demand in demands {
-            merged.merge(demand);
-        }
-        for request in merged.requests.iter().chain(&section.requests) {
-            prefetched.remove(request);
-        }
-        merged.info.level = ladder.base;
-        info.volume = merged.info;
-        Some(Requests {
-            time: meta.time,
-            volume: merged.requests,
-            section: section.requests,
-            prefetch: issued,
-            volume_view: merged.info,
-            section_view: section.info,
-        })
+        requests.prefetch = issued;
+        Some(requests)
     }
+}
+
+fn demands_complete(demand: &Demand, assured: bool) -> bool {
+    demand.requests.is_empty()
+        && demand.info.resident == demand.info.demand
+        && (!assured || demand.info.visible == demand.info.demand)
 }
 
 fn index_of(request: &BrickRequest, pyramid: &Pyramid) -> u32 {
@@ -198,18 +237,44 @@ pub(super) fn view_key(meta: &Residency) -> u64 {
     meta.prefetch.hash(&mut hasher);
     meta.assured.hash(&mut hasher);
     meta.time.hash(&mut hasher);
-    meta.eye.map(f32::to_bits).hash(&mut hasher);
-    meta.focus.map(f32::to_bits).hash(&mut hasher);
-    meta.field_of_view.to_bits().hash(&mut hasher);
-    meta.section_center.map(f32::to_bits).hash(&mut hasher);
-    meta.section_normal.map(f32::to_bits).hash(&mut hasher);
-    meta.section_right.map(f32::to_bits).hash(&mut hasher);
-    meta.span.to_bits().hash(&mut hasher);
-    meta.volume.hash(&mut hasher);
-    meta.section.hash(&mut hasher);
-    meta.levels.ladder.hash(&mut hasher);
-    meta.levels.section.hash(&mut hasher);
-    meta.levels.section_fallback.hash(&mut hasher);
+    for pane in meta.panes.iter().flatten() {
+        match pane {
+            PaneResidency::Volume {
+                eye,
+                focus,
+                field_of_view,
+                size,
+                levels,
+            } => {
+                eye.map(f32::to_bits).hash(&mut hasher);
+                focus.map(f32::to_bits).hash(&mut hasher);
+                field_of_view.to_bits().hash(&mut hasher);
+                size.hash(&mut hasher);
+                levels.ladder.hash(&mut hasher);
+                levels.capacity.hash(&mut hasher);
+            }
+            PaneResidency::Section {
+                center,
+                normal,
+                right,
+                span,
+                thickness,
+                size,
+                levels,
+                ..
+            } => {
+                center.map(f32::to_bits).hash(&mut hasher);
+                normal.map(f32::to_bits).hash(&mut hasher);
+                right.map(f32::to_bits).hash(&mut hasher);
+                span.to_bits().hash(&mut hasher);
+                thickness.to_bits().hash(&mut hasher);
+                size.hash(&mut hasher);
+                levels.level.hash(&mut hasher);
+                levels.fallback.hash(&mut hasher);
+                levels.capacity.hash(&mut hasher);
+            }
+        }
+    }
     hasher.finish()
 }
 
@@ -280,7 +345,7 @@ pub(super) fn prefetch_requests(
             issued,
         );
     }
-    if budget > 0 {
+    if budget > 0 && ladder.count > 0 {
         carry(
             pyramid,
             atlas,

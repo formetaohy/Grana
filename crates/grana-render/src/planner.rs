@@ -247,14 +247,18 @@ impl Plan {
     }
 }
 
+pub(crate) struct PanePlans {
+    pub bands: [Plan; BAND],
+    pub section: Plan,
+}
+
 pub(crate) struct Planner {
     plan: ComputePipeline,
     volume_count: ComputePipeline,
     volume_scatter: ComputePipeline,
     section_count: ComputePipeline,
     section_scatter: ComputePipeline,
-    pub bands: [Plan; BAND],
-    pub section: Plan,
+    pub panes: [PanePlans; crate::PANE_COUNT],
 }
 
 impl Planner {
@@ -291,32 +295,40 @@ impl Planner {
             volume_scatter: pipeline("grana.volume.scatter", &cull, "volume_scatter"),
             section_count: pipeline("grana.section.count", &cull, "section_count"),
             section_scatter: pipeline("grana.section.scatter", &cull, "section_scatter"),
-            bands: std::array::from_fn(|_| Plan::new(device, layouts, "grana.band.plan", capacity)),
-            section: Plan::new(device, layouts, "grana.section.plan", capacity),
+            panes: std::array::from_fn(|_| PanePlans {
+                bands: std::array::from_fn(|_| {
+                    Plan::new(device, layouts, "grana.band.plan", capacity)
+                }),
+                section: Plan::new(device, layouts, "grana.section.plan", capacity),
+            }),
         }
     }
 
     pub fn bind_arena(&mut self, device: &Device, layouts: &Layouts, arena: &BrickArena) {
-        for plan in self
-            .bands
-            .iter_mut()
-            .chain(std::iter::once(&mut self.section))
-        {
-            plan.bind_arena(device, layouts, arena);
+        for pane in &mut self.panes {
+            for plan in pane
+                .bands
+                .iter_mut()
+                .chain(std::iter::once(&mut pane.section))
+            {
+                plan.bind_arena(device, layouts, arena);
+            }
         }
     }
 
-    pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
+    pub fn encode(&self, encoder: &mut CommandEncoder, scenes: &[&BindGroup; crate::PANE_COUNT]) {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("grana.plan.count"),
                 timestamp_writes: None,
             });
-            pass.set_bind_group(0, scene, &[]);
-            for plan in &self.bands {
-                dispatch(&mut pass, &self.volume_count, plan);
+            for (index, pane) in self.panes.iter().enumerate() {
+                pass.set_bind_group(0, scenes[index], &[]);
+                for plan in &pane.bands {
+                    dispatch(&mut pass, &self.volume_count, plan);
+                }
+                dispatch(&mut pass, &self.section_count, &pane.section);
             }
-            dispatch(&mut pass, &self.section_count, &self.section);
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -324,9 +336,11 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.plan);
-            for plan in self.bands.iter().chain(std::iter::once(&self.section)) {
-                pass.set_bind_group(0, plan.data_group(), &[]);
-                pass.dispatch_workgroups(1, 1, 1);
+            for pane in &self.panes {
+                for plan in pane.bands.iter().chain(std::iter::once(&pane.section)) {
+                    pass.set_bind_group(0, plan.data_group(), &[]);
+                    pass.dispatch_workgroups(1, 1, 1);
+                }
             }
         }
         {
@@ -334,11 +348,13 @@ impl Planner {
                 label: Some("grana.plan.scatter"),
                 timestamp_writes: None,
             });
-            pass.set_bind_group(0, scene, &[]);
-            for plan in &self.bands {
-                dispatch(&mut pass, &self.volume_scatter, plan);
+            for (index, pane) in self.panes.iter().enumerate() {
+                pass.set_bind_group(0, scenes[index], &[]);
+                for plan in &pane.bands {
+                    dispatch(&mut pass, &self.volume_scatter, plan);
+                }
+                dispatch(&mut pass, &self.section_scatter, &pane.section);
             }
-            dispatch(&mut pass, &self.section_scatter, &self.section);
         }
     }
 }

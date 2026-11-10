@@ -1,9 +1,10 @@
-use glam::{Vec2, Vec3};
-use grana_figure::{self as overlay, Handle, Label, Legend, Overlay};
+use glam::Vec2;
+use grana_display::{PANE_COUNT, PaneKind, SectionCamera};
+use grana_figure::{self as overlay, Handle, Label, Legend, Pane};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Layer, Length, Level, Phase,
-    Rect, TextStyle, TypeStyle, icon,
+    BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Layer, Length, Level, Rect,
+    TextStyle, TypeStyle, icon,
 };
 
 use crate::message::Message;
@@ -17,16 +18,6 @@ const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
 const RECORD: Color = Color::rgba(1.0, 0.52, 0.44, 1.0);
 
-#[derive(Clone, Copy)]
-struct Geometry {
-    volume_rect: Rect,
-    section_rect: Rect,
-    volume_safe: Rect,
-    section_safe: Rect,
-    world: Vec3,
-    recording: Option<(u32, u32)>,
-}
-
 pub(super) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
@@ -36,89 +27,35 @@ pub(super) fn view<'a>(
     let mut elements = Vec::new();
     let palette = ctx.theme().palette;
     let size = full.size();
-    let geometry = geometry(layout, state);
-    let volume = layout.volume;
-    let section = layout.section;
+    let rects = layout.panes;
     let stage_backdrop = palette.scene_backdrop;
     let content = grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         painter.rect(info.rect, Corners::ZERO, stage_backdrop);
-        painter.scene(volume, Corners::ZERO, scene_uv(volume, size));
-        painter.scene(section, Corners::ZERO, scene_uv(section, size));
+        for rect in rects {
+            painter.scene(rect, Corners::ZERO, scene_uv(rect, size));
+        }
     })
     .named("stage.content")
     .at(full)
     .layer(Layer::Content);
     elements.push(content);
-    elements.push(overlay_view(state, geometry, full));
-    elements.extend(region_handles(state, geometry));
-    elements.push(pane_fit(
-        ctx,
-        geometry.volume_safe,
-        "volume.fit",
-        "Fit volume",
-        Message::FitVolume,
-    ));
-    elements.push(pane_fit(
-        ctx,
-        geometry.section_safe,
-        "section.fit",
-        "Fit section",
-        Message::FitSection,
-    ));
-    elements.extend(split_handle(ctx, layout));
-    elements.push(chip(
-        ctx,
-        "figure.volume",
-        geometry.volume_safe,
-        geometry.volume_safe.min,
-        Icon::Cube,
-        "3D",
-        LABEL,
-    ));
-    let section = state.viewport.section();
-    let extent = geometry.world.abs().dot(section.normal().abs());
-    let depth = section.center().dot(section.normal()) + 0.5 * extent;
-    let mode = if section.projected() {
-        format!(
-            "{} · {:.2} µm",
-            section.projection().label(),
-            section.thickness()
-        )
-    } else {
-        section.projection().label().to_string()
-    };
-    elements.push(chip(
-        ctx,
-        "figure.section",
-        geometry.section_rect,
-        geometry.section_safe.min,
-        Icon::Section,
-        &format!(
-            "{mode} · E{:.0}° A{:.0}° · {depth:.2} µm",
-            section.elevation().to_degrees(),
-            section.azimuth().to_degrees()
-        ),
-        LABEL,
-    ));
-    if let Some((frame, frames)) = geometry.recording {
-        elements.push(chip(
-            ctx,
-            "figure.recording",
-            geometry.volume_rect,
-            geometry.volume_safe.min + Vec2::new(0.0, 34.0),
-            Icon::Record,
-            &format!("REC · frame {frame} of {frames}"),
-            RECORD,
-        ));
+    elements.push(overlay_view(state, layout, full));
+    elements.extend(region_handles(state, layout));
+    for index in 0..PANE_COUNT {
+        let safe = layout.panes[index].shrink(STAGE_INSET);
+        elements.push(pane_fit(ctx, safe, index));
+        elements.extend(pane_chip(ctx, layout, state, index));
     }
-    elements.extend(mask_bar(ctx, state, geometry));
+    elements.extend(split_handle(ctx, layout));
+    elements.extend(recording_chip(ctx, layout, state));
+    elements.extend(mask_bar(ctx, state, layout));
     elements
 }
 
 fn mask_bar<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
-    geometry: Geometry,
+    layout: &Layout,
 ) -> Vec<Element<'a, Message>> {
     let Some(brush) = state.workspace.mask else {
         return Vec::new();
@@ -171,12 +108,10 @@ fn mask_bar<'a>(
     );
     let width = 240.0;
     let height = 34.0 + 30.0 + 34.0 + 6.0 + 30.0 + 12.0;
-    let floor = geometry.section_safe.max.y;
+    let safe = layout.panes[state.active()].shrink(STAGE_INSET);
+    let floor = safe.max.y;
     let rect = Rect::from_min_size(
-        Vec2::new(
-            geometry.section_safe.min.x,
-            (floor - height).max(geometry.section_safe.min.y),
-        ),
+        Vec2::new(safe.min.x, (floor - height).max(safe.min.y)),
         Vec2::new(width, height),
     );
     vec![
@@ -230,66 +165,93 @@ pub(crate) fn remote<'a>(
     vec![sheet.at(rect).layer(Layer::Popup)]
 }
 
-fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {
-    Geometry {
-        volume_rect: layout.volume,
-        section_rect: layout.section,
-        volume_safe: layout.volume.shrink(STAGE_INSET),
-        section_safe: layout.section.shrink(STAGE_INSET),
-        world: state.scene.dataset.world_size(),
-        recording: state.io.exporting,
+fn plane_label(section: &SectionCamera) -> &'static str {
+    let normal = section.normal().abs();
+    if normal.z >= normal.y && normal.z >= normal.x {
+        "XY"
+    } else if normal.y >= normal.x {
+        "XZ"
+    } else {
+        "YZ"
     }
 }
 
-fn overlay_of<'a>(
+fn pane<'a>(
     state: &'a View<'a>,
-    geometry: Geometry,
+    layout: &Layout,
+    index: usize,
+    planes: &'a [SectionCamera],
     legends: &'a [Legend],
     labels: &'a [Label],
     annotations: &'a [grana_figure::AnnotationItem],
-) -> Overlay<'a> {
-    Overlay {
-        camera: state.viewport.camera(),
-        section: state.viewport.section(),
-        world: geometry.world,
+) -> Pane<'a> {
+    let pane = state.panes.pane(index);
+    Pane {
+        kind: pane.kind(),
+        camera: pane.camera(),
+        section: pane.section(),
+        plane: if pane.kind().volume() { planes } else { &[] },
+        world: state.scene.dataset.world_size(),
         voxel: state.scene.dataset.voxel_size(),
-        volume_safe: geometry.volume_safe,
-        section_safe: geometry.section_safe,
-        volume_rect: geometry.volume_rect,
-        section_rect: geometry.section_rect,
+        rect: layout.panes[index],
+        safe: layout.panes[index].shrink(STAGE_INSET),
         region: &state.scene.region,
         clip: state.scene.clip,
         legends,
         labels,
         annotations,
         pending: state.workspace.annotation_pending,
-        recording: geometry.recording,
+        recording: state.io.exporting,
     }
 }
 
-fn overlay_view<'a>(state: &'a View<'a>, geometry: Geometry, full: Rect) -> Element<'a, Message> {
+fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout, full: Rect) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
     let annotations = overlay::annotations(state.scene, state.scene.time());
-    grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
-        let _ = info;
-        let overlay = overlay_of(state, geometry, &legends, &labels, &annotations);
-        overlay::paint(painter, &overlay);
+    let sections = sections(state);
+    let layout = *layout;
+    grana_ui::canvas(Length::Fill, full.height(), move |painter, _info| {
+        for index in 0..PANE_COUNT {
+            let pane = pane(
+                state,
+                &layout,
+                index,
+                &sections,
+                if index == 0 { &legends } else { &[] },
+                &labels,
+                &annotations,
+            );
+            overlay::paint(painter, &pane);
+        }
     })
     .named("stage.overlay")
     .at(full)
     .layer(Layer::Content)
 }
 
-fn region_handles<'a>(state: &'a View<'a>, geometry: Geometry) -> Vec<Element<'a, Message>> {
-    let overlay = overlay_of(state, geometry, &[], &[], &[]);
-    overlay::handles(&overlay)
-        .into_iter()
-        .map(region_handle)
+fn sections(state: &View<'_>) -> Vec<SectionCamera> {
+    (0..PANE_COUNT)
+        .filter(|index| state.panes.pane(*index).kind() == PaneKind::Section)
+        .map(|index| state.panes.pane(index).section().clone())
         .collect()
 }
 
-fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
+fn region_handles<'a>(state: &'a View<'a>, layout: &Layout) -> Vec<Element<'a, Message>> {
+    let sections = sections(state);
+    let labels: [Label; 0] = [];
+    let annotations: [grana_figure::AnnotationItem; 0] = [];
+    let Some(index) = (0..PANE_COUNT).find(|index| state.panes.pane(*index).kind().volume()) else {
+        return Vec::new();
+    };
+    let pane = pane(state, layout, index, &sections, &[], &labels, &annotations);
+    overlay::handles(&pane)
+        .into_iter()
+        .map(|handle| region_handle(index, handle))
+        .collect()
+}
+
+fn region_handle<'a>(pane: usize, handle: Handle) -> Element<'a, Message> {
     let Handle {
         axis,
         side,
@@ -310,11 +272,14 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
             );
         },
     )
-    .key(Key::index("region.handle", axis * 2 + side))
+    .key(Key::new(format!(
+        "region.handle.{pane}.{}",
+        axis * 2 + side
+    )))
     .at(rect)
     .layer(Layer::Content)
     .on_pointer(move |pointer| {
-        (pointer.phase == Phase::Move).then_some(Message::Region {
+        (pointer.phase == grana_ui::Phase::Move).then_some(Message::Region {
             axis,
             side,
             delta: pointer.delta.dot(direction) * world_per_point,
@@ -325,9 +290,7 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
 fn pane_fit<'a>(
     ctx: &mut BuildContext<'_, Message>,
     safe: Rect,
-    key: &str,
-    tooltip: &str,
-    message: Message,
+    index: usize,
 ) -> Element<'a, Message> {
     let rect = Rect::from_min_size(
         Vec2::new((safe.max.x - PANE_CONTROL).max(safe.min.x), safe.min.y),
@@ -335,12 +298,12 @@ fn pane_fit<'a>(
     );
     crate::view::glass_icon_button(
         ctx,
-        key,
+        &format!("pane.fit.{index}"),
         Icon::Fit,
         PANE_CONTROL,
         GlassStyle::stage_control(),
-        tooltip,
-        message,
+        "Fit this view",
+        Message::FitPane(index),
     )
     .at(rect)
 }
@@ -349,15 +312,15 @@ fn split_handle<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
 ) -> Vec<Element<'a, Message>> {
-    let volume = layout.volume;
-    let section = layout.section;
-    let x = (volume.max.x + section.min.x) * 0.5;
+    let left = layout.panes[0];
+    let right = layout.panes[1];
+    let x = (left.max.x + right.min.x) * 0.5;
     let grab = Rect::from_center_size(
-        Vec2::new(x, volume.center().y),
-        Vec2::new(16.0, volume.height()),
+        Vec2::new(x, left.center().y),
+        Vec2::new(16.0, left.height()),
     );
-    let total = (volume.width() + section.width()).max(1.0);
-    let origin = volume.min.x;
+    let total = (left.width() + right.width()).max(1.0);
+    let origin = left.min.x;
     let palette = ctx.theme().palette;
     let line = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
         let rect = info.rect;
@@ -371,7 +334,7 @@ fn split_handle<'a>(
     .named("split.line");
     let lens = grana_ui::canvas(Length::Fill, 36.0, |_painter, _info| {})
         .at(Rect::from_center_size(
-            Vec2::new(x, volume.center().y),
+            Vec2::new(x, left.center().y),
             Vec2::new(8.0, 36.0),
         ))
         .named("split.lens")
@@ -398,11 +361,140 @@ fn split_handle<'a>(
     .named("split.bar")
     .cursor(Cursor::ResizeHorizontal)
     .on_pointer(move |pointer| {
-        (pointer.phase == Phase::Move)
+        (pointer.phase == grana_ui::Phase::Move)
             .then_some(Message::SetSplit((pointer.position.x - origin) / total))
     })
     .layer(Layer::Labels);
     vec![line, lens, bar]
+}
+
+fn pane_chip<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+    index: usize,
+) -> Vec<Element<'a, Message>> {
+    let pane = state.panes.pane(index);
+    let rect = layout.panes[index];
+    let safe = rect.shrink(STAGE_INSET);
+    let active = state.active() == index;
+    let title = match pane.kind() {
+        PaneKind::Volume => "3D".to_string(),
+        PaneKind::Section => format!("Slice · {}", plane_label(pane.section())),
+    };
+    let tint = if active {
+        LABEL
+    } else {
+        Color::rgba(1.0, 1.0, 1.0, 0.62)
+    };
+    let key = format!("pane.menu.{index}");
+    let open = state.workspace.sections.is_open(Key::new(&key));
+    chip_control(
+        ctx,
+        &key,
+        index,
+        rect,
+        safe,
+        pane.kind(),
+        &title,
+        tint,
+        open,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chip_control<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    index: usize,
+    pane_rect: Rect,
+    safe: Rect,
+    kind: PaneKind,
+    title: &str,
+    tint: Color,
+    open: bool,
+) -> Vec<Element<'a, Message>> {
+    let style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
+    let maximum = (pane_rect.width() - 64.0).max(96.0);
+    let layout = ctx.layout_text(title, style, maximum);
+    let width = (layout.size.x + 46.0).min(maximum + 24.0);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
+        let rect = info.rect;
+        icon::paint(
+            match kind {
+                PaneKind::Volume => Icon::Cube,
+                PaneKind::Section => Icon::Section,
+            },
+            painter,
+            Vec2::new(rect.min.x + 15.0, rect.center().y),
+            13.0,
+            tint,
+            1.5,
+        );
+        painter.text(
+            &layout,
+            Vec2::new(rect.min.x + 25.0, rect.min.y + 5.5),
+            tint,
+        );
+        icon::chevron(
+            painter,
+            Vec2::new(rect.max.x - 12.0, rect.center().y),
+            4.0,
+            std::f32::consts::FRAC_PI_2,
+            tint,
+            1.5,
+        );
+    })
+    .named(key)
+    .at(Rect::from_min_size(safe.min, Vec2::new(width, 26.0)))
+    .glass(GlassStyle::hud_chip())
+    .cursor(Cursor::Pointing)
+    .press(Message::ToggleOpen(Key::new(key)));
+    if !open {
+        return vec![anchor];
+    }
+    let theme = *ctx.theme();
+    let options = [
+        (
+            "3D Volume",
+            Message::SetPaneKind {
+                index,
+                kind: PaneKind::Volume,
+            },
+        ),
+        ("XY Slice", Message::SetPaneSlice { index, preset: 0 }),
+        ("XZ Slice", Message::SetPaneSlice { index, preset: 1 }),
+        ("YZ Slice", Message::SetPaneSlice { index, preset: 2 }),
+    ];
+    let mut rows = Vec::new();
+    for (slot, (label, message)) in options.into_iter().enumerate() {
+        rows.push(
+            grana_ui::widget::menu_row(&theme, label, false)
+                .key(Key::index(key, slot))
+                .press(message),
+        );
+    }
+    let popup = grana_ui::popover::popup(Key::new(key), width.max(150.0), rows);
+    vec![anchor, popup]
+}
+fn recording_chip<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    let Some((frame, frames)) = state.io.exporting else {
+        return Vec::new();
+    };
+    let safe = layout.panes[0].shrink(STAGE_INSET);
+    vec![chip(
+        ctx,
+        "figure.recording",
+        layout.panes[0],
+        safe.min + Vec2::new(0.0, 34.0),
+        Icon::Record,
+        &format!("REC · frame {frame} of {frames}"),
+        RECORD,
+    )]
 }
 
 fn chip<'a>(

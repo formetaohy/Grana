@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 use grana_animation::Timeline;
-use grana_display::Viewport;
+use grana_display::{PANE_COUNT, Pane, Panes};
 use grana_measure::{MeasureView, Measurement};
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
@@ -22,8 +22,7 @@ pub struct ViewStats {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameStats {
-    pub volume: ViewStats,
-    pub section: ViewStats,
+    pub panes: [ViewStats; PANE_COUNT],
     pub bytes: u64,
     pub geometry: u64,
     pub fragments: u64,
@@ -255,6 +254,7 @@ pub struct Palette {
 
 pub struct Workspace {
     pub panel: Option<Panel>,
+    pub active: usize,
     pub last_panel: Panel,
     pub sidebar_hidden: bool,
     pub sidebar_tab: usize,
@@ -291,6 +291,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             panel: None,
+            active: 0,
             last_panel: Panel::Statistics,
             sidebar_hidden: false,
             sidebar_tab: 0,
@@ -357,14 +358,22 @@ pub struct View<'a> {
     pub recent: &'a [grana_session::RecentEntry],
     pub import: &'a [grana_session::ImportNote],
     pub palette: Option<&'a crate::palette::PaletteView>,
-    pub viewport: &'a Viewport,
+    pub panes: &'a Panes,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,
     pub export: Export,
     pub frame: FrameStats,
 }
 
-impl View<'_> {
+impl<'a> View<'a> {
+    pub fn pane(&self) -> &'a Pane {
+        self.panes.pane(self.workspace.active.min(PANE_COUNT - 1))
+    }
+
+    pub fn active(&self) -> usize {
+        self.workspace.active.min(PANE_COUNT - 1)
+    }
+
     pub fn batch_protocol(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.protocol)
     }

@@ -103,6 +103,15 @@ const _: () = {
     assert!(size_of::<ScheduleData>() == 48);
 };
 
+pub(crate) struct SharedView {
+    pub shading: Shading,
+    pub channels: usize,
+    pub region: Region,
+    pub clip: Clip,
+    pub time: u32,
+    pub space: ShadowSpace,
+}
+
 pub(crate) struct VolumeView<'a> {
     pub camera: &'a Camera,
     pub region: Region,
@@ -115,6 +124,60 @@ pub(crate) struct VolumeView<'a> {
 const UNREACHED: f32 = 1.0e19;
 
 impl FrameData {
+    pub fn shared(view: SharedView) -> Self {
+        let SharedView {
+            shading,
+            channels,
+            region,
+            clip,
+            time,
+            space,
+        } = view;
+        let light = shading.light();
+        let (normal, offset) = clip.parts();
+        Self {
+            view_projection: [[0.0; 4]; 4],
+            inv_view_projection: [[0.0; 4]; 4],
+            eye: [0.0; 4],
+            light: [light.x, light.y, light.z, 0.0],
+            right: [0.0; 4],
+            up: [0.0; 4],
+            forward: [0.0; 4],
+            region_center: [
+                region.center().x,
+                region.center().y,
+                region.center().z,
+                if region.enabled() { 1.0 } else { 0.0 },
+            ],
+            region_axis: std::array::from_fn(|index| {
+                let axis = region.axis(index);
+                [axis.x, axis.y, axis.z, region.half()[index]]
+            }),
+            atlas: [0; 4],
+            shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
+            march: [0.0, shading.shadows, channels as f32, 0.0],
+            viewport: [0.0; 4],
+            jitter: [0.0; 4],
+            planes: [[0.0; 4]; 6],
+            light_view: space.view().to_cols_array_2d(),
+            light_inverse: space.inverse().to_cols_array_2d(),
+            light_reach: space.reach(),
+            oit: [0; 4],
+            clip: [normal[0], normal[1], normal[2], offset],
+            tag: [time, 0, 0, 0],
+            dims: [[0.0; 4]; BAND],
+            grids: [[0; 4]; BAND],
+            origins: [[0.0; 4]; BAND],
+            axes: [[0.0; 4]; BAND * 3],
+            inverses: [[0.0; 4]; BAND * 3],
+            bases: [0; 4],
+            bands: [0; 4],
+            edge: [UNREACHED; 4],
+            projection: [1.0, 0.0, 0.0, 0.0],
+            lens: [0.0, 0.0, 1.0, 0.0],
+        }
+    }
+
     pub fn new(
         view: VolumeView<'_>,
         ladder: Ladder,
