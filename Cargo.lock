@@ -3380,8 +3380,10 @@ dependencies = [
  "grana-scene",
  "grana-segment",
  "grana-session",
+ "grana-text",
  "grana-tiff",
  "grana-ui",
+ "grana-vector",
  "grana-volume",
  "grana-weight",
  "grana-zarr",
@@ -3636,12 +3638,15 @@ dependencies = [
  "grana-display",
  "grana-engine",
  "grana-figure",
+ "grana-file",
  "grana-gpu",
  "grana-raster",
  "grana-render",
  "grana-scene",
+ "grana-text",
  "grana-tiff",
  "grana-ui",
+ "grana-vector",
  "grana-video",
  "grana-volume",
  "wgpu",
@@ -3884,6 +3889,15 @@ dependencies = [
  "grana-text",
  "slotmap",
  "wgpu",
+]
+
+[[package]]
+name = "grana-vector"
+version = "0.1.1"
+dependencies = [
+ "flate2",
+ "grana-raster",
+ "grana-text",
 ]
 
 [[package]]

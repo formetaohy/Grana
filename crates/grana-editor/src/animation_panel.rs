@@ -482,6 +482,23 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         ctx,
         "Eight bit PNG or sixteen bit OME-TIFF, chosen by the saved extension.",
     ));
+    let figure = grana_ui::widget::button_enabled(
+        &theme,
+        "Save Vector Figure",
+        Role::Control,
+        Length::Fill,
+        idle,
+    )
+    .named("animation.save.figure");
+    children.push(if idle {
+        figure.press(Message::Command(Command::SaveFigure))
+    } else {
+        figure
+    });
+    children.push(view::caption(
+        ctx,
+        "SVG or PDF with outlined text over the rendered volume.",
+    ));
     let sequence = grana_ui::widget::button_enabled(
         &theme,
         "Export Frame Sequence",

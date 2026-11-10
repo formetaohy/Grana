@@ -5,6 +5,7 @@ use grana_raster::Bitmap;
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::image::ImageAtlas;
+use crate::record::Mark;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 
@@ -132,6 +133,7 @@ pub struct Painter<'a> {
     clip: Clip,
     gamma: f32,
     vibrancy: bool,
+    marks: Option<&'a mut Vec<Mark>>,
 }
 
 impl<'a> Painter<'a> {
@@ -142,6 +144,7 @@ impl<'a> Painter<'a> {
         clip: Clip,
         dark: bool,
         vibrancy: bool,
+        marks: Option<&'a mut Vec<Mark>>,
     ) -> Self {
         Self {
             instances,
@@ -150,6 +153,13 @@ impl<'a> Painter<'a> {
             clip,
             gamma: if dark { 0.86 } else { 1.0 },
             vibrancy,
+            marks,
+        }
+    }
+
+    fn mark(&mut self, mark: Mark) {
+        if let Some(marks) = self.marks.as_deref_mut() {
+            marks.push(mark);
         }
     }
 
@@ -185,6 +195,13 @@ impl<'a> Painter<'a> {
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.color = color.to_array();
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Rect {
+            rect,
+            corners,
+            color,
+            clip,
+        });
     }
 
     pub fn gradient(&mut self, rect: Rect, corners: Corners, top: Color, bottom: Color) {
@@ -198,6 +215,14 @@ impl<'a> Painter<'a> {
         instance.color2 = bottom.to_array();
         instance.meta[1] |= FLAG_GRADIENT;
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Gradient {
+            rect,
+            corners,
+            top,
+            bottom,
+            clip,
+        });
     }
 
     pub fn outlined(
@@ -233,6 +258,14 @@ impl<'a> Painter<'a> {
             instance.meta[1] |= FLAG_BORDER;
             instance.extra = [border.width, 0.0, 0.0, 0.0];
             self.push(instance);
+            let clip = self.clip.rect;
+            self.mark(Mark::Border {
+                rect,
+                corners,
+                width: border.width,
+                color: border.color,
+                clip,
+            });
         }
     }
 
@@ -279,6 +312,12 @@ impl<'a> Painter<'a> {
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.uv = uv;
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Bitmap {
+            rect,
+            bitmap: bitmap.clone(),
+            clip,
+        });
     }
 
     pub fn triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: Color) {
@@ -297,6 +336,12 @@ impl<'a> Painter<'a> {
         instance.extra = [c.x, c.y, 0.0, 0.0];
         instance.color = color.to_array();
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Triangle {
+            corners: [a.to_array(), b.to_array(), c.to_array()],
+            color,
+            clip,
+        });
     }
 
     pub fn segment(&mut self, from: Vec2, to: Vec2, width: f32, color: Color) {
@@ -313,6 +358,15 @@ impl<'a> Painter<'a> {
         instance.color2 = end.to_array();
         instance.extra = [width, 0.0, 0.0, 0.0];
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Segment {
+            from: from.to_array(),
+            to: to.to_array(),
+            width,
+            start,
+            end,
+            clip,
+        });
     }
 
     pub fn ring(
@@ -332,6 +386,16 @@ impl<'a> Painter<'a> {
         instance.color = color.to_array();
         instance.extra = [start, sweep, 0.0, 0.0];
         self.push(instance);
+        let clip = self.clip.rect;
+        self.mark(Mark::Arc {
+            center: center.to_array(),
+            radius,
+            width,
+            start,
+            sweep,
+            color,
+            clip,
+        });
     }
 
     pub fn glyphs(&mut self, layout: &TextLayout, origin: Vec2, color: Color) {
@@ -363,6 +427,7 @@ impl<'a> Painter<'a> {
 
     pub fn text(&mut self, layout: &TextLayout, position: Vec2, color: Color) {
         self.glyphs(layout, position, color);
+        self.record_text(layout, position, color);
     }
 
     pub fn layout(
@@ -392,6 +457,7 @@ impl<'a> Painter<'a> {
             .text
             .layout(text, style.font, 0.0, false, style.truncate, style.align);
         self.glyphs(&layout, position, style.color);
+        self.record_text(&layout, position, style.color);
     }
 
     pub fn text_in(&mut self, rect: Rect, text: &str, style: TextStyle, vertical: Align) {
@@ -456,6 +522,23 @@ impl<'a> Painter<'a> {
             instance.rect[0] += delta.x;
             instance.rect[1] += delta.y;
         }
+        self.record_text(&layout, origin + delta, style.color);
+    }
+
+    fn record_text(&mut self, layout: &TextLayout, origin: Vec2, color: Color) {
+        if self.marks.is_none() || color.alpha <= 0.0 {
+            return;
+        }
+        let contours = self.text.contours(layout, origin);
+        if contours.is_empty() {
+            return;
+        }
+        let clip = self.clip.rect;
+        self.mark(Mark::Outline {
+            contours,
+            color,
+            clip,
+        });
     }
 }
 

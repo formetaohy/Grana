@@ -14,6 +14,7 @@ pub struct Pose {
 
 pub enum Destination {
     Image { path: PathBuf },
+    Figure { path: PathBuf },
     Movie { path: PathBuf },
     Sequence { directory: PathBuf, stem: String },
 }
@@ -46,9 +47,12 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     if plan.poses.is_empty() {
         return Err("an export holds at least one pose".to_string());
     }
-    if let Destination::Image { path } = &plan.destination
-        && still(path)? == Still::Tiff
-    {
+    let wide = match &plan.destination {
+        Destination::Image { path } => still(path)? == Still::Tiff,
+        Destination::Figure { .. } => true,
+        _ => false,
+    };
+    if wide {
         let size = plan.size.to_array();
         let bytes = u64::from(size[0]) * u64::from(size[1]) * WIDE_BYTES;
         if bytes > WIDE_CEILING {

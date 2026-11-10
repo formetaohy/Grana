@@ -31,6 +31,7 @@ pub enum Command {
     SaveProject,
     SaveProjectAs,
     SaveSnapshot,
+    SaveFigure,
     SetTime(u32),
     SelectSeries(usize),
     SelectField(usize),

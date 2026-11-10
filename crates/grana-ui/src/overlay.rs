@@ -52,6 +52,7 @@ impl<A: Clone> Ui<A> {
                 clip,
                 dark,
                 true,
+                None,
             );
             if focus_visible
                 && let Some(node) = focus

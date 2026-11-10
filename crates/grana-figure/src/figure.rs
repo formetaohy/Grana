@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_ui::{Instance, Rect, Ui};
+use grana_ui::{Instance, Mark, Rect, Ui};
 
 use crate::annotation::{self, Placed as PlacedAnnotation};
 use crate::labels::{self, Placed as PlacedLabel};
@@ -29,6 +29,36 @@ pub fn instances<A: Clone>(
         .caption
         .map(|caption| Placed::new(ui.text(), caption, rect));
     ui.figure_instances(points, pixels_per_point, |painter| {
+        overlay::figure(
+            painter,
+            rect,
+            world_per_point,
+            contents.legends,
+            placed.as_ref(),
+            backdrop,
+        );
+        labels::paint(painter, rect, contents.labels);
+        annotation::paint(painter, rect, contents.annotations);
+    })
+}
+
+pub fn marks<A: Clone>(
+    ui: &mut Ui<A>,
+    size: [u32; 2],
+    pixels_per_point: f32,
+    world_per_point: f32,
+    contents: Contents<'_>,
+    backdrop: bool,
+) -> Vec<Mark> {
+    let points = Vec2::new(
+        size[0] as f32 / pixels_per_point,
+        size[1] as f32 / pixels_per_point,
+    );
+    let rect = Rect::from_min_size(Vec2::ZERO, points);
+    let placed = contents
+        .caption
+        .map(|caption| Placed::new(ui.text(), caption, rect));
+    ui.figure_marks(points, pixels_per_point, |painter| {
         overlay::figure(
             painter,
             rect,

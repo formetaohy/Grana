@@ -417,6 +417,7 @@ fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message>
         command_row(ctx, "save.as"),
         menu_separator(ctx),
         command_row(ctx, "snapshot"),
+        command_row(ctx, "figure"),
         command_row(ctx, "labels"),
     ];
     menu(ctx, key, 228.0, rows)

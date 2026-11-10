@@ -6,6 +6,7 @@ mod offline;
 mod plan;
 mod sink;
 mod task;
+mod vector;
 mod worker;
 
 pub use offline::{Offline, Outcome};

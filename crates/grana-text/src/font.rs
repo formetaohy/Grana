@@ -7,6 +7,7 @@ use swash::{FontRef, Setting};
 
 use crate::face::{self, Face};
 use crate::glyph::GlyphRaster;
+use crate::outline::Outline;
 
 pub struct Fonts {
     faces: Vec<Face>,
@@ -148,6 +149,29 @@ impl Fonts {
             height: placement.height,
             data: image.data.to_vec(),
         })
+    }
+
+    pub fn outline(&mut self, index: usize, glyph: u16, style: GlyphStyle) -> Option<Outline> {
+        assert!(
+            style.size.is_finite() && style.size > 0.0,
+            "an outline is scaled to a positive size"
+        );
+        let font = self.font(index);
+        let mut scaler: Scaler<'_> = self
+            .scale
+            .builder(font)
+            .size(style.size)
+            .hint(false)
+            .variations([Setting::from(("wght", style.weight))])
+            .build();
+        let scaled = scaler.scale_outline(glyph)?;
+        let mut outline = Outline::new();
+        for layer in 0..scaled.len() {
+            if let Some(layer) = scaled.get(layer) {
+                outline.absorb(crate::outline::collect(layer.path()));
+            }
+        }
+        Some(outline)
     }
 
     pub fn has_glyph(&self, index: usize, character: char) -> bool {

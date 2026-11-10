@@ -1,6 +1,64 @@
+use grana_text::{Contour, Curve};
 use grana_volume::{
     BrickCoord, BrickGrid, Channel, Extent, Intensity, PADDED_SIDE, Spacing, Volume, VoxelData,
 };
+
+#[test]
+fn writes_deterministic_vector_pages() {
+    let mut document = grana_vector::Document::new(320.0, 200.0);
+    document.push(grana_vector::Shape::new(
+        grana_vector::rounded_rect(
+            grana_vector::Rect::new([8.0, 8.0], [312.0, 192.0]),
+            [12.0, 12.0, 12.0, 12.0],
+        ),
+        grana_vector::Paint::Stroke {
+            width: 1.5,
+            color: grana_vector::Rgba::new(0.9, 0.2, 0.1, 0.5),
+            cap: grana_vector::Cap::Round,
+        },
+    ));
+    document.push(grana_vector::Shape::new(
+        grana_vector::segment([20.0, 120.0], [300.0, 120.0]),
+        grana_vector::Paint::Gradient(
+            grana_vector::Rgba::new(0.1, 0.4, 0.9, 1.0),
+            grana_vector::Rgba::new(0.9, 0.4, 0.1, 1.0),
+        ),
+    ));
+    let mut contour = Contour::new([40.0, 40.0]);
+    contour.push(Curve::Line([80.0, 40.0]));
+    contour.push(Curve::Quad([90.0, 60.0], [80.0, 80.0]));
+    contour.push(Curve::Cubic([60.0, 90.0], [50.0, 50.0], [40.0, 40.0]));
+    document.push(grana_vector::Shape::new(
+        vec![contour],
+        grana_vector::Paint::Fill(grana_vector::Rgba::new(0.2, 0.8, 0.3, 1.0)),
+    ));
+    document.push(grana_vector::Shape::new(
+        grana_vector::arc([160.0, 120.0], 40.0, 0.0, 1.5),
+        grana_vector::Paint::Stroke {
+            width: 2.0,
+            color: grana_vector::Rgba::new(0.8, 0.8, 0.8, 1.0),
+            cap: grana_vector::Cap::Butt,
+        },
+    ));
+    let svg = grana_vector::write_svg(&document);
+    assert_eq!(svg, grana_vector::write_svg(&document));
+    assert!(svg.contains("<path d=\"M 40 40 L 80 40 Q 90 60 80 80 C 60 90 50 50 40 40 Z\""));
+    assert!(svg.contains("stroke-linecap=\"round\""));
+    assert!(svg.contains("stroke-linecap=\"butt\""));
+    let arc = svg.split("M 200 120").nth(1).expect("the arc is written");
+    let arc = &arc[..arc.find('"').expect("the arc path closes")];
+    assert!(
+        !arc.contains('Z'),
+        "an open arc is stroked without a closing chord"
+    );
+    let pdf = grana_vector::write_pdf(&document);
+    assert_eq!(pdf, grana_vector::write_pdf(&document));
+    assert!(pdf.starts_with(b"%PDF-1.7"));
+    assert!(pdf.ends_with(b"%%EOF\n"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/ShadingType 2"));
+    assert!(text.contains("startxref"));
+}
 
 #[test]
 fn builds_padded_bricks_from_a_volume() {

@@ -409,11 +409,42 @@ impl<A: Clone> Ui<A> {
                 clip,
                 dark,
                 false,
+                None,
             );
             content(&mut painter);
         }
         self.text.begin(self.scale);
         instances.material
+    }
+
+    pub fn figure_marks(
+        &mut self,
+        size: Vec2,
+        pixels_per_point: f32,
+        content: impl FnOnce(&mut Painter),
+    ) -> Vec<crate::record::Mark> {
+        self.text.begin(pixels_per_point);
+        let clip = Clip::new(
+            Rect::from_min_size(Vec2::ZERO, size),
+            crate::geometry::Corners::ZERO,
+        );
+        let dark = self.theme.dark;
+        let mut instances = LayerInstances::default();
+        let mut marks = Vec::new();
+        {
+            let mut painter = Painter::new(
+                &mut instances,
+                &mut self.text,
+                &mut self.images,
+                clip,
+                dark,
+                false,
+                Some(&mut marks),
+            );
+            content(&mut painter);
+        }
+        self.text.begin(self.scale);
+        marks
     }
 
     pub fn build(&mut self) -> BuildContext<'_, A> {

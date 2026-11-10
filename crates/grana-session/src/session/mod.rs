@@ -77,6 +77,7 @@ pub struct Effects {
     pub open_project: bool,
     pub save_project: Option<bool>,
     pub snapshot: bool,
+    pub figure: bool,
     pub movie: Option<bool>,
     pub sequence: bool,
     pub cancel_export: bool,

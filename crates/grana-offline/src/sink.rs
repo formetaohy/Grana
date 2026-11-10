@@ -18,6 +18,7 @@ const BAYER: [[u8; 8]; 8] = [
 pub(crate) enum Sink {
     Png { path: PathBuf },
     Tiff { path: PathBuf },
+    Figure { path: PathBuf },
     Movie { path: PathBuf, recorder: Recorder },
     Sequence { sequence: Sequence },
 }
@@ -37,8 +38,11 @@ impl Sink {
             Self::Tiff { .. } => {
                 unreachable!("a sixteen bit picture is written from the rendered frame")
             }
+            Self::Figure { .. } => {
+                unreachable!("a vector figure is written from the resolved frame")
+            }
             Self::Movie { recorder, .. } => {
-                let rgba = to_eight(size, pixels, transparent);
+                let rgba = dithered(size, pixels, transparent);
                 recorder.push(&rgba).map_err(|error| error.to_string())
             }
             Self::Sequence { sequence } => {
@@ -52,6 +56,7 @@ impl Sink {
         match self {
             Self::Png { path } => Ok(path),
             Self::Tiff { path } => Ok(path),
+            Self::Figure { path } => Ok(path),
             Self::Movie { path, recorder } => {
                 recorder.finish().map_err(|error| error.to_string())?;
                 Ok(path)
@@ -62,7 +67,7 @@ impl Sink {
 
     pub(crate) fn discard(self) {
         match self {
-            Self::Png { path } | Self::Tiff { path } => {
+            Self::Png { path } | Self::Tiff { path } | Self::Figure { path } => {
                 let _ = std::fs::remove_file(path);
             }
             Self::Movie { path, recorder } => {
@@ -92,7 +97,28 @@ fn png16(size: [u32; 2], pixels: &[u16], transparent: bool) -> Result<Vec<u8>, S
     }
 }
 
-fn to_eight(size: [u32; 2], pixels: &[u16], transparent: bool) -> Vec<u8> {
+pub(crate) fn rgba8(size: [u32; 2], pixels: &[u16], transparent: bool) -> Vec<u8> {
+    assert_eq!(
+        pixels.len(),
+        size[0] as usize * size[1] as usize * 4,
+        "the picture covers every pixel of the export"
+    );
+    let mut rgba = Vec::with_capacity(pixels.len());
+    for pixel in pixels.as_chunks::<4>().0 {
+        for sample in &pixel[..3] {
+            let value = f32::from(*sample) / 65535.0 * 255.0;
+            rgba.push(value.round().clamp(0.0, 255.0) as u8);
+        }
+        rgba.push(if transparent {
+            (u32::from(pixel[3]) * 255 / 65535) as u8
+        } else {
+            255
+        });
+    }
+    rgba
+}
+
+fn dithered(size: [u32; 2], pixels: &[u16], transparent: bool) -> Vec<u8> {
     assert_eq!(
         pixels.len(),
         size[0] as usize * size[1] as usize * 4,

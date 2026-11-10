@@ -29,14 +29,17 @@ pub struct Request {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DestinationKind {
     Image,
+    Figure,
     Movie,
     Sequence,
 }
 
 pub fn run(request: &Request) -> Result<PathBuf, String> {
     let kind = classify(&request.output)?;
-    if request.time.is_some() && kind != DestinationKind::Image {
-        return Err("--time names one frame, so it only applies to a still image".to_string());
+    if request.time.is_some() && !matches!(kind, DestinationKind::Image | DestinationKind::Figure) {
+        return Err(
+            "--time names one frame, so it only applies to a still image or a figure".to_string(),
+        );
     }
     if request.output.exists() && kind == DestinationKind::Sequence {
         return Err(format!(
@@ -137,6 +140,22 @@ impl Job<'_> {
                     0,
                 )
             }
+            DestinationKind::Figure => {
+                let frames = self.scene.frame_count();
+                let time = self.request.time.unwrap_or(self.scene.time());
+                if time >= frames {
+                    return Err(format!(
+                        "frame {time} lies outside the dataset's {frames} frames"
+                    ));
+                }
+                (
+                    Destination::Figure {
+                        path: self.output.to_path_buf(),
+                    },
+                    vec![Pose { time, camera }],
+                    0,
+                )
+            }
             DestinationKind::Movie => {
                 let poses = grana_offline::poses(self.timeline);
                 if poses.is_empty() {
@@ -187,10 +206,11 @@ fn classify(output: &Path) -> Result<DestinationKind, String> {
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
         Some("png" | "tif" | "tiff") => Ok(DestinationKind::Image),
+        Some("svg" | "pdf") => Ok(DestinationKind::Figure),
         Some("mp4" | "mov") => Ok(DestinationKind::Movie),
         None => Ok(DestinationKind::Sequence),
         Some(other) => Err(format!(
-            "a render writes PNG, OME-TIFF, MP4, MOV or a frame folder, not `.{other}`"
+            "a render writes PNG, OME-TIFF, SVG, PDF, MP4, MOV or a frame folder, not `.{other}`"
         )),
     }
 }
@@ -252,7 +272,9 @@ fn default_width(view: &Option<ViewState>, kind: DestinationKind) -> u32 {
     view.as_ref().map_or(OutputSize::DEFAULT_WIDTH, |view| {
         let width = match kind {
             DestinationKind::Movie => view.export.movie,
-            DestinationKind::Image | DestinationKind::Sequence => view.export.image,
+            DestinationKind::Image | DestinationKind::Figure | DestinationKind::Sequence => {
+                view.export.image
+            }
         };
         if width == 0 {
             OutputSize::DEFAULT_WIDTH

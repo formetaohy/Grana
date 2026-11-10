@@ -120,6 +120,62 @@ fn exports_a_two_view_image_at_the_requested_size() {
 }
 
 #[test]
+fn exports_vector_figures_as_svg_and_pdf() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-figure");
+    let svg = temp.path().join("figure.svg");
+    export_image(&gpu, Destination::Figure { path: svg.clone() }, false);
+    let markup = std::fs::read_to_string(&svg).expect("the vector figure reads as text");
+    assert!(markup.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
+    assert!(markup.contains("<svg "));
+    assert!(markup.contains("<image "));
+    assert!(markup.contains("<path d=\"M "));
+    assert!(
+        !markup.contains("<text"),
+        "the figure letters are stored as outlines"
+    );
+    assert!(markup.contains("fill-opacity=\"0.6\""));
+    let pdf = temp.path().join("figure.pdf");
+    export_image(&gpu, Destination::Figure { path: pdf.clone() }, false);
+    let bytes = std::fs::read(&pdf).expect("the vector figure reads as bytes");
+    assert!(bytes.starts_with(b"%PDF-1.7\n"));
+    assert!(bytes.ends_with(b"%%EOF\n"));
+    assert!(find(&bytes, b"/Subtype /Image").is_some());
+    assert!(find(&bytes, b"/MediaBox [0 0 800 560]").is_some());
+    let start = find(&bytes, b"startxref\n").expect("the cross reference table is announced") + 10;
+    let text = std::str::from_utf8(&bytes[start..])
+        .expect("the cross reference offset is written in ascii")
+        .lines()
+        .next()
+        .expect("the cross reference offset stands on its own line")
+        .trim()
+        .parse::<usize>()
+        .expect("the cross reference offset is a number");
+    assert_eq!(&bytes[text..text + 4], b"xref");
+    let transparent = temp.path().join("figure-transparent.pdf");
+    export_image(
+        &gpu,
+        Destination::Figure {
+            path: transparent.clone(),
+        },
+        true,
+    );
+    let bytes = std::fs::read(&transparent).expect("the transparent figure reads as bytes");
+    assert!(
+        find(&bytes, b"/SMask").is_some(),
+        "a transparent figure masks the backdrop"
+    );
+}
+
+fn find(bytes: &[u8], needle: &[u8]) -> Option<usize> {
+    bytes
+        .windows(needle.len())
+        .rposition(|window| window == needle)
+}
+
+#[test]
 fn exports_a_sixteen_bit_ome_tiff() {
     let Some(gpu) = gpu() else {
         return;

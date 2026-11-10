@@ -911,6 +911,9 @@ impl App {
         if effects.snapshot {
             self.begin_snapshot();
         }
+        if effects.figure {
+            self.begin_figure();
+        }
         if let Some(transparent) = effects.movie {
             self.begin_movie(transparent);
         }
@@ -1167,6 +1170,40 @@ impl App {
             size,
             transparent: export.transparent,
             poses,
+            fps: 0,
+            region: scene.region,
+        });
+    }
+
+    fn begin_figure(&mut self) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let export = self.session.export();
+        let slug = grana_session::slug(scene.dataset.name());
+        let width = if export.image == 0 {
+            self.native_width()
+        } else {
+            export.image
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save a vector figure")
+            .set_file_name(format!("{slug}-figure.svg"))
+            .add_filter("SVG (vector)", &["svg"])
+            .add_filter("PDF (vector)", &["pdf"])
+            .save_file()
+        else {
+            return;
+        };
+        let size = self.output_size(width, false);
+        self.start_export(Plan {
+            destination: Destination::Figure { path },
+            size,
+            transparent: export.transparent,
+            poses: vec![self.pose()],
             fps: 0,
             region: scene.region,
         });

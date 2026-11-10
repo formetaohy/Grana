@@ -70,6 +70,7 @@ impl<A: Clone> Ui<A> {
                 Clip::new(clip, clip_corners),
                 dark,
                 vibrancy,
+                None,
             );
             if let Some(surface) = background
                 && !rect.is_empty()

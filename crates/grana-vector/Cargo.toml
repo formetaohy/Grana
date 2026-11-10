@@ -1,0 +1,15 @@
+[package]
+name = "grana-vector"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2 = { workspace = true }
+grana-raster = { workspace = true }
+grana-text = { workspace = true }
+
+[lints]
+workspace = true

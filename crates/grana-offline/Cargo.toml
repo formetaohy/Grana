@@ -13,12 +13,15 @@ grana-animation = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
 grana-figure = { workspace = true }
+grana-file = { workspace = true }
 grana-gpu = { workspace = true }
 grana-raster = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-tiff = { workspace = true }
+grana-text = { workspace = true }
 grana-ui = { workspace = true }
+grana-vector = { workspace = true }
 grana-video = { workspace = true }
 grana-volume = { workspace = true }
 wgpu = { workspace = true }

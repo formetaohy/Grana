@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec2;
-use grana_text::Fonts;
+use grana_text::{Contour, Fonts, GlyphStyle};
 
 use crate::atlas::{Atlas, GlyphSlot};
 use crate::color::Color;
@@ -290,6 +290,23 @@ impl Text {
             baseline: baseline_offset,
             truncated,
         }
+    }
+
+    pub fn contours(&mut self, layout: &TextLayout, origin: Vec2) -> Vec<Contour> {
+        let style = GlyphStyle {
+            size: layout.style.size,
+            weight: layout.style.weight,
+            hint: false,
+        };
+        let mut contours = Vec::new();
+        for glyph in &layout.glyphs {
+            let Some(mut outline) = self.fonts.outline(glyph.face as usize, glyph.id, style) else {
+                continue;
+            };
+            outline.transform(|[x, y]| [origin.x + glyph.x + x, origin.y + glyph.baseline - y]);
+            contours.extend(outline.into_contours());
+        }
+        contours
     }
 
     pub fn pixels_per_point(&self) -> f32 {

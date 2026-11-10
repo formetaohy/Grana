@@ -11,6 +11,7 @@ use crate::compose::Composer;
 use crate::figure::{self, Figure};
 use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
+use crate::vector::{self, Format};
 
 const DEVIATION_TO_SIGMA: f32 = 1.2533;
 const DEVIATION_WINDOW: usize = 4;
@@ -49,6 +50,7 @@ pub(crate) struct Export {
     viewport: grana_engine::Viewport,
     lens: Option<(Camera, u32)>,
     transparent: bool,
+    figure: Option<Format>,
     draw: (Texture, TextureView),
     overlay: (Texture, TextureView),
 }
@@ -83,6 +85,18 @@ impl Export {
             !movie || size.height().is_multiple_of(2) && size.width().is_multiple_of(2),
             "a movie frame holds an even number of pixels"
         );
+        let figure = match &destination {
+            Destination::Figure { path } => Some(vector::format(path).ok_or_else(|| {
+                format!(
+                    "a vector figure is saved as SVG or PDF, not `{}`",
+                    path.display()
+                )
+            })?),
+            _ => None,
+        };
+        if figure.is_some() && poses.len() != 1 {
+            return Err("a vector figure renders exactly one frame".to_string());
+        }
         let viewport = grana_engine::Viewport::export(size);
         let limit = device.limits().max_texture_dimension_2d;
         if viewport.size[0] > limit || viewport.size[1] > limit {
@@ -104,6 +118,7 @@ impl Export {
                 Still::Png => Sink::Png { path },
                 Still::Tiff => Sink::Tiff { path },
             },
+            Destination::Figure { path } => Sink::Figure { path },
             Destination::Movie { path } => Sink::Movie {
                 recorder: grana_video::Recorder::start(&path, viewport.size, fps, transparent)
                     .map_err(|error| error.to_string())?,
@@ -144,6 +159,7 @@ impl Export {
             viewport,
             lens,
             transparent,
+            figure,
             draw: (draw, draw_view),
             overlay: (overlay, overlay_view),
         })
@@ -283,19 +299,46 @@ impl Export {
         let caption = grana_figure::caption(drawn.scene, drawn.pose.time);
         let labels = grana_figure::labels(drawn.scene, drawn.pose.time);
         let annotations = grana_figure::annotations(drawn.scene, drawn.pose.time);
-        let instances = figure::instances(
-            ui,
-            Figure {
-                viewport: &self.viewport,
-                camera: &camera(&drawn.pose.camera),
-                world: drawn.scene.dataset.world_size(),
-                labels: &labels,
-                annotations: &annotations,
-                legends: &legends,
-                caption: Some(&caption),
-                backdrop: !self.transparent,
-            },
-        );
+        let camera = camera(&drawn.pose.camera);
+        let figure = Figure {
+            viewport: &self.viewport,
+            camera: &camera,
+            world: drawn.scene.dataset.world_size(),
+            labels: &labels,
+            annotations: &annotations,
+            legends: &legends,
+            caption: Some(&caption),
+            backdrop: !self.transparent,
+        };
+        if let Some(format) = self.figure {
+            let marks = figure::marks(ui, figure);
+            let image = drawn.renderer.picture(
+                drawn.device,
+                drawn.queue,
+                drawn.scene.exposure,
+                self.transparent,
+            );
+            let size = image.size();
+            assert_eq!(size, self.viewport.size, "the picture covers the export");
+            let sink = self.sink.take().expect("the export is alive");
+            let Sink::Figure { path } = sink else {
+                unreachable!("a vector figure writes a figure sink")
+            };
+            vector::write(
+                &path,
+                format,
+                size,
+                image.pixels(),
+                &marks,
+                self.transparent,
+            )?;
+            self.frame += 1;
+            self.attempts = 0;
+            self.converged = false;
+            self.deviations.clear();
+            return Ok(Some(path));
+        }
+        let instances = figure::instances(ui, figure);
         let size = self.viewport.size;
         let scale = self.viewport.pixels_per_point;
         let overlay = &self.overlay.1;
