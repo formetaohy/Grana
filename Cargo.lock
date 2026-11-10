@@ -3360,6 +3360,7 @@ dependencies = [
  "grana-app",
  "grana-display",
  "grana-engine",
+ "grana-figure",
  "grana-geometry",
  "grana-gpu",
  "grana-image",

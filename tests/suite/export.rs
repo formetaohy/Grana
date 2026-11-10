@@ -3,8 +3,9 @@ use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
+use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
-use grana_scene::{Dataset, Scene};
+use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
 };
@@ -166,6 +167,128 @@ fn exports_vector_figures_as_svg_and_pdf() {
     assert!(
         find(&bytes, b"/SMask").is_some(),
         "a transparent figure masks the backdrop"
+    );
+}
+
+#[test]
+fn exports_a_track_lineage_as_a_vector_page() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-lineage");
+    let volume = export_volume();
+    let base = volume.pyramid();
+    let pyramid = Pyramid::new(
+        base.levels().to_vec(),
+        base.stored(),
+        base.channels().to_vec(),
+        4,
+        1.0,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("lineage", pyramid.clone()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    for time in 0..4 {
+        let spot = Spot::new([16.0 + time as f32, 64.0, 32.0], 4.0, 1.0);
+        let intensities =
+            IntensityTable::new(1, vec![SampleStatistics::new(60.0, 40.0, 80.0, 2.0, 60.0)]);
+        scene.install(
+            set,
+            time,
+            ObjectFrame::Spots(SpotSet::new(0, vec![spot], intensities)),
+        );
+    }
+    let mother = Track::new(
+        None,
+        vec![
+            TrackNode::new(0, 0, [16.0, 64.0, 32.0]),
+            TrackNode::new(1, 0, [17.0, 64.0, 32.0]),
+        ],
+    );
+    let daughter = Track::new(
+        Some(0),
+        vec![
+            TrackNode::new(2, 0, [18.0, 64.0, 32.0]),
+            TrackNode::new(3, 0, [19.0, 64.0, 32.0]),
+        ],
+    );
+    let tracks = TrackSet::new(1.0, vec![mother, daughter]);
+    assert_eq!(grana_object::TrackLayout::of(&tracks).order(), &[0, 1]);
+    scene.install_tracks(set, tracks);
+    let size = grana_figure::lineage::page_size(2, 960).expect("two tracks fit a page");
+    assert_eq!(size, [960, 162]);
+    assert!(
+        grana_figure::lineage::page_size(2_000, 960).is_ok(),
+        "a large lineage compresses its rows"
+    );
+    assert!(
+        grana_figure::lineage::page_size(5_000, 960).is_err(),
+        "a lineage past the page limit asks for paging"
+    );
+    let plan = Plan {
+        destination: Destination::Lineage {
+            path: temp.path().join("lineage.svg"),
+            set,
+        },
+        size: OutputSize::of(size[0], size[1]),
+        transparent: false,
+        poses: vec![Pose {
+            time: 1,
+            camera: Camera::new(35.0).state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let task = Task {
+        plan,
+        scene: scene.snapshot().into_scene(),
+        bricks: Arc::new(VolumeBricks {
+            volume: volume.clone(),
+            pyramid: pyramid.clone(),
+        }),
+    };
+    let mut offline = offline(&gpu);
+    let Outcome::Complete { path } = offline.run(task, &AtomicBool::new(false), &mut |_, _| {})
+    else {
+        panic!("the lineage was not written");
+    };
+    let markup = std::fs::read_to_string(&path).expect("the lineage reads as text");
+    assert!(markup.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
+    assert!(markup.contains("width=\"960pt\" height=\"162pt\""));
+    assert!(markup.contains("<path d=\"M "));
+    assert!(
+        !markup.contains("<image ") && !markup.contains("<text"),
+        "a lineage page holds paths and outlines, not rasters or text"
+    );
+    let pdf_plan = Plan {
+        destination: Destination::Lineage {
+            path: temp.path().join("lineage.pdf"),
+            set,
+        },
+        size: OutputSize::of(size[0], size[1]),
+        transparent: false,
+        poses: vec![Pose {
+            time: 1,
+            camera: Camera::new(35.0).state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let task = Task {
+        plan: pdf_plan,
+        scene: scene.snapshot().into_scene(),
+        bricks: Arc::new(VolumeBricks { volume, pyramid }),
+    };
+    let Outcome::Complete { path } = offline.run(task, &AtomicBool::new(false), &mut |_, _| {})
+    else {
+        panic!("the lineage pdf was not written");
+    };
+    let bytes = std::fs::read(&path).expect("the lineage pdf reads as bytes");
+    assert!(bytes.starts_with(b"%PDF-1.7\n"));
+    assert!(bytes.ends_with(b"%%EOF\n"));
+    assert!(find(&bytes, b"/MediaBox [0 0 960 162]").is_some());
+    assert!(
+        find(&bytes, b"/Subtype /Image").is_none(),
+        "a lineage page stays vector only"
     );
 }
 

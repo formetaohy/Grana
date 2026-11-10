@@ -709,6 +709,10 @@ pub fn apply(
                 workspace.track_set = set;
                 workspace.cancel_lineage();
             }
+            Message::ExportLineage(set) => {
+                workspace.track_set = Some(set);
+                commands.push(Command::SaveLineage);
+            }
             Message::SetJoin(join) => {
                 workspace.cancel_lineage();
                 workspace.join = join;

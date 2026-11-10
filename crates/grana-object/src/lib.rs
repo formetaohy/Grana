@@ -4,6 +4,7 @@ mod filament;
 mod graph;
 mod intensity;
 mod label;
+mod layout;
 mod mask;
 mod mask_edit;
 mod params;
@@ -18,6 +19,7 @@ pub use anchor::{ObjectAnchor, assign, match_anchor};
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
+pub use layout::TrackLayout;
 pub use mask::{Mask, Roi};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{

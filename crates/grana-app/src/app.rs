@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
-use grana_display::Camera;
+use grana_display::{Camera, OutputSize};
 use grana_editor::{
     AnnotationTool, GrabDrag, MaskBrush, PaintDrag, Panel, Stage, ToolDrag, Workspace,
 };
@@ -914,6 +914,9 @@ impl App {
         if effects.figure {
             self.begin_figure();
         }
+        if effects.lineage {
+            self.begin_lineage();
+        }
         if let Some(transparent) = effects.movie {
             self.begin_movie(transparent);
         }
@@ -1206,6 +1209,61 @@ impl App {
             poses: vec![self.pose()],
             fps: 0,
             region: scene.region,
+        });
+    }
+
+    fn begin_lineage(&mut self) {
+        if !self.export_ready() {
+            return;
+        }
+        let prepared = {
+            let Some(scene) = self.session.scene() else {
+                return;
+            };
+            self.workspace
+                .track_set
+                .or_else(|| scene.selection().map(|selection| selection.set))
+                .and_then(|set| scene.objects.get(set))
+                .filter(|set| set.tracks().is_some())
+                .or_else(|| scene.objects.iter().find(|set| set.tracks().is_some()))
+                .map(|set| {
+                    let tracks = set.tracks().expect("the tracked set carries its lineage");
+                    (
+                        set.id(),
+                        tracks.set().len(),
+                        grana_session::slug(scene.dataset.name()),
+                        scene.region,
+                    )
+                })
+        };
+        let Some((set, tracks, slug, region)) = prepared else {
+            self.set_output_message("open a tracked object set before exporting its lineage");
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save a track lineage")
+            .set_file_name(format!("{slug}-lineage.svg"))
+            .add_filter("SVG (vector)", &["svg"])
+            .add_filter("PDF (vector)", &["pdf"])
+            .save_file()
+        else {
+            return;
+        };
+        let size =
+            match grana_figure::lineage::page_size(tracks, grana_figure::lineage::DEFAULT_WIDTH) {
+                Ok(size) => size,
+                Err(detail) => {
+                    self.set_output_message(&detail);
+                    return;
+                }
+            };
+        self.start_export(Plan {
+            destination: Destination::Lineage { path, set },
+            size: OutputSize::of(size[0], size[1]),
+            transparent: false,
+            poses: vec![self.pose()],
+            fps: 0,
+            region,
         });
     }
 

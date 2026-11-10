@@ -23,6 +23,7 @@ pub struct Request {
     pub height: Option<u32>,
     pub time: Option<u32>,
     pub view: Option<String>,
+    pub lineage: Option<String>,
     pub transparent: bool,
 }
 
@@ -30,15 +31,33 @@ pub struct Request {
 enum DestinationKind {
     Image,
     Figure,
+    Lineage,
     Movie,
     Sequence,
 }
 
 pub fn run(request: &Request) -> Result<PathBuf, String> {
-    let kind = classify(&request.output)?;
-    if request.time.is_some() && !matches!(kind, DestinationKind::Image | DestinationKind::Figure) {
+    let kind = classify(&request.output, request.lineage.is_some())?;
+    if request.time.is_some()
+        && !matches!(
+            kind,
+            DestinationKind::Image | DestinationKind::Figure | DestinationKind::Lineage
+        )
+    {
         return Err(
-            "--time names one frame, so it only applies to a still image or a figure".to_string(),
+            "--time names one frame, so it only applies to a still image, a figure or a lineage"
+                .to_string(),
+        );
+    }
+    if request.lineage.is_some() && request.view.is_some() {
+        return Err("--view names a camera, which a lineage page does not read".to_string());
+    }
+    if request.lineage.is_some() && request.transparent {
+        return Err("--transparent applies to a rendered image, not a lineage page".to_string());
+    }
+    if request.lineage.is_some() && request.height.is_some() {
+        return Err(
+            "a lineage page sizes itself to its tracks, so --height does not apply".to_string(),
         );
     }
     if request.output.exists() && kind == DestinationKind::Sequence {
@@ -58,32 +77,77 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
     let view = named(&mut session, request.view.as_deref(), &request.input)?;
     let scene = session.scene().expect("the opened session holds a scene");
     let image = session.image().expect("the opened session holds an image");
-    let mut camera = Camera::new(35.0);
-    let mut timeline = session.timeline().clone();
-    if let Some(view) = &view {
-        camera.restore(view.camera);
-        timeline = view.timeline.clone();
-    }
-    let width = request.width.unwrap_or_else(|| default_width(&view, kind));
-    let even = kind == DestinationKind::Movie;
-    let size = match request.height {
-        Some(height) => OutputSize::of(width, height),
-        None => OutputSize::of_width(width),
+    let plan = if let Some(name) = &request.lineage {
+        let set = scene
+            .objects
+            .iter()
+            .find(|set| set.name() == name)
+            .ok_or_else(|| {
+                format!(
+                    "{} holds no object set named `{name}`",
+                    request.input.display()
+                )
+            })?
+            .id();
+        let tracks = scene
+            .objects
+            .get(set)
+            .and_then(|set| set.tracks())
+            .ok_or_else(|| format!("`{name}` holds no tracked lineage"))?;
+        let width = request
+            .width
+            .unwrap_or(grana_figure::lineage::DEFAULT_WIDTH);
+        let size = grana_figure::lineage::page_size(tracks.set().len(), width)?;
+        let time = request.time.unwrap_or_else(|| scene.time());
+        if time >= scene.frame_count() {
+            return Err(format!(
+                "frame {time} lies outside the dataset's {} frames",
+                scene.frame_count()
+            ));
+        }
+        let camera = Camera::new(35.0);
+        Plan {
+            destination: Destination::Lineage {
+                path: request.output.clone(),
+                set,
+            },
+            size: OutputSize::of(size[0], size[1]),
+            transparent: false,
+            poses: vec![Pose {
+                time,
+                camera: camera.state(),
+            }],
+            fps: 0,
+            region: scene.region,
+        }
+    } else {
+        let mut camera = Camera::new(35.0);
+        let mut timeline = session.timeline().clone();
+        if let Some(view) = &view {
+            camera.restore(view.camera);
+            timeline = view.timeline.clone();
+        }
+        let width = request.width.unwrap_or_else(|| default_width(&view, kind));
+        let even = kind == DestinationKind::Movie;
+        let size = match request.height {
+            Some(height) => OutputSize::of(width, height),
+            None => OutputSize::of_width(width),
+        };
+        let size = if even { size.even() } else { size };
+        if view.is_none() {
+            camera.fit(scene.dataset.world_size(), aspect(size.to_array()));
+        }
+        Job {
+            kind,
+            output: &request.output,
+            camera: &camera,
+            timeline: &timeline,
+            scene,
+            request,
+            size,
+        }
+        .plan()?
     };
-    let size = if even { size.even() } else { size };
-    if view.is_none() {
-        camera.fit(scene.dataset.world_size(), aspect(size.to_array()));
-    }
-    let plan = Job {
-        kind,
-        output: &request.output,
-        camera: &camera,
-        timeline: &timeline,
-        scene,
-        request,
-        size,
-    }
-    .plan()?;
     let channels = Channels::render(image, scene);
     let mut offline = Offline::headless()?;
     let task = Task {
@@ -184,6 +248,9 @@ impl Job<'_> {
                     0,
                 )
             }
+            DestinationKind::Lineage => {
+                unreachable!("a lineage page is planned before the camera fits")
+            }
         };
         Ok(Plan {
             destination,
@@ -196,14 +263,20 @@ impl Job<'_> {
     }
 }
 
-fn classify(output: &Path) -> Result<DestinationKind, String> {
-    if output.is_dir() {
-        return Ok(DestinationKind::Sequence);
-    }
+fn classify(output: &Path, lineage: bool) -> Result<DestinationKind, String> {
     let extension = output
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
+    if lineage {
+        return match extension.as_deref() {
+            Some("svg" | "pdf") => Ok(DestinationKind::Lineage),
+            _ => Err("a lineage page is saved as SVG or PDF".to_string()),
+        };
+    }
+    if output.is_dir() {
+        return Ok(DestinationKind::Sequence);
+    }
     match extension.as_deref() {
         Some("png" | "tif" | "tiff") => Ok(DestinationKind::Image),
         Some("svg" | "pdf") => Ok(DestinationKind::Figure),
@@ -272,9 +345,10 @@ fn default_width(view: &Option<ViewState>, kind: DestinationKind) -> u32 {
     view.as_ref().map_or(OutputSize::DEFAULT_WIDTH, |view| {
         let width = match kind {
             DestinationKind::Movie => view.export.movie,
-            DestinationKind::Image | DestinationKind::Figure | DestinationKind::Sequence => {
-                view.export.image
-            }
+            DestinationKind::Image
+            | DestinationKind::Figure
+            | DestinationKind::Sequence
+            | DestinationKind::Lineage => view.export.image,
         };
         if width == 0 {
             OutputSize::DEFAULT_WIDTH

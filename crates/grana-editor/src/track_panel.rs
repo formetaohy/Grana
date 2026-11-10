@@ -242,6 +242,14 @@ fn tracking_controls<'a>(
         ));
         buttons.push(enabled_button(
             ctx,
+            &format!("{prefix}.export"),
+            "Export",
+            Role::Quiet,
+            !busy,
+            Some(Message::ExportLineage(id)),
+        ));
+        buttons.push(enabled_button(
+            ctx,
             &format!("{prefix}.recompute"),
             "Recompute",
             Role::Quiet,
@@ -304,19 +312,25 @@ fn header<'a>(
     let divisions = object.tracks().map_or(0, |layer| layer.set().divisions());
     let tracks = object.tracks().map_or(0, |layer| layer.set().len());
     let joining = state.workspace.join.is_some();
-    let right_width = if tracking.is_some() {
-        110.0 + 14.0 + 8.0 + 8.0 + button_width(ctx, "Cancel") + 3.0 * 6.0
-    } else {
-        [
-            button_width(ctx, "Cut"),
-            button_width(ctx, if joining { "Cancel Join" } else { "Join" }),
-            button_width(ctx, "Recompute"),
-            button_width(ctx, "Track"),
-        ]
-        .iter()
-        .sum::<f32>()
-            + 3.0 * 6.0
-    };
+    let mut widths = Vec::new();
+    if object.tracks().is_some() {
+        widths.push(button_width(ctx, "Cut"));
+        widths.push(button_width(
+            ctx,
+            if joining { "Cancel Join" } else { "Join" },
+        ));
+        widths.push(button_width(ctx, "Export"));
+        widths.push(button_width(ctx, "Recompute"));
+    }
+    match tracking {
+        Some(_) => {
+            widths.push(110.0);
+            widths.push(14.0);
+            widths.push(button_width(ctx, "Cancel"));
+        }
+        None => widths.push(button_width(ctx, "Track")),
+    }
+    let right_width = widths.iter().sum::<f32>() + (widths.len() - 1) as f32 * 6.0;
     let right_rect = Rect::from_min_size(
         Vec2::new((rect.max.x - right_width).max(rect.min.x), rect.min.y),
         Vec2::new(right_width.min(rect.width()), rect.height()),
@@ -426,11 +440,11 @@ fn lineage<'a>(
         rect.min + Vec2::new(SIDE, AXIS + 4.0),
         rect.max - Vec2::new(SIDE + 6.0, 6.0),
     );
-    let order = lanes(set);
-    let mut lane_of = vec![0usize; set.len()];
-    for (lane, index) in order.iter().enumerate() {
-        lane_of[*index] = lane;
-    }
+    let layout = grana_object::TrackLayout::of(set);
+    let order = layout.order().to_vec();
+    let lane_of = (0..set.len())
+        .map(|index| layout.lane(index))
+        .collect::<Vec<_>>();
     let content = order.len() as f32 * ROW;
     let limit = (content - inner.height()).max(0.0);
     let key = Key::new("tracks.tree");
@@ -1262,26 +1276,6 @@ fn appearance<'a>(
         }
     }
     Some(view::card(ctx, 6.0, children))
-}
-
-fn lanes(set: &TrackSet) -> Vec<usize> {
-    let mut children = vec![Vec::new(); set.len()];
-    let mut roots = Vec::new();
-    for index in 0..set.len() {
-        match set.track(index).and_then(|track| track.parent()) {
-            Some(parent) => children[parent as usize].push(index),
-            None => roots.push(index),
-        }
-    }
-    let mut order = Vec::with_capacity(set.len());
-    let mut stack = roots.iter().rev().copied().collect::<Vec<_>>();
-    while let Some(index) = stack.pop() {
-        order.push(index);
-        for child in children[index].iter().rev() {
-            stack.push(*child);
-        }
-    }
-    order
 }
 
 fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'a, Message> {

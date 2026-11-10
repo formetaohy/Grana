@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--transparent] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --clear-cache";
+const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--lineage <set>] [--transparent] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --clear-cache";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();

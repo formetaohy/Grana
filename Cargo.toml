@@ -118,6 +118,7 @@ grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
+grana-figure = { workspace = true }
 grana-geometry = { workspace = true }
 grana-gpu = { workspace = true }
 grana-image = { workspace = true }

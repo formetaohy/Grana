@@ -4,9 +4,10 @@ use std::sync::atomic::AtomicBool;
 
 use grana_animation::Timeline;
 use grana_display::Camera;
+use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_pipeline::{Capture as CapturePort, CaptureKind, CaptureRequest, Channels};
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
-use grana_scene::{Dataset, Measure, Scene};
+use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene};
 
 use crate::support::Temp;
 
@@ -24,6 +25,7 @@ fn image_request(input: PathBuf, output: PathBuf) -> grana_app::render::Request 
         height: Some(64),
         time: None,
         view: None,
+        lineage: None,
         transparent: false,
     }
 }
@@ -83,6 +85,103 @@ fn renders_a_dataset_and_a_project_without_a_window() {
         .expect("the project renders");
     assert_eq!(written, rendered);
     assert_eq!(painted(&rendered), [96, 64]);
+}
+
+#[test]
+fn renders_a_track_lineage_without_a_window() {
+    let Some(_gpu) = crate::support::gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-command-lineage");
+    let input = fixture("ome.tif");
+    let source = grana_image::Source::file(input.clone());
+    let image = grana_image::Image::open(&source).expect("the fixture opens");
+    let fingerprint = image.fingerprint().expect("the fixture fingerprints");
+    let mut scene = Scene::new(Dataset::tiff(
+        image.name().to_string(),
+        image.pyramid().clone(),
+    ));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let intensities =
+        IntensityTable::new(1, vec![SampleStatistics::new(60.0, 40.0, 80.0, 2.0, 60.0)]);
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([16.0, 16.0, 1.0], 3.0, 1.0)],
+            intensities,
+        )),
+    );
+    scene.install_tracks(
+        set,
+        TrackSet::new(
+            1.0,
+            vec![Track::new(
+                None,
+                vec![TrackNode::new(0, 0, [16.0, 16.0, 1.0])],
+            )],
+        ),
+    );
+    let name = scene
+        .objects
+        .get(set)
+        .expect("the tracked set exists")
+        .name()
+        .to_string();
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), 1.0);
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        ProjectSource::File {
+            name: image.name().to_string(),
+            path: input,
+            series: 0,
+        },
+        ViewState {
+            camera: camera.state(),
+            timeline: Timeline::new(30, 1.0),
+            export: Export::new(96, 320, false),
+        },
+        Vec::new(),
+        fingerprint,
+    );
+    let saved = temp.path().join("lineage.grana");
+    project
+        .write(&saved, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let output = temp.path().join("lineage.svg");
+    let written = grana_app::render::run(&grana_app::render::Request {
+        input: saved.clone(),
+        output: output.clone(),
+        width: Some(640),
+        height: None,
+        time: None,
+        view: None,
+        lineage: Some(name.clone()),
+        transparent: false,
+    })
+    .expect("the lineage renders");
+    assert_eq!(written, output);
+    let markup = std::fs::read_to_string(&output).expect("the lineage reads as text");
+    assert!(markup.starts_with("<?xml"));
+    assert!(
+        markup.contains("height=\"147pt\""),
+        "one track fills a page"
+    );
+    let missing = grana_app::render::run(&grana_app::render::Request {
+        input: saved,
+        output,
+        width: Some(640),
+        height: None,
+        time: None,
+        view: None,
+        lineage: Some("Missing".to_string()),
+        transparent: false,
+    })
+    .expect_err("an unknown lineage is refused");
+    assert!(missing.contains("Missing"));
 }
 
 #[test]

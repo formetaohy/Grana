@@ -33,24 +33,37 @@ pub(crate) fn write(
     marks: &[Mark],
     transparent: bool,
 ) -> Result<(), String> {
-    let document = document(size, pixels, marks, transparent)?;
+    let mut document = Document::new(size[0] as f32, size[1] as f32);
+    let cleared = sink::rgba8(size, pixels, transparent);
+    document.set_background(Image::new(size, cleared));
+    push(&mut document, marks)?;
+    write_document(path, format, &document)
+}
+
+pub(crate) fn write_marks(
+    path: &Path,
+    format: Format,
+    size: [u32; 2],
+    marks: &[Mark],
+) -> Result<(), String> {
+    if size[0] == 0 || size[1] == 0 {
+        return Err("a vector page covers at least one point".to_string());
+    }
+    let mut document = Document::new(size[0] as f32, size[1] as f32);
+    push(&mut document, marks)?;
+    write_document(path, format, &document)
+}
+
+fn write_document(path: &Path, format: Format, document: &Document) -> Result<(), String> {
     let bytes = match format {
-        Format::Svg => grana_vector::write_svg(&document).into_bytes(),
-        Format::Pdf => grana_vector::write_pdf(&document),
+        Format::Svg => grana_vector::write_svg(document).into_bytes(),
+        Format::Pdf => grana_vector::write_pdf(document),
     };
     grana_file::write(path, &bytes)
         .map_err(|error| format!("failed to write {}: {error}", PathBuf::from(path).display()))
 }
 
-fn document(
-    size: [u32; 2],
-    pixels: &[u16],
-    marks: &[Mark],
-    transparent: bool,
-) -> Result<Document, String> {
-    let mut document = Document::new(size[0] as f32, size[1] as f32);
-    let cleared = sink::rgba8(size, pixels, transparent);
-    document.set_background(Image::new(size, cleared));
+fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
     for mark in marks {
         match *mark {
             Mark::Rect {
@@ -174,7 +187,7 @@ fn document(
             }
         }
     }
-    Ok(document)
+    Ok(())
 }
 
 fn to_rect(rect: Rect) -> grana_vector::Rect {

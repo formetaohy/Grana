@@ -1,6 +1,7 @@
 mod annotation;
 mod figure;
 mod labels;
+pub mod lineage;
 mod overlay;
 
 pub use annotation::{

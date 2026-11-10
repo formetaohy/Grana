@@ -11,7 +11,7 @@ use wgpu::{Device, Queue, TextureFormat};
 
 use crate::compose::Composer;
 use crate::export::{Export, Step};
-use crate::plan;
+use crate::plan::{self, Destination};
 use crate::task::{Bricks, Task};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
@@ -62,6 +62,25 @@ impl Offline {
         scene.region = plan.region;
         if let Err(detail) = plan::validate(&plan) {
             return Outcome::Failed { detail };
+        }
+        if let Destination::Lineage { path, set } = &plan.destination {
+            progress(0, 1);
+            let outcome = match crate::lineage::write(
+                &self.device,
+                &self.queue,
+                self.format,
+                &scene,
+                *set,
+                path,
+                plan.size.to_array(),
+            ) {
+                Ok(path) => Outcome::Complete { path },
+                Err(detail) => Outcome::Failed { detail },
+            };
+            if matches!(outcome, Outcome::Complete { .. }) {
+                progress(1, 1);
+            }
+            return outcome;
         }
         let pyramid = scene.dataset.pyramid().clone();
         let needed = match plan::residency(&plan, &pyramid) {

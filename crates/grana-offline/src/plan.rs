@@ -13,10 +13,23 @@ pub struct Pose {
 }
 
 pub enum Destination {
-    Image { path: PathBuf },
-    Figure { path: PathBuf },
-    Movie { path: PathBuf },
-    Sequence { directory: PathBuf, stem: String },
+    Image {
+        path: PathBuf,
+    },
+    Figure {
+        path: PathBuf,
+    },
+    Lineage {
+        path: PathBuf,
+        set: grana_scene::ObjectSetId,
+    },
+    Movie {
+        path: PathBuf,
+    },
+    Sequence {
+        directory: PathBuf,
+        stem: String,
+    },
 }
 
 pub fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
@@ -47,10 +60,20 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     if plan.poses.is_empty() {
         return Err("an export holds at least one pose".to_string());
     }
+    if matches!(plan.destination, Destination::Lineage { .. }) {
+        if plan.poses.len() != 1 {
+            return Err("a lineage page highlights exactly one frame".to_string());
+        }
+        if plan.transparent {
+            return Err("a lineage page paints its own backdrop".to_string());
+        }
+    }
     let wide = match &plan.destination {
         Destination::Image { path } => still(path)? == Still::Tiff,
         Destination::Figure { .. } => true,
-        _ => false,
+        Destination::Lineage { .. } | Destination::Movie { .. } | Destination::Sequence { .. } => {
+            false
+        }
     };
     if wide {
         let size = plan.size.to_array();

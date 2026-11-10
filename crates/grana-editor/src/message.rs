@@ -61,6 +61,7 @@ pub enum Message {
         parent: (u32, usize),
     },
     CancelLineage,
+    ExportLineage(ObjectSetId),
     SetSeed(Option<ObjectSetId>),
     ArmMask(ObjectSetId),
     DisarmMask,

@@ -2,6 +2,7 @@ mod capture;
 mod compose;
 mod export;
 mod figure;
+mod lineage;
 mod offline;
 mod plan;
 mod sink;

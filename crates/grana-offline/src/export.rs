@@ -70,6 +70,9 @@ impl Export {
             region: _,
         } = plan;
         assert!(!poses.is_empty(), "an export holds at least one pose");
+        if matches!(destination, Destination::Lineage { .. }) {
+            return Err("a lineage page is written without a renderer".to_string());
+        }
         if !matches!(
             format,
             wgpu::TextureFormat::Rgba8Unorm
@@ -119,6 +122,9 @@ impl Export {
                 Still::Tiff => Sink::Tiff { path },
             },
             Destination::Figure { path } => Sink::Figure { path },
+            Destination::Lineage { .. } => {
+                unreachable!("a lineage page never reaches the renderer")
+            }
             Destination::Movie { path } => Sink::Movie {
                 recorder: grana_video::Recorder::start(&path, viewport.size, fps, transparent)
                     .map_err(|error| error.to_string())?,

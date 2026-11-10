@@ -150,6 +150,7 @@ pub fn render(arguments: &[String]) -> Option<ExitCode> {
     let mut height = None;
     let mut time = None;
     let mut view = None;
+    let mut lineage = None;
     let mut transparent = false;
     let mut index = 0;
     while index < arguments.len() {
@@ -168,6 +169,10 @@ pub fn render(arguments: &[String]) -> Option<ExitCode> {
             }
             "--view" => {
                 view = Some(arguments.get(index + 1)?.clone());
+                index += 2;
+            }
+            "--lineage" => {
+                lineage = Some(arguments.get(index + 1)?.clone());
                 index += 2;
             }
             "--transparent" => {
@@ -191,6 +196,7 @@ pub fn render(arguments: &[String]) -> Option<ExitCode> {
         height,
         time,
         view,
+        lineage,
         transparent,
     };
     match crate::render::run(&request) {
