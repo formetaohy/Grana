@@ -136,5 +136,8 @@ pub struct SessionView<'a> {
     pub labels: &'a [String],
     pub views: &'a [NamedView],
     pub recent: &'a [crate::RecentEntry],
+    pub import: &'a [ImportNote],
     pub export: Export,
 }
+
+pub use grana_readout::ImportedDiagnostic as ImportNote;

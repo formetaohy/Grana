@@ -48,8 +48,8 @@ use crate::sample;
 use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{
-    BatchComparison, BatchDataset, BatchSignificance, BatchView, HistoryView, IoView, Message,
-    PlateView, SeriesView, StoreView,
+    BatchComparison, BatchDataset, BatchSignificance, BatchView, HistoryView, ImportNote, IoView,
+    Message, PlateView, SeriesView, StoreView,
 };
 use crate::{Action, Analysis, Command, Series, Source};
 use field::{Fields, Recovered};
@@ -145,6 +145,7 @@ pub struct Session {
     mask_stamp: Option<(u32, u64)>,
     transfer: Transfer,
     recent: Recent,
+    import: Vec<ImportNote>,
 }
 
 impl Default for Session {
@@ -219,6 +220,7 @@ impl Session {
             mask_stamp: None,
             transfer: Transfer::default(),
             recent: Recent::default(),
+            import: Vec::new(),
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -402,6 +404,9 @@ impl Session {
     }
     pub fn views(&self) -> &[NamedView] {
         &self.views
+    }
+    pub fn import(&self) -> &[ImportNote] {
+        &self.import
     }
     pub fn recent(&self) -> &[RecentEntry] {
         self.recent.entries()

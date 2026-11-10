@@ -1,7 +1,7 @@
 use glam::Vec3;
 use grana_object::{SampleAccumulator, SampleStatistics};
 use grana_pipeline::Channels;
-use grana_readout::{ImportedSpot, ImportedSurface};
+use grana_readout::{ImportedFilament, ImportedSpot, ImportedSurface};
 use grana_volume::Level;
 
 const LIMIT: u64 = 1 << 22;
@@ -57,6 +57,37 @@ impl<'a> Sampler<'a> {
         let low = [0, 1, 2].map(|axis| center[axis] - spot.radius());
         self.sample(time, low, reach, |level, low, high, mask| {
             spot_mask(level, low, high, center, spot.radius(), mask)
+        })
+    }
+
+    pub(super) fn filament(
+        &mut self,
+        time: u32,
+        filament: &ImportedFilament,
+    ) -> Result<Sampled, String> {
+        let positions = filament.positions();
+        let radii = filament.radii();
+        if positions.is_empty() || filament.edges().is_empty() {
+            return Err("the filament holds no edge to sample".to_string());
+        }
+        let reach = radii.iter().copied().fold(0.0f32, f32::max);
+        let low = [0, 1, 2].map(|axis| {
+            positions
+                .iter()
+                .map(|point| point[axis])
+                .fold(f32::INFINITY, f32::min)
+                - reach
+        });
+        let high = [0, 1, 2].map(|axis| {
+            positions
+                .iter()
+                .map(|point| point[axis])
+                .fold(f32::NEG_INFINITY, f32::max)
+                + reach
+        });
+        let edges = filament.edges();
+        self.sample(time, low, high, |level, low, high, mask| {
+            filament_mask(level, low, high, positions, radii, edges, mask)
         })
     }
 
@@ -256,6 +287,82 @@ fn spot_mask(
             }
         }
     }
+}
+
+fn filament_mask(
+    level: Level,
+    low: [u32; 3],
+    high: [u32; 3],
+    positions: &[[f32; 3]],
+    radii: &[f32],
+    edges: &[[u32; 2]],
+    mask: &mut [bool],
+) {
+    let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
+    let width = dims[0] as usize;
+    let height = dims[1] as usize;
+    for edge in edges {
+        let (Some(first), Some(second)) = (
+            positions.get(edge[0] as usize),
+            positions.get(edge[1] as usize),
+        ) else {
+            continue;
+        };
+        let (first_radius, second_radius) = (radii[edge[0] as usize], radii[edge[1] as usize]);
+        let reach = first_radius.max(second_radius);
+        let minimum = [0, 1, 2].map(|axis| first[axis].min(second[axis]) - reach);
+        let maximum = [0, 1, 2].map(|axis| first[axis].max(second[axis]) + reach);
+        let Some((start, end)) = voxel_range(level, minimum, maximum, low, high) else {
+            continue;
+        };
+        let origin = Vec3::from(*first);
+        let direction = Vec3::from(*second) - origin;
+        let length = direction.length_squared();
+        for z in start[2]..end[2] {
+            for y in start[1]..end[1] {
+                for x in start[0]..end[0] {
+                    let world = Vec3::from(level.voxel_center([x as f32, y as f32, z as f32]));
+                    let along = if length > 0.0 {
+                        ((world - origin).dot(direction) / length).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let radius = first_radius + along * (second_radius - first_radius);
+                    if world.distance_squared(origin + direction * along) <= radius * radius {
+                        let index = (x - low[0]) as usize
+                            + width * ((y - low[1]) as usize + height * (z - low[2]) as usize);
+                        mask[index] = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn voxel_range(
+    level: Level,
+    minimum: [f32; 3],
+    maximum: [f32; 3],
+    low: [u32; 3],
+    high: [u32; 3],
+) -> Option<([u32; 3], [u32; 3])> {
+    let first = level.voxel_of(minimum);
+    let last = level.voxel_of(maximum);
+    let mut start = [0u32; 3];
+    let mut end = [0u32; 3];
+    for axis in 0..3 {
+        if !(first[axis].is_finite() && last[axis].is_finite()) {
+            return None;
+        }
+        start[axis] =
+            (first[axis].floor() as i64).clamp(i64::from(low[axis]), i64::from(high[axis])) as u32;
+        end[axis] = (last[axis].ceil() as i64 + 1)
+            .clamp(i64::from(low[axis]), i64::from(high[axis])) as u32;
+        if start[axis] >= end[axis] {
+            return None;
+        }
+    }
+    Some((start, end))
 }
 
 fn seed(low: [u32; 3], high: [u32; 3], mask: &mut [bool]) -> Result<(), String> {

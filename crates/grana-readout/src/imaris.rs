@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use hdf5_pure::{AttrValue, Dataset, Datatype, DatatypeByteOrder, File};
-use openreadout_hdf5::ims_scene::{self, SceneTable, SceneTableKind};
+use openreadout_hdf5::ims_scene::{self, FieldValue, Records, SceneTable, SceneTableKind};
 
 use crate::error::Error;
 
@@ -12,6 +12,32 @@ const CONTENT: [&str; 2] = ["Scene8/Content", "Scene/Content"];
 pub enum Kind {
     Surfaces,
     Spots,
+    Filaments,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    name: String,
+    detail: String,
+}
+
+impl Diagnostic {
+    pub fn new(name: &str, detail: &str) -> Self {
+        assert!(!name.trim().is_empty(), "a diagnostic names its object");
+        assert!(!detail.trim().is_empty(), "a diagnostic names its reason");
+        Self {
+            name: name.to_string(),
+            detail: detail.to_string(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -130,9 +156,36 @@ impl Spot {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Filament {
+    positions: Vec<[f32; 3]>,
+    radii: Vec<f32>,
+    edges: Vec<[u32; 2]>,
+    intensities: Option<Vec<Sample>>,
+}
+
+impl Filament {
+    pub fn positions(&self) -> &[[f32; 3]] {
+        &self.positions
+    }
+
+    pub fn radii(&self) -> &[f32] {
+        &self.radii
+    }
+
+    pub fn edges(&self) -> &[[u32; 2]] {
+        &self.edges
+    }
+
+    pub fn intensities(&self) -> Option<&[Sample]> {
+        self.intensities.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
     Surfaces(Vec<Surface>),
     Spots(Vec<Spot>),
+    Filaments(Vec<Filament>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +213,7 @@ impl Object {
 pub struct Imported {
     center: [f32; 3],
     objects: Vec<Object>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Imported {
@@ -169,6 +223,10 @@ impl Imported {
 
     pub fn objects(&self) -> &[Object] {
         &self.objects
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 
     pub fn is_empty(&self) -> bool {
@@ -182,48 +240,66 @@ pub fn imported(path: &Path) -> Result<Imported, Error> {
     let statistics = statistics(&file, path).unwrap_or_default();
     let candidates = content(&file, path)?;
     let mut objects = Vec::new();
-    for (name, groups) in candidates {
-        let mut found = None;
-        for group in &groups {
-            if let Some(geometry) = geometry(&file, path, group)? {
-                found = Some((group, geometry));
-                break;
-            }
+    let mut diagnostics = Vec::new();
+    for candidate in &candidates {
+        let label = candidate.label(&file);
+        match read(
+            &file,
+            path,
+            candidate,
+            statistics.get(&candidate.key),
+            center,
+        ) {
+            Ok(Some(object)) => objects.push(object),
+            Ok(None) => diagnostics.push(Diagnostic::new(
+                &label,
+                "the object holds no readable geometry",
+            )),
+            Err(detail) => diagnostics.push(Diagnostic::new(&label, &detail)),
         }
-        let Some((_group, (kind, geometry))) = found else {
-            continue;
-        };
-        let label = groups
-            .iter()
-            .find_map(|candidate| label(&file, candidate))
-            .unwrap_or_else(|| name.clone());
-        let ids = groups
-            .iter()
-            .find_map(|candidate| identifiers(&file, candidate, kind));
-        let frames = match kind {
-            Kind::Surfaces => {
-                let normals = groups
-                    .iter()
-                    .find_map(|candidate| normals(&file, path, candidate));
-                surfaces(&file, path, &geometry, normals, center)
-            }
-            Kind::Spots => spots(&file, path, &geometry, center),
-        };
-        let Ok(frames) = frames else {
-            continue;
-        };
-        let frames = attach(frames, statistics.get(&name), ids.as_deref());
-        if frames.is_empty() {
-            continue;
-        }
-        objects.push(Object {
-            name: label,
-            kind,
-            frames,
-        });
     }
     objects.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(Imported { center, objects })
+    Ok(Imported {
+        center,
+        objects,
+        diagnostics,
+    })
+}
+
+fn read(
+    file: &File,
+    path: &Path,
+    candidate: &Group,
+    statistics: Option<&Statistics>,
+    center: [f32; 3],
+) -> Result<Option<Object>, String> {
+    let Some(source) = geometry(file, path, candidate)? else {
+        return Ok(None);
+    };
+    let kind = source.kind();
+    let ids = identifiers(file, candidate, kind);
+    let frames = match &source {
+        Source::Surfaces(dir) => {
+            let normals = candidate
+                .paths
+                .iter()
+                .find_map(|group| normals(file, path, group));
+            surfaces(file, path, dir, normals, center).map_err(|error| error.to_string())
+        }
+        Source::Graphs(dir) => graphs(file, path, dir, center),
+        Source::Filaments(dir) => filaments(file, dir, center),
+        Source::Spots(dir) => spots(file, path, dir, center).map_err(|error| error.to_string()),
+        Source::Points(dir) => points(file, dir, center),
+    }?;
+    let frames = attach(frames, statistics, ids.as_deref());
+    if frames.is_empty() {
+        return Err("the object holds no frame with geometry".to_string());
+    }
+    Ok(Some(Object {
+        name: candidate.label(file),
+        kind,
+        frames,
+    }))
 }
 
 fn center(file: &File) -> [f32; 3] {
@@ -250,6 +326,28 @@ fn center(file: &File) -> [f32; 3] {
     })
 }
 
+fn text(attribute: &AttrValue) -> Option<String> {
+    let joined = |parts: &[String]| parts.concat().trim_end_matches('\0').trim().to_string();
+    let value = match attribute {
+        AttrValue::String(value)
+        | AttrValue::AsciiString(value)
+        | AttrValue::VarLenString(value)
+        | AttrValue::VarLenAsciiString(value) => value.trim().to_string(),
+        AttrValue::StringSized { value, .. } | AttrValue::AsciiStringSized { value, .. } => {
+            value.trim().to_string()
+        }
+        AttrValue::StringArray(parts)
+        | AttrValue::AsciiStringArray(parts)
+        | AttrValue::VarLenStringArray(parts)
+        | AttrValue::VarLenAsciiStringArray(parts)
+        | AttrValue::VarLenAsciiCharArray(parts) => joined(parts),
+        AttrValue::StringArraySized { values, .. }
+        | AttrValue::AsciiStringArraySized { values, .. } => joined(values),
+        _ => return None,
+    };
+    (!value.is_empty()).then_some(value)
+}
+
 fn value(attribute: &AttrValue) -> Option<f64> {
     match attribute {
         AttrValue::F32(value) => Some(f64::from(*value)),
@@ -262,16 +360,77 @@ fn value(attribute: &AttrValue) -> Option<f64> {
         AttrValue::U16(value) => Some(f64::from(*value)),
         AttrValue::U32(value) => Some(f64::from(*value)),
         AttrValue::U64(value) => Some(*value as f64),
-        AttrValue::String(value)
-        | AttrValue::AsciiString(value)
-        | AttrValue::VarLenString(value)
-        | AttrValue::VarLenAsciiString(value) => value.trim().parse().ok(),
-        _ => None,
+        _ => text(attribute)?.parse().ok(),
     }
 }
 
-fn content(file: &File, path: &Path) -> Result<BTreeMap<String, Vec<String>>, Error> {
-    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+struct Group {
+    key: String,
+    id: Option<i64>,
+    names: Vec<String>,
+    paths: Vec<String>,
+}
+
+impl Group {
+    fn new(key: String, id: Option<i64>, name: Option<String>, path: String) -> Self {
+        Self {
+            key,
+            id,
+            names: name.into_iter().collect(),
+            paths: vec![path],
+        }
+    }
+
+    fn absorb(&mut self, path: String, name: Option<String>) {
+        self.paths.push(path);
+        if let Some(name) = name
+            && !self.names.contains(&name)
+        {
+            self.names.push(name);
+        }
+    }
+
+    fn matches(&self, id: Option<i64>, folder: &str, name: Option<&str>) -> bool {
+        match (self.id, id) {
+            (Some(held), Some(other)) => held == other,
+            (None, _) => {
+                self.key == folder
+                    || name.is_some_and(|name| self.names.iter().any(|held| held == name))
+            }
+            (Some(_), None) => self.key == folder,
+        }
+    }
+
+    fn label(&self, file: &File) -> String {
+        self.paths
+            .iter()
+            .find_map(|path| label(file, path))
+            .or_else(|| self.names.first().cloned())
+            .unwrap_or_else(|| self.key.clone())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Source {
+    Surfaces(String),
+    Filaments(String),
+    Graphs(String),
+    Spots(String),
+    Points(String),
+}
+
+impl Source {
+    fn kind(&self) -> Kind {
+        match self {
+            Self::Surfaces(_) => Kind::Surfaces,
+            Self::Filaments(_) | Self::Graphs(_) => Kind::Filaments,
+            Self::Spots(_) | Self::Points(_) => Kind::Spots,
+        }
+    }
+}
+
+fn content(file: &File, path: &Path) -> Result<Vec<Group>, Error> {
+    let mut found: Vec<Group> = Vec::new();
     for root in CONTENT {
         let Ok(group) = file.group(root) else {
             continue;
@@ -280,35 +439,29 @@ fn content(file: &File, path: &Path) -> Result<BTreeMap<String, Vec<String>>, Er
             .groups()
             .map_err(|error| Error::read(path, error.to_string()))?;
         names.sort();
-        for name in names {
-            found
-                .entry(name.clone())
-                .or_default()
-                .push(format!("{root}/{name}"));
+        for folder in names {
+            let full = format!("{root}/{folder}");
+            let id = identity(file, &full);
+            let name = label(file, &full);
+            match found
+                .iter_mut()
+                .find(|held| held.matches(id, &folder, name.as_deref()))
+            {
+                Some(held) => held.absorb(full, name),
+                None => found.push(Group::new(folder, id, name, full)),
+            }
         }
     }
     Ok(found)
 }
 
-fn geometry(file: &File, path: &Path, group: &str) -> Result<Option<(Kind, String)>, Error> {
-    let mut candidates = vec![group.to_string()];
-    candidates.extend(["Surfaces", "Points"].map(|child| format!("{group}/{child}")));
-    for candidate in candidates {
-        let Ok(datasets) = datasets(file, path, &candidate) else {
-            continue;
-        };
-        let holds = |wanted: &str| datasets.iter().any(|held| held == wanted);
-        if ["TimeNVerticesNTriangles", "Vertices", "Triangles"]
-            .iter()
-            .all(|wanted| holds(wanted))
-        {
-            return Ok(Some((Kind::Surfaces, candidate)));
-        }
-        if ["CoordsXYZR", "Time"].iter().all(|wanted| holds(wanted)) {
-            return Ok(Some((Kind::Spots, candidate)));
-        }
-    }
-    Ok(None)
+fn identity(file: &File, group: &str) -> Option<i64> {
+    let attrs = file.group(group).ok()?.attrs().ok()?;
+    attrs
+        .get("Id")
+        .and_then(value)
+        .filter(|id| id.is_finite())
+        .map(|id| id as i64)
 }
 
 fn datasets(file: &File, path: &Path, group: &str) -> Result<Vec<String>, Error> {
@@ -318,46 +471,135 @@ fn datasets(file: &File, path: &Path, group: &str) -> Result<Vec<String>, Error>
         .map_err(|error| Error::read(path, error.to_string()))
 }
 
-fn label(file: &File, group: &str) -> Option<String> {
-    let attrs = file.group(group).ok()?.attrs().ok()?;
-    let name = match attrs.get("Name")? {
-        AttrValue::String(name)
-        | AttrValue::AsciiString(name)
-        | AttrValue::VarLenString(name)
-        | AttrValue::VarLenAsciiString(name) => name.trim(),
-        _ => return None,
-    };
-    (!name.is_empty()).then(|| name.to_string())
+fn holds(file: &File, path: &Path, group: &str, dataset: &str) -> bool {
+    datasets(file, path, group).is_ok_and(|held| held.iter().any(|name| name == dataset))
 }
 
-fn identifiers(file: &File, group: &str, kind: Kind) -> Option<Vec<i64>> {
-    let name = match kind {
-        Kind::Surfaces => "Surface",
-        Kind::Spots => "Spot",
-    };
-    for candidate in [
-        format!("{group}/{name}"),
-        format!("{group}/Surfaces/{name}"),
-        format!("{group}/Points/{name}"),
-    ] {
-        let Ok(dataset) = file.dataset(&candidate) else {
+fn geometry(file: &File, path: &Path, candidate: &Group) -> Result<Option<Source>, String> {
+    let mut blocked = None;
+    for group in &candidate.paths {
+        let Ok(held) = datasets(file, path, group) else {
             continue;
         };
-        let rows = dataset.shape().ok()?.first().copied()? as usize;
-        let raw = dataset.read_raw().ok()?;
-        if rows == 0 || raw.len() < rows * 8 {
-            continue;
+        let holds_here = |wanted: &str| held.iter().any(|name| name == wanted);
+        if ["TimeNVerticesNTriangles", "Vertices", "Triangles"]
+            .iter()
+            .all(|wanted| holds_here(wanted))
+        {
+            return Ok(Some(Source::Surfaces(group.clone())));
         }
-        return Some(
-            raw.as_chunks::<8>()
-                .0
-                .iter()
-                .take(rows)
-                .map(|record| i64::from_le_bytes(*record))
-                .collect(),
-        );
+        let surfaces = format!("{group}/Surfaces");
+        if ["TimeNVerticesNTriangles", "Vertices", "Triangles"]
+            .iter()
+            .all(|wanted| holds(file, path, &surfaces, wanted))
+        {
+            return Ok(Some(Source::Surfaces(surfaces)));
+        }
+        if ["Vertex", "Edge", "Filament"]
+            .iter()
+            .all(|wanted| holds_here(wanted))
+        {
+            return Ok(Some(Source::Filaments(group.clone())));
+        }
+        let graphs = format!("{group}/Graphs");
+        if ["TimesNVerticesNEdgesRoots", "Vertices", "Segments"]
+            .iter()
+            .all(|wanted| holds(file, path, &graphs, wanted))
+        {
+            return Ok(Some(Source::Graphs(graphs)));
+        }
+        if ["CoordsXYZR", "Time"]
+            .iter()
+            .all(|wanted| holds_here(wanted))
+        {
+            return Ok(Some(Source::Spots(group.clone())));
+        }
+        let points = format!("{group}/Points");
+        if ["CoordsXYZR", "Time"]
+            .iter()
+            .all(|wanted| holds(file, path, &points, wanted))
+        {
+            return Ok(Some(Source::Spots(points)));
+        }
+        if holds_here("Vertex") && holds(file, path, &format!("{group}/Points"), "Point") {
+            return Ok(Some(Source::Points(group.clone())));
+        }
+        if holds_here("Vertex") && holds_here("Point") {
+            return Ok(Some(Source::Points(group.clone())));
+        }
+        if holds_here("SurfaceModel") || holds_here("BlockData") {
+            blocked =
+                Some("the object stores only an Imaris block model, which is not read".to_string());
+        }
+    }
+    match blocked {
+        Some(detail) => Err(detail),
+        None => Ok(None),
+    }
+}
+
+fn label(file: &File, group: &str) -> Option<String> {
+    let attrs = file.group(group).ok()?.attrs().ok()?;
+    let name = text(attrs.get("Name")?)?;
+    (!name.trim().is_empty()).then(|| name.trim().to_string())
+}
+
+fn identifiers(file: &File, candidate: &Group, kind: Kind) -> Option<Vec<i64>> {
+    let names: &[&str] = match kind {
+        Kind::Surfaces => &["Surface"],
+        Kind::Spots => &["Point", "Spot"],
+        Kind::Filaments => &["Filament"],
+    };
+    for group in &candidate.paths {
+        for name in names {
+            for path in [
+                format!("{group}/{name}"),
+                format!("{group}/Surfaces/{name}"),
+                format!("{group}/Points/{name}"),
+            ] {
+                if let Some(ids) = identifiers_at(file, &path) {
+                    return Some(ids);
+                }
+            }
+        }
     }
     None
+}
+
+fn identifiers_at(file: &File, dataset: &str) -> Option<Vec<i64>> {
+    let held = file.dataset(dataset).ok()?;
+    if let Some(ids) = records(file, dataset).and_then(|held| column(&held, "ID")) {
+        return Some(ids.iter().map(|value| *value as i64).collect());
+    }
+    let rows = held.shape().ok()?.first().copied()? as usize;
+    let raw = held.read_raw().ok()?;
+    if rows == 0 || raw.len() < rows * 8 {
+        return None;
+    }
+    Some(
+        raw.as_chunks::<8>()
+            .0
+            .iter()
+            .take(rows)
+            .map(|record| i64::from_le_bytes(*record))
+            .collect(),
+    )
+}
+
+fn records(file: &File, dataset: &str) -> Option<Records> {
+    ims_scene::read_records(file, dataset).ok().flatten()
+}
+
+fn column(records: &Records, name: &str) -> Option<Vec<f64>> {
+    let index = records.fields.iter().position(|field| field == name)?;
+    records
+        .rows
+        .iter()
+        .map(|row| match row.get(index)? {
+            FieldValue::Number(value) => Some(*value),
+            FieldValue::Text(_) => None,
+        })
+        .collect()
 }
 
 fn surfaces(
@@ -549,6 +791,291 @@ fn spots(
         .into_iter()
         .map(|(time, spots)| (time, Frame::Spots(spots)))
         .collect())
+}
+
+fn graphs(
+    file: &File,
+    path: &Path,
+    directory: &str,
+    center: [f32; 3],
+) -> Result<Vec<(u32, Frame)>, String> {
+    let counts = table(
+        file,
+        path,
+        &format!("{directory}/TimesNVerticesNEdgesRoots"),
+        4,
+    )?;
+    let vertices = table(file, path, &format!("{directory}/Vertices"), 5)?;
+    let segments = table(file, path, &format!("{directory}/Segments"), 2)?;
+    let mut order = (0..counts.rows).collect::<Vec<_>>();
+    order.sort_by(|left, right| counts.row(*left)[0].total_cmp(&counts.row(*right)[0]));
+    let mut frames: BTreeMap<u32, Vec<Filament>> = BTreeMap::new();
+    let mut vertex_start = 0usize;
+    let mut edge_start = 0usize;
+    for row in order {
+        let values = counts.row(row);
+        let held_vertices = values[1].max(0.0) as usize;
+        let held_edges = values[2].max(0.0) as usize;
+        let vertex_end = (vertex_start + held_vertices).min(vertices.rows);
+        let edge_end = (edge_start + held_edges).min(segments.rows);
+        if let Some(filament) = graph(
+            &vertices,
+            vertex_start..vertex_end,
+            &segments,
+            edge_start..edge_end,
+            center,
+        ) {
+            frames.entry(time_of(values[0])).or_default().push(filament);
+        }
+        vertex_start += held_vertices;
+        edge_start += held_edges;
+    }
+    Ok(frames
+        .into_iter()
+        .map(|(time, filaments)| (time, Frame::Filaments(filaments)))
+        .collect())
+}
+
+fn graph(
+    vertices: &Table,
+    nodes: std::ops::Range<usize>,
+    segments: &Table,
+    edges: std::ops::Range<usize>,
+    center: [f32; 3],
+) -> Option<Filament> {
+    if nodes.len() < 2 || edges.is_empty() {
+        return None;
+    }
+    let positions = nodes
+        .clone()
+        .map(|index| {
+            let value = vertices.row(index);
+            [
+                value[0] as f32 - center[0],
+                value[1] as f32 - center[1],
+                value[2] as f32 - center[2],
+            ]
+        })
+        .collect::<Vec<_>>();
+    let radii = nodes
+        .clone()
+        .map(|index| (0.5 * vertices.row(index)[3].abs()) as f32)
+        .collect::<Vec<_>>();
+    let mut held = Vec::with_capacity(edges.len());
+    for index in edges {
+        let value = segments.row(index);
+        let (a, b) = (value[0].max(0.0) as usize, value[1].max(0.0) as usize);
+        if !(nodes.contains(&a) && nodes.contains(&b)) || a == b {
+            continue;
+        }
+        held.push([(a - nodes.start) as u32, (b - nodes.start) as u32]);
+    }
+    if held.is_empty() {
+        return None;
+    }
+    let radii = positive(radii, &positions)?;
+    build(positions, radii, held)
+}
+
+fn filaments(file: &File, group: &str, center: [f32; 3]) -> Result<Vec<(u32, Frame)>, String> {
+    let vertices = records(file, &format!("{group}/Vertex"))
+        .ok_or_else(|| "the filament object holds no vertex records".to_string())?;
+    let edges = records(file, &format!("{group}/Edge"))
+        .ok_or_else(|| "the filament object holds no edge records".to_string())?;
+    let filaments = records(file, &format!("{group}/Filament"))
+        .ok_or_else(|| "the filament object holds no filament records".to_string())?;
+    let positions = coordinates(&vertices, center)
+        .ok_or_else(|| "the filament vertices do not hold finite positions".to_string())?;
+    let radii = column(&vertices, "Radius")
+        .ok_or_else(|| "the filament vertices hold no radius".to_string())?;
+    let first = column(&edges, "VertexA")
+        .ok_or_else(|| "the filament edges hold no first vertex".to_string())?;
+    let second = column(&edges, "VertexB")
+        .ok_or_else(|| "the filament edges hold no second vertex".to_string())?;
+    let times = column(&filaments, "ID_Time")
+        .ok_or_else(|| "the filaments hold no frame index".to_string())?;
+    let node_begin = column(&filaments, "IndexVertexBegin")
+        .ok_or_else(|| "the filaments hold no vertex range".to_string())?;
+    let node_end = column(&filaments, "IndexVertexEnd")
+        .ok_or_else(|| "the filaments hold no vertex range".to_string())?;
+    let edge_begin = column(&filaments, "IndexEdgeBegin")
+        .ok_or_else(|| "the filaments hold no edge range".to_string())?;
+    let edge_end = column(&filaments, "IndexEdgeEnd")
+        .ok_or_else(|| "the filaments hold no edge range".to_string())?;
+    let mut frames: BTreeMap<u32, Vec<Filament>> = BTreeMap::new();
+    for row in 0..filaments.rows.len() {
+        let nodes = range(node_begin[row], node_end[row], positions.len());
+        let held = range(edge_begin[row], edge_end[row], first.len());
+        let (Some(nodes), Some(held)) = (nodes, held) else {
+            continue;
+        };
+        if nodes.is_empty() || held.is_empty() {
+            continue;
+        }
+        let slice = positions[nodes.clone()].to_vec();
+        let slice_radii = radii[nodes.clone()]
+            .iter()
+            .map(|radius| *radius as f32)
+            .collect::<Vec<_>>();
+        let mut links = Vec::new();
+        for edge in held {
+            let (a, b) = (
+                first[edge].max(0.0) as usize,
+                second[edge].max(0.0) as usize,
+            );
+            if !(nodes.contains(&a) && nodes.contains(&b)) || a == b {
+                continue;
+            }
+            links.push([(a - nodes.start) as u32, (b - nodes.start) as u32]);
+        }
+        if links.is_empty() {
+            continue;
+        }
+        let Some(radii) = positive(slice_radii, &slice) else {
+            continue;
+        };
+        if let Some(filament) = build(slice, radii, links) {
+            frames
+                .entry(time_of(times[row]))
+                .or_default()
+                .push(filament);
+        }
+    }
+    Ok(frames
+        .into_iter()
+        .map(|(time, filaments)| (time, Frame::Filaments(filaments)))
+        .collect())
+}
+
+fn points(file: &File, group: &str, center: [f32; 3]) -> Result<Vec<(u32, Frame)>, String> {
+    let vertices = records(file, &format!("{group}/Vertex"))
+        .ok_or_else(|| "the spot object holds no vertex records".to_string())?;
+    let points = records(file, &format!("{group}/Points/Point"))
+        .or_else(|| records(file, &format!("{group}/Point")))
+        .ok_or_else(|| "the spot object holds no point records".to_string())?;
+    let positions = coordinates(&vertices, center)
+        .ok_or_else(|| "the spot vertices do not hold finite positions".to_string())?;
+    let radii = column(&vertices, "Radius")
+        .ok_or_else(|| "the spot vertices hold no radius".to_string())?;
+    let nodes = column(&points, "IndexVertex")
+        .ok_or_else(|| "the spot points name no vertex".to_string())?;
+    let times = column(&points, "ID_Time")
+        .ok_or_else(|| "the spot points hold no frame index".to_string())?;
+    let mut frames: BTreeMap<u32, Vec<Spot>> = BTreeMap::new();
+    for row in 0..points.rows.len() {
+        let node = nodes[row];
+        let radius = radii.get(node.max(0.0) as usize).copied();
+        let center = positions.get(node.max(0.0) as usize).copied();
+        let (Some(center), Some(radius)) = (center, radius) else {
+            continue;
+        };
+        let radius = radius.abs();
+        if !center.iter().all(|value| value.is_finite()) || !radius.is_finite() || radius <= 0.0 {
+            continue;
+        }
+        frames.entry(time_of(times[row])).or_default().push(Spot {
+            center,
+            radius: radius as f32,
+            intensities: None,
+        });
+    }
+    Ok(frames
+        .into_iter()
+        .map(|(time, spots)| (time, Frame::Spots(spots)))
+        .collect())
+}
+
+fn coordinates(records: &Records, center: [f32; 3]) -> Option<Vec<[f32; 3]>> {
+    let x = column(records, "PositionX")?;
+    let y = column(records, "PositionY")?;
+    let z = column(records, "PositionZ")?;
+    x.iter()
+        .zip(y.iter())
+        .zip(z.iter())
+        .map(|((x, y), z)| {
+            let point = [
+                *x as f32 - center[0],
+                *y as f32 - center[1],
+                *z as f32 - center[2],
+            ];
+            point.iter().all(|value| value.is_finite()).then_some(point)
+        })
+        .collect()
+}
+
+fn build(positions: Vec<[f32; 3]>, radii: Vec<f32>, edges: Vec<[u32; 2]>) -> Option<Filament> {
+    if positions.len() < 2 || radii.len() != positions.len() || edges.is_empty() {
+        return None;
+    }
+    if !positions.iter().flatten().all(|value| value.is_finite()) {
+        return None;
+    }
+    let count = positions.len() as u32;
+    let mut kept = Vec::with_capacity(edges.len());
+    for edge in edges {
+        if edge[0] >= count || edge[1] >= count || edge[0] == edge[1] {
+            continue;
+        }
+        kept.push(edge);
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    Some(Filament {
+        positions,
+        radii,
+        edges: kept,
+        intensities: None,
+    })
+}
+
+fn positive(radii: Vec<f32>, positions: &[[f32; 3]]) -> Option<Vec<f32>> {
+    let valid = |radius: &f32| radius.is_finite() && *radius > 0.0;
+    let fallback = if radii.iter().all(valid) {
+        0.0
+    } else {
+        let mut sorted = radii
+            .iter()
+            .copied()
+            .filter(|radius| valid(radius))
+            .collect::<Vec<_>>();
+        sorted.sort_by(f32::total_cmp);
+        sorted
+            .get(sorted.len() / 2)
+            .copied()
+            .or_else(|| nearest(positions))?
+    };
+    radii
+        .iter()
+        .map(|radius| {
+            let value = if valid(radius) { *radius } else { fallback };
+            (value > 0.0).then_some(value)
+        })
+        .collect()
+}
+
+fn nearest(positions: &[[f32; 3]]) -> Option<f32> {
+    let mut nearest = f32::INFINITY;
+    for pair in positions.windows(2) {
+        let distance = ((pair[1][0] - pair[0][0]).powi(2)
+            + (pair[1][1] - pair[0][1]).powi(2)
+            + (pair[1][2] - pair[0][2]).powi(2))
+        .sqrt();
+        if distance.is_finite() && distance > 0.0 {
+            nearest = nearest.min(distance);
+        }
+    }
+    nearest.is_finite().then_some(0.5 * nearest)
+}
+
+fn range(begin: f64, end: f64, limit: usize) -> Option<std::ops::Range<usize>> {
+    let begin = begin.max(0.0) as usize;
+    let end = (end.max(0.0) as usize).min(limit);
+    (begin < end && begin < limit).then_some(begin..end)
+}
+
+fn table(file: &File, path: &Path, dataset: &str, columns: usize) -> Result<Table, String> {
+    read_table(file, path, dataset, columns).map_err(|error| error.to_string())
 }
 
 struct Table {
@@ -752,6 +1279,14 @@ fn attach(
                     global += 1;
                 }
                 Frame::Spots(spots)
+            }
+            Frame::Filaments(mut filaments) => {
+                for filament in &mut filaments {
+                    filament.intensities =
+                        statistics.and_then(|held| held.samples(time, global, ids));
+                    global += 1;
+                }
+                Frame::Filaments(filaments)
             }
         };
         attached.push((time, frame));

@@ -1,11 +1,12 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex, ends, push_graph};
 use grana_object::{
-    IntensityTable, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
+    SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_readout::{
-    Imported, ImportedFrame, ImportedKind, ImportedObject, ImportedSample, ImportedSpot,
-    ImportedSurface,
+    Imported, ImportedFilament, ImportedFrame, ImportedKind, ImportedObject, ImportedSample,
+    ImportedSpot, ImportedSurface,
 };
 use grana_scene::{IntensitySource, ObjectKind};
 
@@ -51,6 +52,22 @@ impl Sampling<'_, '_> {
         }
         Ok(measured.intensities)
     }
+
+    fn filament(
+        &mut self,
+        time: u32,
+        filament: &ImportedFilament,
+    ) -> Result<Vec<SampleStatistics>, String> {
+        let Some(sampler) = self.sampler.as_mut() else {
+            return Err("the Imaris statistics do not measure every channel".to_string());
+        };
+        let measured = sampler.filament(time, filament)?;
+        *self.sampled += 1;
+        if !measured.measured {
+            self.report.unmeasured += 1;
+        }
+        Ok(measured.intensities)
+    }
 }
 
 impl Session {
@@ -88,18 +105,33 @@ impl Session {
                     ImportedKind::Spots => {
                         spots(object, count, frames, &mut sampling, &mut sampled_here)
                     }
+                    ImportedKind::Filaments => filaments(
+                        object,
+                        count,
+                        frames,
+                        &store,
+                        &mut sampling,
+                        &mut sampled_here,
+                    ),
                 };
                 let loaded = match built {
                     Ok(loaded) if !loaded.is_empty() => loaded,
-                    Ok(_) => continue,
+                    Ok(_) => {
+                        failed.push(ImportNote::new(
+                            object.name(),
+                            "the object holds no frame with geometry",
+                        ));
+                        continue;
+                    }
                     Err(detail) => {
-                        failed.push(format!("{}: {detail}", object.name()));
+                        failed.push(ImportNote::new(object.name(), &detail));
                         continue;
                     }
                 };
                 let kind = match object.kind() {
                     ImportedKind::Surfaces => ObjectKind::Surfaces,
                     ImportedKind::Spots => ObjectKind::Spots,
+                    ImportedKind::Filaments => ObjectKind::Filaments,
                 };
                 let intensities = if sampled_here > 0 {
                     IntensitySource::Sampled
@@ -119,7 +151,11 @@ impl Session {
         if !failed.is_empty() {
             notes.push(format!(
                 "the Imaris objects could not be read: {}",
-                failed.join(", ")
+                failed
+                    .iter()
+                    .map(|note| format!("{} ({})", note.name(), note.detail()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if sampled > 0 {
@@ -137,6 +173,12 @@ impl Session {
         if !notes.is_empty() {
             self.message = Some(Message::info(notes.join(" · ")));
         }
+        self.import = imported
+            .diagnostics()
+            .iter()
+            .chain(failed.iter())
+            .cloned()
+            .collect();
         self.touch();
     }
 }
@@ -247,6 +289,128 @@ fn spots(
         loaded.push((*time, ObjectFrame::Spots(SpotSet::new(0, held, table))));
     }
     Ok(loaded)
+}
+
+fn filaments(
+    object: &ImportedObject,
+    channels: usize,
+    frames: u32,
+    store: &Arc<GeometryStore>,
+    sampling: &mut Sampling<'_, '_>,
+    sampled: &mut usize,
+) -> Result<Loaded, String> {
+    let mut loaded = Vec::new();
+    for (time, frame) in object.frames() {
+        if *time >= frames {
+            continue;
+        }
+        let ImportedFrame::Filaments(filaments) = frame else {
+            return Err("the object holds mixed frames".to_string());
+        };
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut objects = Vec::new();
+        let mut intensities = Vec::new();
+        for filament in filaments {
+            let edges = filament
+                .edges()
+                .iter()
+                .copied()
+                .filter(|edge| joins(filament.positions(), *edge))
+                .collect::<Vec<_>>();
+            if edges.is_empty() {
+                continue;
+            }
+            let index = objects.len() as u32;
+            let branches = push_graph(
+                &mut vertices,
+                &mut indices,
+                filament.positions(),
+                filament.radii(),
+                &edges,
+                index,
+            );
+            objects.push(measures(filament, &edges, branches)?);
+            let samples = match filament.intensities() {
+                Some(samples) if samples.len() == channels => {
+                    samples.iter().copied().map(statistics_sample).collect()
+                }
+                _ => {
+                    *sampled += 1;
+                    sampling.filament(*time, filament)?
+                }
+            };
+            intensities.extend(samples);
+        }
+        if vertices.is_empty() || indices.is_empty() {
+            continue;
+        }
+        let mesh = Mesh::new(vertices, indices);
+        let table = IntensityTable::new(channels, intensities);
+        let set = FilamentSet::paged(0, store, mesh, objects, table)
+            .map_err(|error| error.to_string())?;
+        loaded.push((*time, ObjectFrame::Filaments(set)));
+    }
+    Ok(loaded)
+}
+
+fn joins(positions: &[[f32; 3]], edge: [u32; 2]) -> bool {
+    let (Some(first), Some(second)) = (
+        positions.get(edge[0] as usize),
+        positions.get(edge[1] as usize),
+    ) else {
+        return false;
+    };
+    edge[0] != edge[1] && first != second
+}
+
+fn measures(
+    filament: &ImportedFilament,
+    edges: &[[u32; 2]],
+    branches: usize,
+) -> Result<FilamentStatistics, String> {
+    let positions = filament.positions();
+    let radii = filament.radii();
+    let mut length = 0.0f64;
+    let mut volume = 0.0f64;
+    let mut moment = Vec3::ZERO;
+    for edge in edges {
+        let (first, second) = (
+            Vec3::from(positions[edge[0] as usize]),
+            Vec3::from(positions[edge[1] as usize]),
+        );
+        let distance = f64::from(first.distance(second));
+        if !(distance.is_finite() && distance > 0.0) {
+            continue;
+        }
+        let radius = 0.5 * (radii[edge[0] as usize] + radii[edge[1] as usize]);
+        length += distance;
+        volume += std::f64::consts::PI * f64::from(radius).powi(2) * distance;
+        moment += (first + second) * (0.5 * distance as f32);
+    }
+    if !(length.is_finite() && length > 0.0 && volume.is_finite() && volume > 0.0) {
+        return Err("a filament holds no measurable length".to_string());
+    }
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for position in positions {
+        for (axis, value) in position.iter().enumerate() {
+            low[axis] = low[axis].min(*value);
+            high[axis] = high[axis].max(*value);
+        }
+    }
+    let diameter = 2.0 * (volume / (std::f64::consts::PI * length)).sqrt();
+    let ends = ends(edges, positions.len());
+    let nodes = positions.len().min(u32::MAX as usize) as u32;
+    let centroid = moment / length as f32;
+    Ok(FilamentStatistics::new(
+        length,
+        diameter,
+        volume,
+        FilamentTopology::new(branches as u32, ends.terminals, ends.junctions, nodes),
+        centroid.to_array(),
+        Bounds::new(low, high),
+    ))
 }
 
 fn statistics_sample(sample: ImportedSample) -> SampleStatistics {

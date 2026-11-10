@@ -963,6 +963,7 @@ impl App {
             labels: session.label_images(),
             views: session.views(),
             recent: session.recent(),
+            import: session.import(),
             export: session.export(),
         };
         let frame = frame_stats(*info);
@@ -1770,6 +1771,7 @@ impl App {
                 labels: session.label_images(),
                 views: session.views(),
                 recent: session.recent(),
+                import: session.import(),
                 export: session.export(),
             };
             let mut commands = Vec::new();

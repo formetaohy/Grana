@@ -9,6 +9,8 @@ const WIDE_SPAN: usize = 8;
 const BIN_FLOOR: usize = 16;
 const BIN_CEIL: usize = 256;
 const BIN_TRIANGLES: usize = 16;
+const BAND_LIMIT: usize = 1 << 12;
+pub const SECTION_QUADS: usize = 1 << 19;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SectionPlane {
@@ -287,6 +289,7 @@ impl SectionCutter {
         let reach = (ceiling - base).abs().max(1.0);
         self.events
             .dedup_by(|left, right| (*left - *right).abs() <= 1.0e-6 * reach);
+        self.quantise();
         self.order.clear();
         self.order.extend(0..self.edges.len());
         self.order
@@ -294,7 +297,7 @@ impl SectionCutter {
         let mut pending = 0usize;
         let mut quads = 0usize;
         self.active.clear();
-        for band in self.events.windows(2) {
+        'bands: for band in self.events.windows(2) {
             let (bottom, top) = (band[0], band[1]);
             if top <= bottom {
                 continue;
@@ -325,6 +328,9 @@ impl SectionCutter {
                 if right.low <= left.low && right.high <= left.high {
                     continue;
                 }
+                if quads >= SECTION_QUADS {
+                    break 'bands;
+                }
                 vertices.push([left.low, bottom]);
                 vertices.push([right.low, bottom]);
                 vertices.push([right.high, top]);
@@ -333,6 +339,23 @@ impl SectionCutter {
             }
         }
         quads
+    }
+
+    fn quantise(&mut self) {
+        if self.events.len() <= BAND_LIMIT {
+            return;
+        }
+        let low = self.events[0];
+        let high = self.events[self.events.len() - 1];
+        let step = (high - low) / BAND_LIMIT as f32;
+        if !(step.is_finite() && step > 0.0) {
+            return;
+        }
+        for event in &mut self.events {
+            *event = low + ((*event - low) / step).round() * step;
+        }
+        self.events.sort_by(f32::total_cmp);
+        self.events.dedup_by(|left, right| *left == *right);
     }
 }
 

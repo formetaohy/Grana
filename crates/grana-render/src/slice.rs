@@ -35,7 +35,6 @@ const SHADER: &str = concat!(
 
 const UNIT: f32 = 65535.0;
 const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
-const QUAD_LIMIT: u32 = 1 << 18;
 const PARALLEL_FLOOR: usize = 8;
 const WORKER_LIMIT: usize = 16;
 const INDEX_BYTES_PER_PIXEL: u64 = 64;
@@ -354,8 +353,9 @@ impl SlicePass {
         let cuts = self.cut(&candidates, plane);
         for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
             assert!(
-                quads <= QUAD_LIMIT,
-                "a cut face spans more than {QUAD_LIMIT} quads"
+                quads as usize <= grana_geometry::SECTION_QUADS,
+                "a cut face spans more than {} quads",
+                grana_geometry::SECTION_QUADS
             );
             if quads == 0 {
                 continue;

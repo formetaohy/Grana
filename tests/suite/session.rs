@@ -323,6 +323,37 @@ fn settle(session: &mut Session) {
 }
 
 #[test]
+fn imports_imaris_filaments() {
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/imaris-filaments.ims");
+    let mut session = Session::new();
+    session.begin_load(fixture);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the Imaris fixture never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let scene = session.scene().expect("the fixture opens");
+    let sets = scene.objects.iter().collect::<Vec<_>>();
+    assert_eq!(sets.len(), 1);
+    let set = sets[0];
+    assert_eq!(set.kind(), grana_scene::ObjectKind::Filaments);
+    let frame = set.frame(0).expect("the filament holds its first frame");
+    let grana_scene::ObjectFrame::Filaments(filaments) = frame else {
+        panic!("the frame holds filaments");
+    };
+    assert_eq!(filaments.object_count(), 1);
+    let statistics = filaments.object(0).expect("the filament is measured");
+    assert!((statistics.length() - 4.0).abs() <= 1.0e-5);
+    assert_eq!(statistics.nodes(), 3);
+    assert_eq!(statistics.terminals(), 2);
+    assert_eq!(statistics.junctions(), 0);
+    assert_eq!(filaments.intensities().object(0, 0).mean(), 5000.0);
+    assert!(session.import().is_empty());
+}
+
+#[test]
 fn measures_imported_objects_without_statistics() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/imaris-no-statistics.ims");

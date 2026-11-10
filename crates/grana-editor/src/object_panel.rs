@@ -47,6 +47,9 @@ pub fn view<'a>(
     let count = state.scene.objects.len();
     let mut elements = add_menu(ctx, state);
     elements.insert(0, header(ctx, count));
+    if !state.import.is_empty() {
+        elements.insert(1, notes(ctx, state.import));
+    }
     if count == 0 {
         elements.push(view::empty_state(
             ctx,
@@ -69,6 +72,31 @@ pub fn view<'a>(
         elements.push(object(ctx, state, id, position, sets));
     }
     elements
+}
+
+fn notes<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    notes: &[grana_session::ImportNote],
+) -> Element<'a, Message> {
+    let shown = notes.len().min(4);
+    let detail = format!("{} unread", notes.len());
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Warning,
+        "IMPORT",
+        Some(&detail),
+    )];
+    for note in &notes[..shown] {
+        children.push(view::labelled(ctx, note.name(), note.detail()));
+    }
+    if notes.len() > shown {
+        children.push(view::labelled(
+            ctx,
+            "…",
+            &format!("{} more", notes.len() - shown),
+        ));
+    }
+    view::card(ctx, 6.0, children)
 }
 
 fn header<'a>(ctx: &mut BuildContext<'_, Message>, count: usize) -> Element<'a, Message> {

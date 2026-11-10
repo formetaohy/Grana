@@ -122,6 +122,7 @@ pub fn build(
         labels: view.labels,
         views: view.views,
         recent: view.recent,
+        import: view.import,
         palette: palette.as_ref(),
         viewport: &*viewport,
         stage: &*stage,

@@ -355,6 +355,7 @@ pub struct View<'a> {
     pub labels: &'a [String],
     pub views: &'a [grana_session::NamedView],
     pub recent: &'a [grana_session::RecentEntry],
+    pub import: &'a [grana_session::ImportNote],
     pub palette: Option<&'a crate::palette::PaletteView>,
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,

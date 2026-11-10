@@ -27,5 +27,5 @@ pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{
     BatchComparison, BatchDataset, BatchMetric, BatchSample, BatchSignificance, BatchView,
-    HistoryView, IoView, Kind, Message, PlateView, SeriesView, SessionView, StoreView,
+    HistoryView, ImportNote, IoView, Kind, Message, PlateView, SeriesView, SessionView, StoreView,
 };
