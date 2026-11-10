@@ -54,6 +54,7 @@ use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::slice::SlicePass;
 use crate::summary::Summary;
 use crate::target::{self, SceneTarget};
+use crate::temporal::{FramePanes, Temporal, TemporalPass};
 use crate::volume::VolumePass;
 use grana_volume::CHANNEL_LIMIT;
 
@@ -78,7 +79,6 @@ pub use resolution::{Governor, Load, Resolution};
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
     pub(super) weight: f32,
-    pub(super) samples: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -112,6 +112,8 @@ pub struct FrameInfo {
     pub geometry: u64,
     pub fragments: u64,
     pub samples: u32,
+    pub seeded: bool,
+    pub history: bool,
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
@@ -129,6 +131,8 @@ impl Default for FrameInfo {
             geometry: 0,
             fragments: 0,
             samples: 0,
+            seeded: false,
+            history: false,
             settled: false,
             truncated: false,
             fading: false,
@@ -207,6 +211,7 @@ pub struct Frame<'a, 'b> {
     pub prefetch: bool,
     pub level_cap: usize,
     pub assured: bool,
+    pub temporal: Option<Temporal>,
 }
 
 pub struct Renderer {
@@ -262,6 +267,7 @@ pub struct Renderer {
     transparent: bool,
     exporting: bool,
     convergence: Convergence,
+    temporal: TemporalPass,
     fade: Option<Fade>,
     object_key: Option<u64>,
     settled: Option<Residency>,
@@ -349,6 +355,7 @@ impl Renderer {
             transparent: false,
             exporting: false,
             convergence: Convergence::new(device),
+            temporal: TemporalPass::new(device, queue),
             fade: None,
             object_key: None,
             settled: None,
@@ -740,7 +747,6 @@ impl Renderer {
         device: &Device,
         queue: &Queue,
         exposure: f32,
-        samples: u32,
         transparent: bool,
     ) -> crate::image::Image16 {
         let target = self.target.as_ref().expect("a drawn frame holds a target");
@@ -760,8 +766,7 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
-        self.present
-            .write_wide(queue, exposure, samples, transparent);
+        self.present.write_wide(queue, exposure, transparent);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.picture"),
         });

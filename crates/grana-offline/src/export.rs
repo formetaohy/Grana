@@ -17,6 +17,9 @@ const IMAGE_SAMPLE_LIMIT: u32 = 64;
 const MOVIE_SAMPLE_LIMIT: u32 = 32;
 const IMAGE_SAMPLE_FLOOR: u32 = 16;
 const MOVIE_SAMPLE_FLOOR: u32 = 8;
+const TEMPORAL_HISTORY: f32 = 16.0;
+const TEMPORAL_SAMPLE_LIMIT: u32 = 8;
+const TEMPORAL_SAMPLE_FLOOR: u32 = 2;
 const IMAGE_ERROR: f32 = 0.0035;
 const MOVIE_ERROR: f32 = 0.005;
 const IMAGE_ATTEMPTS: u32 = 4096;
@@ -35,8 +38,12 @@ pub(crate) struct Export {
     attempts: u32,
     samples: u32,
     floor: u32,
+    base_samples: u32,
+    base_floor: u32,
     error: f32,
     converged: bool,
+    history: bool,
+    temporal: Option<grana_render::Temporal>,
     deviations: std::collections::VecDeque<f32>,
     regions: grana_engine::Regions,
     lens: Option<(Camera, u32)>,
@@ -130,6 +137,7 @@ impl Export {
         };
         let error = if movie { MOVIE_ERROR } else { IMAGE_ERROR };
         let lens = detail_lens(&poses, &regions);
+        let temporal = movie.then(|| grana_render::Temporal::new(TEMPORAL_HISTORY));
         Ok(Self {
             sink: Some(sink),
             poses,
@@ -137,8 +145,12 @@ impl Export {
             attempts: 0,
             samples,
             floor,
+            base_samples: samples,
+            base_floor: floor,
             error,
             converged: false,
+            history: false,
+            temporal,
             deviations: std::collections::VecDeque::new(),
             regions,
             lens,
@@ -221,9 +233,18 @@ impl Export {
                 prefetch: false,
                 level_cap: usize::MAX,
                 assured: true,
+                temporal: self.temporal,
             },
         );
         self.attempts += 1;
+        self.history = info.history;
+        if self.history {
+            self.samples = TEMPORAL_SAMPLE_LIMIT;
+            self.floor = TEMPORAL_SAMPLE_FLOOR;
+        } else {
+            self.samples = self.base_samples;
+            self.floor = self.base_floor;
+        }
         if info.truncated {
             return self.fail(truncation(&info, &self.regions));
         }
@@ -253,7 +274,6 @@ impl Export {
             queue,
             scene,
             pose,
-            samples: info.samples,
         };
         match self.store(ui, drawn) {
             Ok(Some(path)) => Step::Complete(path),
@@ -348,13 +368,9 @@ impl Export {
         let scale = self.regions.pixels_per_point;
         let device = drawn.device;
         let queue = drawn.queue;
-        let picture = drawn.renderer.picture(
-            device,
-            queue,
-            drawn.scene.exposure,
-            drawn.samples,
-            self.transparent,
-        );
+        let picture = drawn
+            .renderer
+            .picture(device, queue, drawn.scene.exposure, self.transparent);
         let format = self.format;
         if self.figure.is_none() {
             let texture = capture::texture(device, "grana.export.figure", format, size);
@@ -446,7 +462,6 @@ struct Drawn<'a> {
     queue: &'a Queue,
     scene: &'a Scene,
     pose: Pose,
-    samples: u32,
 }
 
 fn truncation(info: &FrameInfo, regions: &grana_engine::Regions) -> String {

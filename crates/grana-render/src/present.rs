@@ -50,16 +50,7 @@ impl Present {
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.present.layout"),
             entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture(0),
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStages::FRAGMENT,
@@ -70,16 +61,9 @@ impl Present {
                     },
                     count: None,
                 },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture(2),
+                texture(3),
+                texture(4),
             ],
         });
         let sourced_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -91,15 +75,7 @@ impl Present {
             label: Some("grana.present"),
             source: ShaderSource::Wgsl(SHADER.into()),
         });
-        let accumulate = pipeline(
-            device,
-            "grana.present.accumulate",
-            &shader,
-            "fs_accumulate",
-            crate::target::ACCUMULATION_FORMAT,
-            &sourced_layout,
-            Some(ACCUMULATE),
-        );
+        let accumulate = accumulate_pipeline(device, &shader, &sourced_layout);
         let present = pipeline(
             device,
             "grana.present",
@@ -107,7 +83,6 @@ impl Present {
             "fs_present",
             format,
             &sourced_layout,
-            None,
         );
         let quantize = pipeline(
             device,
@@ -116,7 +91,6 @@ impl Present {
             "fs_present",
             crate::target::WIDE_FORMAT,
             &sourced_layout,
-            None,
         );
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.present.uniforms"),
@@ -139,7 +113,14 @@ impl Present {
         self.format
     }
 
-    pub fn bind(&self, device: &Device, source: &TextureView, fade: &TextureView) -> BindGroup {
+    pub fn bind(
+        &self,
+        device: &Device,
+        source: &TextureView,
+        count: &TextureView,
+        fade: &TextureView,
+        fade_count: &TextureView,
+    ) -> BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.present.group"),
             layout: &self.layout,
@@ -156,23 +137,24 @@ impl Present {
                     binding: 2,
                     resource: BindingResource::TextureView(fade),
                 },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(count),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(fade_count),
+                },
             ],
         })
     }
 
-    pub fn write(
-        &self,
-        queue: &Queue,
-        exposure: f32,
-        samples: u32,
-        transparent: bool,
-        fade: Option<(f32, u32)>,
-    ) {
-        self.write_with(queue, self.encode, exposure, samples, transparent, fade);
+    pub fn write(&self, queue: &Queue, exposure: f32, transparent: bool, fade: Option<f32>) {
+        self.write_with(queue, self.encode, exposure, transparent, fade);
     }
 
-    pub fn write_wide(&self, queue: &Queue, exposure: f32, samples: u32, transparent: bool) {
-        self.write_with(queue, true, exposure, samples, transparent, None);
+    pub fn write_wide(&self, queue: &Queue, exposure: f32, transparent: bool) {
+        self.write_with(queue, true, exposure, transparent, None);
     }
 
     fn write_with(
@@ -180,29 +162,26 @@ impl Present {
         queue: &Queue,
         encode: bool,
         exposure: f32,
-        samples: u32,
         transparent: bool,
-        fade: Option<(f32, u32)>,
+        fade: Option<f32>,
     ) {
         assert!(
             exposure.is_finite() && exposure > 0.0,
             "an exposure scales radiance by a positive factor"
         );
-        assert!(samples > 0, "a present pass resolves at least one sample");
-        let (weight, previous) = fade.unwrap_or((0.0, samples));
+        let weight = fade.unwrap_or(0.0);
         assert!(
             weight.is_finite() && (0.0..=1.0).contains(&weight),
             "a cross fade blends two resolved images"
         );
-        assert!(previous > 0, "a cross fade resolves the previous image");
         let uniforms = Uniforms {
             flags: [
                 if encode { 1.0 } else { 0.0 },
                 exposure,
-                1.0 / samples as f32,
                 if transparent { 1.0 } else { 0.0 },
+                0.0,
             ],
-            fade: [weight, 1.0 / previous as f32, 0.0, 0.0],
+            fade: [weight, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -211,24 +190,37 @@ impl Present {
         &self,
         encoder: &mut CommandEncoder,
         target: &TextureView,
+        count: &TextureView,
         group: &BindGroup,
         reset: bool,
     ) {
+        let load = if reset {
+            LoadOp::Clear(Color::TRANSPARENT)
+        } else {
+            LoadOp::Load
+        };
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.present.accumulate.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: if reset {
-                        LoadOp::Clear(Color::TRANSPARENT)
-                    } else {
-                        LoadOp::Load
+            color_attachments: &[
+                Some(RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load,
+                        store: StoreOp::Store,
                     },
-                    store: StoreOp::Store,
-                },
-            })],
+                }),
+                Some(RenderPassColorAttachment {
+                    view: count,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load,
+                        store: StoreOp::Store,
+                    },
+                }),
+            ],
             ..Default::default()
         });
         pass.set_pipeline(&self.accumulate);
@@ -237,6 +229,20 @@ impl Present {
     }
 
     pub fn present(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
+        self.draw(encoder, target, &self.present, group);
+    }
+
+    pub fn quantize(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
+        self.draw(encoder, target, &self.quantize, group);
+    }
+
+    fn draw(
+        &self,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        pipeline: &RenderPipeline,
+        group: &BindGroup,
+    ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.present.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -250,39 +256,32 @@ impl Present {
             })],
             ..Default::default()
         });
-        pass.set_pipeline(&self.present);
-        pass.set_bind_group(0, group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
-    pub fn quantize(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.present.quantize.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.quantize);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
 
+fn texture(binding: u32) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Float { filterable: true },
+            view_dimension: TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 fn pipeline(
     device: &Device,
-    label: &str,
+    label: &'static str,
     shader: &wgpu::ShaderModule,
     fragment: &str,
     format: TextureFormat,
     layout: &wgpu::PipelineLayout,
-    blend: Option<BlendState>,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -302,9 +301,48 @@ fn pipeline(
             compilation_options: Default::default(),
             targets: &[Some(ColorTargetState {
                 format,
-                blend,
+                blend: None,
                 write_mask: ColorWrites::ALL,
             })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn accumulate_pipeline(
+    device: &Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+) -> RenderPipeline {
+    device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("grana.present.accumulate"),
+        layout: Some(layout),
+        vertex: VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(FragmentState {
+            module: shader,
+            entry_point: Some("fs_accumulate"),
+            compilation_options: Default::default(),
+            targets: &[
+                Some(ColorTargetState {
+                    format: crate::target::ACCUMULATION_FORMAT,
+                    blend: Some(ACCUMULATE),
+                    write_mask: ColorWrites::ALL,
+                }),
+                Some(ColorTargetState {
+                    format: crate::target::COUNT_FORMAT,
+                    blend: Some(ACCUMULATE),
+                    write_mask: ColorWrites::ALL,
+                }),
+            ],
         }),
         multiview_mask: None,
         cache: None,

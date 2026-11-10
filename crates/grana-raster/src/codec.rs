@@ -1,5 +1,5 @@
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{Error, Raster};
 
@@ -62,20 +62,10 @@ fn straight(pixels: &[u8]) -> Vec<u8> {
 
 pub fn write(path: &Path, raster: &Raster) -> Result<(), Error> {
     let bytes = encode(raster)?;
-    let temporary = temporary_path(path);
-    let fault = |detail: String| Error::Write {
+    grana_file::write(path, &bytes).map_err(|error| Error::Write {
         path: path.to_path_buf(),
-        detail,
-    };
-    if let Err(error) = std::fs::write(&temporary, &bytes) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(fault(error.to_string()));
-    }
-    if let Err(error) = std::fs::rename(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(fault(error.to_string()));
-    }
-    Ok(())
+        detail: error.to_string(),
+    })
 }
 
 fn expand(bytes: &[u8], color: png::ColorType, path: &Path) -> Result<Vec<u8>, Error> {
@@ -106,12 +96,4 @@ fn expand(bytes: &[u8], color: png::ColorType, path: &Path) -> Result<Vec<u8>, E
         }
     }
     Ok(pixels)
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("image");
-    path.with_file_name(format!(".{name}.{}.part", std::process::id()))
 }

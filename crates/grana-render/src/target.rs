@@ -7,6 +7,7 @@ use wgpu::{
 
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
@@ -94,6 +95,26 @@ pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> Texture {
         sample_count: 1,
         dimension: TextureDimension::D2,
         format: ACCUMULATION_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+pub(crate) fn count(device: &Device, size: [u32; 2]) -> Texture {
+    device.create_texture(&TextureDescriptor {
+        label: Some("grana.scene.count"),
+        size: Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: COUNT_FORMAT,
         usage: TextureUsages::RENDER_ATTACHMENT
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_SRC

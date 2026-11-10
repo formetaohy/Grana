@@ -33,6 +33,7 @@ impl Renderer {
             prefetch,
             level_cap: _,
             assured,
+            temporal: requested,
         } = frame;
         for pane in panes.iter().flatten() {
             assert!(inside(pane.region(), size), "the panes lie on the surface");
@@ -126,6 +127,7 @@ impl Renderer {
             transparent,
             exporting,
             convergence,
+            temporal: temporal_pass,
             fade,
             object_key,
             info,
@@ -472,7 +474,7 @@ impl Renderer {
                 data.oit[3] = oit.tail_scale();
             }
         }
-        let (structure, transition) = {
+        let (structure, transition, shot) = {
             let signatures: [Option<PaneSignature<'_>>; PANE_COUNT] =
                 std::array::from_fn(|index| match (panes[index], &volume_data[index]) {
                     (Some(PaneFrame::Volume { camera, region, .. }), Some(data)) => {
@@ -504,8 +506,10 @@ impl Renderer {
                 content: *content,
                 size,
             };
-            (signature.digest(), signature.transition())
+            (signature.digest(), signature.transition(), signature.shot())
         };
+        let mut panes_now = FramePanes::default();
+        panes_now.collect(&panes, &volume_data);
         let key = LevelKey::of(levels);
         let moved = target.transition != Some(transition);
         if moved {
@@ -520,10 +524,7 @@ impl Renderer {
         {
             target.fade_group(device, present);
             target.snapshot(&mut encoder);
-            *fade = Some(Fade {
-                weight: 0.0,
-                samples: target.samples,
-            });
+            *fade = Some(Fade { weight: 0.0 });
         }
         target.transition = Some(transition);
         target.levels = Some(key);
@@ -532,6 +533,42 @@ impl Renderer {
             target.samples = 0;
         }
         let reset = target.samples == 0;
+        let mut seeding = false;
+        if reset {
+            target.seeded = false;
+            let continuing = requested.is_some() && target.holds && target.shot == Some(shot);
+            if requested.is_some() {
+                temporal_pass.ensure(&mut target.history, device, size);
+            }
+            if continuing {
+                let previous = target.panes;
+                let history = target.history.as_mut().expect("the history is allocated");
+                temporal_pass.capture(
+                    device,
+                    queue,
+                    &mut encoder,
+                    history,
+                    &previous,
+                    &crate::temporal::Inputs {
+                        accumulated: &target.accumulation_view,
+                        counts: &target.count_view,
+                        fresh: target.scene.color(),
+                        depth: target.scene.depth(),
+                        volumes: std::array::from_fn(|index| {
+                            target.ao[index].as_ref().map(crate::ao::Ao::volume_normal)
+                        }),
+                        normals: std::array::from_fn(|index| {
+                            target.ao[index].as_ref().map(crate::ao::Ao::normal)
+                        }),
+                    },
+                );
+                seeding = true;
+            } else {
+                target.holds = false;
+                TemporalPass::invalidate(&mut target.history);
+            }
+            target.shot = Some(shot);
+        }
         if reset {
             convergence.reset();
         }
@@ -1160,9 +1197,49 @@ impl Renderer {
             present.accumulate(
                 &mut encoder,
                 &target.accumulation_view,
+                &target.count_view,
                 &target.accumulate_group,
                 reset,
             );
+            if seeding && target.samples == 1 {
+                let request = requested.expect("the seeding frame carries a history request");
+                let history = target.history.as_ref().expect("the history is captured");
+                let tolerances: [f32; PANE_COUNT] =
+                    std::array::from_fn(|index| match levels.panes[index] {
+                        Some(PaneLevels::Volume(levels)) => {
+                            let spacing = pyramid.level(levels.ladder.base).spacing();
+                            crate::temporal::tolerance(
+                                spacing.x().max(spacing.y()).max(spacing.z()),
+                            )
+                        }
+                        _ => 0.0,
+                    });
+                temporal_pass.seed(
+                    device,
+                    queue,
+                    &mut encoder,
+                    crate::temporal::Reuse {
+                        history,
+                        panes: &panes_now,
+                        length: request.history(),
+                        tolerances,
+                        inputs: &crate::temporal::Inputs {
+                            accumulated: &target.accumulation_view,
+                            counts: &target.count_view,
+                            fresh: target.scene.color(),
+                            depth: target.scene.depth(),
+                            volumes: std::array::from_fn(|index| {
+                                target.ao[index].as_ref().map(crate::ao::Ao::volume_normal)
+                            }),
+                            normals: std::array::from_fn(|index| {
+                                target.ao[index].as_ref().map(crate::ao::Ao::normal)
+                            }),
+                        },
+                    },
+                );
+                target.seeded = true;
+            }
+            target.holds = true;
         } else if !ready {
             target.samples = 0;
             info.samples = 0;
@@ -1171,8 +1248,8 @@ impl Renderer {
             if let Some(active) = fade.as_mut() {
                 active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);
             }
-            let blend = fade.as_ref().map(|fade| (fade.weight, fade.samples));
-            present.write(queue, exposure, target.samples, *transparent, blend);
+            let blend = fade.as_ref().map(|fade| fade.weight);
+            present.write(queue, exposure, *transparent, blend);
             if fade.is_some() {
                 let group = target.fade_group(device, present);
                 present.present(&mut encoder, surface, group);
@@ -1247,6 +1324,13 @@ impl Renderer {
         info.oit.dropped = dropped.iter().sum();
         info.cut.indices = slice.iter().map(SlicePass::index_bytes).sum();
         info.volume_scale = scales;
+        info.seeded = target.seeded;
+        info.history = requested.is_some()
+            && target
+                .history
+                .as_ref()
+                .is_some_and(crate::temporal::History::ready);
+        target.panes = panes_now;
         *info
     }
 }

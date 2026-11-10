@@ -89,6 +89,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             prefetch: false,
             level_cap: usize::MAX,
             assured: true,
+            temporal: None,
         };
         settle(&gpu, &mut renderer, &frame, &volume);
         read_pixels(&gpu, &texture, [SIDE, SIDE])
@@ -221,6 +222,7 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
         prefetch: frame.prefetch,
         level_cap: frame.level_cap,
         assured: frame.assured,
+        temporal: frame.temporal,
     }
 }
 

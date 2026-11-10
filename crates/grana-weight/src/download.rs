@@ -21,7 +21,9 @@ pub(crate) fn fetch(
         fs::create_dir_all(parent)
             .map_err(|error| Error::storage(format!("`{}`: {error}", parent.display())))?;
     }
-    let staging = target.with_extension("part");
+    let atomic = grana_file::Atomic::file(target)
+        .map_err(|error| Error::storage(format!("`{}`: {error}", target.display())))?;
+    let staging = atomic.staging().to_path_buf();
     let agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(Duration::from_secs(60)))
@@ -48,7 +50,6 @@ pub(crate) fn fetch(
     loop {
         if cancel.load(Ordering::Relaxed) {
             drop(writer);
-            let _ = fs::remove_file(&staging);
             return Err(Error::Cancelled);
         }
         let read = reader
@@ -69,14 +70,11 @@ pub(crate) fn fetch(
         .map_err(|error| Error::storage(format!("`{}`: {error}", staging.display())))?;
     drop(writer);
     if written != asset.length || crate::integrity::hex(&hasher.finalize()) != asset.checksum {
-        let _ = fs::remove_file(&staging);
         return Err(Error::Checksum);
     }
-    if let Err(error) = crate::archive::normalize(&staging) {
-        let _ = fs::remove_file(&staging);
-        return Err(error);
-    }
-    fs::rename(&staging, target)
+    crate::archive::normalize(&staging)?;
+    atomic
+        .commit()
         .map_err(|error| Error::storage(format!("`{}`: {error}", target.display())))?;
     if let Err(error) = crate::integrity::record(target) {
         let _ = fs::remove_file(target);

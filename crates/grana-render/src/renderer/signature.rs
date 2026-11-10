@@ -88,6 +88,43 @@ impl Signature<'_, '_> {
         hasher.finish()
     }
 
+    pub(super) fn shot(self) -> u64 {
+        let Self {
+            scene,
+            panes,
+            pane_channels,
+            exposure,
+            epoch,
+            size,
+            ..
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        for (index, pane) in panes.iter().enumerate() {
+            pane_channels[index].hidden().hash(&mut hasher);
+            match pane {
+                Some(PaneSignature::Volume { data, region, .. }) => {
+                    1u8.hash(&mut hasher);
+                    region.hash(&mut hasher);
+                    data.clip.map(f32::to_bits).hash(&mut hasher);
+                    data.region_center.map(f32::to_bits).hash(&mut hasher);
+                    for axis in data.region_axis {
+                        axis.map(f32::to_bits).hash(&mut hasher);
+                    }
+                }
+                Some(PaneSignature::Section { region, .. }) => {
+                    2u8.hash(&mut hasher);
+                    region.hash(&mut hasher);
+                }
+                None => 0u8.hash(&mut hasher),
+            }
+        }
+        exposure.to_bits().hash(&mut hasher);
+        epoch.hash(&mut hasher);
+        size.hash(&mut hasher);
+        content_digest(scene, &mut hasher);
+        hasher.finish()
+    }
+
     pub(super) fn transition(self) -> u64 {
         let Self {
             scene,

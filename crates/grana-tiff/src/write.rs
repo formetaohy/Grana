@@ -42,7 +42,7 @@ pub struct Picture<'a> {
 
 pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
     let bytes = encode(picture).map_err(|detail| Error::write(path, detail))?;
-    std::fs::write(path, bytes).map_err(|error| Error::write(path, error.to_string()))
+    grana_file::write(path, &bytes).map_err(|error| Error::write(path, error.to_string()))
 }
 
 struct Entry {

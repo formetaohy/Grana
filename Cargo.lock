@@ -3521,6 +3521,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-file"
+version = "0.1.1"
+
+[[package]]
 name = "grana-geometry"
 version = "0.1.1"
 dependencies = [
@@ -3653,6 +3657,7 @@ dependencies = [
  "grana-animation",
  "grana-calibration",
  "grana-display",
+ "grana-file",
  "grana-geometry",
  "grana-image",
  "grana-interop",
@@ -3701,6 +3706,7 @@ dependencies = [
  "grana-animation",
  "grana-codec",
  "grana-display",
+ "grana-file",
  "grana-geometry",
  "grana-measure",
  "grana-object",
@@ -3737,6 +3743,7 @@ dependencies = [
 name = "grana-raster"
 version = "0.1.1"
 dependencies = [
+ "grana-file",
  "grana-text",
  "png",
  "thiserror 2.0.21",
@@ -3851,6 +3858,7 @@ name = "grana-tiff"
 version = "0.1.1"
 dependencies = [
  "flate2",
+ "grana-file",
  "grana-volume",
  "quick-xml",
  "thiserror 2.0.21",
@@ -3874,6 +3882,7 @@ dependencies = [
 name = "grana-video"
 version = "0.1.1"
 dependencies = [
+ "grana-file",
  "openh264",
  "png",
  "thiserror 2.0.21",
@@ -3891,6 +3900,7 @@ name = "grana-weight"
 version = "0.1.1"
 dependencies = [
  "grana-dir",
+ "grana-file",
  "grana-model",
  "sha2",
  "thiserror 2.0.21",
@@ -3901,6 +3911,7 @@ dependencies = [
 name = "grana-zarr"
 version = "0.1.1"
 dependencies = [
+ "grana-file",
  "grana-net",
  "grana-volume",
  "ome_zarr_metadata",

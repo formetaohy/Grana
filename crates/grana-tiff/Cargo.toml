@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-file = { workspace = true }
 flate2 = { workspace = true }
 grana-volume = { workspace = true }
 quick-xml = { workspace = true }

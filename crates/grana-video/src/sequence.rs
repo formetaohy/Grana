@@ -8,7 +8,7 @@ pub fn frame_name(stem: &str, index: u32, time: u32) -> String {
 
 pub struct Sequence {
     directory: PathBuf,
-    staging: Option<PathBuf>,
+    atomic: Option<grana_file::Atomic>,
     stem: String,
     frames: u32,
     written: u32,
@@ -22,14 +22,13 @@ impl Sequence {
                 path: directory.to_path_buf(),
             });
         }
-        let staging = staging_path(directory);
-        std::fs::create_dir(&staging).map_err(|error| Error::Write {
-            path: staging.clone(),
+        let atomic = grana_file::Atomic::directory(directory).map_err(|error| Error::Write {
+            path: directory.to_path_buf(),
             detail: error.to_string(),
         })?;
         Ok(Self {
             directory: directory.to_path_buf(),
-            staging: Some(staging),
+            atomic: Some(atomic),
             stem: stem.to_string(),
             frames,
             written: 0,
@@ -53,7 +52,11 @@ impl Sequence {
             self.written < self.frames,
             "a frame sequence holds no more than its frames"
         );
-        let staging = self.staging.as_ref().expect("the sequence is open");
+        let staging = self
+            .atomic
+            .as_ref()
+            .expect("the sequence is open")
+            .staging();
         let path = staging.join(frame_name(&self.stem, self.written, time));
         std::fs::write(&path, png).map_err(|error| Error::Write {
             path,
@@ -70,34 +73,18 @@ impl Sequence {
                 frames: self.frames,
             });
         }
-        let staging = self.staging.take().expect("the sequence is open");
-        std::fs::rename(&staging, &self.directory).map_err(|error| Error::Write {
-            path: self.directory.clone(),
-            detail: error.to_string(),
-        })?;
+        self.atomic
+            .take()
+            .expect("the sequence is open")
+            .commit()
+            .map_err(|error| Error::Write {
+                path: self.directory.clone(),
+                detail: error.to_string(),
+            })?;
         Ok(self.directory.clone())
     }
 
     pub fn discard(mut self) {
-        let Some(staging) = self.staging.take() else {
-            return;
-        };
-        let _ = std::fs::remove_dir_all(staging);
+        self.atomic.take();
     }
-}
-
-impl Drop for Sequence {
-    fn drop(&mut self) {
-        if let Some(staging) = self.staging.take() {
-            let _ = std::fs::remove_dir_all(&staging);
-        }
-    }
-}
-
-fn staging_path(directory: &Path) -> PathBuf {
-    let name = directory
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("sequence");
-    directory.with_file_name(format!(".{name}.{}.part", std::process::id()))
 }

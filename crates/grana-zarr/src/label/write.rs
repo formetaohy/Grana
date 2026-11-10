@@ -90,21 +90,19 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     }
     let labels_group = crate::hcs::join(group, "labels");
     let root = directory.join("labels").join(spec.name);
-    let temporary_name = format!(".{}.{}.tmp", spec.name, std::process::id());
+    let atomic = grana_file::Atomic::directory(&root).map_err(|error| Error::Write {
+        path: directory.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    let temporary_name = atomic
+        .staging()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .expect("the label staging names a folder");
     let temporary_group = crate::hcs::join(&labels_group, &temporary_name);
-    let temporary = directory.join("labels").join(&temporary_name);
-    if temporary.exists() {
-        std::fs::remove_dir_all(&temporary).map_err(|error| Error::Write {
-            path: directory.display().to_string(),
-            detail: error.to_string(),
-        })?;
-    }
-    let fail = |detail: String| {
-        let _ = std::fs::remove_dir_all(&temporary);
-        Error::Write {
-            path: directory.display().to_string(),
-            detail,
-        }
+    let fail = |detail: String| Error::Write {
+        path: directory.display().to_string(),
+        detail,
     };
     let image = Image::open_group(path, group)?;
     if image.minor() < 5 {
@@ -334,10 +332,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         )
         .map_err(&fail)?;
     }
-    if root.exists() {
-        std::fs::remove_dir_all(&root).map_err(|error| fail(error.to_string()))?;
-    }
-    std::fs::rename(&temporary, &root).map_err(|error| fail(error.to_string()))?;
+    atomic.commit().map_err(|error| fail(error.to_string()))?;
     if let Err(detail) = register_labels(
         store.clone(),
         &directory,

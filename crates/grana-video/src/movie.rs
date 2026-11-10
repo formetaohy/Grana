@@ -20,7 +20,7 @@ pub(crate) enum Codec {
 
 pub(crate) struct Movie {
     path: PathBuf,
-    temporary: PathBuf,
+    atomic: Option<grana_file::Atomic>,
     sink: BufWriter<File>,
     size: [u32; 2],
     fps: u32,
@@ -33,7 +33,11 @@ pub(crate) struct Movie {
 
 impl Movie {
     pub fn create(path: &Path, size: [u32; 2], fps: u32, alpha: bool) -> Result<Self, Error> {
-        let temporary = temporary_path(path);
+        let atomic = grana_file::Atomic::file(path).map_err(|error| Error::Write {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })?;
+        let temporary = atomic.staging().to_path_buf();
         let file = File::create(&temporary).map_err(|error| Error::Write {
             path: temporary.clone(),
             detail: error.to_string(),
@@ -45,7 +49,7 @@ impl Movie {
         let start = (header.len() + 8) as u64;
         Ok(Self {
             path: path.to_path_buf(),
-            temporary,
+            atomic: Some(atomic),
             sink,
             size,
             fps,
@@ -65,7 +69,13 @@ impl Movie {
         let length = u32::try_from(bytes.len()).map_err(|_| {
             Error::Encode("an encoded sample outgrew its four byte length".to_string())
         })?;
-        write(&mut self.sink, &self.temporary, bytes)?;
+        let temporary = self
+            .atomic
+            .as_ref()
+            .expect("the movie is open")
+            .staging()
+            .to_path_buf();
+        write(&mut self.sink, &temporary, bytes)?;
         self.samples.push(length);
         if key {
             self.keys.push(self.samples.len() as u32);
@@ -77,7 +87,12 @@ impl Movie {
     pub fn finish(mut self, codec: Codec) -> Result<(), Error> {
         let mdat = u32::try_from(self.media + 8)
             .map_err(|_| Error::Encode("the movie outgrew a four gigabyte file".to_string()))?;
-        let temporary = self.temporary.clone();
+        let temporary = self
+            .atomic
+            .as_ref()
+            .expect("the movie is open")
+            .staging()
+            .to_path_buf();
         let fault = |error: std::io::Error| Error::Write {
             path: temporary.clone(),
             detail: error.to_string(),
@@ -91,10 +106,14 @@ impl Movie {
         let moov = self.moov(&codec);
         self.sink.write_all(&moov).map_err(fault)?;
         self.sink.flush().map_err(fault)?;
-        std::fs::rename(&self.temporary, &self.path).map_err(|error| Error::Write {
-            path: self.path.clone(),
-            detail: error.to_string(),
-        })
+        self.atomic
+            .take()
+            .expect("the movie is open")
+            .commit()
+            .map_err(|error| Error::Write {
+                path: self.path.clone(),
+                detail: error.to_string(),
+            })
     }
 
     fn moov(&self, codec: &Codec) -> Vec<u8> {
@@ -169,12 +188,6 @@ impl Movie {
             ]
             .concat(),
         )
-    }
-}
-
-impl Drop for Movie {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.temporary);
     }
 }
 
@@ -350,12 +363,4 @@ fn write(sink: &mut BufWriter<File>, path: &Path, bytes: &[u8]) -> Result<(), Er
         path: path.to_path_buf(),
         detail: error.to_string(),
     })
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("movie");
-    path.with_file_name(format!(".{name}.{}.part", std::process::id()))
 }

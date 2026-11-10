@@ -299,6 +299,15 @@ fn cancels_an_export_without_leaving_a_partial_file() {
         !path.exists(),
         "a cancelled movie leaves no partial file behind"
     );
+    let staging = std::fs::read_dir(temp.path())
+        .expect("the temporary directory lists")
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".part"))
+        .count();
+    assert_eq!(
+        staging, 0,
+        "a cancelled movie leaves no staging file behind"
+    );
 }
 
 #[test]

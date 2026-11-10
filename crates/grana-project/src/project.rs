@@ -176,20 +176,16 @@ impl Project {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<(), Error> {
-        let temporary = temporary_path(path);
+        let atomic = grana_file::Atomic::file(path).map_err(|error| Error::Write {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })?;
         let total = self.steps();
-        let result = self
-            .write_stream(&temporary, path, total, cancel, progress)
-            .and_then(|()| {
-                std::fs::rename(&temporary, path).map_err(|error| Error::Write {
-                    path: path.to_path_buf(),
-                    detail: error.to_string(),
-                })
-            });
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        result
+        self.write_stream(atomic.staging(), path, total, cancel, progress)?;
+        atomic.commit().map_err(|error| Error::Write {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })
     }
 
     pub fn read(
@@ -308,14 +304,6 @@ impl Project {
     }
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("project");
-    path.with_file_name(format!(".{name}.{}.tmp", std::process::id()))
-}
-
 fn sweep(path: &Path) {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return;
@@ -332,7 +320,7 @@ fn sweep(path: &Path) {
         let Some(candidate_name) = candidate.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if !candidate_name.starts_with(&prefix) || !candidate_name.ends_with(".tmp") {
+        if !candidate_name.starts_with(&prefix) || !candidate_name.ends_with(".part") {
             continue;
         }
         let stale = entry

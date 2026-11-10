@@ -231,10 +231,7 @@ fn write_run(output: &Path, run: &Run) -> Result<(), String> {
     let text = serde_json::to_string_pretty(run)
         .map_err(|error| format!("failed to record the batch run: {error}"))?;
     let path = output.join(RUN);
-    let temporary = output.join(format!(".{RUN}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, text)
-        .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, &path)
+    grana_file::write(&path, text.as_bytes())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 

@@ -44,6 +44,7 @@ pub(crate) fn draw(
             prefetch: frame.prefetch,
             level_cap: frame.level_cap,
             assured: false,
+            temporal: None,
         },
     )
 }

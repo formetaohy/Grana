@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-file = { workspace = true }
 grana-net = { workspace = true }
 grana-volume = { workspace = true }
 ome_zarr_metadata = { workspace = true }

@@ -283,6 +283,10 @@ struct March {
     transmittance: f32,
     hit: vec4<f32>,
     normal: vec4<f32>,
+    moment: f32,
+    mass: f32,
+    peak: f32,
+    peak_distance: f32,
 }
 
 fn march(
@@ -297,8 +301,21 @@ fn march(
     var transmittance = 1.0;
     var hit = vec4<f32>(0.0);
     var hit_normal = vec4<f32>(0.0);
+    var moment = 0.0;
+    var mass = 0.0;
+    var brightest = -1.0;
+    var brightest_distance = 0.0;
     if (finish <= begin) {
-        return March(radiance, transmittance, hit, hit_normal);
+        return March(
+            radiance,
+            transmittance,
+            hit,
+            hit_normal,
+            moment,
+            mass,
+            brightest,
+            brightest_distance,
+        );
     }
     let channel_count = u32(frame.march.z);
     let pack_count = (channel_count + PACK - 1u) / PACK;
@@ -396,6 +413,10 @@ fn march(
                         }
                         if (channel_maximum(channel)) {
                             peak[channel] = max(peak[channel], values[component]);
+                            if (values[component] > brightest) {
+                                brightest = values[component];
+                                brightest_distance = cursor;
+                            }
                             continue;
                         }
                         let extinction = channel_tau(channel, values[component]);
@@ -474,7 +495,10 @@ fn march(
                 if (optical_depth > 0.0) {
                     let segment_transmittance = exp(-optical_depth);
                     let average_color = emission / optical_depth;
-                    radiance += transmittance * (1.0 - segment_transmittance) * average_color;
+                    let absorbed = transmittance * (1.0 - segment_transmittance);
+                    moment += absorbed * cursor;
+                    mass += absorbed;
+                    radiance += absorbed * average_color;
                     transmittance *= segment_transmittance;
                 }
                 texel += texel_rate * segment;
@@ -500,7 +524,16 @@ fn march(
         radiance += transmittance * opacity * color;
         transmittance *= 1.0 - opacity;
     }
-    return March(radiance, transmittance, hit, hit_normal);
+    return March(
+        radiance,
+        transmittance,
+        hit,
+        hit_normal,
+        moment,
+        mass,
+        brightest,
+        brightest_distance,
+    );
 }
 
 struct VolumeOutput {
@@ -646,10 +679,20 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     var cursor = start + min(jitter, max(exit - start, 0.0));
     var hit = vec4<f32>(0.0);
     var hit_normal = vec4<f32>(0.0);
+    var moment = 0.0;
+    var mass = 0.0;
+    var brightest = -1.0;
+    var brightest_distance = 0.0;
     for (var index = 0u; index < layers; index += 1u) {
         let limit = min(object_distance(origin, layer_depth[index], ndc), exit);
         if (limit > cursor) {
             let segment = march(origin, cursor, limit, direction, dither, ao);
+            moment += transmittance * segment.moment;
+            mass += transmittance * segment.mass;
+            if (segment.peak > brightest) {
+                brightest = segment.peak;
+                brightest_distance = segment.peak_distance;
+            }
             radiance += transmittance * segment.radiance;
             transmittance *= segment.transmittance;
             if (hit.w <= 0.0 && segment.hit.w > 0.0) {
@@ -662,6 +705,9 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
             unpack2x16float(layer_color[index].x),
             unpack2x16float(layer_color[index].y),
         );
+        let absorbed = transmittance * sample.a;
+        moment += absorbed * layer_depth[index];
+        mass += absorbed;
         radiance += transmittance * sample.rgb;
         transmittance *= 1.0 - sample.a;
         if (transmittance < MINIMUM_TRANSMITTANCE) {
@@ -670,6 +716,12 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     }
     if (cursor < exit) {
         let segment = march(origin, cursor, exit, direction, dither, ao);
+        moment += transmittance * segment.moment;
+        mass += transmittance * segment.mass;
+        if (segment.peak > brightest) {
+            brightest = segment.peak;
+            brightest_distance = segment.peak_distance;
+        }
         radiance += transmittance * segment.radiance;
         transmittance *= segment.transmittance;
         if (hit.w <= 0.0 && segment.hit.w > 0.0) {
@@ -677,7 +729,14 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
             hit_normal = segment.normal;
         }
     }
-    let depth = select(1.0, clip_depth(hit.xyz), hit.w > 0.0);
+    var depth = 1.0;
+    if (hit.w > 0.0) {
+        depth = clip_depth(hit.xyz);
+    } else if (mass > 1.0e-4) {
+        depth = clip_depth(origin + direction * (moment / mass));
+    } else if (brightest >= 0.0) {
+        depth = clip_depth(origin + direction * brightest_distance);
+    }
     return VolumeOutput(
         vec4<f32>(radiance, 1.0 - transmittance),
         vec4<f32>(hit_normal.xyz, depth),

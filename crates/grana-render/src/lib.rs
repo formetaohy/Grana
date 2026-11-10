@@ -24,6 +24,7 @@ mod slice;
 mod summary;
 mod table;
 mod target;
+mod temporal;
 mod volume;
 
 pub use grana_display::PANE_COUNT;
@@ -38,3 +39,4 @@ pub use renderer::{
     Resolution, ViewInfo,
 };
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};
+pub use temporal::Temporal;

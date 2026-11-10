@@ -161,6 +161,8 @@ pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
     pub(super) accumulation: Texture,
     pub(super) accumulation_view: TextureView,
+    pub(super) count: Texture,
+    pub(super) count_view: TextureView,
     pub(super) accumulate_group: BindGroup,
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
@@ -172,6 +174,11 @@ pub(super) struct FrameTarget {
     pub(super) signature: Option<u64>,
     pub(super) transition: Option<u64>,
     pub(super) levels: Option<LevelKey>,
+    pub(super) shot: Option<u64>,
+    pub(super) panes: FramePanes,
+    pub(super) history: Option<crate::temporal::History>,
+    pub(super) seeded: bool,
+    pub(super) holds: bool,
 }
 
 pub(super) struct VolumeLayer {
@@ -182,6 +189,7 @@ pub(super) struct VolumeLayer {
 
 pub(super) struct FadeTarget {
     pub(super) texture: Texture,
+    pub(super) count: Texture,
     pub(super) group: BindGroup,
 }
 
@@ -195,12 +203,28 @@ impl FrameTarget {
         let scene = SceneTarget::new(device, &layouts.depth, size);
         let accumulation = target::accumulation(device, size);
         let accumulation_view = target::view(&accumulation);
-        let accumulate_group = present.bind(device, scene.color(), scene.color());
-        let present_group = present.bind(device, &accumulation_view, &accumulation_view);
+        let count = target::count(device, size);
+        let count_view = target::view(&count);
+        let accumulate_group = present.bind(
+            device,
+            scene.color(),
+            scene.color(),
+            scene.color(),
+            scene.color(),
+        );
+        let present_group = present.bind(
+            device,
+            &accumulation_view,
+            &count_view,
+            &accumulation_view,
+            &count_view,
+        );
         Self {
             scene,
             accumulation,
             accumulation_view,
+            count,
+            count_view,
             accumulate_group,
             present_group,
             fade: None,
@@ -212,6 +236,11 @@ impl FrameTarget {
             signature: None,
             transition: None,
             levels: None,
+            shot: None,
+            panes: FramePanes::default(),
+            history: None,
+            seeded: false,
+            holds: false,
         }
     }
 
@@ -263,8 +292,20 @@ impl FrameTarget {
         let fade = self.fade.get_or_insert_with(|| {
             let texture = target::accumulation(device, self.size);
             let view = target::view(&texture);
-            let group = present.bind(device, &self.accumulation_view, &view);
-            FadeTarget { texture, group }
+            let count = target::count(device, self.size);
+            let count_view = target::view(&count);
+            let group = present.bind(
+                device,
+                &self.accumulation_view,
+                &self.count_view,
+                &view,
+                &count_view,
+            );
+            FadeTarget {
+                texture,
+                count,
+                group,
+            }
         });
         &fade.group
     }
@@ -273,24 +314,30 @@ impl FrameTarget {
         let Some(fade) = self.fade.as_ref() else {
             return;
         };
-        encoder.copy_texture_to_texture(
-            TexelCopyTextureInfo {
-                texture: &self.accumulation,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            TexelCopyTextureInfo {
-                texture: &fade.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: self.size[0],
-                height: self.size[1],
-                depth_or_array_layers: 1,
-            },
-        );
+        let extent = wgpu::Extent3d {
+            width: self.size[0],
+            height: self.size[1],
+            depth_or_array_layers: 1,
+        };
+        for (source, destination) in [
+            (&self.accumulation, &fade.texture),
+            (&self.count, &fade.count),
+        ] {
+            encoder.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: source,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: destination,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                extent,
+            );
+        }
     }
 }
