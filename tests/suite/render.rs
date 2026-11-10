@@ -633,32 +633,34 @@ fn trades_volume_resolution_for_frame_time() {
         "a fresh governor renders at full resolution"
     );
     assert_eq!(fresh.penalty, 1.0, "a fresh governor samples as asked");
-    let mut scale = 1;
-    for _ in 0..32 {
+    let mut resolution = fresh;
+    for _ in 0..64 {
         governor.observe(32.0);
-        scale = governor.decide(&moving, false).scale[0];
+        resolution = governor.decide(&moving, false);
     }
-    assert_eq!(
-        scale, 4,
-        "a sustained overrun coarsens the volume until the budget fits"
-    );
     assert!(
-        governor.decide(&moving, false).penalty > 1.0,
-        "an overrun that survives the coarsest volume coarsens the samples"
+        resolution.penalty > 1.0,
+        "a sustained overrun first coarsens the samples"
     );
-    let mut restored = 4;
     for _ in 0..128 {
-        governor.observe(1.0);
-        restored = governor.decide(&moving, false).scale[0];
+        governor.observe(32.0);
+        resolution = governor.decide(&moving, false);
     }
     assert_eq!(
-        restored, 1,
-        "spare budget restores the full resolution and the sampling step"
+        resolution.scale, [4; 4],
+        "an overrun that survives the samples coarsens the volume"
+    );
+    for _ in 0..512 {
+        governor.observe(1.0);
+        resolution = governor.decide(&moving, false);
+    }
+    assert_eq!(
+        resolution.scale, [1; 4],
+        "spare budget restores the full resolution"
     );
     assert_eq!(
-        governor.decide(&moving, false).penalty,
-        1.0,
-        "spare budget refines the sampling"
+        resolution.penalty, 1.0,
+        "spare budget restores the full sampling"
     );
     assert_eq!(
         governor.decide(&resting, false).scale,

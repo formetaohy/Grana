@@ -9,9 +9,6 @@ use wgpu::{
 const MARK_LIMIT: usize = 16;
 const STAMP_BYTES: u64 = size_of::<u64>() as u64;
 const SLOTS: usize = 4;
-const SMOOTHING: f32 = 0.3;
-const OVERRUN: f32 = 0.85;
-const HEADROOM: f32 = 0.5;
 const NANOSECONDS: f32 = 1.0e6;
 const TARGET_FLOOR: f32 = 4.0;
 const TARGET_CEILING: f32 = 40.0;
@@ -100,21 +97,21 @@ impl FrameProfile {
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     target: f32,
-    measured: f32,
+    latest: f32,
 }
 
 impl Budget {
     pub fn new(target: f32) -> Self {
         Self {
             target: validated(target),
-            measured: validated(target),
+            latest: validated(target),
         }
     }
 
     pub fn retarget(self, target: f32) -> Self {
         Self {
             target: validated(target),
-            measured: self.measured,
+            latest: self.latest,
         }
     }
 
@@ -122,12 +119,8 @@ impl Budget {
         self.target
     }
 
-    pub fn overrun(self) -> bool {
-        self.measured > self.target * OVERRUN
-    }
-
-    pub fn headroom(self) -> bool {
-        self.measured < self.target * HEADROOM
+    pub fn pressure(self) -> f32 {
+        self.latest / self.target
     }
 
     pub fn observe(&mut self, elapsed: f32) {
@@ -135,7 +128,7 @@ impl Budget {
             elapsed.is_finite() && elapsed >= 0.0,
             "a measured frame spans a finite duration"
         );
-        self.measured += SMOOTHING * (elapsed - self.measured);
+        self.latest = elapsed;
     }
 }
 

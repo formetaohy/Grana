@@ -1,9 +1,11 @@
 use grana_display::{ChannelMask, PANE_COUNT, Quality};
-use grana_render::{Frame, FrameInfo, PaneFrame, Renderer};
+use grana_render::{Frame, FrameInfo, PaneFrame, Renderer, Temporal};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
 
 use crate::view;
+
+const HISTORY: f32 = 8.0;
 
 pub(crate) struct View<'a> {
     pub target: &'a TextureView,
@@ -44,7 +46,7 @@ pub(crate) fn draw(
             prefetch: frame.prefetch,
             level_cap: frame.level_cap,
             assured: false,
-            temporal: None,
+            temporal: Some(Temporal::adaptive(HISTORY)),
         },
     )
 }

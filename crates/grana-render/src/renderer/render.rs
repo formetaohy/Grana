@@ -9,6 +9,7 @@ use grana_display::ChannelMask;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
+const LOD_PENALTY_LIMIT: f32 = 2.0;
 
 impl Renderer {
     pub(super) fn render(
@@ -76,15 +77,15 @@ impl Renderer {
         self.interactive = moved.iter().any(|moved| *moved);
         let frozen = self.exporting || assured;
         let loads: [Load; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
-            Some(PaneFrame::Volume { .. }) => Load::volume(
-                !frozen && pane_quality[index] != Quality::High,
-                moved[index],
-            ),
+            Some(PaneFrame::Volume { .. }) => Load::volume(!frozen, moved[index]),
             _ => Load::IDLE,
         });
         let resolution = self.governor.decide(&loads, frozen);
         let scales = resolution.scale;
         let penalty = resolution.penalty;
+        let stochastic = penalty > 1.0;
+        let temporal = requested.filter(|request| !request.stochastic() || stochastic);
+        let lod_penalty = penalty.min(LOD_PENALTY_LIMIT);
         self.motion = motion;
         self.info.volume_scale = scales;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -200,7 +201,7 @@ impl Renderer {
                 height as f32,
                 if assured { None } else { section_level[index] },
                 limits,
-                penalty,
+                lod_penalty,
             );
             let (resolved, visible) = resolve_section_level(
                 pyramid,
@@ -281,7 +282,7 @@ impl Renderer {
                 limits,
                 capacity: volume_share,
                 current: if assured { None } else { volume_level[index] },
-                penalty,
+                penalty: lod_penalty,
             });
             let base = fit.ladder.base.min(allowed - 1);
             let count = BAND.min(allowed - base);
@@ -536,8 +537,8 @@ impl Renderer {
         let mut seeding = false;
         if reset {
             target.seeded = false;
-            let continuing = requested.is_some() && target.holds && target.shot == Some(shot);
-            if requested.is_some() {
+            let continuing = temporal.is_some() && target.holds && target.shot == Some(shot);
+            if temporal.is_some() {
                 temporal_pass.ensure(&mut target.history, device, size);
             }
             if continuing {
@@ -624,11 +625,7 @@ impl Renderer {
                 continue;
             };
             let extent = panes[index].as_ref().map_or([1, 1], |pane| {
-                let scale = scales[index];
-                [
-                    pane.region()[2].max(1).div_ceil(scale),
-                    pane.region()[3].max(1).div_ceil(scale),
-                ]
+                [pane.region()[2].max(1), pane.region()[3].max(1)]
             });
             let offset = sample::offset(sample_index, extent);
             data.jitter = [
@@ -1202,7 +1199,7 @@ impl Renderer {
                 reset,
             );
             if seeding && target.samples == 1 {
-                let request = requested.expect("the seeding frame carries a history request");
+                let request = temporal.expect("the seeding frame carries a history request");
                 let history = target.history.as_ref().expect("the history is captured");
                 let tolerances: [f32; PANE_COUNT] =
                     std::array::from_fn(|index| match levels.panes[index] {
@@ -1325,7 +1322,7 @@ impl Renderer {
         info.cut.indices = slice.iter().map(SlicePass::index_bytes).sum();
         info.volume_scale = scales;
         info.seeded = target.seeded;
-        info.history = requested.is_some()
+        info.history = temporal.is_some()
             && target
                 .history
                 .as_ref()

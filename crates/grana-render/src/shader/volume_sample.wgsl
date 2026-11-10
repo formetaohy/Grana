@@ -204,18 +204,15 @@ fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32)
     return max(delta, minimum);
 }
 
-fn pack_gradient(
-    band: u32,
+fn texel_gradient(
     pack: u32,
-    uvw: vec3<f32>,
-    step: vec3<f32>,
+    texel: vec3<f32>,
+    values: vec4<f32>,
+    extent: vec3<f32>,
 ) -> array<vec3<f32>, 4> {
-    let dx = sample_pack(band, pack, uvw + vec3<f32>(step.x, 0.0, 0.0))
-        - sample_pack(band, pack, uvw - vec3<f32>(step.x, 0.0, 0.0));
-    let dy = sample_pack(band, pack, uvw + vec3<f32>(0.0, step.y, 0.0))
-        - sample_pack(band, pack, uvw - vec3<f32>(0.0, step.y, 0.0));
-    let dz = sample_pack(band, pack, uvw + vec3<f32>(0.0, 0.0, step.z))
-        - sample_pack(band, pack, uvw - vec3<f32>(0.0, 0.0, step.z));
+    let dx = sample_atlas(pack, texel + vec3<f32>(1.0, 0.0, 0.0) / extent) - values;
+    let dy = sample_atlas(pack, texel + vec3<f32>(0.0, 1.0, 0.0) / extent) - values;
+    let dz = sample_atlas(pack, texel + vec3<f32>(0.0, 0.0, 1.0) / extent) - values;
     return array<vec3<f32>, 4>(
         vec3<f32>(dx.x, dy.x, dz.x),
         vec3<f32>(dx.y, dy.y, dz.y),

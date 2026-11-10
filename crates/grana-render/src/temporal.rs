@@ -36,19 +36,35 @@ const ADD: BlendState = BlendState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Temporal {
     history: f32,
+    stochastic: bool,
 }
 
 impl Temporal {
     pub fn new(history: f32) -> Self {
+        Self::of(history, false)
+    }
+
+    pub fn adaptive(history: f32) -> Self {
+        Self::of(history, true)
+    }
+
+    fn of(history: f32, stochastic: bool) -> Self {
         assert!(
             history.is_finite() && history > 0.0 && history <= HISTORY_LIMIT,
             "a temporal history spans up to {HISTORY_LIMIT} samples"
         );
-        Self { history }
+        Self {
+            history,
+            stochastic,
+        }
     }
 
     pub fn history(self) -> f32 {
         self.history
+    }
+
+    pub fn stochastic(self) -> bool {
+        self.stochastic
     }
 }
 

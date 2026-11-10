@@ -2,15 +2,34 @@ use grana_display::PANE_COUNT;
 
 use crate::profile::Budget;
 
-const SCALE: u32 = 2;
-const COARSE: u32 = 4;
-const RECOVERY: u8 = 8;
-const COOLDOWN: u16 = 30;
-const SETTLE: u8 = 4;
-const PRESSURE: u8 = 2;
-const STEP: f32 = 1.15;
-const PENALTY_FLOOR: f32 = 1.0;
-const PENALTY_CEILING: f32 = 4.0;
+const STATES: [(u32, f32); 18] = [
+    (1, 1.0),
+    (1, 1.35),
+    (1, 1.8),
+    (1, 2.4),
+    (1, 3.2),
+    (1, 4.3),
+    (1, 5.8),
+    (1, 7.7),
+    (1, 10.3),
+    (1, 13.8),
+    (2, 3.2),
+    (2, 4.3),
+    (2, 5.8),
+    (2, 7.7),
+    (2, 10.3),
+    (4, 5.8),
+    (4, 7.7),
+    (4, 10.3),
+];
+
+const SETTLE: u8 = 10;
+const TIGHT: f32 = 0.9;
+const SLACK: f32 = 0.55;
+const REVERSE: f32 = 1.05;
+const JUMP: f32 = 0.28;
+const JUMP_LIMIT: usize = 5;
+const START: usize = 4;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Load {
@@ -37,52 +56,38 @@ pub struct Resolution {
 
 impl Default for Resolution {
     fn default() -> Self {
+        let (scale, penalty) = STATES[0];
         Self {
-            scale: [1; PANE_COUNT],
-            penalty: PENALTY_FLOOR,
+            scale: [scale; PANE_COUNT],
+            penalty,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Pane {
-    scale: u32,
-    probing: bool,
-    streak: u8,
-    cooldown: u16,
-}
-
-impl Default for Pane {
-    fn default() -> Self {
-        Self {
-            scale: 1,
-            probing: false,
-            streak: 0,
-            cooldown: 0,
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Move {
+    Rise,
+    Fall,
 }
 
 pub struct Governor {
     budget: Budget,
-    panes: [Pane; PANE_COUNT],
-    penalty: f32,
+    index: usize,
     observed: bool,
     measured: bool,
     settle: u8,
-    pressure: u8,
+    last: Option<Move>,
 }
 
 impl Governor {
     pub fn new(target: f32) -> Self {
         Self {
             budget: Budget::new(target),
-            panes: [Pane::default(); PANE_COUNT],
-            penalty: PENALTY_FLOOR,
+            index: START,
             observed: false,
             measured: false,
             settle: 0,
-            pressure: 0,
+            last: None,
         }
     }
 
@@ -91,7 +96,7 @@ impl Governor {
     }
 
     pub fn penalty(&self) -> f32 {
-        self.penalty
+        STATES[self.index].1
     }
 
     pub fn retarget(&mut self, target: f32) {
@@ -106,91 +111,55 @@ impl Governor {
     }
 
     pub fn decide(&mut self, loads: &[Load; PANE_COUNT], frozen: bool) -> Resolution {
-        if frozen {
+        if frozen || !self.measured {
             self.forget();
             return Resolution::default();
         }
-        if !self.measured {
+        let observed = std::mem::take(&mut self.observed);
+        let interactive = loads.iter().any(|load| load.scalable && load.moved);
+        if !interactive {
+            self.forget();
             return Resolution::default();
         }
-        let observed = std::mem::take(&mut self.observed);
-        let overrun = self.budget.overrun();
-        self.pressure = if observed && overrun {
-            (self.pressure + 1).min(PRESSURE)
-        } else {
-            0
-        };
-        let headroom = self.budget.headroom();
-        let mut interactive = false;
-        for (index, load) in loads.iter().enumerate() {
-            let pane = &mut self.panes[index];
-            if !(load.scalable && load.moved) {
-                *pane = Pane::default();
-                continue;
-            }
-            interactive = true;
-            if self.settle > 0 {
-                continue;
-            }
-            if overrun && self.pressure >= PRESSURE {
-                pane.streak = 0;
-                if pane.probing {
-                    pane.probing = false;
-                    pane.cooldown = COOLDOWN;
-                }
-                pane.scale = (pane.scale * SCALE).min(COARSE);
-                self.settle = SETTLE;
-                self.pressure = 0;
-                continue;
-            }
-            if pane.scale == 1 {
-                continue;
-            }
-            if pane.cooldown > 0 {
-                pane.cooldown -= 1;
-                pane.streak = 0;
-                continue;
-            }
-            if !observed || !headroom {
-                pane.streak = 0;
-                continue;
-            }
-            pane.streak = pane.streak.saturating_add(1);
-            if pane.streak < RECOVERY {
-                continue;
-            }
-            pane.streak = 0;
-            pane.probing = true;
-            pane.scale /= SCALE;
-            self.settle = SETTLE;
+        if observed {
+            self.advance();
         }
+        let (scale, penalty) = STATES[self.index];
+        Resolution {
+            scale: [scale; PANE_COUNT],
+            penalty,
+        }
+    }
+
+    fn advance(&mut self) {
         if self.settle > 0 {
             self.settle -= 1;
+            return;
         }
-        if observed && interactive {
-            let coarsest = self.panes.iter().any(|pane| pane.scale == COARSE);
-            if overrun && coarsest {
-                self.penalty = (self.penalty * STEP).min(PENALTY_CEILING);
-            } else if headroom {
-                self.penalty = (self.penalty / STEP).max(PENALTY_FLOOR);
-            }
-        }
-        Resolution {
-            scale: std::array::from_fn(|index| self.panes[index].scale),
-            penalty: if interactive {
-                self.penalty
+        let ratio = self.budget.pressure();
+        if ratio > TIGHT {
+            let confidence = if self.last == Some(Move::Rise) {
+                REVERSE
             } else {
-                PENALTY_FLOOR
-            },
+                TIGHT
+            };
+            if ratio > confidence {
+                let jumps = (((ratio - TIGHT) / JUMP).ceil() as usize).clamp(1, JUMP_LIMIT);
+                self.index = (self.index + jumps).min(STATES.len() - 1);
+                self.settle = SETTLE;
+                self.last = Some(Move::Fall);
+            }
+        } else if ratio < SLACK && self.index > 0 {
+            self.index -= 1;
+            self.settle = SETTLE;
+            self.last = Some(Move::Rise);
         }
     }
 
     fn forget(&mut self) {
-        self.panes = [Pane::default(); PANE_COUNT];
-        self.penalty = PENALTY_FLOOR;
         self.observed = false;
         self.measured = false;
         self.settle = 0;
-        self.pressure = 0;
+        self.last = None;
     }
 }

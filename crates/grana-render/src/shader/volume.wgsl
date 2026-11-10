@@ -336,7 +336,6 @@ fn march(
         let record = level_record(band, brick_index(g.grid, brick));
         let slot = brick_slot(record) - 1u;
         let voxels_per_world = length(direction_uvw * g.dims);
-        let gradient_step = vec3<f32>(1.0) / g.dims;
         let texel_rate = direction_uvw * g.dims / atlas_extent;
         var texel =
             (slot_origin(frame.atlas.xyz, slot)
@@ -414,7 +413,7 @@ fn march(
                         shaded = shaded || extinction.a > SHADING_TAU;
                     }
                     if (shaded) {
-                        let gradient = pack_gradient(band, pack, position, gradient_step);
+                        let gradient = texel_gradient(pack, texel, values, atlas_extent);
                         if (hit.w <= 0.0) {
                             for (var component = 0u; component < PACK; component += 1u) {
                                 let channel = pack * PACK + component;
