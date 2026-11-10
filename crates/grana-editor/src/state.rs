@@ -281,6 +281,8 @@ pub struct Workspace {
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
     pub palette: Option<Palette>,
+    pub appearance: grana_ui::Appearance,
+    pub contrast: bool,
     pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
@@ -318,6 +320,8 @@ impl Default for Workspace {
             comparison_key: None,
             comparison_open: None,
             palette: None,
+            appearance: grana_ui::Appearance::System,
+            contrast: false,
             palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }

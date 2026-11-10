@@ -9,6 +9,7 @@ use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{Device, Queue, TextureFormat};
 
+use crate::compose::Composer;
 use crate::export::{Export, Step};
 use crate::plan;
 use crate::task::{Bricks, Task};
@@ -26,16 +27,19 @@ pub struct Offline {
     queue: Queue,
     format: TextureFormat,
     renderer: Renderer,
+    composer: Composer,
 }
 
 impl Offline {
     pub fn new(device: Device, queue: Queue, format: TextureFormat) -> Self {
         let renderer = Renderer::new(&device, &queue, format, TEXTURE_BUDGET);
+        let composer = Composer::new(&device);
         Self {
             device,
             queue,
             format,
             renderer,
+            composer,
         }
     }
 
@@ -113,9 +117,12 @@ impl Offline {
             let rendered = &prepared.as_ref().expect("the prepared scene is ready").1;
             match export.render(
                 &mut self.renderer,
-                &self.device,
-                &self.queue,
-                &mut ui,
+                crate::export::Context {
+                    device: &self.device,
+                    queue: &self.queue,
+                    ui: &mut ui,
+                    composer: &mut self.composer,
+                },
                 &scene,
                 rendered,
             ) {

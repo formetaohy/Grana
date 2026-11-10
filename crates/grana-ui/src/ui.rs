@@ -83,8 +83,9 @@ pub struct Ui<A = ()> {
     pub(crate) hovered_since: Option<(NodeId, f32)>,
     pub(crate) tooltip: Option<(NodeId, String)>,
     pub(crate) clipboard: Box<dyn Clipboard>,
-    pub(crate) theme_stamp: Appearance,
+    pub(crate) theme_stamp: Skin,
     pub(crate) scene_revision: Option<u64>,
+    pub(crate) preedit: Option<String>,
 }
 
 impl<A: Clone> Ui<A> {
@@ -135,6 +136,7 @@ impl<A: Clone> Ui<A> {
             clipboard: Box::new(NullClipboard),
             theme_stamp: appearance(Theme::dark()),
             scene_revision: None,
+            preedit: None,
         }
     }
 
@@ -267,6 +269,13 @@ impl<A: Clone> Ui<A> {
         self.scale = scale;
         self.time = time as f32;
         self.elapsed = self.input.begin(size, scale, time);
+        let preedit = self.input.preedit().map(str::to_owned);
+        if preedit != self.preedit {
+            self.preedit = preedit;
+            if let Some(edit) = self.edit {
+                self.tree.nodes[edit].paint_dirty = true;
+            }
+        }
         self.text.begin(scale);
         self.actions.clear();
         self.occluders.clear();
@@ -430,8 +439,8 @@ impl<A: Clone> Ui<A> {
         self.change.reset = true;
     }
 
-    fn theme_appearance(&self) -> Appearance {
-        Appearance {
+    fn theme_appearance(&self) -> Skin {
+        Skin {
             dark: self.theme.dark,
             palette: self.theme.palette,
             typography: self.theme.typography,
@@ -441,7 +450,7 @@ impl<A: Clone> Ui<A> {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Appearance {
+pub(crate) struct Skin {
     pub dark: bool,
     pub palette: crate::theme::Palette,
     pub typography: crate::theme::Typography,
@@ -548,8 +557,8 @@ pub(crate) fn glass_rect(rect: Rect) -> grana_glass::Rect {
     grana_glass::Rect::new(rect.min.x, rect.min.y, rect.width(), rect.height())
 }
 
-fn appearance(theme: Theme) -> Appearance {
-    Appearance {
+fn appearance(theme: Theme) -> Skin {
+    Skin {
         dark: theme.dark,
         palette: theme.palette,
         typography: theme.typography,

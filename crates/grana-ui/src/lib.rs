@@ -49,5 +49,5 @@ pub use paint::{Clip, Instance, Painter};
 pub use render::Figure;
 pub use style::{Border, Fill, Shadow, State, Surface};
 pub use text::{Align, Text, TextLayout, TextStyle};
-pub use theme::{Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
+pub use theme::{Appearance, Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
 pub use ui::{BuildContext, Ui};

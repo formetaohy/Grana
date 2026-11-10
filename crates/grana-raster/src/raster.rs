@@ -83,23 +83,6 @@ impl Raster {
         }
     }
 
-    pub fn paste_premultiplied(&mut self, source: &Raster, at: [u32; 2]) {
-        assert!(
-            at[0] + source.width <= self.width && at[1] + source.height <= self.height,
-            "a pasted raster fits inside its target"
-        );
-        for y in 0..source.height {
-            for x in 0..source.width {
-                let above = source.pixel(x, y);
-                let slot = ((at[0] + x) + self.width * (at[1] + y)) as usize * 4;
-                let below: [u8; 4] = self.pixels[slot..slot + 4]
-                    .try_into()
-                    .expect("a pixel holds four channels");
-                self.pixels[slot..slot + 4].copy_from_slice(&over_premultiplied(below, above));
-            }
-        }
-    }
-
     pub fn scaled(&self, width: u32, height: u32) -> Raster {
         assert!(
             width > 0 && height > 0,
@@ -214,28 +197,6 @@ fn blend(corners: &[([u8; 4], f64); 4]) -> [u8; 4] {
     pixel
 }
 
-pub fn composite(under: &Raster, over: &Raster) -> Raster {
-    assert_eq!(
-        under.size(),
-        over.size(),
-        "a composited layer covers its scene"
-    );
-    let mut raster = under.clone();
-    raster.paste(over, [0, 0]);
-    raster
-}
-
-pub fn composite_premultiplied(under: &Raster, over: &Raster) -> Raster {
-    assert_eq!(
-        under.size(),
-        over.size(),
-        "a composited layer covers its scene"
-    );
-    let mut raster = under.clone();
-    raster.paste_premultiplied(over, [0, 0]);
-    raster
-}
-
 pub(crate) fn over(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
     if above[3] == 255 {
         return above;
@@ -254,34 +215,6 @@ pub(crate) fn over(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
         let value = (linear(above[channel]) * front
             + linear(below[channel]) * back * (1.0 - front))
             / alpha;
-        pixel[channel] = encode(value);
-    }
-    pixel[3] = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-    pixel
-}
-
-fn over_premultiplied(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
-    if above[3] == 255 {
-        return above;
-    }
-    if above[3] == 0 {
-        return below;
-    }
-    let front = f32::from(above[3]) / 255.0;
-    let back = f32::from(below[3]) / 255.0;
-    let covered = back * (1.0 - front);
-    let alpha = front + covered;
-    if alpha <= 0.0 {
-        return [0; 4];
-    }
-    let mut pixel = [0u8; 4];
-    for channel in 0..3 {
-        let premultiplied = if front > 0.0 {
-            linear_value(f32::from(above[channel]) / 255.0 / front) * front
-        } else {
-            0.0
-        };
-        let value = (premultiplied + linear(below[channel]) * covered) / alpha;
         pixel[channel] = encode(value);
     }
     pixel[3] = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;

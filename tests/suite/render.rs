@@ -1582,7 +1582,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
-        1 << 20,
+        400 << 10,
     );
     renderer.set_dataset(gpu.device(), &pyramid);
     let target = texture(&gpu, SIDE);

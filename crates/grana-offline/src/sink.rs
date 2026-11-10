@@ -1,8 +1,19 @@
 use std::path::{Path, PathBuf};
 
-use grana_raster::Raster;
+use grana_render::Image16;
 use grana_scene::Scene;
 use grana_video::{Recorder, Sequence};
+
+const BAYER: [[u8; 8]; 8] = [
+    [0, 32, 8, 40, 2, 34, 10, 42],
+    [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44, 4, 36, 14, 46, 6, 38],
+    [60, 28, 52, 20, 62, 30, 54, 22],
+    [3, 35, 11, 43, 1, 33, 9, 41],
+    [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47, 7, 39, 13, 45, 5, 37],
+    [63, 31, 55, 23, 61, 29, 53, 21],
+];
 
 pub(crate) enum Sink {
     Png { path: PathBuf },
@@ -12,18 +23,26 @@ pub(crate) enum Sink {
 }
 
 impl Sink {
-    pub(crate) fn push(&mut self, time: u32, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
-        let raster = || Raster::new(size[0], size[1], pixels.to_vec());
+    pub(crate) fn push(
+        &mut self,
+        time: u32,
+        size: [u32; 2],
+        image: &Image16,
+        transparent: bool,
+    ) -> Result<(), String> {
+        assert_eq!(image.size(), size, "the picture covers the export");
+        let pixels = image.pixels();
         match self {
-            Self::Png { path } => grana_raster::write(path, &raster()).map_err(String::from),
+            Self::Png { path } => encode16(path, size, pixels, transparent),
             Self::Tiff { .. } => {
-                unreachable!("a wide picture is written from the rendered frame")
+                unreachable!("a sixteen bit picture is written from the rendered frame")
             }
             Self::Movie { recorder, .. } => {
-                recorder.push(pixels).map_err(|error| error.to_string())
+                let rgba = to_eight(size, pixels, transparent);
+                recorder.push(&rgba).map_err(|error| error.to_string())
             }
             Self::Sequence { sequence } => {
-                let png = grana_raster::encode(&raster()).map_err(String::from)?;
+                let png = png16(size, pixels, transparent)?;
                 sequence.push(time, &png).map_err(|error| error.to_string())
             }
         }
@@ -53,6 +72,48 @@ impl Sink {
             Self::Sequence { sequence } => sequence.discard(),
         }
     }
+}
+
+fn encode16(path: &Path, size: [u32; 2], pixels: &[u16], transparent: bool) -> Result<(), String> {
+    if transparent {
+        grana_raster::write16(path, size, 4, pixels).map_err(String::from)
+    } else {
+        let rgb = strip_alpha(pixels);
+        grana_raster::write16(path, size, 3, &rgb).map_err(String::from)
+    }
+}
+
+fn png16(size: [u32; 2], pixels: &[u16], transparent: bool) -> Result<Vec<u8>, String> {
+    if transparent {
+        grana_raster::encode16(size, 4, pixels).map_err(String::from)
+    } else {
+        let rgb = strip_alpha(pixels);
+        grana_raster::encode16(size, 3, &rgb).map_err(String::from)
+    }
+}
+
+fn to_eight(size: [u32; 2], pixels: &[u16], transparent: bool) -> Vec<u8> {
+    assert_eq!(
+        pixels.len(),
+        size[0] as usize * size[1] as usize * 4,
+        "the picture covers every pixel of the export"
+    );
+    let mut rgba = Vec::with_capacity(pixels.len());
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        let x = index % size[0] as usize;
+        let y = index / size[0] as usize;
+        let threshold = f32::from(BAYER[y % 8][x % 8]) / 64.0 - 0.5;
+        for sample in &pixel[..3] {
+            let value = f32::from(*sample) / 65535.0 * 255.0 + threshold;
+            rgba.push(value.round().clamp(0.0, 255.0) as u8);
+        }
+        rgba.push(if transparent {
+            (u32::from(pixel[3]) * 255 / 65535) as u8
+        } else {
+            255
+        });
+    }
+    rgba
 }
 
 pub(crate) fn write_picture(

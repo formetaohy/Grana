@@ -95,6 +95,8 @@ impl Renderer {
             pyramid,
             channels,
             volume_level,
+            volume_measure,
+            volume_rejection,
             section_level,
             section_probe,
             section_measure,
@@ -254,7 +256,23 @@ impl Renderer {
             };
             let height = region[3].max(1);
             let aspect = region[2].max(1) as f32 / height as f32;
-            let fit = fit_volume(FitView {
+            let current = if assured { None } else { volume_level[index] };
+            let measured = !assured
+                && current.is_some_and(|level| {
+                    volume_measure[index]
+                        .get(level)
+                        .copied()
+                        .flatten()
+                        .is_some()
+                });
+            let rejected = if assured {
+                None
+            } else {
+                volume_rejection[index]
+                    .filter(|(captured, _)| motion[index] == Some(*captured))
+                    .map(|(_, level)| level)
+            };
+            let view = FitView {
                 pyramid,
                 camera,
                 region: bounds,
@@ -262,8 +280,13 @@ impl Renderer {
                 height,
                 limits,
                 capacity: volume_share,
-                current: if assured { None } else { volume_level[index] },
-            });
+                current,
+            };
+            let (fit, overflowed) = if measured {
+                fit_measured(view, &volume_measure[index], rejected)
+            } else {
+                (fit_volume(view), None)
+            };
             let base = fit.ladder.base.min(allowed - 1);
             let count = BAND.min(allowed - base);
             let ladder = Ladder { base, count };
@@ -272,6 +295,12 @@ impl Renderer {
             } else {
                 capacities(volume_share, &fit.capacity, count)
             };
+            if !assured {
+                let overflow = info.panes[index].visible > info.panes[index].demand;
+                volume_rejection[index] = overflowed
+                    .or_else(|| current.filter(|_| overflow))
+                    .and_then(|level| motion[index].map(|captured| (captured, level)));
+            }
             levels.panes[index] = Some(PaneLevels::Volume(VolumeLevels { ladder, capacity }));
             volume_level[index] = Some(base);
         }

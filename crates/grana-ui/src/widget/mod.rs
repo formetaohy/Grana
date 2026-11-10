@@ -42,6 +42,7 @@ pub struct PaintInfo<'a> {
     pub engaged: f32,
     pub time: f32,
     pub enabled: bool,
+    pub preedit: Option<&'a str>,
 }
 
 pub(crate) struct FrameAnimation {

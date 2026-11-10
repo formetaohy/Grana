@@ -82,6 +82,11 @@ impl<A: Clone> Ui<A> {
                     surface.shadow,
                 );
             }
+            let preedit = if self.edit == Some(id) {
+                self.preedit.as_deref()
+            } else {
+                None
+            };
             let info = PaintInfo {
                 theme: &self.theme,
                 rect,
@@ -91,6 +96,7 @@ impl<A: Clone> Ui<A> {
                 engaged,
                 time,
                 enabled,
+                preedit,
             };
             let node = &mut self.tree.nodes[id];
             node.sub_glass.clear();

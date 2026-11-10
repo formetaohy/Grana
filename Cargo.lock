@@ -3418,10 +3418,12 @@ dependencies = [
  "arboard",
  "glam",
  "grana-animation",
+ "grana-dir",
  "grana-display",
  "grana-editor",
  "grana-engine",
  "grana-figure",
+ "grana-file",
  "grana-gpu",
  "grana-image",
  "grana-offline",
@@ -3435,6 +3437,8 @@ dependencies = [
  "grana-ui",
  "grana-volume",
  "rfd",
+ "serde",
+ "serde_json",
  "wgpu",
  "winit",
 ]
@@ -3625,6 +3629,7 @@ dependencies = [
 name = "grana-offline"
 version = "0.1.1"
 dependencies = [
+ "bytemuck",
  "glam",
  "grana-animation",
  "grana-display",

@@ -40,8 +40,8 @@ use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
     self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, SectionKey, SectionMeasure,
-    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan, fit_volume,
-    resolve_section_level, section_range, select_section_level, volume_dispatch,
+    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan, fit_measured,
+    fit_volume, resolve_section_level, section_range, select_section_level, volume_dispatch,
 };
 use crate::present::Present;
 use crate::profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
@@ -236,6 +236,8 @@ pub struct Renderer {
     channels: usize,
     time: u32,
     volume_level: [Option<usize>; PANE_COUNT],
+    volume_measure: [Vec<Option<usize>>; PANE_COUNT],
+    volume_rejection: [Option<(u64, usize)>; PANE_COUNT],
     section_level: [Option<usize>; PANE_COUNT],
     motion: [Option<u64>; PANE_COUNT],
     section_probe: [SectionProbe; PANE_COUNT],
@@ -323,6 +325,8 @@ impl Renderer {
             channels: 0,
             time: 0,
             volume_level: [None; PANE_COUNT],
+            volume_measure: std::array::from_fn(|_| Vec::new()),
+            volume_rejection: [None; PANE_COUNT],
             section_level: [None; PANE_COUNT],
             motion: [None; PANE_COUNT],
             section_probe: std::array::from_fn(|_| SectionProbe::default()),
@@ -442,6 +446,7 @@ impl Renderer {
         self.fade = None;
         self.level_cap = None;
         self.volume_level = [None; PANE_COUNT];
+        self.volume_rejection = [None; PANE_COUNT];
         self.section_level = [None; PANE_COUNT];
         self.section_probe = std::array::from_fn(|_| SectionProbe::default());
         self.section_measure = std::array::from_fn(|_| None);
@@ -545,6 +550,8 @@ impl Renderer {
         self.slot_bytes = slot_bytes;
         self.time = 0;
         self.volume_level = [None; PANE_COUNT];
+        self.volume_measure = std::array::from_fn(|_| vec![None; pyramid.level_count()]);
+        self.volume_rejection = [None; PANE_COUNT];
         self.section_level = [None; PANE_COUNT];
         self.section_probe = std::array::from_fn(|_| SectionProbe::default());
         self.section_measure = std::array::from_fn(|_| None);
@@ -733,13 +740,13 @@ impl Renderer {
         self.convergence.read(device)
     }
 
-    pub fn picture(
+    pub fn wide_picture(
         &mut self,
         device: &Device,
         queue: &Queue,
         exposure: f32,
         transparent: bool,
-    ) -> crate::image::Image16 {
+    ) -> (Texture, [u32; 2]) {
         let target = self.target.as_ref().expect("a drawn frame holds a target");
         let size = target.size;
         let texture = device.create_texture(&TextureDescriptor {
@@ -753,7 +760,9 @@ impl Renderer {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: crate::target::WIDE_FORMAT,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::COPY_SRC
+                | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -764,6 +773,17 @@ impl Renderer {
         self.present
             .quantize(&mut encoder, &view, &target.present_group);
         queue.submit([encoder.finish()]);
+        (texture, size)
+    }
+
+    pub fn picture(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        exposure: f32,
+        transparent: bool,
+    ) -> crate::image::Image16 {
+        let (texture, size) = self.wide_picture(device, queue, exposure, transparent);
         crate::image::read16(device, queue, &texture, size)
     }
 }

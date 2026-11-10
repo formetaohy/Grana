@@ -29,7 +29,7 @@ mod volume;
 pub use grana_display::PANE_COUNT;
 
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
-pub use image::{Image, Image16, read as read_image};
+pub use image::{Image16, read16 as read_image16};
 pub use marker::Marker;
 pub use pick::PickId;
 pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage, frame_target};

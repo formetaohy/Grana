@@ -3,34 +3,10 @@ use std::sync::mpsc;
 use wgpu::{
     BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, Extent3d, MapMode, Origin3d,
     PollType, Queue, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
-    TextureAspect, TextureFormat,
+    TextureAspect,
 };
 
 const COPY_ALIGNMENT: u32 = 256;
-
-pub struct Image {
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
-}
-
-impl Image {
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    pub fn size(&self) -> [u32; 2] {
-        [self.width, self.height]
-    }
-
-    pub fn pixels(&self) -> &[u8] {
-        &self.pixels
-    }
-}
 
 pub struct Image16 {
     size: [u32; 2],
@@ -44,44 +20,6 @@ impl Image16 {
 
     pub fn pixels(&self) -> &[u16] {
         &self.pixels
-    }
-}
-
-pub fn read(
-    device: &Device,
-    queue: &Queue,
-    texture: &Texture,
-    size: [u32; 2],
-    format: TextureFormat,
-) -> Image {
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "a captured image covers at least one pixel"
-    );
-    assert!(
-        matches!(
-            format,
-            TextureFormat::Rgba8Unorm
-                | TextureFormat::Rgba8UnormSrgb
-                | TextureFormat::Bgra8Unorm
-                | TextureFormat::Bgra8UnormSrgb
-        ),
-        "a captured image is an eight bit colour target"
-    );
-    let mut pixels = capture(device, queue, texture, size, 4);
-    if matches!(
-        format,
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb
-    ) {
-        let (pixels, _) = pixels.as_chunks_mut::<4>();
-        for pixel in pixels {
-            pixel.swap(0, 2);
-        }
-    }
-    Image {
-        width: size[0],
-        height: size[1],
-        pixels,
     }
 }
 

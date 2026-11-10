@@ -930,6 +930,82 @@ fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usi
     }
 }
 
+pub(crate) fn fit_measured(
+    view: FitView<'_>,
+    measure: &[Option<usize>],
+    rejected: Option<usize>,
+) -> (VolumeFit, Option<usize>) {
+    let FitView {
+        pyramid,
+        camera,
+        region: _,
+        aspect: _,
+        height,
+        limits,
+        capacity,
+        current,
+    } = view;
+    assert!(capacity > 0, "a volume fit reserves at least one brick");
+    let levels = limits.count(pyramid);
+    let desired = volume_ladder(LadderView {
+        pyramid,
+        camera,
+        height: height as f32,
+        current,
+        limits,
+    });
+    let mut base = current
+        .unwrap_or(desired.base)
+        .clamp(desired.base, levels - 1);
+    let mut overflowed = None;
+    while base + 1 < levels {
+        let count = ladder_count(camera.projection(), levels, base);
+        let Some(total) = measured_demand(measure, base, count) else {
+            break;
+        };
+        if total <= capacity {
+            break;
+        }
+        overflowed = Some(base);
+        base += 1;
+    }
+    if base > desired.base {
+        let target = base - 1;
+        let headroom = match measure.get(target).copied().flatten() {
+            Some(visible) => visible.saturating_mul(2) <= capacity,
+            None => {
+                rejected != Some(target)
+                    && measure
+                        .get(base)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|visible| visible.saturating_mul(2) <= capacity)
+            }
+        };
+        if headroom {
+            base = target;
+        }
+    }
+    let count = ladder_count(camera.projection(), levels, base);
+    let wanted: [usize; BAND] =
+        std::array::from_fn(|band| measure.get(base + band).copied().flatten().unwrap_or(1));
+    (
+        VolumeFit {
+            ladder: Ladder { base, count },
+            capacity: capacities(capacity, &wanted, count),
+        },
+        overflowed,
+    )
+}
+
+fn measured_demand(measure: &[Option<usize>], base: usize, count: usize) -> Option<usize> {
+    let mut total = 0usize;
+    for band in 0..count {
+        total = total.checked_add(measure.get(base + band).copied().flatten()?)?;
+    }
+    Some(total)
+}
+
 pub(crate) fn volume_counts(
     pyramid: &Pyramid,
     base: usize,

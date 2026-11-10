@@ -17,7 +17,8 @@ use grana_render::FrameInfo;
 use grana_scene::{ObjectFrame, ObjectSetId, Revision};
 use grana_session::{Command, Effects, MaskMode, MaskTool, ObjectAnchor, Session, SessionView};
 use grana_ui::{
-    Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
+    Appearance, Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Theme, Ui,
+    Vec2 as UiVec2,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -28,6 +29,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::clipboard::SystemClipboard;
 use crate::export::{Export, Report};
+use crate::preference::Preference;
 use crate::stream::{Stream, View as StreamView};
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
@@ -86,6 +88,10 @@ pub struct App {
     autosave_at: Option<Instant>,
     changed_at: Option<Instant>,
     revision: Revision,
+    appearance: Appearance,
+    contrast: bool,
+    system_dark: bool,
+    themed: Option<(Appearance, bool)>,
 }
 
 impl App {
@@ -94,6 +100,10 @@ impl App {
         session.attach_recent_store();
         session.attach_recovery_store();
         session.set_capture_factory(Arc::new(|| Arc::new(crate::capture::OfflineCapture::new())));
+        let preference = Preference::load();
+        let mut workspace = Workspace::default();
+        workspace.appearance = preference.appearance;
+        workspace.contrast = preference.contrast;
         Self {
             surface: None,
             session,
@@ -105,7 +115,7 @@ impl App {
             exiting: false,
             panes: Panes::new(),
             stage: Stage::new(),
-            workspace: Workspace::default(),
+            workspace,
             info: FrameInfo::default(),
             replaced: Revision::ZERO,
             content: Revision::ZERO,
@@ -128,6 +138,10 @@ impl App {
             autosave_at: None,
             changed_at: None,
             revision: Revision::ZERO,
+            appearance: preference.appearance,
+            contrast: preference.contrast,
+            system_dark: true,
+            themed: None,
         }
     }
 
@@ -145,7 +159,7 @@ impl App {
         );
         let size = window.inner_size();
         window.set_ime_allowed(false);
-        window.set_theme(Some(winit::window::Theme::Dark));
+        self.system_dark = window.theme() != Some(winit::window::Theme::Light);
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
         let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
@@ -176,7 +190,51 @@ impl App {
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
         self.engine = Some(engine);
+        self.themed = None;
+        self.sync_theme();
         self.sync_frame_target();
+    }
+
+    fn sync_theme(&mut self) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let key = (self.appearance, self.contrast);
+        if self.themed == Some(key) {
+            return;
+        }
+        self.themed = Some(key);
+        let theme = if self.appearance.dark(self.system_dark) {
+            Theme::dark()
+        } else {
+            Theme::light()
+        };
+        *surface.ui.theme_mut() = theme.with_contrast(self.contrast);
+        surface.window.set_theme(match self.appearance {
+            Appearance::System => None,
+            Appearance::Light => Some(winit::window::Theme::Light),
+            Appearance::Dark => Some(winit::window::Theme::Dark),
+        });
+        surface.window.request_redraw();
+    }
+
+    fn sync_preference(&mut self) {
+        if self.workspace.appearance == self.appearance && self.workspace.contrast == self.contrast
+        {
+            return;
+        }
+        self.appearance = self.workspace.appearance;
+        self.contrast = self.workspace.contrast;
+        let preference = Preference {
+            appearance: self.appearance,
+            contrast: self.contrast,
+        };
+        if let Err(detail) = preference.save() {
+            self.output = Some(detail);
+        }
+        self.themed = None;
+        self.sync_theme();
+        self.request_redraw();
     }
 
     fn sync_frame_target(&mut self) {
@@ -210,6 +268,7 @@ impl App {
         self.poll_pick();
         self.session.sync_measure();
         let (commands, animating) = self.run_ui();
+        self.sync_preference();
         self.sync_ime();
         self.interact_viewport();
         if self.apply(commands) {
@@ -2167,6 +2226,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Moved(_) => self.sync_frame_target(),
+            WindowEvent::ThemeChanged(theme) => {
+                if self.appearance == Appearance::System {
+                    self.system_dark = theme == winit::window::Theme::Dark;
+                    self.themed = None;
+                    self.sync_theme();
+                }
+            }
             WindowEvent::DroppedFile(path) => {
                 self.apply(vec![Command::OpenPath(path)]);
                 self.request_redraw();

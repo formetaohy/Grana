@@ -6,7 +6,8 @@ use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
 
-use crate::capture::{self, Capture};
+use crate::capture;
+use crate::compose::Composer;
 use crate::figure::{self, Figure};
 use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, section, still};
 use crate::sink::Sink;
@@ -48,11 +49,8 @@ pub(crate) struct Export {
     regions: grana_engine::Regions,
     lens: Option<(Camera, u32)>,
     transparent: bool,
-    format: wgpu::TextureFormat,
-    texture: Texture,
-    view: TextureView,
-    layer: Option<(Texture, TextureView)>,
-    figure: Option<(Texture, TextureView)>,
+    draw: (Texture, TextureView),
+    overlay: (Texture, TextureView),
 }
 
 impl Export {
@@ -103,13 +101,10 @@ impl Export {
             Destination::Image { path } => Some(still(path)?),
             _ => None,
         };
-        let texture = capture::texture(device, "grana.export", format, regions.size);
-        let view = texture.create_view(&TextureViewDescriptor::default());
-        let layer = transparent.then(|| {
-            let layer = capture::texture(device, "grana.export.overlay", format, regions.size);
-            let view = layer.create_view(&TextureViewDescriptor::default());
-            (layer, view)
-        });
+        let draw = capture::texture(device, "grana.export", format, regions.size);
+        let draw_view = draw.create_view(&TextureViewDescriptor::default());
+        let overlay = capture::texture(device, "grana.export.overlay", format, regions.size);
+        let overlay_view = overlay.create_view(&TextureViewDescriptor::default());
         let sink = match destination {
             Destination::Image { path } => match kind.expect("the still was classified") {
                 Still::Png => Sink::Png { path },
@@ -155,11 +150,8 @@ impl Export {
             regions,
             lens,
             transparent,
-            format,
-            texture,
-            view,
-            layer,
-            figure: None,
+            draw: (draw, draw_view),
+            overlay: (overlay, overlay_view),
         })
     }
 
@@ -187,12 +179,16 @@ impl Export {
     pub(crate) fn render(
         &mut self,
         renderer: &mut Renderer,
-        device: &Device,
-        queue: &Queue,
-        ui: &mut Ui<()>,
+        context: Context<'_>,
         scene: &Scene,
         rendered: &grana_engine::RenderedScene,
     ) -> Step {
+        let Context {
+            device,
+            queue,
+            ui,
+            composer,
+        } = context;
         let pose = self.poses[self.frame];
         let cameras = pose.views.map(|view| camera(&view.camera));
         let sections = pose.views.map(|view| section(&view.section));
@@ -219,7 +215,7 @@ impl Export {
             device,
             queue,
             grana_render::Frame {
-                target: &self.view,
+                target: &self.draw.1,
                 size: self.regions.size,
                 panes,
                 time: scene.time(),
@@ -275,7 +271,7 @@ impl Export {
             scene,
             pose,
         };
-        match self.store(ui, drawn) {
+        match self.store(ui, drawn, composer) {
             Ok(Some(path)) => Step::Complete(path),
             Ok(None) => Step::Running,
             Err(detail) => Step::Failed(detail),
@@ -302,7 +298,12 @@ impl Export {
         Step::Failed(detail)
     }
 
-    fn store(&mut self, ui: &mut Ui<()>, mut drawn: Drawn<'_>) -> Result<Option<PathBuf>, String> {
+    fn store(
+        &mut self,
+        ui: &mut Ui<()>,
+        drawn: Drawn<'_>,
+        composer: &mut Composer,
+    ) -> Result<Option<PathBuf>, String> {
         let legends = grana_figure::legends(drawn.scene);
         let caption = grana_figure::caption(drawn.scene, drawn.pose.time);
         let labels = grana_figure::labels(drawn.scene, drawn.pose.time);
@@ -321,27 +322,56 @@ impl Export {
                 backdrop: !self.transparent,
             },
         );
-        let tiff = matches!(self.sink, Some(Sink::Tiff { .. }));
-        let captured = if tiff {
-            Capture::Tiff(self.wide_pixels(ui, &mut drawn, &instances)?)
-        } else {
-            Capture::Png(self.capture(ui, &drawn, &instances)?)
-        };
         let size = self.regions.size;
-        let mut sink = self.sink.take().expect("the export is alive");
-        let written = match captured {
-            Capture::Png(pixels) => sink.push(drawn.pose.time, size, &pixels),
-            Capture::Tiff(pixels) => match &sink {
-                Sink::Tiff { path } => crate::sink::write_picture(
-                    path,
-                    size,
-                    &pixels,
-                    drawn.scene,
-                    drawn.pose.time,
-                    self.transparent,
-                ),
-                _ => unreachable!("a wide picture comes from a wide sink"),
+        let scale = self.regions.pixels_per_point;
+        let overlay = &self.overlay.1;
+        ui.flush(drawn.queue);
+        let mut encoder = drawn
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("grana.export.figure"),
+            });
+        capture::clear(&mut encoder, overlay);
+        let (figure, atlas, images) = ui.renderer_and_atlas();
+        figure.paint_figure(
+            &mut encoder,
+            grana_ui::Figure {
+                target: overlay,
+                size,
+                scale,
+                instances: &instances,
             },
+            atlas,
+            images,
+        );
+        drawn.queue.submit([encoder.finish()]);
+        let (picture, picture_size) = drawn.renderer.wide_picture(
+            drawn.device,
+            drawn.queue,
+            drawn.scene.exposure,
+            self.transparent,
+        );
+        assert_eq!(picture_size, size, "the picture covers the export");
+        let picture_view = picture.create_view(&TextureViewDescriptor::default());
+        let image = composer.compose(
+            drawn.device,
+            drawn.queue,
+            &picture_view,
+            overlay,
+            size,
+            self.transparent,
+        );
+        let mut sink = self.sink.take().expect("the export is alive");
+        let written = match &sink {
+            Sink::Tiff { path } => crate::sink::write_picture(
+                path,
+                image.size(),
+                image.pixels(),
+                drawn.scene,
+                drawn.pose.time,
+                self.transparent,
+            ),
+            _ => sink.push(drawn.pose.time, image.size(), &image, self.transparent),
         };
         if let Err(detail) = written {
             sink.discard();
@@ -357,103 +387,13 @@ impl Export {
         }
         sink.finish().map(Some)
     }
+}
 
-    fn wide_pixels(
-        &mut self,
-        ui: &mut Ui<()>,
-        drawn: &mut Drawn<'_>,
-        instances: &[grana_ui::Instance],
-    ) -> Result<Vec<u16>, String> {
-        let size = self.regions.size;
-        let scale = self.regions.pixels_per_point;
-        let device = drawn.device;
-        let queue = drawn.queue;
-        let picture = drawn
-            .renderer
-            .picture(device, queue, drawn.scene.exposure, self.transparent);
-        let format = self.format;
-        if self.figure.is_none() {
-            let texture = capture::texture(device, "grana.export.figure", format, size);
-            let view = texture.create_view(&TextureViewDescriptor::default());
-            self.figure = Some((texture, view));
-        }
-        let (texture, view) = self.figure.as_ref().expect("the figure layer is ready");
-        ui.flush(queue);
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("grana.export.figure"),
-        });
-        capture::clear(&mut encoder, view);
-        let (figure, atlas, images) = ui.renderer_and_atlas();
-        figure.paint_figure(
-            &mut encoder,
-            grana_ui::Figure {
-                target: view,
-                size,
-                scale,
-                instances,
-            },
-            atlas,
-            images,
-        );
-        queue.submit([encoder.finish()]);
-        let overlay = grana_render::read_image(device, queue, texture, size, format);
-        Ok(capture::compose(&picture, &overlay, self.transparent))
-    }
-
-    fn capture(
-        &mut self,
-        ui: &mut Ui<()>,
-        drawn: &Drawn<'_>,
-        instances: &[grana_ui::Instance],
-    ) -> Result<Vec<u8>, String> {
-        let device = drawn.device;
-        let queue = drawn.queue;
-        let size = self.regions.size;
-        let scale = self.regions.pixels_per_point;
-        ui.flush(queue);
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("grana.export.figure"),
-        });
-        if self.transparent {
-            let (texture, view) = self.layer.as_ref().expect("the export carries a layer");
-            capture::clear(&mut encoder, view);
-            let (renderer, atlas, images) = ui.renderer_and_atlas();
-            renderer.paint_figure(
-                &mut encoder,
-                grana_ui::Figure {
-                    target: view,
-                    size,
-                    scale,
-                    instances,
-                },
-                atlas,
-                images,
-            );
-            queue.submit([encoder.finish()]);
-            let below = grana_render::read_image(device, queue, &self.texture, size, self.format);
-            let above = grana_render::read_image(device, queue, texture, size, self.format);
-            let below = grana_raster::Raster::new(size[0], size[1], below.pixels().to_vec());
-            let above = grana_raster::Raster::new(size[0], size[1], above.pixels().to_vec());
-            return Ok(grana_raster::composite_premultiplied(&below, &above)
-                .pixels()
-                .to_vec());
-        }
-        let (renderer, atlas, images) = ui.renderer_and_atlas();
-        renderer.paint_figure(
-            &mut encoder,
-            grana_ui::Figure {
-                target: &self.view,
-                size,
-                scale,
-                instances,
-            },
-            atlas,
-            images,
-        );
-        queue.submit([encoder.finish()]);
-        let image = grana_render::read_image(device, queue, &self.texture, size, self.format);
-        Ok(image.pixels().to_vec())
-    }
+pub(crate) struct Context<'a> {
+    pub(crate) device: &'a Device,
+    pub(crate) queue: &'a Queue,
+    pub(crate) ui: &'a mut Ui<()>,
+    pub(crate) composer: &'a mut Composer,
 }
 
 struct Drawn<'a> {

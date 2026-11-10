@@ -68,6 +68,56 @@ pub fn write(path: &Path, raster: &Raster) -> Result<(), Error> {
     })
 }
 
+pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8>, Error> {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a sixteen bit image covers at least one pixel"
+    );
+    assert!(
+        samples == 3 || samples == 4,
+        "a sixteen bit image carries three or four samples per pixel"
+    );
+    assert_eq!(
+        pixels.len(),
+        size[0] as usize * size[1] as usize * samples,
+        "the samples fill every pixel of a sixteen bit image"
+    );
+    let mut bytes = Vec::with_capacity(pixels.len() * 2);
+    for pixel in pixels.chunks_exact(samples) {
+        for sample in &pixel[..samples] {
+            bytes.extend_from_slice(&sample.to_be_bytes());
+        }
+    }
+    let mut buffer = Vec::new();
+    let fault = |detail: String| Error::Encode { detail };
+    {
+        let mut encoder = png::Encoder::new(&mut buffer, size[0], size[1]);
+        encoder.set_color(if samples == 4 {
+            png::ColorType::Rgba
+        } else {
+            png::ColorType::Rgb
+        });
+        encoder.set_depth(png::BitDepth::Sixteen);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|error| fault(error.to_string()))?;
+        writer
+            .write_image_data(&bytes)
+            .map_err(|error| fault(error.to_string()))?;
+        writer.finish().map_err(|error| fault(error.to_string()))?;
+    }
+    Ok(buffer)
+}
+
+pub fn write16(path: &Path, size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<(), Error> {
+    let bytes = encode16(size, samples, pixels)?;
+    grana_file::write(path, &bytes).map_err(|error| Error::Write {
+        path: path.to_path_buf(),
+        detail: error.to_string(),
+    })
+}
+
 fn expand(bytes: &[u8], color: png::ColorType, path: &Path) -> Result<Vec<u8>, Error> {
     let channels = match color {
         png::ColorType::Rgba => return Ok(bytes.to_vec()),

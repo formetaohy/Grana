@@ -4,6 +4,7 @@ mod capture;
 mod cli;
 mod clipboard;
 mod export;
+mod preference;
 pub mod render;
 pub mod stream;
 

@@ -522,6 +522,29 @@ fn diagnostics_menu<'a>(
         ));
     }
     rows.push(menu_separator(ctx));
+    rows.push(crate::view::section_header(ctx, "Appearance", None));
+    for appearance in grana_ui::Appearance::ALL {
+        let key = match appearance {
+            grana_ui::Appearance::System => "appearance.system",
+            grana_ui::Appearance::Light => "appearance.light",
+            grana_ui::Appearance::Dark => "appearance.dark",
+        };
+        rows.push(crate::view::menu_row(
+            ctx,
+            key,
+            appearance.label(),
+            state.workspace.appearance == appearance,
+            Some(Message::SetAppearance(appearance)),
+        ));
+    }
+    rows.push(crate::view::menu_row(
+        ctx,
+        "appearance.contrast",
+        "Increase Contrast",
+        state.workspace.contrast,
+        Some(Message::SetContrast(!state.workspace.contrast)),
+    ));
+    rows.push(menu_separator(ctx));
     rows.push(
         crate::view::button_with(
             ctx,

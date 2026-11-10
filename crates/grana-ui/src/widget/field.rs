@@ -151,6 +151,11 @@ pub(super) fn paint_field(
             painter.measure(before, style).x
         };
         let mut offset = (caret_x - inner.width() + 2.0).max(0.0);
+        let preedit = info.preedit.filter(|composed| !composed.is_empty());
+        let preedit_width = preedit.map_or(0.0, |composed| painter.measure(composed, style).x);
+        if !field.multiline {
+            offset = (caret_x + preedit_width - inner.width() + 2.0).max(0.0);
+        }
         if field.multiline {
             let line_height = style.font.leading.max(style.font.size * 1.28);
             let chars: Vec<char> = text.chars().collect();
@@ -159,8 +164,8 @@ pub(super) fn paint_field(
             let mut next = 0.0;
             if line_x < next + 2.0 {
                 next = line_x - 2.0;
-            } else if line_x + 2.0 > next + inner.width() {
-                next = line_x + 2.0 - inner.width();
+            } else if line_x + 2.0 + preedit_width > next + inner.width() {
+                next = line_x + 2.0 + preedit_width - inner.width();
             }
             offset = next.max(0.0);
             let selection = anchor.min(caret)..anchor.max(caret);
@@ -199,9 +204,25 @@ pub(super) fn paint_field(
             }
             let (_, caret_x) = caret_xy(painter, style, &chars, &spans, caret);
             let caret_line = caret_line_of(&chars, caret);
+            if let Some(composed) = preedit {
+                let layout = painter.layout(composed, style, 0.0);
+                let origin = Vec2::new(
+                    inner.min.x + caret_x - offset,
+                    inner.min.y + caret_line as f32 * line_height,
+                );
+                painter.text(&layout, origin, style.color);
+                painter.rect(
+                    Rect::from_min_size(
+                        Vec2::new(origin.x, origin.y + layout.size.y - 1.0),
+                        Vec2::new(layout.size.x, 1.0),
+                    ),
+                    Corners::ZERO,
+                    palette.accent.with_alpha(0.8),
+                );
+            }
             let caret_rect = Rect::from_min_size(
                 Vec2::new(
-                    inner.min.x + caret_x - offset,
+                    inner.min.x + caret_x + preedit_width - offset,
                     inner.min.y + caret_line as f32 * line_height + 1.0,
                 ),
                 Vec2::new(1.4, (line_height - 2.0).max(1.0)),
@@ -231,8 +252,27 @@ pub(super) fn paint_field(
             inner.min.y + (inner.height() - layout.size.y) * 0.5,
         );
         painter.text(&layout, origin, style.color);
+        if let Some(composed) = preedit {
+            let composed = painter.layout(composed, style, 0.0);
+            let origin = Vec2::new(
+                inner.min.x + caret_x - offset,
+                inner.min.y + (inner.height() - composed.size.y) * 0.5,
+            );
+            painter.text(&composed, origin, style.color);
+            painter.rect(
+                Rect::from_min_size(
+                    Vec2::new(origin.x, origin.y + composed.size.y - 1.0),
+                    Vec2::new(composed.size.x, 1.0),
+                ),
+                Corners::ZERO,
+                palette.accent.with_alpha(0.8),
+            );
+        }
         let caret_rect = Rect::from_min_size(
-            Vec2::new(inner.min.x + caret_x - offset, inner.min.y + 2.0),
+            Vec2::new(
+                inner.min.x + caret_x + preedit_width - offset,
+                inner.min.y + 2.0,
+            ),
             Vec2::new(1.4, inner.height() - 4.0),
         );
         if edit.caret_visible(info.time) {

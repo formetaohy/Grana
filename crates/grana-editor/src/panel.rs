@@ -557,6 +557,9 @@ pub fn apply(
                 }
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
+            Message::SetAppearance(appearance) => workspace.appearance = appearance,
+            Message::SetContrast(contrast) => workspace.contrast = contrast,
+            Message::ToggleContrast => workspace.contrast = !workspace.contrast,
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {

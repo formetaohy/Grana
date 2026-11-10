@@ -1,4 +1,5 @@
 mod capture;
+mod compose;
 mod export;
 mod figure;
 mod offline;

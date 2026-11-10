@@ -58,6 +58,34 @@ impl TypeStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "Follow System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    pub fn dark(self, system_dark: bool) -> bool {
+        match self {
+            Self::System => system_dark,
+            Self::Light => false,
+            Self::Dark => true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub text_primary: Color,
@@ -154,6 +182,22 @@ impl Palette {
             hud_border: Color::black_alpha(0.10),
             track: Color::black_alpha(0.14),
             shade: Color::black_alpha(0.14),
+        }
+    }
+
+    pub fn contrasted(self) -> Self {
+        let lift = |color: Color| color.with_alpha((color.alpha * 1.3 + 0.08).min(1.0));
+        Self {
+            text_primary: lift(self.text_primary),
+            text_secondary: lift(self.text_secondary),
+            text_tertiary: lift(self.text_tertiary),
+            text_quaternary: lift(self.text_quaternary),
+            separator: lift(self.separator),
+            border: lift(self.border),
+            material_border: lift(self.material_border),
+            hud_border: lift(self.hud_border),
+            track: lift(self.track),
+            ..self
         }
     }
 }
@@ -258,6 +302,17 @@ impl Theme {
             typography: Typography::standard(),
             metrics: Metrics::standard(),
             dark: false,
+        }
+    }
+
+    pub fn with_contrast(self, contrast: bool) -> Self {
+        if contrast {
+            Self {
+                palette: self.palette.contrasted(),
+                ..self
+            }
+        } else {
+            self
         }
     }
 

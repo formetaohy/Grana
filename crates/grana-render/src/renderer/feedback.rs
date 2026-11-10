@@ -59,6 +59,7 @@ impl Renderer {
             prefetch_rate,
             section_measure,
             section_sequence,
+            volume_measure,
             ..
         } = self;
         let pyramid = pyramid.as_ref()?;
@@ -99,6 +100,9 @@ impl Renderer {
                         demands.push(held);
                     }
                     for (band, demand) in demands.iter().enumerate() {
+                        if let Some(slot) = volume_measure[index].get_mut(ladder.level(band)) {
+                            *slot = Some(demand.info.visible);
+                        }
                         atlas.touch(
                             meta.time,
                             ladder.level(band),
