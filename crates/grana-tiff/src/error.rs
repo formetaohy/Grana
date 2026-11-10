@@ -14,6 +14,8 @@ pub enum Error {
     Region { path: PathBuf, detail: String },
     #[error("failed to read the OME-TIFF data of `{path}`: {detail}")]
     Read { path: PathBuf, detail: String },
+    #[error("failed to write the OME-TIFF image `{path}`: {detail}")]
+    Write { path: PathBuf, detail: String },
 }
 
 impl Error {
@@ -40,6 +42,13 @@ impl Error {
 
     pub(crate) fn open(path: &std::path::Path, detail: impl Into<String>) -> Self {
         Self::Open {
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn write(path: &std::path::Path, detail: impl Into<String>) -> Self {
+        Self::Write {
             path: path.to_path_buf(),
             detail: detail.into(),
         }

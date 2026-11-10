@@ -19,5 +19,7 @@ pub use panes::{
     SPLIT_MIN,
 };
 pub use shading::{AZIMUTH_LIMIT, DEFAULT_AZIMUTH, DEFAULT_ELEVATION, ELEVATION_LIMIT, Shading};
-pub use transfer::{Stop, TransferFunction, linear_to_srgb, srgb_to_linear};
+pub use transfer::{
+    Stop, TransferFunction, linear_to_srgb, srgb_component_to_linear, srgb_to_linear,
+};
 pub use volume::{VolumeMode, VolumeStyle};

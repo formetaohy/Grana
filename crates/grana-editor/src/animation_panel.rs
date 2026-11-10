@@ -470,19 +470,18 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         view::divider(ctx),
     ];
     let idle = running.is_none();
-    let save = grana_ui::widget::button_enabled(
-        &theme,
-        "Save Image (PNG)",
-        Role::Prominent,
-        Length::Fill,
-        idle,
-    )
-    .named("animation.save.image");
+    let save =
+        grana_ui::widget::button_enabled(&theme, "Save Image", Role::Prominent, Length::Fill, idle)
+            .named("animation.save.image");
     children.push(if idle {
         save.press(Message::Command(Command::SaveSnapshot))
     } else {
         save
     });
+    children.push(view::caption(
+        ctx,
+        "Eight bit PNG or sixteen bit OME-TIFF, chosen by the saved extension.",
+    ));
     let sequence = grana_ui::widget::button_enabled(
         &theme,
         "Export Frame Sequence",

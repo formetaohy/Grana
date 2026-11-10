@@ -38,6 +38,7 @@ struct Uniforms {
 pub(crate) struct Present {
     accumulate: RenderPipeline,
     present: RenderPipeline,
+    quantize: RenderPipeline,
     layout: BindGroupLayout,
     uniforms: Buffer,
     encode: bool,
@@ -108,6 +109,15 @@ impl Present {
             &sourced_layout,
             None,
         );
+        let quantize = pipeline(
+            device,
+            "grana.present.quantize",
+            &shader,
+            "fs_present",
+            crate::target::WIDE_FORMAT,
+            &sourced_layout,
+            None,
+        );
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.present.uniforms"),
             size: size_of::<Uniforms>() as u64,
@@ -117,6 +127,7 @@ impl Present {
         Self {
             accumulate,
             present,
+            quantize,
             layout,
             uniforms,
             encode: !format.is_srgb(),
@@ -157,6 +168,22 @@ impl Present {
         transparent: bool,
         fade: Option<(f32, u32)>,
     ) {
+        self.write_with(queue, self.encode, exposure, samples, transparent, fade);
+    }
+
+    pub fn write_wide(&self, queue: &Queue, exposure: f32, samples: u32, transparent: bool) {
+        self.write_with(queue, true, exposure, samples, transparent, None);
+    }
+
+    fn write_with(
+        &self,
+        queue: &Queue,
+        encode: bool,
+        exposure: f32,
+        samples: u32,
+        transparent: bool,
+        fade: Option<(f32, u32)>,
+    ) {
         assert!(
             exposure.is_finite() && exposure > 0.0,
             "an exposure scales radiance by a positive factor"
@@ -170,7 +197,7 @@ impl Present {
         assert!(previous > 0, "a cross fade resolves the previous image");
         let uniforms = Uniforms {
             flags: [
-                if self.encode { 1.0 } else { 0.0 },
+                if encode { 1.0 } else { 0.0 },
                 exposure,
                 1.0 / samples as f32,
                 if transparent { 1.0 } else { 0.0 },
@@ -224,6 +251,25 @@ impl Present {
             ..Default::default()
         });
         pass.set_pipeline(&self.present);
+        pass.set_bind_group(0, group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    pub fn quantize(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.present.quantize.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color::BLACK),
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.quantize);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }

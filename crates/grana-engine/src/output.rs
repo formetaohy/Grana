@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use grana_display::{Camera, PANE_COUNT, PaneKind, PaneView, SectionCamera};
+use grana_display::{
+    Camera, PANE_COUNT, PaneKind, PaneView, SectionCamera, linear_to_srgb, srgb_component_to_linear,
+};
 use grana_raster::Raster;
 use grana_render::{FrameInfo, Lens, PaneFrame, Renderer};
 use grana_scene::Scene;
@@ -17,8 +19,16 @@ use crate::frame::{self, View};
 use crate::overlay;
 use crate::panels::{Panels, Regions};
 
-pub const IMAGE_SAMPLES: u32 = 64;
-pub const MOVIE_SAMPLES: u32 = 32;
+const IMAGE_SAMPLE_LIMIT: u32 = 64;
+const MOVIE_SAMPLE_LIMIT: u32 = 32;
+const IMAGE_SAMPLE_FLOOR: u32 = 16;
+const MOVIE_SAMPLE_FLOOR: u32 = 8;
+const IMAGE_ERROR: f32 = 0.0035;
+const MOVIE_ERROR: f32 = 0.005;
+const DEVIATION_TO_SIGMA: f32 = 1.2533;
+const DEVIATION_WINDOW: usize = 4;
+const WIDE_BYTES: u64 = 16;
+const WIDE_CEILING: u64 = 1 << 30;
 const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
 
@@ -51,7 +61,8 @@ pub enum Outcome {
 }
 
 enum Sink {
-    Image { path: PathBuf },
+    Png { path: PathBuf },
+    Tiff { path: PathBuf },
     Movie { path: PathBuf, recorder: Recorder },
     Sequence { sequence: Sequence },
 }
@@ -60,7 +71,10 @@ impl Sink {
     fn push(&mut self, time: u32, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
         let raster = || Raster::new(size[0], size[1], pixels.to_vec());
         match self {
-            Self::Image { path } => grana_raster::write(path, &raster()).map_err(String::from),
+            Self::Png { path } => grana_raster::write(path, &raster()).map_err(String::from),
+            Self::Tiff { .. } => {
+                unreachable!("a wide picture is written from the rendered frame")
+            }
             Self::Movie { recorder, .. } => {
                 recorder.push(pixels).map_err(|error| error.to_string())
             }
@@ -73,7 +87,8 @@ impl Sink {
 
     fn finish(self) -> Result<PathBuf, String> {
         match self {
-            Self::Image { path } => Ok(path),
+            Self::Png { path } => Ok(path),
+            Self::Tiff { path } => Ok(path),
             Self::Movie { path, recorder } => {
                 recorder.finish().map_err(|error| error.to_string())?;
                 Ok(path)
@@ -86,6 +101,27 @@ impl Sink {
 pub(crate) struct ExportResidency {
     pub(crate) slots: usize,
     pub(crate) level: usize,
+}
+
+pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
+    if plan.poses.is_empty() {
+        return Err("an export holds at least one pose".to_string());
+    }
+    if let Destination::Image { path } = &plan.destination
+        && still(path)? == Still::Tiff
+    {
+        let size = plan.panels.export(plan.width, false).size;
+        let bytes = u64::from(size[0]) * u64::from(size[1]) * WIDE_BYTES;
+        if bytes > WIDE_CEILING {
+            return Err(format!(
+                "a sixteen bit still at {} × {} needs more than {} GiB of texture memory; lower the export width",
+                size[0],
+                size[1],
+                WIDE_CEILING >> 30
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<ExportResidency, String> {
@@ -149,6 +185,10 @@ pub struct Export {
     frame: usize,
     attempts: u32,
     samples: u32,
+    floor: u32,
+    error: f32,
+    converged: bool,
+    deviations: std::collections::VecDeque<f32>,
     regions: Regions,
     lens: Option<(Camera, u32)>,
     transparent: bool,
@@ -156,6 +196,7 @@ pub struct Export {
     texture: Texture,
     view: TextureView,
     layer: Option<(Texture, TextureView)>,
+    figure: Option<(Texture, TextureView)>,
 }
 
 impl Export {
@@ -189,6 +230,10 @@ impl Export {
                 regions.size[0], regions.size[1]
             ));
         }
+        let kind = match &destination {
+            Destination::Image { path } => Some(still(path)?),
+            _ => None,
+        };
         let texture = create_texture(device, "grana.export", format, regions.size);
         let view = texture.create_view(&TextureViewDescriptor::default());
         let layer = transparent.then(|| {
@@ -197,7 +242,10 @@ impl Export {
             (layer, view)
         });
         let sink = match destination {
-            Destination::Image { path } => Sink::Image { path },
+            Destination::Image { path } => match kind.expect("the still was classified") {
+                Still::Png => Sink::Png { path },
+                Still::Tiff => Sink::Tiff { path },
+            },
             Destination::Movie { path } => Sink::Movie {
                 recorder: Recorder::start(&path, regions.size, fps, transparent)
                     .map_err(|error| error.to_string())?,
@@ -208,7 +256,17 @@ impl Export {
                     .map_err(|error| error.to_string())?,
             },
         };
-        let samples = if movie { MOVIE_SAMPLES } else { IMAGE_SAMPLES };
+        let samples = if movie {
+            MOVIE_SAMPLE_LIMIT
+        } else {
+            IMAGE_SAMPLE_LIMIT
+        };
+        let floor = if movie {
+            MOVIE_SAMPLE_FLOOR
+        } else {
+            IMAGE_SAMPLE_FLOOR
+        };
+        let error = if movie { MOVIE_ERROR } else { IMAGE_ERROR };
         let lens = detail_lens(&poses, &regions);
         Ok(Self {
             sink: Some(sink),
@@ -216,6 +274,10 @@ impl Export {
             frame: 0,
             attempts: 0,
             samples,
+            floor,
+            error,
+            converged: false,
+            deviations: std::collections::VecDeque::new(),
             regions,
             lens,
             transparent,
@@ -223,6 +285,7 @@ impl Export {
             texture,
             view,
             layer,
+            figure: None,
         })
     }
 
@@ -292,7 +355,20 @@ impl Export {
                 detail: truncation(&info, &self.regions),
             };
         }
-        if info.samples < self.samples || !info.settled {
+        if let Some((samples, deviation)) = renderer.convergence(device) {
+            self.deviations.push_back(deviation);
+            if self.deviations.len() > DEVIATION_WINDOW {
+                self.deviations.pop_front();
+            }
+            if self.deviations.len() == DEVIATION_WINDOW {
+                let smoothed = self.deviations.iter().sum::<f32>() / DEVIATION_WINDOW as f32;
+                let standard_error = DEVIATION_TO_SIGMA * smoothed / (samples as f32).sqrt();
+                self.converged = samples >= self.floor && standard_error <= self.error;
+            }
+        }
+        let resolved =
+            info.samples >= self.samples || (self.converged && info.samples >= self.floor);
+        if !resolved || !info.settled {
             if self.attempts > self.attempts_limit() {
                 return Outcome::Failed {
                     detail: "the export could not resolve the volume being streamed".to_string(),
@@ -300,7 +376,15 @@ impl Export {
             }
             return Outcome::Running;
         }
-        match self.store(device, queue, ui, scene, pose) {
+        let drawn = Drawn {
+            renderer,
+            device,
+            queue,
+            scene,
+            pose,
+            samples: info.samples,
+        };
+        match self.store(ui, drawn) {
             Ok(Some(path)) => Outcome::Complete { path },
             Ok(None) => Outcome::Running,
             Err(detail) => Outcome::Failed { detail },
@@ -316,36 +400,53 @@ impl Export {
 
     fn store<A: Clone>(
         &mut self,
-        device: &Device,
-        queue: &Queue,
         ui: &mut Ui<A>,
-        scene: &Scene,
-        pose: Pose,
+        mut drawn: Drawn<'_>,
     ) -> Result<Option<PathBuf>, String> {
-        let legends = grana_figure::legends(scene);
-        let caption = grana_figure::caption(scene, pose.time);
-        let labels = grana_figure::labels(scene, pose.time);
-        let annotations = grana_figure::annotations(scene, pose.time);
+        let legends = grana_figure::legends(drawn.scene);
+        let caption = grana_figure::caption(drawn.scene, drawn.pose.time);
+        let labels = grana_figure::labels(drawn.scene, drawn.pose.time);
+        let annotations = grana_figure::annotations(drawn.scene, drawn.pose.time);
         let instances = overlay::instances(
             ui,
             overlay::Figure {
                 regions: &self.regions,
-                views: &pose.views,
-                world: scene.dataset.world_size(),
+                views: &drawn.pose.views,
+                world: drawn.scene.dataset.world_size(),
                 labels: &labels,
                 annotations: &annotations,
-                voxel: scene.dataset.voxel_size(),
+                voxel: drawn.scene.dataset.voxel_size(),
                 legends: &legends,
                 caption: Some(&caption),
                 backdrop: !self.transparent,
             },
         );
-        let pixels = self.capture(device, queue, ui, &instances)?;
+        let tiff = matches!(self.sink, Some(Sink::Tiff { .. }));
+        let captured = if tiff {
+            Capture::Tiff(self.wide_pixels(ui, &mut drawn, &instances)?)
+        } else {
+            Capture::Png(self.capture(ui, &drawn, &instances)?)
+        };
         let size = self.regions.size;
         let mut sink = self.sink.take().expect("the export is alive");
-        sink.push(pose.time, size, &pixels)?;
+        match captured {
+            Capture::Png(pixels) => sink.push(drawn.pose.time, size, &pixels)?,
+            Capture::Tiff(pixels) => match &sink {
+                Sink::Tiff { path } => write_picture(
+                    path,
+                    size,
+                    &pixels,
+                    drawn.scene,
+                    drawn.pose.time,
+                    self.transparent,
+                )?,
+                _ => unreachable!("a wide picture comes from a wide sink"),
+            },
+        }
         self.frame += 1;
         self.attempts = 0;
+        self.converged = false;
+        self.deviations.clear();
         if self.frame < self.poses.len() {
             self.sink = Some(sink);
             return Ok(None);
@@ -353,13 +454,60 @@ impl Export {
         sink.finish().map(Some)
     }
 
+    fn wide_pixels<A: Clone>(
+        &mut self,
+        ui: &mut Ui<A>,
+        drawn: &mut Drawn<'_>,
+        instances: &[grana_ui::Instance],
+    ) -> Result<Vec<u16>, String> {
+        let size = self.regions.size;
+        let scale = self.regions.pixels_per_point;
+        let device = drawn.device;
+        let queue = drawn.queue;
+        let picture = drawn.renderer.picture(
+            device,
+            queue,
+            drawn.scene.exposure,
+            drawn.samples,
+            self.transparent,
+        );
+        let format = self.format;
+        if self.figure.is_none() {
+            let texture = create_texture(device, "grana.export.figure", format, size);
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            self.figure = Some((texture, view));
+        }
+        let (texture, view) = self.figure.as_ref().expect("the figure layer is ready");
+        ui.flush(queue);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("grana.export.figure"),
+        });
+        clear(&mut encoder, view);
+        let (figure, atlas, images) = ui.renderer_and_atlas();
+        figure.paint_figure(
+            &mut encoder,
+            grana_ui::Figure {
+                target: view,
+                size,
+                scale,
+                instances,
+            },
+            atlas,
+            images,
+        );
+        queue.submit([encoder.finish()]);
+        let overlay = grana_render::read_image(device, queue, texture, size, format);
+        Ok(compose(&picture, &overlay, self.transparent))
+    }
+
     fn capture<A: Clone>(
         &mut self,
-        device: &Device,
-        queue: &Queue,
         ui: &mut Ui<A>,
+        drawn: &Drawn<'_>,
         instances: &[grana_ui::Instance],
     ) -> Result<Vec<u8>, String> {
+        let device = drawn.device;
+        let queue = drawn.queue;
         let size = self.regions.size;
         let scale = self.regions.pixels_per_point;
         ui.flush(queue);
@@ -413,6 +561,145 @@ pub fn name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("the export")
         .to_string()
+}
+
+struct Drawn<'a> {
+    renderer: &'a mut Renderer,
+    device: &'a Device,
+    queue: &'a Queue,
+    scene: &'a Scene,
+    pose: Pose,
+    samples: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Still {
+    Png,
+    Tiff,
+}
+
+enum Capture {
+    Png(Vec<u8>),
+    Tiff(Vec<u16>),
+}
+
+fn still(path: &Path) -> Result<Still, String> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("png") => Ok(Still::Png),
+        Some("tif" | "tiff") => Ok(Still::Tiff),
+        other => Err(format!(
+            "a still image is saved as PNG or OME-TIFF, not `{}`",
+            other.unwrap_or("a nameless file")
+        )),
+    }
+}
+
+fn compose(
+    picture: &grana_render::Image16,
+    overlay: &grana_render::Image,
+    transparent: bool,
+) -> Vec<u16> {
+    assert_eq!(
+        picture.size(),
+        overlay.size(),
+        "the figure layer covers its scene"
+    );
+    let mut composed = Vec::with_capacity(picture.pixels().len());
+    for (below, above) in picture
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(overlay.pixels().as_chunks::<4>().0)
+    {
+        if transparent {
+            over_transparent(below, above, &mut composed);
+        } else {
+            over_opaque(below, above, &mut composed);
+        }
+    }
+    composed
+}
+
+fn over_opaque(below: &[u16], above: &[u8], out: &mut Vec<u16>) {
+    let keep = 1.0 - f32::from(above[3]) / 255.0;
+    for (index, value) in below.iter().take(3).enumerate() {
+        let mixed = f32::from(above[index]) * 257.0 + f32::from(*value) * keep;
+        out.push(mixed.round().clamp(0.0, 65535.0) as u16);
+    }
+    out.push(u16::MAX);
+}
+
+fn over_transparent(below: &[u16], above: &[u8], out: &mut Vec<u16>) {
+    let front = f32::from(above[3]) / 255.0;
+    let back = f32::from(below[3]) / 65535.0;
+    let covered = back * (1.0 - front);
+    let alpha = front + covered;
+    if alpha <= 0.0 {
+        out.extend_from_slice(&[0; 4]);
+        return;
+    }
+    for index in 0..3 {
+        let premultiplied = if front > 0.0 {
+            srgb_component_to_linear(f32::from(above[index]) / 255.0 / front) * front
+        } else {
+            0.0
+        };
+        let value = (premultiplied
+            + srgb_component_to_linear(f32::from(below[index]) / 65535.0) * covered)
+            / alpha;
+        out.push(quantize(linear_to_srgb(value)));
+    }
+    out.push((alpha * 65535.0).round().clamp(0.0, 65535.0) as u16);
+}
+
+fn quantize(encoded: f32) -> u16 {
+    (encoded.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+fn write_picture(
+    path: &Path,
+    size: [u32; 2],
+    pixels: &[u16],
+    scene: &Scene,
+    time: u32,
+    transparent: bool,
+) -> Result<(), String> {
+    let name = if scene.dataset.frame_count() > 1 {
+        format!("{} · t={time}", scene.dataset.name())
+    } else {
+        scene.dataset.name().to_string()
+    };
+    let rgb;
+    let picture = if transparent {
+        grana_tiff::Picture {
+            size,
+            samples: 4,
+            pixels,
+            name: &name,
+        }
+    } else {
+        rgb = strip_alpha(pixels);
+        grana_tiff::Picture {
+            size,
+            samples: 3,
+            pixels: &rgb,
+            name: &name,
+        }
+    };
+    grana_tiff::write(path, &picture).map_err(|error| error.to_string())
+}
+
+fn strip_alpha(pixels: &[u16]) -> Vec<u16> {
+    let mut rgb = Vec::with_capacity(pixels.len() / 4 * 3);
+    for pixel in pixels.as_chunks::<4>().0 {
+        rgb.extend_from_slice(&pixel[..3]);
+    }
+    rgb
 }
 
 fn create_texture(

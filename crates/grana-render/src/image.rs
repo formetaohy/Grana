@@ -23,7 +23,26 @@ impl Image {
         self.height
     }
 
+    pub fn size(&self) -> [u32; 2] {
+        [self.width, self.height]
+    }
+
     pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
+pub struct Image16 {
+    size: [u32; 2],
+    pixels: Vec<u16>,
+}
+
+impl Image16 {
+    pub fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
+    pub fn pixels(&self) -> &[u16] {
         &self.pixels
     }
 }
@@ -49,7 +68,47 @@ pub fn read(
         ),
         "a captured image is an eight bit colour target"
     );
-    let row = size[0] * 4;
+    let mut pixels = capture(device, queue, texture, size, 4);
+    if matches!(
+        format,
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb
+    ) {
+        let (pixels, _) = pixels.as_chunks_mut::<4>();
+        for pixel in pixels {
+            pixel.swap(0, 2);
+        }
+    }
+    Image {
+        width: size[0],
+        height: size[1],
+        pixels,
+    }
+}
+
+pub fn read16(device: &Device, queue: &Queue, texture: &Texture, size: [u32; 2]) -> Image16 {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a captured wide image covers at least one pixel"
+    );
+    let bytes = capture(device, queue, texture, size, 16);
+    let pixels = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|sample| f32::from_le_bytes(*sample))
+        .map(|value| (value.clamp(0.0, 1.0) * 65535.0).round() as u16)
+        .collect();
+    Image16 { size, pixels }
+}
+
+fn capture(
+    device: &Device,
+    queue: &Queue,
+    texture: &Texture,
+    size: [u32; 2],
+    bytes_per_pixel: u32,
+) -> Vec<u8> {
+    let row = size[0] * bytes_per_pixel;
     let stride = row.div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT;
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("grana.image"),
@@ -104,18 +163,5 @@ pub fn read(
     }
     drop(mapped);
     buffer.unmap();
-    if matches!(
-        format,
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb
-    ) {
-        let (pixels, _) = pixels.as_chunks_mut::<4>();
-        for pixel in pixels {
-            pixel.swap(0, 2);
-        }
-    }
-    Image {
-        width: size[0],
-        height: size[1],
-        pixels,
-    }
+    pixels
 }

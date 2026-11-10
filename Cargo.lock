@@ -3503,6 +3503,7 @@ dependencies = [
  "grana-raster",
  "grana-render",
  "grana-scene",
+ "grana-tiff",
  "grana-ui",
  "grana-video",
  "grana-volume",

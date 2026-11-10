@@ -282,11 +282,93 @@ fn profile(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) -> grana_render:
         if profile.measured() {
             break;
         }
+    }
+    profile
+}
+
+#[test]
+fn measures_the_convergence_of_a_volume() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        assured: true,
+    };
+    settle(&gpu, &mut renderer, &view, &volume);
+    renderer.set_exporting(true);
+    let mut reset = frame(&view);
+    reset.samples = 12;
+    reset.exposure = 1.4;
+    renderer.draw(gpu.device(), gpu.queue(), reset);
+    let mut metrics = Vec::new();
+    for _ in 0..24 {
+        let mut drawn = frame(&view);
+        drawn.samples = 12;
+        drawn.exposure = 1.4;
+        let info = renderer.draw(gpu.device(), gpu.queue(), drawn);
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
+        if let Some(metric) = renderer.convergence(&gpu) {
+            metrics.push(metric);
+        }
+        if info.samples >= 12 {
+            break;
+        }
     }
-    profile
+    assert!(!metrics.is_empty(), "the render measures no convergence");
+    assert!(
+        metrics.first().is_some_and(|(samples, _)| *samples >= 2),
+        "the first metric comes before a second sample"
+    );
+    let standard_error = |(samples, error): (u32, f32)| error / (samples as f32).sqrt();
+    assert!(
+        standard_error(*metrics.last().expect("a metric is measured"))
+            < standard_error(*metrics.first().expect("a metric is measured")),
+        "the standard error does not fall as samples accumulate: {metrics:?}"
+    );
+    let mut restarted = None;
+    for _ in 0..4 {
+        let mut drawn = frame(&view);
+        drawn.samples = 12;
+        drawn.exposure = 1.8;
+        renderer.draw(gpu.device(), gpu.queue(), drawn);
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+        if let Some((samples, _)) = renderer.convergence(&gpu) {
+            restarted = Some(samples);
+        }
+    }
+    assert!(
+        restarted.is_some_and(|samples| samples <= 4),
+        "a changed exposure keeps the samples of the previous frame: {restarted:?}"
+    );
 }
 
 #[test]
@@ -1097,9 +1179,6 @@ fn assure(
             );
             return info;
         }
-        gpu.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("failed to wait for the gpu");
         if let Some(requests) = next_demand(gpu, renderer) {
             let bricks = requests
                 .volume

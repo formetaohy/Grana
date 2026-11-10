@@ -193,6 +193,7 @@ impl Engine {
         let Some(pyramid) = self.dataset.clone() else {
             return Err("the dataset is still opening".to_string());
         };
+        crate::output::validate(&plan)?;
         let needed = crate::output::residency(&plan, &pyramid)?;
         self.renderer
             .reserve(device, &pyramid, needed.slots, EXPORT_CEILING)?;

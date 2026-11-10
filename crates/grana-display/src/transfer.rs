@@ -197,13 +197,15 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
 }
 
 pub fn srgb_to_linear(srgb: [f32; 3]) -> [f32; 3] {
-    srgb.map(|channel| {
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    })
+    srgb.map(srgb_component_to_linear)
+}
+
+pub fn srgb_component_to_linear(channel: f32) -> f32 {
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 pub fn linear_to_srgb(channel: f32) -> f32 {

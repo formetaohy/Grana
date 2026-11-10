@@ -7,6 +7,8 @@ mod page;
 mod planes;
 mod store;
 mod tag;
+mod write;
 
 pub use error::Error;
 pub use image::{Image, dataset_name};
+pub use write::{Picture, write};

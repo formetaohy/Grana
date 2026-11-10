@@ -78,6 +78,7 @@ impl Renderer {
             shadow,
             transparent,
             exporting,
+            convergence,
             fade,
             object_key,
             info,
@@ -484,6 +485,9 @@ impl Renderer {
             target.samples = 0;
         }
         let reset = target.samples == 0;
+        if reset {
+            convergence.reset();
+        }
         info.samples = target.samples;
         *sampled = false;
         let mut marks = Marks::new();
@@ -1044,6 +1048,16 @@ impl Renderer {
                 }
             }
             mark(profile, &mut encoder, Stage::Present, &mut marks);
+            if *exporting && target.samples > 1 {
+                convergence.encode(
+                    device,
+                    &mut encoder,
+                    target.size,
+                    target.scene.color(),
+                    &target.accumulation_view,
+                    target.samples,
+                );
+            }
             present.accumulate(
                 &mut encoder,
                 &target.accumulation_view,
@@ -1100,6 +1114,7 @@ impl Renderer {
             profiler.finish(&mut encoder, marks);
         }
         queue.submit([encoder.finish()]);
+        convergence.register();
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
         }

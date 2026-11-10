@@ -73,6 +73,17 @@ impl Readback {
         texture: &wgpu::Texture,
         row: u64,
     ) {
+        self.stage_level(encoder, slot, texture, 0, row);
+    }
+
+    pub fn stage_level(
+        &self,
+        encoder: &mut CommandEncoder,
+        slot: usize,
+        texture: &wgpu::Texture,
+        level: u32,
+        row: u64,
+    ) {
         assert!(
             row.is_multiple_of(COPY_ALIGNMENT) && row <= self.slots[slot].buffer.size(),
             "a pixel readback row fits its staging buffer"
@@ -80,7 +91,7 @@ impl Readback {
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
-                mip_level: 0,
+                mip_level: level,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },

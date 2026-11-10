@@ -14,6 +14,87 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+#[test]
+fn writes_a_sixteen_bit_ome_tiff() {
+    let temp = Temp::new("suite-tiff-write");
+    let path = temp.path().join("picture.ome.tif");
+    let size = [5u32, 4];
+    let mut pixels = vec![0u16; size[0] as usize * size[1] as usize * 3];
+    for (index, value) in pixels.iter_mut().enumerate() {
+        *value = (index as u16).wrapping_mul(1237).wrapping_add(3);
+    }
+    grana_tiff::write(
+        &path,
+        &grana_tiff::Picture {
+            size,
+            samples: 3,
+            pixels: &pixels,
+            name: "figure & frame",
+        },
+    )
+    .expect("the picture writes");
+    let image = grana_tiff::Image::open(&path).expect("the written picture opens");
+    assert_eq!(image.name(), "figure & frame");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 3);
+    assert_eq!(pyramid.frame_count(), 1);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(5, 4, 1));
+    assert_eq!(pyramid.channels()[0].name(), "Red");
+    assert_eq!(pyramid.channels()[1].tint(), [0.0, 1.0, 0.0]);
+    for channel in 0..3 {
+        let data = image
+            .read_region(0, 0, channel, 0..5, 0..4, 0..1)
+            .expect("the written plane reads");
+        let VoxelData::U16(values) = data else {
+            panic!("the written picture stores sixteen bit voxels");
+        };
+        for y in 0..4u32 {
+            for x in 0..5u32 {
+                let index = (x + 5 * y) as usize;
+                assert_eq!(
+                    values[index],
+                    pixels[index * 3 + channel],
+                    "texel {x},{y} of channel {channel}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn writes_an_alpha_channel_plane() {
+    let temp = Temp::new("suite-tiff-alpha");
+    let path = temp.path().join("picture.ome.tif");
+    let size = [3u32, 2];
+    let mut pixels = vec![0u16; size[0] as usize * size[1] as usize * 4];
+    for (index, value) in pixels.iter_mut().enumerate() {
+        *value = 1000 + index as u16;
+    }
+    grana_tiff::write(
+        &path,
+        &grana_tiff::Picture {
+            size,
+            samples: 4,
+            pixels: &pixels,
+            name: "transparent",
+        },
+    )
+    .expect("the transparent picture writes");
+    let image = grana_tiff::Image::open(&path).expect("the transparent picture opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 4);
+    assert_eq!(pyramid.channels()[3].name(), "Alpha");
+    let data = image
+        .read_region(0, 0, 3, 0..3, 0..2, 0..1)
+        .expect("the alpha plane reads");
+    let VoxelData::U16(values) = data else {
+        panic!("the alpha plane stores sixteen bit voxels");
+    };
+    for (index, value) in values.iter().enumerate() {
+        assert_eq!(*value, pixels[index * 4 + 3]);
+    }
+}
+
 fn write_zarr(root: &std::path::Path) {
     let levels = [
         Level::new(Extent::new(24, 16, 8), Spacing::new(0.5, 0.5, 1.0)),

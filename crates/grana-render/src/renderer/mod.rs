@@ -30,6 +30,7 @@ use wgpu::{
 
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::brick::{BrickArena, BrickTable};
+use crate::converge::Convergence;
 use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, SharedView, VolumeView};
 use crate::layout::Layouts;
@@ -233,6 +234,7 @@ pub struct Renderer {
     prefetch_rate: f32,
     transparent: bool,
     exporting: bool,
+    convergence: Convergence,
     fade: Option<Fade>,
     object_key: Option<u64>,
     settled: Option<Residency>,
@@ -316,6 +318,7 @@ impl Renderer {
             prefetch_rate: 1.0,
             transparent: false,
             exporting: false,
+            convergence: Convergence::new(device),
             fade: None,
             object_key: None,
             settled: None,
@@ -396,6 +399,7 @@ impl Renderer {
 
     pub fn begin_export(&mut self) {
         self.target = None;
+        self.convergence.forget();
         self.settled = None;
         self.exporting = true;
         self.fade = None;
@@ -515,6 +519,7 @@ impl Renderer {
         }
         self.target = None;
         self.regions = None;
+        self.convergence.forget();
         self.pick_readback = None;
         self.pick_pending = false;
         self.epoch += 1;
@@ -551,6 +556,7 @@ impl Renderer {
             .is_none_or(|target| target.size != size)
         {
             self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
+            self.convergence.forget();
             self.settled = None;
         }
         let mut target = self.target.take().expect("the frame target is ready");
@@ -687,6 +693,46 @@ impl Renderer {
 
     pub fn pick_pending(&self) -> bool {
         self.pick_pending
+    }
+
+    pub fn convergence(&mut self, device: &Device) -> Option<(u32, f32)> {
+        self.convergence.read(device)
+    }
+
+    pub fn picture(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        exposure: f32,
+        samples: u32,
+        transparent: bool,
+    ) -> crate::image::Image16 {
+        let target = self.target.as_ref().expect("a drawn frame holds a target");
+        let size = target.size;
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("grana.picture"),
+            size: Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: crate::target::WIDE_FORMAT,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        self.present
+            .write_wide(queue, exposure, samples, transparent);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.picture"),
+        });
+        self.present
+            .quantize(&mut encoder, &view, &target.present_group);
+        queue.submit([encoder.finish()]);
+        crate::image::read16(device, queue, &texture, size)
     }
 }
 

@@ -1223,7 +1223,8 @@ impl App {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Save an image")
             .set_file_name(suggested)
-            .add_filter("PNG", &["png"])
+            .add_filter("PNG (8-bit)", &["png"])
+            .add_filter("OME-TIFF (16-bit)", &["tif", "tiff"])
             .save_file()
         else {
             return;
