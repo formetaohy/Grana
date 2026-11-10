@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Camera, SectionCamera, SectionProjection, Shading, TransferFunction};
+use grana_display::{
+    Camera, SectionCamera, SectionProjection, Shading, TransferFunction, VolumeStyle,
+};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
@@ -77,6 +79,7 @@ fn channels(pyramid: &Pyramid, transfers: &[TransferFunction]) -> Vec<grana_rend
             opacity: 1.0,
             window: channel.window(),
             transfer: transfer.clone(),
+            volume: VolumeStyle::default(),
         })
         .collect()
 }
@@ -182,6 +185,7 @@ fn background(
             opacity: row.opacity,
             window: row.window,
             transfer: row.transfer.clone(),
+            volume: row.volume,
         })
         .collect::<Vec<_>>();
     let scene = SceneFrame {
@@ -337,6 +341,7 @@ fn renders_a_rotated_placement() {
                 channel.window().max() * 2.0,
             ),
             transfer: transfer.clone(),
+            volume: VolumeStyle::default(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(level.world_extent());
@@ -447,6 +452,7 @@ fn reveals_a_section_plane() {
                 channel.window().max() * 2.0,
             ),
             transfer: transfer.clone(),
+            volume: VolumeStyle::default(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(volume.world_extent());
@@ -589,6 +595,7 @@ fn projects_a_slab_through_the_section() {
                 channel.window().max() * 2.0,
             ),
             transfer: transfer.clone(),
+            volume: VolumeStyle::default(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(volume.world_extent());
@@ -1128,5 +1135,200 @@ fn assures_complete_reproducible_frames() {
     assert!(
         lit > (SIDE * SIDE / 32) as usize,
         "the assured frame is empty"
+    );
+}
+
+fn layered_volume(near: u16, far: u16) -> Volume {
+    let extent = Extent::new(32, 32, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let value = if (22..26).contains(&z) {
+                    near
+                } else if (6..10).contains(&z) {
+                    far
+                } else {
+                    0
+                };
+                values[extent.index(x, y, z) as usize] = value;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "layers",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn gradient_volume() -> Volume {
+    let extent = Extent::new(64, 64, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.2);
+    let centre = [32.0f32, 32.0, 16.0];
+    let radius = 12.0f32;
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let point = [x as f32, y as f32, z as f32];
+                let distance = (0..3)
+                    .map(|axis| (point[axis] - centre[axis]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                if distance <= radius {
+                    let unit = 1.0 - distance / radius;
+                    values[extent.index(x, y, z) as usize] = (unit * 60_000.0) as u16;
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "gradient",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn axis_camera(volume: &Volume) -> Camera {
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut state = camera.state();
+    state.yaw = 0.0;
+    state.pitch = 0.0;
+    state.aperture = 0.0;
+    state.projection = grana_display::CameraProjection::Orthographic;
+    camera.restore(state);
+    camera
+}
+
+fn render_volume(
+    gpu: &Gpu,
+    volume: &Volume,
+    style: VolumeStyle,
+    camera: &Camera,
+    visible: bool,
+) -> Vec<[u8; 4]> {
+    let pyramid = volume.pyramid();
+    let channels = vec![grana_render::ChannelRow {
+        visible,
+        opacity: 1.0,
+        window: pyramid.channels()[0].window(),
+        transfer: TransferFunction::tinted(pyramid.channels()[0].tint()),
+        volume: style,
+    }];
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let section = SectionCamera::new();
+    let mut renderer = build_renderer(gpu, &pyramid);
+    let target = texture(gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        assured: false,
+    };
+    settle(gpu, &mut renderer, &view, volume);
+    read_pixels(gpu, &target, [SIDE, SIDE])
+}
+
+fn difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> f32 {
+    let total = left
+        .iter()
+        .zip(right)
+        .map(|(a, b)| {
+            (0..3)
+                .map(|channel| (i32::from(a[channel]) - i32::from(b[channel])).abs())
+                .max()
+                .unwrap_or(0)
+        })
+        .sum::<i32>();
+    total as f32 / left.len() as f32
+}
+
+fn painted(pixels: &[[u8; 4]], reference: &[[u8; 4]]) -> usize {
+    pixels
+        .iter()
+        .zip(reference)
+        .filter(|(pixel, background)| {
+            (0..3).any(|channel| {
+                (i32::from(pixel[channel]) - i32::from(background[channel])).abs() >= 8
+            })
+        })
+        .count()
+}
+
+#[test]
+fn projects_the_maximum_and_surfaces_the_isovalue() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let near_bright = layered_volume(60_000, 20_000);
+    let far_bright = layered_volume(20_000, 60_000);
+    let camera = axis_camera(&near_bright);
+    let maximum = VolumeStyle::new(grana_display::VolumeMode::Maximum, 0.5);
+    let blend = VolumeStyle::new(grana_display::VolumeMode::Blend, 0.5);
+    let near_maximum = render_volume(&gpu, &near_bright, maximum, &camera, true);
+    let far_maximum = render_volume(&gpu, &far_bright, maximum, &camera, true);
+    let projected = difference(&near_maximum, &far_maximum);
+    assert!(
+        projected < 1.0,
+        "the maximum projection follows depth: {projected}"
+    );
+    let near_blend = render_volume(&gpu, &near_bright, blend, &camera, true);
+    let far_blend = render_volume(&gpu, &far_bright, blend, &camera, true);
+    assert!(
+        difference(&near_blend, &far_blend) > 1.0,
+        "blending ignores depth"
+    );
+    let gradient = gradient_volume();
+    let mut gradient_camera = Camera::new(35.0);
+    gradient_camera.fit(Vec3::from(gradient.world_extent()), 1.0);
+    let surface = grana_display::VolumeMode::Isosurface;
+    let background = render_volume(&gpu, &gradient, blend, &gradient_camera, false);
+    let coarse = painted(
+        &render_volume(
+            &gpu,
+            &gradient,
+            VolumeStyle::new(surface, 0.25),
+            &gradient_camera,
+            true,
+        ),
+        &background,
+    );
+    let fine = painted(
+        &render_volume(
+            &gpu,
+            &gradient,
+            VolumeStyle::new(surface, 0.75),
+            &gradient_camera,
+            true,
+        ),
+        &background,
+    );
+    assert!(coarse > 0, "the isosurface is empty");
+    assert!(
+        coarse > 4 * fine,
+        "the isovalue does not shrink the surface: {coarse} and {fine}"
     );
 }

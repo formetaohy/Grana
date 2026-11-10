@@ -1,6 +1,6 @@
 ﻿use std::sync::Arc;
 
-use grana_display::{Shading, TransferFunction};
+use grana_display::{Shading, TransferFunction, VolumeStyle};
 use grana_measure::ObjectColoc;
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
@@ -54,6 +54,7 @@ pub struct ChannelState {
     pub opacity: f32,
     pub window: Intensity,
     pub transfer: TransferFunction,
+    pub volume: VolumeStyle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +119,7 @@ impl Scene {
                     opacity: channel.opacity,
                     window: channel.window,
                     transfer: channel.transfer().clone(),
+                    volume: channel.volume(),
                 })
                 .collect(),
             derived: self.derived_shared(),
@@ -177,6 +179,7 @@ impl Scene {
             channel.opacity = source.opacity;
             channel.window = source.window;
             channel.set_transfer(source.transfer);
+            channel.set_volume(source.volume);
         }
         self.selected = state.selected;
         self.shading = state.shading;
@@ -298,6 +301,8 @@ impl Scene {
             hash = mix(hash, u64::from(channel.opacity.to_bits()));
             hash = mix(hash, u64::from(channel.window.min().to_bits()));
             hash = mix(hash, u64::from(channel.window.max().to_bits()));
+            hash = mix(hash, channel.volume().mode().index() as u64);
+            hash = mix(hash, u64::from(channel.volume().isovalue().to_bits()));
             for stop in channel.transfer().stops() {
                 hash = mix(hash, u64::from(stop.position().to_bits()));
                 hash = mix(hash, u64::from(stop.opacity().to_bits()));

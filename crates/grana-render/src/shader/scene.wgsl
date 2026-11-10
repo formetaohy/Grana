@@ -60,6 +60,8 @@ struct ChannelData {
     inverse: f32,
     lut_row: f32,
     threshold: f32,
+    mode: f32,
+    pad: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
@@ -221,6 +223,19 @@ fn channel_opacity(index: u32) -> f32 {
 
 fn channel_threshold(index: u32) -> f32 {
     return channels[index].threshold;
+}
+
+fn channel_mode(index: u32) -> f32 {
+    return channels[index].mode;
+}
+
+fn channel_maximum(index: u32) -> bool {
+    let mode = channels[index].mode;
+    return mode > 0.5 && mode < 1.5;
+}
+
+fn channel_isosurface(index: u32) -> bool {
+    return channels[index].mode > 1.5;
 }
 
 fn channel_position(index: u32, unit: f32) -> f32 {

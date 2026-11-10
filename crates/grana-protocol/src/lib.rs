@@ -19,7 +19,7 @@ pub use spec::{
     PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RelationSpec,
     RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec, ShadingSpec, SmoothSpec,
     SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec,
-    TransferSpec, ViewSpec, WindowSpec,
+    TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;

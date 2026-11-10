@@ -26,6 +26,7 @@ const VOLUME_ROUGHNESS: f32 = 0.85;
 const VOLUME_METALLIC: f32 = 0.0;
 const EMPTY_DISTANCE: f32 = 1.0e19;
 const MAXIMUM_ENTRIES: u32 = 9u;
+const CHANNEL_LIMIT: u32 = 16u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -268,6 +269,15 @@ fn local_step(t: f32) -> f32 {
     return max(frame.march.x, 0.5 * frame.jitter.w * pixel_world(t));
 }
 
+fn refined_modes(channels_active: u32) -> bool {
+    for (var channel = 0u; channel < channels_active; channel += 1u) {
+        if (channel_opacity(channel) > 0.0 && channel_mode(channel) > 0.5) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct March {
     radiance: vec3<f32>,
     transmittance: f32,
@@ -293,6 +303,12 @@ fn march(
     let channel_count = u32(frame.march.z);
     let pack_count = (channel_count + PACK - 1u) / PACK;
     let atlas_extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
+    let refined = refined_modes(channel_count);
+    var peak = array<f32, CHANNEL_LIMIT>();
+    for (var channel = 0u; channel < CHANNEL_LIMIT; channel += 1u) {
+        peak[channel] = -1.0;
+    }
+    var finished = 0u;
     var t = begin;
     var samples = 0u;
     var cells = 0u;
@@ -334,11 +350,12 @@ fn march(
                 continue;
             }
             let extinction = cell_extinction(band, slot, subcell, channel_count);
-            let stride = clamp(
+            let adaptive = clamp(
                 SAMPLING_ERROR / max(extinction * voxels_per_world, 1.0e-9),
                 step,
                 step * STRIDE_LIMIT,
             );
+            let stride = select(adaptive, step, refined);
             while (cursor < limit && samples < MAX_SAMPLES) {
                 let next = min(cursor + stride, limit);
                 let segment = next - cursor;
@@ -357,6 +374,7 @@ fn march(
                         vec3<f32>(0.0),
                         vec3<f32>(0.0),
                     );
+                    var iso = array<bool, PACK>(false, false, false, false);
                     var shaded = false;
                     for (var component = 0u; component < PACK; component += 1u) {
                         let channel = pack * PACK + component;
@@ -365,6 +383,19 @@ fn march(
                         }
                         if (channel_opacity(channel) <= 0.0
                             || values[component] < channel_threshold(channel)) {
+                            continue;
+                        }
+                        if (channel_isosurface(channel)) {
+                            if ((finished & (1u << channel)) != 0u) {
+                                continue;
+                            }
+                            iso[component] = true;
+                            color[component] = channel_tau(channel, values[component]).rgb;
+                            shaded = true;
+                            continue;
+                        }
+                        if (channel_maximum(channel)) {
+                            peak[channel] = max(peak[channel], values[component]);
                             continue;
                         }
                         let extinction = channel_tau(channel, values[component]);
@@ -380,8 +411,10 @@ fn march(
                                 if (channel >= channel_count) {
                                     break;
                                 }
-                                if (tau[component] <= SHADING_TAU
-                                    || channel_opacity(channel) <= 0.0) {
+                                if (channel_opacity(channel) <= 0.0) {
+                                    continue;
+                                }
+                                if (!iso[component] && tau[component] <= SHADING_TAU) {
                                     continue;
                                 }
                                 let surface_normal = gradient[component];
@@ -398,7 +431,10 @@ fn march(
                             if (channel >= channel_count) {
                                 break;
                             }
-                            if (tau[component] <= SHADING_TAU || channel_opacity(channel) <= 0.0) {
+                            if (channel_opacity(channel) <= 0.0) {
+                                continue;
+                            }
+                            if (!iso[component] && tau[component] <= SHADING_TAU) {
                                 continue;
                             }
                             color[component] = shade_channel(
@@ -409,12 +445,21 @@ fn march(
                                 direction,
                                 ao,
                             );
+                            if (iso[component]) {
+                                let alpha = clamp(channel_opacity(channel), 0.0, 1.0);
+                                radiance += transmittance * alpha * color[component];
+                                transmittance *= 1.0 - alpha;
+                                finished |= 1u << channel;
+                            }
                         }
                     }
                     for (var component = 0u; component < PACK; component += 1u) {
                         let channel = pack * PACK + component;
                         if (channel >= channel_count) {
                             break;
+                        }
+                        if (iso[component]) {
+                            continue;
                         }
                         let opacity = channel_opacity(channel);
                         let weight_tau = tau[component];
@@ -442,6 +487,18 @@ fn march(
             }
         }
         t = max(cursor, boundary);
+    }
+    for (var channel = 0u; channel < channel_count; channel += 1u) {
+        if (!channel_maximum(channel) || peak[channel] < 0.0) {
+            continue;
+        }
+        let opacity = channel_opacity(channel);
+        if (opacity <= 0.0) {
+            continue;
+        }
+        let color = channel_tau(channel, peak[channel]).rgb;
+        radiance += transmittance * opacity * color;
+        transmittance *= 1.0 - opacity;
     }
     return March(radiance, transmittance, hit, hit_normal);
 }

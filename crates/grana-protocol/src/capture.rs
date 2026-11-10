@@ -12,7 +12,7 @@ use crate::{
     MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec,
     NamedViewSpec, PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec,
     RelationSpec, RenderSpec, RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
-    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -148,6 +148,7 @@ impl Protocol {
                     high: channel.window.max(),
                 },
                 transfer: Some(TransferSpec::of(channel.transfer())),
+                volume: Some(VolumeSpec::of(channel.volume())),
             })
             .collect::<Vec<_>>();
         let mask = scene

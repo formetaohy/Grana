@@ -1,7 +1,8 @@
 use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Material, Palette, SectionState, Shading, Stop, TransferFunction,
+    CameraState, Material, Palette, SectionState, Shading, Stop, TransferFunction, VolumeMode,
+    VolumeStyle,
 };
 use grana_measure::{
     Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
@@ -28,6 +29,15 @@ pub struct ChannelSpec {
     pub window: WindowSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transfer: Option<TransferSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<VolumeSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VolumeSpec {
+    pub mode: String,
+    pub isovalue: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -2110,6 +2120,38 @@ impl ChannelSpec {
         }
         if let Some(transfer) = &self.transfer {
             transfer.checked(&self.name)?;
+        }
+        if let Some(volume) = &self.volume {
+            volume.checked(&self.name)?;
+        }
+        Ok(())
+    }
+}
+
+impl VolumeSpec {
+    pub fn of(style: VolumeStyle) -> Self {
+        Self {
+            mode: style.mode().name().to_string(),
+            isovalue: style.isovalue(),
+        }
+    }
+
+    pub fn style(&self) -> VolumeStyle {
+        let mode = VolumeMode::from_name(&self.mode).expect("the volume mode was checked");
+        VolumeStyle::new(mode, self.isovalue)
+    }
+
+    fn checked(&self, name: &str) -> Result<(), ProtocolError> {
+        if VolumeMode::from_name(&self.mode).is_none() {
+            return Err(ProtocolError::Invalid(format!(
+                "the channel {name} names an unknown volume mode {}",
+                self.mode
+            )));
+        }
+        if !self.isovalue.is_finite() || !(0.0..=1.0).contains(&self.isovalue) {
+            return Err(ProtocolError::Invalid(format!(
+                "the isovalue of {name} lies in the unit interval"
+            )));
         }
         Ok(())
     }

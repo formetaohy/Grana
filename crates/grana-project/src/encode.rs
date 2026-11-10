@@ -332,6 +332,8 @@ impl Encode for ChannelState {
         writer.f32(self.opacity);
         self.window.encode(writer);
         self.transfer.encode(writer);
+        writer.u8(self.volume.mode().index() as u8);
+        writer.f32(self.volume.isovalue());
     }
 }
 

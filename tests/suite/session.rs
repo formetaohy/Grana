@@ -714,6 +714,8 @@ fn round_trips_a_project() {
         )),
     );
     scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
+    scene.set_volume_mode(0, grana_display::VolumeMode::Isosurface);
+    scene.set_isovalue(0, 0.35);
     let project = Project::capture(
         &scene,
         &Measure::new(),
@@ -784,6 +786,7 @@ fn replays_a_captured_protocol() {
         spots,
         Some(grana_scene::LabelExport::new("/fixture.ome.zarr", 1, 5)),
     );
+    scene.set_volume_mode(0, grana_display::VolumeMode::Maximum);
     let view = ViewSpec::of(&view_state(), 0);
     let named = NamedViewSpec::of("Overview", view.clone());
     let protocol = Protocol::capture(&scene, &Measure::new(), Some(view), vec![named.clone()])
@@ -815,6 +818,11 @@ fn replays_a_captured_protocol() {
         "the protocol stages the label image export"
     );
     assert_eq!(staged_scene.region, region);
+    assert_eq!(
+        staged_scene.channels[0].volume().mode(),
+        grana_display::VolumeMode::Maximum,
+        "the protocol stages the volume mode"
+    );
     let staged = staged_scene
         .objects
         .get(staged.sets()[0])

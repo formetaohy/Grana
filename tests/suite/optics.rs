@@ -1,5 +1,7 @@
 use glam::Vec3;
-use grana_display::{Camera, CameraProjection, SectionCamera, Shading, TransferFunction};
+use grana_display::{
+    Camera, CameraProjection, SectionCamera, Shading, TransferFunction, VolumeStyle,
+};
 use grana_render::{ChannelRow, Frame, Marker, Renderer, Requests, SceneFrame};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
@@ -140,6 +142,7 @@ fn hidden(pyramid: &Pyramid) -> Vec<ChannelRow> {
             opacity: 1.0,
             window: channel.window(),
             transfer: TransferFunction::tinted(channel.tint()),
+            volume: VolumeStyle::default(),
         })
         .collect()
 }

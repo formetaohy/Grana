@@ -4,6 +4,8 @@
 @group(2) @binding(1) var atlas_sampler: sampler;
 
 const GRADIENT_EPSILON: f32 = 1.0e-8;
+const ISO_EXTINCTION: f32 = 8.0;
+const ISO_SOFTNESS: f32 = 0.04;
 const CELL_SIDE: f32 = 8.0;
 const CELL_AXIS: f32 = 4.0;
 const CELLS: u32 = 64u;
@@ -159,6 +161,23 @@ fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
             }
             let opacity = channel_opacity(channel);
             if (opacity <= 0.0) {
+                continue;
+            }
+            if (channel_isosurface(channel)) {
+                let inverse = channels[channel].inverse;
+                if (inverse > 0.0) {
+                    let softness = ISO_SOFTNESS / inverse;
+                    let threshold = channel_threshold(channel);
+                    let ramp = smoothstep(
+                        threshold - softness,
+                        threshold + softness,
+                        values[component],
+                    );
+                    extinction += ISO_EXTINCTION * ramp * opacity;
+                }
+                continue;
+            }
+            if (channel_maximum(channel)) {
                 continue;
             }
             let alpha = clamp(channel_sample(channel, values[component]).a, 0.0, 0.998);

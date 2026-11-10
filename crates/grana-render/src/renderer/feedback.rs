@@ -164,10 +164,10 @@ impl Renderer {
         let complete = demands.iter().all(|demand| {
             demand.requests.is_empty()
                 && demand.info.resident == demand.info.demand
-                && demand.info.visible == demand.info.demand
+                && (!meta.assured || demand.info.visible == demand.info.demand)
         }) && section.requests.is_empty()
             && section.info.resident == section.info.demand
-            && section.info.visible == section.info.demand;
+            && (!meta.assured || section.info.visible == section.info.demand);
         let settled_now = complete && (!meta.assured || issued.is_empty());
         *settled = settled_now.then_some(meta);
         let mut merged = Demand::default();

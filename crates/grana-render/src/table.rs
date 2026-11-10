@@ -11,7 +11,7 @@ use wgpu::{
 use crate::frame::{FrameData, SectionData};
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
-use grana_display::TransferFunction;
+use grana_display::{TransferFunction, VolumeMode};
 use grana_volume::CHANNEL_LIMIT;
 
 const LUT_SIZE: usize = 1024;
@@ -28,9 +28,11 @@ struct ChannelData {
     inverse: f32,
     lut_row: f32,
     threshold: f32,
+    mode: f32,
+    pad: [f32; 2],
 }
 
-const _: () = assert!(size_of::<ChannelData>() == 20);
+const _: () = assert!(size_of::<ChannelData>() == 32);
 
 pub(crate) struct SceneTable {
     uniforms: Buffer,
@@ -170,10 +172,14 @@ impl SceneTable {
                 self.transfers[index] = Some(row.transfer.clone());
             }
             let opaque = self.thresholds[index];
-            let threshold = match opaque {
-                Some(position) if inverse > 0.0 => start + position / inverse,
-                Some(position) if position <= 0.0 => f32::NEG_INFINITY,
-                _ => f32::INFINITY,
+            let mode = row.volume.mode();
+            let threshold = match mode {
+                VolumeMode::Isosurface => unit_at(start, inverse, row.volume.isovalue()),
+                VolumeMode::Blend | VolumeMode::Maximum => match opaque {
+                    Some(position) if position <= 0.0 => f32::NEG_INFINITY,
+                    Some(position) => unit_at(start, inverse, position),
+                    None => f32::INFINITY,
+                },
             };
             data.push(ChannelData {
                 opacity: if row.visible { row.opacity } else { 0.0 },
@@ -181,6 +187,8 @@ impl SceneTable {
                 inverse,
                 lut_row: (index as f32 + 0.5) / rows.len() as f32,
                 threshold,
+                mode: mode.index() as f32,
+                pad: [0.0; 2],
             });
         }
         let _ = self.channels.write(device, queue, &data);
@@ -259,6 +267,14 @@ fn write_row(queue: &Queue, texture: &Texture, row: usize, quantized: &[u16]) {
             depth_or_array_layers: 1,
         },
     );
+}
+
+fn unit_at(start: f32, inverse: f32, position: f32) -> f32 {
+    if inverse > 0.0 {
+        start + position / inverse
+    } else {
+        f32::INFINITY
+    }
 }
 
 fn window(range: Intensity, window: Intensity) -> (f32, f32) {

@@ -160,6 +160,7 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
             opacity: channel.opacity,
             window: channel.window,
             transfer: channel.transfer().clone(),
+            volume: channel.volume(),
         })
         .collect();
     Ok(RenderedScene {

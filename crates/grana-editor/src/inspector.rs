@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3};
-use grana_display::TransferFunction;
+use grana_display::{TransferFunction, VolumeMode};
 use grana_optics::{Psf, PsfParams};
 use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
@@ -679,6 +679,37 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             opacity: value.clamp(0.0, 1.0),
         },
     ));
+    let volume = scene.channels[index].volume();
+    let modes = VolumeMode::ALL.map(VolumeMode::label);
+    children.push(view::segmented_fill(
+        ctx,
+        "display.volume",
+        &modes,
+        volume.mode().index(),
+        move |selected| {
+            Message::Command(Command::SetVolumeMode {
+                channel: index,
+                mode: VolumeMode::from_index(selected).expect("the segment names a volume mode"),
+            })
+        },
+    ));
+    if volume.mode() == VolumeMode::Isosurface {
+        let isovalue = volume.isovalue();
+        let value = format!("{:.0}", current.value(isovalue));
+        children.push(view::slider_readout(
+            ctx,
+            "display.isovalue",
+            Some("Iso Value"),
+            isovalue,
+            0.0..=1.0,
+            false,
+            &value,
+            move |value| Command::SetIsovalue {
+                channel: index,
+                isovalue: value.clamp(0.0, 1.0),
+            },
+        ));
+    }
     let preset = (width - 12.0) / 3.0;
     let auto = view::button_with(ctx, "Auto", Role::Control, Length::Fixed(preset))
         .press(Message::Command(Command::ResetWindow(index)));

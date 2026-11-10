@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Coloring, Extent, Material, Shading, TransferFunction};
+use grana_display::{Coloring, Extent, Material, Shading, TransferFunction, VolumeMode};
 use grana_geometry::ray_hit;
 use grana_measure::{
     Aggregate, Classifier, ColocMetric, Frame, Group, Measurement, ObjectColoc, RelationRow, Table,
@@ -673,6 +673,16 @@ impl Scene {
 
     pub fn set_transfer(&mut self, index: usize, transfer: TransferFunction) {
         self.channels[index].set_transfer(transfer);
+    }
+
+    pub fn set_volume_mode(&mut self, index: usize, mode: VolumeMode) {
+        let channel = &mut self.channels[index];
+        channel.set_volume(channel.volume().with_mode(mode));
+    }
+
+    pub fn set_isovalue(&mut self, index: usize, isovalue: f32) {
+        let channel = &mut self.channels[index];
+        channel.set_volume(channel.volume().with_isovalue(isovalue));
     }
 
     pub fn add_object(&mut self, kind: ObjectKind, channel: usize) -> ObjectSetId {

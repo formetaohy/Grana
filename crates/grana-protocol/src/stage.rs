@@ -485,6 +485,9 @@ impl Protocol {
             if let Some(transfer) = &spec.transfer {
                 scene.set_transfer(index, transfer.transfer());
             }
+            if let Some(volume) = &spec.volume {
+                scene.channels[index].set_volume(volume.style());
+            }
         }
         Ok(())
     }

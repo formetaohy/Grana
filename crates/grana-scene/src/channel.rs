@@ -1,4 +1,4 @@
-use grana_display::TransferFunction;
+use grana_display::{TransferFunction, VolumeStyle};
 use grana_volume::Intensity;
 
 pub struct Channel {
@@ -6,6 +6,7 @@ pub struct Channel {
     pub opacity: f32,
     pub window: Intensity,
     transfer: TransferFunction,
+    volume: VolumeStyle,
 }
 
 impl Channel {
@@ -15,6 +16,7 @@ impl Channel {
             opacity: 1.0,
             window,
             transfer,
+            volume: VolumeStyle::default(),
         }
     }
 
@@ -28,5 +30,13 @@ impl Channel {
 
     pub fn set_transfer(&mut self, transfer: TransferFunction) {
         self.transfer = transfer;
+    }
+
+    pub fn volume(&self) -> VolumeStyle {
+        self.volume
+    }
+
+    pub fn set_volume(&mut self, volume: VolumeStyle) {
+        self.volume = volume;
     }
 }

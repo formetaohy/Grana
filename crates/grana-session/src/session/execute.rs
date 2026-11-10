@@ -327,6 +327,20 @@ impl Session {
                     target.set_transfer(transfer);
                 }
             }
+            Command::SetVolumeMode { channel, mode } => {
+                if let Some(scene) = self.scene.as_mut()
+                    && channel < scene.channels.len()
+                {
+                    scene.set_volume_mode(channel, mode);
+                }
+            }
+            Command::SetIsovalue { channel, isovalue } => {
+                if let Some(scene) = self.scene.as_mut()
+                    && channel < scene.channels.len()
+                {
+                    scene.set_isovalue(channel, isovalue.clamp(0.0, 1.0));
+                }
+            }
             Command::SetObjectVisible { set, visible } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_visible(visible);

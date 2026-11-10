@@ -1,4 +1,4 @@
-use grana_display::{Coloring, Material, Shading, TransferFunction};
+use grana_display::{Coloring, Material, Shading, TransferFunction, VolumeMode};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
     Measurement, PlotAxis, Scope,
@@ -183,6 +183,14 @@ pub enum Command {
     SetTransfer {
         channel: usize,
         transfer: TransferFunction,
+    },
+    SetVolumeMode {
+        channel: usize,
+        mode: VolumeMode,
+    },
+    SetIsovalue {
+        channel: usize,
+        isovalue: f32,
     },
     SetObjectVisible {
         set: ObjectSetId,
@@ -421,6 +429,8 @@ pub enum Action {
     Window,
     ResetWindow,
     Transfer,
+    VolumeMode,
+    Isovalue,
     Derived,
     ObjectVisible,
     ObjectLabels,
@@ -499,6 +509,8 @@ impl Action {
             Self::Window => "intensity window",
             Self::ResetWindow => "window reset",
             Self::Transfer => "transfer function",
+            Self::VolumeMode => "volume mode",
+            Self::Isovalue => "isovalue",
             Self::Derived => "derived channel",
             Self::ObjectVisible => "object visibility",
             Self::ObjectLabels => "object labels",
@@ -554,6 +566,7 @@ impl Action {
             Self::ChannelOpacity
                 | Self::Window
                 | Self::Transfer
+                | Self::Isovalue
                 | Self::ObjectColor
                 | Self::ObjectOpacity
                 | Self::ObjectMaterial
@@ -661,6 +674,10 @@ impl Command {
             Self::SetWindow { channel, .. } => Edit::targeted(Action::Window, *channel as u64),
             Self::ResetWindow(channel) => Edit::targeted(Action::ResetWindow, *channel as u64),
             Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
+            Self::SetVolumeMode { channel, .. } => {
+                Edit::targeted(Action::VolumeMode, *channel as u64)
+            }
+            Self::SetIsovalue { channel, .. } => Edit::targeted(Action::Isovalue, *channel as u64),
             Self::AddMaskChannel { .. }
             | Self::AddRestoreChannel { .. }
             | Self::AddSmoothChannel { .. }

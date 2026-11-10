@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
-use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
+use grana_display::{
+    CameraState, Palette, SectionState, Shading, Stop, TransferFunction, VolumeMode, VolumeStyle,
+};
 use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
     Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, Lasso, MeasureView,
@@ -505,11 +507,21 @@ fn decode_point(reader: &mut Reader<'_>) -> Result<[f32; 3], &'static str> {
 
 impl Decode for ChannelState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let enabled = reader.bool()?;
+        let opacity = unit(reader.f32()?)?;
+        let window = Intensity::decode(reader)?;
+        let transfer = TransferFunction::decode(reader)?;
+        let mode = VolumeMode::from_index(reader.u8()? as usize).ok_or(FAULT_TAG)?;
+        let isovalue = reader.f32()?;
+        if !(0.0..=1.0).contains(&isovalue) {
+            return Err(FAULT_VALUE);
+        }
         Ok(Self {
-            enabled: reader.bool()?,
-            opacity: unit(reader.f32()?)?,
-            window: Intensity::decode(reader)?,
-            transfer: TransferFunction::decode(reader)?,
+            enabled,
+            opacity,
+            window,
+            transfer,
+            volume: VolumeStyle::new(mode, isovalue),
         })
     }
 }

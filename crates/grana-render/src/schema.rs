@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::marker::Marker;
-use grana_display::{Material, Shading, TransferFunction};
+use grana_display::{Material, Shading, TransferFunction, VolumeStyle};
 use grana_geometry::PackedMesh;
 use grana_volume::Intensity;
 
@@ -109,6 +109,7 @@ pub struct ChannelRow {
     pub opacity: f32,
     pub window: Intensity,
     pub transfer: TransferFunction,
+    pub volume: VolumeStyle,
 }
 
 #[derive(Clone)]
