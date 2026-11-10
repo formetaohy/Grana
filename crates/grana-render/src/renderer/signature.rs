@@ -16,29 +16,29 @@ pub(super) enum PaneSignature<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Signature<'a, 'b> {
-    pub(super) scene: &'a SceneFrame<'b>,
+pub(super) struct Signature<'a> {
     pub(super) panes: &'a [Option<PaneSignature<'a>>; PANE_COUNT],
     pub(super) pane_channels: [ChannelMask; PANE_COUNT],
     pub(super) levels: Levels,
+    pub(super) content: u64,
+    pub(super) uploads: u64,
     pub(super) time: u32,
     pub(super) exposure: f32,
     pub(super) epoch: u64,
-    pub(super) content: u64,
     pub(super) size: [u32; 2],
 }
 
-impl Signature<'_, '_> {
+impl Signature<'_> {
     pub(super) fn digest(self) -> u64 {
         let Self {
-            scene,
             panes,
             pane_channels,
             levels,
+            content,
+            uploads,
             time,
             exposure,
             epoch,
-            content,
             size,
         } = self;
         let mut hasher = DefaultHasher::new();
@@ -82,17 +82,17 @@ impl Signature<'_, '_> {
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
-        content.hash(&mut hasher);
         size.hash(&mut hasher);
-        content_digest(scene, &mut hasher);
+        content.hash(&mut hasher);
+        uploads.hash(&mut hasher);
         hasher.finish()
     }
 
     pub(super) fn shot(self) -> u64 {
         let Self {
-            scene,
             panes,
             pane_channels,
+            content,
             exposure,
             epoch,
             size,
@@ -121,15 +121,15 @@ impl Signature<'_, '_> {
         exposure.to_bits().hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        content_digest(scene, &mut hasher);
+        content.hash(&mut hasher);
         hasher.finish()
     }
 
     pub(super) fn transition(self) -> u64 {
         let Self {
-            scene,
             panes,
             pane_channels,
+            content,
             time,
             exposure,
             epoch,
@@ -169,12 +169,11 @@ impl Signature<'_, '_> {
                 }
             }
         }
-        scene.step_scale.to_bits().hash(&mut hasher);
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        content_digest(scene, &mut hasher);
+        content.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -196,41 +195,6 @@ pub(super) fn hash_section(view: SectionState, hasher: &mut DefaultHasher) {
     view.span.to_bits().hash(hasher);
     view.projection.index().hash(hasher);
     view.thickness.to_bits().hash(hasher);
-}
-
-fn content_digest(scene: &SceneFrame<'_>, hasher: &mut DefaultHasher) {
-    scene.channels.len().hash(hasher);
-    for channel in scene.channels {
-        channel.visible.hash(hasher);
-        channel.opacity.to_bits().hash(hasher);
-        channel.window.min().to_bits().hash(hasher);
-        channel.window.max().to_bits().hash(hasher);
-        channel.volume.mode().index().hash(hasher);
-        channel.volume.isovalue().to_bits().hash(hasher);
-        channel.transfer.stops().len().hash(hasher);
-        for stop in channel.transfer.stops() {
-            stop.position().to_bits().hash(hasher);
-            stop.opacity().to_bits().hash(hasher);
-            stop.color().map(f32::to_bits).hash(hasher);
-        }
-    }
-    scene.layers.len().hash(hasher);
-    for layer in scene.layers {
-        layer.key.hash(hasher);
-        layer.style_start.hash(hasher);
-        layer.style_count.hash(hasher);
-    }
-    scene.styles.len().hash(hasher);
-    for style in scene.styles {
-        style.color().map(f32::to_bits).hash(hasher);
-        style.visible().hash(hasher);
-        style.selected().hash(hasher);
-        style.opacity().to_bits().hash(hasher);
-    }
-    scene.markers.len().hash(hasher);
-    for marker in scene.markers {
-        marker.hash(hasher);
-    }
 }
 
 pub(super) fn digest(words: &[u64]) -> u64 {
@@ -260,24 +224,6 @@ pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3)
         high = high.max(center + radius);
     }
     (low, high)
-}
-
-pub(super) fn shadow_geometry(scene: &SceneFrame<'_>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    scene.layers.len().hash(&mut hasher);
-    for layer in scene.layers {
-        layer.key.hash(&mut hasher);
-        layer.style_count.hash(&mut hasher);
-        for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
-            style.visible().hash(&mut hasher);
-        }
-    }
-    scene.markers.len().hash(&mut hasher);
-    for marker in scene.markers {
-        marker.center().map(f32::to_bits).hash(&mut hasher);
-        marker.radius().to_bits().hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 pub(super) fn channel_style_panes(rows: &[Vec<crate::ChannelRow>; PANE_COUNT]) -> u64 {

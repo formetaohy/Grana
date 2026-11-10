@@ -93,7 +93,8 @@ impl Offline {
         let mut ui: Ui<()> = Ui::new(&self.device, &self.queue, self.format);
         ui.resize(export.size());
         progress(0, export.progress().1);
-        let mut prepared: Option<(u32, RenderedScene)> = None;
+        let mut prepared: Option<(u32, Vec<usize>, RenderedScene)> = None;
+        let mut revision = 0u64;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 export.discard();
@@ -101,9 +102,14 @@ impl Offline {
             }
             let pose = export.pose();
             scene.set_time(pose.time);
-            if prepared.as_ref().is_none_or(|(time, _)| *time != pose.time) {
-                match grana_engine::frame(&scene, export.lens()) {
-                    Ok(rendered) => prepared = Some((pose.time, rendered)),
+            let detail = grana_engine::detail(&scene, export.lens());
+            let stale = prepared
+                .as_ref()
+                .is_none_or(|(time, cached, _)| *time != pose.time || *cached != detail);
+            if stale {
+                revision += 1;
+                match grana_engine::frame(&scene, revision, &detail) {
+                    Ok(rendered) => prepared = Some((pose.time, detail, rendered)),
                     Err(detail) => {
                         export.discard();
                         return Outcome::Failed { detail };
@@ -114,7 +120,7 @@ impl Offline {
                 export.discard();
                 return Outcome::Failed { detail };
             }
-            let rendered = &prepared.as_ref().expect("the prepared scene is ready").1;
+            let rendered = &prepared.as_ref().expect("the prepared scene is ready").2;
             match export.render(
                 &mut self.renderer,
                 crate::export::Context {

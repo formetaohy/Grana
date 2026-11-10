@@ -2,18 +2,15 @@ use grana_gpu::layout::{sampler, texture};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingType, BlendState, ColorTargetState, ColorWrites, CommandEncoder,
-    Device, Extent3d, FragmentState, LoadOp, MultisampleState, Operations,
-    PipelineLayoutDescriptor, PrimitiveState, RenderPass, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerDescriptor,
-    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureDescriptor,
-    TextureDimension, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
-    TextureViewDimension, VertexState,
+    Device, Extent3d, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState,
+    RenderPass, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
+    ShaderStages, StoreOp, TextureDescriptor, TextureDimension, TextureSampleType, TextureUsages,
+    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
 };
 
 use crate::layout::Layouts;
 use crate::target::{CUT_ID_FORMAT, SCENE_FORMAT};
-
-const CUT_SAMPLES: u32 = 4;
 
 const SHADER: &str = include_str!("shader/cut.wgsl");
 
@@ -29,7 +26,6 @@ pub(crate) struct CutLayer {
 
 struct Target {
     color: TextureView,
-    resolved: TextureView,
     identities: TextureView,
     group: BindGroup,
     identities_group: BindGroup,
@@ -52,7 +48,7 @@ impl CutLayer {
                 ty: BindingType::Texture {
                     sample_type: TextureSampleType::Float { filterable: false },
                     view_dimension: TextureViewDimension::D2,
-                    multisampled: true,
+                    multisampled: false,
                 },
                 count: None,
             }],
@@ -87,7 +83,7 @@ impl CutLayer {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: Default::default(),
             fragment: Some(FragmentState {
                 module: &shader,
                 entry_point: Some("fs_composite"),
@@ -117,7 +113,7 @@ impl CutLayer {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: None,
-            multisample: MultisampleState::default(),
+            multisample: Default::default(),
             fragment: Some(FragmentState {
                 module: &shader,
                 entry_point: Some("fs_outline"),
@@ -160,10 +156,10 @@ impl CutLayer {
                 Some(RenderPassColorAttachment {
                     view: &target.color,
                     depth_slice: None,
-                    resolve_target: Some(&target.resolved),
+                    resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Discard,
+                        store: StoreOp::Store,
                     },
                 }),
                 Some(RenderPassColorAttachment {
@@ -190,7 +186,7 @@ impl CutLayer {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.cut.outline.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: &target.resolved,
+                view: &target.color,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -256,18 +252,6 @@ impl CutLayer {
                 label: Some("grana.cut.color"),
                 size: extent,
                 mip_level_count: 1,
-                sample_count: CUT_SAMPLES,
-                dimension: TextureDimension::D2,
-                format: SCENE_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
-        let resolved = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.cut.resolved"),
-                size: extent,
-                mip_level_count: 1,
                 sample_count: 1,
                 dimension: TextureDimension::D2,
                 format: SCENE_FORMAT,
@@ -280,7 +264,7 @@ impl CutLayer {
                 label: Some("grana.cut.identities"),
                 size: extent,
                 mip_level_count: 1,
-                sample_count: CUT_SAMPLES,
+                sample_count: 1,
                 dimension: TextureDimension::D2,
                 format: CUT_ID_FORMAT,
                 usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
@@ -293,7 +277,7 @@ impl CutLayer {
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&resolved),
+                    resource: wgpu::BindingResource::TextureView(&color),
                 },
                 BindGroupEntry {
                     binding: 1,
@@ -311,18 +295,9 @@ impl CutLayer {
         });
         Target {
             color,
-            resolved,
             identities,
             group,
             identities_group,
         }
-    }
-}
-
-pub(crate) fn multisample() -> MultisampleState {
-    MultisampleState {
-        count: CUT_SAMPLES,
-        mask: !0,
-        alpha_to_coverage_enabled: false,
     }
 }

@@ -121,6 +121,7 @@ pub struct Layer {
 }
 
 pub struct SceneFrame<'a> {
+    pub revision: u64,
     pub channels: &'a [ChannelRow],
     pub shading: Shading,
     pub step_scale: f32,

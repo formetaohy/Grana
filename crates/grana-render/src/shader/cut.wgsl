@@ -6,10 +6,9 @@ struct Style {
 
 @group(0) @binding(0) var layer: texture_2d<f32>;
 @group(0) @binding(1) var layer_sampler: sampler;
-@group(0) @binding(2) var identities: texture_multisampled_2d<f32>;
+@group(0) @binding(2) var identities: texture_2d<f32>;
 @group(1) @binding(0) var<storage, read> styles: array<Style>;
 
-const SAMPLE_COUNT: i32 = 4;
 const OUTLINE_ALPHA: f32 = 0.85;
 const OUTLINE_RADIUS: i32 = 1;
 const SELECTED: vec3<f32> = vec3<f32>(1.0, 0.86, 0.45);
@@ -47,11 +46,7 @@ fn decode_identity(value: vec4<f32>) -> u32 {
 fn nearest_identity(coordinate: vec2<i32>) -> u32 {
     let extent = vec2<i32>(textureDimensions(identities));
     let at = clamp(coordinate, vec2<i32>(0), extent - vec2<i32>(1));
-    var identity = 0u;
-    for (var index = 0; index < SAMPLE_COUNT; index += 1) {
-        identity = max(identity, decode_identity(textureLoad(identities, at, index)));
-    }
-    return identity;
+    return decode_identity(textureLoad(identities, at, 0));
 }
 
 @fragment

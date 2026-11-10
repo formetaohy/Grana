@@ -18,6 +18,7 @@ pub struct Lens<'a> {
 }
 
 pub struct RenderedScene {
+    pub revision: u64,
     pub channels: Vec<ChannelRow>,
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
@@ -31,6 +32,7 @@ pub struct RenderedScene {
 impl RenderedScene {
     pub fn frame(&self) -> SceneFrame<'_> {
         SceneFrame {
+            revision: self.revision,
             channels: &self.channels,
             shading: self.shading,
             step_scale: self.step_scale,
@@ -41,17 +43,42 @@ impl RenderedScene {
     }
 }
 
-pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, String> {
+pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
+    let mut details = Vec::new();
+    for set in scene.objects.iter() {
+        if !scene.shown(set) {
+            continue;
+        }
+        let Some(frame) = set.frame(scene.time()) else {
+            details.push(0);
+            continue;
+        };
+        details.push(match (frame, lens) {
+            (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
+                surfaces.select_detail(triangle_target(surfaces, lens))
+            }
+            _ => 0,
+        });
+    }
+    details
+}
+
+pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedScene, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
     let mut style_ids = Vec::new();
     let mut marker_ids = Vec::new();
+    let mut ordinal = 0usize;
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
         }
+        let wanted = *detail
+            .get(ordinal)
+            .expect("every shown set carries a detail level");
+        ordinal += 1;
         for seed in scene.seeds(set.id()) {
             markers.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
             marker_ids.push(None);
@@ -78,13 +105,7 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
                 }));
             }
         }
-        let wanted = match (frame, lens) {
-            (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
-                surfaces.select_detail(triangle_target(surfaces, lens))
-            }
-            _ => 0,
-        };
-        let (geometry, detail) = match frame {
+        let (geometry, level) = match frame {
             ObjectFrame::Surfaces(surfaces) => {
                 let (mesh, available) =
                     surfaces.detail(wanted).map_err(|error| error.to_string())?;
@@ -112,13 +133,7 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
                 });
             }
             layers.push(Layer {
-                key: LayerKey::at_frame(
-                    set.id().raw(),
-                    0,
-                    scene.time(),
-                    stamp.raw(),
-                    detail as u16,
-                ),
+                key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp.raw(), level as u16),
                 mesh,
                 style_start: start,
                 style_count: frame.object_count(),
@@ -163,7 +178,13 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
             volume: channel.volume(),
         })
         .collect();
+    assert_eq!(
+        ordinal,
+        detail.len(),
+        "the detail levels cover every shown set"
+    );
     Ok(RenderedScene {
+        revision,
         channels,
         styles,
         layers,

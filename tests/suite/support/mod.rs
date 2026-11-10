@@ -1,5 +1,6 @@
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -73,6 +74,11 @@ pub fn gpu() -> Option<Gpu> {
         queue,
         _serial: serial,
     })
+}
+
+pub fn revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 pub fn spheres(extent: Extent, spacing: Spacing, spheres: &[([f32; 3], f32)], peak: u16) -> Volume {

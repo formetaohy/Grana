@@ -11,7 +11,6 @@ use wgpu::{
     TextureView, VertexState,
 };
 
-use crate::cut;
 use crate::layout::Layouts;
 use crate::renderer::{Lighting, VolumeTargets};
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
@@ -372,7 +371,7 @@ impl MarkerPasses {
                 ..Default::default()
             },
             depth_stencil: None,
-            multisample: cut::multisample(),
+            multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &section_module,
                 entry_point: Some("fs_main"),
@@ -499,13 +498,7 @@ impl MarkerPasses {
         }
     }
 
-    pub fn prepare(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        layouts: &Layouts,
-        markers: &[Marker],
-    ) {
+    pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, markers: &[Marker]) {
         if markers.is_empty() {
             self.count = 0;
             return;
@@ -548,6 +541,9 @@ impl MarkerPasses {
                 )
             });
         }
+    }
+
+    pub fn rewind(&self, queue: &Queue) {
         for args in &self.args {
             args.opaque.reset(queue, 6);
             args.layer.reset(queue, 6);

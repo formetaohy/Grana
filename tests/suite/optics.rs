@@ -7,7 +7,7 @@ use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
 
-use crate::support::{Gpu, gpu, read_pixels, spheres};
+use crate::support::{Gpu, gpu, read_pixels, revision, spheres};
 
 const SIDE: u32 = 384;
 const SAMPLES: u32 = 48;
@@ -66,6 +66,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         ),
     ];
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,

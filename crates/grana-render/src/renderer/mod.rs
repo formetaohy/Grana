@@ -109,6 +109,7 @@ pub struct FrameInfo {
     pub samples: u32,
     pub seeded: bool,
     pub history: bool,
+    pub rebuilt: bool,
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
@@ -127,6 +128,7 @@ impl Default for FrameInfo {
             samples: 0,
             seeded: false,
             history: false,
+            rebuilt: false,
             settled: false,
             truncated: false,
             fading: false,
@@ -252,7 +254,8 @@ pub struct Renderer {
     view_words: usize,
     view_bytes: u64,
     epoch: u64,
-    content: u64,
+    resident: Option<u64>,
+    uploads: u64,
     pin: u64,
     prefetch: bool,
     prefetched: HashSet<BrickRequest>,
@@ -341,7 +344,8 @@ impl Renderer {
             view_words: 0,
             view_bytes: 0,
             epoch: 0,
-            content: 0,
+            resident: None,
+            uploads: 0,
             pin: 0,
             prefetch: false,
             prefetched: HashSet::new(),
@@ -440,6 +444,7 @@ impl Renderer {
 
     pub fn begin_export(&mut self) {
         self.target = None;
+        self.resident = None;
         self.convergence.forget();
         self.settled = None;
         self.exporting = true;
@@ -567,6 +572,7 @@ impl Renderer {
         self.pick_readback = None;
         self.pick_pending = false;
         self.epoch += 1;
+        self.resident = None;
         self.pin = 0;
         self.prefetched.clear();
         self.prefetch_key = None;

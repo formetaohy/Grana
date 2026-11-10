@@ -112,6 +112,7 @@ pub(crate) struct SharedView {
     pub clip: Clip,
     pub time: u32,
     pub space: ShadowSpace,
+    pub forward: Vec3,
 }
 
 pub(crate) struct VolumeView<'a> {
@@ -134,6 +135,7 @@ impl FrameData {
             clip,
             time,
             space,
+            forward,
         } = view;
         let light = shading.light();
         let (normal, offset) = clip.parts();
@@ -144,7 +146,7 @@ impl FrameData {
             light: [light.x, light.y, light.z, 0.0],
             right: [0.0; 4],
             up: [0.0; 4],
-            forward: [0.0; 4],
+            forward: [forward.x, forward.y, forward.z, 0.0],
             region_center: [
                 region.center().x,
                 region.center().y,

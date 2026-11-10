@@ -32,7 +32,7 @@ impl Renderer {
             pyramid,
             channels,
             time: now,
-            content,
+            uploads,
             pin,
             prefetched,
             staging,
@@ -110,7 +110,7 @@ impl Renderer {
                 if let Some(table) = tables[level].as_mut() {
                     table.set_record(queue, arena, index, BrickRecord::hollow(time));
                 }
-                *content += 1;
+                *uploads += 1;
                 accepted += 1;
                 continue;
             }
@@ -151,7 +151,7 @@ impl Renderer {
                     BrickRecord::new(slot + 1, time, maxima),
                 );
             }
-            *content += 1;
+            *uploads += 1;
             accepted += 1;
         }
         accepted

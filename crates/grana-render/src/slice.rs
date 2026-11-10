@@ -16,7 +16,6 @@ use wgpu::{
     VertexBufferLayout, VertexFormat, VertexState, VertexStepMode, util::DeviceExt,
 };
 
-use crate::cut;
 use crate::frame::SectionData;
 use crate::layout::Layouts;
 use crate::mesh::{StyleData, style_data};
@@ -149,7 +148,7 @@ impl SlicePass {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: None,
-            multisample: cut::multisample(),
+            multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &module,
                 entry_point: Some("fs_main"),

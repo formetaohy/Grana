@@ -1160,6 +1160,7 @@ impl App {
                     regions: std::array::from_fn(|index| {
                         regions.panes[index].map(|pane| pane.region)
                     }),
+                    revision: session.revision().raw(),
                     prefetch: playing,
                     level_cap: cap,
                 },

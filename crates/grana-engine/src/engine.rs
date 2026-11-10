@@ -5,6 +5,7 @@ use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::frame::{self, View};
+use crate::view::{self, RenderedScene};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
 pub const SAMPLE_LIMIT: u32 = 32;
@@ -15,6 +16,7 @@ pub struct ViewportFrame<'a> {
     pub panes: &'a Panes,
     pub size: [u32; 2],
     pub regions: [Option<[u32; 4]>; PANE_COUNT],
+    pub revision: u64,
     pub prefetch: bool,
     pub level_cap: usize,
 }
@@ -32,26 +34,32 @@ struct Identities {
     markers: Vec<Option<Selection>>,
 }
 
+struct Prepared {
+    revision: u64,
+    detail: Vec<usize>,
+    scene: RenderedScene,
+}
+
 pub struct Engine {
     renderer: Renderer,
-    identities: Identities,
     pending_pick: Option<Identities>,
+    prepared: Option<Prepared>,
 }
 
 impl Engine {
     pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         Self {
             renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET),
-            identities: Identities::default(),
             pending_pick: None,
+            prepared: None,
         }
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
         self.renderer.set_budget(TEXTURE_BUDGET);
         self.renderer.set_dataset(device, pyramid);
-        self.identities = Identities::default();
         self.pending_pick = None;
+        self.prepared = None;
     }
 
     pub fn set_frame_target(&mut self, target: f32) {
@@ -90,12 +98,29 @@ impl Engine {
                     height: region[3],
                 })
             });
-        let rendered = crate::view::frame(frame.scene, lens)?;
+        let detail = view::detail(frame.scene, lens);
+        if self
+            .prepared
+            .as_ref()
+            .is_none_or(|prepared| prepared.revision != frame.revision || prepared.detail != detail)
+        {
+            let scene = view::frame(frame.scene, frame.revision, &detail)?;
+            self.prepared = Some(Prepared {
+                revision: frame.revision,
+                detail,
+                scene,
+            });
+        }
+        let Self {
+            renderer, prepared, ..
+        } = self;
+        let prepared = prepared.as_ref().expect("the rendered scene is ready");
+        let rendered = &prepared.scene;
         let panes = pane_frames(frame.panes, frame.regions);
         let channels = std::array::from_fn(|index| frame.panes.pane(index).channels());
         let quality = std::array::from_fn(|index| frame.panes.pane(index).quality());
         let info = frame::draw(
-            &mut self.renderer,
+            renderer,
             device,
             queue,
             View {
@@ -109,12 +134,8 @@ impl Engine {
                 prefetch: frame.prefetch,
                 level_cap: frame.level_cap,
             },
-            &rendered,
+            rendered,
         );
-        self.identities = Identities {
-            styles: rendered.style_ids,
-            markers: rendered.marker_ids,
-        };
         Ok(info)
     }
 
@@ -125,10 +146,24 @@ impl Engine {
         pane: usize,
         point: [u32; 2],
     ) -> bool {
-        if self.pending_pick.is_some() || !self.renderer.request_pick(device, queue, pane, point) {
+        if self.pending_pick.is_some() {
             return false;
         }
-        self.pending_pick = Some(self.identities.clone());
+        let Self {
+            renderer,
+            pending_pick,
+            prepared,
+        } = self;
+        let Some(prepared) = prepared.as_ref() else {
+            return false;
+        };
+        if !renderer.request_pick(device, queue, pane, point) {
+            return false;
+        }
+        *pending_pick = Some(Identities {
+            styles: prepared.scene.style_ids.clone(),
+            markers: prepared.scene.marker_ids.clone(),
+        });
         true
     }
 

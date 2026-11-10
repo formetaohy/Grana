@@ -1,6 +1,5 @@
 use super::signature::{
     channel_style, channel_style_panes, digest, hash_camera, hash_section, shadow_bounds,
-    shadow_geometry,
 };
 use super::*;
 use crate::ChannelRow;
@@ -107,7 +106,8 @@ impl Renderer {
             frames,
             view_bytes,
             epoch,
-            content,
+            resident,
+            uploads,
             settled,
             planned,
             shadow,
@@ -304,10 +304,25 @@ impl Renderer {
             levels.panes[index] = Some(PaneLevels::Volume(VolumeLevels { ladder, capacity }));
             volume_level[index] = Some(base);
         }
+        let content = {
+            let mut hasher = DefaultHasher::new();
+            scene.revision.hash(&mut hasher);
+            scene.step_scale.to_bits().hash(&mut hasher);
+            scene.channels.len().hash(&mut hasher);
+            scene.layers.len().hash(&mut hasher);
+            scene.styles.len().hash(&mut hasher);
+            scene.markers.len().hash(&mut hasher);
+            for mask in pane_channels {
+                mask.hidden().hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let stamp = digest(&[content, *uploads]);
+        let fresh = *resident != Some(content);
         let residency = Residency::of(
             *epoch,
             Content {
-                content: *content,
+                content: stamp,
                 style: channel_style_panes(&rows),
             },
             Mode { prefetch, assured },
@@ -446,6 +461,7 @@ impl Renderer {
                         clip,
                         time,
                         space,
+                        forward: -section.normal(),
                     }));
                 }
                 _ => {}
@@ -499,14 +515,14 @@ impl Renderer {
                     },
                 });
             let signature = Signature {
-                scene,
                 panes: &signatures,
                 pane_channels,
                 levels,
+                content,
+                uploads: *uploads,
                 time,
                 exposure,
                 epoch: *epoch,
-                content: *content,
                 size,
             };
             (signature.digest(), signature.transition(), signature.shot())
@@ -582,7 +598,10 @@ impl Renderer {
             .position(Option::is_some)
             .expect("a frame draws a pane");
         if reset {
-            meshes.set(device, queue, layouts, scene);
+            info.rebuilt = fresh;
+            if fresh {
+                meshes.set(device, queue, layouts, scene);
+            }
             for (index, pane) in panes.iter().enumerate() {
                 if let (Some(PaneFrame::Section { section, region }), Some(data)) =
                     (pane, &section_data[index])
@@ -602,7 +621,11 @@ impl Renderer {
                     );
                 }
             }
-            markers.prepare(device, queue, layouts, scene.markers);
+            if fresh {
+                markers.set(device, queue, layouts, scene.markers);
+                *resident = Some(content);
+            }
+            markers.rewind(queue);
             mark(profile, &mut encoder, Stage::Cull, &mut marks);
             for (index, pane) in panes.iter().enumerate() {
                 match pane {
@@ -653,10 +676,14 @@ impl Renderer {
             let offset = sample::offset(sample_index, extent);
             data.jitter = [offset.x, offset.y, 0.0, 0.0];
         }
-        scene_table.prepare(device, queue, pyramid, scene.channels);
+        if fresh {
+            scene_table.prepare(device, queue, pyramid, scene.channels);
+        }
         for index in 0..PANE_COUNT {
             if volume_data[index].is_some() || section_data[index].is_some() {
-                scene_table.write_channels(device, queue, pyramid, index, &rows[index]);
+                if fresh {
+                    scene_table.write_channels(device, queue, pyramid, index, &rows[index]);
+                }
                 scene_table.write_frame(
                     index,
                     queue,
@@ -846,7 +873,7 @@ impl Renderer {
                     atlas: atlas.group(),
                 };
                 if scene.shading.shadows > 0.0 {
-                    let object = digest(&[shadow_geometry(scene), space.digest()]);
+                    let object = digest(&[content, space.digest()]);
                     if *object_key != Some(object) {
                         *object_key = Some(object);
                         meshes.draw_shadow(&mut encoder, shadow.objects());
@@ -873,7 +900,7 @@ impl Renderer {
                         &mut encoder,
                         groups,
                         digest(&[
-                            *content,
+                            content,
                             channel_key,
                             ladder.base as u64,
                             ladder.count as u64,

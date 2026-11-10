@@ -13,7 +13,7 @@ use grana_volume::{
     PADDED_SIDE, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
-use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
+use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres};
 
 const SIDE: u32 = 128;
 const SAMPLES: u32 = 4;
@@ -242,6 +242,7 @@ fn background(
         })
         .collect::<Vec<_>>();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &rows,
         shading: view.scene.shading,
         step_scale: view.scene.step_scale,
@@ -302,6 +303,7 @@ fn measures_the_convergence_of_a_volume() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -391,6 +393,7 @@ fn streams_and_shades_two_channels() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -485,6 +488,7 @@ fn renders_a_rotated_placement() {
     let mut section = SectionCamera::new();
     section.fit(world, voxel, 0.5);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -617,6 +621,7 @@ fn reveals_a_section_plane() {
     let mut section = SectionCamera::new();
     section.fit(world, voxel, 1.0);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -678,6 +683,7 @@ fn reveals_an_oblique_section_plane() {
     section.set_orientation(0.7, 0.45);
     section.fit(world, voxel, 1.0);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -757,6 +763,7 @@ fn projects_a_slab_through_the_section() {
     let mut section = SectionCamera::new();
     section.fit(world, voxel, 1.0);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -873,6 +880,7 @@ fn probes_a_finer_section_level_for_a_sparse_slab() {
     let mut section = SectionCamera::new();
     section.set_center(Vec3::ZERO);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -992,6 +1000,7 @@ fn composites_a_mesh_layer() {
         style_count: 1,
     }];
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -1050,6 +1059,7 @@ fn keeps_a_translucent_layer_across_pane_layouts() {
         style_count: 1,
     }];
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -1127,6 +1137,7 @@ fn clips_an_oriented_region() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -1221,6 +1232,7 @@ fn assured_pixels(
     section: &SectionCamera,
 ) -> Vec<[u8; 4]> {
     let scene = SceneFrame {
+        revision: revision(),
         channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1372,6 +1384,7 @@ fn render_volume(
         volume: style,
     }];
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1571,6 +1584,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1631,6 +1645,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1707,6 +1722,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1754,6 +1770,7 @@ fn renders_a_section_pane_without_a_volume() {
         1.0,
     );
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1837,6 +1854,7 @@ fn keeps_pane_channel_sets_independent() {
         .collect::<Vec<_>>();
     let channels = channels(&pyramid, &transfers);
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1941,6 +1959,7 @@ fn keeps_two_volume_panes_independent() {
         focus: 1.0,
     });
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -2105,6 +2124,7 @@ fn reuses_the_history_of_a_still_camera() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -2208,6 +2228,7 @@ fn reprojects_the_history_of_a_moving_camera() {
     moved.orbit(glam::Vec2::new(0.1, 0.05));
     let section = SectionCamera::new();
     let scene = SceneFrame {
+        revision: revision(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -2305,6 +2326,7 @@ fn drops_the_history_of_another_shot() {
     let first_transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let first_channels = channels(&pyramid, &first_transfers);
     let first = SceneFrame {
+        revision: revision(),
         channels: &first_channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -2315,6 +2337,7 @@ fn drops_the_history_of_another_shot() {
     let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
     let second_channels = channels(&pyramid, &second_transfers);
     let second = SceneFrame {
+        revision: revision(),
         channels: &second_channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -2374,5 +2397,228 @@ fn drops_the_history_of_another_shot() {
     assert!(
         fresh * 8.0 < stale,
         "the new shot carries the old frame ({fresh:.1} against {stale:.1})"
+    );
+}
+
+fn cube(half: f32) -> Mesh {
+    let corners = [
+        [-half, -half, -half],
+        [half, -half, -half],
+        [half, half, -half],
+        [-half, half, -half],
+        [-half, -half, half],
+        [half, -half, half],
+        [half, half, half],
+        [-half, half, half],
+    ];
+    let faces = [
+        ([0.0, 0.0, -1.0], [0, 3, 2, 1]),
+        ([0.0, 0.0, 1.0], [4, 5, 6, 7]),
+        ([0.0, -1.0, 0.0], [0, 1, 5, 4]),
+        ([0.0, 1.0, 0.0], [3, 2, 6, 7]),
+        ([-1.0, 0.0, 0.0], [0, 4, 7, 3]),
+        ([1.0, 0.0, 0.0], [1, 2, 6, 5]),
+    ];
+    let mut vertices = Vec::with_capacity(24);
+    let mut indices = Vec::with_capacity(36);
+    for (normal, face) in faces {
+        let first = vertices.len() as u32;
+        for corner in face {
+            vertices.push(MeshVertex::new(corners[corner], normal, 0));
+        }
+        indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
+#[test]
+fn cuts_a_closed_solid_on_the_section_plane() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(16, 16, 16);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "empty",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let world = Vec3::from(volume.world_extent());
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new();
+    section.fit(world, Vec3::ONE, 1.0);
+    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
+    let layers = [Layer {
+        key: LayerKey::stable(2, 0, 1),
+        mesh: Arc::new(PackedMesh::new(cube(4.0))),
+        style_start: 0,
+        style_count: 1,
+    }];
+    let scene = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let target = texture(&gpu, SIDE);
+    let target_view = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let view = View {
+        target: &target_view,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        assured: false,
+    };
+    let (pixels, info) = take(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &Take {
+            texture: &target,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            time: 0,
+            samples: 8,
+            history: None,
+        },
+    );
+    assert_eq!(info.cut.objects, 1, "the section misses the solid");
+    assert!(
+        info.cut.draws >= 2,
+        "the section does not outline its cut face"
+    );
+    let shot = Snapshot::new(
+        [SIDE, SIDE],
+        background(&gpu, &mut renderer, &view, &target, &volume),
+        pixels,
+    );
+    assert!(
+        shot.coverage(shot.middle()) > 0.25,
+        "the cut face barely covers the section: {:.2}",
+        shot.coverage(shot.middle())
+    );
+    assert!(
+        shot.hue(shot.middle(), Hue::Red) > 1_000,
+        "the cut face lost the colour of its solid: {} red pixels",
+        shot.hue(shot.middle(), Hue::Red)
+    );
+    assert!(
+        shot.painted([0, 0, SIDE / 8, SIDE / 8]) <= 1,
+        "the cut face spills outside the solid"
+    );
+}
+
+fn drawn<'a, 'b>(
+    target: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    scene: &'a SceneFrame<'b>,
+) -> Frame<'a, 'b> {
+    Frame {
+        target,
+        size: [SIDE, SIDE],
+        panes: panes(camera, section, WHOLE, CORNER),
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        samples: 8,
+        scene,
+        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
+        prefetch: false,
+        level_cap: usize::MAX,
+        assured: false,
+        temporal: None,
+    }
+}
+
+#[test]
+fn rebuilds_the_scene_only_when_its_content_changes() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut moved = camera.clone();
+    moved.orbit(glam::Vec2::new(0.2, 0.1));
+    let section = SectionCamera::new();
+    let settled = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let changed = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let target = texture(&gpu, SIDE);
+    let view = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let first = renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        drawn(&view, &camera, &section, &settled),
+    );
+    assert!(first.rebuilt, "the first frame reused an empty scene");
+    take(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &Take {
+            texture: &target,
+            camera: &camera,
+            section: &section,
+            scene: &settled,
+            time: 0,
+            samples: 8,
+            history: None,
+        },
+    );
+    let moved_info = renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        drawn(&view, &moved, &section, &settled),
+    );
+    assert!(
+        !moved_info.rebuilt,
+        "a moved camera rebuilt the scene it still shows"
+    );
+    let changed_info = renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        drawn(&view, &camera, &section, &changed),
+    );
+    assert!(
+        changed_info.rebuilt,
+        "a new content revision kept the previous scene"
     );
 }
