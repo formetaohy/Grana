@@ -142,7 +142,7 @@ impl Signature<'_, '_> {
     }
 }
 
-fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
+pub(super) fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
     camera.pivot.map(f32::to_bits).hash(hasher);
     camera.yaw.to_bits().hash(hasher);
     camera.pitch.to_bits().hash(hasher);
@@ -152,7 +152,7 @@ fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
     camera.focus.to_bits().hash(hasher);
 }
 
-fn hash_section(view: SectionState, hasher: &mut DefaultHasher) {
+pub(super) fn hash_section(view: SectionState, hasher: &mut DefaultHasher) {
     view.center.map(f32::to_bits).hash(hasher);
     view.azimuth.to_bits().hash(hasher);
     view.elevation.to_bits().hash(hasher);

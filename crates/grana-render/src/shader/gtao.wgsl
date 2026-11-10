@@ -60,7 +60,11 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let pixel = vec2<i32>(id.xy);
-    let volume_at = pixel + vec2<i32>(ao.region.xy);
+    let volume_scale = max(ao.noise.z, 1.0);
+    var volume_at = pixel + vec2<i32>(ao.region.xy);
+    if (volume_scale > 1.0) {
+        volume_at = vec2<i32>(floor(vec2<f32>(pixel) / volume_scale));
+    }
     var depth = textureLoad(surface_depth, pixel, 0);
     var raw_normal = textureLoad(surface_normal, pixel, 0).xyz;
     var surface = depth < 1.0 && length(raw_normal) >= 0.5;

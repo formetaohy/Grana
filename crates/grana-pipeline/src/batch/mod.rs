@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use grana_protocol::Protocol;
 use thiserror::Error;
 
-use crate::snapshot::Snapshotter;
+use crate::capture::Capture;
 use discover::dataset_workers;
 use gate::Gate;
 use pipeline::{analyse, artifacts};
@@ -37,8 +37,6 @@ const RESULT: &str = "result.json";
 
 const PARTIAL: &str = "partial";
 
-const SNAPSHOT: &str = "snapshot.png";
-
 pub const MAX_JOBS: usize = 16;
 
 const ANALYSIS_REVISION: u32 = 10;
@@ -50,7 +48,7 @@ pub struct Plan {
     pub jobs: usize,
     pub project: bool,
     pub channels: bool,
-    pub snapshot: Option<Arc<dyn Snapshotter>>,
+    pub capture: Option<Arc<dyn Capture>>,
 }
 
 pub enum Event {
@@ -183,7 +181,7 @@ struct Task<'a> {
     project: bool,
     channels: bool,
     corrected: bool,
-    snapshot: Option<&'a dyn Snapshotter>,
+    capture: Option<&'a dyn Capture>,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
     gate: &'a Gate,
@@ -255,7 +253,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                             project: plan.project,
                             channels: plan.channels,
                             corrected: corrections[index].is_some(),
-                            snapshot: plan.snapshot.as_deref(),
+                            capture: plan.capture.as_deref(),
                             events: &events,
                             cancel: &cancel,
                             gate: &gate,
@@ -328,16 +326,16 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
 }
 
 fn prepare(plan: &Plan, corrections: &[Option<Protocol>]) -> Result<(), String> {
-    let snapshot = plan.protocol.snapshot().is_some()
+    let captures = plan.protocol.snapshot().is_some()
         || corrections
             .iter()
             .flatten()
             .any(|protocol| protocol.snapshot().is_some());
-    if snapshot {
-        let snapshotter = plan.snapshot.as_ref().ok_or_else(|| {
-            "the protocol requests quality snapshots but this run carries no renderer".to_string()
+    if captures {
+        let capture = plan.capture.as_ref().ok_or_else(|| {
+            "the protocol requests captures but this run carries no renderer".to_string()
         })?;
-        snapshotter.open()?;
+        capture.open()?;
     }
     std::fs::create_dir_all(&plan.output)
         .map_err(|error| format!("failed to create {}: {error}", plan.output.display()))?;

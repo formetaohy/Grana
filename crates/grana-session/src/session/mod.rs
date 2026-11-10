@@ -55,7 +55,7 @@ use crate::{Action, Analysis, Command, Series, Source};
 use field::{Fields, Recovered};
 use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
-    Batch, BatchEvent, BatchPoll, Event, Outcome, Plan as BatchPlan, SnapshotFactory,
+    Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
 
@@ -133,7 +133,7 @@ pub struct Session {
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
-    snapshotter: Option<SnapshotFactory>,
+    capturer: Option<CaptureFactory>,
     series: Vec<Series>,
     series_index: usize,
     plate: Option<Plate>,
@@ -208,7 +208,7 @@ impl Session {
             label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
-            snapshotter: None,
+            capturer: None,
             series: Vec::new(),
             series_index: 0,
             plate: None,

@@ -16,6 +16,7 @@ use grana_volume::{
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
 
 const SIDE: u32 = 128;
+const WIDE: u32 = 1536;
 const SAMPLES: u32 = 4;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
@@ -78,6 +79,42 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         prefetch: false,
         level_cap: usize::MAX,
         assured: view.assured,
+    }
+}
+
+fn wide<'a, 'b>(
+    target: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    scene: &'a SceneFrame<'b>,
+    assured: bool,
+) -> Frame<'a, 'b> {
+    Frame {
+        target,
+        size: [WIDE, WIDE],
+        panes: [
+            Some(PaneFrame::Volume {
+                camera,
+                lens: Lens {
+                    camera,
+                    aspect: 1.0,
+                },
+                region: [0, 0, WIDE, WIDE],
+            }),
+            None,
+            None,
+            None,
+        ],
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        samples: SAMPLES,
+        scene,
+        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
+        prefetch: false,
+        level_cap: usize::MAX,
+        assured,
     }
 }
 
@@ -1162,6 +1199,125 @@ fn clips_an_oriented_region() {
         shot.hue(shot.right(), Hue::Green) < 20,
         "the oriented region kept the dropped ball: {} pixels",
         shot.hue(shot.right(), Hue::Green)
+    );
+}
+
+fn stream_wide(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    volume: &Volume,
+    target: &wgpu::TextureView,
+    scene: &SceneFrame<'_>,
+    camera: &Camera,
+) -> grana_render::FrameInfo {
+    let grid = BrickGrid::new(volume.extent());
+    renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        wide(target, camera, scene, false),
+    );
+    for _ in 0..64 {
+        if let Some(requests) = next_demand(gpu, renderer) {
+            let bricks = requests
+                .volume
+                .iter()
+                .chain(&requests.section)
+                .map(|request| (*request, volume.brick(&grid, request.coord)))
+                .collect::<Vec<_>>();
+            renderer.upload(gpu.queue(), &bricks);
+        }
+        let info = renderer.draw(
+            gpu.device(),
+            gpu.queue(),
+            wide(target, camera, scene, false),
+        );
+        if !renderer.requests_pending() && info.samples >= SAMPLES && info.settled {
+            return info;
+        }
+    }
+    panic!("the wide frame never settled");
+}
+
+fn wide_brightness(pixels: &[[u8; 4]]) -> f64 {
+    let total = pixels
+        .iter()
+        .map(|pixel| pixel[0] as u64 + pixel[1] as u64 + pixel[2] as u64)
+        .sum::<u64>();
+    total as f64 / pixels.len() as f64
+}
+
+#[test]
+fn scales_a_moving_volume_to_lower_resolution() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, WIDE);
+    let view = target.create_view(&Default::default());
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let resting = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &camera);
+    assert_eq!(
+        resting.volume_scale[0], 1,
+        "a resting view resolves at full volume resolution"
+    );
+    let settled = read_pixels(&gpu, &target, [WIDE, WIDE]);
+    assert!(
+        wide_brightness(&settled) > 1.0,
+        "the resting volume rendered nothing"
+    );
+    let mut moved = Camera::new(35.0);
+    moved.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut state = moved.state();
+    state.yaw = 0.35;
+    moved.restore(state);
+    let moving = renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        wide(&view, &moved, &scene, false),
+    );
+    assert_eq!(
+        moving.volume_scale[0], 2,
+        "a moving view halves its volume resolution"
+    );
+    let coarse = read_pixels(&gpu, &target, [WIDE, WIDE]);
+    let returning = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &moved);
+    assert_eq!(
+        returning.volume_scale[0], 1,
+        "the volume returns to full resolution once the view rests"
+    );
+    let fine = read_pixels(&gpu, &target, [WIDE, WIDE]);
+    let coarse_mean = wide_brightness(&coarse);
+    let fine_mean = wide_brightness(&fine);
+    assert!(
+        fine_mean > 1.0,
+        "the settled volume rendered nothing: {fine_mean}"
+    );
+    assert!(
+        (coarse_mean - fine_mean).abs() < 0.5 * fine_mean,
+        "the scaled volume diverged from the settled one: {coarse_mean} against {fine_mean}"
+    );
+    let mut other = Camera::new(35.0);
+    other.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut state = other.state();
+    state.yaw = -0.4;
+    other.restore(state);
+    let assured = renderer.draw(gpu.device(), gpu.queue(), wide(&view, &other, &scene, true));
+    assert_eq!(
+        assured.volume_scale[0], 1,
+        "an assured frame keeps the full volume resolution"
     );
 }
 

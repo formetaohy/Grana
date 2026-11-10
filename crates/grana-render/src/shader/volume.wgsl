@@ -510,7 +510,7 @@ struct VolumeOutput {
 
 fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
     let size = vec2<i32>(frame.viewport.zw);
-    let at = vec2<i32>(floor(pixel - frame.viewport.xy));
+    let at = vec2<i32>(floor(volume_target_pixel(pixel) - frame.viewport.xy));
     if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
         return 1.0;
     }
@@ -526,7 +526,8 @@ fn clip_depth(world: vec3<f32>) -> f32 {
 fn fs_main(input: VertexOutput) -> VolumeOutput {
     let ndc = input.ndc + frame.jitter.xy;
     let pixel = vec2<i32>(input.clip_position.xy);
-    let ao = ambient_occlusion(vec2<f32>(input.clip_position.xy));
+    let scene_pixel = vec2<i32>(floor(volume_target_pixel(input.clip_position.xy)));
+    let ao = ambient_occlusion(input.clip_position.xy);
     let ray = camera_ray(ndc);
     let origin = ray.origin;
     let direction = ray.direction;
@@ -539,7 +540,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     let lowest_t = min(near_t, far_t);
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
-    let object = object_distance(origin, textureLoad(object_depth, pixel, 0), ndc);
+    let object = object_distance(origin, textureLoad(object_depth, scene_pixel, 0), ndc);
     let region = region_interval(origin, direction);
     let plane = clip_interval(origin, direction);
     let clip = vec2<f32>(max(region.x, plane.x), min(region.y, plane.y));

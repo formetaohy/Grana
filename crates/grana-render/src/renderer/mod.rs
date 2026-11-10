@@ -21,15 +21,16 @@ use grana_volume::{
     BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
 };
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
-    Operations, Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
-    RenderPassDescriptor, Sampler, SamplerDescriptor, StoreOp, TexelCopyBufferLayout,
-    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, CommandEncoder, Device,
+    Extent3d, LoadOp, Operations, Queue, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, Sampler, SamplerDescriptor, StoreOp,
+    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::brick::{BrickArena, BrickTable};
+use crate::composite::CompositePass;
 use crate::converge::Convergence;
 use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, SharedView, VolumeView};
@@ -100,9 +101,10 @@ pub struct OitInfo {
     pub dropped: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct FrameInfo {
     pub panes: [ViewInfo; PANE_COUNT],
+    pub volume_scale: [u32; PANE_COUNT],
     pub cut: CutInfo,
     pub oit: OitInfo,
     pub bytes: u64,
@@ -113,6 +115,25 @@ pub struct FrameInfo {
     pub truncated: bool,
     pub fading: bool,
     pub profile: FrameProfile,
+}
+
+impl Default for FrameInfo {
+    fn default() -> Self {
+        Self {
+            panes: [ViewInfo::default(); PANE_COUNT],
+            volume_scale: [1; PANE_COUNT],
+            cut: CutInfo::default(),
+            oit: OitInfo::default(),
+            bytes: 0,
+            geometry: 0,
+            fragments: 0,
+            samples: 0,
+            settled: false,
+            truncated: false,
+            fading: false,
+            profile: FrameProfile::default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -201,6 +222,8 @@ pub struct Renderer {
     planner: Option<Planner>,
     shadow: Option<Shadow>,
     volume: VolumePass,
+    composite: CompositePass,
+    gtao: crate::ao::AoPipeline,
     section: SectionPass,
     cut: [CutLayer; PANE_COUNT],
     slice: [SlicePass; PANE_COUNT],
@@ -215,6 +238,7 @@ pub struct Renderer {
     time: u32,
     volume_level: [Option<usize>; PANE_COUNT],
     section_level: [Option<usize>; PANE_COUNT],
+    motion: [Option<u64>; PANE_COUNT],
     section_probe: [SectionProbe; PANE_COUNT],
     section_measure: [Option<(u64, SectionMeasure)>; PANE_COUNT],
     section_sequence: u64,
@@ -284,6 +308,8 @@ impl Renderer {
             planner: None,
             shadow: None,
             volume: VolumePass::new(device, &layouts),
+            composite: CompositePass::new(device, &layouts),
+            gtao: crate::ao::AoPipeline::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             cut: std::array::from_fn(|_| CutLayer::new(device, &layouts)),
             slice: std::array::from_fn(|_| SlicePass::new(device, &layouts)),
@@ -299,6 +325,7 @@ impl Renderer {
             time: 0,
             volume_level: [None; PANE_COUNT],
             section_level: [None; PANE_COUNT],
+            motion: [None; PANE_COUNT],
             section_probe: std::array::from_fn(|_| SectionProbe::default()),
             section_measure: std::array::from_fn(|_| None),
             section_sequence: 0,
@@ -419,6 +446,7 @@ impl Renderer {
         self.prefetch_rate = 1.0;
         self.sampled = false;
         self.frames.fill(None);
+        self.motion = [None; PANE_COUNT];
         self.info = FrameInfo::default();
     }
 
@@ -534,6 +562,7 @@ impl Renderer {
         self.planned = None;
         self.exporting = false;
         self.fade = None;
+        self.motion = [None; PANE_COUNT];
         self.info = FrameInfo::default();
     }
 

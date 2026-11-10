@@ -80,7 +80,7 @@ impl App {
     pub fn new(capture: Option<PathBuf>, startup: Option<String>) -> Self {
         let mut session = Session::new();
         session.attach_recent_store();
-        session.set_snapshot_factory(Arc::new(|| Arc::new(crate::snapshot::Snapshot::new())));
+        session.set_capture_factory(Arc::new(|| Arc::new(crate::capture::OfflineCapture::new())));
         Self {
             surface: None,
             session,

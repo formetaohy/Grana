@@ -379,6 +379,12 @@ impl Protocol {
             if !snapshot.views.is_empty() {
                 summary.push_str(&format!(" over {} views", snapshot.views.len()));
             }
+            if snapshot.movies {
+                summary.push_str(" and a movie");
+            }
+            if snapshot.sequences {
+                summary.push_str(" and a sequence");
+            }
         }
         summary
     }

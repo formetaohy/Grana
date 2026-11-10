@@ -1,12 +1,16 @@
 use super::signature::{
-    channel_style, channel_style_panes, digest, shadow_bounds, shadow_geometry,
+    channel_style, channel_style_panes, digest, hash_camera, hash_section, shadow_bounds,
+    shadow_geometry,
 };
 use super::*;
 use crate::ChannelRow;
+use crate::composite::CompositeFrame;
 use grana_display::ChannelMask;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
+const VOLUME_SCALE: u32 = 2;
+const VOLUME_SCALE_PIXELS: u64 = 1 << 21;
 
 impl Renderer {
     pub(super) fn render(
@@ -51,6 +55,35 @@ impl Renderer {
         });
         self.info.cut.objects = 0;
         self.info.cut.draws = 0;
+        let translucent = scene
+            .styles
+            .iter()
+            .any(|style| style.visible() && style.transparent())
+            || scene.markers.iter().any(|marker| marker.transparent());
+        let motion: [Option<u64>; PANE_COUNT] = std::array::from_fn(|index| {
+            panes[index].map(|pane| {
+                pane_motion(
+                    pane,
+                    bounds,
+                    time,
+                    pane_channels[index],
+                    pane_quality[index],
+                    exposure,
+                )
+            })
+        });
+        let moved: [bool; PANE_COUNT] =
+            std::array::from_fn(|index| motion[index] != self.motion[index]);
+        let scales: [u32; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
+            Some(PaneFrame::Volume { region, .. }) => volume_scale(
+                pane_quality[index],
+                [region[2].max(1), region[3].max(1)],
+                !self.exporting && !assured && !translucent && moved[index],
+            ),
+            _ => 1,
+        });
+        self.motion = motion;
+        self.info.volume_scale = scales;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
@@ -64,6 +97,8 @@ impl Renderer {
             bricks,
             planner,
             volume,
+            composite,
+            gtao,
             section: section_pass,
             cut,
             slice,
@@ -332,11 +367,6 @@ impl Renderer {
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
         let step_scale = |index: usize| steps[index];
-        let translucent = scene
-            .styles
-            .iter()
-            .any(|style| style.visible() && style.transparent())
-            || scene.markers.iter().any(|marker| marker.transparent());
         let mut volume_data: [Option<FrameData>; PANE_COUNT] = [None; PANE_COUNT];
         let mut section_data: [Option<SectionData>; PANE_COUNT] = [None; PANE_COUNT];
         let mut section_frame: [Option<FrameData>; PANE_COUNT] = [None; PANE_COUNT];
@@ -382,6 +412,12 @@ impl Renderer {
                         region[3] as f32,
                     ];
                     data.oit = [u32::from(translucent), 0, 0, 0];
+                    let origin = if scales[index] == 1 {
+                        [0, 0]
+                    } else {
+                        [region[0], region[1]]
+                    };
+                    data.set_volume_layer(scales[index], origin);
 
                     volume_data[index] = Some(data);
                     lenses[index] = Some(*lens);
@@ -553,7 +589,11 @@ impl Renderer {
                 continue;
             };
             let extent = panes[index].as_ref().map_or([1, 1], |pane| {
-                [pane.region()[2].max(1), pane.region()[3].max(1)]
+                let scale = scales[index];
+                [
+                    pane.region()[2].max(1).div_ceil(scale),
+                    pane.region()[3].max(1).div_ceil(scale),
+                ]
             });
             let offset = sample::offset(sample_index, extent);
             data.jitter = [
@@ -710,11 +750,26 @@ impl Renderer {
                     continue;
                 }
                 let extent = [region[2].max(1), region[3].max(1)];
-                if target.ao[index]
-                    .as_ref()
-                    .is_none_or(|ao| ao.size() != extent || ao.volume_size() != size)
-                {
-                    target.ao[index] = Some(crate::ao::Ao::new(device, layouts, extent, size));
+                let scale = scales[index];
+                if target.ao[index].as_ref().is_none_or(|ao| {
+                    ao.size() != extent || ao.volume_size() != size || ao.scale() != scale
+                }) {
+                    target.ao[index] = Some(crate::ao::Ao::new(
+                        device,
+                        layouts,
+                        gtao.pipeline(),
+                        extent,
+                        size,
+                        scale,
+                    ));
+                }
+                if scale > 1 {
+                    target.ensure_volume_layer(
+                        device,
+                        layouts,
+                        index,
+                        [extent[0].div_ceil(scale), extent[1].div_ceil(scale)],
+                    );
                 }
                 let ao = target.ao[index]
                     .as_ref()
@@ -1015,24 +1070,49 @@ impl Renderer {
                         }
                         mark(profile, &mut encoder, Stage::Volume, &mut marks);
                         if volume_visible[index] {
-                            volume.draw(
-                                &mut encoder,
-                                crate::volume::VolumeFrame {
-                                    target: target.scene.color(),
-                                    normal: target.ao[index]
-                                        .as_ref()
-                                        .expect("the ambient occlusion target is ready")
-                                        .volume_normal(),
-                                    region: *region,
-                                    scene: group,
-                                    level: level_group,
-                                    atlas: atlas.group(),
-                                    depth_group: target.scene.depth_group(),
-                                    shadow: shadow_group,
-                                    oit: oit_group,
-                                    ao: ao_group,
-                                },
-                            );
+                            let normal = target.ao[index]
+                                .as_ref()
+                                .expect("the ambient occlusion target is ready")
+                                .volume_normal();
+                            let volume_frame = crate::volume::VolumeFrame {
+                                target: target.scene.color(),
+                                normal,
+                                region: *region,
+                                clear: false,
+                                scene: group,
+                                level: level_group,
+                                atlas: atlas.group(),
+                                depth_group: target.scene.depth_group(),
+                                shadow: shadow_group,
+                                oit: oit_group,
+                                ao: ao_group,
+                            };
+                            if scales[index] == 1 {
+                                volume.draw(&mut encoder, volume_frame);
+                            } else {
+                                let layer = target.volume[index]
+                                    .as_ref()
+                                    .expect("the volume layer is ready");
+                                volume.draw(
+                                    &mut encoder,
+                                    crate::volume::VolumeFrame {
+                                        target: &layer.view,
+                                        region: [0, 0, layer.size[0], layer.size[1]],
+                                        clear: true,
+                                        ..volume_frame
+                                    },
+                                );
+                                composite.draw(
+                                    &mut encoder,
+                                    CompositeFrame {
+                                        target: target.scene.color(),
+                                        region: *region,
+                                        scene: group,
+                                        depth: target.scene.depth_group(),
+                                        layer: &layer.group,
+                                    },
+                                );
+                            }
                         }
                     }
                     PaneFrame::Section { region, .. } => {
@@ -1168,7 +1248,57 @@ impl Renderer {
             .unwrap_or(0);
         info.oit.dropped = dropped.iter().sum();
         info.cut.indices = slice.iter().map(SlicePass::index_bytes).sum();
+        info.volume_scale = scales;
         *info
+    }
+}
+
+fn pane_motion(
+    pane: PaneFrame<'_>,
+    clip: Region,
+    time: u32,
+    channels: ChannelMask,
+    quality: Quality,
+    exposure: f32,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    match pane {
+        PaneFrame::Volume {
+            camera,
+            lens,
+            region,
+        } => {
+            hash_camera(camera.state(), &mut hasher);
+            lens.aspect.to_bits().hash(&mut hasher);
+            region.hash(&mut hasher);
+        }
+        PaneFrame::Section { section, region } => {
+            hash_section(section.state(), &mut hasher);
+            region.hash(&mut hasher);
+        }
+    }
+    time.hash(&mut hasher);
+    channels.hidden().hash(&mut hasher);
+    quality.index().hash(&mut hasher);
+    exposure.to_bits().hash(&mut hasher);
+    clip.enabled().hash(&mut hasher);
+    clip.center().to_array().map(f32::to_bits).hash(&mut hasher);
+    clip.half().to_array().map(f32::to_bits).hash(&mut hasher);
+    for axis in 0..3 {
+        clip.axis(axis)
+            .to_array()
+            .map(f32::to_bits)
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn volume_scale(quality: Quality, extent: [u32; 2], allowed: bool) -> u32 {
+    let pixels = u64::from(extent[0]) * u64::from(extent[1]);
+    if allowed && quality != Quality::High && pixels >= VOLUME_SCALE_PIXELS {
+        VOLUME_SCALE
+    } else {
+        1
     }
 }
 

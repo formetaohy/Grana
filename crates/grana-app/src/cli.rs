@@ -7,8 +7,8 @@ use grana_protocol::Protocol;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::app::App;
+use crate::capture::OfflineCapture;
 use crate::render::Request;
-use crate::snapshot::Snapshot;
 
 pub fn gui(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
     let event_loop = EventLoop::new().expect("failed to create the event loop");
@@ -69,7 +69,7 @@ pub fn batch(
         jobs: jobs.unwrap_or_else(grana_pipeline::default_jobs),
         project,
         channels,
-        snapshot: Some(Arc::new(Snapshot::new())),
+        capture: Some(Arc::new(OfflineCapture::new())),
     });
     listen(running.control());
     let mut failures = 0;

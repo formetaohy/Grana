@@ -837,6 +837,15 @@ fn replays_a_captured_protocol() {
         Protocol::from_json(&broken.to_string()).is_err(),
         "a snapshot rejects a view the protocol does not carry"
     );
+    let mut filmed: serde_json::Value = serde_json::from_str(&text).expect("the protocol is json");
+    filmed["snapshot"]["movies"] = serde_json::Value::Bool(true);
+    filmed["snapshot"]["sequences"] = serde_json::Value::Bool(true);
+    let filmed = Protocol::from_json(&filmed.to_string()).expect("a snapshot films its views");
+    let snapshot = filmed.snapshot().expect("the protocol snapshots");
+    assert!(
+        snapshot.movies() && snapshot.sequences(),
+        "a snapshot records that it films and frames its views"
+    );
     let mut staged_scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
     let staged = restored
         .stage(&mut staged_scene)

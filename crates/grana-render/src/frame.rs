@@ -42,6 +42,7 @@ pub(crate) struct FrameData {
     pub edge: [f32; 4],
     pub projection: [f32; 4],
     pub lens: [f32; 4],
+    pub volume_layer: [f32; 4],
 }
 
 #[repr(C)]
@@ -86,7 +87,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1296);
+    assert!(size_of::<FrameData>() == 1312);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -99,6 +100,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, edge) == 1248);
     assert!(std::mem::offset_of!(FrameData, projection) == 1264);
     assert!(std::mem::offset_of!(FrameData, lens) == 1280);
+    assert!(std::mem::offset_of!(FrameData, volume_layer) == 1296);
     assert!(size_of::<SectionData>() == 432);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -175,6 +177,7 @@ impl FrameData {
             edge: [UNREACHED; 4],
             projection: [1.0, 0.0, 0.0, 0.0],
             lens: [0.0, 0.0, 1.0, 0.0],
+            volume_layer: [1.0, 0.0, 0.0, 0.0],
         }
     }
 
@@ -282,7 +285,16 @@ impl FrameData {
                 half_height,
             ],
             lens: [0.0, 0.0, camera.focus(), camera.aperture()],
+            volume_layer: [1.0, 0.0, 0.0, 0.0],
         }
+    }
+
+    pub fn set_volume_layer(&mut self, scale: u32, origin: [u32; 2]) {
+        assert!(
+            scale >= 1,
+            "a volume layer divides the pane by at least one"
+        );
+        self.volume_layer = [scale as f32, origin[0] as f32, origin[1] as f32, 0.0];
     }
 }
 

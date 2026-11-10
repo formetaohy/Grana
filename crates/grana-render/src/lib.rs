@@ -1,6 +1,7 @@
 mod ao;
 mod atlas;
 mod brick;
+mod composite;
 mod converge;
 mod cut;
 mod detail;

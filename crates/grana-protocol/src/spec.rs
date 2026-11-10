@@ -182,6 +182,10 @@ pub struct SnapshotSpec {
     pub transparent: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub movies: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sequences: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2050,6 +2054,8 @@ impl SnapshotSpec {
             height: (width * 5 / 8).max(Self::MIN),
             transparent,
             views,
+            movies: false,
+            sequences: false,
         }
     }
 
@@ -2061,12 +2067,31 @@ impl SnapshotSpec {
         &self.views
     }
 
+    pub fn movies(&self) -> bool {
+        self.movies
+    }
+
+    pub fn sequences(&self) -> bool {
+        self.sequences
+    }
+
     pub fn size_for(&self, export: Option<Export>) -> [u32; 2] {
         match export {
             Some(export) if (Self::MIN..=Self::MAX).contains(&export.image) => {
                 let height = (u64::from(export.image) * u64::from(self.height)
                     / u64::from(self.width.max(1))) as u32;
                 [export.image, height.clamp(Self::MIN, Self::MAX)]
+            }
+            _ => [self.width, self.height],
+        }
+    }
+
+    pub fn film_size_for(&self, export: Option<Export>) -> [u32; 2] {
+        match export {
+            Some(export) if (Self::MIN..=Self::MAX).contains(&export.movie) => {
+                let height = (u64::from(export.movie) * u64::from(self.height)
+                    / u64::from(self.width.max(1))) as u32;
+                [export.movie, height.clamp(Self::MIN, Self::MAX)]
             }
             _ => [self.width, self.height],
         }

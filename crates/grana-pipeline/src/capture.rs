@@ -6,23 +6,29 @@ use grana_scene::Scene;
 
 use crate::channels::Channels;
 
-pub struct SnapshotRequest {
-    pub view: Option<ViewState>,
-    pub size: [u32; 2],
-    pub transparent: bool,
-    pub time: u32,
+pub enum Kind {
+    Still { time: u32 },
+    Movie,
+    Sequence,
 }
 
-pub trait Snapshotter: Send + Sync {
+pub struct CaptureRequest {
+    pub view: ViewState,
+    pub size: [u32; 2],
+    pub transparent: bool,
+    pub kind: Kind,
+}
+
+pub trait Capture: Send + Sync {
     fn open(&self) -> Result<(), String>;
 
-    fn snapshot(
+    fn capture(
         &self,
         channels: &Channels,
         scene: &Scene,
-        request: &SnapshotRequest,
+        request: &CaptureRequest,
         path: &Path,
     ) -> Result<(), String>;
 }
 
-pub type SnapshotFactory = Arc<dyn Fn() -> Arc<dyn Snapshotter> + Send + Sync>;
+pub type CaptureFactory = Arc<dyn Fn() -> Arc<dyn Capture> + Send + Sync>;

@@ -43,7 +43,7 @@ pub(super) fn write(
         };
         let dataset = &plan.datasets[index];
         let folder = plan.output.join(dataset.folder());
-        let Some(file) = super::pipeline::snapshot_files(&plan.protocol)
+        let Some(file) = super::pipeline::capture_files(&plan.protocol, "snapshot", Some("png"))
             .into_iter()
             .next()
         else {

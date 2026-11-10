@@ -166,11 +166,18 @@ pub(super) struct FrameTarget {
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: [Option<Oit>; PANE_COUNT],
     pub(super) ao: [Option<crate::ao::Ao>; PANE_COUNT],
+    pub(super) volume: [Option<VolumeLayer>; PANE_COUNT],
     pub(super) size: [u32; 2],
     pub(super) samples: u32,
     pub(super) signature: Option<u64>,
     pub(super) transition: Option<u64>,
     pub(super) levels: Option<LevelKey>,
+}
+
+pub(super) struct VolumeLayer {
+    pub(super) size: [u32; 2],
+    pub(super) view: TextureView,
+    pub(super) group: BindGroup,
 }
 
 pub(super) struct FadeTarget {
@@ -199,12 +206,57 @@ impl FrameTarget {
             fade: None,
             oit: std::array::from_fn(|_| None),
             ao: std::array::from_fn(|_| None),
+            volume: std::array::from_fn(|_| None),
             size,
             samples: 0,
             signature: None,
             transition: None,
             levels: None,
         }
+    }
+
+    pub(super) fn ensure_volume_layer(
+        &mut self,
+        device: &Device,
+        layouts: &Layouts,
+        index: usize,
+        size: [u32; 2],
+    ) {
+        assert!(index < PANE_COUNT, "a volume layer names one of the panes");
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a volume layer covers a positive pane"
+        );
+        if self.volume[index]
+            .as_ref()
+            .is_some_and(|layer| layer.size == size)
+        {
+            return;
+        }
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("grana.volume.layer"),
+            size: Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: crate::target::SCENE_FORMAT,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = target::view(&texture);
+        let group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.volume.layer.group"),
+            layout: &layouts.layer,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&view),
+            }],
+        });
+        self.volume[index] = Some(VolumeLayer { size, view, group });
     }
 
     pub(super) fn fade_group(&mut self, device: &Device, present: &Present) -> &BindGroup {

@@ -30,7 +30,7 @@ const SHADER: &str = concat!(
     include_str!("shader/volume.wgsl")
 );
 
-const BLEND: BlendState = BlendState {
+pub(crate) const BLEND: BlendState = BlendState {
     color: BlendComponent {
         src_factor: BlendFactor::One,
         dst_factor: BlendFactor::OneMinusSrcAlpha,
@@ -51,6 +51,7 @@ pub(crate) struct VolumeFrame<'a> {
     pub target: &'a TextureView,
     pub normal: &'a TextureView,
     pub region: [u32; 4],
+    pub clear: bool,
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
     pub atlas: &'a BindGroup,
@@ -113,7 +114,11 @@ impl VolumePass {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Load,
+                        load: if frame.clear {
+                            LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        } else {
+                            LoadOp::Load
+                        },
                         store: StoreOp::Store,
                     },
                 }),

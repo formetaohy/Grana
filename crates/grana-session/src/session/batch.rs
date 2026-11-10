@@ -241,7 +241,7 @@ impl Session {
             jobs: self.batch_jobs,
             project: self.batch_project,
             channels: self.batch_channels,
-            snapshot: self.snapshotter.as_ref().map(|factory| factory()),
+            capture: self.capturer.as_ref().map(|factory| factory()),
         }));
     }
 

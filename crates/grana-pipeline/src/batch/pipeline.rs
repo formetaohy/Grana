@@ -14,19 +14,19 @@ use grana_scene::{
 };
 use grana_volume::{Pyramid, Region};
 
+use crate::capture::{Capture, CaptureRequest, Kind as CaptureKind};
 use crate::channels::Channels;
 use crate::event::Event as RunEvent;
 use crate::label::Labeling;
 use crate::mesh::{self, Export as MeshExport};
 use crate::run;
-use crate::snapshot::SnapshotRequest;
-use grana_protocol::{Protocol, ProtocolError, Step, ViewSpec};
+use grana_protocol::{Protocol, ProtocolError, SnapshotSpec, Step, ViewSpec};
 
 use super::channel;
 use super::profile;
 use super::quality::{self, Quality};
 use super::resume::{Record, build};
-use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, SNAPSHOT, Task};
+use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, Task};
 
 const COLOC_PLOT: [u32; 2] = [720, 450];
 
@@ -342,29 +342,22 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         quality,
     };
     if let Some(spec) = task.protocol.snapshot() {
-        let snapshotter = task.snapshot.ok_or_else(|| {
-            "the protocol requests quality snapshots but this run carries no renderer".to_string()
+        let capture = task.capture.ok_or_else(|| {
+            "the protocol requests captures but this run carries no renderer".to_string()
         })?;
         let render = Channels::render(Arc::clone(&reader), &scene);
         let time = task.protocol.view().map_or(scene.time(), |view| view.time);
         scene.set_time(time.min(scene.frame_count() - 1));
+        let stems = capture_stems(task.protocol);
         if spec.views().is_empty() {
             let _ = task.events.send(Event::Step {
                 index: task.index,
-                label: format!("rendering the quality snapshot of {}", reader.name()),
+                label: format!("rendering the captures of {}", reader.name()),
             });
-            let request = SnapshotRequest {
-                view: task
-                    .protocol
-                    .view()
-                    .map(|view| view_state(Some(view), &scene)),
-                size: spec.size(),
-                transparent: spec.transparent,
-                time: scene.time(),
-            };
-            snapshotter.snapshot(&render, &scene, &request, &folder.join(SNAPSHOT))?;
+            let view = view_state(task.protocol.view(), &scene);
+            capture_view(capture, &render, &scene, &spec, view, folder, &stems[0])?;
         } else {
-            for (name, file) in spec.views().iter().zip(snapshot_files(task.protocol)) {
+            for (name, stem) in spec.views().iter().zip(&stems) {
                 let named = task
                     .protocol
                     .named_view(name)
@@ -375,13 +368,8 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                     index: task.index,
                     label: format!("rendering the view {name} of {}", reader.name()),
                 });
-                let request = SnapshotRequest {
-                    view: Some(view_state(Some(named.view()), &scene)),
-                    size: spec.size_for(named.view().export()),
-                    transparent: spec.transparent,
-                    time: scene.time(),
-                };
-                snapshotter.snapshot(&render, &scene, &request, &folder.join(file))?;
+                let view = view_state(Some(named.view()), &scene);
+                capture_view(capture, &render, &scene, &spec, view, folder, stem)?;
             }
             scene.set_time(time.min(scene.frame_count() - 1));
         }
@@ -1078,17 +1066,87 @@ fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
         .collect()
 }
 
-pub(super) fn snapshot_files(protocol: &Protocol) -> Vec<String> {
-    match protocol.snapshot() {
-        Some(snapshot) if !snapshot.views.is_empty() => snapshot
-            .views
-            .iter()
-            .enumerate()
-            .map(|(index, name)| format!("snapshot-{:02}-{}.png", index + 1, slug(name)))
-            .collect(),
-        Some(_) => vec![SNAPSHOT.to_string()],
-        None => Vec::new(),
+fn capture_view(
+    capture: &dyn Capture,
+    render: &Channels,
+    scene: &Scene,
+    spec: &SnapshotSpec,
+    view: ViewState,
+    folder: &Path,
+    stem: &str,
+) -> Result<(), String> {
+    let still_size = spec.size_for(Some(view.export));
+    let film_size = spec.film_size_for(Some(view.export));
+    let still = CaptureRequest {
+        view: view.clone(),
+        size: still_size,
+        transparent: spec.transparent,
+        kind: CaptureKind::Still { time: scene.time() },
+    };
+    capture.capture(
+        render,
+        scene,
+        &still,
+        &folder.join(format!("snapshot{stem}.png")),
+    )?;
+    if spec.movies() {
+        let film = CaptureRequest {
+            view: view.clone(),
+            size: film_size,
+            transparent: spec.transparent,
+            kind: CaptureKind::Movie,
+        };
+        capture.capture(
+            render,
+            scene,
+            &film,
+            &folder.join(format!("movie{stem}.mp4")),
+        )?;
     }
+    if spec.sequences() {
+        let frames = CaptureRequest {
+            view,
+            size: still_size,
+            transparent: spec.transparent,
+            kind: CaptureKind::Sequence,
+        };
+        capture.capture(
+            render,
+            scene,
+            &frames,
+            &folder.join(format!("sequence{stem}")),
+        )?;
+    }
+    Ok(())
+}
+
+fn capture_stems(protocol: &Protocol) -> Vec<String> {
+    let Some(snapshot) = protocol.snapshot() else {
+        return Vec::new();
+    };
+    if snapshot.views.is_empty() {
+        return vec![String::new()];
+    }
+    snapshot
+        .views
+        .iter()
+        .enumerate()
+        .map(|(index, name)| format!("-{:02}-{}", index + 1, slug(name)))
+        .collect()
+}
+
+pub(super) fn capture_files(
+    protocol: &Protocol,
+    prefix: &str,
+    extension: Option<&str>,
+) -> Vec<String> {
+    capture_stems(protocol)
+        .into_iter()
+        .map(|stem| match extension {
+            Some(extension) => format!("{prefix}{stem}.{extension}"),
+            None => format!("{prefix}{stem}"),
+        })
+        .collect()
 }
 
 pub(super) fn artifacts(
@@ -1126,8 +1184,14 @@ pub(super) fn artifacts(
     if channels {
         artifacts.push(format!("{}.ome.zarr", slug(name)));
     }
-    if protocol.snapshot().is_some() {
-        artifacts.extend(snapshot_files(protocol));
+    if let Some(snapshot) = protocol.snapshot() {
+        artifacts.extend(capture_files(protocol, "snapshot", Some("png")));
+        if snapshot.movies() {
+            artifacts.extend(capture_files(protocol, "movie", Some("mp4")));
+        }
+        if snapshot.sequences() {
+            artifacts.extend(capture_files(protocol, "sequence", None));
+        }
     }
     if project {
         artifacts.push(format!("{}.granaproj", slug(name)));

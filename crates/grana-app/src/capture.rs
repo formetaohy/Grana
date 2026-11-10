@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use grana_display::{PANE_GAP, Panes};
 use grana_engine::Panels;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
-use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
+use grana_pipeline::{Capture, CaptureKind, CaptureRequest, Channels};
 use grana_scene::Scene;
 use grana_ui::{Rect, Vec2};
 
@@ -12,17 +12,17 @@ use crate::bricks::ImageBricks;
 
 const STAGE_WIDTH: f32 = 1000.0;
 
-pub struct Snapshot {
+pub struct OfflineCapture {
     state: Mutex<Option<Offline>>,
 }
 
-impl Default for Snapshot {
+impl Default for OfflineCapture {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Snapshot {
+impl OfflineCapture {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(None),
@@ -38,51 +38,75 @@ impl Snapshot {
     }
 }
 
-impl Snapshotter for Snapshot {
+impl Capture for OfflineCapture {
     fn open(&self) -> Result<(), String> {
         self.state().map(|_| ())
     }
 
-    fn snapshot(
+    fn capture(
         &self,
         channels: &Channels,
         scene: &Scene,
-        request: &SnapshotRequest,
+        request: &CaptureRequest,
         path: &Path,
     ) -> Result<(), String> {
         let mut slot = self.state()?;
         let offline = slot.as_mut().expect("the offline context is ready");
         let mut panes = Panes::new();
-        if let Some(view) = &request.view {
-            panes.restore(view.panes);
-            panes.set_layout(view.layout);
-            panes.set_split(view.split);
-            panes.set_row(view.row);
-        }
+        panes.restore(request.view.panes);
+        panes.set_layout(request.view.layout);
+        panes.set_split(request.view.split);
+        panes.set_row(request.view.row);
         let panels = panels(&panes, request.size);
-        let regions = panels.export(request.size[0], false);
-        if request.view.is_none() {
-            panes.fit(
-                scene.dataset.world_size(),
-                scene.dataset.voxel_size(),
-                std::array::from_fn(|index| {
-                    regions.panes[index].map_or(1.0, |pane| aspect(pane.region))
-                }),
-            );
-        }
-        let task = Task {
-            plan: Plan {
-                destination: Destination::Image {
+        let views = panes.views();
+        let (destination, poses, fps) = match request.kind {
+            CaptureKind::Still { time } => (
+                Destination::Image {
                     path: path.to_path_buf(),
                 },
+                vec![Pose { time, views }],
+                0,
+            ),
+            CaptureKind::Movie => {
+                let poses = grana_offline::poses(&request.view.timeline);
+                if poses.is_empty() {
+                    return Err(format!(
+                        "the timeline of {} holds no keyframe to film",
+                        path.display()
+                    ));
+                }
+                (
+                    Destination::Movie {
+                        path: path.to_path_buf(),
+                    },
+                    poses,
+                    request.view.timeline.fps(),
+                )
+            }
+            CaptureKind::Sequence => {
+                let frames = scene.frame_count();
+                if frames == 0 {
+                    return Err(format!("{} holds no frame to render", path.display()));
+                }
+                let poses = (0..frames).map(|time| Pose { time, views }).collect();
+                (
+                    Destination::Sequence {
+                        directory: path.to_path_buf(),
+                        stem: grana_session::slug(scene.dataset.name()),
+                    },
+                    poses,
+                    0,
+                )
+            }
+        };
+        let task = Task {
+            plan: Plan {
+                destination,
                 panels,
                 width: request.size[0],
                 transparent: request.transparent,
-                poses: vec![Pose {
-                    time: request.time,
-                    views: panes.views(),
-                }],
-                fps: 0,
+                poses,
+                fps,
                 region: scene.region,
             },
             scene: scene.snapshot().into_scene(),
@@ -94,10 +118,7 @@ impl Snapshotter for Snapshot {
         match offline.render(task) {
             Outcome::Complete { .. } => Ok(()),
             Outcome::Failed { detail } => Err(detail),
-            Outcome::Cancelled => Err(format!(
-                "the quality snapshot at {} was cancelled",
-                path.display()
-            )),
+            Outcome::Cancelled => Err(format!("the capture at {} was cancelled", path.display())),
         }
     }
 }
@@ -105,7 +126,7 @@ impl Snapshotter for Snapshot {
 fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
     assert!(
         size[0] > 0 && size[1] > 0,
-        "a quality snapshot covers at least one pixel"
+        "a capture covers at least one pixel"
     );
     let height = STAGE_WIDTH * size[1] as f32 / size[0] as f32;
     let rects = panes.rects([0.0, 0.0, STAGE_WIDTH, height], PANE_GAP);
@@ -120,8 +141,4 @@ fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
             )
         })
     }))
-}
-
-fn aspect(region: [u32; 4]) -> f32 {
-    region[2].max(1) as f32 / region[3].max(1) as f32
 }

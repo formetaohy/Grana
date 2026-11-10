@@ -49,8 +49,8 @@ impl Session {
         }
     }
 
-    pub fn set_snapshot_factory(&mut self, factory: SnapshotFactory) {
-        self.snapshotter = Some(factory);
+    pub fn set_capture_factory(&mut self, factory: CaptureFactory) {
+        self.capturer = Some(factory);
     }
 
     pub fn begin_load(&mut self, path: PathBuf) {
