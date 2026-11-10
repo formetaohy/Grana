@@ -531,7 +531,7 @@ struct VolumeOutput {
 
 fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
     let size = vec2<i32>(frame.viewport.zw);
-    let at = vec2<i32>(floor(volume_target_pixel(pixel) - frame.viewport.xy));
+    let at = vec2<i32>(floor(pixel)) - vec2<i32>(frame.viewport.xy);
     if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
         return 1.0;
     }
@@ -546,7 +546,7 @@ fn clip_depth(world: vec3<f32>) -> f32 {
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
     let ndc = input.ndc + frame.jitter.xy;
-    let scene_pixel = vec2<i32>(floor(volume_target_pixel(input.clip_position.xy)));
+    let scene_pixel = vec2<i32>(floor(input.clip_position.xy));
     let ao = ambient_occlusion(input.clip_position.xy);
     let ray = camera_ray(ndc);
     let origin = ray.origin;

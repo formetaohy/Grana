@@ -12,25 +12,12 @@ use crate::message::Message;
 use crate::panel::Panel;
 use crate::stage::Stage;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ViewStats {
     pub level: usize,
     pub visible: usize,
     pub demand: usize,
     pub resident: usize,
-    pub scale: u32,
-}
-
-impl Default for ViewStats {
-    fn default() -> Self {
-        Self {
-            level: 0,
-            visible: 0,
-            demand: 0,
-            resident: 0,
-            scale: 1,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

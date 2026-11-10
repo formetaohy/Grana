@@ -1,7 +1,6 @@
 mod ao;
 mod atlas;
 mod brick;
-mod composite;
 mod converge;
 mod cut;
 mod detail;
@@ -35,8 +34,7 @@ pub use marker::Marker;
 pub use pick::PickId;
 pub use profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage, frame_target};
 pub use renderer::{
-    CutInfo, Frame, FrameInfo, Governor, Lens, Load, OitInfo, PaneFrame, Renderer, Requests,
-    Resolution, ViewInfo,
+    CutInfo, Frame, FrameInfo, Governor, Lens, OitInfo, PaneFrame, Renderer, Requests, ViewInfo,
 };
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};
 pub use temporal::Temporal;

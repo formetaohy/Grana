@@ -4,12 +4,10 @@ use super::signature::{
 };
 use super::*;
 use crate::ChannelRow;
-use crate::composite::CompositeFrame;
 use grana_display::ChannelMask;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
-const LOD_PENALTY_LIMIT: f32 = 2.0;
 
 impl Renderer {
     pub(super) fn render(
@@ -34,7 +32,7 @@ impl Renderer {
             prefetch,
             level_cap: _,
             assured,
-            temporal: requested,
+            temporal,
         } = frame;
         for pane in panes.iter().flatten() {
             assert!(inside(pane.region(), size), "the panes lie on the surface");
@@ -74,20 +72,14 @@ impl Renderer {
         });
         let moved: [bool; PANE_COUNT] =
             std::array::from_fn(|index| motion[index] != self.motion[index]);
-        self.interactive = moved.iter().any(|moved| *moved);
+        let interactive = moved.iter().any(|moved| *moved);
+        self.interactive = interactive;
         let frozen = self.exporting || assured;
-        let loads: [Load; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
-            Some(PaneFrame::Volume { .. }) => Load::volume(!frozen, moved[index]),
-            _ => Load::IDLE,
-        });
-        let resolution = self.governor.decide(&loads, frozen);
-        let scales = resolution.scale;
-        let penalty = resolution.penalty;
-        let stochastic = penalty > 1.0;
-        let temporal = requested.filter(|request| !request.stochastic() || stochastic);
-        let lod_penalty = penalty.min(LOD_PENALTY_LIMIT);
+        let penalty = self.governor.decide(interactive, !frozen);
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1);
         self.motion = motion;
-        self.info.volume_scale = scales;
+        self.info.profile.penalty = penalty;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
@@ -101,7 +93,6 @@ impl Renderer {
             bricks,
             planner,
             volume,
-            composite,
             gtao,
             section: section_pass,
             cut,
@@ -201,7 +192,6 @@ impl Renderer {
                 height as f32,
                 if assured { None } else { section_level[index] },
                 limits,
-                lod_penalty,
             );
             let (resolved, visible) = resolve_section_level(
                 pyramid,
@@ -278,11 +268,9 @@ impl Renderer {
                 region: bounds,
                 aspect,
                 height,
-                lod: scales[index] as f32,
                 limits,
                 capacity: volume_share,
                 current: if assured { None } else { volume_level[index] },
-                penalty: lod_penalty,
             });
             let base = fit.ladder.base.min(allowed - 1);
             let count = BAND.min(allowed - base);
@@ -396,7 +384,6 @@ impl Renderer {
                             clip,
                             aspect: region[2].max(1) as f32 / region[3].max(1) as f32,
                             height: region[3].max(1),
-                            lod: scales[index] as f32,
                             time,
                         },
                         levels.ladder,
@@ -413,12 +400,6 @@ impl Renderer {
                         region[3] as f32,
                     ];
                     data.oit = [u32::from(translucent), 0, 0, 0];
-                    let origin = if scales[index] == 1 {
-                        [0, 0]
-                    } else {
-                        [region[0], region[1]]
-                    };
-                    data.set_volume_layer(scales[index], origin);
 
                     volume_data[index] = Some(data);
                     lenses[index] = Some(*lens);
@@ -619,7 +600,11 @@ impl Renderer {
                 meshes.cull_shadow(&mut encoder, scene_table.group(first_pane));
             }
         }
-        let sample_index = target.samples.min(samples - 1);
+        let sample_index = if reset && !assured && temporal.is_some() {
+            (sequence % u64::from(samples)) as u32
+        } else {
+            target.samples.min(samples - 1)
+        };
         for (index, slot) in volume_data.iter_mut().enumerate() {
             let Some(data) = slot else {
                 continue;
@@ -782,26 +767,17 @@ impl Renderer {
                     continue;
                 }
                 let extent = [region[2].max(1), region[3].max(1)];
-                let scale = scales[index];
-                if target.ao[index].as_ref().is_none_or(|ao| {
-                    ao.size() != extent || ao.volume_size() != size || ao.scale() != scale
-                }) {
+                if target.ao[index]
+                    .as_ref()
+                    .is_none_or(|ao| ao.size() != extent || ao.volume_size() != size)
+                {
                     target.ao[index] = Some(crate::ao::Ao::new(
                         device,
                         layouts,
                         gtao.pipeline(),
                         extent,
                         size,
-                        scale,
                     ));
-                }
-                if scale > 1 {
-                    target.ensure_volume_layer(
-                        device,
-                        layouts,
-                        index,
-                        [extent[0].div_ceil(scale), extent[1].div_ceil(scale)],
-                    );
                 }
                 let ao = target.ao[index]
                     .as_ref()
@@ -1119,32 +1095,7 @@ impl Renderer {
                                 oit: oit_group,
                                 ao: ao_group,
                             };
-                            if scales[index] == 1 {
-                                volume.draw(&mut encoder, volume_frame);
-                            } else {
-                                let layer = target.volume[index]
-                                    .as_ref()
-                                    .expect("the volume layer is ready");
-                                volume.draw(
-                                    &mut encoder,
-                                    crate::volume::VolumeFrame {
-                                        target: &layer.view,
-                                        region: [0, 0, layer.size[0], layer.size[1]],
-                                        clear: true,
-                                        ..volume_frame
-                                    },
-                                );
-                                composite.draw(
-                                    &mut encoder,
-                                    CompositeFrame {
-                                        target: target.scene.color(),
-                                        region: *region,
-                                        scene: group,
-                                        depth: target.scene.depth_group(),
-                                        layer: &layer.group,
-                                    },
-                                );
-                            }
+                            volume.draw(&mut encoder, volume_frame);
                         }
                     }
                     PaneFrame::Section { region, .. } => {
@@ -1284,7 +1235,7 @@ impl Renderer {
             frames[slot] = Some(residency);
         }
         if let Some(profiler) = profile.as_mut() {
-            profiler.finish(&mut encoder, marks);
+            profiler.finish(&mut encoder, marks, penalty);
         }
         queue.submit([encoder.finish()]);
         convergence.register();
@@ -1320,7 +1271,6 @@ impl Renderer {
             .unwrap_or(0);
         info.oit.dropped = dropped.iter().sum();
         info.cut.indices = slice.iter().map(SlicePass::index_bytes).sum();
-        info.volume_scale = scales;
         info.seeded = target.seeded;
         info.history = temporal.is_some()
             && target

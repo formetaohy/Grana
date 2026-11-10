@@ -94,52 +94,6 @@ impl FrameProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Budget {
-    target: f32,
-    latest: f32,
-}
-
-impl Budget {
-    pub fn new(target: f32) -> Self {
-        Self {
-            target: validated(target),
-            latest: validated(target),
-        }
-    }
-
-    pub fn retarget(self, target: f32) -> Self {
-        Self {
-            target: validated(target),
-            latest: self.latest,
-        }
-    }
-
-    pub fn target(self) -> f32 {
-        self.target
-    }
-
-    pub fn pressure(self) -> f32 {
-        self.latest / self.target
-    }
-
-    pub fn observe(&mut self, elapsed: f32) {
-        assert!(
-            elapsed.is_finite() && elapsed >= 0.0,
-            "a measured frame spans a finite duration"
-        );
-        self.latest = elapsed;
-    }
-}
-
-fn validated(target: f32) -> f32 {
-    assert!(
-        target.is_finite() && target > 0.0,
-        "a frame budget is a positive duration"
-    );
-    target
-}
-
 #[derive(Default)]
 pub struct Marks {
     phases: Vec<Stage>,
@@ -157,6 +111,7 @@ pub struct Profiler {
     readback: Readback,
     period: f32,
     frames: VecDeque<Vec<Stage>>,
+    penalties: VecDeque<f32>,
 }
 
 impl Profiler {
@@ -187,6 +142,7 @@ impl Profiler {
             readback,
             period: queue.get_timestamp_period(),
             frames: VecDeque::new(),
+            penalties: VecDeque::new(),
         })
     }
 
@@ -198,7 +154,7 @@ impl Profiler {
         marks.phases.push(stage);
     }
 
-    pub fn finish(&mut self, encoder: &mut CommandEncoder, marks: Marks) {
+    pub fn finish(&mut self, encoder: &mut CommandEncoder, marks: Marks, penalty: f32) {
         let count = marks.phases.len();
         if count < 2 {
             return;
@@ -216,6 +172,7 @@ impl Profiler {
             (count as u64 + 1) * STAMP_BYTES,
         );
         self.frames.push_back(marks.phases);
+        self.penalties.push_back(penalty);
     }
 
     fn stamp(&self, encoder: &mut CommandEncoder, index: u32) {
@@ -236,6 +193,7 @@ impl Profiler {
     pub fn poll(&mut self, device: &Device) -> Option<FrameProfile> {
         let (_, bytes) = self.readback.take(device)?;
         let phases = self.frames.pop_front()?;
+        let penalty = self.penalties.pop_front()?;
         let (stamps, _) = bytes.as_chunks::<8>();
         let stamps = stamps
             .iter()
@@ -254,7 +212,7 @@ impl Profiler {
             stages,
             total,
             target: 0.0,
-            penalty: 0.0,
+            penalty,
         })
     }
 }

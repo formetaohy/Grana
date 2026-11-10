@@ -152,6 +152,8 @@ fn fs_main(input: VertexOutput) -> Seeded {
         return Seeded(vec4<f32>(0.0), 0.0);
     }
     let limits = neighbourhood(surface, bounds);
+    let motion = clamp(length(uv - input.clip.xy) / max(seed.flags.w, 1.0), 0.0, 1.0);
+    let weight = mix(seed.flags.x, 1.0, motion);
     let color = clamp(history_color(uv, bounds), limits.low, limits.high);
-    return Seeded(color * seed.flags.x, seed.flags.x);
+    return Seeded(color * weight, weight);
 }

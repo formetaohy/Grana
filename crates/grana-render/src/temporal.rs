@@ -19,6 +19,7 @@ const CAPTURE: &str = include_str!("shader/temporal_capture.wgsl");
 const SEED: &str = include_str!("shader/temporal_seed.wgsl");
 
 const HISTORY_LIMIT: f32 = 32.0;
+const MOTION_REACH: f32 = 64.0;
 
 const ADD: BlendState = BlendState {
     color: BlendComponent {
@@ -36,35 +37,19 @@ const ADD: BlendState = BlendState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Temporal {
     history: f32,
-    stochastic: bool,
 }
 
 impl Temporal {
     pub fn new(history: f32) -> Self {
-        Self::of(history, false)
-    }
-
-    pub fn adaptive(history: f32) -> Self {
-        Self::of(history, true)
-    }
-
-    fn of(history: f32, stochastic: bool) -> Self {
         assert!(
             history.is_finite() && history > 0.0 && history <= HISTORY_LIMIT,
             "a temporal history spans up to {HISTORY_LIMIT} samples"
         );
-        Self {
-            history,
-            stochastic,
-        }
+        Self { history }
     }
 
     pub fn history(self) -> f32 {
         self.history
-    }
-
-    pub fn stochastic(self) -> bool {
-        self.stochastic
     }
 }
 
@@ -395,7 +380,7 @@ impl TemporalPass {
                     length,
                     if current == previous { 1.0 } else { 0.0 },
                     tolerance,
-                    0.0,
+                    MOTION_REACH,
                 ],
             };
             queue.write_buffer(&self.seed_uniforms[index], 0, bytemuck::bytes_of(&data));

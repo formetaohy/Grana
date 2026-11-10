@@ -46,7 +46,7 @@ pub(crate) fn draw(
             prefetch: frame.prefetch,
             level_cap: frame.level_cap,
             assured: false,
-            temporal: Some(Temporal::adaptive(HISTORY)),
+            temporal: Some(Temporal::new(HISTORY)),
         },
     )
 }

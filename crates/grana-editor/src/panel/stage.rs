@@ -558,13 +558,10 @@ fn pane_chip<'a>(
     let rect = layout.panes[index];
     let safe = rect.shrink(STAGE_INSET);
     let active = state.active() == index;
-    let mut title = match pane.kind() {
+    let title = match pane.kind() {
         PaneKind::Volume => "3D".to_string(),
         PaneKind::Section => format!("Slice · {}", plane_label(pane.section())),
     };
-    if state.frame.panes[index].scale > 1 {
-        title.push_str(" · ½ res");
-    }
     let tint = if active {
         LABEL
     } else {

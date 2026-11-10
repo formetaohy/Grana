@@ -536,7 +536,7 @@ fn diagnostics_menu<'a>(
 }
 
 fn bricks(view: crate::state::ViewStats) -> String {
-    let held = if view.demand == view.visible {
+    if view.demand == view.visible {
         format!("L{} · {}/{}", view.level + 1, view.resident, view.demand)
     } else {
         format!(
@@ -546,11 +546,6 @@ fn bricks(view: crate::state::ViewStats) -> String {
             view.demand,
             view.visible
         )
-    };
-    if view.scale > 1 {
-        format!("{held} · ½ res")
-    } else {
-        held
     }
 }
 

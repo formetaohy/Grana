@@ -823,7 +823,6 @@ pub(crate) struct LadderView<'a> {
     pub(crate) height: f32,
     pub(crate) current: Option<usize>,
     pub(crate) limits: Limits,
-    pub(crate) penalty: f32,
 }
 
 pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
@@ -833,18 +832,16 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         height,
         current,
         limits,
-        penalty,
     } = view;
     let first = limits.first;
     let levels = limits.count(pyramid);
-    let mut pixel_world = match camera.projection() {
+    let pixel_world = match camera.projection() {
         CameraProjection::Perspective => {
             2.0 * nearest_distance(pyramid.level(0), camera.eye()) * (camera.fov_y() * 0.5).tan()
                 / height.max(1.0)
         }
         CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
     };
-    pixel_world *= penalty;
     let mut target = first;
     for index in first..levels {
         if minimum_spacing(pyramid, index) <= pixel_world {
@@ -876,11 +873,9 @@ pub(crate) struct FitView<'a> {
     pub(crate) region: Region,
     pub(crate) aspect: f32,
     pub(crate) height: u32,
-    pub(crate) lod: f32,
     pub(crate) limits: Limits,
     pub(crate) capacity: usize,
     pub(crate) current: Option<usize>,
-    pub(crate) penalty: f32,
 }
 
 pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
@@ -890,11 +885,9 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         region,
         aspect,
         height,
-        lod,
         limits,
         capacity,
         current,
-        penalty,
     } = view;
     assert!(capacity > 0, "a volume fit reserves at least one brick");
     assert!(aspect > 0.0, "a volume pane has a positive aspect");
@@ -902,23 +895,14 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
     let desired = volume_ladder(LadderView {
         pyramid,
         camera,
-        height: height as f32 / lod,
+        height: height as f32,
         current,
         limits,
-        penalty,
     });
     let mut fallback: Option<VolumeFit> = None;
     for base in desired.base..levels {
         let count = ladder_count(camera.projection(), levels, base);
-        let counts = volume_counts(
-            pyramid,
-            base,
-            count,
-            camera,
-            aspect,
-            height as f32 / lod,
-            region,
-        );
+        let counts = volume_counts(pyramid, base, count, camera, aspect, height as f32, region);
         let demand = counts[..count].iter().sum::<usize>();
         if demand <= capacity {
             return VolumeFit {
@@ -1054,11 +1038,10 @@ pub(crate) fn select_section_level(
     height: f32,
     current: Option<usize>,
     limits: Limits,
-    penalty: f32,
 ) -> usize {
     let first = limits.first;
     let levels = limits.count(pyramid);
-    let pixel_world = section.span() / height.max(1.0) * penalty;
+    let pixel_world = section.span() / height.max(1.0);
     let mut level = first;
     for index in first..levels {
         if section_spacing(pyramid, index, section) <= pixel_world {

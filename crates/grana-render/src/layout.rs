@@ -30,9 +30,7 @@ pub(crate) struct Layouts {
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
     pub ao_compute: BindGroupLayout,
-    pub layer: BindGroupLayout,
     pub volume: PipelineLayout,
-    pub composite: PipelineLayout,
     pub section: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
@@ -300,21 +298,6 @@ impl Layouts {
             "grana.volume.layout",
             &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &ao_read],
         );
-        let layer = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.volume.layer.layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: false },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let composite =
-            pipeline_layout(device, "grana.composite.layout", &[&scene, &depth, &layer]);
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
             device,
@@ -401,9 +384,7 @@ impl Layouts {
             oit_read,
             ao_read,
             ao_compute,
-            layer,
             volume,
-            composite,
             section,
             cull,
             plan_pipeline,

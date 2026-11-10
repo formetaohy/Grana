@@ -66,7 +66,6 @@ pub fn residency(
                     height: height as f32,
                     current: None,
                     limits,
-                    penalty: 1.0,
                 });
                 let counts = volume_counts(
                     pyramid,
@@ -85,8 +84,7 @@ pub fn residency(
                 }
             }
             PaneFrame::Section { section, .. } => {
-                let level =
-                    select_section_level(pyramid, section, height as f32, None, limits, 1.0);
+                let level = select_section_level(pyramid, section, height as f32, None, limits);
                 let bricks = section_brick_count(pyramid, level, section, aspect, region);
                 sections.push(bricks);
                 Detail { level, bricks }

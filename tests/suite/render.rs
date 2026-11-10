@@ -623,49 +623,29 @@ fn follows_the_refresh_rate_of_the_display() {
 }
 
 #[test]
-fn trades_volume_resolution_for_frame_time() {
+fn fits_the_volume_sampling_to_the_frame_budget() {
     let mut governor = grana_render::Governor::new(16.0);
-    let resting = [grana_render::Load::volume(true, false); grana_render::PANE_COUNT];
-    let moving = [grana_render::Load::volume(true, true); grana_render::PANE_COUNT];
-    let fresh = governor.decide(&moving, false);
     assert_eq!(
-        fresh.scale, [1; 4],
-        "a fresh governor renders at full resolution"
+        governor.decide(true, true),
+        1.0,
+        "a fresh governor samples as asked"
     );
-    assert_eq!(fresh.penalty, 1.0, "a fresh governor samples as asked");
-    let mut resolution = fresh;
-    for _ in 0..64 {
-        governor.observe(32.0);
-        resolution = governor.decide(&moving, false);
+    for _ in 0..8 {
+        governor.observe(30.0, 32.0, 1.0);
     }
     assert!(
-        resolution.penalty > 1.0,
-        "a sustained overrun first coarsens the samples"
-    );
-    for _ in 0..128 {
-        governor.observe(32.0);
-        resolution = governor.decide(&moving, false);
-    }
-    assert_eq!(
-        resolution.scale, [4; 4],
-        "an overrun that survives the samples coarsens the volume"
-    );
-    for _ in 0..512 {
-        governor.observe(1.0);
-        resolution = governor.decide(&moving, false);
-    }
-    assert_eq!(
-        resolution.scale, [1; 4],
-        "spare budget restores the full resolution"
+        governor.decide(true, true) > 1.0,
+        "a sustained overrun coarsens the samples"
     );
     assert_eq!(
-        resolution.penalty, 1.0,
-        "spare budget restores the full sampling"
+        governor.decide(true, false),
+        1.0,
+        "a frozen frame samples as asked"
     );
     assert_eq!(
-        governor.decide(&resting, false).scale,
-        [1; 4],
-        "a settled view renders at full resolution"
+        governor.decide(false, true),
+        1.0,
+        "a resting view samples as asked"
     );
 }
 
@@ -1314,7 +1294,7 @@ fn wide_brightness(pixels: &[[u8; 4]]) -> f64 {
 }
 
 #[test]
-fn scales_a_moving_volume_to_lower_resolution() {
+fn lowers_the_volume_sampling_to_fit_the_budget() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -1337,8 +1317,8 @@ fn scales_a_moving_volume_to_lower_resolution() {
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let resting = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &camera, true);
     assert_eq!(
-        resting.volume_scale[0], 1,
-        "a view inside the frame budget resolves at full volume resolution"
+        resting.profile.penalty, 1.0,
+        "a view inside the frame budget samples as asked"
     );
     let settled = read_pixels(&gpu, &target, [WIDE, WIDE]);
     assert!(
@@ -1350,43 +1330,38 @@ fn scales_a_moving_volume_to_lower_resolution() {
     let mut state = moved.state();
     state.yaw = 0.35;
     moved.restore(state);
-    let mut scale = 1;
+    let mut penalty = 1.0;
     renderer.set_frame_target(0.5);
     for _ in 0..24 {
         let mut state = moved.state();
         state.yaw += 0.01;
         moved.restore(state);
-        scale = renderer
+        penalty = renderer
             .draw(
                 gpu.device(),
                 gpu.queue(),
                 wide(&view, &moved, &scene, false),
             )
-            .volume_scale[0];
+            .profile
+            .penalty;
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
     }
     assert!(
-        scale > 1,
-        "a moving view that overruns its budget lowers the volume resolution"
+        penalty > 1.0,
+        "a moving view that overruns its budget coarsens its samples"
     );
-    let coarse = read_pixels(&gpu, &target, [WIDE, WIDE]);
     let returning = stream_wide(&gpu, &mut renderer, &volume, &view, &scene, &moved, true);
     assert_eq!(
-        returning.volume_scale[0], 1,
-        "an assured frame returns the volume to full resolution"
+        returning.profile.penalty, 1.0,
+        "an assured frame samples as asked"
     );
     let fine = read_pixels(&gpu, &target, [WIDE, WIDE]);
-    let coarse_mean = wide_brightness(&coarse);
     let fine_mean = wide_brightness(&fine);
     assert!(
         fine_mean > 1.0,
         "the settled volume rendered nothing: {fine_mean}"
-    );
-    assert!(
-        (coarse_mean - fine_mean).abs() < 0.5 * fine_mean,
-        "the scaled volume diverged from the settled one: {coarse_mean} against {fine_mean}"
     );
     let mut other = Camera::new(35.0);
     other.fit(Vec3::from(volume.world_extent()), 1.0);
@@ -1395,8 +1370,8 @@ fn scales_a_moving_volume_to_lower_resolution() {
     other.restore(state);
     let assured = renderer.draw(gpu.device(), gpu.queue(), wide(&view, &other, &scene, true));
     assert_eq!(
-        assured.volume_scale[0], 1,
-        "an assured frame keeps the full volume resolution"
+        assured.profile.penalty, 1.0,
+        "an assured frame samples as asked"
     );
 }
 

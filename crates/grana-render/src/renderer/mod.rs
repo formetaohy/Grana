@@ -1,7 +1,7 @@
 mod feedback;
+mod quality;
 mod render;
 mod residency;
-mod resolution;
 mod signature;
 mod upload;
 
@@ -22,16 +22,15 @@ use grana_volume::{
     BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
 };
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, CommandEncoder, Device,
-    Extent3d, LoadOp, Operations, Queue, RenderPassColorAttachment,
-    RenderPassDepthStencilAttachment, RenderPassDescriptor, Sampler, SamplerDescriptor, StoreOp,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
+    Operations, Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, Sampler, SamplerDescriptor, StoreOp, TexelCopyBufferLayout,
+    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::brick::{BrickArena, BrickTable};
-use crate::composite::CompositePass;
 use crate::converge::Convergence;
 use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, SharedView, VolumeView};
@@ -74,7 +73,7 @@ const FADE_DRAWS: f32 = 10.0;
 
 const UNIT: f32 = 65535.0;
 
-pub use resolution::{Governor, Load, Resolution};
+pub use quality::Governor;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -105,7 +104,6 @@ pub struct OitInfo {
 #[derive(Clone, Copy, Debug)]
 pub struct FrameInfo {
     pub panes: [ViewInfo; PANE_COUNT],
-    pub volume_scale: [u32; PANE_COUNT],
     pub cut: CutInfo,
     pub oit: OitInfo,
     pub bytes: u64,
@@ -124,7 +122,6 @@ impl Default for FrameInfo {
     fn default() -> Self {
         Self {
             panes: [ViewInfo::default(); PANE_COUNT],
-            volume_scale: [1; PANE_COUNT],
             cut: CutInfo::default(),
             oit: OitInfo::default(),
             bytes: 0,
@@ -228,7 +225,6 @@ pub struct Renderer {
     planner: Option<Planner>,
     shadow: Option<Shadow>,
     volume: VolumePass,
-    composite: CompositePass,
     gtao: crate::ao::AoPipeline,
     section: SectionPass,
     cut: [CutLayer; PANE_COUNT],
@@ -283,6 +279,7 @@ pub struct Renderer {
     measured: [f32; STAGE_COUNT],
     sampled: bool,
     interactive: bool,
+    sequence: u64,
     info: FrameInfo,
 }
 
@@ -316,7 +313,6 @@ impl Renderer {
             planner: None,
             shadow: None,
             volume: VolumePass::new(device, &layouts),
-            composite: CompositePass::new(device, &layouts),
             gtao: crate::ao::AoPipeline::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             cut: std::array::from_fn(|_| CutLayer::new(device, &layouts)),
@@ -374,6 +370,7 @@ impl Renderer {
             measured: [0.0; STAGE_COUNT],
             sampled: false,
             interactive: false,
+            sequence: 0,
             info: FrameInfo::default(),
         }
     }
@@ -602,6 +599,7 @@ impl Renderer {
         {
             self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
             self.convergence.forget();
+            self.governor.forget();
             self.settled = None;
         }
         let mut target = self.target.take().expect("the frame target is ready");
@@ -612,7 +610,11 @@ impl Renderer {
             && let Some(measured) = profile.poll(device)
         {
             if self.sampled && self.interactive && !self.exporting {
-                self.governor.observe(measured.total);
+                self.governor.observe(
+                    measured.stage(Stage::Volume),
+                    measured.total,
+                    measured.penalty,
+                );
             }
             self.measured = measured.stages;
         }
@@ -620,7 +622,7 @@ impl Renderer {
             stages: self.measured,
             total: self.measured.iter().sum(),
             target: self.governor.target(),
-            penalty: self.governor.penalty(),
+            penalty: info.profile.penalty,
         };
         info
     }

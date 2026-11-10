@@ -39,7 +39,6 @@ pub(crate) struct Ao {
     uniform: Buffer,
     size: [u32; 2],
     volume_size: [u32; 2],
-    scale: u32,
 }
 
 pub(crate) struct AoPipeline {
@@ -75,7 +74,6 @@ impl Ao {
         pipeline: &ComputePipeline,
         size: [u32; 2],
         volume_size: [u32; 2],
-        scale: u32,
     ) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0 && volume_size[0] > 0 && volume_size[1] > 0,
@@ -85,15 +83,6 @@ impl Ao {
             volume_size[0] >= size[0] && volume_size[1] >= size[1],
             "the volume target holds the volume pane"
         );
-        assert!(
-            scale >= 1,
-            "a volume layer divides the pane by at least one"
-        );
-        let volume_dims = if scale == 1 {
-            volume_size
-        } else {
-            [size[0].div_ceil(scale), size[1].div_ceil(scale)]
-        };
         let normal = attachment(
             device,
             "grana.ao.normal",
@@ -111,7 +100,7 @@ impl Ao {
         let volume_normal = attachment(
             device,
             "grana.ao.volume.normal",
-            volume_dims,
+            volume_size,
             NORMAL_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
@@ -173,7 +162,6 @@ impl Ao {
             uniform,
             size,
             volume_size,
-            scale,
         }
     }
 
@@ -183,10 +171,6 @@ impl Ao {
 
     pub fn volume_size(&self) -> [u32; 2] {
         self.volume_size
-    }
-
-    pub fn scale(&self) -> u32 {
-        self.scale
     }
 
     pub fn normal(&self) -> &TextureView {
@@ -273,7 +257,7 @@ impl Ao {
             inverse_view_projection: frame.inv_view_projection,
             eye: frame.eye,
             extent: [self.size[0] as f32, self.size[1] as f32, reach, strength],
-            noise: [sample as f32, frame.march[3], self.scale as f32, 0.0],
+            noise: [sample as f32, frame.march[3], 0.0, 0.0],
             region: frame.viewport,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));

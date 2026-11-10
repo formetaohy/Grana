@@ -30,7 +30,6 @@ struct FrameData {
     edge: vec4<f32>,
     projection: vec4<f32>,
     lens: vec4<f32>,
-    volume_layer: vec4<f32>,
     sampling: vec4<f32>,
 }
 
@@ -120,14 +119,6 @@ fn lens_shift(clip_w: f32) -> vec2<f32> {
 
 fn pixel_world(distance: f32) -> f32 {
     return select(distance, 1.0, orthographic()) / max(frame.sampling.x, 1.0e-6);
-}
-
-fn volume_scale() -> f32 {
-    return max(frame.volume_layer.x, 1.0);
-}
-
-fn volume_target_pixel(local: vec2<f32>) -> vec2<f32> {
-    return frame.volume_layer.yz + local * volume_scale();
 }
 
 fn level_origin(band: u32) -> vec3<f32> {
