@@ -277,6 +277,9 @@ impl App {
         }
         if replaced {
             self.needs_fit = true;
+            for pane in self.panes.iter_mut() {
+                pane.show_all_channels();
+            }
             self.workspace.playback.playing = false;
             self.workspace.playback.previewing = false;
             self.last_advance = None;
@@ -1226,7 +1229,7 @@ impl App {
         else {
             return;
         };
-        let poses = poses(self.session.timeline());
+        let poses = grana_offline::poses(self.session.timeline());
         let fps = self.session.timeline().fps();
         let panels = self.panels();
         self.start_export(Plan {
@@ -1830,16 +1833,6 @@ fn annotation_hit(
         }
     };
     grana_figure::pick_annotation(&placed, pointer)
-}
-
-fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
-    (0..timeline.frames())
-        .filter_map(|frame| timeline.sample_frame(frame))
-        .map(|sample| Pose {
-            time: sample.time,
-            views: sample.views,
-        })
-        .collect()
 }
 
 fn frame_stats(info: FrameInfo) -> FrameStats {

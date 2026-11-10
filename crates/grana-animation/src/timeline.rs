@@ -193,6 +193,8 @@ impl Timeline {
                 hash = mix(hash, u64::from(view.section.span.to_bits()));
                 hash = mix(hash, view.section.projection.index() as u64);
                 hash = mix(hash, u64::from(view.section.thickness.to_bits()));
+                hash = mix(hash, u64::from(view.channels.hidden()));
+                hash = mix(hash, view.quality.index() as u64);
             }
         }
         hash
@@ -254,6 +256,16 @@ fn blend_view(from: PaneView, to: PaneView, eased: f32) -> PaneView {
                 to.section.projection
             },
             thickness: lerp(from.section.thickness, to.section.thickness),
+        },
+        channels: if eased < 0.5 {
+            from.channels
+        } else {
+            to.channels
+        },
+        quality: if eased < 0.5 {
+            from.quality
+        } else {
+            to.quality
         },
     }
 }

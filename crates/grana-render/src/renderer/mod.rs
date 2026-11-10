@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use bytemuck::cast_slice;
 use glam::Vec3;
-use grana_display::{Camera, PANE_COUNT, PaneKind, SectionCamera};
+use grana_display::{Camera, ChannelMask, PANE_COUNT, PaneKind, Quality, SectionCamera};
 use grana_gpu::Readback;
 use grana_volume::{
     BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
@@ -180,6 +180,8 @@ pub struct Frame<'a, 'b> {
     pub exposure: f32,
     pub samples: u32,
     pub scene: &'a SceneFrame<'b>,
+    pub pane_channels: [ChannelMask; PANE_COUNT],
+    pub pane_quality: [Quality; PANE_COUNT],
     pub prefetch: bool,
     pub level_cap: usize,
     pub assured: bool,

@@ -207,6 +207,8 @@ impl Export {
                 exposure: scene.exposure,
                 samples: self.samples,
                 scene: &frame,
+                pane_channels: pose.views.map(|view| view.channels),
+                pane_quality: pose.views.map(|view| view.quality),
                 prefetch: false,
                 level_cap: usize::MAX,
                 assured: true,

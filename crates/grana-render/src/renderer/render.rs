@@ -1,5 +1,9 @@
-use super::signature::{channel_style, digest, scene_styles, shadow_bounds, shadow_geometry};
+use super::signature::{
+    channel_style, channel_style_panes, digest, shadow_bounds, shadow_geometry,
+};
 use super::*;
+use crate::ChannelRow;
+use grana_display::ChannelMask;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
@@ -22,6 +26,8 @@ impl Renderer {
             exposure,
             samples,
             scene,
+            pane_channels,
+            pane_quality,
             prefetch,
             level_cap: _,
             assured,
@@ -29,6 +35,10 @@ impl Renderer {
         for pane in panes.iter().flatten() {
             assert!(inside(pane.region(), size), "the panes lie on the surface");
         }
+        let rows: [Vec<ChannelRow>; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
+            Some(_) => pane_rows(scene.channels, pane_channels[index]),
+            None => Vec::new(),
+        });
         self.time = time;
         self.prefetch = prefetch;
         self.regions = Some(Regions {
@@ -136,6 +146,8 @@ impl Renderer {
         } else {
             frame_budget.penalty()
         };
+        let steps: [f32; PANE_COUNT] =
+            std::array::from_fn(|index| scene.step_scale * pane_quality[index].scale() * penalty);
         let active = panes.iter().flatten().count();
         assert!(active > 0, "a frame draws at least one pane");
         let share = (slots / active).max(1);
@@ -252,7 +264,7 @@ impl Renderer {
             *epoch,
             Content {
                 content: *content,
-                style: channel_style(scene.channels),
+                style: channel_style_panes(&rows),
             },
             Mode { prefetch, assured },
             time,
@@ -319,7 +331,7 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
-        let step_scale = scene.step_scale * penalty;
+        let step_scale = |index: usize| steps[index];
         let translucent = scene
             .styles
             .iter()
@@ -359,7 +371,7 @@ impl Renderer {
                         levels.ladder,
                         &tables,
                         scene.shading,
-                        step_scale,
+                        step_scale(index),
                         *channels,
                         space,
                     );
@@ -450,6 +462,7 @@ impl Renderer {
             let signature = Signature {
                 scene,
                 panes: &signatures,
+                pane_channels,
                 levels,
                 time,
                 exposure,
@@ -547,7 +560,7 @@ impl Renderer {
                 offset.x,
                 offset.y,
                 sample_index as f32,
-                step_scale.max(1.0e-3),
+                step_scale(index).max(1.0e-3),
             ];
             if let Some(lens) = lenses[index] {
                 data.lens = crate::frame::lens(lens.camera, sample_index, samples, lens.aspect);
@@ -563,10 +576,11 @@ impl Renderer {
             let offset = sample::offset(sample_index, extent);
             data.jitter = [offset.x, offset.y, 0.0, 0.0];
         }
-        scene_table.update(device, queue, pyramid, scene.channels);
+        scene_table.prepare(device, queue, pyramid, scene.channels);
         for index in 0..PANE_COUNT {
             if volume_data[index].is_some() || section_data[index].is_some() {
-                scene_table.write(
+                scene_table.write_channels(device, queue, pyramid, index, &rows[index]);
+                scene_table.write_frame(
                     index,
                     queue,
                     volume_data[index].or(section_frame[index]),
@@ -683,16 +697,16 @@ impl Renderer {
             info.samples = target.samples;
             *sampled = true;
             let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
-            let volume_visible = scene
-                .channels
-                .iter()
-                .any(|row| row.visible && row.opacity > 0.0);
-            let ambient = surfaces || volume_visible;
+            let volume_visible: [bool; PANE_COUNT] = std::array::from_fn(|index| {
+                rows[index]
+                    .iter()
+                    .any(|row| row.visible && row.opacity > 0.0)
+            });
             for (index, pane) in panes.iter().enumerate() {
                 let Some(PaneFrame::Volume { region, .. }) = pane else {
                     continue;
                 };
-                if !ambient {
+                if !surfaces && !volume_visible[index] {
                     continue;
                 }
                 let extent = [region[2].max(1), region[3].max(1)];
@@ -734,11 +748,18 @@ impl Renderer {
                     sample_index,
                 );
             }
-            let styles = scene_styles(scene);
+            if let Some(data) = panes.iter().enumerate().find_map(|(index, pane)| {
+                matches!(pane, Some(PaneFrame::Volume { .. }))
+                    .then(|| volume_data[index])
+                    .flatten()
+            }) {
+                scene_table.write_shadow_frame(queue, data);
+            }
+            let channel_key = channel_style(scene.channels);
             mark(profile, &mut encoder, Stage::Shadow, &mut marks);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
-                    scene: scene_table.group(first_pane),
+                    scene: scene_table.shadow_group(),
                     level: level_group,
                     atlas: atlas.group(),
                 };
@@ -771,7 +792,7 @@ impl Renderer {
                         groups,
                         digest(&[
                             *content,
-                            styles,
+                            channel_key,
                             ladder.base as u64,
                             ladder.count as u64,
                             space.digest(),
@@ -993,7 +1014,7 @@ impl Renderer {
                             }
                         }
                         mark(profile, &mut encoder, Stage::Volume, &mut marks);
-                        if volume_visible {
+                        if volume_visible[index] {
                             volume.draw(
                                 &mut encoder,
                                 crate::volume::VolumeFrame {
@@ -1168,6 +1189,17 @@ fn mark(profile: &Option<Profiler>, encoder: &mut CommandEncoder, stage: Stage, 
     if let Some(profiler) = profile.as_ref() {
         profiler.mark(encoder, stage, marks);
     }
+}
+
+fn pane_rows(channels: &[ChannelRow], mask: ChannelMask) -> Vec<ChannelRow> {
+    channels
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| ChannelRow {
+            visible: channel.visible && mask.shown(index),
+            ..channel.clone()
+        })
+        .collect()
 }
 
 pub(super) fn clear(encoder: &mut CommandEncoder, target: &TextureView) {

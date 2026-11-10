@@ -1,5 +1,5 @@
 use super::*;
-use grana_display::{CameraState, SectionState};
+use grana_display::{CameraState, ChannelMask, SectionState};
 
 #[derive(Clone, Copy)]
 pub(super) enum PaneSignature<'a> {
@@ -19,6 +19,7 @@ pub(super) enum PaneSignature<'a> {
 pub(super) struct Signature<'a, 'b> {
     pub(super) scene: &'a SceneFrame<'b>,
     pub(super) panes: &'a [Option<PaneSignature<'a>>; PANE_COUNT],
+    pub(super) pane_channels: [ChannelMask; PANE_COUNT],
     pub(super) levels: Levels,
     pub(super) time: u32,
     pub(super) exposure: f32,
@@ -32,6 +33,7 @@ impl Signature<'_, '_> {
         let Self {
             scene,
             panes,
+            pane_channels,
             levels,
             time,
             exposure,
@@ -41,6 +43,7 @@ impl Signature<'_, '_> {
         } = self;
         let mut hasher = DefaultHasher::new();
         for (index, pane) in panes.iter().enumerate() {
+            pane_channels[index].hidden().hash(&mut hasher);
             match pane {
                 Some(PaneSignature::Volume {
                     data,
@@ -89,6 +92,7 @@ impl Signature<'_, '_> {
         let Self {
             scene,
             panes,
+            pane_channels,
             time,
             exposure,
             epoch,
@@ -96,7 +100,11 @@ impl Signature<'_, '_> {
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        for pane in &panes.iter().flatten().collect::<Vec<_>>() {
+        for (index, pane) in panes.iter().enumerate() {
+            pane_channels[index].hidden().hash(&mut hasher);
+            let Some(pane) = pane else {
+                continue;
+            };
             match pane {
                 PaneSignature::Volume {
                     data,
@@ -235,17 +243,10 @@ pub(super) fn shadow_geometry(scene: &SceneFrame<'_>) -> u64 {
     hasher.finish()
 }
 
-pub(super) fn scene_styles(scene: &SceneFrame<'_>) -> u64 {
+pub(super) fn channel_style_panes(rows: &[Vec<crate::ChannelRow>; PANE_COUNT]) -> u64 {
     let mut hasher = DefaultHasher::new();
-    channel_style(scene.channels).hash(&mut hasher);
-    for layer in scene.layers {
-        layer.key.hash(&mut hasher);
-        layer.style_start.hash(&mut hasher);
-        layer.style_count.hash(&mut hasher);
-    }
-    for style in scene.styles {
-        style.color().map(f32::to_bits).hash(&mut hasher);
-        style.visible().hash(&mut hasher);
+    for row in rows {
+        channel_style(row).hash(&mut hasher);
     }
     hasher.finish()
 }

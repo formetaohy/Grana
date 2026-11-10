@@ -281,10 +281,19 @@ impl Decode for PaneState {
         let kind = grana_display::PaneKind::from_index(reader.u8()? as usize).ok_or(FAULT_VALUE)?;
         Ok(Self {
             kind,
-            view: PaneView {
-                camera: CameraState::decode(reader)?,
-                section: SectionState::decode(reader)?,
-            },
+            view: PaneView::decode(reader)?,
+        })
+    }
+}
+
+impl Decode for PaneView {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(Self {
+            camera: CameraState::decode(reader)?,
+            section: SectionState::decode(reader)?,
+            channels: grana_display::ChannelMask::of(reader.u32()?),
+            quality: grana_display::Quality::from_index(reader.u8()? as usize)
+                .ok_or(FAULT_VALUE)?,
         })
     }
 }
@@ -314,10 +323,7 @@ impl Decode for Keyframe {
         let time = reader.u32()?;
         let mut views = Vec::with_capacity(grana_display::PANE_COUNT);
         for _ in 0..grana_display::PANE_COUNT {
-            views.push(PaneView {
-                camera: CameraState::decode(reader)?,
-                section: SectionState::decode(reader)?,
-            });
+            views.push(PaneView::decode(reader)?);
         }
         Ok(Self {
             at,

@@ -1,4 +1,5 @@
 mod analysis;
+mod command;
 mod core;
 mod export;
 mod format;

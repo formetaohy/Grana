@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --clear-cache";
+const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --render <project|dataset> <image.png|image.ome.tif|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--transparent] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --clear-cache";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -26,6 +26,7 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
             [_] => Some(grana_app::clear_cache()),
             _ => None,
         },
+        Some("--render") => grana_app::render_command(&arguments[1..]),
         Some("--batch") => {
             let mut paths = Vec::new();
             let mut jobs = None;

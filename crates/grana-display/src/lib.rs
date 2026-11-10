@@ -15,8 +15,8 @@ pub use color::{ColorState, Coloring, Extent, merged};
 pub use material::Material;
 pub use palette::Palette;
 pub use panes::{
-    PANE_COUNT, PANE_GAP, Pane, PaneKind, PaneLayout, PaneState, PaneView, Panes, SPLIT_MAX,
-    SPLIT_MIN,
+    ChannelMask, PANE_COUNT, PANE_GAP, Pane, PaneKind, PaneLayout, PaneState, PaneView, Panes,
+    Quality, SPLIT_MAX, SPLIT_MIN,
 };
 pub use shading::{AZIMUTH_LIMIT, DEFAULT_AZIMUTH, DEFAULT_ELEVATION, ELEVATION_LIMIT, Shading};
 pub use transfer::{

@@ -764,6 +764,18 @@ pub fn apply(
                 }
                 workspace.active = index.min(PANE_COUNT - 1);
             }
+            Message::SetPaneChannel {
+                index,
+                channel,
+                shown,
+            } => {
+                panes.pane_mut(index).set_channel(channel, shown);
+                workspace.active = index.min(PANE_COUNT - 1);
+            }
+            Message::SetPaneQuality { index, quality } => {
+                panes.pane_mut(index).set_quality(quality);
+                workspace.active = index.min(PANE_COUNT - 1);
+            }
             Message::SetSectionPreset(index) => {
                 let active = workspace.active.min(PANE_COUNT - 1);
                 let aspect = pane_aspect(stage, active);

@@ -1,4 +1,4 @@
-use grana_display::PANE_COUNT;
+use grana_display::{ChannelMask, PANE_COUNT, Quality};
 use grana_render::{Frame, FrameInfo, PaneFrame, Renderer};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
@@ -9,6 +9,8 @@ pub(crate) struct View<'a> {
     pub target: &'a TextureView,
     pub scene: &'a Scene,
     pub panes: [Option<PaneFrame<'a>>; PANE_COUNT],
+    pub channels: [ChannelMask; PANE_COUNT],
+    pub quality: [Quality; PANE_COUNT],
     pub size: [u32; 2],
     pub samples: u32,
     pub prefetch: bool,
@@ -37,6 +39,8 @@ pub(crate) fn draw(
             exposure: frame.scene.exposure,
             samples: frame.samples,
             scene: &scene,
+            pane_channels: frame.channels,
+            pane_quality: frame.quality,
             prefetch: frame.prefetch,
             level_cap: frame.level_cap,
             assured: false,

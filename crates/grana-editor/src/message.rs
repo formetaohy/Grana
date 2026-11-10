@@ -95,6 +95,15 @@ pub enum Message {
         index: usize,
         preset: usize,
     },
+    SetPaneChannel {
+        index: usize,
+        channel: usize,
+        shown: bool,
+    },
+    SetPaneQuality {
+        index: usize,
+        quality: grana_display::Quality,
+    },
     Plot(PlotEvent),
     Locate(usize),
     ClearGates,

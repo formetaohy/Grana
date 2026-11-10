@@ -459,6 +459,8 @@ fn view_state() -> ViewState {
             projection: grana_display::SectionProjection::Plane,
             thickness: 2.0,
         },
+        channels: grana_display::ChannelMask::of(0b10),
+        quality: grana_display::Quality::High,
     };
     ViewState {
         panes: [

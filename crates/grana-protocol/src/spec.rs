@@ -199,6 +199,13 @@ pub struct PaneSpec {
     pub kind: String,
     pub camera: CameraSpec,
     pub section: SectionSpec,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<u32>,
+    #[serde(
+        default = "default_quality",
+        skip_serializing_if = "is_balanced_quality"
+    )]
+    pub quality: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -206,6 +213,21 @@ pub struct PaneSpec {
 pub struct PaneViewSpec {
     pub camera: CameraSpec,
     pub section: SectionSpec,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<u32>,
+    #[serde(
+        default = "default_quality",
+        skip_serializing_if = "is_balanced_quality"
+    )]
+    pub quality: String,
+}
+
+fn default_quality() -> String {
+    grana_display::Quality::Balanced.name().to_string()
+}
+
+fn is_balanced_quality(value: &str) -> bool {
+    grana_display::Quality::from_name(value) == Some(grana_display::Quality::Balanced)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1890,6 +1912,8 @@ impl PaneSpec {
             kind: pane.kind.name().to_string(),
             camera: CameraSpec::of(pane.view.camera),
             section: SectionSpec::of(pane.view.section),
+            hidden: hidden(pane.view.channels),
+            quality: pane.view.quality.name().to_string(),
         }
     }
 
@@ -1900,8 +1924,15 @@ impl PaneSpec {
             view: PaneView {
                 camera: self.camera.camera(),
                 section: self.section.section(),
+                channels: self.mask(),
+                quality: grana_display::Quality::from_name(&self.quality)
+                    .expect("the pane quality was checked"),
             },
         }
+    }
+
+    fn mask(&self) -> grana_display::ChannelMask {
+        masked(&self.hidden)
     }
 
     fn checked(&self) -> Result<(), ProtocolError> {
@@ -1911,7 +1942,9 @@ impl PaneSpec {
             ));
         }
         self.camera.checked()?;
-        self.section.checked()
+        self.section.checked()?;
+        hidden_checked(&self.hidden)?;
+        quality_checked(&self.quality)
     }
 }
 
@@ -1920,6 +1953,8 @@ impl PaneViewSpec {
         Self {
             camera: CameraSpec::of(view.camera),
             section: SectionSpec::of(view.section),
+            hidden: hidden(view.channels),
+            quality: view.quality.name().to_string(),
         }
     }
 
@@ -1927,13 +1962,50 @@ impl PaneViewSpec {
         PaneView {
             camera: self.camera.camera(),
             section: self.section.section(),
+            channels: masked(&self.hidden),
+            quality: grana_display::Quality::from_name(&self.quality)
+                .expect("the pane quality was checked"),
         }
     }
 
     fn checked(&self) -> Result<(), ProtocolError> {
         self.camera.checked()?;
-        self.section.checked()
+        self.section.checked()?;
+        hidden_checked(&self.hidden)?;
+        quality_checked(&self.quality)
     }
+}
+
+fn hidden(mask: grana_display::ChannelMask) -> Vec<u32> {
+    (0..u32::BITS)
+        .filter(|channel| !mask.shown(*channel as usize))
+        .collect()
+}
+
+fn masked(hidden: &[u32]) -> grana_display::ChannelMask {
+    let mut mask = grana_display::ChannelMask::NONE;
+    for channel in hidden {
+        mask.set(*channel as usize, false);
+    }
+    mask
+}
+
+fn hidden_checked(hidden: &[u32]) -> Result<(), ProtocolError> {
+    if hidden.iter().any(|channel| *channel >= u32::BITS) {
+        return Err(ProtocolError::Invalid(
+            "a pane hides only channels the mask addresses".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn quality_checked(quality: &str) -> Result<(), ProtocolError> {
+    if grana_display::Quality::from_name(quality).is_none() {
+        return Err(ProtocolError::Invalid(
+            "a pane names a known render quality".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 impl NamedViewSpec {

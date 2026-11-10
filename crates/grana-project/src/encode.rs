@@ -1,6 +1,6 @@
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
-    CameraState, Palette, PaneState, SectionState, Shading, Stop, TransferFunction,
+    CameraState, Palette, PaneState, PaneView, SectionState, Shading, Stop, TransferFunction,
 };
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{
@@ -172,8 +172,16 @@ impl Encode for ViewState {
 impl Encode for PaneState {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u8(self.kind.index() as u8);
-        self.view.camera.encode(writer);
-        self.view.section.encode(writer);
+        self.view.encode(writer);
+    }
+}
+
+impl Encode for PaneView {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.camera.encode(writer);
+        self.section.encode(writer);
+        writer.u32(self.channels.hidden());
+        writer.u8(self.quality.index() as u8);
     }
 }
 
@@ -198,8 +206,7 @@ impl Encode for Keyframe {
         writer.f32(self.at);
         writer.u32(self.time);
         for view in &self.views {
-            view.camera.encode(writer);
-            view.section.encode(writer);
+            view.encode(writer);
         }
     }
 }

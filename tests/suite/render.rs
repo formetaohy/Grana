@@ -73,6 +73,8 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         exposure: 1.0,
         samples: SAMPLES,
         scene: view.scene,
+        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: view.assured,
@@ -1764,6 +1766,8 @@ fn renders_a_section_pane_without_a_volume() {
         exposure: 1.0,
         samples: SAMPLES,
         scene: &scene,
+        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: false,
@@ -1781,6 +1785,112 @@ fn renders_a_section_pane_without_a_volume() {
     assert!(
         centre > corner + 90,
         "the lone section pane paints nothing at its centre: {centre} against {corner}"
+    );
+}
+
+fn hue_pixels(pixels: &[[u8; 4]], rect: [u32; 4], channel: usize) -> usize {
+    let [left, top, right, bottom] = rect;
+    let mut count = 0;
+    for y in top..bottom {
+        for x in left..right {
+            let pixel = pixels[(y * SIDE + x) as usize];
+            let value = u32::from(pixel[channel]);
+            if value > 24
+                && (0..3).all(|other| other == channel || value > u32::from(pixel[other]) * 2)
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn keeps_pane_channel_sets_independent() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = two_channel_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let left_region = [0, 0, SIDE / 2, SIDE];
+    let right_region = [SIDE / 2, 0, SIDE / 2, SIDE];
+    let left_probe = [0, 0, SIDE / 2, SIDE];
+    let right_probe = [SIDE / 2, 0, SIDE, SIDE];
+    let lens = Lens {
+        camera: &camera,
+        aspect: 0.5,
+    };
+    let panes = [
+        Some(PaneFrame::Volume {
+            camera: &camera,
+            lens,
+            region: left_region,
+        }),
+        Some(PaneFrame::Volume {
+            camera: &camera,
+            lens,
+            region: right_region,
+        }),
+        None,
+        None,
+    ];
+    let mut left = grana_display::ChannelMask::NONE;
+    left.set(1, false);
+    let mut right = grana_display::ChannelMask::NONE;
+    right.set(0, false);
+    let build = || Frame {
+        target: &view_texture,
+        size: [SIDE, SIDE],
+        panes,
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        samples: SAMPLES,
+        scene: &scene,
+        pane_channels: [
+            left,
+            right,
+            grana_display::ChannelMask::NONE,
+            grana_display::ChannelMask::NONE,
+        ],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
+        prefetch: false,
+        level_cap: usize::MAX,
+        assured: false,
+    };
+    settle_with(&gpu, &mut renderer, build, &volume);
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let blue_left = hue_pixels(&pixels, left_probe, 2);
+    let green_left = hue_pixels(&pixels, left_probe, 1);
+    let blue_right = hue_pixels(&pixels, right_probe, 2);
+    let green_right = hue_pixels(&pixels, right_probe, 1);
+    assert!(
+        blue_left > green_left * 4,
+        "the left pane hides its green channel: {blue_left} blue against {green_left} green"
+    );
+    assert!(
+        green_right > blue_right * 4,
+        "the right pane hides its blue channel: {green_right} green against {blue_right} blue"
     );
 }
 
@@ -1854,14 +1964,21 @@ fn keeps_two_volume_panes_independent() {
         exposure: 1.0,
         samples: SAMPLES,
         scene: &scene,
+        pane_channels: [grana_display::ChannelMask::NONE; grana_render::PANE_COUNT],
+        pane_quality: [grana_display::Quality::Balanced; grana_render::PANE_COUNT],
         prefetch: false,
         level_cap: usize::MAX,
         assured: false,
     };
     settle_with(&gpu, &mut renderer, build, &volume);
+    let info = renderer.draw(gpu.device(), gpu.queue(), build());
+    println!(
+        "info {:?} settled {} truncated {}",
+        info.panes, info.settled, info.truncated
+    );
     let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    let lit_left = lit(&pixels, left_region);
-    let lit_right = lit(&pixels, right_region);
+    let lit_left = lit(&pixels, [0, 0, SIDE / 2, SIDE]);
+    let lit_right = lit(&pixels, [SIDE / 2, 0, SIDE, SIDE]);
     assert!(
         lit_left > (SIDE * SIDE / 64) as usize,
         "the left pane is empty"

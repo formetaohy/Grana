@@ -88,6 +88,8 @@ impl Engine {
             });
         let rendered = crate::view::frame(frame.scene, lens)?;
         let panes = pane_frames(frame.panes, frame.regions);
+        let channels = std::array::from_fn(|index| frame.panes.pane(index).channels());
+        let quality = std::array::from_fn(|index| frame.panes.pane(index).quality());
         let info = frame::draw(
             &mut self.renderer,
             device,
@@ -96,6 +98,8 @@ impl Engine {
                 target: frame.target,
                 scene: frame.scene,
                 panes,
+                channels,
+                quality,
                 size: frame.size,
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,

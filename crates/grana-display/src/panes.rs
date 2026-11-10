@@ -107,10 +107,102 @@ impl PaneKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChannelMask {
+    hidden: u32,
+}
+
+impl ChannelMask {
+    pub const NONE: Self = Self { hidden: 0 };
+    const BITS: usize = u32::BITS as usize;
+
+    pub const fn of(hidden: u32) -> Self {
+        Self { hidden }
+    }
+
+    pub const fn hidden(self) -> u32 {
+        self.hidden
+    }
+
+    pub fn shown(self, channel: usize) -> bool {
+        assert!(channel < Self::BITS, "a channel mask names a channel");
+        self.hidden & (1 << channel) == 0
+    }
+
+    pub fn set(&mut self, channel: usize, shown: bool) {
+        assert!(channel < Self::BITS, "a channel mask names a channel");
+        let bit = 1 << channel;
+        if shown {
+            self.hidden &= !bit;
+        } else {
+            self.hidden |= bit;
+        }
+    }
+
+    pub fn toggle(&mut self, channel: usize) {
+        assert!(channel < Self::BITS, "a channel mask names a channel");
+        self.hidden ^= 1 << channel;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    Draft,
+    #[default]
+    Balanced,
+    High,
+}
+
+impl Quality {
+    pub const ALL: [Self; 3] = [Self::Draft, Self::Balanced, Self::High];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Balanced => "balanced",
+            Self::High => "high",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Draft => "Draft",
+            Self::Balanced => "Balanced",
+            Self::High => "High",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Draft => 0,
+            Self::Balanced => 1,
+            Self::High => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|quality| quality.name() == name)
+    }
+
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Draft => 2.0,
+            Self::Balanced => 1.0,
+            Self::High => 0.5,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaneView {
     pub camera: CameraState,
     pub section: SectionState,
+    pub channels: ChannelMask,
+    pub quality: Quality,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,6 +216,8 @@ pub struct Pane {
     kind: PaneKind,
     camera: Camera,
     section: SectionCamera,
+    channels: ChannelMask,
+    quality: Quality,
 }
 
 impl Pane {
@@ -132,6 +226,8 @@ impl Pane {
             kind,
             camera: Camera::new(35.0),
             section: SectionCamera::new(),
+            channels: ChannelMask::NONE,
+            quality: Quality::Balanced,
         }
     }
 
@@ -165,10 +261,32 @@ impl Pane {
         &mut self.section
     }
 
+    pub fn channels(&self) -> ChannelMask {
+        self.channels
+    }
+
+    pub fn set_channel(&mut self, channel: usize, shown: bool) {
+        self.channels.set(channel, shown);
+    }
+
+    pub fn show_all_channels(&mut self) {
+        self.channels = ChannelMask::NONE;
+    }
+
+    pub fn quality(&self) -> Quality {
+        self.quality
+    }
+
+    pub fn set_quality(&mut self, quality: Quality) {
+        self.quality = quality;
+    }
+
     pub fn view(&self) -> PaneView {
         PaneView {
             camera: self.camera.state(),
             section: self.section.state(),
+            channels: self.channels,
+            quality: self.quality,
         }
     }
 
@@ -187,6 +305,8 @@ impl Pane {
     pub fn restore_view(&mut self, view: PaneView) {
         self.camera.restore(view.camera);
         self.section.restore(view.section);
+        self.channels = view.channels;
+        self.quality = view.quality;
     }
 
     pub fn fit(&mut self, world: Vec3, voxel: Vec3, aspect: f32) {
@@ -240,6 +360,10 @@ impl Panes {
 
     pub fn iter(&self) -> impl Iterator<Item = &Pane> {
         self.panes.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.panes.iter_mut()
     }
 
     pub fn layout(&self) -> PaneLayout {

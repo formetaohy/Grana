@@ -14,6 +14,9 @@ use crate::view::scene_uv;
 
 const PANE_CONTROL: f32 = 26.0;
 const LAYOUT_CONTROL: f32 = 30.0;
+const SWATCH: f32 = 14.0;
+const SWATCH_STRIDE: f32 = 18.0;
+const SWATCH_COLUMNS: usize = 8;
 const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
@@ -48,6 +51,7 @@ pub(super) fn view<'a>(
         let safe = layout.panes[index].shrink(STAGE_INSET);
         elements.push(pane_fit(ctx, safe, index));
         elements.extend(pane_chip(ctx, layout, state, index));
+        elements.extend(channel_swatches(state, safe, index));
     }
     elements.extend(dividers(ctx, layout, state));
     elements.extend(recording_chip(ctx, layout, state));
@@ -569,35 +573,109 @@ fn pane_chip<'a>(
         ctx,
         &key,
         index,
-        rect,
-        safe,
-        pane.kind(),
+        Chip {
+            pane: rect,
+            safe,
+            kind: pane.kind(),
+            quality: pane.quality(),
+        },
         &title,
         tint,
         open,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+fn channel_swatches<'a>(
+    state: &'a View<'a>,
+    safe: Rect,
+    index: usize,
+) -> Vec<Element<'a, Message>> {
+    let channels = state.scene.channels.len();
+    if channels < 2 {
+        return Vec::new();
+    }
+    let pane = state.panes.pane(index);
+    let columns = channels.min(SWATCH_COLUMNS);
+    let origin = Vec2::new(
+        safe.max.x - (columns as f32 * SWATCH_STRIDE - (SWATCH_STRIDE - SWATCH)),
+        safe.min.y + PANE_CONTROL + 6.0,
+    );
+    let mut elements = Vec::with_capacity(channels);
+    for channel in 0..channels {
+        let shown = pane.channels().shown(channel);
+        let info = &state.scene.dataset.channels()[channel];
+        let tint = Color::from_rgb_f32(info.tint());
+        let name = info.name().to_string();
+        let column = channel % SWATCH_COLUMNS;
+        let row = channel / SWATCH_COLUMNS;
+        let rect = Rect::from_min_size(
+            origin + Vec2::new(column as f32 * SWATCH_STRIDE, row as f32 * SWATCH_STRIDE),
+            Vec2::splat(SWATCH),
+        );
+        let tooltip = if shown {
+            format!("Hide {name} in this view")
+        } else {
+            format!("Show {name} in this view")
+        };
+        let corners = Corners::all(4.0);
+        elements.push(
+            grana_ui::canvas(Length::Fixed(SWATCH), SWATCH, move |painter, info| {
+                let engaged = info.hover.max(info.press);
+                if shown {
+                    painter.rect(info.rect, corners, tint.with_alpha(0.62 + 0.3 * engaged));
+                } else {
+                    painter.outlined(
+                        info.rect,
+                        corners,
+                        grana_ui::Fill::Solid(tint.with_alpha(0.1)),
+                        grana_ui::Border {
+                            width: 1.0,
+                            color: tint.with_alpha(0.55 + 0.3 * engaged),
+                        },
+                        grana_ui::Shadow::NONE,
+                    );
+                }
+            })
+            .key(Key::index(format!("pane.channel.{index}"), channel))
+            .at(rect)
+            .layer(Layer::Hud)
+            .cursor(Cursor::Pointing)
+            .tooltip(&tooltip)
+            .press(Message::SetPaneChannel {
+                index,
+                channel,
+                shown: !shown,
+            }),
+        );
+    }
+    elements
+}
+
+#[derive(Clone, Copy)]
+struct Chip {
+    pane: Rect,
+    safe: Rect,
+    kind: PaneKind,
+    quality: grana_display::Quality,
+}
+
 fn chip_control<'a>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,
     index: usize,
-    pane_rect: Rect,
-    safe: Rect,
-    kind: PaneKind,
+    chip: Chip,
     title: &str,
     tint: Color,
     open: bool,
 ) -> Vec<Element<'a, Message>> {
     let style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
-    let maximum = (pane_rect.width() - 64.0).max(96.0);
+    let maximum = (chip.pane.width() - 64.0).max(96.0);
     let layout = ctx.layout_text(title, style, maximum);
     let width = (layout.size.x + 46.0).min(maximum + 24.0);
     let anchor = grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
         let rect = info.rect;
         icon::paint(
-            match kind {
+            match chip.kind {
                 PaneKind::Volume => Icon::Cube,
                 PaneKind::Section => Icon::Section,
             },
@@ -622,7 +700,7 @@ fn chip_control<'a>(
         );
     })
     .named(key)
-    .at(Rect::from_min_size(safe.min, Vec2::new(width, 26.0)))
+    .at(Rect::from_min_size(chip.safe.min, Vec2::new(width, 26.0)))
     .glass(GlassStyle::hud_chip())
     .cursor(Cursor::Pointing)
     .press(Message::ToggleOpen(Key::new(key)));
@@ -643,6 +721,7 @@ fn chip_control<'a>(
         ("YZ Slice", Message::SetPaneSlice { index, preset: 2 }),
     ];
     let mut rows = Vec::new();
+    let kinds = options.len();
     for (slot, (label, message)) in options.into_iter().enumerate() {
         rows.push(
             grana_ui::widget::menu_row(&theme, label, false)
@@ -650,7 +729,19 @@ fn chip_control<'a>(
                 .press(message),
         );
     }
-    let popup = grana_ui::popover::popup(Key::new(key), width.max(150.0), rows);
+    let quality_start = kinds + 1;
+    rows.push(crate::view::menu_separator(ctx));
+    for (slot, option) in grana_display::Quality::ALL.into_iter().enumerate() {
+        rows.push(
+            grana_ui::widget::menu_row(&theme, option.label(), chip.quality == option)
+                .key(Key::index(key, quality_start + slot))
+                .press(Message::SetPaneQuality {
+                    index,
+                    quality: option,
+                }),
+        );
+    }
+    let popup = grana_ui::popover::popup(Key::new(key), width.max(170.0), rows);
     vec![anchor, popup]
 }
 fn recording_chip<'a>(

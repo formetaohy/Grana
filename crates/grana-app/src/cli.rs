@@ -7,6 +7,7 @@ use grana_protocol::Protocol;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::app::App;
+use crate::render::Request;
 use crate::snapshot::Snapshot;
 
 pub fn gui(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
@@ -137,6 +138,67 @@ pub fn batch(
     }
     eprintln!("the batch stopped before it finished");
     ExitCode::FAILURE
+}
+
+pub fn render(arguments: &[String]) -> Option<ExitCode> {
+    let mut paths = Vec::new();
+    let mut width = None;
+    let mut height = None;
+    let mut time = None;
+    let mut view = None;
+    let mut transparent = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--width" => {
+                width = Some(arguments.get(index + 1)?.parse().ok()?);
+                index += 2;
+            }
+            "--height" => {
+                height = Some(arguments.get(index + 1)?.parse().ok()?);
+                index += 2;
+            }
+            "--time" => {
+                time = Some(arguments.get(index + 1)?.parse().ok()?);
+                index += 2;
+            }
+            "--view" => {
+                view = Some(arguments.get(index + 1)?.clone());
+                index += 2;
+            }
+            "--transparent" => {
+                transparent = true;
+                index += 1;
+            }
+            option if option.starts_with("--") => return None,
+            value => {
+                paths.push(PathBuf::from(value));
+                index += 1;
+            }
+        }
+    }
+    let [input, output] = paths.as_slice() else {
+        return None;
+    };
+    let request = Request {
+        input: input.clone(),
+        output: output.clone(),
+        width,
+        height,
+        time,
+        view,
+        transparent,
+    };
+    match crate::render::run(&request) {
+        Ok(path) => {
+            println!("{}", path.display());
+            Some(ExitCode::SUCCESS)
+        }
+        Err(detail) => {
+            eprintln!("{detail}");
+            Some(ExitCode::FAILURE)
+        }
+    }
 }
 
 fn listen(control: Control) {

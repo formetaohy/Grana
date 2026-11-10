@@ -21,6 +21,16 @@ pub enum Destination {
     Sequence { directory: PathBuf, stem: String },
 }
 
+pub fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
+    (0..timeline.frames())
+        .filter_map(|frame| timeline.sample_frame(frame))
+        .map(|sample| Pose {
+            time: sample.time,
+            views: sample.views,
+        })
+        .collect()
+}
+
 pub struct Plan {
     pub destination: Destination,
     pub panels: grana_engine::Panels,

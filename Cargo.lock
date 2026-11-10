@@ -3622,6 +3622,7 @@ name = "grana-offline"
 version = "0.1.1"
 dependencies = [
  "glam",
+ "grana-animation",
  "grana-display",
  "grana-engine",
  "grana-figure",
