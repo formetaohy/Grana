@@ -11,6 +11,7 @@ mod source;
 
 pub use cache::default_root as cache_root;
 pub use error::Error;
+pub use fingerprint::FINGERPRINT_COVERAGE;
 pub use grana_zarr::{Field, Label, Labels, Plate, Well};
 pub use image::{
     Format, Image, dataset_name, is_image, is_remote, plate, plate_at, remote_series_group,

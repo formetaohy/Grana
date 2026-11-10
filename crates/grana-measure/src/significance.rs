@@ -1,6 +1,21 @@
 use crate::math::{normal_two_sided, student_quantile, student_two_sided};
 use crate::sample::Sample;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Object,
+    Image,
+}
+
+impl Level {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Object => "object",
+            Self::Image => "image",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WelchTest {
     n_a: usize,
@@ -244,16 +259,42 @@ pub fn hedges_g(a: &[f64], b: &[f64]) -> Option<f64> {
         a.iter().chain(b).all(|value| value.is_finite()),
         "a compared sample holds finite values"
     );
-    let mean_a = mean(a);
-    let mean_b = mean(b);
-    let variance_a = deviation(a, mean_a).powi(2);
-    let variance_b = deviation(b, mean_b).powi(2);
-    let pooled = ((a.len() - 1) as f64 * variance_a + (b.len() - 1) as f64 * variance_b)
-        / (a.len() + b.len() - 2) as f64;
+    hedges_g_pooled(
+        a.len(),
+        mean(a),
+        Some(deviation(a, mean(a))),
+        b.len(),
+        mean(b),
+        Some(deviation(b, mean(b))),
+    )
+}
+
+pub fn hedges_g_pooled(
+    objects_a: usize,
+    mean_a: f64,
+    deviation_a: Option<f64>,
+    objects_b: usize,
+    mean_b: f64,
+    deviation_b: Option<f64>,
+) -> Option<f64> {
+    if objects_a < 2 || objects_b < 2 {
+        return None;
+    }
+    let deviation_a = deviation_a?;
+    let deviation_b = deviation_b?;
+    if ![mean_a, mean_b, deviation_a, deviation_b]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let pooled = ((objects_a - 1) as f64 * deviation_a * deviation_a
+        + (objects_b - 1) as f64 * deviation_b * deviation_b)
+        / (objects_a + objects_b - 2) as f64;
     if pooled <= 0.0 {
         return None;
     }
-    let correction = 1.0 - 3.0 / (4.0 * (a.len() + b.len()) as f64 - 9.0);
+    let correction = 1.0 - 3.0 / (4.0 * (objects_a + objects_b) as f64 - 9.0);
     Some(correction * (mean_a - mean_b) / pooled.sqrt())
 }
 

@@ -1,8 +1,111 @@
 use super::*;
 
+use grana_interop::Crate;
+use grana_measure::Aggregate;
 use grana_mesh::Format as MeshFormat;
+use grana_scene::Trace;
 
 impl Session {
+    pub(super) fn export_provenance(&mut self) {
+        if self.scene.is_none() {
+            self.message = Some(Message::info(
+                "open a dataset before exporting its provenance",
+            ));
+            return;
+        }
+        if self.protocol.is_none() {
+            self.capture_protocol();
+        }
+        let Some(protocol) = self.protocol.clone() else {
+            self.message = Some(Message::error("the analysis carries no protocol"));
+            return;
+        };
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("Export the provenance crate into a folder")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.message = match self.write_crate(&protocol, &root) {
+            Ok(path) => Some(Message::info(format!(
+                "the provenance crate is at {}",
+                path.display()
+            ))),
+            Err(detail) => Some(Message::error(detail)),
+        };
+    }
+
+    fn write_crate(&self, protocol: &Protocol, root: &Path) -> Result<PathBuf, String> {
+        let scene = self
+            .scene
+            .as_ref()
+            .ok_or_else(|| "the crate needs an open dataset".to_string())?;
+        let protocol_path = root.join("protocol.json");
+        protocol
+            .write(&protocol_path)
+            .map_err(|error| error.to_string())?;
+        let mut record = Crate::new(
+            scene.dataset.name(),
+            "The analysis of a microscopy dataset",
+            "Grana",
+            env!("CARGO_PKG_VERSION"),
+        );
+        if let Some(fingerprint) = self.fingerprint {
+            record.fingerprint(&fingerprint.hex(), grana_image::FINGERPRINT_COVERAGE);
+        }
+        if let Some(path) = self.source.as_ref().and_then(|loader| {
+            let source = loader.source();
+            source.path().map(Path::to_path_buf)
+        }) {
+            record.source(&path);
+        }
+        record.part(
+            "protocol.json",
+            "protocol.json",
+            "application/json",
+            "the protocol that reproduces the analysis",
+        );
+        for set in scene.objects.iter() {
+            if set.provenance().is_attached() {
+                continue;
+            }
+            let Some(table) = scene.table(set.id(), Group::Object, Aggregate::MEAN) else {
+                continue;
+            };
+            let rows = (0..table.rows()).collect::<Vec<_>>();
+            let file = format!(
+                "measurements/{}-objects.csv",
+                crate::slug(set.key().as_str())
+            );
+            let path = root.join(&file);
+            if let Some(folder) = path.parent() {
+                std::fs::create_dir_all(folder)
+                    .map_err(|error| format!("failed to create {}: {error}", folder.display()))?;
+            }
+            std::fs::write(&path, table.csv(&rows))
+                .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+            let trace = Trace::of(set, self.fingerprint);
+            record.part(
+                &file,
+                &format!("{}-objects.csv", crate::slug(set.key().as_str())),
+                "text/csv",
+                &format!("the objects of {} at every frame", set.name()),
+            );
+            record.action(
+                &format!("#create-{}", crate::slug(set.key().as_str())),
+                &format!("{} of {}", trace.algorithm().title(), set.name()),
+                &format!(
+                    "{} v{} over {} objects",
+                    trace.algorithm().title(),
+                    trace.version(),
+                    trace.objects()
+                ),
+                &[file, "protocol.json".to_string()],
+            );
+        }
+        record.write(root).map_err(|error| error.to_string())
+    }
+
     pub(super) fn export_coloc(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
             return;

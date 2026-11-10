@@ -97,6 +97,53 @@ fn tests_group_significance() {
 }
 
 #[test]
+fn tests_clustered_group_significance() {
+    let images = |values: [[f64; 3]; 2]| {
+        values.map(|image| {
+            grana_measure::ClusterSample::of(&image).expect("an image spreads across objects")
+        })
+    };
+    let a = images([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]);
+    let b = images([[10.0, 11.0, 12.0], [11.0, 12.0, 13.0]]);
+    let test = grana_measure::ClusteredWelch::of(&a, &b).expect("two images per group test");
+    assert_eq!(test.samples_a(), 6);
+    assert_eq!(test.clusters_a(), 2);
+    assert_eq!(test.mean_a(), 2.5);
+    assert!((test.difference() + 9.0).abs() < 1.0e-12);
+    assert!((test.error() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1.0e-12);
+    assert!((test.t() + 12.727_922_061_357_855).abs() < 1.0e-9);
+    assert!((test.df() - 2.0).abs() < 1.0e-12);
+    assert!((test.p() - 0.006_116_3).abs() < 1.0e-6);
+    assert!(
+        (test.deviation_a().expect("six objects spread") - 1.048_808_848_170_151_6).abs() < 1.0e-12
+    );
+    assert!(
+        grana_measure::ClusteredWelch::of(&a[..1], &b).is_none(),
+        "a single image carries no cluster variance"
+    );
+
+    let singles = |values: [f64; 3]| {
+        values.map(|value| grana_measure::ClusterSample::single(value).expect("a counted image"))
+    };
+    let welch = grana_measure::WelchTest::of(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0])
+        .expect("two three-object groups test");
+    let degenerated =
+        grana_measure::ClusteredWelch::of(&singles([1.0, 2.0, 3.0]), &singles([4.0, 5.0, 6.0]))
+            .expect("images of one object test");
+    assert!((degenerated.t() - welch.t()).abs() < 1.0e-12);
+    assert!((degenerated.df() - welch.df()).abs() < 1.0e-12);
+    assert!((degenerated.p() - welch.p()).abs() < 1.0e-12);
+    assert!(
+        (degenerated
+            .design_effect()
+            .expect("the design effect reads")
+            - 1.0)
+            .abs()
+            < 1.0e-12
+    );
+}
+
+#[test]
 fn summarises_robust_statistics() {
     let a = [1.0, 2.0, 3.0];
     let b = [4.0, 5.0, 6.0];

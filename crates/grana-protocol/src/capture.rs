@@ -5,12 +5,13 @@ use grana_scene::{
     Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, Seeds, SegmentParams,
     TrackColor,
 };
+use grana_volume::Fingerprint;
 
 use crate::{
     AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
     ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
     MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec,
-    NamedViewSpec, PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec,
+    NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec,
     RelationSpec, RenderSpec, RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
     SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
 };
@@ -21,6 +22,7 @@ impl Protocol {
         measure: &Measure,
         view: Option<ViewSpec>,
         views: Vec<NamedViewSpec>,
+        fingerprint: Option<Fingerprint>,
     ) -> Result<Self, ProtocolError> {
         let channels = scene
             .dataset
@@ -297,6 +299,7 @@ impl Protocol {
             .map(|set| set.key().as_str().to_string())
             .collect::<Vec<_>>();
         Protocol {
+            origin: Some(OriginSpec::of(scene, fingerprint)),
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
                 scene.shading,

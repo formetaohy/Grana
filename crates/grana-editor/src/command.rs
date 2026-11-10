@@ -112,6 +112,7 @@ pub enum Action {
     ExportMovieTransparent,
     ExportSequence,
     ExportMeasure,
+    ExportProvenance,
     ExportDataset,
     ExportPlate,
     ComputeColoc,
@@ -161,6 +162,7 @@ impl Action {
             }
             Self::ExportSequence => Message::Command(Command::ExportSequence),
             Self::ExportMeasure => Message::Command(Command::ExportMeasure),
+            Self::ExportProvenance => Message::Command(Command::ExportProvenance),
             Self::ExportDataset => Message::Command(Command::ExportDataset),
             Self::ExportPlate => Message::Command(Command::ExportPlate),
             Self::ComputeColoc => Message::Command(Command::ComputeColoc),
@@ -543,6 +545,15 @@ pub const SPECS: &[Spec] = &[
         scope: Scope::Scene,
         shortcut: None,
         action: Action::ExportMeasure,
+    },
+    Spec {
+        id: "provenance.export",
+        title: "Export Provenance Crate…",
+        group: Group::Export,
+        symbol: Icon::Info,
+        scope: Scope::Scene,
+        shortcut: None,
+        action: Action::ExportProvenance,
     },
     Spec {
         id: "dataset.export",

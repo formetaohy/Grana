@@ -45,6 +45,10 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         actions.push(
             view::button(ctx, "Save", Role::Quiet).press(Message::Command(Command::SaveProtocol)),
         );
+        actions.push(
+            view::button(ctx, "Provenance", Role::Quiet)
+                .press(Message::Command(Command::ExportProvenance)),
+        );
         if has_protocol {
             actions.push(
                 view::button(ctx, "Apply", Role::Quiet)
@@ -508,7 +512,7 @@ fn comparison<'a>(
     );
     children.push(view::weak(
         ctx,
-        "Welch and Mann–Whitney on dataset means; q is the Benjamini–Hochberg correction over the run.",
+        "Objects are the samples and images are the clusters; the Welch test corrects for the clustering and the rank test compares image means. q is the Benjamini–Hochberg correction over the run.",
     ));
     view::card(ctx, 6.0, children)
 }
@@ -551,9 +555,11 @@ fn comparison_row<'a>(
         mark => format!("{readout}   {mark}"),
     };
     let count = format!(
-        "{} dataset{}",
-        row.datasets,
-        if row.datasets == 1 { "" } else { "s" }
+        "{} object{} in {} image{}",
+        row.objects,
+        if row.objects == 1 { "" } else { "s" },
+        row.images,
+        if row.images == 1 { "" } else { "s" }
     );
     let samples = row
         .samples
@@ -691,7 +697,12 @@ fn sample_line(row: &grana_session::BatchComparison, metric: ComparisonMetric) -
         .iter()
         .take(LIMIT)
         .map(|sample| match metric.sample(sample) {
-            Some(value) => format!("{}: {}", sample.dataset, metric.format(value)),
+            Some(value) => format!(
+                "{}: {} ({} objects)",
+                sample.dataset,
+                metric.format(value),
+                sample.objects
+            ),
             None => format!("{}: no value", sample.dataset),
         })
         .collect::<Vec<_>>();
@@ -712,9 +723,11 @@ fn test_line(group: &str, tests: &[&grana_session::BatchSignificance]) -> String
                 .interval_text()
                 .unwrap_or_else(|| "-".to_string());
             format!(
-                "{} vs {} · Welch p={} q={} · Mann–Whitney p={} q={} · g={} Δ={:.2} · CI {interval} {}",
+                "{} vs {} · {} samples in {} images · Welch p={} q={} · image rank p={} q={} · g={} Δ={:.2} · CI {interval} {}",
                 group,
                 test.other(group),
+                test.test.samples_a(),
+                test.test.clusters_a(),
                 test.p_text(),
                 test.q_text(),
                 test.rank_p_text(),

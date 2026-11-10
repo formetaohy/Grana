@@ -832,8 +832,14 @@ fn replays_a_captured_protocol() {
     scene.set_volume_mode(0, grana_display::VolumeMode::Maximum);
     let view = ViewSpec::of(&view_state(), 0);
     let named = NamedViewSpec::of("Overview", view.clone());
-    let protocol = Protocol::capture(&scene, &Measure::new(), Some(view), vec![named.clone()])
-        .expect("the scene captures");
+    let protocol = Protocol::capture(
+        &scene,
+        &Measure::new(),
+        Some(view),
+        vec![named.clone()],
+        None,
+    )
+    .expect("the scene captures");
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol parses");
     assert_eq!(restored, protocol);
@@ -1523,18 +1529,18 @@ fn reads_a_batch_run_record() {
                     "name": "Nuclei",
                     "kind": "Surfaces",
                     "objects": objects,
-                    "volume": volume,
-                    "area": 1.0,
-                    "size": 2.0,
-                    "intensity": intensity
+                    "volume": {"objects": objects, "mean": volume, "deviation": 0.5},
+                    "area": {"objects": objects, "mean": 1.0},
+                    "size": {"objects": objects, "mean": 2.0, "deviation": 0.1},
+                    "intensity": {"objects": objects, "mean": intensity, "deviation": 4.0}
                 }
             ]
         })
     })
     .collect::<Vec<_>>();
     let record = serde_json::json!({
-        "format": 2,
-        "build": "0.1.1/11",
+        "format": 3,
+        "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 2,
         "project": true,
@@ -1557,7 +1563,8 @@ fn reads_a_batch_run_record() {
     let report = run.comparison();
     assert_eq!(report.groups.len(), 2);
     assert_eq!(report.groups[0].group, "control");
-    assert_eq!(report.groups[0].datasets, 2);
+    assert_eq!(report.groups[0].images, 2);
+    assert_eq!(report.groups[0].objects, 26);
     assert_eq!(report.groups[0].samples[0].dataset, "A1");
     assert_eq!(
         grana_pipeline::Metric::Objects.sample(&report.groups[0].samples[1]),
@@ -1568,7 +1575,14 @@ fn reads_a_batch_run_record() {
         report
             .tests
             .iter()
-            .all(|test| test.test.n_a() == 2 && test.test.n_b() == 2)
+            .all(|test| test.test.clusters_a() == 2 && test.test.clusters_b() == 2)
+    );
+    assert!(
+        report
+            .tests
+            .iter()
+            .filter(|test| test.metric != grana_pipeline::Metric::Objects)
+            .all(|test| test.test.samples_a() == 26 && test.test.samples_b() == 18)
     );
     assert!(
         report
@@ -1593,12 +1607,12 @@ fn reads_a_batch_run_record() {
         "a separated group tests significant"
     );
     let table = grana_pipeline::significance_table(&report.tests);
-    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,"));
+    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,level,"));
     assert!(
         table
             .lines()
             .next()
-            .is_some_and(|header| header.contains("rank_p"))
+            .is_some_and(|header| header.contains("clusters_a") && header.contains("rank_p"))
     );
 }
 
@@ -1606,8 +1620,8 @@ fn reads_a_batch_run_record() {
 fn records_a_batch_correction() {
     let temp = Temp::new("run-correction");
     let record = serde_json::json!({
-        "format": 2,
-        "build": "0.1.1/11",
+        "format": 3,
+        "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 1,
         "project": false,

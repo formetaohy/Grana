@@ -10,6 +10,9 @@ const SAMPLE_LEVELS: usize = 2;
 
 const PATCH_SIDE: u32 = 64;
 
+pub const FINGERPRINT_COVERAGE: &str =
+    "two levels, four channels, three frames and centered 64×64 patches at two depths";
+
 impl Image {
     pub fn fingerprint(&self) -> Result<Fingerprint, Error> {
         let pyramid = self.pyramid();

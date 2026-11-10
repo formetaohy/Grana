@@ -687,6 +687,7 @@ impl Decode for SetState {
             frames,
             relations: Vec::<RelationState>::decode(reader)?,
             provenance: Provenance::decode(reader)?,
+            version: reader.u32()?,
             curation: Curation::decode(reader)?,
             document: grana_scene::Revision::from_raw(reader.u64()?),
         };

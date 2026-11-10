@@ -102,6 +102,7 @@ pub struct ObjectSet {
     tracks: Option<TrackLayer>,
     relations: Vec<Relation>,
     provenance: Provenance,
+    version: u32,
     curation: Curation,
 }
 
@@ -152,6 +153,7 @@ impl ObjectSet {
             tracks: None,
             relations: Vec::new(),
             provenance: Provenance::detection(),
+            version: grana_object::Algorithm::Detection.version(),
             curation: Curation::default(),
         }
     }
@@ -208,10 +210,15 @@ impl ObjectSet {
         &self.provenance
     }
 
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
     pub(crate) fn set_provenance(&mut self, provenance: Provenance) {
         if self.provenance == provenance {
             return;
         }
+        self.version = provenance.algorithm().version();
         self.provenance = provenance;
         self.document = self.document.next();
     }
@@ -975,6 +982,7 @@ impl ObjectSet {
                 })
                 .collect(),
             provenance: self.provenance.clone(),
+            version: self.version,
             curation: self.curation.clone(),
             document: self.document,
         }
@@ -1007,6 +1015,7 @@ impl ObjectSet {
             frames,
             relations,
             provenance,
+            version,
             curation,
             document,
         } = state;
@@ -1059,6 +1068,7 @@ impl ObjectSet {
             tracks: None,
             relations: Vec::new(),
             provenance,
+            version,
             curation,
         };
         match &seeds {
@@ -1671,6 +1681,7 @@ impl ObjectSet {
             seeds: self.seeds.clone(),
             tracks: None,
             relations,
+            version: provenance.algorithm().version(),
             provenance,
             curation: Curation::default(),
         };
@@ -1814,6 +1825,7 @@ impl ObjectSet {
             tracks,
             relations,
             provenance: self.provenance.clone(),
+            version: self.version,
             curation: self.curation.combined(&other.curation),
         };
         Ok(merged)

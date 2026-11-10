@@ -247,6 +247,21 @@ pub enum Provenance {
 }
 
 impl Provenance {
+    pub fn algorithm(&self) -> grana_object::Algorithm {
+        match self {
+            Self::Detection => grana_object::Algorithm::Detection,
+            Self::Segmented { .. } => grana_object::Algorithm::Segmentation,
+            Self::Imported { .. } => grana_object::Algorithm::Import,
+            Self::Interop { .. } => grana_object::Algorithm::Interop,
+            Self::Attached { .. } => grana_object::Algorithm::Attachment,
+            Self::Filtered { .. } => grana_object::Algorithm::Filter,
+            Self::Copied { .. } => grana_object::Algorithm::Copy,
+            Self::Edited { .. } => grana_object::Algorithm::Edit,
+            Self::Masked { .. } => grana_object::Algorithm::Mask,
+            Self::Merged { .. } => grana_object::Algorithm::Merge,
+        }
+    }
+
     pub fn detection() -> Self {
         Self::Detection
     }

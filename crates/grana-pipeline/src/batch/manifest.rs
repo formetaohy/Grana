@@ -14,7 +14,7 @@ pub(super) const RUN: &str = "run.json";
 
 const CORRECTION: &str = "correction.json";
 
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

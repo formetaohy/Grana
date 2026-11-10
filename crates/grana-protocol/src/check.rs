@@ -347,6 +347,9 @@ impl Protocol {
                 "a protocol measures one object set".to_string(),
             ));
         }
+        if let Some(origin) = &self.origin {
+            origin.checked(&set_keys)?;
+        }
         for (index, key) in self.label_images.iter().enumerate() {
             if !set_keys.contains(key) {
                 return Err(ProtocolError::Invalid(format!(

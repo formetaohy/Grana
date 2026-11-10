@@ -102,19 +102,20 @@ pub fn batch(
             BatchEvent::Comparison(report) => {
                 for row in &report.groups {
                     println!(
-                        "  {} · {} ({}) over {} datasets",
-                        row.group, row.name, row.kind, row.datasets
+                        "  {} · {} ({}) over {} objects in {} images",
+                        row.group, row.name, row.kind, row.objects, row.images
                     );
                 }
                 for test in report.tests.iter().filter(|test| test.significant()) {
                     println!(
-                        "  {} vs {} · {} · {}: n={}/{} Welch p={} q={} · Mann–Whitney p={} q={} g={} Δ={:.2} {}",
+                        "  {} vs {} · {} · {} on {}: {} samples in {} images per group, Welch p={} q={} · image rank p={} q={} g={} Δ={:.2} {}",
                         test.group_a,
                         test.group_b,
                         test.name,
                         test.metric.name(),
-                        test.test.n_a(),
-                        test.test.n_b(),
+                        test.level().key(),
+                        test.test.samples_a(),
+                        test.test.clusters_a(),
                         test.p_text(),
                         test.q_text(),
                         test.rank_p_text(),

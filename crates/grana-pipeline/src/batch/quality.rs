@@ -1,11 +1,68 @@
 use std::collections::BTreeMap;
 
-use grana_measure::{Measurement, Statistic, Table, channel_keys};
+use grana_measure::{Level, Measurement, Statistic, Table, channel_keys};
 use grana_scene::{ObjectSetId, Scene};
 use serde::{Deserialize, Serialize};
 
 use super::Plan;
 use super::significance::{self, Significance};
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Summary {
+    objects: usize,
+    mean: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deviation: Option<f64>,
+}
+
+impl Summary {
+    pub fn new(objects: usize, mean: f64, deviation: Option<f64>) -> Option<Self> {
+        if objects == 0
+            || !mean.is_finite()
+            || deviation.is_some_and(|deviation| !deviation.is_finite() || deviation < 0.0)
+        {
+            return None;
+        }
+        Some(Self {
+            objects,
+            mean,
+            deviation,
+        })
+    }
+
+    pub fn of(values: &[f64]) -> Option<Self> {
+        if values.is_empty() || values.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let deviation = (values.len() > 1).then(|| {
+            let variance = values
+                .iter()
+                .map(|value| (value - mean) * (value - mean))
+                .sum::<f64>()
+                / (values.len() - 1) as f64;
+            variance.max(0.0).sqrt()
+        });
+        Self::new(values.len(), mean, deviation)
+    }
+
+    pub fn counted(objects: usize) -> Option<Self> {
+        Self::new(1, objects as f64, None)
+    }
+
+    pub fn objects(self) -> usize {
+        self.objects
+    }
+
+    pub fn mean(self) -> f64 {
+        self.mean
+    }
+
+    pub fn deviation(self) -> Option<f64> {
+        self.deviation
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,10 +73,14 @@ pub struct Quality {
     pub name: String,
     pub kind: String,
     pub objects: usize,
-    pub volume: Option<f64>,
-    pub area: Option<f64>,
-    pub size: Option<f64>,
-    pub intensity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<Summary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<Summary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Summary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intensity: Option<Summary>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -97,6 +158,13 @@ impl Metric {
         }
     }
 
+    pub fn level(self) -> Level {
+        match self {
+            Self::Objects => Level::Image,
+            Self::Volume | Self::Area | Self::Size | Self::Intensity => Level::Object,
+        }
+    }
+
     pub fn format(self, value: f64) -> String {
         let number = format!("{value:.*}", self.decimals());
         match self.unit() {
@@ -114,12 +182,16 @@ impl Metric {
     }
 
     pub fn sample(self, sample: &ComparisonSample) -> Option<f64> {
+        self.summary_of(sample).map(Summary::mean)
+    }
+
+    pub fn summary_of(self, sample: &ComparisonSample) -> Option<Summary> {
         sample.values[self.index()]
     }
 
-    pub(super) fn read(self, quality: &Quality) -> Option<f64> {
+    pub fn summary(self, quality: &Quality) -> Option<Summary> {
         match self {
-            Self::Objects => Some(quality.objects as f64),
+            Self::Objects => Summary::counted(quality.objects),
             Self::Volume => quality.volume,
             Self::Area => quality.area,
             Self::Size => quality.size,
@@ -152,17 +224,6 @@ pub(super) fn of(
         .objects
         .get(set)
         .expect("the batch quality names its object set");
-    let mean = |key: &str| -> Option<f64> {
-        let column = table.column(key)?;
-        if rows.is_empty() {
-            return None;
-        }
-        let total = rows
-            .iter()
-            .map(|row| f64::from(table.value(*row, column)))
-            .sum::<f64>();
-        Some(total / rows.len() as f64)
-    };
     let intensity = Measurement::Intensity {
         channel: object.channel(),
         statistic: Statistic::Mean,
@@ -175,11 +236,21 @@ pub(super) fn of(
         name: object.name().to_string(),
         kind: object.kind().name().to_string(),
         objects: rows.len(),
-        volume: mean("volume_um3"),
-        area: mean("area_um2"),
-        size: mean("diameter_um").or_else(|| mean("length_um")),
-        intensity: mean(&intensity),
+        volume: summary(table, rows, Some("volume_um3")),
+        area: summary(table, rows, Some("area_um2")),
+        size: summary(table, rows, Some("diameter_um"))
+            .or_else(|| summary(table, rows, Some("length_um"))),
+        intensity: summary(table, rows, Some(intensity.as_str())),
     }
+}
+
+fn summary(table: &Table, rows: &[usize], key: Option<&str>) -> Option<Summary> {
+    let column = table.column(key?)?;
+    let values = rows
+        .iter()
+        .map(|row| f64::from(table.value(*row, column)))
+        .collect::<Vec<_>>();
+    Summary::of(&values)
 }
 
 pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
@@ -212,10 +283,10 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
                 &quality.name,
                 &quality.kind,
                 &quality.objects.to_string(),
-                &formatted(quality.volume, 3),
-                &formatted(quality.area, 3),
-                &formatted(quality.size, 3),
-                &formatted(quality.intensity, 2),
+                &formatted(quality.volume.map(Summary::mean), 3),
+                &formatted(quality.area.map(Summary::mean), 3),
+                &formatted(quality.size.map(Summary::mean), 3),
+                &formatted(quality.intensity.map(Summary::mean), 2),
             ])
         }));
     }
@@ -225,7 +296,8 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
 #[derive(Clone, Debug)]
 pub struct ComparisonSample {
     pub dataset: String,
-    pub values: [Option<f64>; Metric::COUNT],
+    pub objects: usize,
+    pub values: [Option<Summary>; Metric::COUNT],
 }
 
 #[derive(Clone, Debug)]
@@ -234,7 +306,8 @@ pub struct Comparison {
     pub key: String,
     pub name: String,
     pub kind: String,
-    pub datasets: usize,
+    pub images: usize,
+    pub objects: usize,
     pub means: [Option<f64>; Metric::COUNT],
     pub deviations: [Option<f64>; Metric::COUNT],
     pub samples: Vec<ComparisonSample>,
@@ -260,9 +333,9 @@ pub(super) fn comparison(rows: &[Option<Row>]) -> (ComparisonReport, String) {
 }
 
 pub(super) fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) -> Vec<Comparison> {
-    let mut groups = BTreeMap::<(String, String, String), Summary>::new();
+    let mut buckets = BTreeMap::<(String, String, String), Bucket>::new();
     for quality in qualities {
-        groups
+        buckets
             .entry((
                 quality.group.clone(),
                 quality.key.clone(),
@@ -271,34 +344,44 @@ pub(super) fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) ->
             .or_default()
             .push(quality);
     }
-    let mut compared = Vec::with_capacity(groups.len());
-    for ((group, key, kind), summary) in groups {
+    let mut compared = Vec::with_capacity(buckets.len());
+    for ((group, key, kind), bucket) in buckets {
+        let mut means = [None; Metric::COUNT];
+        let mut deviations = [None; Metric::COUNT];
+        for (index, metric) in Metric::ALL.iter().enumerate() {
+            let (mean, deviation) = bucket.pooled(*metric);
+            means[index] = mean;
+            deviations[index] = deviation;
+        }
         compared.push(Comparison {
             group,
             key,
-            name: summary.name,
+            name: bucket.name,
             kind,
-            datasets: summary.datasets,
-            means: std::array::from_fn(|index| mean(&summary.values[index])),
-            deviations: std::array::from_fn(|index| deviation(&summary.values[index])),
-            samples: summary.samples,
+            images: bucket.images,
+            objects: bucket.objects,
+            means,
+            deviations,
+            samples: bucket.samples,
         });
     }
     compared
 }
 
 pub(super) fn samples(comparison: &[Comparison]) -> String {
-    let mut fields = vec!["group", "set_key", "set", "kind", "dataset"];
+    let mut fields = vec!["group", "set_key", "set", "kind", "dataset", "objects"];
     fields.extend(Metric::ALL.map(Metric::key));
     let mut lines = vec![grana_measure::csv::line(&fields)];
     for row in comparison {
         for sample in &row.samples {
+            let objects = sample.objects.to_string();
             let mut fields = vec![
                 row.group.as_str(),
                 row.key.as_str(),
                 row.name.as_str(),
                 row.kind.as_str(),
                 sample.dataset.as_str(),
+                objects.as_str(),
             ];
             let values =
                 Metric::ALL.map(|metric| formatted(metric.sample(sample), metric.decimals()));
@@ -310,7 +393,7 @@ pub(super) fn samples(comparison: &[Comparison]) -> String {
 }
 
 fn header() -> String {
-    let mut fields = vec!["group", "set_key", "set", "kind", "datasets"];
+    let mut fields = vec!["group", "set_key", "set", "kind", "images", "objects"];
     let means = Metric::ALL.map(|metric| format!("{}_mean", metric.key()));
     let deviations = Metric::ALL.map(|metric| format!("{}_std", metric.key()));
     fields.extend(means.iter().map(String::as_str));
@@ -324,7 +407,8 @@ fn line(comparison: &Comparison) -> String {
         comparison.key.clone(),
         comparison.name.clone(),
         comparison.kind.clone(),
-        comparison.datasets.to_string(),
+        comparison.images.to_string(),
+        comparison.objects.to_string(),
     ];
     let means = Metric::ALL.map(|metric| formatted(metric.value(comparison), metric.decimals()));
     let deviations =
@@ -335,48 +419,69 @@ fn line(comparison: &Comparison) -> String {
 }
 
 #[derive(Default)]
-struct Summary {
+struct Bucket {
     name: String,
-    datasets: usize,
-    values: [Vec<f64>; Metric::COUNT],
+    images: usize,
+    objects: usize,
+    summaries: [Vec<Summary>; Metric::COUNT],
     samples: Vec<ComparisonSample>,
 }
 
-impl Summary {
+impl Bucket {
     fn push(&mut self, quality: &Quality) {
-        self.datasets += 1;
+        self.images += 1;
+        self.objects += quality.objects;
         self.name.clone_from(&quality.name);
-        let values = std::array::from_fn(|index| Metric::ALL[index].read(quality));
-        for (bucket, value) in self.values.iter_mut().zip(values) {
-            if let Some(value) = value {
-                bucket.push(value);
+        let values = std::array::from_fn(|index| Metric::ALL[index].summary(quality));
+        for (bucket, value) in self.summaries.iter_mut().zip(&values) {
+            if let Some(summary) = value {
+                bucket.push(*summary);
             }
         }
         self.samples.push(ComparisonSample {
             dataset: quality.dataset.clone(),
+            objects: quality.objects,
             values,
         });
     }
+
+    fn pooled(&self, metric: Metric) -> (Option<f64>, Option<f64>) {
+        pooled(&self.summaries[metric.index()])
+    }
 }
 
-fn mean(values: &[f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    Some(values.iter().sum::<f64>() / values.len() as f64)
-}
-
-fn deviation(values: &[f64]) -> Option<f64> {
-    if values.len() < 2 {
-        return None;
-    }
-    let mean = mean(values)?;
-    let variance = values
+fn pooled(summaries: &[Summary]) -> (Option<f64>, Option<f64>) {
+    let total = summaries
         .iter()
-        .map(|value| (value - mean) * (value - mean))
+        .map(|summary| summary.objects())
+        .sum::<usize>();
+    if total == 0 {
+        return (None, None);
+    }
+    let mean = summaries
+        .iter()
+        .map(|summary| summary.objects() as f64 * summary.mean())
         .sum::<f64>()
-        / (values.len() - 1) as f64;
-    Some(variance.sqrt())
+        / total as f64;
+    let deviation = (total > 1).then(|| {
+        let within = summaries
+            .iter()
+            .filter_map(|summary| {
+                summary
+                    .deviation()
+                    .map(|deviation| (summary.objects() - 1) as f64 * deviation * deviation)
+            })
+            .sum::<f64>();
+        let between = summaries
+            .iter()
+            .map(|summary| {
+                let offset = summary.mean() - mean;
+                summary.objects() as f64 * offset * offset
+            })
+            .sum::<f64>();
+        ((within + between) / (total - 1) as f64).max(0.0).sqrt()
+    });
+    (Some(mean), deviation)
 }
 
 fn formatted(value: Option<f64>, decimals: usize) -> String {

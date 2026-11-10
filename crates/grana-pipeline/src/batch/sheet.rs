@@ -122,7 +122,8 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
         let position = match tables.iter().position(|(group, _)| *group == entry.group) {
             Some(position) => position,
             None => {
-                let rows = std::iter::once("datasets".to_string())
+                let rows = std::iter::once("images".to_string())
+                    .chain(std::iter::once("objects".to_string()))
                     .chain(Metric::ALL.map(metric_label))
                     .map(|label| Row {
                         label,
@@ -141,7 +142,7 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
         };
         let table = &mut tables[position].1;
         table.columns.push(entry.name.clone());
-        let mut values = vec![entry.datasets.to_string()];
+        let mut values = vec![entry.images.to_string(), entry.objects.to_string()];
         values.extend(Metric::ALL.map(|metric| {
             deviated(
                 metric.value(entry),

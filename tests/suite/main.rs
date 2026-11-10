@@ -8,6 +8,7 @@ mod imaris;
 mod measure;
 mod mesh;
 mod optics;
+mod provenance;
 mod render;
 mod restore;
 mod segment;

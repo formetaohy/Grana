@@ -120,6 +120,7 @@ grana-engine = { workspace = true }
 grana-geometry = { workspace = true }
 grana-gpu = { workspace = true }
 grana-image = { workspace = true }
+grana-interop = { workspace = true }
 grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
 grana-model = { workspace = true }

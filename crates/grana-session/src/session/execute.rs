@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 use grana_scene::{SegmentModel, SegmentParams};
 
@@ -637,6 +637,7 @@ impl Session {
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
+            Command::ExportProvenance => self.export_provenance(),
             Command::ExportRelation {
                 source,
                 target,

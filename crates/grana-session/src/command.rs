@@ -1,4 +1,4 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 
 use grana_display::{Coloring, Material, Shading, TransferFunction, VolumeMode};
 use grana_measure::{
@@ -355,6 +355,7 @@ pub enum Command {
     },
     ExportColoc,
     ExportMeasure,
+    ExportProvenance,
     ExportRelation {
         source: ObjectSetId,
         target: ObjectSetId,

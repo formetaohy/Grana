@@ -26,7 +26,7 @@ impl Session {
             .iter()
             .map(|named| NamedViewSpec::of(named.name.clone(), ViewSpec::of(&named.view, time)))
             .collect();
-        match Protocol::capture(scene, &self.measure, view, views) {
+        match Protocol::capture(scene, &self.measure, view, views, self.fingerprint) {
             Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
         }
@@ -364,6 +364,15 @@ impl Session {
             return;
         };
         protocol.present_measure(recipe.sets(), &mut self.measure, scene);
+        if let Some(origin) = protocol.origin() {
+            let drift = origin.verify(scene, self.fingerprint);
+            if !drift.is_empty() {
+                self.message = Some(Message::info(format!(
+                    "the replay departs from the recorded run: {}",
+                    drift.join("; ")
+                )));
+            }
+        }
     }
 
     pub(super) fn abort_recipe(&mut self) {

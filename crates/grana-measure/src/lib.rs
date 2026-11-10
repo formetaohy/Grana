@@ -1,5 +1,6 @@
 mod child;
 mod classifier;
+mod cluster;
 mod coloc;
 mod column;
 mod correlation;
@@ -18,6 +19,7 @@ mod table;
 
 pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
 pub use classifier::{Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL};
+pub use cluster::{ClusterSample, ClusteredWelch};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
     COLOC_PERMUTATIONS_DEFAULT, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame, ColocMetric,
@@ -37,5 +39,7 @@ pub use plot::{
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;
 pub use scope::Scope;
-pub use significance::{MannWhitney, WelchTest, benjamini_hochberg, hedges_g, stars};
+pub use significance::{
+    Level, MannWhitney, WelchTest, benjamini_hochberg, hedges_g, hedges_g_pooled, stars,
+};
 pub use table::{Aggregate, Frame, Group, Objects, Observation, Table, channel_keys};

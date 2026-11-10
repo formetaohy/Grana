@@ -29,7 +29,7 @@ pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
 pub use manifest::{
     Run, RunDataset, clear as clear_correction, read as read_run, record as record_correction,
 };
-pub use quality::{Comparison, ComparisonReport, ComparisonSample, Metric, Quality};
+pub use quality::{Comparison, ComparisonReport, ComparisonSample, Metric, Quality, Summary};
 pub use significance::{Significance, table as significance_table};
 
 const RESULT: &str = "result.json";
@@ -38,7 +38,7 @@ const PARTIAL: &str = "partial";
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 11;
+const ANALYSIS_REVISION: u32 = 12;
 
 pub struct Plan {
     pub protocol: Protocol,

@@ -1,6 +1,7 @@
 mod capture;
 mod check;
 mod derived;
+mod origin;
 mod present;
 mod spec;
 mod stage;
@@ -10,6 +11,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+pub use origin::{AlgorithmSpec, ExpectedSpec, OriginSpec};
 
 pub use spec::{
     AnchorSpec, AnnotationSpec, BackgroundSpec, CameraSpec, ChannelSpec, ClassifierSpec,
@@ -27,6 +30,8 @@ pub use step::Step;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Protocol {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<OriginSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     region: Option<RegionSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +76,10 @@ pub enum ProtocolError {
 }
 
 impl Protocol {
+    pub fn origin(&self) -> Option<&OriginSpec> {
+        self.origin.as_ref()
+    }
+
     pub fn region(&self) -> Option<RegionSpec> {
         self.region
     }
@@ -385,6 +394,9 @@ impl Protocol {
             if snapshot.sequences {
                 summary.push_str(" and a sequence");
             }
+        }
+        if let Some(origin) = self.origin.as_ref() {
+            summary.push_str(&format!(" · captured from {}", origin.software()));
         }
         summary
     }

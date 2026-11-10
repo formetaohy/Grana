@@ -1,4 +1,4 @@
-﻿use std::sync::Arc;
+use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction, VolumeStyle};
 use grana_measure::ObjectColoc;
@@ -104,6 +104,7 @@ pub struct SetState {
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
+    pub version: u32,
     pub curation: Curation,
     pub document: Revision,
 }

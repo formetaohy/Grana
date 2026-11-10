@@ -1,3 +1,4 @@
+mod algorithm;
 mod anchor;
 mod filament;
 mod graph;
@@ -12,6 +13,7 @@ mod spot;
 mod surface;
 mod track;
 
+pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};

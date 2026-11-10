@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use grana_measure::{MannWhitney, WelchTest, benjamini_hochberg, hedges_g, stars};
+use grana_measure::{
+    ClusterSample, ClusteredWelch, Level, MannWhitney, benjamini_hochberg, hedges_g_pooled, stars,
+};
 
 use super::quality::{Comparison, Metric};
 
@@ -12,7 +14,7 @@ pub struct Significance {
     pub metric: Metric,
     pub group_a: String,
     pub group_b: String,
-    pub test: WelchTest,
+    pub test: ClusteredWelch,
     pub rank: MannWhitney,
     pub effect: Option<f64>,
     pub interval: Option<(f64, f64)>,
@@ -35,6 +37,22 @@ impl Significance {
 
     pub fn rank_q(&self) -> f64 {
         self.rank_adjusted
+    }
+
+    pub fn level(&self) -> Level {
+        self.metric.level()
+    }
+
+    pub fn samples(&self) -> (usize, usize) {
+        (self.test.samples_a(), self.test.samples_b())
+    }
+
+    pub fn clusters(&self) -> (usize, usize) {
+        (self.test.clusters_a(), self.test.clusters_b())
+    }
+
+    pub fn design_effect(&self) -> Option<f64> {
+        self.test.design_effect()
     }
 
     pub fn involves(&self, group: &str) -> bool {
@@ -98,12 +116,13 @@ pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
         for (index, first) in bucket.iter().enumerate() {
             for second in &bucket[index + 1..] {
                 for metric in Metric::ALL {
-                    let a = sample_metric(first, metric);
-                    let b = sample_metric(second, metric);
-                    let Some(test) = WelchTest::of(&a, &b) else {
+                    let a = clusters(first, metric);
+                    let b = clusters(second, metric);
+                    let Some(test) = ClusteredWelch::of(&a, &b) else {
                         continue;
                     };
-                    let Some(rank) = MannWhitney::of(&a, &b) else {
+                    let Some(rank) = MannWhitney::of(&means(first, metric), &means(second, metric))
+                    else {
                         continue;
                     };
                     tested.push(Significance {
@@ -113,10 +132,17 @@ pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
                         metric,
                         group_a: first.group.clone(),
                         group_b: second.group.clone(),
+                        effect: hedges_g_pooled(
+                            test.samples_a(),
+                            test.mean_a(),
+                            test.deviation_a(),
+                            test.samples_b(),
+                            test.mean_b(),
+                            test.deviation_b(),
+                        ),
+                        interval: test.interval(0.95),
                         test,
                         rank,
-                        effect: hedges_g(&a, &b),
-                        interval: test.interval(0.95),
                         adjusted: 1.0,
                         rank_adjusted: 1.0,
                     });
@@ -149,8 +175,11 @@ pub fn table(tests: &[Significance]) -> String {
         "set",
         "kind",
         "metric",
-        "datasets_a",
-        "datasets_b",
+        "level",
+        "samples_a",
+        "samples_b",
+        "clusters_a",
+        "clusters_b",
         "mean_a",
         "std_a",
         "mean_b",
@@ -163,20 +192,21 @@ pub fn table(tests: &[Significance]) -> String {
         "p",
         "q",
         "hedges_g",
-        "median_a",
-        "median_b",
+        "image_median_a",
+        "image_median_b",
         "u",
         "z",
         "rank_p",
         "rank_q",
         "cliffs_delta",
+        "design_effect",
         "mark",
     ]);
     let mut text = header;
     for test in tests {
         let metric = test.metric;
         let decimals = metric.decimals();
-        let interval = test.interval.unwrap_or((f64::NAN, f64::NAN));
+        let interval = test.interval;
         let line = grana_measure::csv::line(&[
             &test.group_a,
             &test.group_b,
@@ -184,15 +214,18 @@ pub fn table(tests: &[Significance]) -> String {
             &test.name,
             &test.kind,
             metric.name(),
-            &test.test.n_a().to_string(),
-            &test.test.n_b().to_string(),
+            test.level().key(),
+            &test.test.samples_a().to_string(),
+            &test.test.samples_b().to_string(),
+            &test.test.clusters_a().to_string(),
+            &test.test.clusters_b().to_string(),
             &format!("{:.*}", decimals, test.test.mean_a()),
-            &format!("{:.*}", decimals, test.test.deviation_a()),
+            &formatted(test.test.deviation_a(), decimals),
             &format!("{:.*}", decimals, test.test.mean_b()),
-            &format!("{:.*}", decimals, test.test.deviation_b()),
+            &formatted(test.test.deviation_b(), decimals),
             &format!("{:.*}", decimals, test.test.difference()),
-            &format!("{:.*}", decimals, interval.0),
-            &format!("{:.*}", decimals, interval.1),
+            &formatted(interval.map(|interval| interval.0), decimals),
+            &formatted(interval.map(|interval| interval.1), decimals),
             &format!("{:.3}", test.test.t()),
             &format!("{:.2}", test.test.df()),
             &test.p_text(),
@@ -207,6 +240,9 @@ pub fn table(tests: &[Significance]) -> String {
             &test.rank_p_text(),
             &test.rank_q_text(),
             &format!("{:.3}", test.rank.delta()),
+            &test
+                .design_effect()
+                .map_or_else(String::new, |effect| format!("{effect:.2}")),
             test.mark(),
         ]);
         text.push_str(&line);
@@ -214,11 +250,28 @@ pub fn table(tests: &[Significance]) -> String {
     text
 }
 
-fn sample_metric(row: &Comparison, metric: Metric) -> Vec<f64> {
+fn clusters(row: &Comparison, metric: Metric) -> Vec<ClusterSample> {
+    row.samples
+        .iter()
+        .filter_map(|sample| metric.summary_of(sample))
+        .filter_map(|summary| {
+            ClusterSample::from_summary(summary.objects(), summary.mean(), summary.deviation())
+        })
+        .collect()
+}
+
+fn means(row: &Comparison, metric: Metric) -> Vec<f64> {
     row.samples
         .iter()
         .filter_map(|sample| metric.sample(sample))
         .collect()
+}
+
+fn formatted(value: Option<f64>, decimals: usize) -> String {
+    match value {
+        Some(value) => format!("{value:.decimals$}"),
+        None => String::new(),
+    }
 }
 
 fn scientific(value: f64) -> String {

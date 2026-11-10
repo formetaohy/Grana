@@ -453,6 +453,7 @@ impl Encode for SetState {
         self.frames.encode(writer);
         self.relations.encode(writer);
         self.provenance.encode(writer);
+        writer.u32(self.version);
         self.curation.encode(writer);
         writer.u64(self.document.raw());
     }

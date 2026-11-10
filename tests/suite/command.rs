@@ -214,6 +214,7 @@ fn captures_a_protocol_film_without_a_window() {
         &Measure::new(),
         Some(grana_protocol::ViewSpec::of(&view, 0)),
         Vec::new(),
+        None,
     )
     .expect("the scene captures");
     let mut json = serde_json::from_str::<serde_json::Value>(
@@ -287,7 +288,7 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
             grana_object::SpotParams::new(0.5, 0.1),
         ));
     let mut capture = serde_json::from_str::<serde_json::Value>(
-        &grana_protocol::Protocol::capture(&scene, &Measure::new(), None, Vec::new())
+        &grana_protocol::Protocol::capture(&scene, &Measure::new(), None, Vec::new(), None)
             .expect("the scene captures")
             .to_json()
             .expect("the protocol serializes"),
