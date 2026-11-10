@@ -4,8 +4,12 @@ use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatistics};
 use grana_volume::{Level, VoxelData};
+use rayon::prelude::*;
 
 use crate::table::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
+
+const RELAX_ITERATIONS: usize = 8;
+const RELAX_TRIANGLE_FLOOR: usize = 12;
 
 struct Object {
     label: u32,
@@ -92,15 +96,20 @@ impl LabelBuilder {
         let mut statistics = Vec::with_capacity(objects.len());
         let mut intensities = Vec::with_capacity(objects.len() * self.channels);
         let voxel_volume = self.info.voxel_volume();
+        let relaxed = objects
+            .par_iter()
+            .map(|object| relaxed_surface(&object.positions, &object.indices))
+            .collect::<Vec<_>>();
         for (object_index, object) in objects.iter().enumerate() {
             assert!(
                 object.voxels > 0 && !object.indices.is_empty(),
                 "a label object carries voxels and a closed surface"
             );
-            let mut normals = vec![[0.0f32; 3]; object.positions.len()];
+            let positions = &relaxed[object_index];
+            let mut normals = vec![[0.0f32; 3]; positions.len()];
             let mut area = 0.0f64;
             for triangle in object.indices.as_chunks::<3>().0 {
-                let points = triangle.map(|vertex| object.positions[vertex as usize]);
+                let points = triangle.map(|vertex| positions[vertex as usize]);
                 let first = Vec3::from(points[0]);
                 let cross = (Vec3::from(points[1]) - first).cross(Vec3::from(points[2]) - first);
                 area += 0.5 * f64::from(cross.length());
@@ -112,7 +121,7 @@ impl LabelBuilder {
                 }
             }
             let base = vertices.len() as u32;
-            for (position, normal) in object.positions.iter().zip(&normals) {
+            for (position, normal) in positions.iter().zip(&normals) {
                 let normal = Vec3::from(*normal).normalize_or_zero();
                 let normal = if normal == Vec3::ZERO {
                     [0.0, 0.0, 1.0]
@@ -134,7 +143,7 @@ impl LabelBuilder {
                     .cell_bounds(object.low, object.high.map(|value| value + 1));
                 Bounds::new(low, high)
             };
-            let shape = SurfaceShape::of(&object.positions, object.indices.as_chunks::<3>().0);
+            let shape = SurfaceShape::of(positions, object.indices.as_chunks::<3>().0);
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
                 count * voxel_volume,
@@ -299,6 +308,13 @@ impl LabelBuilder {
         };
         &mut self.objects[slot]
     }
+}
+
+fn relaxed_surface(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    if indices.len() / 3 < RELAX_TRIANGLE_FLOOR {
+        return positions.to_vec();
+    }
+    grana_geometry::relax(positions, indices, RELAX_ITERATIONS)
 }
 
 fn at(

@@ -914,3 +914,57 @@ fn shear(path: &std::path::Path) {
     let group = builder.build(store, "/").expect("the root rebuilds");
     group.store_metadata().expect("the sheared metadata stores");
 }
+
+#[test]
+fn measures_a_relaxed_label_surface() {
+    let extent = Extent::new(48, 48, 48);
+    let spacing = Spacing::new(1.0, 1.0, 1.0);
+    let radius = 10.0f32;
+    let centre = [24.0f32, 24.0, 24.0];
+    let mut labels = vec![0u32; 48 * 48 * 48];
+    let mut channel = vec![0.0f32; 48 * 48 * 48];
+    for z in 0..48u32 {
+        for y in 0..48u32 {
+            for x in 0..48u32 {
+                let slot = (x + 48 * (y + 48 * z)) as usize;
+                let point = [x as f32, y as f32, z as f32];
+                let distance = (0..3)
+                    .map(|axis| (point[axis] - centre[axis]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                if distance <= radius {
+                    labels[slot] = 1;
+                    channel[slot] = 1.0;
+                }
+            }
+        }
+    }
+    let level = Level::new(extent, spacing);
+    let mut builder = grana_analysis::LabelBuilder::new(0, level, 1);
+    builder.push(grana_analysis::LabelSlab {
+        origin: [0, 0, 0],
+        core: [48, 48, 48],
+        extent: [48, 48, 48],
+        labels: &labels,
+        channels: &[VoxelData::F32(channel)],
+    });
+    let set = builder.finish().expect("the label surface is built");
+    let object = set.objects()[0];
+    let expected_volume = 4.0 / 3.0 * PI * f64::from(radius).powi(3);
+    let expected_area = 4.0 * PI * f64::from(radius).powi(2);
+    assert!(
+        (object.volume() - expected_volume).abs() / expected_volume < 0.05,
+        "the sphere volume {} is off from {expected_volume}",
+        object.volume()
+    );
+    assert!(
+        (object.area() - expected_area).abs() / expected_area < 0.05,
+        "the sphere area {} is off from {expected_area}",
+        object.area()
+    );
+    assert!(
+        object.sphericity() > 0.97,
+        "a voxelised sphere surfaces with sphericity {}",
+        object.sphericity()
+    );
+}

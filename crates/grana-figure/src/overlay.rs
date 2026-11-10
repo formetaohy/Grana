@@ -690,11 +690,12 @@ fn nice_length(target: f32) -> f32 {
 }
 
 fn format_length(length: f32) -> String {
+    let unit = grana_measure::Unit::Micrometer.suffix();
     if length >= 10.0 {
-        format!("{length:.0} 碌m")
+        format!("{length:.0} {unit}")
     } else if length >= 1.0 {
-        format!("{length:.1} 碌m")
+        format!("{length:.1} {unit}")
     } else {
-        format!("{length:.3} 碌m")
+        format!("{length:.3} {unit}")
     }
 }
