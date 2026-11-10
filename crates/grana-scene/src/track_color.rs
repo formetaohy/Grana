@@ -1,5 +1,5 @@
 use grana_measure::{Aggregate, RelationField, TrackMeasurement, Unit};
-use grana_object::{RelationFrame, SampleAccumulator, TrackSet};
+use grana_object::{RelationFrame, TrackSet};
 
 use crate::object_set::ObjectSetId;
 use crate::relation::Relation;
@@ -50,20 +50,15 @@ impl TrackColor {
                 let (Some(entry), Some(relation)) = (set.track(track), relation) else {
                     return f32::NAN;
                 };
-                let mut accumulator = SampleAccumulator::new();
-                let mut count = 0u32;
+                let mut values = Vec::with_capacity(entry.nodes().len());
                 for node in entry.nodes() {
-                    let value = relation_value(field, relation.frame(node.time()), node.object());
-                    if value.is_finite() {
-                        accumulator.push(value);
-                        count += 1;
-                    }
+                    values.push(relation_value(
+                        field,
+                        relation.frame(node.time()),
+                        node.object(),
+                    ));
                 }
-                if count == 0 {
-                    f32::NAN
-                } else {
-                    aggregate.apply(accumulator.statistics())
-                }
+                aggregate.apply(&values)
             }
         }
     }

@@ -258,6 +258,7 @@ impl Protocol {
                 settings: ColocSettingsSpec {
                     permutations: settings.permutations(),
                     block: settings.block(),
+                    precision: settings.precision().name().to_string(),
                 },
                 pairs,
                 mask,
@@ -756,7 +757,7 @@ impl MeasureSpec {
     pub fn of(measure: &Measure) -> Self {
         let group = measure.group();
         let aggregate = if group == Group::Object {
-            Aggregate::Mean
+            Aggregate::MEAN
         } else {
             measure.aggregate()
         };

@@ -1825,12 +1825,16 @@ impl Decode for ColocSettings {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let permutations = reader.u32()?;
         let block = reader.u32()?;
+        let precision = reader.u8()?;
         if !(1..=COLOC_PERMUTATIONS_MAX).contains(&permutations)
             || !(1..=COLOC_BLOCK_MAX).contains(&block)
         {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(permutations, block))
+        let Some(precision) = grana_measure::ColocPrecision::from_index(precision) else {
+            return Err(FAULT_VALUE);
+        };
+        Ok(Self::new(permutations, block).with_precision(precision))
     }
 }
 
@@ -1881,8 +1885,12 @@ impl Decode for ColocSeriesInfo {
         let level = reader.count(1)?;
         let permutation_level = reader.count(1)?;
         let permutation_stride = reader.u32()?;
+        let coverage = reader.f32()?;
         let mask = Option::<u64>::decode(reader)?;
-        if permutation_level < level || permutation_stride == 0 {
+        if permutation_level < level
+            || permutation_stride == 0
+            || !(coverage.is_finite() && (0.0..=1.0).contains(&coverage))
+        {
             return Err(FAULT_VALUE);
         }
         Ok(Self::new(
@@ -1890,6 +1898,7 @@ impl Decode for ColocSeriesInfo {
             permutation_level,
             permutation_stride,
             mask,
+            coverage,
         ))
     }
 }

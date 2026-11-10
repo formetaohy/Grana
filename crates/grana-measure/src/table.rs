@@ -1,6 +1,4 @@
-use grana_object::{
-    FilamentSet, IntensityTable, SampleAccumulator, SampleStatistics, SpotSet, SurfaceSet, TrackSet,
-};
+use grana_object::{FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
 
 use crate::child::Child;
 use crate::column::{Column, Unit};
@@ -9,6 +7,7 @@ use crate::filter::Filter;
 use crate::lasso::Lasso;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
+use crate::sample::Sample;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -41,32 +40,90 @@ impl Group {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Aggregate {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Aggregate {
+    kind: Kind,
+    percent: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Kind {
     Mean,
     Sum,
     Minimum,
     Maximum,
     Deviation,
+    Mad,
+    Quantile,
 }
 
 impl Aggregate {
-    pub const ALL: [Self; 5] = [
-        Self::Mean,
-        Self::Sum,
-        Self::Minimum,
-        Self::Maximum,
-        Self::Deviation,
+    pub const MEAN: Self = Self {
+        kind: Kind::Mean,
+        percent: 0,
+    };
+
+    pub const SUM: Self = Self {
+        kind: Kind::Sum,
+        percent: 0,
+    };
+
+    pub const MINIMUM: Self = Self {
+        kind: Kind::Minimum,
+        percent: 0,
+    };
+
+    pub const MAXIMUM: Self = Self {
+        kind: Kind::Maximum,
+        percent: 0,
+    };
+
+    pub const DEVIATION: Self = Self {
+        kind: Kind::Deviation,
+        percent: 0,
+    };
+
+    pub const MAD: Self = Self {
+        kind: Kind::Mad,
+        percent: 0,
+    };
+
+    pub const QUANTILES: [u8; 7] = [5, 10, 25, 50, 75, 90, 95];
+
+    pub const ALL: [Self; 13] = [
+        Self::MEAN,
+        Self::SUM,
+        Self::MINIMUM,
+        Self::MAXIMUM,
+        Self::DEVIATION,
+        Self::MAD,
+        Self::quantile_unchecked(5),
+        Self::quantile_unchecked(10),
+        Self::quantile_unchecked(25),
+        Self::quantile_unchecked(50),
+        Self::quantile_unchecked(75),
+        Self::quantile_unchecked(90),
+        Self::quantile_unchecked(95),
     ];
 
-    pub fn index(self) -> u8 {
-        match self {
-            Self::Mean => 0,
-            Self::Sum => 1,
-            Self::Minimum => 2,
-            Self::Maximum => 3,
-            Self::Deviation => 4,
+    const fn quantile_unchecked(percent: u8) -> Self {
+        Self {
+            kind: Kind::Quantile,
+            percent,
         }
+    }
+
+    pub fn quantile(percent: u8) -> Option<Self> {
+        Self::QUANTILES
+            .contains(&percent)
+            .then_some(Self::quantile_unchecked(percent))
+    }
+
+    pub fn index(self) -> u8 {
+        Self::ALL
+            .iter()
+            .position(|aggregate| *aggregate == self)
+            .expect("an aggregate belongs to the catalog") as u8
     }
 
     pub fn from_index(index: u8) -> Option<Self> {
@@ -74,22 +131,41 @@ impl Aggregate {
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Mean => "mean",
-            Self::Sum => "sum",
-            Self::Minimum => "minimum",
-            Self::Maximum => "maximum",
-            Self::Deviation => "deviation",
+        match self.kind {
+            Kind::Mean => "mean",
+            Kind::Sum => "sum",
+            Kind::Minimum => "minimum",
+            Kind::Maximum => "maximum",
+            Kind::Deviation => "deviation",
+            Kind::Mad => "MAD",
+            Kind::Quantile if self.percent == 50 => "median",
+            Kind::Quantile => "quantile",
         }
     }
 
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Mean => "mean",
-            Self::Sum => "sum",
-            Self::Minimum => "min",
-            Self::Maximum => "max",
-            Self::Deviation => "std",
+    pub fn label(self) -> String {
+        match self.kind {
+            Kind::Mean => "Mean".to_string(),
+            Kind::Sum => "Sum".to_string(),
+            Kind::Minimum => "Min".to_string(),
+            Kind::Maximum => "Max".to_string(),
+            Kind::Deviation => "SD (σ)".to_string(),
+            Kind::Mad => "MAD".to_string(),
+            Kind::Quantile if self.percent == 50 => "Median".to_string(),
+            Kind::Quantile => format!("P{}", self.percent),
+        }
+    }
+
+    pub fn key(self) -> String {
+        match self.kind {
+            Kind::Mean => "mean".to_string(),
+            Kind::Sum => "sum".to_string(),
+            Kind::Minimum => "min".to_string(),
+            Kind::Maximum => "max".to_string(),
+            Kind::Deviation => "std".to_string(),
+            Kind::Mad => "mad".to_string(),
+            Kind::Quantile if self.percent == 50 => "median".to_string(),
+            Kind::Quantile => format!("p{:02}", self.percent),
         }
     }
 
@@ -99,13 +175,42 @@ impl Aggregate {
             .find(|aggregate| aggregate.key() == key)
     }
 
-    pub fn apply(self, statistics: SampleStatistics) -> f32 {
-        match self {
-            Self::Mean => statistics.mean(),
-            Self::Sum => statistics.sum() as f32,
-            Self::Minimum => statistics.minimum(),
-            Self::Maximum => statistics.maximum(),
-            Self::Deviation => statistics.deviation(),
+    pub fn apply(self, values: &[f32]) -> f32 {
+        let finite = || values.iter().copied().filter(|value| value.is_finite());
+        match self.kind {
+            Kind::Mean => {
+                let mut count = 0u64;
+                let mut sum = 0.0f64;
+                for value in finite() {
+                    count += 1;
+                    sum += f64::from(value);
+                }
+                if count == 0 {
+                    f32::NAN
+                } else {
+                    (sum / count as f64) as f32
+                }
+            }
+            Kind::Sum => finite().map(f64::from).sum::<f64>() as f32,
+            Kind::Minimum => finite().fold(f32::NAN, f32::min),
+            Kind::Maximum => finite().fold(f32::NAN, f32::max),
+            Kind::Deviation => {
+                let collected = finite().map(f64::from).collect::<Vec<_>>();
+                let Some(sample) = Sample::new(collected) else {
+                    return f32::NAN;
+                };
+                sample.deviation().unwrap_or(0.0) as f32
+            }
+            Kind::Mad => {
+                let collected = finite().map(f64::from).collect::<Vec<_>>();
+                Sample::new(collected).map_or(f32::NAN, |sample| sample.mad() as f32)
+            }
+            Kind::Quantile => {
+                let collected = finite().map(f64::from).collect::<Vec<_>>();
+                Sample::new(collected).map_or(f32::NAN, |sample| {
+                    sample.quantile(self.percent as f64) as f32
+                })
+            }
         }
     }
 }
@@ -610,22 +715,18 @@ fn track_table(
     };
     let rows = set.len();
     let slots = measurements.len() + relations.len();
-    let mut accumulators = vec![SampleAccumulator::new(); rows * slots];
-    let mut counts = vec![0u32; rows * relations.len()];
+    let mut collected = vec![Vec::<f32>::new(); rows * slots];
     for frame in frames {
         for object in 0..frame.objects.count() {
             let Some(track) = set.track_at(frame.time, object) else {
                 continue;
             };
             for (index, measurement) in measurements.iter().enumerate() {
-                accumulators[track * slots + index].push(measurement.value(frame.objects, object));
+                collected[track * slots + index].push(measurement.value(frame.objects, object));
             }
             for (slot, (index, field)) in relations.iter().enumerate() {
-                let value = field.value(frame.relations[*index], object);
-                if value.is_finite() {
-                    accumulators[track * slots + measurements.len() + slot].push(value);
-                    counts[track * relations.len() + slot] += 1;
-                }
+                collected[track * slots + measurements.len() + slot]
+                    .push(field.value(frame.relations[*index], object));
             }
         }
     }
@@ -640,16 +741,8 @@ fn track_table(
         for field in &TrackMeasurement::ALL {
             values.push(field.value(track, set));
         }
-        for index in 0..measurements.len() {
-            values.push(aggregate.apply(accumulators[track * slots + index].statistics()));
-        }
-        for slot in 0..relations.len() {
-            values.push(if counts[track * relations.len() + slot] == 0 {
-                f32::NAN
-            } else {
-                aggregate
-                    .apply(accumulators[track * slots + measurements.len() + slot].statistics())
-            });
+        for cell in 0..slots {
+            values.push(aggregate.apply(&collected[track * slots + cell]));
         }
     }
     Table::new(columns, TrackMeasurement::ALL.len(), observations, values)
@@ -688,27 +781,18 @@ fn timepoint_table(
             values.push(field.value(frame, frame_interval));
         }
         for measurement in &measurements {
-            let mut accumulator = SampleAccumulator::new();
+            let mut collected = Vec::with_capacity(frame.objects.count());
             for object in 0..frame.objects.count() {
-                accumulator.push(measurement.value(frame.objects, object));
+                collected.push(measurement.value(frame.objects, object));
             }
-            values.push(aggregate.apply(accumulator.statistics()));
+            values.push(aggregate.apply(&collected));
         }
         for (index, field) in &relations {
-            let mut accumulator = SampleAccumulator::new();
-            let mut count = 0u32;
+            let mut collected = Vec::with_capacity(frame.objects.count());
             for object in 0..frame.objects.count() {
-                let value = field.value(frame.relations[*index], object);
-                if value.is_finite() {
-                    accumulator.push(value);
-                    count += 1;
-                }
+                collected.push(field.value(frame.relations[*index], object));
             }
-            values.push(if count == 0 {
-                f32::NAN
-            } else {
-                aggregate.apply(accumulator.statistics())
-            });
+            values.push(aggregate.apply(&collected));
         }
     }
     Table::new(columns, TimeField::ALL.len(), observations, values)

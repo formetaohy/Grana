@@ -43,36 +43,30 @@ fn aggregate_scores(
             let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
                 return Vec::new();
             };
-            let mut accumulators = vec![grana_object::SampleAccumulator::new(); tracks.len()];
+            let mut collected = vec![Vec::<f32>::new(); tracks.len()];
             for (time, frame) in set.frames() {
                 let objects = frame.objects();
                 for index in 0..frame.object_count() {
                     let Some(track) = tracks.track_at(time, index) else {
                         continue;
                     };
-                    let score = classifier.score(objects, index);
-                    if score.is_finite() {
-                        accumulators[track].push(score);
-                    }
+                    collected[track].push(classifier.score(objects, index));
                 }
             }
-            accumulators
+            collected
                 .iter()
-                .map(|accumulator| aggregate.apply(accumulator.statistics()))
+                .map(|values| aggregate.apply(values))
                 .collect()
         }
         Group::Timepoint => set
             .frames()
             .map(|(_, frame)| {
                 let objects = frame.objects();
-                let mut accumulator = grana_object::SampleAccumulator::new();
+                let mut collected = Vec::with_capacity(frame.object_count());
                 for index in 0..frame.object_count() {
-                    let score = classifier.score(objects, index);
-                    if score.is_finite() {
-                        accumulator.push(score);
-                    }
+                    collected.push(classifier.score(objects, index));
                 }
-                aggregate.apply(accumulator.statistics())
+                aggregate.apply(&collected)
             })
             .collect(),
     }
@@ -91,8 +85,7 @@ fn aggregate_coloc(
             let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
                 return Vec::new();
             };
-            let mut accumulators = vec![grana_object::SampleAccumulator::new(); tracks.len()];
-            let mut counts = vec![0u32; tracks.len()];
+            let mut collected = vec![Vec::<f32>::new(); tracks.len()];
             for (time, frame) in set.frames() {
                 let Some(values) = coloc.objects(time) else {
                     continue;
@@ -104,40 +97,25 @@ fn aggregate_coloc(
                     let Some(track) = tracks.track_at(time, index) else {
                         continue;
                     };
-                    accumulators[track].push(value as f32);
-                    counts[track] += 1;
+                    collected[track].push(value as f32);
                 }
             }
-            accumulators
+            collected
                 .iter()
-                .zip(&counts)
-                .map(|(accumulator, count)| {
-                    if *count == 0 {
-                        f32::NAN
-                    } else {
-                        aggregate.apply(accumulator.statistics())
-                    }
-                })
+                .map(|values| aggregate.apply(values))
                 .collect()
         }
         Group::Timepoint => set
             .frames()
             .map(|(time, frame)| {
-                let mut accumulator = grana_object::SampleAccumulator::new();
-                let mut count = 0u32;
+                let mut collected = Vec::with_capacity(frame.object_count());
                 let values = coloc.objects(time).unwrap_or_default();
                 for value in values.iter().take(frame.object_count()) {
-                    let Some(value) = value.metric(metric) else {
-                        continue;
-                    };
-                    accumulator.push(value as f32);
-                    count += 1;
+                    if let Some(value) = value.metric(metric) {
+                        collected.push(value as f32);
+                    }
                 }
-                if count == 0 {
-                    f32::NAN
-                } else {
-                    aggregate.apply(accumulator.statistics())
-                }
+                aggregate.apply(&collected)
             })
             .collect(),
     }
@@ -914,7 +892,7 @@ impl Scene {
         }
         let tracks = filtered.tracks().map(|layer| layer.set());
         let table = self
-            .table(source, criteria.group(), Aggregate::Mean)
+            .table(source, criteria.group(), Aggregate::MEAN)
             .ok_or_else(|| {
                 format!(
                     "{} holds no objects to filter into {}",
@@ -1506,7 +1484,7 @@ impl Scene {
             return Err("a classifier trains on measurements of its object set".to_string());
         }
         let table = self
-            .table(id, Group::Object, Aggregate::Mean)
+            .table(id, Group::Object, Aggregate::MEAN)
             .ok_or("the object set holds no measurements to train on")?;
         let keys = grana_measure::channel_keys(
             &self

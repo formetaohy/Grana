@@ -508,7 +508,7 @@ fn comparison<'a>(
     );
     children.push(view::weak(
         ctx,
-        "Welch's t on dataset means; q is the Benjamini–Hochberg correction over the run.",
+        "Welch and Mann–Whitney on dataset means; q is the Benjamini–Hochberg correction over the run.",
     ));
     view::card(ctx, 6.0, children)
 }
@@ -708,13 +708,19 @@ fn test_line(group: &str, tests: &[&grana_session::BatchSignificance]) -> String
             let effect = test
                 .effect
                 .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}"));
+            let interval = test
+                .interval_text()
+                .unwrap_or_else(|| "-".to_string());
             format!(
-                "Welch {} vs {}: p={} · q={} · g={} {}",
+                "{} vs {} · Welch p={} q={} · Mann–Whitney p={} q={} · g={} Δ={:.2} · CI {interval} {}",
                 group,
                 test.other(group),
                 test.p_text(),
                 test.q_text(),
+                test.rank_p_text(),
+                test.rank_q_text(),
                 effect,
+                test.rank.delta(),
                 test.mark()
             )
         })

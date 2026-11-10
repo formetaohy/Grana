@@ -598,6 +598,7 @@ fn measures_correlated_channels() {
     );
     assert_eq!(series.joint().iter().sum::<u64>(), extent.voxel_count());
     assert_eq!(series.level(), 0);
+    assert_eq!(series.coverage(), 1.0);
     let significance = series
         .significance()
         .expect("the series carries a permutation test");
@@ -606,6 +607,49 @@ fn measures_correlated_channels() {
         significance.p() < 0.05,
         "a perfectly correlated pair tests significant"
     );
+}
+
+#[test]
+fn chooses_the_colocalization_precision() {
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let extents = [256, 128, 64, 32].map(|side| Extent::new(side, side, side));
+    let levels = extents
+        .iter()
+        .map(|extent| Level::new(*extent, spacing))
+        .collect::<Vec<_>>();
+    let intensity = Intensity::new(0.0, f32::from(HIGH));
+    let channel = ChannelInfo::new(
+        "Channel".to_string(),
+        [1.0, 1.0, 1.0],
+        intensity,
+        intensity,
+        VoxelFormat::U16,
+    );
+    let pyramid = Pyramid::new(levels, 1, vec![channel], 1, 1.0);
+    let full = coloc_levels(
+        &pyramid,
+        Region::none(),
+        1,
+        grana_measure::ColocPrecision::Full,
+    );
+    let balanced = coloc_levels(
+        &pyramid,
+        Region::none(),
+        1,
+        grana_measure::ColocPrecision::Balanced,
+    );
+    let fast = coloc_levels(
+        &pyramid,
+        Region::none(),
+        1,
+        grana_measure::ColocPrecision::Fast,
+    );
+    assert_eq!(full.scan(), 0);
+    assert_eq!(balanced.scan(), 1);
+    assert_eq!(fast.scan(), 2);
+    assert!(full.permutation() >= full.scan());
+    assert!(balanced.permutation() >= balanced.scan());
+    assert!(fast.permutation() >= fast.scan());
 }
 
 fn ramp(extent: Extent) -> VoxelData {
@@ -636,7 +680,12 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
         })
         .collect();
     let pyramid = Pyramid::new(vec![level], 1, channels, 1, 1.0);
-    let levels = coloc_levels(&pyramid, Region::none(), 1);
+    let levels = coloc_levels(
+        &pyramid,
+        Region::none(),
+        1,
+        grana_measure::ColocPrecision::Full,
+    );
     let info = pyramid.level(levels.scan());
     let pair = ColocPair::new(0, 1);
     let intensities = [intensity, intensity];

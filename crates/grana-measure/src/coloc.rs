@@ -87,10 +87,55 @@ impl ColocThresholdRange {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ColocPrecision {
+    #[default]
+    Full,
+    Balanced,
+    Fast,
+}
+
+impl ColocPrecision {
+    pub const ALL: [Self; 3] = [Self::Full, Self::Balanced, Self::Fast];
+
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Full => 0,
+            Self::Balanced => 1,
+            Self::Fast => 2,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Balanced => "balanced",
+            Self::Fast => "fast",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Full resolution",
+            Self::Balanced => "Balanced",
+            Self::Fast => "Fast",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.name() == key)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColocSettings {
     permutations: u32,
     block: u32,
+    precision: ColocPrecision,
 }
 
 impl ColocSettings {
@@ -106,7 +151,12 @@ impl ColocSettings {
         Self {
             permutations,
             block,
+            precision: ColocPrecision::default(),
         }
+    }
+
+    pub fn with_precision(self, precision: ColocPrecision) -> Self {
+        Self { precision, ..self }
     }
 
     pub fn permutations(self) -> u32 {
@@ -116,6 +166,10 @@ impl ColocSettings {
     pub fn block(self) -> u32 {
         self.block
     }
+
+    pub fn precision(self) -> ColocPrecision {
+        self.precision
+    }
 }
 
 impl Default for ColocSettings {
@@ -124,12 +178,13 @@ impl Default for ColocSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColocSeriesInfo {
     level: usize,
     permutation_level: usize,
     permutation_stride: u32,
     mask: Option<u64>,
+    coverage: f32,
 }
 
 impl ColocSeriesInfo {
@@ -138,6 +193,7 @@ impl ColocSeriesInfo {
         permutation_level: usize,
         permutation_stride: u32,
         mask: Option<u64>,
+        coverage: f32,
     ) -> Self {
         assert!(
             permutation_level >= level,
@@ -147,11 +203,16 @@ impl ColocSeriesInfo {
             permutation_stride > 0,
             "a colocalization significance test samples a positive stride"
         );
+        assert!(
+            coverage.is_finite() && (0.0..=1.0).contains(&coverage),
+            "a colocalization scan covers a fraction of its region"
+        );
         Self {
             level,
             permutation_level,
             permutation_stride,
             mask,
+            coverage,
         }
     }
 
@@ -169,6 +230,10 @@ impl ColocSeriesInfo {
 
     pub fn mask(self) -> Option<u64> {
         self.mask
+    }
+
+    pub fn coverage(self) -> f32 {
+        self.coverage
     }
 }
 
@@ -525,6 +590,10 @@ impl ColocSeries {
 
     pub fn permutation_stride(&self) -> u32 {
         self.info.permutation_stride()
+    }
+
+    pub fn coverage(&self) -> f32 {
+        self.info.coverage()
     }
 
     pub fn mask(&self) -> Option<u64> {

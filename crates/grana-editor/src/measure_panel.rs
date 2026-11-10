@@ -144,21 +144,16 @@ fn toolbar<'a>(
             .iter()
             .position(|value| *value == aggregate)
             .unwrap_or(0);
+        let labels = Aggregate::ALL
+            .iter()
+            .map(|value| value.label())
+            .collect::<Vec<_>>();
         items.push(combo(
             ctx,
             "measure.aggregate",
-            86.0,
+            96.0,
             aggregate_index,
-            &Aggregate::ALL
-                .iter()
-                .map(|value| match value {
-                    Aggregate::Mean => "Mean".to_string(),
-                    Aggregate::Sum => "Sum".to_string(),
-                    Aggregate::Minimum => "Min".to_string(),
-                    Aggregate::Maximum => "Max".to_string(),
-                    Aggregate::Deviation => "SD (σ)".to_string(),
-                })
-                .collect::<Vec<_>>(),
+            &labels,
             move |index| match Aggregate::ALL.get(index) {
                 Some(value) if *value != aggregate => {
                     Message::Command(Command::SetMeasureAggregate(*value))

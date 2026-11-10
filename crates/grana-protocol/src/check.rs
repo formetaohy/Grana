@@ -471,6 +471,11 @@ impl Protocol {
                         .to_string(),
                 ));
             }
+            if grana_measure::ColocPrecision::parse(&coloc.settings.precision).is_none() {
+                return Err(ProtocolError::Invalid(
+                    "a colocalization precision names full, balanced or fast".to_string(),
+                ));
+            }
             if coloc.pairs.is_empty() {
                 return Err(ProtocolError::Invalid(
                     "a colocalization specification names at least one channel pair".to_string(),

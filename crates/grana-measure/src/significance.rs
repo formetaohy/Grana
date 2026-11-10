@@ -1,22 +1,5 @@
-const LANCZOS: [f64; 9] = [
-    0.999_999_999_999_809_9,
-    676.520_368_121_885_1,
-    -1_259.139_216_722_402_8,
-    771.323_428_777_653_1,
-    -176.615_029_162_140_6,
-    12.507_343_278_686_905,
-    -0.138_571_095_265_720_12,
-    9.984_369_578_019_572e-6,
-    1.505_632_735_149_311_6e-7,
-];
-
-const LANCZOS_SHIFT: f64 = 7.0;
-
-const MAXIMUM_ITERATION: usize = 300;
-
-const EPSILON: f64 = 3.0e-16;
-
-const TINY: f64 = 1.0e-300;
+use crate::math::{normal_two_sided, student_quantile, student_two_sided};
+use crate::sample::Sample;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WelchTest {
@@ -120,6 +103,137 @@ impl WelchTest {
     pub fn p(&self) -> f64 {
         self.p
     }
+
+    pub fn interval(&self, level: f64) -> Option<(f64, f64)> {
+        assert!(
+            level.is_finite() && level > 0.0 && level < 1.0,
+            "a confidence level lies inside the unit interval"
+        );
+        let error = (self.deviation_a * self.deviation_a / self.n_a as f64
+            + self.deviation_b * self.deviation_b / self.n_b as f64)
+            .sqrt();
+        if !error.is_finite() {
+            return None;
+        }
+        let t = student_quantile(0.5 + 0.5 * level, self.df);
+        Some((self.difference - t * error, self.difference + t * error))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MannWhitney {
+    n_a: usize,
+    n_b: usize,
+    u: f64,
+    z: f64,
+    p: f64,
+    delta: f64,
+    median_a: f64,
+    median_b: f64,
+}
+
+impl MannWhitney {
+    pub fn of(a: &[f64], b: &[f64]) -> Option<Self> {
+        if a.is_empty() || b.is_empty() {
+            return None;
+        }
+        assert!(
+            a.iter().chain(b).all(|value| value.is_finite()),
+            "a compared sample holds finite values"
+        );
+        let mut ranked = Vec::with_capacity(a.len() + b.len());
+        ranked.extend(a.iter().map(|value| (*value, true)));
+        ranked.extend(b.iter().map(|value| (*value, false)));
+        ranked.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut rank_sum_a = 0.0;
+        let mut ties = 0.0;
+        let mut index = 0;
+        while index < ranked.len() {
+            let mut end = index + 1;
+            while end < ranked.len() && ranked[end].0 == ranked[index].0 {
+                end += 1;
+            }
+            let width = end - index;
+            let rank = 0.5 * (index + 1 + end) as f64;
+            for (_, first) in &ranked[index..end] {
+                if *first {
+                    rank_sum_a += rank;
+                }
+            }
+            if width > 1 {
+                let width = width as f64;
+                ties += width * width * width - width;
+            }
+            index = end;
+        }
+        let n_a = a.len();
+        let n_b = b.len();
+        let total = (n_a + n_b) as f64;
+        let u = rank_sum_a - (n_a * (n_a + 1)) as f64 / 2.0;
+        let expected = 0.5 * (n_a * n_b) as f64;
+        let variance = if total > 1.0 {
+            (n_a * n_b) as f64 / 12.0 * ((total + 1.0) - ties / (total * (total - 1.0)))
+        } else {
+            0.0
+        };
+        let (z, p) = if variance > 0.0 {
+            let shift = if u > expected {
+                0.5
+            } else if u < expected {
+                -0.5
+            } else {
+                0.0
+            };
+            let z = (u - expected - shift) / variance.sqrt();
+            (z, normal_two_sided(z))
+        } else {
+            (0.0, 1.0)
+        };
+        let sample_a = Sample::of(a).expect("a compared sample holds a value");
+        let sample_b = Sample::of(b).expect("a compared sample holds a value");
+        Some(Self {
+            n_a,
+            n_b,
+            u,
+            z,
+            p,
+            delta: 2.0 * u / (n_a * n_b) as f64 - 1.0,
+            median_a: sample_a.median(),
+            median_b: sample_b.median(),
+        })
+    }
+
+    pub fn n_a(&self) -> usize {
+        self.n_a
+    }
+
+    pub fn n_b(&self) -> usize {
+        self.n_b
+    }
+
+    pub fn u(&self) -> f64 {
+        self.u
+    }
+
+    pub fn z(&self) -> f64 {
+        self.z
+    }
+
+    pub fn p(&self) -> f64 {
+        self.p.clamp(0.0, 1.0)
+    }
+
+    pub fn delta(&self) -> f64 {
+        self.delta
+    }
+
+    pub fn median_a(&self) -> f64 {
+        self.median_a
+    }
+
+    pub fn median_b(&self) -> f64 {
+        self.median_b
+    }
 }
 
 pub fn hedges_g(a: &[f64], b: &[f64]) -> Option<f64> {
@@ -141,25 +255,6 @@ pub fn hedges_g(a: &[f64], b: &[f64]) -> Option<f64> {
     }
     let correction = 1.0 - 3.0 / (4.0 * (a.len() + b.len()) as f64 - 9.0);
     Some(correction * (mean_a - mean_b) / pooled.sqrt())
-}
-
-pub fn student_two_sided(t: f64, df: f64) -> f64 {
-    assert!(!t.is_nan(), "a Student statistic is a number");
-    assert!(
-        df > 0.0,
-        "a Student test counts positive degrees of freedom"
-    );
-    if t == 0.0 {
-        return 1.0;
-    }
-    let x = df / (df + t * t);
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    regularized_beta(0.5 * df, 0.5, x)
 }
 
 pub fn benjamini_hochberg(p: &[f64]) -> Vec<f64> {
@@ -212,79 +307,4 @@ fn deviation(values: &[f64], mean: f64) -> f64 {
         .sum::<f64>()
         / (values.len() - 1) as f64;
     variance.sqrt()
-}
-
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let front =
-        (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * beta_continued_fraction(a, b, x) / a
-    } else {
-        1.0 - front * beta_continued_fraction(b, a, 1.0 - x) / b
-    }
-}
-
-fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
-    let sum = a + b;
-    let forward = a + 1.0;
-    let backward = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - sum * x / forward;
-    if d.abs() < TINY {
-        d = TINY;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for iteration in 1..=MAXIMUM_ITERATION {
-        let m = iteration as f64;
-        let double = 2.0 * m;
-        let numerator = m * (b - m) * x / ((backward + double) * (a + double));
-        d = 1.0 + numerator * d;
-        if d.abs() < TINY {
-            d = TINY;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < TINY {
-            c = TINY;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-        let numerator = -(a + m) * (sum + m) * x / ((a + double) * (forward + double));
-        d = 1.0 + numerator * d;
-        if d.abs() < TINY {
-            d = TINY;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < TINY {
-            c = TINY;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() < EPSILON {
-            break;
-        }
-    }
-    h
-}
-
-fn ln_gamma(value: f64) -> f64 {
-    assert!(value > 0.0, "a gamma function counts a positive argument");
-    if value < 0.5 {
-        let reflected = std::f64::consts::PI / (std::f64::consts::PI * value).sin();
-        return reflected.ln() - ln_gamma(1.0 - value);
-    }
-    let shifted = value - 1.0;
-    let mut series = LANCZOS[0];
-    for (index, coefficient) in LANCZOS.iter().enumerate().skip(1) {
-        series += coefficient / (shifted + index as f64);
-    }
-    let t = shifted + LANCZOS_SHIFT + 0.5;
-    0.5 * (2.0 * std::f64::consts::PI).ln() + (shifted + 0.5) * t.ln() - t + series.ln()
 }

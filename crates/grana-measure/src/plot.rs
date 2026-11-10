@@ -1,4 +1,5 @@
 use crate::correlation::Pearson;
+use crate::sample::Sample;
 use crate::table::Table;
 
 pub const HISTOGRAM_BINS: usize = 48;
@@ -77,6 +78,10 @@ pub struct Summary {
     deviation: f64,
     minimum: f64,
     maximum: f64,
+    median: f64,
+    lower: f64,
+    upper: f64,
+    mad: f64,
 }
 
 impl Summary {
@@ -98,6 +103,22 @@ impl Summary {
 
     pub fn maximum(self) -> f64 {
         self.maximum
+    }
+
+    pub fn median(self) -> f64 {
+        self.median
+    }
+
+    pub fn lower_quartile(self) -> f64 {
+        self.lower
+    }
+
+    pub fn upper_quartile(self) -> f64 {
+        self.upper
+    }
+
+    pub fn mad(self) -> f64 {
+        self.mad
     }
 }
 
@@ -235,51 +256,38 @@ impl Plot {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Moments {
-    count: u64,
-    sum: f64,
-    squares: f64,
-    minimum: f64,
-    maximum: f64,
+    values: Vec<f32>,
 }
 
 impl Moments {
     fn new() -> Self {
-        Self {
-            count: 0,
-            sum: 0.0,
-            squares: 0.0,
-            minimum: f64::INFINITY,
-            maximum: f64::NEG_INFINITY,
-        }
+        Self { values: Vec::new() }
     }
 
     fn push(&mut self, value: f32) {
-        if !value.is_finite() {
-            return;
+        if value.is_finite() {
+            self.values.push(value);
         }
-        let value = f64::from(value);
-        self.count += 1;
-        self.sum += value;
-        self.squares += value * value;
-        self.minimum = self.minimum.min(value);
-        self.maximum = self.maximum.max(value);
     }
 
     fn summary(self) -> Summary {
-        if self.count == 0 {
+        if self.values.is_empty() {
             return Summary::default();
         }
-        let count = self.count as f64;
-        let mean = self.sum / count;
-        let variance = (self.squares / count - mean * mean).max(0.0);
+        let sample = Sample::new(self.values.iter().map(|value| f64::from(*value)).collect())
+            .expect("a moment holds a finite value");
         Summary {
-            count: self.count,
-            mean,
-            deviation: variance.sqrt(),
-            minimum: self.minimum,
-            maximum: self.maximum,
+            count: sample.len() as u64,
+            mean: sample.mean(),
+            deviation: sample.deviation().unwrap_or(0.0),
+            minimum: sample.minimum(),
+            maximum: sample.maximum(),
+            median: sample.median(),
+            lower: sample.quantile(25.0),
+            upper: sample.quantile(75.0),
+            mad: sample.mad(),
         }
     }
 }

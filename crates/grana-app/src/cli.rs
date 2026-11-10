@@ -108,7 +108,7 @@ pub fn batch(
                 }
                 for test in report.tests.iter().filter(|test| test.significant()) {
                     println!(
-                        "  Welch {} vs {} · {} · {}: n={}/{} p={} q={} g={} {}",
+                        "  {} vs {} · {} · {}: n={}/{} Welch p={} q={} · Mann–Whitney p={} q={} g={} Δ={:.2} {}",
                         test.group_a,
                         test.group_b,
                         test.name,
@@ -117,8 +117,11 @@ pub fn batch(
                         test.test.n_b(),
                         test.p_text(),
                         test.q_text(),
+                        test.rank_p_text(),
+                        test.rank_q_text(),
                         test.effect
                             .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}")),
+                        test.rank.delta(),
                         test.mark()
                     );
                 }

@@ -1,4 +1,4 @@
-﻿use glam::Vec3;
+use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{
     CameraState, Material, OutputSize, Palette, Shading, Stop, TransferFunction, VolumeMode,
@@ -1312,11 +1312,17 @@ pub struct ColocSpec {
     pub mask: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColocSettingsSpec {
     pub permutations: u32,
     pub block: u32,
+    #[serde(default = "default_coloc_precision")]
+    pub precision: String,
+}
+
+fn default_coloc_precision() -> String {
+    grana_measure::ColocPrecision::default().name().to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1329,7 +1335,10 @@ pub struct ColocPairSpec {
 
 impl ColocSpec {
     pub fn settings(&self) -> grana_measure::ColocSettings {
+        let precision = grana_measure::ColocPrecision::parse(&self.settings.precision)
+            .expect("a checked colocalization names a supported precision");
         grana_measure::ColocSettings::new(self.settings.permutations, self.settings.block)
+            .with_precision(precision)
     }
 }
 
@@ -2357,7 +2366,7 @@ impl SetSpec {
     pub fn aggregate(&self) -> Aggregate {
         self.measure
             .as_ref()
-            .map_or(Aggregate::Mean, MeasureSpec::aggregate)
+            .map_or(Aggregate::MEAN, MeasureSpec::aggregate)
     }
 
     pub fn filters(&self, table: &Table) -> Result<Vec<Filter>, String> {
@@ -2427,7 +2436,7 @@ impl MeasureSpec {
         let aggregate = Aggregate::parse(&self.aggregate).ok_or_else(|| {
             ProtocolError::Invalid(format!("the set {set} names an unknown aggregate"))
         })?;
-        if group == Group::Object && aggregate != Aggregate::Mean {
+        if group == Group::Object && aggregate != Aggregate::MEAN {
             return invalid("measures objects without an aggregate".to_string());
         }
         if group == Group::Track && !tracked {

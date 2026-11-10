@@ -243,8 +243,12 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                 format!("{total} objects · Ungated · {HISTOGRAM_HINT}")
             } else {
                 format!(
-                    "{} of {total} gated · Mean {:.places$} {unit} · σ {:.places$} · {HISTOGRAM_HINT}",
+                    "{} of {total} gated · Median {:.places$} {unit} · MAD {:.places$} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$} · {HISTOGRAM_HINT}",
                     statistics.count(),
+                    statistics.median(),
+                    statistics.mad(),
+                    statistics.lower_quartile(),
+                    statistics.upper_quartile(),
                     statistics.mean(),
                     statistics.deviation()
                 )

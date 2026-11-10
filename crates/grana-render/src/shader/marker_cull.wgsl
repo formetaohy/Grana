@@ -30,19 +30,6 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
-fn outside_section(center: vec3<f32>, radius: f32) -> bool {
-    if (abs(section_plane_distance(center)) > radius) {
-        return true;
-    }
-    if (abs(section_across(center)) - radius > section.right.w) {
-        return true;
-    }
-    if (abs(section_down(center)) - radius > section.up.w) {
-        return true;
-    }
-    return false;
-}
-
 fn append_volume(index: u32, opaque: bool) {
     if (opaque) {
         let slot = atomicAdd(&opaque_args.instance_count, 1u);
@@ -50,16 +37,6 @@ fn append_volume(index: u32, opaque: bool) {
     } else {
         let slot = atomicAdd(&layer_args.instance_count, 1u);
         layer_order[slot] = index;
-    }
-}
-
-fn append_section(index: u32, front: bool) {
-    if (front) {
-        let slot = atomicAdd(&front_args.instance_count, 1u);
-        front_order[slot] = index;
-    } else {
-        let slot = atomicAdd(&behind_args.instance_count, 1u);
-        behind_order[slot] = index;
     }
 }
 
@@ -74,29 +51,4 @@ fn marker_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
         && !outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
         append_volume(index, data.color_alpha.a >= 1.0);
     }
-}
-
-fn cull_section_side(index: u32, front: bool) {
-    if (index >= arrayLength(&markers)) {
-        return;
-    }
-    let data = markers[index];
-    if (outside_section(data.center_radius.xyz, data.center_radius.w)
-        || outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
-        return;
-    }
-    let ahead = section_plane_distance(data.center_radius.xyz) >= 0.0;
-    if (ahead == front) {
-        append_section(index, front);
-    }
-}
-
-@compute @workgroup_size(64)
-fn marker_cull_section_behind(@builtin(global_invocation_id) id: vec3<u32>) {
-    cull_section_side(id.x, false);
-}
-
-@compute @workgroup_size(64)
-fn marker_cull_section_front(@builtin(global_invocation_id) id: vec3<u32>) {
-    cull_section_side(id.x, true);
 }

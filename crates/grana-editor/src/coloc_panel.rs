@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_measure::{
-    COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocPair, ColocSeries, ColocSettings,
+    COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocPair, ColocPrecision, ColocSeries, ColocSettings,
     ColocStatistics, ColocThresholds,
 };
 use grana_scene::{Job, ObjectSetId, Progress};
@@ -465,11 +465,26 @@ fn method<'a>(
     let max_block = COLOC_BLOCK_MAX as f32;
     let theme = *ctx.theme();
     let sample = format!(
-        "{} vx · {}×{}f ({} blocks, s{stride})",
+        "{:.1}% · {} vx · {}×{}f ({} blocks, s{stride})",
+        100.0 * result.coverage(),
         cost.scan_voxels(),
         cost.permutation_voxels(),
         cost.permutation_frames(),
         cost.blocks()
+    );
+    let precision = settings.precision();
+    let labels = ColocPrecision::ALL.map(ColocPrecision::label);
+    let precision_row = view::segmented(
+        ctx,
+        "coloc.precision",
+        &labels,
+        precision.index() as usize,
+        move |index| match ColocPrecision::from_index(index as u8) {
+            Some(next) if next != precision => {
+                Message::Command(Command::SetColocSettings(settings.with_precision(next)))
+            }
+            _ => Message::Noop,
+        },
     );
     let permutations_value = grana_ui::widget::drag_value(&theme, permutations, 0)
         .named("coloc.permutations")
@@ -506,7 +521,12 @@ fn method<'a>(
     let title = view::card_title(ctx, Icon::Sparkles, "Method", Some(&detail));
     let sampling = view::labelled(ctx, "Sampling", &sample);
     let shuffles = view::form_row(ctx, "Shuffles", shuffles);
-    Some(view::card(ctx, 4.0, vec![title, sampling, shuffles]))
+    let precision = view::form_row(ctx, "Precision", precision_row);
+    Some(view::card(
+        ctx,
+        4.0,
+        vec![title, sampling, precision, shuffles],
+    ))
 }
 
 fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {

@@ -58,7 +58,7 @@ impl Measure {
         Self {
             set: None,
             group: Group::Object,
-            aggregate: Aggregate::Mean,
+            aggregate: Aggregate::MEAN,
             scope: Scope::All,
             filters: Vec::new(),
             lasso: None,

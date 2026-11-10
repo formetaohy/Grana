@@ -282,7 +282,7 @@ pub fn coloc(
         return Err("the region does not overlap the dataset".to_string());
     }
     let frames = pyramid.frame_count();
-    let levels = coloc_levels(pyramid, region, frames);
+    let levels = coloc_levels(pyramid, region, frames, settings.precision());
     let scan_level = levels.scan();
     let permutation_level = levels.permutation();
     let scan_info = pyramid.level(scan_level);

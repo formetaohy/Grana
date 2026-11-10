@@ -16,7 +16,7 @@ use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
 const MAGIC: &[u8; 9] = b"granaproj";
-const VERSION: u32 = 57;
+const VERSION: u32 = 59;
 const VERSION_BYTES: usize = size_of::<u32>();
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();

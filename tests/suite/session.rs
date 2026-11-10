@@ -1305,7 +1305,7 @@ fn colocalizes_every_object_and_carries_it_through_project_and_protocol() {
         .table(
             set,
             grana_measure::Group::Object,
-            grana_measure::Aggregate::Mean,
+            grana_measure::Aggregate::MEAN,
         )
         .expect("the measurement table builds");
     let pearson = table
@@ -1526,6 +1526,15 @@ fn reads_a_batch_run_record() {
             .iter()
             .all(|test| test.adjusted >= test.p() && test.p() > 0.0)
     );
+    assert!(report.tests.iter().all(|test| test.rank.n_a() == 2
+        && test.rank.n_b() == 2
+        && test.rank_adjusted >= test.rank.p()));
+    assert!(
+        report
+            .tests
+            .iter()
+            .all(|test| test.interval.is_some() && test.rank.delta().abs() <= 1.0)
+    );
     assert!(
         report
             .tests
@@ -1533,9 +1542,13 @@ fn reads_a_batch_run_record() {
             .any(grana_pipeline::Significance::significant),
         "a separated group tests significant"
     );
+    let table = grana_pipeline::significance_table(&report.tests);
+    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,"));
     assert!(
-        grana_pipeline::significance_table(&report.tests)
-            .starts_with("group_a,group_b,set_key,set,kind,metric,")
+        table
+            .lines()
+            .next()
+            .is_some_and(|header| header.contains("rank_p"))
     );
 }
 

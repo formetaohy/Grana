@@ -227,9 +227,10 @@ fn significance_tables(tests: &[Significance]) -> Vec<(String, Table)> {
         };
         let row = test.metric.index();
         let cell = format!(
-            "{} q={} g={}",
+            "{} q={} r={} g={}",
             test.mark(),
             test.q_text(),
+            test.rank_q_text(),
             test.effect
                 .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}"))
         );

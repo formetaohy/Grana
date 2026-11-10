@@ -1146,6 +1146,7 @@ impl Encode for ColocSettings {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.permutations());
         writer.u32(self.block());
+        writer.u8(self.precision().index());
     }
 }
 
@@ -1166,6 +1167,7 @@ impl Encode for ColocSeriesInfo {
         writer.count(self.level());
         writer.count(self.permutation_level());
         writer.u32(self.permutation_stride());
+        writer.f32(self.coverage());
         self.mask().encode(writer);
     }
 }

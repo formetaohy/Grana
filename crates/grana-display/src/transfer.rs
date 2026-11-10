@@ -1,5 +1,3 @@
-const SECTION_SLAB_VOXELS: f32 = 3.0;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stop {
     position: f32,
@@ -146,13 +144,6 @@ impl TransferFunction {
             .collect()
     }
 
-    pub fn section_lut(&self, size: usize) -> Vec<[f32; 4]> {
-        self.lut(size)
-            .into_iter()
-            .map(|[red, green, blue, alpha]| [red, green, blue, section_coverage(alpha)])
-            .collect()
-    }
-
     fn sample(&self, position: f32) -> [f32; 4] {
         let stops = &self.stops;
         let right = stops.partition_point(|stop| stop.position < position);
@@ -178,10 +169,6 @@ impl TransferFunction {
         let [red, green, blue] = srgb_to_linear(color);
         [red, green, blue, lerp(left.opacity, right.opacity, t)]
     }
-}
-
-fn section_coverage(opacity: f32) -> f32 {
-    1.0 - (1.0 - opacity).powf(SECTION_SLAB_VOXELS)
 }
 
 fn sort(stops: &mut [Stop]) {

@@ -4,6 +4,7 @@ mod significance;
 
 use std::ops::Range;
 
+use grana_measure::ColocPrecision;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 pub use scan::{ColocScan, ColocScanConfig};
@@ -12,7 +13,8 @@ pub use significance::ColocPermutation;
 pub type ColocRead<'a> =
     dyn Fn(u32, usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
-const SCAN_VOXELS: u64 = 1 << 22;
+const BALANCED_SCAN_VOXELS: u64 = 1 << 22;
+const FAST_SCAN_VOXELS: u64 = 1 << 20;
 const PERMUTATION_VOXELS: u64 = 1 << 17;
 const PERMUTATION_SAMPLES: u64 = 1 << 19;
 const PERMUTATION_FLOOR: u64 = 1 << 15;
@@ -44,7 +46,12 @@ impl ColocLevels {
     }
 }
 
-pub fn coloc_levels(pyramid: &Pyramid, region: Region, frames: u32) -> ColocLevels {
+pub fn coloc_levels(
+    pyramid: &Pyramid,
+    region: Region,
+    frames: u32,
+    precision: ColocPrecision,
+) -> ColocLevels {
     assert!(frames > 0, "a colocalization scan covers a frame");
     let levels = (0..pyramid.level_count())
         .filter_map(|index| voxels(region, pyramid.level(index)).map(|voxels| (index, voxels)))
@@ -53,9 +60,14 @@ pub fn coloc_levels(pyramid: &Pyramid, region: Region, frames: u32) -> ColocLeve
         !levels.is_empty(),
         "the colocalization region overlaps the dataset"
     );
+    let budget = match precision {
+        ColocPrecision::Full => u64::MAX,
+        ColocPrecision::Balanced => BALANCED_SCAN_VOXELS,
+        ColocPrecision::Fast => FAST_SCAN_VOXELS,
+    };
     let scan = levels
         .iter()
-        .find(|(_, count)| *count <= SCAN_VOXELS)
+        .find(|(_, count)| *count <= budget)
         .map_or_else(
             || levels.last().expect("the scan level exists").0,
             |(index, _)| *index,

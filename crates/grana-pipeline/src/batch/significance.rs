@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use grana_measure::{WelchTest, benjamini_hochberg, hedges_g, stars};
+use grana_measure::{MannWhitney, WelchTest, benjamini_hochberg, hedges_g, stars};
 
 use super::quality::{Comparison, Metric};
 
@@ -13,13 +13,28 @@ pub struct Significance {
     pub group_a: String,
     pub group_b: String,
     pub test: WelchTest,
+    pub rank: MannWhitney,
     pub effect: Option<f64>,
+    pub interval: Option<(f64, f64)>,
     pub adjusted: f64,
+    pub rank_adjusted: f64,
 }
 
 impl Significance {
     pub fn p(&self) -> f64 {
         self.test.p()
+    }
+
+    pub fn rank_p(&self) -> f64 {
+        self.rank.p()
+    }
+
+    pub fn q(&self) -> f64 {
+        self.adjusted
+    }
+
+    pub fn rank_q(&self) -> f64 {
+        self.rank_adjusted
     }
 
     pub fn involves(&self, group: &str) -> bool {
@@ -53,6 +68,20 @@ impl Significance {
     pub fn q_text(&self) -> String {
         scientific(self.adjusted)
     }
+
+    pub fn rank_p_text(&self) -> String {
+        scientific(self.rank_p())
+    }
+
+    pub fn rank_q_text(&self) -> String {
+        scientific(self.rank_adjusted)
+    }
+
+    pub fn interval_text(&self) -> Option<String> {
+        let (low, high) = self.interval?;
+        let decimals = self.metric.decimals();
+        Some(format!("{low:.*} … {high:.*}", decimals, decimals))
+    }
 }
 
 pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
@@ -74,6 +103,9 @@ pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
                     let Some(test) = WelchTest::of(&a, &b) else {
                         continue;
                     };
+                    let Some(rank) = MannWhitney::of(&a, &b) else {
+                        continue;
+                    };
                     tested.push(Significance {
                         key: first.key.clone(),
                         name: first.name.clone(),
@@ -82,16 +114,21 @@ pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
                         group_a: first.group.clone(),
                         group_b: second.group.clone(),
                         test,
+                        rank,
                         effect: hedges_g(&a, &b),
+                        interval: test.interval(0.95),
                         adjusted: 1.0,
+                        rank_adjusted: 1.0,
                     });
                 }
             }
         }
     }
     let corrected = benjamini_hochberg(&tested.iter().map(Significance::p).collect::<Vec<_>>());
-    for (test, adjusted) in tested.iter_mut().zip(corrected) {
+    let ranked = benjamini_hochberg(&tested.iter().map(Significance::rank_p).collect::<Vec<_>>());
+    for ((test, adjusted), ranked) in tested.iter_mut().zip(corrected).zip(ranked) {
         test.adjusted = adjusted;
+        test.rank_adjusted = ranked;
     }
     tested.sort_by(|left, right| {
         left.key
@@ -119,17 +156,27 @@ pub fn table(tests: &[Significance]) -> String {
         "mean_b",
         "std_b",
         "difference",
+        "difference_ci_low",
+        "difference_ci_high",
         "t",
         "df",
         "p",
         "q",
         "hedges_g",
+        "median_a",
+        "median_b",
+        "u",
+        "z",
+        "rank_p",
+        "rank_q",
+        "cliffs_delta",
         "mark",
     ]);
     let mut text = header;
     for test in tests {
         let metric = test.metric;
         let decimals = metric.decimals();
+        let interval = test.interval.unwrap_or((f64::NAN, f64::NAN));
         let line = grana_measure::csv::line(&[
             &test.group_a,
             &test.group_b,
@@ -144,6 +191,8 @@ pub fn table(tests: &[Significance]) -> String {
             &format!("{:.*}", decimals, test.test.mean_b()),
             &format!("{:.*}", decimals, test.test.deviation_b()),
             &format!("{:.*}", decimals, test.test.difference()),
+            &format!("{:.*}", decimals, interval.0),
+            &format!("{:.*}", decimals, interval.1),
             &format!("{:.3}", test.test.t()),
             &format!("{:.2}", test.test.df()),
             &test.p_text(),
@@ -151,6 +200,13 @@ pub fn table(tests: &[Significance]) -> String {
             &test
                 .effect
                 .map_or_else(String::new, |effect| format!("{effect:.3}")),
+            &format!("{:.*}", decimals, test.rank.median_a()),
+            &format!("{:.*}", decimals, test.rank.median_b()),
+            &format!("{:.1}", test.rank.u()),
+            &format!("{:.3}", test.rank.z()),
+            &test.rank_p_text(),
+            &test.rank_q_text(),
+            &format!("{:.3}", test.rank.delta()),
             test.mark(),
         ]);
         text.push_str(&line);

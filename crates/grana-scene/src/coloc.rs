@@ -90,6 +90,10 @@ impl ColocResult {
         self.series.permutation_stride()
     }
 
+    pub fn coverage(&self) -> f32 {
+        self.series.coverage()
+    }
+
     pub fn mask(&self) -> Option<u64> {
         self.series.mask()
     }

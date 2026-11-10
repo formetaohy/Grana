@@ -55,6 +55,7 @@ pub struct ColocScan {
     permutation_stride: u32,
     mask: Option<u64>,
     grid: Grid,
+    region_voxels: u64,
     scales: [[f32; 2]; 2],
     frames: Vec<ColocFrame>,
     joint: Vec<u64>,
@@ -71,6 +72,10 @@ impl ColocScan {
         let Some(ranges) = region.voxel_range(info) else {
             panic!("the colocalization region overlaps the dataset");
         };
+        let region_voxels = ranges
+            .iter()
+            .map(|range| u64::from(range.end - range.start))
+            .product();
         Self {
             pair,
             level: levels.scan(),
@@ -78,6 +83,7 @@ impl ColocScan {
             permutation_stride: levels.stride(),
             mask,
             grid: Grid::new(ranges),
+            region_voxels,
             scales: intensities.map(scale),
             frames: (0..frames).map(|_| ColocFrame::new(WORKING_BINS)).collect(),
             joint: vec![0; WORKING_BINS * WORKING_BINS],
@@ -193,11 +199,13 @@ impl ColocScan {
             randomizations,
             blocks,
         );
+        let coverage = (voxels as f64 / self.region_voxels as f64).clamp(0.0, 1.0) as f32;
         let info = ColocSeriesInfo::new(
             self.level,
             self.permutation_level,
             self.permutation_stride,
             self.mask,
+            coverage,
         );
         ColocSeries::from_parts(self.pair, info, bins, frames, joint, significance, cost)
     }

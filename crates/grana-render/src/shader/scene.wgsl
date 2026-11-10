@@ -33,28 +33,6 @@ struct FrameData {
     sampling: vec4<f32>,
 }
 
-struct SectionData {
-    center: vec4<f32>,
-    plane: vec4<f32>,
-    right: vec4<f32>,
-    up: vec4<f32>,
-    jitter: vec4<f32>,
-    origin: vec4<f32>,
-    axes: array<vec4<f32>, 3>,
-    inverses: array<vec4<f32>, 3>,
-    dims: vec4<f32>,
-    grid: vec4<u32>,
-    atlas: vec4<u32>,
-    channels: vec4<u32>,
-    bases: vec4<u32>,
-    fallback_origin: vec4<f32>,
-    fallback_axes: array<vec4<f32>, 3>,
-    fallback_inverses: array<vec4<f32>, 3>,
-    fallback_dims: vec4<f32>,
-    fallback_grid: vec4<u32>,
-    projection: vec4<f32>,
-}
-
 struct ChannelData {
     opacity: f32,
     start: f32,
@@ -66,12 +44,10 @@ struct ChannelData {
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
-@group(0) @binding(1) var<uniform> section: SectionData;
 @group(0) @binding(2) var<storage, read> channels: array<ChannelData>;
 @group(0) @binding(3) var lut: texture_2d<f32>;
 @group(0) @binding(4) var lut_sampler: sampler;
 @group(0) @binding(5) var extinction_lut: texture_2d<f32>;
-@group(0) @binding(6) var section_lut: texture_2d<f32>;
 
 const SHADING_TAU: f32 = 0.020203;
 
@@ -173,51 +149,6 @@ fn level_extent(band: u32) -> vec3<f32> {
         + abs(level_axis(band, 2u)) * dims.z;
 }
 
-fn section_local(point: vec3<f32>) -> vec3<f32> {
-    let offset = point - section.origin.xyz;
-    return vec3<f32>(
-        dot(section.inverses[0].xyz, offset),
-        dot(section.inverses[1].xyz, offset),
-        dot(section.inverses[2].xyz, offset),
-    ) / section.dims.xyz;
-}
-
-fn section_world(local: vec3<f32>) -> vec3<f32> {
-    return section.origin.xyz
-        + section.axes[0].xyz * local.x
-        + section.axes[1].xyz * local.y
-        + section.axes[2].xyz * local.z;
-}
-
-fn fallback_local(point: vec3<f32>) -> vec3<f32> {
-    let offset = point - section.fallback_origin.xyz;
-    return vec3<f32>(
-        dot(section.fallback_inverses[0].xyz, offset),
-        dot(section.fallback_inverses[1].xyz, offset),
-        dot(section.fallback_inverses[2].xyz, offset),
-    ) / section.fallback_dims.xyz;
-}
-
-fn section_point(ndc: vec2<f32>) -> vec3<f32> {
-    let across = section.center.x + ndc.x * section.right.w;
-    let down = section.center.y + ndc.y * section.up.w;
-    return section.right.xyz * across
-        + section.up.xyz * down
-        + section.plane.xyz * section.plane.w;
-}
-
-fn section_plane_distance(point: vec3<f32>) -> f32 {
-    return dot(section.plane.xyz, point) - section.plane.w;
-}
-
-fn section_across(point: vec3<f32>) -> f32 {
-    return dot(section.right.xyz, point) - section.center.x;
-}
-
-fn section_down(point: vec3<f32>) -> f32 {
-    return dot(section.up.xyz, point) - section.center.y;
-}
-
 fn channel_opacity(index: u32) -> f32 {
     return channels[index].opacity;
 }
@@ -256,15 +187,6 @@ fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
 fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
     return textureSampleLevel(
         extinction_lut,
-        lut_sampler,
-        vec2<f32>(channel_position(index, unit), channels[index].lut_row),
-        0.0,
-    );
-}
-
-fn channel_coverage(index: u32, unit: f32) -> vec4<f32> {
-    return textureSampleLevel(
-        section_lut,
         lut_sampler,
         vec2<f32>(channel_position(index, unit), channels[index].lut_row),
         0.0,

@@ -970,7 +970,7 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
                 field: spec
                     .field()
                     .expect("a checked color names a relation field"),
-                aggregate: spec.aggregate().unwrap_or(grana_measure::Aggregate::Mean),
+                aggregate: spec.aggregate().unwrap_or(grana_measure::Aggregate::MEAN),
                 shift: spec.shift,
             }
         }

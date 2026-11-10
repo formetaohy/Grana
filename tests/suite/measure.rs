@@ -19,7 +19,7 @@ fn summarises_spots_and_exports_a_csv() {
         &channels,
         2.0,
         Group::Object,
-        Aggregate::Mean,
+        Aggregate::MEAN,
     );
     assert_eq!(table.rows(), 4);
     assert_eq!(value(&table, 0, "frame"), 1.0);
@@ -39,7 +39,7 @@ fn summarises_spots_and_exports_a_csv() {
         &channels,
         2.0,
         Group::Track,
-        Aggregate::Mean,
+        Aggregate::MEAN,
     );
     assert_eq!(per_track.rows(), 2);
     assert_eq!(value(&per_track, 0, "nodes"), 2.0);
@@ -53,7 +53,7 @@ fn summarises_spots_and_exports_a_csv() {
         &channels,
         2.0,
         Group::Timepoint,
-        Aggregate::Sum,
+        Aggregate::SUM,
     );
     assert_eq!(per_frame.rows(), 2);
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
@@ -94,6 +94,51 @@ fn tests_group_significance() {
     assert_eq!(grana_measure::stars(0.0009), "***");
     assert_eq!(grana_measure::stars(0.02), "*");
     assert_eq!(grana_measure::stars(0.2), "ns");
+}
+
+#[test]
+fn summarises_robust_statistics() {
+    let a = [1.0, 2.0, 3.0];
+    let b = [4.0, 5.0, 6.0];
+    let sample =
+        grana_measure::Sample::of(&[1.0, 2.0, 3.0, 4.0, 5.0]).expect("a sample holds values");
+    assert_eq!(sample.median(), 3.0);
+    assert_eq!(sample.quantile(25.0), 2.0);
+    assert_eq!(sample.quantile(75.0), 4.0);
+    assert_eq!(sample.mad(), 1.0);
+    assert!(
+        (sample.deviation().expect("five values spread") - 1.581_138_830_084_189_8).abs() < 1.0e-12
+    );
+    let interval = sample
+        .mean_interval(0.95)
+        .expect("five values bound a mean");
+    assert!((interval.0 - 1.036_756_838_522_439).abs() < 1.0e-9);
+    assert!((interval.1 - 4.963_243_161_477_561).abs() < 1.0e-9);
+    let ordered = grana_measure::Sample::of(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+        .expect("ten values bound a median");
+    let median = ordered
+        .median_interval(0.95)
+        .expect("ten values order a median");
+    assert_eq!(median, (1.0, 8.0));
+    assert!(grana_measure::Sample::of(&[f64::NAN]).is_none());
+
+    let rank = grana_measure::MannWhitney::of(&a, &b).expect("two groups rank");
+    assert_eq!(rank.n_a(), 3);
+    assert_eq!(rank.n_b(), 3);
+    assert_eq!(rank.u(), 0.0);
+    assert_eq!(rank.delta(), -1.0);
+    assert!((rank.p() - 0.080_855_596_178_832_73).abs() < 1.0e-6);
+    assert_eq!(rank.median_a(), 2.0);
+    assert_eq!(rank.median_b(), 5.0);
+
+    let median = Aggregate::quantile(50).expect("the median is a supported quantile");
+    assert_eq!(median.apply(&[1.0, 2.0, 3.0, 4.0]), 2.5);
+    assert_eq!(Aggregate::MAD.apply(&[1.0, 2.0, 3.0, 4.0]), 1.0);
+    let quartile = Aggregate::quantile(25).expect("the lower quartile is supported");
+    assert_eq!(quartile.apply(&[1.0, 2.0, 3.0, 4.0]), 1.75);
+    assert_eq!(Aggregate::parse("median"), Some(median));
+    assert_eq!(Aggregate::parse("p90"), Aggregate::quantile(90));
+    assert_eq!(Aggregate::from_index(quartile.index()), Some(quartile));
 }
 
 fn value(table: &Table, row: usize, key: &str) -> f32 {
