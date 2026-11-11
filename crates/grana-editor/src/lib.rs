@@ -23,9 +23,10 @@ mod transfer;
 mod view;
 pub use grana_ui::widget;
 
-pub use chart::page as chart_page;
+pub use chart::{comparison_page, page as chart_page};
 pub use command::shortcut;
 pub use fitting::slice_step;
+pub use grana_chart::Page as ChartPage;
 pub use message::{Message, PlotEvent};
 pub use panel::{Panel, apply, build};
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};

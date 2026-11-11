@@ -84,6 +84,7 @@ pub struct Effects {
     pub figure: bool,
     pub lineage: bool,
     pub chart: bool,
+    pub comparison: bool,
     pub movie: Option<bool>,
     pub sequence: bool,
     pub cancel_export: bool,

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Filter, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table};
+use grana_measure::{
+    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Plot, PlotAxis, Scope, Table,
+};
 
 use glam::Vec3;
 use grana_volume::Region;
@@ -38,6 +40,13 @@ pub struct Measure {
     table: Option<Arc<Table>>,
     retained: Option<(Vec<String>, Vec<bool>)>,
     rows: Vec<usize>,
+    mask: Arc<Mask>,
+    frame_mask: Option<(Option<u32>, Mask)>,
+    region_mask: Option<(Option<Region>, Mask)>,
+    scope_mask: Mask,
+    filter_masks: Vec<(Filter, Mask)>,
+    lasso_mask: Option<(Lasso, Mask)>,
+    gate_mask: Mask,
     total: usize,
     visible: Vec<bool>,
     visibility: bool,
@@ -73,6 +82,13 @@ impl Measure {
             table: None,
             retained: None,
             rows: Vec::new(),
+            mask: Arc::new(Mask::none(0)),
+            frame_mask: None,
+            region_mask: None,
+            scope_mask: Mask::none(0),
+            filter_masks: Vec::new(),
+            lasso_mask: None,
+            gate_mask: Mask::none(0),
             total: 0,
             visible: Vec::new(),
             visibility: true,
@@ -217,7 +233,7 @@ impl Measure {
         Some(PlotRequest {
             key,
             table,
-            rows: self.rows.clone(),
+            mask: Arc::clone(&self.mask),
             view: self.view,
             axes: self.axes,
         })
@@ -426,6 +442,7 @@ impl Measure {
         self.retained = None;
         self.rows.clear();
         self.total = 0;
+        self.clear_masks();
         self.visible.clear();
         self.scope = Scope::All;
         self.filters.clear();
@@ -452,6 +469,7 @@ impl Measure {
             self.clear_plot();
             self.rows.clear();
             self.total = 0;
+            self.clear_masks();
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
@@ -529,9 +547,9 @@ impl Measure {
         if table.rows() == 0 {
             return Some(Visibility::All);
         }
-        let mut rows = table.matching(&self.filters, self.lasso.as_ref(), None);
-        if let Some(roi) = roi {
-            rows.retain(|row| holds_row(roi, table, *row));
+        let mut mask = self.gate_mask.clone();
+        if let Some((_, region)) = &self.region_mask {
+            mask.intersect(region);
         }
         Some(match self.group {
             Group::Object => {
@@ -540,11 +558,11 @@ impl Measure {
                         vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)]
                     })
                     .collect::<Vec<_>>();
-                for row in rows {
+                for row in mask.iter() {
                     let observation = table.observation(row);
                     if let (Some(time), Some(index)) = (observation.time(), observation.object())
-                        && let Some(mask) = frames.get_mut(time as usize)
-                        && let Some(value) = mask.get_mut(index)
+                        && let Some(frame) = frames.get_mut(time as usize)
+                        && let Some(value) = frame.get_mut(index)
                     {
                         *value = true;
                     }
@@ -553,15 +571,15 @@ impl Measure {
             }
             Group::Track => {
                 let count = object.tracks().map_or(0, |layer| layer.set().len());
-                let mut mask = vec![false; count];
-                for row in rows {
+                let mut visible = vec![false; count];
+                for row in mask.iter() {
                     if let Some(track) = table.observation(row).track()
-                        && let Some(value) = mask.get_mut(track)
+                        && let Some(value) = visible.get_mut(track)
                     {
                         *value = true;
                     }
                 }
-                Visibility::Track(Arc::new(mask))
+                Visibility::Track(Arc::new(visible))
             }
             Group::Timepoint => Visibility::All,
         })
@@ -605,6 +623,7 @@ impl Measure {
         self.table = None;
         self.rows.clear();
         self.total = 0;
+        self.clear_masks();
         self.visible.clear();
         self.filters.clear();
         self.lasso = None;
@@ -704,6 +723,7 @@ impl Measure {
         self.clear_plot();
         self.rows.clear();
         self.total = 0;
+        self.clear_masks();
         self.origin = None;
         let Some(id) = self.set else {
             self.table = None;
@@ -739,6 +759,7 @@ impl Measure {
         }
         self.rows.clear();
         self.total = 0;
+        self.clear_masks();
         self.lasso = None;
         self.axes = [0; 2];
     }
@@ -748,6 +769,7 @@ impl Measure {
         self.clear_plot();
         self.rows.clear();
         self.total = 0;
+        self.clear_masks();
         let previous = self
             .table
             .take()
@@ -810,34 +832,117 @@ impl Measure {
 
     fn refresh(&mut self) {
         self.dirty = true;
-        let Some(table) = self.table.as_ref() else {
+        let Some(table) = self.table.clone() else {
             self.rows.clear();
             self.total = 0;
+            self.clear_masks();
             self.clear_plot();
             return;
         };
         let frame = self.scope_frame();
         let roi = self.roi.filter(|_| self.group == Group::Object);
-        self.total = match roi {
-            None => table.count(frame),
-            Some(roi) => (0..table.rows())
-                .filter(|row| {
-                    frame.is_none_or(|time| table.observation(*row).time() == Some(time))
-                        && holds_row(roi, table, *row)
-                })
-                .count(),
-        };
-        let mut rows = table.matching(&self.filters, self.lasso.as_ref(), frame);
-        if let Some(roi) = roi {
-            rows.retain(|row| holds_row(roi, table, *row));
-        }
+        let table = table.as_ref();
+        self.sync_scope(table, frame, roi);
+        self.sync_gate(table);
+        let mut mask = self.scope_mask.clone();
+        mask.intersect(&self.gate_mask);
+        self.total = self.scope_mask.count() as usize;
+        let mut rows = mask.to_rows();
         if let Some((column, descending)) = self.sort
             && column < table.columns().len()
         {
             table.sort(&mut rows, column, descending);
         }
         self.rows = rows;
+        self.mask = Arc::new(mask);
         self.refresh_plot();
+    }
+
+    fn sync_scope(&mut self, table: &Table, frame: Option<u32>, roi: Option<Region>) {
+        let stale = match &self.frame_mask {
+            Some((cached, _)) => *cached != frame,
+            None => true,
+        };
+        if stale {
+            self.frame_mask = Some((frame, table.frame_mask(frame)));
+        }
+        let stale = match &self.region_mask {
+            Some((cached, _)) => *cached != roi,
+            None => true,
+        };
+        if stale {
+            let mask = roi.map_or_else(
+                || Mask::all(table.rows()),
+                |region| Mask::of(table.rows(), |row| holds_row(region, table, row)),
+            );
+            self.region_mask = Some((roi, mask));
+        }
+        let (_, frame_mask) = self
+            .frame_mask
+            .as_ref()
+            .expect("a refreshed measure frames its table");
+        let (_, region_mask) = self
+            .region_mask
+            .as_ref()
+            .expect("a refreshed measure bounds its table");
+        self.scope_mask.clone_from(frame_mask);
+        self.scope_mask.intersect(region_mask);
+    }
+
+    fn sync_gate(&mut self, table: &Table) {
+        if self.filters.is_empty() && self.lasso.is_none() {
+            if self.filter_masks.is_empty()
+                && self.lasso_mask.is_none()
+                && self.gate_mask.rows() == table.rows()
+            {
+                return;
+            }
+            self.filter_masks.clear();
+            self.lasso_mask = None;
+            self.gate_mask = Mask::all(table.rows());
+            return;
+        }
+        let mut masks = Vec::with_capacity(self.filters.len());
+        for filter in &self.filters {
+            match self
+                .filter_masks
+                .iter()
+                .position(|(cached, _)| cached == filter)
+            {
+                Some(position) => masks.push(self.filter_masks.swap_remove(position)),
+                None => masks.push((*filter, table.filter_mask(*filter))),
+            }
+        }
+        self.filter_masks = masks;
+        let stale = match (&self.lasso, &self.lasso_mask) {
+            (None, None) => false,
+            (Some(lasso), Some((cached, _))) => cached != lasso,
+            _ => true,
+        };
+        if stale {
+            self.lasso_mask = self
+                .lasso
+                .as_ref()
+                .map(|lasso| (lasso.clone(), table.lasso_mask(lasso)));
+        }
+        let mut gate = Mask::all(table.rows());
+        for (_, mask) in &self.filter_masks {
+            gate.intersect(mask);
+        }
+        if let Some((_, mask)) = &self.lasso_mask {
+            gate.intersect(mask);
+        }
+        self.gate_mask = gate;
+    }
+
+    fn clear_masks(&mut self) {
+        self.mask = Arc::new(Mask::none(0));
+        self.frame_mask = None;
+        self.region_mask = None;
+        self.scope_mask = Mask::none(0);
+        self.filter_masks.clear();
+        self.lasso_mask = None;
+        self.gate_mask = Mask::none(0);
     }
 
     fn scope_frame(&self) -> Option<u32> {
@@ -865,7 +970,7 @@ pub struct PlotKey(u64);
 pub struct PlotRequest {
     key: PlotKey,
     table: Arc<Table>,
-    rows: Vec<usize>,
+    mask: Arc<Mask>,
     view: MeasureView,
     axes: [usize; 2],
 }
@@ -876,7 +981,7 @@ impl PlotRequest {
     }
 
     pub fn build(&self) -> Option<Plot> {
-        self.table.plot(self.view, self.axes, &self.rows)
+        self.table.plot(self.view, self.axes, &self.mask)
     }
 }
 

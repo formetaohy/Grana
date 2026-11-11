@@ -5,6 +5,7 @@ use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
 use crate::lasso::Lasso;
+use crate::mask::Mask;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
 use crate::sample::Sample;
@@ -521,17 +522,42 @@ impl Table {
         lasso: Option<&Lasso>,
         frame: Option<u32>,
     ) -> Vec<usize> {
-        (0..self.rows())
-            .filter(|row| {
-                frame.is_none_or(|frame| self.observations[*row].time() == Some(frame))
-                    && filters
-                        .iter()
-                        .all(|filter| filter.contains(self.value(*row, filter.column())))
-                    && lasso.is_none_or(|lasso| {
-                        lasso.contains(self.value(*row, lasso.x()), self.value(*row, lasso.y()))
-                    })
-            })
-            .collect()
+        let mut mask = self.frame_mask(frame);
+        for filter in filters {
+            mask.intersect(&self.filter_mask(*filter));
+        }
+        if let Some(lasso) = lasso {
+            mask.intersect(&self.lasso_mask(lasso));
+        }
+        mask.to_rows()
+    }
+
+    pub fn frame_mask(&self, frame: Option<u32>) -> Mask {
+        match frame {
+            None => Mask::all(self.rows()),
+            Some(frame) => Mask::of(self.rows(), |row| {
+                self.observations[row].time() == Some(frame)
+            }),
+        }
+    }
+
+    pub fn filter_mask(&self, filter: Filter) -> Mask {
+        assert!(
+            filter.column() < self.columns.len(),
+            "a filter names a column of its table"
+        );
+        let column = filter.column();
+        Mask::of(self.rows(), |row| filter.contains(self.value(row, column)))
+    }
+
+    pub fn lasso_mask(&self, lasso: &Lasso) -> Mask {
+        assert!(
+            lasso.x() < self.columns.len() && lasso.y() < self.columns.len(),
+            "a lasso names columns of its table"
+        );
+        Mask::of(self.rows(), |row| {
+            lasso.contains(self.value(row, lasso.x()), self.value(row, lasso.y()))
+        })
     }
 
     pub fn count(&self, frame: Option<u32>) -> usize {

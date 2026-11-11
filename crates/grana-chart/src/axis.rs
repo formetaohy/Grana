@@ -23,6 +23,18 @@ impl Axis {
         }
     }
 
+    pub fn frames(low: f32, high: f32, target: usize) -> Self {
+        assert!(
+            low.is_finite() && high.is_finite() && high >= low,
+            "a frame axis spans a finite interval"
+        );
+        Self {
+            low,
+            high,
+            step: step(low, high, target).max(1.0).round(),
+        }
+    }
+
     pub fn low(self) -> f32 {
         self.low
     }

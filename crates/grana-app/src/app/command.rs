@@ -59,8 +59,8 @@ impl App {
         if effects.chart {
             self.begin_chart();
         }
-        if effects.chart {
-            self.begin_chart();
+        if effects.comparison {
+            self.begin_comparison();
         }
         if effects.lineage {
             self.begin_lineage();

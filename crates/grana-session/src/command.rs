@@ -34,6 +34,7 @@ pub enum Command {
     SaveFigure,
     SaveLineage,
     SaveChart,
+    SaveComparison,
     SetTime(u32),
     SelectSeries(usize),
     SelectField(usize),

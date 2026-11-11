@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_measure::{SCATTER_BINS, Scatter};
+use grana_measure::Scatter;
 use grana_ui::{Align, Border, Corners, Fill, Painter, Rect, Shadow};
 
 use crate::axis::Axis;
@@ -60,7 +60,9 @@ pub fn paint(
         (None, None) => {}
     }
     let scale = (1.0 + scatter.peak().max(1) as f32).ln();
-    let cell = cell_size(frame, SCATTER_BINS);
+    let x_bins = scatter.x_bins();
+    let y_bins = scatter.y_bins();
+    let cell = cell_size(frame, x_bins, y_bins);
     let dimmed = decor.lasso.is_some();
     let ink = |alpha: f32| {
         palette
@@ -68,12 +70,12 @@ pub fn paint(
             .with_alpha(if dimmed { alpha * 0.5 } else { alpha })
     };
     if decor.sparse {
-        for row in 0..SCATTER_BINS {
-            for column in 0..SCATTER_BINS {
+        for row in 0..y_bins {
+            for column in 0..x_bins {
                 if scatter.total_at(column, row) == 0 {
                     continue;
                 }
-                let centre = cell_centre(frame, column, row, SCATTER_BINS);
+                let centre = cell_centre(frame, column, row, x_bins, y_bins);
                 let dot = cell.x.min(cell.y).clamp(1.8, 3.0);
                 painter.rect(
                     Rect::from_center_size(centre, Vec2::splat(dot)),
@@ -82,12 +84,12 @@ pub fn paint(
                 );
             }
         }
-        for row in 0..SCATTER_BINS {
-            for column in 0..SCATTER_BINS {
+        for row in 0..y_bins {
+            for column in 0..x_bins {
                 if scatter.gated_at(column, row) == 0 {
                     continue;
                 }
-                let centre = cell_centre(frame, column, row, SCATTER_BINS);
+                let centre = cell_centre(frame, column, row, x_bins, y_bins);
                 let dot = cell.x.min(cell.y).clamp(2.2, 3.4);
                 painter.rect(
                     Rect::from_center_size(centre, Vec2::splat(dot)),
@@ -97,13 +99,13 @@ pub fn paint(
             }
         }
     } else {
-        for row in 0..SCATTER_BINS {
-            for column in 0..SCATTER_BINS {
+        for row in 0..y_bins {
+            for column in 0..x_bins {
                 let total = scatter.total_at(column, row);
                 if total == 0 {
                     continue;
                 }
-                let centre = cell_centre(frame, column, row, SCATTER_BINS);
+                let centre = cell_centre(frame, column, row, x_bins, y_bins);
                 let weight = ((1.0 + total as f32).ln() / scale).clamp(0.0, 1.0);
                 painter.rect(
                     Rect::from_center_size(centre, Vec2::new(cell.x + 0.5, cell.y + 0.5)),

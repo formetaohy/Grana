@@ -49,8 +49,12 @@ pub fn paint(
         ((groups.len() as f32 * GROUP_LABEL / frame.width().max(1.0)).ceil() as usize).max(1);
     let width = (0.46 * slot_width(frame, groups.len())).clamp(6.0, 34.0);
     let gating = distribution.gated() < distribution.total();
-    let cold = TextStyle::new(metrics.caption, palette.text_tertiary).truncating();
-    let hot = TextStyle::new(metrics.caption, palette.text_primary).truncating();
+    let cold = TextStyle::new(metrics.caption, palette.text_tertiary)
+        .aligned(Align::Center)
+        .truncating();
+    let hot = TextStyle::new(metrics.caption, palette.text_primary)
+        .aligned(Align::Center)
+        .truncating();
     for (index, group) in groups.iter().enumerate() {
         let centre = group_centre(frame, index, groups.len());
         let slot = Slot {
@@ -276,21 +280,35 @@ fn violin_shape(
         density[low] * (1.0 - weight) + density[high] * weight
     };
     if filled {
-        for row in 0..rows {
-            let t = (row as f32 + 0.5) / rows as f32;
-            let half = sample(1.0 - t).clamp(0.0, 1.0) * reach;
-            if half <= 0.15 {
-                continue;
+        if painter.recording() {
+            let half = |index: usize| sample(index as f32 / (points - 1) as f32).clamp(0.0, 1.0);
+            let row =
+                |index: usize| frame.max.y - (index as f32 + 0.5) / points as f32 * frame.height();
+            let mut outline = Vec::with_capacity(points * 2);
+            for index in 0..points {
+                outline.push(Vec2::new(centre + half(index) * reach, row(index)));
             }
-            let top = frame.min.y + row as f32;
-            painter.rect(
-                Rect::from_min_max(
-                    Vec2::new(centre - half, top),
-                    Vec2::new(centre + half, top + 1.0),
-                ),
-                Corners::ZERO,
-                fill,
-            );
+            for index in (0..points).rev() {
+                outline.push(Vec2::new(centre - half(index) * reach, row(index)));
+            }
+            painter.contour(&outline, fill);
+        } else {
+            for row in 0..rows {
+                let t = (row as f32 + 0.5) / rows as f32;
+                let half = sample(1.0 - t).clamp(0.0, 1.0) * reach;
+                if half <= 0.15 {
+                    continue;
+                }
+                let top = frame.min.y + row as f32;
+                painter.rect(
+                    Rect::from_min_max(
+                        Vec2::new(centre - half, top),
+                        Vec2::new(centre + half, top + 1.0),
+                    ),
+                    Corners::ZERO,
+                    fill,
+                );
+            }
         }
     }
     let mut previous: Option<(f32, f32, f32)> = None;

@@ -1,4 +1,6 @@
-use grana_measure::{Aggregate, DENSITY_POINTS, Frame, Group, MeasureView, Objects, Plot, Table};
+use grana_measure::{
+    Aggregate, DENSITY_POINTS, Frame, Group, Mask, MeasureView, Objects, Plot, Table,
+};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_scene::{Curation, TrackAnchor, TrackEdit};
 
@@ -86,7 +88,7 @@ fn groups_measurements_by_frame_for_distributions() {
     let column = table
         .column("egfp_488_intensity_mean")
         .expect("the spots carry their mean intensity");
-    let rows = (0..table.rows()).collect::<Vec<_>>();
+    let rows = Mask::all(table.rows());
     let plot = table
         .plot(MeasureView::Distribution, [column, 0], &rows)
         .expect("a distribution plots its column");
@@ -110,8 +112,9 @@ fn groups_measurements_by_frame_for_distributions() {
     assert_eq!(series.density().len(), DENSITY_POINTS);
     assert!(series.density().iter().copied().fold(0.0f32, f32::max) >= 0.999);
 
+    let first_frame = Mask::of(table.rows(), |row| row < 2);
     let plot = table
-        .plot(MeasureView::Distribution, [column, 0], &[0, 1])
+        .plot(MeasureView::Distribution, [column, 0], &first_frame)
         .expect("a gated distribution plots its column");
     let Plot::Distribution(gated) = plot else {
         panic!("the distribution view plots a distribution");

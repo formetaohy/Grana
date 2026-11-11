@@ -2,11 +2,13 @@ use glam::Vec2;
 use grana_measure::Plot;
 use grana_ui::{Align, Corners, Mark, Painter, Rect, TextStyle, Ui};
 
+use crate::comparison::Comparison;
 use crate::decor::{Decor, Gates, Highlight};
 use crate::distribution::paint as distribution_paint;
 use crate::histogram::paint as histogram_paint;
 use crate::scatter::paint as scatter_paint;
 use crate::style::{DistributionStyle, Style};
+use crate::trend::paint as trend_paint;
 
 pub const WIDTH: u32 = 960;
 pub const HEIGHT: u32 = 600;
@@ -80,6 +82,7 @@ impl View<'_> {
             Plot::Distribution(distribution) => {
                 distribution_paint(painter, rect, distribution, &self.style, &self.decor)
             }
+            Plot::Trend(trend) => trend_paint(painter, rect, trend, &self.style, &self.decor),
         }
     }
 }
@@ -97,7 +100,7 @@ impl Chart {
         [WIDTH, HEIGHT]
     }
 
-    pub fn marks<A: Clone>(&self, ui: &mut Ui<A>) -> Vec<Mark> {
+    fn marks<A: Clone>(&self, ui: &mut Ui<A>) -> Vec<Mark> {
         let theme = *ui.theme();
         let size = self.size();
         let points = Vec2::new(size[0] as f32, size[1] as f32);
@@ -117,5 +120,26 @@ impl Chart {
             painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
             view.paint(painter, page);
         })
+    }
+}
+
+pub enum Page {
+    Plot(Box<Chart>),
+    Comparison(Box<Comparison>),
+}
+
+impl Page {
+    pub fn size(&self) -> [u32; 2] {
+        match self {
+            Self::Plot(chart) => chart.size(),
+            Self::Comparison(comparison) => comparison.size(),
+        }
+    }
+
+    pub fn marks<A: Clone>(&self, ui: &mut Ui<A>) -> Vec<Mark> {
+        match self {
+            Self::Plot(chart) => chart.marks(ui),
+            Self::Comparison(comparison) => comparison.marks(ui),
+        }
     }
 }

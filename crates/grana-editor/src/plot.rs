@@ -3,7 +3,7 @@ use grana_chart::{
     Axis, Brush, BrushKind, Decor, Gates, Heading, Highlight, Style, View as ChartView,
 };
 use grana_measure::{
-    Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Scatter, Table,
+    Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Scatter, Table, Trend,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
 use grana_session::Command;
@@ -17,8 +17,7 @@ const BRUSH_SLOP: f32 = 0.005;
 const LASSO_STEP: f32 = 0.002;
 const HOVER_REACH: f32 = 11.0;
 const SCATTER_HINT: &str = "Drag: Lasso · Shift-Drag: Box · Click: Locate";
-const HISTOGRAM_HINT: &str = "Drag: Gate · Click: Locate";
-const DISTRIBUTION_HINT: &str = "Drag: Gate · Click: Locate";
+const GATE_HINT: &str = "Drag: Gate · Click: Locate";
 
 enum Readout {
     None,
@@ -34,6 +33,10 @@ enum Readout {
         observation: Option<Observation>,
     },
     Group(usize),
+    Frame {
+        time: u32,
+        point: Option<usize>,
+    },
 }
 
 struct PlotView<'a> {
@@ -77,6 +80,10 @@ impl PlotView<'_> {
                 x: range(self.filters, distribution.column()),
                 y: None,
             },
+            Plot::Trend(trend) => Gates {
+                x: None,
+                y: range(self.filters, trend.column()),
+            },
         }
     }
 
@@ -95,6 +102,13 @@ impl PlotView<'_> {
                 let value = self.table.value(row, distribution.column());
                 group_index(distribution, observation)
                     .map(|index| Highlight::Group { index, value })
+            }
+            Plot::Trend(trend) => {
+                let time = self.table.observation(row).time()?;
+                Some(Highlight::Point(Vec2::new(
+                    time as f32 + 1.0,
+                    self.table.value(row, trend.column()),
+                )))
             }
         }
     }
@@ -141,7 +155,10 @@ pub fn view<'a>(
         Plot::Distribution(distribution) if hovering => {
             distribution_readout(distribution, frame, pointer)
         }
-        Plot::Histogram(_) | Plot::Scatter(_) | Plot::Distribution(_) => Readout::None,
+        Plot::Trend(trend) if hovering => trend_readout(trend, frame, pointer),
+        Plot::Histogram(_) | Plot::Scatter(_) | Plot::Distribution(_) | Plot::Trend(_) => {
+            Readout::None
+        }
     };
     let (title_y, title_x) = titles(plot, table);
     let heading =
@@ -230,6 +247,10 @@ fn titles(plot: &Plot, table: &Table) -> (String, String) {
             ),
             "X: Groups".to_string(),
         ),
+        Plot::Trend(trend) => (
+            format!("Y: {}", crate::view::column_label(&columns[trend.column()])),
+            "X: Frame".to_string(),
+        ),
     }
 }
 
@@ -269,7 +290,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
         }
         (Plot::Distribution(distribution), Readout::Group(index)) => {
             let Some(group) = distribution.groups().get(index) else {
-                return DISTRIBUTION_HINT.to_string();
+                return GATE_HINT.to_string();
             };
             let column = &table.columns()[distribution.column()];
             let places = column.decimals() as usize;
@@ -281,7 +302,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                 Some(group.total())
             };
             let Some(series) = series else {
-                return format!("{} · no gated samples · {DISTRIBUTION_HINT}", group.label());
+                return format!("{} · no gated samples · {GATE_HINT}", group.label());
             };
             let mut text = format!(
                 "{} · n={} · Median {:.places$} {unit} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$}",
@@ -300,7 +321,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                     group.total().count()
                 ));
             }
-            text.push_str(&format!(" · {DISTRIBUTION_HINT}"));
+            text.push_str(&format!(" · {GATE_HINT}"));
             text
         }
         (Plot::Distribution(distribution), _) => {
@@ -309,14 +330,48 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                 "No objects to plot".to_string()
             } else if distribution.gated() < distribution.total() {
                 format!(
-                    "{} of {} gated · {groups} groups · {DISTRIBUTION_HINT}",
+                    "{} of {} gated · {groups} groups · {GATE_HINT}",
                     distribution.gated(),
                     distribution.total()
                 )
             } else {
                 format!(
-                    "{} objects · {groups} groups · {DISTRIBUTION_HINT}",
+                    "{} objects · {groups} groups · {GATE_HINT}",
                     distribution.total()
+                )
+            }
+        }
+        (Plot::Trend(trend), Readout::Frame { time, point }) => {
+            let column = &table.columns()[trend.column()];
+            let places = column.decimals() as usize;
+            let unit = column.unit().suffix();
+            match point.and_then(|index| trend.points().get(index)) {
+                Some(point) => format!(
+                    "Frame {} · Mean {:.places$} {unit} · 95% CI {:.places$}–{:.places$} · n={} · {GATE_HINT}",
+                    time + 1,
+                    point.mean(),
+                    point.lower(),
+                    point.upper(),
+                    point.count()
+                ),
+                None => format!("Frame {} · no samples · {GATE_HINT}", time + 1),
+            }
+        }
+        (Plot::Trend(trend), _) => {
+            if trend.points().is_empty() {
+                "No frames to trend".to_string()
+            } else if trend.gated() < trend.total() {
+                format!(
+                    "{} of {} values over {} frames · {GATE_HINT}",
+                    trend.gated(),
+                    trend.total(),
+                    trend.frames()
+                )
+            } else {
+                format!(
+                    "{} values over {} frames · {GATE_HINT}",
+                    trend.total(),
+                    trend.frames()
                 )
             }
         }
@@ -326,10 +381,10 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
             if statistics.count() == 0 {
-                format!("{total} objects · Ungated · {HISTOGRAM_HINT}")
+                format!("{total} objects · Ungated · {GATE_HINT}")
             } else {
                 format!(
-                    "{} of {total} gated · Median {:.places$} {unit} · MAD {:.places$} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$} · {HISTOGRAM_HINT}",
+                    "{} of {total} gated · Median {:.places$} {unit} · MAD {:.places$} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$} · {GATE_HINT}",
                     statistics.count(),
                     statistics.median(),
                     statistics.mad(),
@@ -427,6 +482,18 @@ fn distribution_readout(distribution: &Distribution, frame: Rect, pointer: Vec2)
     }
 }
 
+fn trend_axis(trend: &Trend) -> Axis {
+    Axis::frames(1.0, trend.frames().max(2) as f32, 5)
+}
+
+fn trend_readout(trend: &Trend, frame: Rect, pointer: Vec2) -> Readout {
+    let value = trend_axis(trend).value_at_x(frame, pointer.x);
+    let last = trend.frames().max(1);
+    let time = ((value.round() as i64) - 1).clamp(0, last as i64 - 1) as u32;
+    let point = trend.points().iter().position(|point| point.time() == time);
+    Readout::Frame { time, point }
+}
+
 fn group_index(distribution: &Distribution, observation: Observation) -> Option<usize> {
     let groups = distribution.groups();
     if groups.len() == 1 {
@@ -490,6 +557,7 @@ pub fn apply(
         Plot::Distribution(distribution) => {
             distribution_apply(event, measure, table, distribution, workspace, commands)
         }
+        Plot::Trend(trend) => trend_apply(event, measure, table, trend, workspace, commands),
     }
 }
 
@@ -727,6 +795,108 @@ fn distribution_value(distribution: &Distribution, position: f32) -> f32 {
     low + position.clamp(0.0, 1.0) * (distribution.high() - low)
 }
 
+fn trend_apply(
+    event: PlotEvent,
+    measure: &Measure,
+    table: &Table,
+    trend: &Trend,
+    workspace: &mut Workspace,
+    commands: &mut Vec<Command>,
+) {
+    if workspace
+        .drag
+        .view
+        .is_some_and(|view| view != MeasureView::Trend)
+    {
+        workspace.drag = PlotDrag::default();
+    }
+    let raw = event.position;
+    let position = raw.clamp(Vec2::ZERO, Vec2::ONE);
+    match event.phase {
+        Phase::Down => {
+            workspace.drag.view = Some(MeasureView::Trend);
+            workspace.drag.gate = Some(BrushKind::Rectangle);
+            workspace.drag.origin = Some(position);
+            workspace.drag.moved = false;
+            workspace.drag.vertices.clear();
+        }
+        Phase::Move => {
+            if let Some(origin) = workspace.drag.origin
+                && origin.distance(position) > BRUSH_SLOP
+            {
+                workspace.drag.moved = true;
+            }
+        }
+        Phase::Up => {
+            let Some(origin) = workspace.drag.origin else {
+                return;
+            };
+            let moved = workspace.drag.moved || origin.distance(position) > BRUSH_SLOP;
+            if moved {
+                if (position.y - origin.y).abs() >= BRUSH_SLOP {
+                    let from = trend_value(trend, origin.y);
+                    let to = trend_value(trend, position.y);
+                    commands.push(Command::SetGate {
+                        column: trend.column(),
+                        minimum: from.min(to),
+                        maximum: from.max(to),
+                    });
+                }
+            } else if inside(raw)
+                && let Some(set) = measure.set()
+                && let Some((time, value)) = trend_target(trend, position)
+                && let Some(row) = nearest_trend_row(table, measure.rows(), trend, time, value)
+            {
+                locate_observation(set, table.observation(row), commands);
+            }
+            workspace.drag.origin = None;
+            workspace.drag.moved = false;
+            workspace.drag.vertices.clear();
+        }
+    }
+}
+
+fn trend_value(trend: &Trend, position: f32) -> f32 {
+    let low = trend.low();
+    low + position.clamp(0.0, 1.0) * (trend.high() - low)
+}
+
+fn trend_target(trend: &Trend, position: Vec2) -> Option<(u32, f32)> {
+    let frames = trend.frames();
+    if frames == 0 {
+        return None;
+    }
+    let value = 1.0 + position.x.clamp(0.0, 1.0) * (frames.max(2) as f32 - 1.0);
+    let time = ((value.round() as i64) - 1).clamp(0, frames as i64 - 1) as u32;
+    Some((time, trend_value(trend, position.y)))
+}
+
+fn nearest_trend_row(
+    table: &Table,
+    rows: &[usize],
+    trend: &Trend,
+    time: u32,
+    value: f32,
+) -> Option<usize> {
+    let mut best = None;
+    let mut closest = f32::INFINITY;
+    for row in rows {
+        if table.observation(*row).time() != Some(time) {
+            continue;
+        }
+        let current = table.value(*row, trend.column());
+        if !current.is_finite() {
+            continue;
+        }
+        let distance = (current - value).abs();
+        if distance < closest {
+            closest = distance;
+            best = Some(*row);
+        }
+    }
+    best
+}
+
 fn group_from_position(distribution: &Distribution, position: f32) -> Option<usize> {
     let count = distribution.groups().len();
     if count == 0 {
@@ -830,6 +1000,7 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
         MeasureView::Histogram => column == axes[0],
         MeasureView::Scatter => column == axes[0] || column == axes[1],
         MeasureView::Distribution => column == axes[0],
+        MeasureView::Trend => column == axes[0],
     };
     let mut indices = measure
         .filters()

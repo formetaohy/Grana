@@ -40,6 +40,7 @@ impl Session {
             Command::SaveFigure => effects.figure = true,
             Command::SaveLineage => effects.lineage = true,
             Command::SaveChart => effects.chart = true,
+            Command::SaveComparison => effects.comparison = true,
             Command::SetTime(time) => self.set_time(time),
             Command::SelectSeries(index) => {
                 if index != self.series_index && !self.select_series(index) {

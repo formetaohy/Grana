@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 use grana_raster::Bitmap;
+use grana_text::{Contour, Curve};
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
@@ -167,6 +168,10 @@ impl<'a> Painter<'a> {
         self.clip
     }
 
+    pub fn recording(&self) -> bool {
+        self.marks.is_some()
+    }
+
     pub fn push_clip(&mut self, rect: Rect, corners: Corners) {
         self.clip = self.clip.intersect(rect, corners);
     }
@@ -316,6 +321,23 @@ impl<'a> Painter<'a> {
         self.mark(Mark::Bitmap {
             rect,
             bitmap: bitmap.clone(),
+            clip,
+        });
+    }
+
+    pub fn contour(&mut self, points: &[Vec2], color: Color) {
+        assert!(self.marks.is_some(), "a contour fill records a vector page");
+        if points.len() < 3 || color.alpha <= 0.0 {
+            return;
+        }
+        let mut contour = Contour::new(points[0].to_array());
+        for point in &points[1..] {
+            contour.push(Curve::Line(point.to_array()));
+        }
+        let clip = self.clip.rect;
+        self.mark(Mark::Outline {
+            contours: vec![contour],
+            color,
             clip,
         });
     }

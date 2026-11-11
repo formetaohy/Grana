@@ -1,11 +1,12 @@
 use glam::Vec2;
-use grana_chart::{Comparison, Decor, Heading, Style};
+use grana_chart::{Decor, Style};
 use grana_session::Command;
 use grana_ui::{
     Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Length, Level,
     Phase, Rect, Role, State, TextStyle, icon,
 };
 
+use crate::chart::{comparison_chart, group_names, set_names};
 use crate::message::Message;
 use crate::state::{ComparisonMetric, View};
 use crate::view;
@@ -402,7 +403,6 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
 }
 
 const CHART_HEIGHT: f32 = 214.0;
-const NOTE_LIMIT: usize = 3;
 
 fn comparison<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -437,13 +437,24 @@ fn comparison<'a>(
     }
     let metric = state.workspace.comparison_metric;
     let labels = ComparisonMetric::ALL.map(ComparisonMetric::name);
-    children.push(view::segmented(
-        ctx,
-        "comparison.metric",
-        &labels,
-        metric.index(),
-        Message::SetComparisonMetric,
-    ));
+    children.push(grana_ui::row().gap(8.0).align(Align::Center).children([
+        view::segmented(
+            ctx,
+            "comparison.metric",
+            &labels,
+            metric.index(),
+            Message::SetComparisonMetric,
+        ),
+        view::icon_button(
+            ctx,
+            "comparison.export",
+            Icon::Export,
+            28.0,
+            Role::Quiet,
+            "Export comparison (SVG/PDF)",
+            Message::Command(Command::SaveComparison),
+        ),
+    ]));
     let groups = group_names(rows);
     let group = state
         .workspace
@@ -497,33 +508,20 @@ fn comparison<'a>(
         children.push(view::weak(ctx, "No reported group matches this filter."));
         return view::card(ctx, 6.0, children);
     }
-    let categories = visible
-        .iter()
-        .map(|row| grana_chart::Category {
-            label: category_label(row, groups.len(), sets.len()),
-            values: row
-                .samples
-                .iter()
-                .filter_map(|sample| metric.sample(sample))
-                .map(|value| value as f32)
-                .collect(),
-        })
-        .collect::<Vec<_>>();
-    let slots = visible
-        .iter()
-        .map(|row| (row.group.clone(), row.key.clone()))
-        .collect::<Vec<_>>();
-    let notes = comparison_notes(&slots, state.batch_significance(), metric);
-    let heading =
-        Heading::new("", format!("Y: {}", metric_axis(metric)), "X: Conditions").with_summary(
-            format!("{} categories · images are the samples", visible.len()),
-        );
-    let chart = Comparison {
-        heading,
-        categories,
-        notes,
+    let Some(built) = comparison_chart(
+        rows,
+        state.batch_significance(),
+        metric,
+        group.as_deref(),
+        key.as_deref(),
+        state.workspace.distribution_style,
+    ) else {
+        children.push(view::weak(ctx, "No reported group matches this filter."));
+        return view::card(ctx, 6.0, children);
     };
-    let style = Style::card(ctx.theme(), state.workspace.distribution_style);
+    let slots = built.slots;
+    let chart = built.chart;
+    let style = Style::card(ctx.theme(), chart.style);
     let pointer = ctx.pointer();
     let count = slots.len();
     let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT, move |painter, info| {
@@ -618,83 +616,6 @@ fn detail<'a>(
 
 fn title(row: &grana_session::BatchComparison) -> String {
     format!("{} · {}", row.group, row.name)
-}
-
-fn category_label(row: &grana_session::BatchComparison, groups: usize, sets: usize) -> String {
-    match (groups, sets) {
-        (1, _) => row.name.clone(),
-        (_, 1) => row.group.clone(),
-        _ => title(row),
-    }
-}
-
-fn metric_axis(metric: ComparisonMetric) -> String {
-    match metric.unit() {
-        "" => metric.name().to_string(),
-        unit => format!("{} ({unit})", metric.name()),
-    }
-}
-
-fn comparison_notes(
-    slots: &[(String, String)],
-    tests: &[grana_session::BatchSignificance],
-    metric: ComparisonMetric,
-) -> Vec<grana_chart::Note> {
-    let mut notes = tests
-        .iter()
-        .filter(|test| test.metric == metric && test.significant())
-        .filter_map(|test| {
-            let from = slots
-                .iter()
-                .position(|(group, key)| group == &test.group_a && key == &test.key)?;
-            let to = slots
-                .iter()
-                .position(|(group, key)| group == &test.group_b && key == &test.key)?;
-            if from == to {
-                return None;
-            }
-            Some((
-                (from.abs_diff(to), from.min(to), from.max(to)),
-                grana_chart::Note {
-                    from,
-                    to,
-                    mark: test.mark().to_string(),
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    notes.sort_by_key(|(order, _)| *order);
-    notes
-        .into_iter()
-        .take(NOTE_LIMIT)
-        .map(|(_, note)| note)
-        .collect()
-}
-
-fn group_names(rows: &[grana_session::BatchComparison]) -> Vec<String> {
-    let mut names = Vec::new();
-    for row in rows {
-        if !names.contains(&row.group) {
-            names.push(row.group.clone());
-        }
-    }
-    names
-}
-
-fn set_names(
-    rows: &[grana_session::BatchComparison],
-    group: Option<&str>,
-) -> Vec<(String, String)> {
-    let mut names = Vec::new();
-    for row in rows {
-        if group.is_some_and(|group| group != row.group) {
-            continue;
-        }
-        if !names.iter().any(|(key, _)| key == &row.key) {
-            names.push((row.key.clone(), row.name.clone()));
-        }
-    }
-    names
 }
 
 fn sample_line(row: &grana_session::BatchComparison, metric: ComparisonMetric) -> String {

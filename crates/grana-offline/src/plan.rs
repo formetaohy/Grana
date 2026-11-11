@@ -25,7 +25,7 @@ pub enum Destination {
     },
     Chart {
         path: PathBuf,
-        chart: Box<grana_chart::Chart>,
+        page: grana_chart::Page,
     },
     Movie {
         path: PathBuf,

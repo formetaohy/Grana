@@ -344,6 +344,11 @@ fn plot_bar<'a>(
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
     let gated = match view {
+        MeasureView::Trend => state
+            .measure
+            .filters()
+            .iter()
+            .any(|filter| filter.column() == axes[0]),
         MeasureView::Distribution => {
             lasso
                 || state
@@ -370,7 +375,7 @@ fn plot_bar<'a>(
         .unwrap_or(0);
     let options_x = options.clone();
     let mut items = Vec::new();
-    if view == MeasureView::Distribution {
+    if view == MeasureView::Distribution || view == MeasureView::Trend {
         items.push(field_label(ctx, "Value"));
         items.push(combo(
             ctx,
@@ -386,19 +391,21 @@ fn plot_bar<'a>(
                 _ => Message::Noop,
             },
         ));
-        let styles = DistributionStyle::ALL
-            .iter()
-            .copied()
-            .map(DistributionStyle::name)
-            .collect::<Vec<_>>();
-        items.push(field_label(ctx, "Style"));
-        items.push(view::segmented(
-            ctx,
-            "measure.distribution",
-            &styles,
-            state.workspace.distribution_style.index(),
-            Message::SetDistributionStyle,
-        ));
+        if view == MeasureView::Distribution {
+            let styles = DistributionStyle::ALL
+                .iter()
+                .copied()
+                .map(DistributionStyle::name)
+                .collect::<Vec<_>>();
+            items.push(field_label(ctx, "Style"));
+            items.push(view::segmented(
+                ctx,
+                "measure.distribution",
+                &styles,
+                state.workspace.distribution_style.index(),
+                Message::SetDistributionStyle,
+            ));
+        }
     } else {
         items.push(field_label(ctx, "X Axis"));
         items.push(combo(
@@ -929,6 +936,7 @@ fn view_label(view: MeasureView) -> &'static str {
         MeasureView::Histogram => "Histogram",
         MeasureView::Scatter => "Scatter",
         MeasureView::Distribution => "Distribution",
+        MeasureView::Trend => "Trend",
     }
 }
 

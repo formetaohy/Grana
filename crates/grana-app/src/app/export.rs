@@ -237,6 +237,34 @@ impl App {
     }
 
     pub(super) fn begin_chart(&mut self) {
+        let stem = self.session.measure().view().name().to_string();
+        self.begin_page(
+            "Save a statistics chart",
+            &stem,
+            "choose a statistics plot before exporting its chart",
+            |view, workspace| grana_editor::chart_page(view, workspace.distribution_style),
+        );
+    }
+
+    pub(super) fn begin_comparison(&mut self) {
+        self.begin_page(
+            "Save a comparison chart",
+            "comparison",
+            "choose a compared condition before exporting its comparison",
+            grana_editor::comparison_page,
+        );
+    }
+
+    fn begin_page(
+        &mut self,
+        title: &str,
+        stem: &str,
+        missing: &str,
+        build: impl FnOnce(
+            &SessionView<'_>,
+            &grana_editor::Workspace,
+        ) -> Option<grana_editor::ChartPage>,
+    ) {
         if !self.export_ready() {
             return;
         }
@@ -264,23 +292,22 @@ impl App {
             };
             self.session.scene().map(|scene| {
                 (
-                    grana_editor::chart_page(&view, self.workspace.distribution_style),
+                    build(&view, &self.workspace),
                     scene.region,
                     grana_session::slug(scene.dataset.name()),
                 )
             })
         };
-        let Some((chart, region, slug)) = prepared else {
-            self.set_output_message("open a dataset before exporting a statistics chart");
+        let Some((page, region, slug)) = prepared else {
+            self.set_output_message("open a dataset before exporting a chart");
             return;
         };
-        let Some(chart) = chart else {
-            self.set_output_message("choose a statistics plot before exporting its chart");
+        let Some(page) = page else {
+            self.set_output_message(missing);
             return;
         };
-        let stem = self.session.measure().view().name();
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save a statistics chart")
+            .set_title(title)
             .set_file_name(format!("{slug}-{stem}.svg"))
             .add_filter("SVG (vector)", &["svg"])
             .add_filter("PDF (vector)", &["pdf"])
@@ -288,12 +315,9 @@ impl App {
         else {
             return;
         };
-        let size = chart.size();
+        let size = page.size();
         self.start_export(Plan {
-            destination: Destination::Chart {
-                path,
-                chart: Box::new(chart),
-            },
+            destination: Destination::Chart { path, page },
             size: grana_display::OutputSize::of(size[0], size[1]),
             transparent: false,
             poses: vec![self.pose()],

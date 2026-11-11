@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use grana_chart::Chart;
+use grana_chart::Page;
 use grana_ui::Ui;
 use wgpu::{Device, Queue, TextureFormat};
 
@@ -10,7 +10,7 @@ pub(crate) fn write(
     device: &Device,
     queue: &Queue,
     format: TextureFormat,
-    chart: &Chart,
+    page: &Page,
     path: &Path,
 ) -> Result<PathBuf, String> {
     let kind = vector::format(path).ok_or_else(|| {
@@ -19,10 +19,10 @@ pub(crate) fn write(
             path.display()
         )
     })?;
-    let size = chart.size();
+    let size = page.size();
     let mut ui: Ui<()> = Ui::new(device, queue, format);
     ui.resize(size);
-    let marks = chart.marks(&mut ui);
+    let marks = page.marks(&mut ui);
     vector::write_marks(path, kind, size, &marks)?;
     Ok(path.to_path_buf())
 }

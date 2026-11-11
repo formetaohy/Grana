@@ -43,18 +43,18 @@ pub fn group_at(frame: Rect, count: usize, pointer: Vec2) -> Option<usize> {
     Some(index.min(count - 1))
 }
 
-pub fn cell_centre(frame: Rect, column: usize, row: usize, bins: usize) -> Vec2 {
-    let width = frame.width() / bins.max(1) as f32;
-    let height = frame.height() / bins.max(1) as f32;
+pub fn cell_centre(frame: Rect, column: usize, row: usize, columns: usize, rows: usize) -> Vec2 {
+    let width = frame.width() / columns.max(1) as f32;
+    let height = frame.height() / rows.max(1) as f32;
     Vec2::new(
         frame.min.x + width * (column as f32 + 0.5),
         frame.max.y - height * (row as f32 + 0.5),
     )
 }
 
-pub fn cell_size(frame: Rect, bins: usize) -> Vec2 {
+pub fn cell_size(frame: Rect, columns: usize, rows: usize) -> Vec2 {
     Vec2::new(
-        frame.width() / bins.max(1) as f32,
-        frame.height() / bins.max(1) as f32,
+        frame.width() / columns.max(1) as f32,
+        frame.height() / rows.max(1) as f32,
     )
 }

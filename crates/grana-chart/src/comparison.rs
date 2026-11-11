@@ -1,14 +1,14 @@
 use glam::Vec2;
 use grana_measure::DistributionSeries;
-use grana_ui::{Align, Corners, Painter, Rect, TextStyle};
+use grana_ui::{Align, Corners, Mark, Painter, Rect, TextStyle, Ui};
 
 use crate::axis::Axis;
-use crate::chart::Heading;
+use crate::chart::{HEIGHT, Heading, WIDTH};
 use crate::decor::Decor;
 use crate::distribution::{self, Slot};
 use crate::grid;
 use crate::layout::{group_at, group_centre, slot as slot_width};
-use crate::style::Style;
+use crate::style::{DistributionStyle, Style};
 
 const BRACKET_ROW: f32 = 17.0;
 const BRACKET_TOP: f32 = 4.0;
@@ -30,6 +30,7 @@ pub struct Comparison {
     pub heading: Heading,
     pub categories: Vec<Category>,
     pub notes: Vec<Note>,
+    pub style: DistributionStyle,
 }
 
 impl Comparison {
@@ -73,9 +74,33 @@ impl Comparison {
 }
 
 impl Comparison {
+    pub fn size(&self) -> [u32; 2] {
+        [WIDTH, HEIGHT]
+    }
+
+    pub(crate) fn marks<A: Clone>(&self, ui: &mut Ui<A>) -> Vec<Mark> {
+        let theme = *ui.theme();
+        let size = self.size();
+        let points = Vec2::new(size[0] as f32, size[1] as f32);
+        let page = Rect::from_min_size(Vec2::ZERO, points);
+        let style = Style::page(&theme, self.style);
+        ui.figure_marks(points, 1.0, |painter| {
+            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            self.paint(painter, page, &style, &Decor::default());
+        })
+    }
+
     pub fn paint(&self, painter: &mut Painter, rect: Rect, style: &Style, decor: &Decor<'_>) {
         let metrics = style.metrics;
         let palette = style.palette;
+        if !self.heading.title.is_empty() {
+            painter.text_in(
+                metrics.title_band(rect),
+                &self.heading.title,
+                TextStyle::new(metrics.title, palette.text_primary),
+                Align::Center,
+            );
+        }
         let label = TextStyle::new(metrics.label, palette.text_tertiary);
         let band = metrics.label_band(rect);
         painter.text_in(band, &self.heading.y, label, Align::Center);
@@ -114,8 +139,12 @@ impl Comparison {
             .pointer
             .and_then(|pointer| group_at(data, self.categories.len(), pointer));
         let width = (0.44 * slot_width(data, self.categories.len())).clamp(6.0, 34.0);
-        let cold = TextStyle::new(metrics.caption, palette.text_tertiary).truncating();
-        let hot = TextStyle::new(metrics.caption, palette.text_primary).truncating();
+        let cold = TextStyle::new(metrics.caption, palette.text_tertiary)
+            .aligned(Align::Center)
+            .truncating();
+        let hot = TextStyle::new(metrics.caption, palette.text_primary)
+            .aligned(Align::Center)
+            .truncating();
         let series = self.series();
         for (index, category) in self.categories.iter().enumerate() {
             let centre = group_centre(data, index, self.categories.len());
@@ -141,7 +170,7 @@ impl Comparison {
                         width,
                         frame: data,
                     },
-                    hovered == Some(index),
+                    true,
                 );
             }
             painter.text_in(

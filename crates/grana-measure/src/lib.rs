@@ -7,6 +7,7 @@ mod correlation;
 pub mod csv;
 mod filter;
 mod lasso;
+mod mask;
 mod math;
 mod metric;
 mod pair;
@@ -30,12 +31,13 @@ pub use coloc::{
 pub use column::{Column, Unit};
 pub use filter::Filter;
 pub use lasso::Lasso;
+pub use mask::Mask;
 pub use math::student_two_sided;
 pub use metric::{Measurement, Statistic, TrackMeasurement};
 pub use pair::PairExport;
 pub use plot::{
-    DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries, HISTOGRAM_BINS, Histogram,
-    MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
+    DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries, Histogram, MeasureView,
+    Plot, PlotAxis, Scatter, Summary, Trend, TrendPoint,
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;
