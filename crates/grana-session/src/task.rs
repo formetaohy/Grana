@@ -16,7 +16,7 @@ impl<T: Send + 'static> Task<T> {
         let (sender, events) = Pipe::new(CAPACITY);
         let job = Executor::shared().submit(move |cancel| {
             let mut sink = |event: T| {
-                let _ = sender.send(event);
+                sender.send_until(event, || cancel.cancelled());
             };
             work(cancel.flag(), &mut sink);
         });

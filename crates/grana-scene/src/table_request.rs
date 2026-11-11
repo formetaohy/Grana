@@ -12,26 +12,19 @@ use crate::scene::Scene;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureKey {
     set: ObjectSetId,
-    revision: Option<u64>,
+    revision: u64,
     group: Group,
     aggregate: Aggregate,
 }
 
 impl MeasureKey {
-    pub fn set(self) -> ObjectSetId {
-        self.set
-    }
-
-    pub fn revision(self) -> Option<u64> {
-        self.revision
-    }
-
-    pub fn group(self) -> Group {
-        self.group
-    }
-
-    pub fn aggregate(self) -> Aggregate {
-        self.aggregate
+    pub fn of(scene: &Scene, set: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Self> {
+        Some(Self {
+            set,
+            revision: scene.table_revision(set)?,
+            group,
+            aggregate,
+        })
     }
 }
 
@@ -110,12 +103,7 @@ impl TableRequest {
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         Some(Self {
-            key: MeasureKey {
-                set: id,
-                revision: scene.objects.table_revision(id),
-                group,
-                aggregate,
-            },
+            key: MeasureKey::of(scene, id, group, aggregate)?,
             rows,
             tracks: set.tracks().map(|layer| layer.set().clone()),
             channels,

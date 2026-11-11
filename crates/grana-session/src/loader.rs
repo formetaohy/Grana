@@ -12,6 +12,7 @@ const ATTEMPTS: u32 = 3;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 const CAPACITY: usize = 16;
 const READ_PRIORITY: u64 = 1;
+const READ_WORKERS: usize = 4;
 
 pub struct Opened {
     pub name: String,
@@ -44,6 +45,7 @@ pub enum Event {
 pub struct Loader {
     events: Pipe<Event>,
     sender: Sender<Event>,
+    reader: Executor,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
     channels: Arc<RwLock<Option<Arc<Channels>>>>,
@@ -78,6 +80,7 @@ impl Loader {
             Self {
                 events,
                 sender,
+                reader: Executor::new(READ_WORKERS),
                 time: Arc::new(AtomicU32::new(0)),
                 drift: Arc::new(RwLock::new(Drift::default())),
                 channels: Arc::new(RwLock::new(Some(channels))),
@@ -112,11 +115,12 @@ impl Loader {
         let drift = Arc::new(RwLock::new(Drift::default()));
         let channels = Arc::new(RwLock::new(None));
         let closed = Arc::new(AtomicBool::new(false));
+        let reader = Executor::new(READ_WORKERS);
         let opening = source.clone();
         let opening_sender = sender.clone();
         let opening_channels = Arc::clone(&channels);
         let opening_closed = Arc::clone(&closed);
-        Executor::shared().submit_ordered(READ_PRIORITY, move |cancel| {
+        reader.submit_ordered(READ_PRIORITY, move |cancel| {
             open(
                 opening,
                 remote,
@@ -129,6 +133,7 @@ impl Loader {
         Self {
             events,
             sender,
+            reader,
             time,
             drift,
             channels,
@@ -149,7 +154,6 @@ impl Loader {
         if self.closed.load(AtomicOrdering::Relaxed) {
             return false;
         }
-        let executor = Executor::shared();
         for request in requests.iter().rev() {
             let request = *request;
             let priority = self.order.fetch_add(1, AtomicOrdering::Relaxed);
@@ -158,7 +162,7 @@ impl Loader {
             let drift = Arc::clone(&self.drift);
             let closed = Arc::clone(&self.closed);
             let events = self.sender.clone();
-            executor.submit_ordered(priority, move |cancel| {
+            self.reader.submit_ordered(priority, move |cancel| {
                 read(request, &channels, &time, &drift, &closed, cancel, &events);
             });
         }
@@ -216,8 +220,9 @@ fn open(
     cancel: &Cancel,
     sender: &Sender<Event>,
 ) {
+    let stopped = || closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
     let fail = |detail: String| {
-        let _ = sender.send(Event::Failed(detail));
+        sender.send_until(Event::Failed(detail), stopped);
     };
     let plate = grana_image::plate(&source).ok().flatten();
     let source = match grana_image::resolve_series(&source) {
@@ -277,7 +282,7 @@ fn open(
     }
     let reader = Arc::new(Channels::stored(Arc::new(reader)));
     *channels.write().unwrap_or_else(|error| error.into_inner()) = Some(reader);
-    let _ = sender.send(opened);
+    sender.send_until(opened, stopped);
 }
 
 fn read(
@@ -289,7 +294,8 @@ fn read(
     cancel: &Cancel,
     events: &Sender<Event>,
 ) {
-    if closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() {
+    let stopped = || closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
+    if stopped() {
         return;
     }
     if request.time < time.load(AtomicOrdering::Relaxed) {
@@ -307,19 +313,22 @@ fn read(
         return;
     };
     for attempt in 1..=ATTEMPTS {
-        if closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() {
+        if stopped() {
             return;
         }
         match channels.read_brick(request.time, request.level, request.coord, shift) {
             Ok(data) => {
-                let _ = events.send(Event::Brick { request, data });
+                events.send_until(Event::Brick { request, data }, stopped);
                 return;
             }
             Err(detail) if attempt == ATTEMPTS => {
-                let _ = events.send(Event::ReadFailed {
-                    request,
-                    detail: detail.to_string(),
-                });
+                events.send_until(
+                    Event::ReadFailed {
+                        request,
+                        detail: detail.to_string(),
+                    },
+                    stopped,
+                );
             }
             Err(_) => std::thread::sleep(RETRY_DELAY),
         }

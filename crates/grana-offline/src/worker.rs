@@ -69,8 +69,9 @@ impl Worker {
 }
 
 fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
+    let stopped = || cancel.cancelled();
     let finish = |outcome: Outcome| {
-        let _ = sender.send(Event::Finished { id, outcome });
+        sender.send_until(Event::Finished { id, outcome }, stopped);
     };
     if cancel.cancelled() {
         return finish(Outcome::Cancelled);
@@ -80,7 +81,7 @@ fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
         Err(detail) => return finish(Outcome::Failed { detail }),
     };
     let outcome = context.run(task, cancel.flag(), &mut |frame, total| {
-        let _ = sender.send(Event::Progress { id, frame, total });
+        sender.send_until(Event::Progress { id, frame, total }, stopped);
     });
     finish(outcome);
 }

@@ -15,7 +15,7 @@ use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
-use crate::object_set::{ObjectSetId, Visibility};
+use crate::object_set::ObjectSetId;
 use crate::provenance::Provenance;
 use crate::revision::Revision;
 use crate::scene::{Item, Scene, Selection};
@@ -99,7 +99,6 @@ pub struct SetState {
     pub classifier: Option<grana_measure::ClassifierState>,
     pub object_coloc: Option<ObjectColoc>,
     pub label_export: Option<LabelExport>,
-    pub visibility: Visibility,
     pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,

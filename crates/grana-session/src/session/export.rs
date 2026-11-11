@@ -1,12 +1,15 @@
 use super::*;
 
-use grana_interop::Crate;
-use grana_measure::Aggregate;
+use grana_measure::{Aggregate, Group};
 use grana_mesh::Format as MeshFormat;
-use grana_scene::Trace;
+use grana_scene::{TableRequest, Trace};
 
 impl Session {
     pub(super) fn export_provenance(&mut self) {
+        if self.writing() {
+            self.message = Some(Message::error("an export is already running"));
+            return;
+        }
         if self.scene.is_none() {
             self.message = Some(Message::info(
                 "open a dataset before exporting its provenance",
@@ -26,84 +29,76 @@ impl Session {
         else {
             return;
         };
-        self.message = match self.write_crate(&protocol, &root) {
-            Ok(path) => Some(Message::info(format!(
-                "the provenance crate is at {}",
-                path.display()
-            ))),
-            Err(detail) => Some(Message::error(detail)),
+        let Some(scene) = self.scene.as_ref() else {
+            return;
         };
-    }
-
-    fn write_crate(&self, protocol: &Protocol, root: &Path) -> Result<PathBuf, String> {
-        let scene = self
-            .scene
-            .as_ref()
-            .ok_or_else(|| "the crate needs an open dataset".to_string())?;
-        let protocol_path = root.join("protocol.json");
-        protocol
-            .write(&protocol_path)
-            .map_err(|error| error.to_string())?;
-        let mut record = Crate::new(
-            scene.dataset.name(),
-            "The analysis of a microscopy dataset",
-            "Grana",
-            env!("CARGO_PKG_VERSION"),
-        );
-        if let Some(fingerprint) = self.fingerprint {
-            record.fingerprint(&fingerprint.hex(), grana_image::FINGERPRINT_COVERAGE);
-        }
-        if let Some(path) = self.source.as_ref().and_then(|loader| {
-            let source = loader.source();
-            source.path().map(Path::to_path_buf)
-        }) {
-            record.source(&path);
-        }
-        record.part(
-            "protocol.json",
-            "protocol.json",
-            "application/json",
-            "the protocol that reproduces the analysis",
-        );
+        let mut sets = Vec::new();
         for set in scene.objects.iter() {
             if set.provenance().is_attached() {
                 continue;
             }
-            let Some(table) = scene.table(set.id(), Group::Object, Aggregate::MEAN) else {
+            let Some(table) = TableRequest::new(scene, set.id(), Group::Object, Aggregate::MEAN)
+            else {
                 continue;
             };
-            let rows = (0..table.rows()).collect::<Vec<_>>();
-            let file = format!(
-                "measurements/{}-objects.csv",
-                crate::slug(set.key().as_str())
-            );
-            let path = root.join(&file);
-            if let Some(folder) = path.parent() {
-                std::fs::create_dir_all(folder)
-                    .map_err(|error| format!("failed to create {}: {error}", folder.display()))?;
-            }
-            std::fs::write(&path, table.csv(&rows))
-                .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-            let trace = Trace::of(set, self.fingerprint);
-            record.part(
-                &file,
-                &format!("{}-objects.csv", crate::slug(set.key().as_str())),
-                "text/csv",
-                &format!("the objects of {} at every frame", set.name()),
-            );
-            record.action(
-                &format!("#create-{}", crate::slug(set.key().as_str())),
-                &format!("{} of {}", trace.algorithm().title(), set.name()),
-                &format!(
-                    "{} v{} over {} objects",
-                    trace.algorithm().title(),
-                    trace.version(),
-                    trace.objects()
-                ),
-                &[file, "protocol.json".to_string()],
-            );
+            sets.push(provenance::Set {
+                key: crate::slug(set.key().as_str()),
+                label: set.name().to_string(),
+                trace: Trace::of(set, self.fingerprint),
+                table,
+            });
         }
-        record.write(root).map_err(|error| error.to_string())
+        let name = scene.dataset.name().to_string();
+        let source = self.source.as_ref().and_then(|loader| {
+            let source = loader.source();
+            source.path().map(Path::to_path_buf)
+        });
+        self.message = None;
+        self.provenance = Some(provenance::Export::start(provenance::Request {
+            root,
+            name,
+            fingerprint: self.fingerprint,
+            source,
+            protocol,
+            sets,
+        }));
+    }
+
+    pub(super) fn poll_provenance(&mut self) -> bool {
+        let Some(mut export) = self.provenance.take() else {
+            return false;
+        };
+        let mut repaint = false;
+        let mut keep = true;
+        loop {
+            match export.poll() {
+                Poll::Event(provenance::Event::Progress(..)) => repaint = true,
+                Poll::Event(provenance::Event::Done(outcome)) => {
+                    keep = false;
+                    repaint = true;
+                    self.message = Some(match outcome {
+                        Ok(path) => {
+                            Message::info(format!("the provenance crate is at {}", path.display()))
+                        }
+                        Err(detail) => Message::error(detail),
+                    });
+                    break;
+                }
+                Poll::Empty => break,
+                Poll::Closed => {
+                    keep = false;
+                    repaint = true;
+                    self.message = Some(Message::error(
+                        "the provenance worker stopped before the crate was written",
+                    ));
+                    break;
+                }
+            }
+        }
+        if keep {
+            self.provenance = Some(export);
+        }
+        repaint
     }
 
     pub(super) fn export_coloc(&mut self) {
@@ -144,16 +139,25 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
+        self.measure_job = None;
+        self.measure.synchronize(scene);
         let Some(set) = self.measure.set() else {
+            self.message = Some(Message::info(
+                "choose an object set before exporting statistics",
+            ));
             return;
         };
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some(csv) = self.measure.csv() else {
+        let Some(csv) = self.measure.csv(scene) else {
+            self.message = Some(Message::error(
+                "the statistics of the chosen object set hold no table to export",
+            ));
             return;
         };
         let channel = scene.dataset.channels()[object.channel()].name();
+        let name = object.name();
         let group = match self.measure.group() {
             Group::Object => "objects",
             Group::Track => "tracks",
@@ -163,9 +167,9 @@ impl Session {
             "{}-{}-{}-{group}.csv",
             crate::slug(scene.dataset.name()),
             crate::slug(channel),
-            crate::slug(object.name())
+            crate::slug(name)
         );
-        let title = format!("Export {} statistics", object.name());
+        let title = format!("Export {name} statistics");
         let Some(path) = rfd::FileDialog::new()
             .set_title(title)
             .set_file_name(file_name)

@@ -17,7 +17,6 @@ use grana_scene::{
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
     MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
     SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
-    Visibility,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 
@@ -448,7 +447,6 @@ impl Encode for SetState {
         self.classifier.encode(writer);
         self.object_coloc.encode(writer);
         self.label_export.encode(writer);
-        self.visibility.encode(writer);
         self.seeds.encode(writer);
         self.frames.encode(writer);
         self.relations.encode(writer);
@@ -750,22 +748,6 @@ impl Encode for TrackNode {
         writer.count(self.object());
         for value in self.centroid() {
             writer.f32(value);
-        }
-    }
-}
-
-impl Encode for Visibility {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        match self {
-            Self::All => writer.u8(0),
-            Self::Object(frames) => {
-                writer.u8(1);
-                frames.encode(writer);
-            }
-            Self::Track(tracks) => {
-                writer.u8(2);
-                tracks.encode(writer);
-            }
         }
     }
 }

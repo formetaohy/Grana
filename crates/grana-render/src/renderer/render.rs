@@ -1,4 +1,4 @@
-use super::signature::{channel_style, digest, hash_camera, shadow_bounds};
+use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
 use super::*;
 
 const AMBIENT_REACH: f32 = 40.0;
@@ -186,6 +186,7 @@ impl Renderer {
         }
         let levels = Levels { ladder, capacity };
         *volume_level = Some(base);
+        let channel_key = channel_style(scene.channels);
         let content = {
             let mut hasher = DefaultHasher::new();
             scene.revision.hash(&mut hasher);
@@ -202,7 +203,7 @@ impl Renderer {
             *epoch,
             Content {
                 content: stamp,
-                style: channel_style(scene.channels),
+                style: channel_key,
             },
             Mode { prefetch, assured },
             time,
@@ -242,6 +243,7 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
+        let shadow_keys = ShadowKeys::of(content, channel_key, ladder, &space);
         let tables = ladder
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
@@ -492,7 +494,6 @@ impl Renderer {
                 }
             }
             scene_table.write_shadow_frame(queue, data);
-            let channel_key = channel_style(scene.channels);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
                     scene: scene_table.shadow_group(),
@@ -500,23 +501,13 @@ impl Renderer {
                     atlas: atlas.group(),
                 };
                 if !slice && scene.shading.shadows > 0.0 {
-                    let object = digest(&[content, space.digest()]);
+                    let object = shadow_keys.objects();
                     if *object_key != Some(object) {
                         *object_key = Some(object);
                         meshes.draw_shadow(&mut encoder, shadow.objects());
                         markers.draw_shadow(&mut encoder, shadow.objects(), scene_table.group());
                     }
-                    shadow.encode_tau(
-                        &mut encoder,
-                        groups,
-                        digest(&[
-                            content,
-                            channel_key,
-                            ladder.base as u64,
-                            ladder.count as u64,
-                            space.digest(),
-                        ]),
-                    );
+                    shadow.encode_tau(&mut encoder, groups, shadow_keys.volume());
                 }
             }
             crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
@@ -758,15 +749,7 @@ impl Renderer {
             }
             if volume_visible && !slice {
                 if let (Some(bake), Some(occupancy)) = (bake.as_ref(), occupancy.as_mut()) {
-                    let material = digest(&[
-                        content,
-                        channel_style(scene.channels),
-                        space.digest(),
-                        u64::from(scene.shading.ambient.to_bits()),
-                        u64::from(scene.shading.diffuse.to_bits()),
-                        u64::from(scene.shading.shadows.to_bits()),
-                        object_key.unwrap_or(u64::MAX),
-                    ]);
+                    let material = shadow_keys.baked(scene.shading);
                     let levels = ladder.levels().collect::<Vec<usize>>();
                     let entries = baked.collect(material, atlas, &levels, time, occupancy, queue);
                     if !entries.is_empty() {

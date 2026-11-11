@@ -968,7 +968,6 @@ impl ObjectSet {
             classifier: self.classifier.as_ref().map(Classifier::state),
             object_coloc: self.object_coloc.clone(),
             label_export: self.label_export.clone(),
-            visibility: self.visibility.clone(),
             seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
             relations: self
@@ -1010,7 +1009,6 @@ impl ObjectSet {
             classifier,
             object_coloc,
             label_export,
-            visibility,
             seeds,
             frames,
             relations,
@@ -1172,7 +1170,6 @@ impl ObjectSet {
             set.tracks = Some(TrackLayer::shared(tracks, thickness, stamps.mint()));
         }
         set.restore_coloring(object_color, track_color);
-        set.set_visibility(visibility);
         set.document = document;
         set
     }

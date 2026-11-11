@@ -1,4 +1,7 @@
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::time::Duration;
+
+const BACKOFF: Duration = Duration::from_micros(250);
 
 pub struct Sender<T> {
     inner: SyncSender<T>,
@@ -15,6 +18,22 @@ impl<T> Clone for Sender<T> {
 impl<T> Sender<T> {
     pub fn send(&self, value: T) -> bool {
         self.inner.send(value).is_ok()
+    }
+
+    pub fn send_until(&self, mut value: T, mut stop: impl FnMut() -> bool) -> bool {
+        loop {
+            match self.inner.try_send(value) {
+                Ok(()) => return true,
+                Err(TrySendError::Full(held)) => {
+                    if stop() {
+                        return false;
+                    }
+                    value = held;
+                    std::thread::sleep(BACKOFF);
+                }
+                Err(TrySendError::Disconnected(_)) => return false,
+            }
+        }
     }
 }
 

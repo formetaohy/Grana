@@ -638,8 +638,8 @@ impl MarkerPasses {
         });
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.opaque_group, &[]);
-        pass.draw_indirect(self.args.opaque.buffer(), 0);
+        pass.set_bind_group(1, &self.shadow_group, &[]);
+        pass.draw(0..6, 0..self.count);
     }
 
     pub fn draw_pick_volume<'a>(

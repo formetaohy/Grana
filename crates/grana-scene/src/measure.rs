@@ -43,7 +43,7 @@ pub struct Measure {
     view: MeasureView,
     axes: [usize; 2],
     plot: Option<Plot>,
-    revision: Option<(ObjectSetId, u64)>,
+    origin: Option<MeasureKey>,
     pending: Option<MeasureKey>,
     time: u32,
     dirty: bool,
@@ -74,7 +74,7 @@ impl Measure {
             view: MeasureView::Table,
             axes: [0; 2],
             plot: None,
-            revision: None,
+            origin: None,
             pending: None,
             time: 0,
             dirty: false,
@@ -400,7 +400,7 @@ impl Measure {
         self.view = MeasureView::Table;
         self.axes = [0; 2];
         self.plot = None;
-        self.revision = None;
+        self.origin = None;
         self.pending = None;
         self.time = 0;
         self.dirty = true;
@@ -410,7 +410,7 @@ impl Measure {
         let id = self.set?;
         if scene.objects.get(id).is_none() {
             self.set = None;
-            self.revision = None;
+            self.origin = None;
             self.pending = None;
             self.table = None;
             self.plot = None;
@@ -425,7 +425,7 @@ impl Measure {
         let time = scene.time();
         let moved = self.time != time;
         self.time = time;
-        if !busy && self.revision != scene.table_revision(id).map(|revision| (id, revision)) {
+        if !busy && !self.settled(scene) {
             let request = TableRequest::new(scene, id, self.group, self.aggregate)?;
             self.pending = Some(request.key());
             return Some(request);
@@ -441,8 +441,31 @@ impl Measure {
             return;
         }
         self.pending = None;
-        self.revision = key.revision().map(|revision| (key.set(), revision));
+        self.origin = Some(key);
         self.adopt(table);
+    }
+
+    pub fn settled(&self, scene: &Scene) -> bool {
+        let Some(id) = self.set else {
+            return false;
+        };
+        self.origin.is_some_and(|origin| {
+            Some(origin) == MeasureKey::of(scene, id, self.group, self.aggregate)
+        })
+    }
+
+    pub fn synchronize(&mut self, scene: &Scene) {
+        if self.settled(scene) {
+            return;
+        }
+        self.rebuild(scene);
+    }
+
+    pub fn current(&self, scene: &Scene) -> Option<&Table> {
+        if !self.settled(scene) {
+            return None;
+        }
+        self.table.as_ref()
     }
 
     pub fn apply(&mut self, scene: &mut Scene) {
@@ -450,27 +473,29 @@ impl Measure {
         let Some(id) = self.set else {
             return;
         };
-        let Some(object) = scene.objects.get_mut(id) else {
+        let Some(visibility) = self.restriction(scene, id) else {
             return;
         };
+        if let Some(object) = scene.objects.get_mut(id) {
+            object.set_visibility(visibility);
+        }
+    }
+
+    fn restriction(&self, scene: &Scene, id: ObjectSetId) -> Option<Visibility> {
+        let object = scene.objects.get(id)?;
         let roi = self.roi.filter(|_| self.group == Group::Object);
         if !self.visibility || (self.filters.is_empty() && self.lasso.is_none() && roi.is_none()) {
-            object.set_visibility(Visibility::All);
-            return;
+            return Some(Visibility::All);
         }
-        let Some(table) = self.table.as_ref() else {
-            return;
-        };
+        let table = self.current(scene)?;
         if table.rows() == 0 {
-            object.set_visibility(Visibility::All);
-            return;
+            return Some(Visibility::All);
         }
-        let rows = table.matching(&self.filters, self.lasso.as_ref(), None);
-        let mut rows = rows;
+        let mut rows = table.matching(&self.filters, self.lasso.as_ref(), None);
         if let Some(roi) = roi {
             rows.retain(|row| holds_row(roi, table, *row));
         }
-        let visibility = match self.group {
+        Some(match self.group {
             Group::Object => {
                 let mut frames = (0..object.frame_count())
                     .map(|time| {
@@ -501,12 +526,11 @@ impl Measure {
                 Visibility::Track(Arc::new(mask))
             }
             Group::Timepoint => Visibility::All,
-        };
-        object.set_visibility(visibility);
+        })
     }
 
-    pub fn csv(&self) -> Option<String> {
-        Some(self.table.as_ref()?.csv(&self.rows))
+    pub fn csv(&self, scene: &Scene) -> Option<String> {
+        Some(self.current(scene)?.csv(&self.rows))
     }
 
     pub fn state(&self) -> MeasureState {
@@ -555,7 +579,7 @@ impl Measure {
         self.view = view;
         self.axes = axes;
         self.plot = None;
-        self.revision = None;
+        self.origin = None;
         self.dirty = true;
         let Some(set) = set else {
             assert!(
@@ -640,13 +664,12 @@ impl Measure {
     pub fn rebuild(&mut self, scene: &Scene) {
         self.dirty = true;
         self.pending = None;
-        self.table = None;
         self.plot = None;
         self.rows.clear();
         self.total = 0;
-        self.visible.clear();
+        self.origin = None;
         let Some(id) = self.set else {
-            self.revision = None;
+            self.table = None;
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
@@ -654,38 +677,71 @@ impl Measure {
         };
         if scene.objects.get(id).is_none() {
             self.set = None;
-            self.revision = None;
+            self.table = None;
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
             return;
         }
         let Some(request) = TableRequest::new(scene, id, self.group, self.aggregate) else {
-            self.revision = None;
+            self.table = None;
             return;
         };
-        let key = request.key();
-        self.revision = key.revision().map(|revision| (key.set(), revision));
+        self.origin = Some(request.key());
         self.adopt(request.build());
     }
 
     fn adopt(&mut self, table: Option<Table>) {
         self.dirty = true;
-        self.table = None;
         self.plot = None;
         self.rows.clear();
         self.total = 0;
-        self.visible.clear();
+        let previous = self.table.take().map(|table| {
+            let keys = column_keys(&table);
+            let visible = std::mem::take(&mut self.visible);
+            (keys, visible)
+        });
         let Some(table) = table else {
+            self.table = None;
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
             return;
         };
+        let keys = column_keys(&table);
+        let columns = keys.len();
         self.visible = default_visibility(&table);
-        self.axes = readable_axes(&table, self.axes);
-        let columns = table.columns().len();
+        if let Some((previous, flags)) = previous {
+            for (index, key) in previous.iter().enumerate() {
+                if let Some(current) = keys.iter().position(|candidate| candidate == key)
+                    && let Some(flag) = flags.get(index)
+                {
+                    self.visible[current] = *flag;
+                }
+            }
+            self.filters
+                .retain_mut(|filter| match remap(&previous, &keys, filter.column()) {
+                    Some(column) => {
+                        *filter = Filter::new(column, filter.minimum(), filter.maximum());
+                        true
+                    }
+                    None => false,
+                });
+            self.sort = self.sort.and_then(|(column, descending)| {
+                remap(&previous, &keys, column).map(|at| (at, descending))
+            });
+            self.lasso = self.lasso.take().and_then(|lasso| {
+                let x = remap(&previous, &keys, lasso.x())?;
+                let y = remap(&previous, &keys, lasso.y())?;
+                Lasso::new(x, y, lasso.points().to_vec())
+            });
+            self.axes = [
+                remap(&previous, &keys, self.axes[0]).unwrap_or(self.axes[0]),
+                remap(&previous, &keys, self.axes[1]).unwrap_or(self.axes[1]),
+            ];
+        }
         self.filters.retain(|filter| filter.column() < columns);
+        self.axes = readable_axes(&table, self.axes);
         if self
             .lasso
             .as_ref()
@@ -748,6 +804,19 @@ fn holds_row(region: Region, table: &Table, row: usize) -> bool {
     table
         .position(row)
         .is_none_or(|position| region.contains(Vec3::from(position)))
+}
+
+fn column_keys(table: &Table) -> Vec<String> {
+    table
+        .columns()
+        .iter()
+        .map(|column| column.key().to_string())
+        .collect()
+}
+
+fn remap(previous: &[String], current: &[String], column: usize) -> Option<usize> {
+    let key = previous.get(column)?;
+    current.iter().position(|candidate| candidate == key)
 }
 
 fn readable_axes(table: &Table, axes: [usize; 2]) -> [usize; 2] {

@@ -28,7 +28,7 @@ use grana_scene::{
     LabelExport, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
     ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
     RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState, SmoothSpec,
-    SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
 
@@ -658,7 +658,6 @@ impl Decode for SetState {
         let classifier = Option::<ClassifierState>::decode(reader)?;
         let object_coloc = Option::<ObjectColoc>::decode(reader)?;
         let label_export = Option::<LabelExport>::decode(reader)?;
-        let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
         let state = Self {
@@ -682,7 +681,6 @@ impl Decode for SetState {
             classifier,
             object_coloc,
             label_export,
-            visibility,
             seeds,
             frames,
             relations: Vec::<RelationState>::decode(reader)?,
@@ -1211,17 +1209,6 @@ impl Decode for TrackNode {
             *value = finite(reader.f32()?)?;
         }
         Ok(Self::new(time, object, centroid))
-    }
-}
-
-impl Decode for Visibility {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        match reader.u8()? {
-            0 => Ok(Self::All),
-            1 => Ok(Self::Object(Arc::<Vec<Vec<bool>>>::decode(reader)?)),
-            2 => Ok(Self::Track(Arc::<Vec<bool>>::decode(reader)?)),
-            _ => Err(FAULT_SHAPE),
-        }
     }
 }
 

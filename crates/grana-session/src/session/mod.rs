@@ -14,6 +14,7 @@ mod montage;
 mod open;
 mod plate;
 mod preview;
+mod provenance;
 mod recover;
 mod replay;
 mod scene_import;
@@ -142,6 +143,7 @@ pub struct Session {
     history: History,
     export: Export,
     labels: Option<label::Labels>,
+    provenance: Option<provenance::Export>,
     labels_queue: Vec<ObjectSetId>,
     dataset_export: Option<dataset::DatasetExport>,
     label_images: Vec<String>,
@@ -222,6 +224,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             labels: None,
+            provenance: None,
             labels_queue: Vec::new(),
             dataset_export: None,
             label_images: Vec::new(),
@@ -537,6 +540,7 @@ impl Session {
         repaint |= self.poll_document();
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
+        repaint |= self.poll_provenance();
         repaint |= self.poll_labels();
         repaint |= self.poll_plate();
         repaint |= self.poll_dataset();
@@ -560,7 +564,10 @@ impl Session {
     }
 
     pub fn writing(&self) -> bool {
-        self.labels.is_some() || self.dataset_export.is_some() || self.montage.is_some()
+        self.labels.is_some()
+            || self.provenance.is_some()
+            || self.dataset_export.is_some()
+            || self.montage.is_some()
     }
     pub fn analysing(&self) -> bool {
         !self.analysis.is_empty() || self.writing()
@@ -571,6 +578,13 @@ impl Session {
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             return Some((labels.label(), labels.progress().0, labels.progress().1));
+        }
+        if let Some(provenance) = self.provenance.as_ref() {
+            return Some((
+                "Exporting the provenance crate",
+                provenance.progress().0,
+                provenance.progress().1,
+            ));
         }
         if let Some(montage) = self.montage.as_ref() {
             return Some(("Plate montage", montage.progress().0, montage.progress().1));
