@@ -91,8 +91,13 @@ impl Comparison {
     }
 
     pub fn paint(&self, painter: &mut Painter, rect: Rect, style: &Style, decor: &Decor<'_>) {
+        let style = Style {
+            language: self.heading.language,
+            ..*style
+        };
         let metrics = style.metrics;
         let palette = style.palette;
+        let style = &style;
         if !self.heading.title.is_empty() {
             painter.text_in(
                 metrics.title_band(rect),
@@ -120,12 +125,14 @@ impl Comparison {
         }
         let frame = metrics.frame(rect);
         if self.categories.is_empty() {
-            painter.text_in(
-                frame,
-                "No groups to compare",
-                distribution::empty_style(style),
-                Align::Center,
-            );
+            if let Some(empty) = &self.heading.empty {
+                painter.text_in(
+                    frame,
+                    empty,
+                    distribution::empty_style(style),
+                    Align::Center,
+                );
+            }
             return;
         }
         let brackets = self.notes.len() as f32 * BRACKET_ROW + BRACKET_TOP;

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use glam::Vec2;
 use grana_glass::{Animated, ContainerId, GlassId, Scene as GlassScene};
+use grana_i18n::Language;
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
@@ -50,6 +51,7 @@ pub struct Ui<A = ()> {
     pub(crate) text: Text,
     pub(crate) images: ImageAtlas,
     pub(crate) theme: Theme,
+    pub(crate) language: Language,
     pub(crate) input: Input,
     pub(crate) tree: Tree<A>,
     pub(crate) animations: HashMap<u64, Animated>,
@@ -102,6 +104,7 @@ impl<A: Clone> Ui<A> {
             text: Text::new(device),
             images: ImageAtlas::new(device),
             theme: Theme::dark(),
+            language: Language::English,
             input: Input::new(),
             tree: Tree::new(),
             animations: HashMap::new(),
@@ -154,6 +157,18 @@ impl<A: Clone> Ui<A> {
 
     pub fn theme_mut(&mut self) -> &mut Theme {
         &mut self.theme
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
+    }
+
+    pub fn set_language(&mut self, language: Language) {
+        if self.language == language {
+            return;
+        }
+        self.language = language;
+        self.invalidate();
     }
 
     pub fn input_mut(&mut self) -> &mut Input {
@@ -467,6 +482,7 @@ impl<A: Clone> Ui<A> {
         BuildContext {
             text: &mut self.text,
             theme: &self.theme,
+            language: self.language,
             tree: &self.tree,
             animations: &mut self.animations,
             animating: &mut self.animating,
@@ -507,6 +523,7 @@ pub(crate) struct Skin {
 pub struct BuildContext<'a, A> {
     text: &'a mut Text,
     theme: &'a Theme,
+    language: Language,
     tree: &'a Tree<A>,
     animations: &'a mut HashMap<u64, Animated>,
     animating: &'a mut bool,
@@ -520,6 +537,10 @@ pub struct BuildContext<'a, A> {
 impl<A> BuildContext<'_, A> {
     pub fn theme(&self) -> &Theme {
         self.theme
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
     }
 
     pub fn size(&self) -> Vec2 {

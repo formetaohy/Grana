@@ -51,7 +51,9 @@ fn mask_bar<'a>(
     let Some(set) = state.scene.objects.get(brush.set) else {
         return Vec::new();
     };
-    let names = crate::state::MaskBrushTool::ALL.map(crate::state::MaskBrushTool::name);
+    let language = ctx.language();
+    let names = crate::state::MaskBrushTool::ALL
+        .map(|tool| crate::state::MaskBrushTool::name(tool, language));
     let tools = crate::view::segmented(
         ctx,
         "mask.tool",
@@ -59,13 +61,18 @@ fn mask_bar<'a>(
         brush.tool.index(),
         Message::SetMaskTool,
     );
-    let title = crate::view::card_title(ctx, Icon::Pencil, "Paint Mask", Some(set.name()));
+    let title = crate::view::card_title(
+        ctx,
+        Icon::Pencil,
+        grana_i18n::annotation::paint_mask(language),
+        Some(set.name()),
+    );
     let mut rows = vec![title, tools];
     if brush.tool.wand() {
         rows.push(crate::view::slider_event(
             ctx,
             "mask.tolerance",
-            Some("Tolerance"),
+            Some(grana_i18n::annotation::tolerance(language)),
             brush.tolerance,
             0.0..=0.5,
             &format!("{:.02}", brush.tolerance),
@@ -75,7 +82,7 @@ fn mask_bar<'a>(
         rows.push(crate::view::slider_event(
             ctx,
             "mask.radius",
-            Some("Radius"),
+            Some(grana_i18n::annotation::radius(language)),
             brush.radius,
             0.1..=20.0,
             &format!("{:.2} µm", brush.radius),
@@ -84,14 +91,22 @@ fn mask_bar<'a>(
     }
     rows.push(
         grana_ui::row().gap(6.0).children([
-            crate::view::button(ctx, "Clear", grana_ui::Role::Control)
-                .named("mask.clear")
-                .press(Message::Command(grana_session::Command::ClearMask(
-                    brush.set,
-                ))),
-            crate::view::button(ctx, "Done", grana_ui::Role::Tinted)
-                .named("mask.done")
-                .press(Message::DisarmMask),
+            crate::view::button(
+                ctx,
+                grana_i18n::common::clear(language),
+                grana_ui::Role::Control,
+            )
+            .named("mask.clear")
+            .press(Message::Command(grana_session::Command::ClearMask(
+                brush.set,
+            ))),
+            crate::view::button(
+                ctx,
+                grana_i18n::common::done(language),
+                grana_ui::Role::Tinted,
+            )
+            .named("mask.done")
+            .press(Message::DisarmMask),
         ]),
     );
     let width = 240.0;
@@ -121,14 +136,15 @@ pub(crate) fn remote<'a>(
         return Vec::new();
     }
     let palette = ctx.theme().palette;
+    let language = ctx.language();
     let width = (stage.width() - 40.0).min(520.0);
     let title = crate::view::card_title(
         ctx,
         Icon::Globe,
-        "Open Remote OME-Zarr",
-        Some("HTTP range access"),
+        grana_i18n::annotation::open_remote(language),
+        Some(grana_i18n::annotation::http_range(language)),
     );
-    let tip = crate::view::caption(ctx, "Paste the https url of an OME-Zarr dataset or plate");
+    let tip = crate::view::caption(ctx, grana_i18n::annotation::remote_tip(language));
     let field = grana_ui::widget::text_field(
         "",
         TextStyle::new(ctx.theme().font(Level::Body), palette.text_primary),
@@ -139,7 +155,7 @@ pub(crate) fn remote<'a>(
     .editing(true)
     .on_commit(|text: &str| Message::OpenRemote(text.to_string()))
     .on_cancel(|| Message::CancelRemote);
-    let hint = crate::view::caption(ctx, "Return opens the dataset · Escape cancels");
+    let hint = crate::view::caption(ctx, grana_i18n::annotation::remote_hint(language));
     let sheet = grana_ui::column()
         .padding(Edges::all(18.0))
         .gap(8.0)
@@ -175,7 +191,11 @@ fn viewport<'a>(
 }
 
 fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message> {
-    let legends = overlay::legends(state.scene);
+    let mut legends = overlay::legends(state.scene);
+    let language = state.workspace.language;
+    for legend in &mut legends {
+        legend.title = crate::text::legend(language, &legend.title);
+    }
     let sliced = state.camera.slice().is_some();
     let labels = if sliced {
         Vec::new()
@@ -253,13 +273,14 @@ fn recording_chip<'a>(
         return Vec::new();
     };
     let origin = layout.content().shrink(STAGE_INSET).min;
+    let title = grana_i18n::annotation::recording(ctx.language(), frame, frames);
     vec![chip(
         ctx,
         "figure.recording",
         layout.viewport,
         origin,
         Icon::Record,
-        &format!("REC · frame {frame} of {frames}"),
+        &title,
         RECORD,
     )]
 }

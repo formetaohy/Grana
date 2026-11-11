@@ -1,0 +1,13 @@
+[package]
+name = "grana-i18n"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sys-locale = { workspace = true }
+
+[lints]
+workspace = true

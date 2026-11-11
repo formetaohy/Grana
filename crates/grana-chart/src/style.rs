@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_ui::{Level, Palette, Rect, Theme, TypeStyle};
 
 use crate::layout::Insets;
@@ -120,6 +121,7 @@ pub struct Style {
     pub palette: Palette,
     pub metrics: Metrics,
     pub distribution: DistributionStyle,
+    pub language: Language,
 }
 
 impl Style {
@@ -128,6 +130,7 @@ impl Style {
             palette: theme.palette,
             metrics: Metrics::card(theme),
             distribution,
+            language: Language::English,
         }
     }
 
@@ -136,6 +139,12 @@ impl Style {
             palette: theme.palette,
             metrics: Metrics::page(),
             distribution,
+            language: Language::English,
         }
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
     }
 }

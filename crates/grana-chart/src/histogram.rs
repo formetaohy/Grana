@@ -14,6 +14,7 @@ pub fn paint(
     histogram: &Histogram,
     style: &Style,
     decor: &Decor<'_>,
+    empty: Option<&str>,
 ) {
     let metrics = style.metrics;
     let palette = style.palette;
@@ -118,13 +119,10 @@ pub fn paint(
             palette.text_primary.with_alpha(0.12),
         );
     }
-    if histogram.peak() == 0 {
-        painter.text_in(
-            frame,
-            "No objects to plot",
-            empty_style(style),
-            grana_ui::Align::Center,
-        );
+    if histogram.peak() == 0
+        && let Some(empty) = empty
+    {
+        painter.text_in(frame, empty, empty_style(style), grana_ui::Align::Center);
     }
 }
 

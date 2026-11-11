@@ -67,11 +67,15 @@ pub enum AnnotationTool {
 impl AnnotationTool {
     pub const ALL: [Self; 3] = [Self::Point, Self::Distance, Self::Roi];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Point => "Point",
-            Self::Distance => "Distance",
-            Self::Roi => "Region",
+    pub fn name(self, language: grana_i18n::Language) -> &'static str {
+        let (english, chinese) = match self {
+            Self::Point => ("Point", "点"),
+            Self::Distance => ("Distance", "距离"),
+            Self::Roi => ("Region", "区域"),
+        };
+        match language {
+            grana_i18n::Language::English => english,
+            grana_i18n::Language::Chinese => chinese,
         }
     }
 
@@ -94,11 +98,15 @@ pub enum MaskBrushTool {
 impl MaskBrushTool {
     pub const ALL: [Self; 3] = [Self::Brush, Self::Erase, Self::Wand];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Brush => "Brush",
-            Self::Erase => "Erase",
-            Self::Wand => "Wand",
+    pub fn name(self, language: grana_i18n::Language) -> &'static str {
+        let (english, chinese) = match self {
+            Self::Brush => ("Brush", "画笔"),
+            Self::Erase => ("Erase", "橡皮擦"),
+            Self::Wand => ("Wand", "魔棒"),
+        };
+        match language {
+            grana_i18n::Language::English => english,
+            grana_i18n::Language::Chinese => chinese,
         }
     }
 
@@ -142,12 +150,16 @@ pub use grana_session::BatchMetric as ComparisonMetric;
 impl RelationMetric {
     pub const ALL: [Self; 4] = [Self::Contact, Self::Distance, Self::Overlap, Self::Center];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Contact => "Contact",
-            Self::Distance => "Distance",
-            Self::Overlap => "Overlap",
-            Self::Center => "Centre",
+    pub fn name(self, language: grana_i18n::Language) -> &'static str {
+        let (english, chinese) = match self {
+            Self::Contact => ("Contact", "接触"),
+            Self::Distance => ("Distance", "距离"),
+            Self::Overlap => ("Overlap", "重叠"),
+            Self::Center => ("Centre", "中心"),
+        };
+        match language {
+            grana_i18n::Language::English => english,
+            grana_i18n::Language::Chinese => chinese,
         }
     }
 
@@ -233,6 +245,7 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub palette: Option<Palette>,
     pub appearance: grana_ui::Appearance,
+    pub language: grana_i18n::Language,
     pub contrast: bool,
     pub reduce_transparency: bool,
     pub(crate) palette_actions: Vec<Message>,
@@ -276,6 +289,7 @@ impl Default for Workspace {
             comparison_open: None,
             palette: None,
             appearance: grana_ui::Appearance::System,
+            language: grana_i18n::Language::English,
             contrast: false,
             reduce_transparency: false,
             palette_actions: Vec::new(),

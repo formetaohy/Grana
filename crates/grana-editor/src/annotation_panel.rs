@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
@@ -31,12 +32,14 @@ fn tools_card<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let active = state.workspace.annotation_tool;
+    let placed = grana_i18n::annotation::placed(language, state.scene.annotations.len());
     let title = view::card_title(
         ctx,
         Icon::Target,
-        "Measure",
-        Some(&format!("{} placed", state.scene.annotations.len())),
+        grana_i18n::annotation::measure(language),
+        Some(&placed),
     );
     let mut row = Vec::new();
     for tool in AnnotationTool::ALL {
@@ -48,10 +51,10 @@ fn tools_card<'a>(
         .width(Length::Fill)
         .children(row);
     let detail = match active {
-        Some(AnnotationTool::Point) => "Click a surface to drop a measurement point.",
-        Some(AnnotationTool::Distance) => "Click two surfaces to measure their distance.",
-        Some(AnnotationTool::Roi) => "Click the volume to place the region of interest.",
-        None => "Choose a tool, then click the volume.",
+        Some(AnnotationTool::Point) => grana_i18n::annotation::click_point(language),
+        Some(AnnotationTool::Distance) => grana_i18n::annotation::click_distance(language),
+        Some(AnnotationTool::Roi) => grana_i18n::annotation::click_roi(language),
+        None => grana_i18n::annotation::choose_tool(language),
     };
     let caption = view::weak(ctx, detail);
     view::card(ctx, 8.0, vec![title, buttons, caption])
@@ -65,7 +68,7 @@ fn tool_button<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let font = theme.button_font();
-    let label = tool.name();
+    let label = tool.name(ctx.language());
     grana_ui::canvas(Length::Fixed(84.0), 30.0, move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
@@ -110,13 +113,19 @@ fn tool_button<'a>(
 
 fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let scene = state.scene;
-    let detail = format!("{} placed", scene.annotations.len());
-    let title = view::card_title(ctx, Icon::Grid, "Annotations", Some(&detail));
+    let language = ctx.language();
+    let detail = grana_i18n::annotation::placed(language, scene.annotations.len());
+    let title = view::card_title(
+        ctx,
+        Icon::Grid,
+        grana_i18n::annotation::annotations(language),
+        Some(&detail),
+    );
     let mut children = vec![title];
     if scene.annotations.is_empty() {
         children.push(view::weak(
             ctx,
-            "Nothing is measured yet. Points and distances stay with the project and the protocol.",
+            grana_i18n::annotation::nothing_measured(language),
         ));
         return view::card(ctx, 8.0, children);
     }
@@ -125,15 +134,25 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     }
     children.push(view::divider(ctx));
     let selected = scene.annotations.selected();
-    let remove = view::button_with(ctx, "Remove", Role::Quiet, Length::Fixed(132.0))
-        .named("annotation.remove.selected")
-        .press(match selected {
-            Some(index) => Message::Command(Command::RemoveAnnotation(index)),
-            None => Message::Noop,
-        });
-    let clear = view::button_with(ctx, "Remove All", Role::Quiet, Length::Fixed(132.0))
-        .named("annotation.clear")
-        .press(Message::Command(Command::ClearAnnotations));
+    let remove = view::button_with(
+        ctx,
+        grana_i18n::common::remove(language),
+        Role::Quiet,
+        Length::Fixed(132.0),
+    )
+    .named("annotation.remove.selected")
+    .press(match selected {
+        Some(index) => Message::Command(Command::RemoveAnnotation(index)),
+        None => Message::Noop,
+    });
+    let clear = view::button_with(
+        ctx,
+        grana_i18n::annotation::remove_all(language),
+        Role::Quiet,
+        Length::Fixed(132.0),
+    )
+    .named("annotation.clear")
+    .press(Message::Command(Command::ClearAnnotations));
     children.push(
         grana_ui::row()
             .gap(6.0)
@@ -151,6 +170,7 @@ fn row<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
+    let language = ctx.language();
     let annotation = state
         .scene
         .annotations
@@ -160,16 +180,17 @@ fn row<'a>(
     let visible = annotation.visible();
     let name = annotation.name().to_string();
     let kind = annotation.kind();
+    let placement = scope(state, language, annotation.frame());
     let detail = match kind.tag() {
-        AnnotationTag::Point => format!("point · {}", scope(state, annotation.frame())),
-        AnnotationTag::Distance => format!(
-            "distance · {} · {}",
-            grana_figure::value(
+        AnnotationTag::Point => grana_i18n::annotation::point_detail(language, &placement),
+        AnnotationTag::Distance => grana_i18n::annotation::distance_detail(
+            language,
+            &grana_figure::value(
                 kind.length().unwrap_or(0.0),
                 grana_measure::Unit::Micrometer,
-                2
+                2,
             ),
-            scope(state, annotation.frame())
+            &placement,
         ),
     };
     let font = if selected {
@@ -239,7 +260,11 @@ fn row<'a>(
         if visible { Icon::Eye } else { Icon::EyeOff },
         26.0,
         Role::Quiet,
-        if visible { "Hide" } else { "Show" },
+        if visible {
+            grana_i18n::annotation::hide(language)
+        } else {
+            grana_i18n::annotation::show(language)
+        },
         Message::Command(Command::SetAnnotationVisible {
             index,
             visible: !visible,
@@ -253,13 +278,15 @@ fn row<'a>(
         .children([eye, body])
 }
 
-fn scope(state: &View<'_>, frame: Option<u32>) -> String {
+fn scope(state: &View<'_>, language: Language, frame: Option<u32>) -> String {
     if state.scene.frame_count() <= 1 {
-        return "single frame".to_string();
+        return grana_i18n::annotation::single_frame_scope(language).to_string();
     }
     match frame {
-        Some(frame) => format!("frame {} of {}", frame + 1, state.scene.frame_count()),
-        None => "every frame".to_string(),
+        Some(frame) => {
+            grana_i18n::annotation::frame_scope(language, frame + 1, state.scene.frame_count())
+        }
+        None => grana_i18n::annotation::every_frame_scope(language).to_string(),
     }
 }
 
@@ -269,29 +296,33 @@ fn selected_card<'a>(
 ) -> Option<Element<'a, Message>> {
     let index = state.scene.annotations.selected()?;
     let annotation = state.scene.annotations.get(index)?;
+    let language = ctx.language();
     let time = state.scene.time();
     let every = annotation.frame().is_none();
     let mut children = Vec::new();
     let detail = if state.scene.frame_count() <= 1 {
-        "The dataset holds a single frame.".to_string()
+        grana_i18n::annotation::single_frame_detail(language).to_string()
     } else {
         match annotation.frame() {
-            Some(frame) => format!(
-                "Placed on frame {} of {}",
-                frame + 1,
-                state.scene.frame_count()
-            ),
-            None => "Shown on every frame.".to_string(),
+            Some(frame) => {
+                grana_i18n::annotation::placed_frame(language, frame + 1, state.scene.frame_count())
+            }
+            None => grana_i18n::annotation::shown_every_frame(language).to_string(),
         }
     };
-    let title = view::card_title(ctx, Icon::Clock, "Time", Some(annotation.name()));
+    let title = view::card_title(
+        ctx,
+        Icon::Clock,
+        grana_i18n::common::time(language),
+        Some(annotation.name()),
+    );
     children.push(title);
     children.push(view::weak(ctx, &detail));
     if state.scene.frame_count() > 1 {
         children.push(view::toggle_row(
             ctx,
             "annotation.every_frame",
-            "On every frame",
+            grana_i18n::annotation::on_every_frame(language),
             every,
             move |every| Command::SetAnnotationFrame {
                 index,
@@ -311,15 +342,21 @@ fn profile_card<'a>(
     if annotation.kind().tag() != AnnotationTag::Distance {
         return None;
     }
+    let language = ctx.language();
     let profile = annotation.profile();
     let detail = profile.map(|profile| {
-        format!(
-            "{} samples · {} channels",
+        grana_i18n::annotation::profile_detail(
+            language,
             profile.samples().len(),
-            profile.names().len()
+            profile.names().len(),
         )
     });
-    let title = view::card_title(ctx, Icon::Channel, "Intensity Profile", detail.as_deref());
+    let title = view::card_title(
+        ctx,
+        Icon::Channel,
+        grana_i18n::annotation::intensity_profile(language),
+        detail.as_deref(),
+    );
     let mut children = vec![title];
     if let Some(profile) = profile {
         let names = profile.names().to_vec();
@@ -390,7 +427,7 @@ fn profile_card<'a>(
                     previous = Some(point);
                 }
             }
-            let caption = format!("0 – {span:.2} µm · every {spacing:.3} µm");
+            let caption = grana_i18n::annotation::profile_span(language, span, spacing);
             painter.text_in(
                 Rect::from_min_max(
                     Vec2::new(rect.left() + 10.0, plot.bottom() + 4.0),
@@ -406,13 +443,13 @@ fn profile_card<'a>(
     } else {
         children.push(view::weak(
             ctx,
-            "Sample the line to draw its intensity profile.",
+            grana_i18n::annotation::empty_profile(language),
         ));
     }
     let label = if profile.is_some() {
-        "Resample"
+        grana_i18n::annotation::resample(language)
     } else {
-        "Sample Profile"
+        grana_i18n::annotation::sample_profile(language)
     };
     children.push(
         view::button_with(ctx, label, Role::Quiet, Length::Fill)
@@ -427,6 +464,7 @@ fn region_card<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let region = state.scene.region;
+    let language = ctx.language();
     let enabled = region.enabled();
     let size = region.size();
     let detail = if enabled {
@@ -437,24 +475,24 @@ fn region_card<'a>(
             size.z.round()
         )
     } else {
-        "whole volume".to_string()
+        grana_i18n::annotation::whole_volume(language).to_string()
     };
     let title = view::card_title(
         ctx,
         Icon::Filter,
-        "Region of Interest",
+        grana_i18n::annotation::region_of_interest(language),
         Some(detail.as_str()),
     );
     let current = region;
     let mut children = vec![title];
     children.push(view::weak(
         ctx,
-        "Statistics, detection, drift and batch stay inside an enabled region. Click the volume to draw one.",
+        grana_i18n::annotation::region_detail(language),
     ));
     children.push(view::toggle_row(
         ctx,
         "annotation.region",
-        "Restrict to region",
+        grana_i18n::annotation::restrict_region(language),
         enabled,
         move |on| {
             let mut region = current;
@@ -465,9 +503,14 @@ fn region_card<'a>(
     if enabled {
         let half = 0.5 * state.scene.dataset.world_size();
         let whole = grana_volume::Region::full(-half, half);
-        let clear = view::button_with(ctx, "Clear", Role::Quiet, Length::Fixed(132.0))
-            .named("annotation.region.clear")
-            .press(Message::Command(Command::SetRegion(whole)));
+        let clear = view::button_with(
+            ctx,
+            grana_i18n::common::clear(language),
+            Role::Quiet,
+            Length::Fixed(132.0),
+        )
+        .named("annotation.region.clear")
+        .press(Message::Command(Command::SetRegion(whole)));
         children.push(
             grana_ui::row()
                 .justify(Align::End)

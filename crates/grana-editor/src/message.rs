@@ -43,6 +43,7 @@ pub enum Message {
     },
     SetPlaying(bool),
     SetAppearance(grana_ui::Appearance),
+    SetLanguage(grana_i18n::Language),
     SetContrast(bool),
     ToggleContrast,
     SetReduceTransparency(bool),

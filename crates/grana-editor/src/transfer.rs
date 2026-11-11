@@ -15,6 +15,7 @@ pub fn edit<'a>(
 ) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let palette = theme.palette;
+    let language = ctx.language();
     let caption_style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
     let lut = transfer.lut(96);
     let colors = lut
@@ -109,15 +110,26 @@ pub fn edit<'a>(
                 .on_slide(faded),
                 crate::inspector::centered(
                     control,
-                    grana_ui::widget::icon_button(Icon::Minus, 18.0, Role::Quiet, "Remove stop")
-                        .named(&format!("{salt}.stop.{index}.remove"))
-                        .press(removed),
+                    grana_ui::widget::icon_button(
+                        Icon::Minus,
+                        18.0,
+                        Role::Quiet,
+                        grana_i18n::inspector::remove_stop(language),
+                    )
+                    .named(&format!("{salt}.stop.{index}.remove"))
+                    .press(removed),
                 ),
             ]),
         );
     }
     children.push(
-        crate::view::button_with(ctx, "Add Stop", Role::Control, Length::Fill).press({
+        crate::view::button_with(
+            ctx,
+            grana_i18n::inspector::add_stop(language),
+            Role::Control,
+            Length::Fill,
+        )
+        .press({
             let mut next = stops.clone();
             next.push(Stop::new(midpoint(&stops), tint, 0.5));
             set(next)

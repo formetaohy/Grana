@@ -5,12 +5,13 @@ pub(super) fn region<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let current = state.scene.region;
     let size = current.size();
     let summary = if current.enabled() {
         format!("{:.1}×{:.1}×{:.1} µm", size.x, size.y, size.z)
     } else {
-        "Whole volume".to_string()
+        grana_i18n::common::whole_volume(language).to_string()
     };
     let key = Key::new("region");
     let open = state.workspace.disclosures.is_open(key);
@@ -21,21 +22,26 @@ pub(super) fn region<'a>(
         let minimum = (0.001 * world.min_element()).max(1.0e-4);
         let reach = world.length().max(minimum);
         children.push(
-            grana_ui::widget::toggle_row(&theme, "Limit Analysis", current.enabled())
-                .named("region.enabled")
-                .on_toggle(move |value| {
-                    let mut region = current;
-                    region.set_enabled(value);
-                    Message::Command(Command::SetRegion(region))
-                }),
+            grana_ui::widget::toggle_row(
+                &theme,
+                grana_i18n::inspector::limit_analysis(language),
+                current.enabled(),
+            )
+            .named("region.enabled")
+            .on_toggle(move |value| {
+                let mut region = current;
+                region.set_enabled(value);
+                Message::Command(Command::SetRegion(region))
+            }),
         );
-        for (name, index) in [("Center X", 0), ("Center Y", 1), ("Center Z", 2)] {
+        for (index, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
             let value = current.center()[index];
             let readout = format!("{value:.2} µm");
+            let label = grana_i18n::inspector::center(language, axis);
             children.push(
                 grana_ui::widget::slider_readout(
                     &theme,
-                    Some(name),
+                    Some(&label),
                     value,
                     -half[index]..=half[index],
                     false,
@@ -51,13 +57,14 @@ pub(super) fn region<'a>(
                 }),
             );
         }
-        for (name, index) in [("Size X", 0), ("Size Y", 1), ("Size Z", 2)] {
+        for (index, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
             let value = size[index];
             let readout = format!("{value:.2} µm");
+            let label = grana_i18n::inspector::size(language, axis);
             children.push(
                 grana_ui::widget::slider_readout(
                     &theme,
-                    Some(name),
+                    Some(&label),
                     value,
                     minimum..=2.0 * reach,
                     false,
@@ -80,8 +87,20 @@ pub(super) fn region<'a>(
         };
         let fill = Message::Command(Command::SetRegion(grana_volume::Region::full(-half, half)));
         let buttons = grana_ui::row().gap(8.0).children([
-            view::button_with(ctx, "Align to Axes", Role::Control, Length::Fill).press(align),
-            view::button_with(ctx, "Fill Volume", Role::Control, Length::Fill).press(fill),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::align_to_axes(language),
+                Role::Control,
+                Length::Fill,
+            )
+            .press(align),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::fill_volume(language),
+                Role::Control,
+                Length::Fill,
+            )
+            .press(fill),
         ]);
         children.push(buttons);
     }
@@ -89,7 +108,7 @@ pub(super) fn region<'a>(
         ctx,
         key,
         Icon::Fit,
-        "Region of Interest",
+        grana_i18n::inspector::region_of_interest(language),
         Some(&summary),
         children,
         open,
@@ -101,14 +120,15 @@ pub(super) fn drift<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let drift = state.scene.drift();
     let running = view::progress(state.jobs, grana_scene::Job::Drift);
     let summary = if running.is_some() {
-        "Aligning…".to_string()
+        grana_i18n::inspector::aligning(language).to_string()
     } else if drift.is_empty() {
-        "Off".to_string()
+        grana_i18n::inspector::inactive(language).to_string()
     } else {
-        format!("{} frames", drift.frames())
+        grana_i18n::inspector::drift_frames(language, drift.frames())
     };
     let key = Key::new("drift");
     let open = state.workspace.disclosures.is_open(key);
@@ -117,9 +137,13 @@ pub(super) fn drift<'a>(
         match running {
             Some(progress) => {
                 let text = if progress.total > 0 {
-                    format!("Aligning · {}/{} frames", progress.done, progress.total)
+                    grana_i18n::inspector::aligning_progress(
+                        language,
+                        progress.done,
+                        progress.total,
+                    )
                 } else {
-                    "Aligning frames…".to_string()
+                    grana_i18n::inspector::aligning_frames(language).to_string()
                 };
                 let spinner = view::spinner(ctx, 12.0);
                 let caption = view::caption(ctx, &text);
@@ -130,14 +154,24 @@ pub(super) fn drift<'a>(
                         .children([spinner, caption]),
                 );
                 children.push(
-                    view::button_with(ctx, "Cancel", Role::Control, Length::Fill)
-                        .press(Message::Command(Command::CancelDrift)),
+                    view::button_with(
+                        ctx,
+                        grana_i18n::common::cancel(language),
+                        Role::Control,
+                        Length::Fill,
+                    )
+                    .press(Message::Command(Command::CancelDrift)),
                 );
             }
             None => {
                 children.push(
-                    view::button_with(ctx, "Correct Drift", Role::Control, Length::Fill)
-                        .press(Message::Command(Command::ComputeDrift)),
+                    view::button_with(
+                        ctx,
+                        grana_i18n::inspector::correct_drift(language),
+                        Role::Control,
+                        Length::Fill,
+                    )
+                    .press(Message::Command(Command::ComputeDrift)),
                 );
                 if drift.is_empty() {
                     let channel = state.scene.dataset.channels()[state.scene.selected]
@@ -145,7 +179,7 @@ pub(super) fn drift<'a>(
                         .to_string();
                     children.push(view::weak(
                         ctx,
-                        &format!("Aligns {channel} across all time frames."),
+                        &grana_i18n::inspector::aligns_channel(language, &channel),
                     ));
                 } else {
                     let frames = drift.frames();
@@ -153,10 +187,7 @@ pub(super) fn drift<'a>(
                     let time = state.scene.time();
                     children.push(view::caption(
                         ctx,
-                        &format!(
-                            "{frames} frames aligned · max {:.1} voxels",
-                            drift.magnitude()
-                        ),
+                        &grana_i18n::inspector::drift_summary(language, frames, drift.magnitude()),
                     ));
                     let reference_field = grana_ui::widget::drag_value(&theme, reference as f32, 0)
                         .named("drift.reference")
@@ -165,16 +196,25 @@ pub(super) fn drift<'a>(
                                 value.round().clamp(0.0, (frames - 1) as f32) as u32,
                             ))
                         });
-                    let unit = view::caption(ctx, "frame");
+                    let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
                     let row = grana_ui::row()
                         .gap(6.0)
                         .align(Align::Center)
                         .children([reference_field, unit]);
-                    children.push(view::form_row(ctx, "Reference", row));
+                    children.push(view::form_row(
+                        ctx,
+                        grana_i18n::inspector::reference(language),
+                        row,
+                    ));
                     children.push(frame_table(ctx, state, time));
                     children.push(
-                        view::button_with(ctx, "Clear Drift", Role::Danger, Length::Fill)
-                            .press(Message::Command(Command::ClearDrift)),
+                        view::button_with(
+                            ctx,
+                            grana_i18n::inspector::clear_drift(language),
+                            Role::Danger,
+                            Length::Fill,
+                        )
+                        .press(Message::Command(Command::ClearDrift)),
                     );
                 }
             }
@@ -184,7 +224,7 @@ pub(super) fn drift<'a>(
         ctx,
         key,
         Icon::Target,
-        "Drift Correction",
+        grana_i18n::inspector::drift_correction(language),
         Some(&summary),
         children,
         open,
@@ -197,17 +237,18 @@ pub(super) fn frame_table<'a>(
     time: u32,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let drift = state.scene.drift();
     let reference = drift.reference();
     let mut rows = Vec::new();
     for frame in 0..drift.frames() {
         let offset = drift.offset(frame);
-        let mut label = format!("Frame {}", frame + 1);
+        let mut label = grana_i18n::inspector::frame_number(language, frame + 1);
         if frame == time {
             label.push_str(" •");
         }
         if frame == reference {
-            label.push_str(" (ref)");
+            label.push_str(grana_i18n::inspector::reference_suffix(language));
         }
         rows.push(view::labelled(
             ctx,
@@ -224,10 +265,13 @@ pub(super) fn frame_table<'a>(
             .children([list]),
     ];
     if time == reference {
-        children.push(view::weak(ctx, "Reference frame is fixed at zero offset."));
+        children.push(view::weak(
+            ctx,
+            grana_i18n::inspector::reference_fixed(language),
+        ));
     } else {
         let offset = drift.offset(time);
-        for (axis, name) in ["Offset X", "Offset Y", "Offset Z"].into_iter().enumerate() {
+        for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
             let field = grana_ui::widget::drag_value(&theme, offset[axis], 2)
                 .named(&format!("drift.offset.{axis}"))
                 .on_drag_value(0.5, move |value| {
@@ -240,7 +284,11 @@ pub(super) fn frame_table<'a>(
                 .gap(6.0)
                 .align(Align::Center)
                 .children([field, unit]);
-            children.push(view::form_row(ctx, name, row));
+            children.push(view::form_row(
+                ctx,
+                &grana_i18n::inspector::offset_axis(language, name),
+                row,
+            ));
         }
     }
     grana_ui::column().gap(6.0).children(children)
@@ -250,6 +298,7 @@ pub(super) fn mask<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let sources = state
         .scene
         .objects
@@ -259,12 +308,18 @@ pub(super) fn mask<'a>(
     let current = state.scene.mask;
     let summary = current
         .and_then(|id| sources.iter().find(|(set, _, _)| *set == id))
-        .map_or_else(|| "Whole volume".to_string(), |(_, name, _)| name.clone());
+        .map_or_else(
+            || grana_i18n::common::whole_volume(language).to_string(),
+            |(_, name, _)| name.clone(),
+        );
     let key = Key::new("mask.card");
     let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
-        let mut options = vec![(None, "Whole Volume".to_string())];
+        let mut options = vec![(
+            None,
+            grana_i18n::common::whole_volume_title(language).to_string(),
+        )];
         options.extend(
             sources
                 .iter()
@@ -273,7 +328,7 @@ pub(super) fn mask<'a>(
         children.push(form_combo(
             ctx,
             "mask",
-            "Source",
+            grana_i18n::inspector::source(language),
             &options,
             Some(current),
             card_width() - crate::panel::FORM_LABEL,
@@ -291,7 +346,7 @@ pub(super) fn mask<'a>(
         children.push(view::slider_readout(
             ctx,
             "mask.radius",
-            Some("Grow by"),
+            Some(grana_i18n::inspector::grow_by(language)),
             radius,
             0.0..=limit,
             false,
@@ -319,7 +374,10 @@ pub(super) fn mask<'a>(
                 })
                 .unwrap_or_default();
             if !relations.is_empty() {
-                let mut options = vec![(None, "Any Relation".to_string())];
+                let mut options = vec![(
+                    None,
+                    grana_i18n::inspector::any_relation(language).to_string(),
+                )];
                 options.extend(relations);
                 let selected = state
                     .scene
@@ -331,7 +389,7 @@ pub(super) fn mask<'a>(
                 children.push(form_combo(
                     ctx,
                     "mask.relation",
-                    "Relation",
+                    grana_i18n::inspector::relation(language),
                     &options,
                     Some(selected),
                     width,
@@ -359,12 +417,12 @@ pub(super) fn mask<'a>(
                     let range = filter.range();
                     let fields = RelationField::CONTINUOUS
                         .into_iter()
-                        .map(|field| (field, field.label().to_string()))
+                        .map(|field| (field, relation_field(language, field)))
                         .collect::<Vec<_>>();
                     children.push(form_combo(
                         ctx,
                         "mask.field",
-                        "Field",
+                        grana_i18n::inspector::field(language),
                         &fields,
                         Some(field),
                         width,
@@ -380,10 +438,11 @@ pub(super) fn mask<'a>(
                         },
                     ));
                     let suffix = field.unit().suffix();
-                    for (index, (label, value)) in [("Minimum", range[0]), ("Maximum", range[1])]
-                        .into_iter()
-                        .enumerate()
-                    {
+                    let bounds = [
+                        (grana_i18n::common::minimum(language), range[0]),
+                        (grana_i18n::common::maximum(language), range[1]),
+                    ];
+                    for (index, (label, value)) in bounds.into_iter().enumerate() {
                         let other = match index {
                             0 => range[1],
                             _ => range[0],
@@ -411,47 +470,45 @@ pub(super) fn mask<'a>(
                     }
                     children.push(view::weak(
                         ctx,
-                        &format!(
-                            "Detects only where the mask relation keeps objects whose {} lies in {:.2}{suffix} to {:.2}{suffix}.",
-                            field.label(),
+                        &grana_i18n::inspector::detects_relation(
+                            language,
+                            &relation_field(language, field),
                             range[0],
-                            range[1]
+                            range[1],
+                            suffix,
                         ),
                     ));
                     let target_name = state.scene.objects.get(target).map_or_else(
-                        || "the relation target".to_string(),
+                        || grana_i18n::inspector::relation_target(language).to_string(),
                         |set| set.name().to_string(),
                     );
                     children.push(view::weak(
                         ctx,
-                        &format!(
-                            "{target_name} is detected without the mask so its relation can limit the mask."
-                        ),
+                        &grana_i18n::inspector::target_without_mask(language, &target_name),
                     ));
                 }
             }
         }
-        children.push(
-            match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
-                Some((_, name, true)) => {
-                    view::weak(ctx, &format!("Detects inside filtered objects of {name}."))
-                }
-                Some((_, name, false)) => {
-                    view::weak(ctx, &format!("Detects inside {name} objects only."))
-                }
-                None => view::weak(ctx, "Detects across the entire dataset."),
-            },
-        );
+        let detail = match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
+            Some((_, name, true)) => grana_i18n::inspector::detects_filtered(language, name),
+            Some((_, name, false)) => grana_i18n::inspector::detects_inside(language, name),
+            None => grana_i18n::inspector::detects_all(language).to_string(),
+        };
+        children.push(view::weak(ctx, &detail));
     }
     view::disclosure_card(
         ctx,
         key,
         Icon::Filter,
-        "Analysis Mask",
+        grana_i18n::inspector::analysis_mask(language),
         Some(&summary),
         children,
         open,
     )
+}
+
+fn relation_field(language: grana_i18n::Language, field: RelationField) -> String {
+    grana_i18n::measure::term(language, field.label()).unwrap_or_else(|| field.label().to_string())
 }
 
 pub(super) fn default_filter_range(field: RelationField, world: Vec3) -> [f32; 2] {

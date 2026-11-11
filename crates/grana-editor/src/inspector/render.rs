@@ -5,6 +5,7 @@ pub(super) fn slice<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let key = Key::new("slice");
     let open = state.workspace.disclosures.is_open(key);
     let active = crate::fitting::slice_position(state.scene, state.camera());
@@ -13,9 +14,13 @@ pub(super) fn slice<'a>(
     let mut children = Vec::new();
     if open {
         children.push(
-            grana_ui::widget::toggle_row(&theme, "Slice View", active.is_some())
-                .named("slice.enabled")
-                .on_toggle(Message::ToggleSlice),
+            grana_ui::widget::toggle_row(
+                &theme,
+                grana_i18n::inspector::slice_view(language),
+                active.is_some(),
+            )
+            .named("slice.enabled")
+            .on_toggle(Message::ToggleSlice),
         );
         if let Some((axis, _, _, at)) = active {
             children.push(view::segmented_fill(
@@ -29,7 +34,7 @@ pub(super) fn slice<'a>(
             children.push(view::slider_event(
                 ctx,
                 "slice.depth",
-                Some("Depth"),
+                Some(grana_i18n::inspector::depth(language)),
                 at,
                 0.0..=1.0,
                 &readout,
@@ -37,7 +42,7 @@ pub(super) fn slice<'a>(
             ));
             children.push(view::caption(
                 ctx,
-                "One unlit voxel layer; drag pans, scroll zooms, ↑↓ or Ctrl-scroll steps.",
+                grana_i18n::inspector::slice_help(language),
             ));
         }
     }
@@ -45,8 +50,12 @@ pub(super) fn slice<'a>(
         ctx,
         key,
         Icon::Layers,
-        "Slice View",
-        Some(detail.as_deref().unwrap_or("Off")),
+        grana_i18n::inspector::slice_view(language),
+        Some(
+            detail
+                .as_deref()
+                .unwrap_or(grana_i18n::inspector::inactive(language)),
+        ),
         children,
         open,
     )
@@ -65,8 +74,13 @@ pub(super) fn clip<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let current = state.scene.clip;
-    let status = if current.enabled() { "Active" } else { "Off" };
+    let status = if current.enabled() {
+        grana_i18n::inspector::active(language)
+    } else {
+        grana_i18n::inspector::inactive(language)
+    };
     let key = Key::new("clip");
     let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
@@ -87,15 +101,19 @@ pub(super) fn clip<'a>(
             }))
         };
         children.push(
-            grana_ui::widget::toggle_row(&theme, "Cut Volume", enabled)
-                .named("clip.enabled")
-                .on_toggle(move |value| apply(azimuth, elevation, offset, value)),
+            grana_ui::widget::toggle_row(
+                &theme,
+                grana_i18n::inspector::cut_volume(language),
+                enabled,
+            )
+            .named("clip.enabled")
+            .on_toggle(move |value| apply(azimuth, elevation, offset, value)),
         );
         let azimuth_text = format!("{azimuth:.0}°");
         children.push(
             grana_ui::widget::slider_readout(
                 &theme,
-                Some("Azimuth"),
+                Some(grana_i18n::inspector::azimuth(language)),
                 azimuth,
                 -180.0..=180.0,
                 false,
@@ -108,7 +126,7 @@ pub(super) fn clip<'a>(
         children.push(
             grana_ui::widget::slider_readout(
                 &theme,
-                Some("Elevation"),
+                Some(grana_i18n::inspector::elevation(language)),
                 elevation,
                 -90.0..=90.0,
                 false,
@@ -121,7 +139,7 @@ pub(super) fn clip<'a>(
         children.push(
             grana_ui::widget::slider_readout(
                 &theme,
-                Some("Offset"),
+                Some(grana_i18n::inspector::offset(language)),
                 offset,
                 -reach..=reach,
                 false,
@@ -131,10 +149,20 @@ pub(super) fn clip<'a>(
             .on_slide(move |value| apply(azimuth, elevation, value, true)),
         );
         let half = (width - 6.0) * 0.5;
-        let flip = view::button_with(ctx, "Flip Plane", Role::Control, Length::Fixed(half))
-            .press(apply(azimuth + 180.0, -elevation, -offset, true));
-        let reset = view::button_with(ctx, "Reset", Role::Control, Length::Fixed(half))
-            .press(Message::Command(Command::SetClip(Clip::none())));
+        let flip = view::button_with(
+            ctx,
+            grana_i18n::inspector::flip_plane(language),
+            Role::Control,
+            Length::Fixed(half),
+        )
+        .press(apply(azimuth + 180.0, -elevation, -offset, true));
+        let reset = view::button_with(
+            ctx,
+            grana_i18n::common::reset(language),
+            Role::Control,
+            Length::Fixed(half),
+        )
+        .press(Message::Command(Command::SetClip(Clip::none())));
         children.push(
             grana_ui::row()
                 .gap(6.0)
@@ -146,7 +174,7 @@ pub(super) fn clip<'a>(
         ctx,
         key,
         Icon::Cube,
-        "Clipping Plane",
+        grana_i18n::inspector::clipping_plane(language),
         Some(status),
         children,
         open,
@@ -168,6 +196,7 @@ pub(super) fn rendering<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let scene = state.scene;
+    let language = ctx.language();
     let shading = scene.shading;
     let key = Key::new("rendering");
     let open = state.workspace.disclosures.is_open(key);
@@ -177,7 +206,7 @@ pub(super) fn rendering<'a>(
         children.push(view::slider_readout(
             ctx,
             "exposure",
-            Some("Exposure"),
+            Some(grana_i18n::inspector::exposure(language)),
             scene.exposure,
             0.05..=20.0,
             true,
@@ -188,7 +217,7 @@ pub(super) fn rendering<'a>(
         children.push(view::slider_readout(
             ctx,
             "shadows",
-            Some("Shadows"),
+            Some(grana_i18n::inspector::shadows(language)),
             shading.shadows,
             0.0..=1.0,
             false,
@@ -209,7 +238,7 @@ pub(super) fn rendering<'a>(
             light.push(view::slider_readout(
                 ctx,
                 "lighting.azimuth",
-                Some("Azimuth"),
+                Some(grana_i18n::inspector::azimuth(language)),
                 shading.azimuth,
                 -grana_display::AZIMUTH_LIMIT..=grana_display::AZIMUTH_LIMIT,
                 false,
@@ -225,7 +254,7 @@ pub(super) fn rendering<'a>(
             light.push(view::slider_readout(
                 ctx,
                 "lighting.elevation",
-                Some("Elevation"),
+                Some(grana_i18n::inspector::elevation(language)),
                 shading.elevation,
                 -grana_display::ELEVATION_LIMIT..=grana_display::ELEVATION_LIMIT,
                 false,
@@ -241,7 +270,7 @@ pub(super) fn rendering<'a>(
             light.push(view::slider_readout(
                 ctx,
                 "lighting.ambient",
-                Some("Ambient"),
+                Some(grana_i18n::inspector::ambient(language)),
                 shading.ambient,
                 0.0..=1.0,
                 false,
@@ -257,7 +286,7 @@ pub(super) fn rendering<'a>(
             light.push(view::slider_readout(
                 ctx,
                 "lighting.diffuse",
-                Some("Diffuse"),
+                Some(grana_i18n::inspector::diffuse(language)),
                 shading.diffuse,
                 0.0..=1.0,
                 false,
@@ -273,13 +302,18 @@ pub(super) fn rendering<'a>(
         children.push(disclosure(
             ctx,
             "rendering.lighting",
-            "Surface Lighting",
+            grana_i18n::inspector::surface_lighting(language),
             lighting_open,
             light,
         ));
         children.push(
-            view::button_with(ctx, "Reset Rendering", Role::Control, Length::Fill)
-                .press(Message::Command(Command::ResetRendering)),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::reset_rendering(language),
+                Role::Control,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::ResetRendering)),
         );
     }
     let summary = format!("{:.2}×", scene.exposure);
@@ -287,7 +321,7 @@ pub(super) fn rendering<'a>(
         ctx,
         key,
         Icon::Sparkles,
-        "Rendering",
+        grana_i18n::inspector::rendering(language),
         Some(&summary),
         children,
         open,

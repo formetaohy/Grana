@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 glam = { workspace = true }
+grana-i18n = { workspace = true }
 grana-measure = { workspace = true }
 grana-ui = { workspace = true }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use glam::Vec2;
 use grana_display::Palette;
+use grana_i18n::Language;
 use grana_object::{RelationFrame, RelationPair};
 use grana_scene::{Item, Job, ObjectFrame, ObjectSet, ObjectSetId, Scene, Selection};
 use grana_session::Command;
@@ -37,9 +38,9 @@ impl Choice {
         (self.source, self.target, self.shift)
     }
 
-    fn caption(self, scene: &Scene) -> String {
-        let source = set_name(scene, self.source);
-        let target = set_name(scene, self.target);
+    fn caption(self, language: Language, scene: &Scene) -> String {
+        let source = set_name(language, scene, self.source);
+        let target = set_name(language, scene, self.target);
         if self.shift == 0 {
             format!("{source} → {target}")
         } else {
@@ -75,13 +76,14 @@ enum Body {
 }
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let choices = choices(state.scene);
     if choices.is_empty() {
         return view::empty_state(
             ctx,
             Icon::Grid,
-            "No Relations Yet",
-            "Add a relation between two object sets in the Objects sidebar to compare their pairs here.",
+            grana_i18n::relation::no_relations_title(language),
+            grana_i18n::relation::no_relations_detail(language),
         );
     }
     let selected = state
@@ -124,11 +126,11 @@ fn choices(scene: &Scene) -> Vec<Choice> {
     choices
 }
 
-fn set_name(scene: &Scene, id: ObjectSetId) -> String {
-    scene
-        .objects
-        .get(id)
-        .map_or_else(|| "Object Set".to_string(), |set| set.name().to_string())
+fn set_name(language: Language, scene: &Scene, id: ObjectSetId) -> String {
+    scene.objects.get(id).map_or_else(
+        || grana_i18n::relation::object_set(language).to_string(),
+        |set| set.name().to_string(),
+    )
 }
 
 fn header<'a>(
@@ -137,6 +139,7 @@ fn header<'a>(
     choices: &[Choice],
     selected: usize,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let mut children = Vec::new();
     let mut buttons = Vec::with_capacity(choices.len());
     for (index, choice) in choices.iter().copied().enumerate() {
@@ -156,11 +159,11 @@ fn header<'a>(
         let label = match running {
             Some(progress) => format!(
                 "{} · {}/{}",
-                choice.caption(state.scene),
+                choice.caption(language, state.scene),
                 progress.done,
                 progress.total
             ),
-            None => choice.caption(state.scene),
+            None => choice.caption(language, state.scene),
         };
         buttons.push(
             view::button(ctx, &label, role)
@@ -174,7 +177,7 @@ fn header<'a>(
     }
     children.push(grana_ui::row().gap(6.0).wrap().children(buttons));
     let metric = state.workspace.relation_metric;
-    let labels = RelationMetric::ALL.map(RelationMetric::name);
+    let labels = RelationMetric::ALL.map(|metric| metric.name(language));
     let segments = view::segmented(
         ctx,
         "relation.metric",
@@ -182,7 +185,11 @@ fn header<'a>(
         metric.index(),
         Message::SetRelationMetric,
     );
-    children.push(view::form_row(ctx, "Metric", segments));
+    children.push(view::form_row(
+        ctx,
+        grana_i18n::relation::metric(language),
+        segments,
+    ));
     let filter = state.workspace.relation_filter;
     let slider = view::slider_event(
         ctx,
@@ -193,25 +200,32 @@ fn header<'a>(
         &format!("≥ {:.0}%", 100.0 * filter),
         |value| Message::SetRelationFilter(value / 100.0),
     );
-    children.push(view::form_row(ctx, "Filter", slider));
-    let choice = choices[selected];
-    let export = view::button(ctx, "Export Pairs…", Role::Control).press(Message::Command(
-        Command::ExportRelation {
-            source: choice.source,
-            target: choice.target,
-            shift: choice.shift,
-        },
+    children.push(view::form_row(
+        ctx,
+        grana_i18n::relation::filter(language),
+        slider,
     ));
+    let choice = choices[selected];
+    let export = view::button(
+        ctx,
+        grana_i18n::relation::export_pairs(language),
+        Role::Control,
+    )
+    .press(Message::Command(Command::ExportRelation {
+        source: choice.source,
+        target: choice.target,
+        shift: choice.shift,
+    }));
     children.push(grana_ui::row().gap(6.0).children([export]));
-    children.push(view::caption(ctx, export_hint(choice)));
+    children.push(view::caption(ctx, export_hint(choice, language)));
     view::card(ctx, 9.0, children)
 }
 
-fn export_hint(choice: Choice) -> &'static str {
+fn export_hint(choice: Choice, language: Language) -> &'static str {
     match choice.computed {
-        0 => "This relation measures no frame yet.",
-        computed if computed == choice.total => "Exports every measured pair as CSV.",
-        _ => "Exports the pairs measured so far as CSV.",
+        0 => grana_i18n::relation::no_frame_measured(language),
+        computed if computed == choice.total => grana_i18n::relation::exports_every_pair(language),
+        _ => grana_i18n::relation::exports_measured_pairs(language),
     }
 }
 
@@ -364,20 +378,25 @@ fn pending<'a>(
             shift: choice.shift,
         },
     );
+    let language = ctx.language();
     let detail = match running {
-        Some(progress) => format!(
-            "Measuring frame {} of {}.",
+        Some(progress) => grana_i18n::relation::measuring_frame(
+            language,
             progress.done.min(progress.total).max(1),
-            progress.total
+            progress.total,
         ),
-        None => format!(
-            "Measured on {} of {} frames. This relation holds no measurement for frame {} yet.",
+        None => grana_i18n::relation::frame_not_measured(
+            language,
             choice.computed,
             choice.total,
-            state.scene.time() + 1
+            state.scene.time() + 1,
         ),
     };
-    let header = view::section_header(ctx, "Pair Matrix", Some(&choice.caption(state.scene)));
+    let header = view::section_header(
+        ctx,
+        grana_i18n::relation::pair_matrix(language),
+        Some(&choice.caption(language, state.scene)),
+    );
     let hint = view::weak(ctx, &detail);
     view::card(ctx, 6.0, vec![header, hint])
 }
@@ -387,24 +406,22 @@ fn matrix_card<'a>(
     state: &View<'a>,
     matrix: &Matrix,
 ) -> Element<'a, Message> {
-    let detail = format!(
-        "{} sources × {} targets",
-        matrix.rows.len(),
-        matrix.columns.len()
-    );
+    let language = ctx.language();
+    let detail =
+        grana_i18n::relation::matrix_scope(language, matrix.rows.len(), matrix.columns.len());
     let mut children = vec![view::card_title(
         ctx,
         Icon::Grid,
-        "Pair Matrix",
+        grana_i18n::relation::pair_matrix(language),
         Some(&detail),
     )];
     if matrix.pairs.is_empty() {
         children.push(view::weak(
             ctx,
             if matrix.filtered {
-                "No pair passes the filter at this frame."
+                grana_i18n::relation::no_pair_filtered(language)
             } else {
-                "This relation holds no pairs at this frame."
+                grana_i18n::relation::no_pairs_frame(language)
             },
         ));
         return view::card(ctx, 8.0, children);
@@ -442,8 +459,9 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
         );
     }
     let gutter_style = TextStyle::new(theme.font(Level::Micro), palette.text_quaternary);
+    let source_target = grana_i18n::relation::source_target(ctx.language());
     let gutter = grana_ui::canvas(Length::Fixed(GUTTER), HEADER, move |painter, info| {
-        painter.text_in(info.rect, "src / tgt", gutter_style, Align::Center);
+        painter.text_in(info.rect, source_target, gutter_style, Align::Center);
     });
     let mut row = vec![gutter];
     row.extend(labels);
@@ -515,17 +533,18 @@ fn legend<'a>(
     metric: RelationMetric,
     matrix: &Matrix,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let theme = *ctx.theme();
     let palette = theme.palette;
     let caption = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
     let low = metric.format(matrix.minimum);
     let high = metric.format(matrix.maximum);
     let label = if matrix.maximum <= matrix.minimum {
-        format!("{low} for every pair")
+        grana_i18n::relation::uniform_strength(language, &low)
     } else if metric.near() {
-        format!("{low} near · {high} far")
+        grana_i18n::relation::near_far(language, &low, &high)
     } else {
-        format!("{low} low · {high} high")
+        grana_i18n::relation::low_high(language, &low, &high)
     };
     grana_ui::canvas(Length::Fill, 16.0, move |painter, info| {
         let rect = Rect::from_min_size(info.rect.min, Vec2::new(160.0, 8.0));
@@ -558,22 +577,31 @@ fn pairs_card<'a>(
     state: &View<'_>,
     matrix: &Matrix,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let metric = state.workspace.relation_metric;
     let theme = *ctx.theme();
     let palette = theme.palette;
     let shown = matrix.pairs.len().min(PAIR_LIMIT);
     let detail = if matrix.pairs.len() > shown {
-        format!("{shown} strongest of {}", matrix.pairs.len())
+        grana_i18n::relation::strongest(language, shown, matrix.pairs.len())
     } else {
-        format!("{} pairs", matrix.pairs.len())
+        grana_i18n::relation::pair_count(language, matrix.pairs.len())
     };
-    let mut children = vec![view::card_title(ctx, Icon::Target, "Pairs", Some(&detail))];
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Target,
+        grana_i18n::relation::pairs(language),
+        Some(&detail),
+    )];
     if matrix.pairs.is_empty() {
-        children.push(view::weak(ctx, "No pairs to list."));
+        children.push(view::weak(
+            ctx,
+            grana_i18n::relation::no_pairs_list(language),
+        ));
         return view::card(ctx, 6.0, children);
     }
-    let source = set_name(state.scene, matrix.source);
-    let target = set_name(state.scene, matrix.target);
+    let source = set_name(language, state.scene, matrix.source);
+    let target = set_name(language, state.scene, matrix.target);
     children.push(view::caption(ctx, &format!("{source} → {target}")));
     let mut rows = Vec::with_capacity(shown);
     for (index, pair) in matrix.pairs.iter().take(shown).enumerate() {

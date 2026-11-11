@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis, Scope};
 use grana_scene::{Item, ObjectSetId, Selection};
 use grana_session::Command;
@@ -22,13 +23,16 @@ pub fn view<'a>(
     rect: Rect,
 ) -> Vec<Element<'a, Message>> {
     if state.scene.objects.is_empty() {
-        return vec![view::empty_state(
-            ctx,
-            Icon::Table,
-            "No Measurements Yet",
-            "Add and detect an object set to build a measurement table, then filter, sort and export it.",
-        )
-        .at(rect)];
+        let language = ctx.language();
+        return vec![
+            view::empty_state(
+                ctx,
+                Icon::Table,
+                grana_i18n::measure::no_measurements(language),
+                grana_i18n::measure::no_measurements_detail(language),
+            )
+            .at(rect),
+        ];
     }
     let mut elements = Vec::new();
     let mut top = rect.min.y;
@@ -81,11 +85,12 @@ fn toolbar<'a>(
         .get(chosen)
         .is_some_and(|object| object.kind().trackable());
     let group = state.measure.group();
-    let mut options = vec!["Objects".to_string()];
+    let language = ctx.language();
+    let mut options = vec![grana_i18n::common::objects(language).to_string()];
     if trackable {
-        options.push("Tracks".to_string());
+        options.push(grana_i18n::common::tracks(language).to_string());
     }
-    options.push("Frames".to_string());
+    options.push(grana_i18n::common::frames(language).to_string());
     let group_index = match group {
         Group::Object => 0,
         Group::Track => 1,
@@ -98,7 +103,7 @@ fn toolbar<'a>(
         }
     };
     let mut items = vec![
-        field_label(ctx, "Set"),
+        field_label(ctx, grana_i18n::measure::set(language)),
         combo(
             ctx,
             "measure.set",
@@ -146,7 +151,7 @@ fn toolbar<'a>(
             .unwrap_or(0);
         let labels = Aggregate::ALL
             .iter()
-            .map(|value| value.label())
+            .map(|value| aggregate_label(language, *value))
             .collect::<Vec<_>>();
         items.push(combo(
             ctx,
@@ -171,7 +176,10 @@ fn toolbar<'a>(
         items.push(view::segmented(
             ctx,
             "measure.scope",
-            &["All", "Current"],
+            &[
+                grana_i18n::common::all(language),
+                grana_i18n::common::current(language),
+            ],
             scope_index,
             move |index| match Scope::ALL.get(index) {
                 Some(value) if *value != scope => {
@@ -192,16 +200,16 @@ fn toolbar<'a>(
     let labels = MeasureView::ALL
         .iter()
         .copied()
-        .map(view_label)
+        .map(|value| view_label(language, value))
         .map(String::from)
         .collect::<Vec<_>>();
     let mode = state.measure.view();
     let total = state.measure.total();
     let shown = state.measure.rows().len();
     let caption = if state.scene.region.enabled() {
-        format!("{shown}/{total} rows · ROI")
+        grana_i18n::measure::rows_roi(language, shown, total)
     } else {
-        format!("{shown}/{total} rows")
+        grana_i18n::measure::rows(language, shown, total)
     };
     let caption_style = TextStyle::new(
         ctx.theme().font(Level::Caption),
@@ -213,7 +221,9 @@ fn toolbar<'a>(
         TextStyle::new(ctx.theme().label_font(), ctx.theme().palette.text_tertiary);
     let view_width = if measured { 132.0 } else { 0.0 };
     let view_label_width = if measured {
-        ctx.measure("View", view_label_style).x + 8.0
+        ctx.measure(grana_i18n::measure::view(language), view_label_style)
+            .x
+            + 8.0
     } else {
         0.0
     };
@@ -231,7 +241,7 @@ fn toolbar<'a>(
             .iter()
             .position(|view| *view == mode)
             .unwrap_or(0);
-        right_items.push(field_label(ctx, "View"));
+        right_items.push(field_label(ctx, grana_i18n::measure::view(language)));
         right_items.push(combo(
             ctx,
             "measure.view",
@@ -251,7 +261,7 @@ fn toolbar<'a>(
         Icon::Filter,
         28.0,
         Role::Quiet,
-        "Add filter",
+        grana_i18n::measure::add_filter(language),
         Message::Command(Command::AddFilter),
     ));
     right_items.push(view::icon_button(
@@ -260,7 +270,7 @@ fn toolbar<'a>(
         Icon::Columns,
         28.0,
         Role::Quiet,
-        "Choose columns",
+        grana_i18n::measure::choose_columns(language),
         Message::Noop,
     ));
     right_items.push(view::icon_button(
@@ -269,7 +279,7 @@ fn toolbar<'a>(
         Icon::Export,
         28.0,
         Role::Quiet,
-        "Export CSV",
+        grana_i18n::measure::export_csv(language),
         Message::Command(Command::ExportMeasure),
     ));
     if chart {
@@ -279,7 +289,7 @@ fn toolbar<'a>(
             Icon::Chart,
             28.0,
             Role::Quiet,
-            "Export plot (SVG/PDF)",
+            grana_i18n::measure::export_plot(language),
             Message::Command(Command::SaveChart),
         ));
     }
@@ -298,20 +308,25 @@ fn columns_menu<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let Some(table) = state.measure.table() else {
         return grana_ui::column();
     };
     let visible = state.measure.visible();
     let mut rows = vec![
-        grana_ui::widget::menu_row(&theme, "Show All Columns", false)
-            .named("measure.show.all")
-            .press(Message::Command(Command::ShowAllColumns)),
+        grana_ui::widget::menu_row(
+            &theme,
+            grana_i18n::measure::show_all_columns(language),
+            false,
+        )
+        .named("measure.show.all")
+        .press(Message::Command(Command::ShowAllColumns)),
         grana_ui::widget::separator().named("measure.columns.separator"),
     ];
     for (index, column) in table.columns().iter().enumerate() {
         let shown = visible.get(index).copied().unwrap_or(false);
         rows.push(
-            grana_ui::widget::menu_row(&theme, &view::column_label(column), shown)
+            grana_ui::widget::menu_row(&theme, &view::column_label(language, column), shown)
                 .key(Key::index("measure.column", index))
                 .press(Message::Command(Command::SetColumnVisible {
                     index,
@@ -330,13 +345,14 @@ fn plot_bar<'a>(
     let Some(table) = state.measure.table() else {
         return Vec::new();
     };
+    let language = ctx.language();
     let view = state.measure.view();
     let axes = state.measure.axes();
     let options = table
         .columns()
         .iter()
         .enumerate()
-        .map(|(index, column)| (index, view::column_label(column)))
+        .map(|(index, column)| (index, view::column_label(language, column)))
         .collect::<Vec<_>>();
     let labels = options
         .iter()
@@ -376,7 +392,7 @@ fn plot_bar<'a>(
     let options_x = options.clone();
     let mut items = Vec::new();
     if view == MeasureView::Distribution || view == MeasureView::Trend {
-        items.push(field_label(ctx, "Value"));
+        items.push(field_label(ctx, grana_i18n::measure::value(language)));
         items.push(combo(
             ctx,
             "measure.plot.x",
@@ -395,9 +411,9 @@ fn plot_bar<'a>(
             let styles = DistributionStyle::ALL
                 .iter()
                 .copied()
-                .map(DistributionStyle::name)
+                .map(|style| distribution_style_label(language, style))
                 .collect::<Vec<_>>();
-            items.push(field_label(ctx, "Style"));
+            items.push(field_label(ctx, grana_i18n::measure::style(language)));
             items.push(view::segmented(
                 ctx,
                 "measure.distribution",
@@ -407,7 +423,7 @@ fn plot_bar<'a>(
             ));
         }
     } else {
-        items.push(field_label(ctx, "X Axis"));
+        items.push(field_label(ctx, grana_i18n::measure::x_axis(language)));
         items.push(combo(
             ctx,
             "measure.plot.x",
@@ -423,7 +439,7 @@ fn plot_bar<'a>(
             },
         ));
         if view == MeasureView::Scatter {
-            items.push(field_label(ctx, "Y Axis"));
+            items.push(field_label(ctx, grana_i18n::measure::y_axis(language)));
             items.push(combo(
                 ctx,
                 "measure.plot.y",
@@ -443,7 +459,10 @@ fn plot_bar<'a>(
         }
     }
     if gated {
-        items.push(view::button(ctx, "Clear Gate", Role::Quiet).press(Message::ClearGates));
+        items.push(
+            view::button(ctx, grana_i18n::measure::clear_gate(language), Role::Quiet)
+                .press(Message::ClearGates),
+        );
     }
     vec![
         grana_ui::row()
@@ -464,6 +483,7 @@ fn filters<'a>(
     let Some(table) = state.measure.table() else {
         return elements;
     };
+    let language = ctx.language();
     let filters = state.measure.filters().to_vec();
     let filtered = !filters.is_empty();
     if filtered || state.measure.lasso().is_some() {
@@ -474,13 +494,25 @@ fn filters<'a>(
         let theme = *ctx.theme();
         let visibility = state.measure.visibility();
         let mut items = vec![
-            grana_ui::widget::checkbox(&theme, "Hide Filtered Rows", visibility)
-                .key(Key::new("hide.filtered"))
-                .on_toggle(|value| Message::Command(Command::SetMeasureVisibility(value))),
-            view::button(ctx, "Extract Filtered", Role::Tinted)
-                .press(Message::Command(Command::ExtractFiltered)),
-            view::button(ctx, "Delete Excluded", Role::Danger)
-                .press(Message::Command(Command::DeleteFiltered)),
+            grana_ui::widget::checkbox(
+                &theme,
+                grana_i18n::measure::hide_filtered_rows(language),
+                visibility,
+            )
+            .key(Key::new("hide.filtered"))
+            .on_toggle(|value| Message::Command(Command::SetMeasureVisibility(value))),
+            view::button(
+                ctx,
+                grana_i18n::measure::extract_filtered(language),
+                Role::Tinted,
+            )
+            .press(Message::Command(Command::ExtractFiltered)),
+            view::button(
+                ctx,
+                grana_i18n::measure::delete_excluded(language),
+                Role::Danger,
+            )
+            .press(Message::Command(Command::DeleteFiltered)),
         ];
         if !filtered {
             items.remove(0);
@@ -498,7 +530,7 @@ fn filters<'a>(
         .columns()
         .iter()
         .enumerate()
-        .map(|(index, column)| (index, view::column_label(column)))
+        .map(|(index, column)| (index, view::column_label(language, column)))
         .collect::<Vec<_>>();
     let labels = options
         .iter()
@@ -566,7 +598,7 @@ fn filters<'a>(
             .align(Align::Center)
             .at(controls)
             .children([
-                field_label(ctx, "Filter"),
+                field_label(ctx, grana_i18n::measure::filter(language)),
                 combo(ctx, &combo_key, 180.0, selected, &labels, move |choice| {
                     match options_for_combo.get(choice) {
                         Some((column, _)) if *column != column_index => {
@@ -590,7 +622,7 @@ fn filters<'a>(
                 Icon::Close,
                 22.0,
                 Role::Quiet,
-                "Remove filter",
+                grana_i18n::measure::remove_filter(language),
                 Message::Command(Command::RemoveFilter(index)),
             )
             .at(remove),
@@ -605,13 +637,14 @@ fn table<'a>(
     state: &'a View<'a>,
     rect: Rect,
 ) -> Vec<Element<'a, Message>> {
+    let language = ctx.language();
     let Some(set) = state.measure.set() else {
         return vec![
             view::empty_state(
                 ctx,
                 Icon::Table,
-                "No Object Set Selected",
-                "Choose an object set to inspect its measurements.",
+                grana_i18n::measure::no_set_selected(language),
+                grana_i18n::measure::no_set_selected_detail(language),
             )
             .at(rect),
         ];
@@ -622,15 +655,15 @@ fn table<'a>(
                 view::empty_state(
                     ctx,
                     Icon::Table,
-                    "Measuring",
-                    "The measurements are computed in the background and appear here when they settle.",
+                    grana_i18n::measure::measuring(language),
+                    grana_i18n::measure::measuring_detail(language),
                 )
             } else {
                 view::empty_state(
                     ctx,
                     Icon::Table,
-                    "No Detection Yet",
-                    "Detect this object set to build its measurement table.",
+                    grana_i18n::measure::no_detection(language),
+                    grana_i18n::measure::no_detection_detail(language),
                 )
             }
             .at(rect),
@@ -638,12 +671,18 @@ fn table<'a>(
     };
     if table.rows() == 0 {
         let detail = match state.measure.group() {
-            Group::Track => "Track the objects to summarise their trajectories.",
-            Group::Object | Group::Timepoint => {
-                "Detect objects in the region to build a measurement table."
-            }
+            Group::Track => grana_i18n::measure::no_rows_track_detail(language),
+            Group::Object | Group::Timepoint => grana_i18n::measure::no_rows_detail(language),
         };
-        return vec![view::empty_state(ctx, Icon::Table, "No Rows", detail).at(rect)];
+        return vec![
+            view::empty_state(
+                ctx,
+                Icon::Table,
+                grana_i18n::measure::no_rows(language),
+                detail,
+            )
+            .at(rect),
+        ];
     }
     let visible = state.measure.visible();
     let columns = table
@@ -658,8 +697,8 @@ fn table<'a>(
             view::empty_state(
                 ctx,
                 Icon::Columns,
-                "No Visible Columns",
-                "Choose at least one column from the columns menu.",
+                grana_i18n::measure::no_visible_columns(language),
+                grana_i18n::measure::no_visible_columns_detail(language),
             )
             .at(rect),
         ];
@@ -706,7 +745,7 @@ fn table<'a>(
         let sorted = sort
             .filter(|(current, _)| *current == *index)
             .map(|(_, descending)| descending);
-        let label = view::column_label(column);
+        let label = view::column_label(language, column);
         let style = TextStyle::new(
             theme.label_font(),
             if sorted.is_some() {
@@ -930,13 +969,38 @@ fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'
     )
 }
 
-fn view_label(view: MeasureView) -> &'static str {
+fn view_label(language: Language, view: MeasureView) -> &'static str {
     match view {
-        MeasureView::Table => "Table",
-        MeasureView::Histogram => "Histogram",
-        MeasureView::Scatter => "Scatter",
-        MeasureView::Distribution => "Distribution",
-        MeasureView::Trend => "Trend",
+        MeasureView::Table => grana_i18n::measure::table(language),
+        MeasureView::Histogram => grana_i18n::measure::histogram(language),
+        MeasureView::Scatter => grana_i18n::measure::scatter(language),
+        MeasureView::Distribution => grana_i18n::measure::distribution(language),
+        MeasureView::Trend => grana_i18n::measure::trend(language),
+    }
+}
+
+fn distribution_style_label(language: Language, style: DistributionStyle) -> &'static str {
+    match style {
+        DistributionStyle::Box => grana_i18n::measure::box_plot(language),
+        DistributionStyle::Violin => grana_i18n::measure::violin_plot(language),
+    }
+}
+
+fn aggregate_label(language: Language, aggregate: Aggregate) -> String {
+    if aggregate == Aggregate::MEAN {
+        grana_i18n::measure::aggregate_mean(language).to_string()
+    } else if aggregate == Aggregate::SUM {
+        grana_i18n::measure::aggregate_sum(language).to_string()
+    } else if aggregate == Aggregate::MINIMUM {
+        grana_i18n::measure::aggregate_minimum(language).to_string()
+    } else if aggregate == Aggregate::MAXIMUM {
+        grana_i18n::measure::aggregate_maximum(language).to_string()
+    } else if aggregate == Aggregate::DEVIATION {
+        grana_i18n::measure::aggregate_deviation(language).to_string()
+    } else if Aggregate::quantile(50) == Some(aggregate) {
+        grana_i18n::measure::aggregate_median(language).to_string()
+    } else {
+        aggregate.label()
     }
 }
 
@@ -1000,10 +1064,11 @@ fn combo<'a>(
 }
 
 fn column_widths(state: &View<'_>, columns: &[(usize, Column)], available: f32) -> Vec<f32> {
+    let language = state.workspace.language;
     let initial = columns
         .iter()
         .map(|(_, column)| {
-            let header = view::column_label(column).chars().count() as f32 * 5.9 + 22.0;
+            let header = view::column_label(language, column).chars().count() as f32 * 5.9 + 22.0;
             let value = (f32::from(column.decimals()) + 6.0) * 7.0 + 18.0;
             header.max(value).max(MIN_COLUMN_WIDTH)
         })

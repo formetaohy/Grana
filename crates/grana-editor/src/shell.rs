@@ -17,6 +17,7 @@ const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 38.0;
 const RECOVERY_HEIGHT: f32 = 76.0;
 const DEMO_HEIGHT: f32 = 68.0;
+const LANGUAGE_HEIGHT: f32 = 28.0;
 
 struct Status {
     text: String,
@@ -33,7 +34,8 @@ pub(crate) fn view<'a>(
 ) -> Vec<Element<'a, Message>> {
     let palette = ctx.theme().palette;
     let backdrop = palette.scene_backdrop;
-    let status = status(view);
+    let status = status(view, workspace.language);
+    let language = workspace.language;
     let detail_style = TextStyle::new(
         ctx.theme().font(Level::Callout),
         if status.error {
@@ -74,6 +76,8 @@ pub(crate) fn view<'a>(
         + recovered
         + CARD_GAP
         + DEMO_HEIGHT
+        + CARD_GAP
+        + LANGUAGE_HEIGHT
         + recents;
     let rect = Rect::from_min_size(
         Vec2::new(
@@ -107,7 +111,7 @@ pub(crate) fn view<'a>(
             grana_ui::widget::action_button(
                 ctx.theme(),
                 Icon::Folder,
-                "OME-Zarr Folder",
+                grana_i18n::shell::ome_zarr_folder(language),
                 Role::Control,
             )
             .named("shell.open.dataset")
@@ -115,17 +119,23 @@ pub(crate) fn view<'a>(
             grana_ui::widget::action_button(
                 ctx.theme(),
                 Icon::Globe,
-                "Remote OME-Zarr",
+                grana_i18n::shell::remote_ome_zarr(language),
                 Role::Control,
             )
             .named("shell.open.remote")
             .press(Message::BeginRemote),
-            grana_ui::widget::action_button(ctx.theme(), Icon::Folder, "Project", Role::Control)
-                .named("shell.open.project")
-                .press(Message::Command(Command::OpenProject)),
+            grana_ui::widget::action_button(
+                ctx.theme(),
+                Icon::Folder,
+                grana_i18n::shell::project(language),
+                Role::Control,
+            )
+            .named("shell.open.project")
+            .press(Message::Command(Command::OpenProject)),
         ]),
     );
     children.push(demo(ctx));
+    children.push(language_switch(ctx));
     children.push(recent_block(ctx, view));
     let card = grana_ui::column()
         .padding(Edges::all(CARD_PADDING))
@@ -139,28 +149,27 @@ pub(crate) fn view<'a>(
     elements
 }
 
-fn status(view: &SessionView<'_>) -> Status {
+fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
     if let Some((label, done, total)) = view.io.document {
         return Status {
-            text: format!("Reading {label}"),
-            detail: format!("{done} of {total} steps complete."),
+            text: grana_i18n::common::task(language, label),
+            detail: grana_i18n::shell::steps_complete(language, done, total),
             busy: true,
             error: false,
         };
     }
     if let Some(label) = view.io.loading {
         return Status {
-            text: format!("Opening {label}"),
-            detail: "The dataset streams in as it is explored, so the window stays live."
-                .to_string(),
+            text: grana_i18n::shell::opening(language, label),
+            detail: grana_i18n::shell::loading_detail(language).to_string(),
             busy: true,
             error: false,
         };
     }
     if let Some((label, done, total)) = view.io.label {
         return Status {
-            text: format!("Writing {label}"),
-            detail: format!("{done} of {total} steps stored."),
+            text: grana_i18n::common::task(language, label),
+            detail: grana_i18n::shell::steps_stored(language, done, total),
             busy: true,
             error: false,
         };
@@ -168,8 +177,8 @@ fn status(view: &SessionView<'_>) -> Status {
     if let Some(message) = view.io.message {
         return Status {
             text: match message.kind() {
-                Kind::Error => "Nothing could be opened".to_string(),
-                Kind::Info => "Ready".to_string(),
+                Kind::Error => grana_i18n::shell::nothing_opened(language).to_string(),
+                Kind::Info => grana_i18n::shell::ready(language).to_string(),
             },
             detail: message.text().to_string(),
             busy: false,
@@ -177,8 +186,8 @@ fn status(view: &SessionView<'_>) -> Status {
         };
     }
     Status {
-        text: "No dataset open".to_string(),
-        detail: "OME-Zarr, CZI, ND2, LIF and OME-TIFF data open here, locally or over HTTP. Start with the demo to explore.".to_string(),
+        text: grana_i18n::shell::no_dataset(language).to_string(),
+        detail: grana_i18n::shell::no_dataset_detail(language).to_string(),
         busy: false,
         error: false,
     }
@@ -246,15 +255,25 @@ fn state<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a
 }
 
 fn actions<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    grana_ui::widget::button_width(ctx.theme(), "Open Image…", Role::Prominent, Length::Fill)
-        .named("shell.open.image")
-        .press(Message::Command(Command::OpenImage))
+    grana_ui::widget::button_width(
+        ctx.theme(),
+        grana_i18n::shell::open_image(ctx.language()),
+        Role::Prominent,
+        Length::Fill,
+    )
+    .named("shell.open.image")
+    .press(Message::Command(Command::OpenImage))
 }
 
 fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let accent = palette.accent;
+    let language = ctx.language();
+    let title = grana_i18n::shell::synthetic_fluorescence(language);
+    let detail = grana_i18n::shell::demo_detail(language);
+    let action = grana_i18n::shell::open_demo(language);
+    let tooltip = grana_i18n::shell::open_demo_tooltip(language);
     let title_style = TextStyle::new(theme.font(Level::Headline).medium(), palette.text_primary);
     let detail_style =
         TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating();
@@ -297,7 +316,7 @@ fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
                 Vec2::new(rect.min.x + 62.0, rect.min.y + 12.0),
                 Vec2::new(rect.max.x - 78.0, rect.min.y + 38.0),
             ),
-            "Synthetic Fluorescence",
+            title,
             title_style,
             Align::Center,
         );
@@ -306,7 +325,7 @@ fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
                 Vec2::new(rect.min.x + 62.0, rect.min.y + 35.0),
                 Vec2::new(rect.max.x - 104.0, rect.max.y - 10.0),
             ),
-            "4D spots, surfaces and filaments, no files.",
+            detail,
             detail_style,
             Align::Center,
         );
@@ -315,7 +334,7 @@ fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
                 Vec2::new(rect.max.x - 92.0, rect.min.y),
                 Vec2::new(rect.max.x - 28.0, rect.max.y),
             ),
-            "OPEN DEMO",
+            action,
             action_style,
             Align::Center,
         );
@@ -329,10 +348,36 @@ fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
         );
     })
     .named("shell.demo")
-    .tooltip("Open the built-in demo dataset")
+    .tooltip(tooltip)
     .press(Message::Command(Command::OpenDemo))
     .cursor(grana_ui::Cursor::Pointing)
     .focus_ring(Corners::all(14.0))
+}
+
+fn language_switch<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
+    let language = ctx.language();
+    let labels = grana_i18n::Language::ALL.map(grana_i18n::Language::label);
+    let selected = grana_i18n::Language::ALL
+        .iter()
+        .position(|candidate| *candidate == language)
+        .unwrap_or(0);
+    let caption = TextStyle::new(
+        ctx.theme().font(Level::Callout),
+        ctx.theme().palette.text_tertiary,
+    );
+    grana_ui::row()
+        .gap(10.0)
+        .align(Align::Center)
+        .height(Length::Fixed(LANGUAGE_HEIGHT))
+        .children([
+            grana_ui::text(grana_i18n::appearance::language(language), caption),
+            crate::view::segmented_fill(ctx, "shell.language", &labels, selected, |index| {
+                match grana_i18n::Language::ALL.get(index) {
+                    Some(language) => Message::SetLanguage(*language),
+                    None => Message::Noop,
+                }
+            }),
+        ])
 }
 
 fn recovery_block<'a>(
@@ -341,8 +386,10 @@ fn recovery_block<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let headline = format!("Unsaved analysis of {}", recovery.name);
-    let detail = format!("{} · saved {}", recovery.detail, ago(recovery.age));
+    let language = ctx.language();
+    let headline = grana_i18n::shell::unsaved_analysis(language, recovery.name);
+    let saved = ago(language, recovery.age);
+    let detail = grana_i18n::shell::saved_detail(language, &recovery.detail, &saved);
     grana_ui::column()
         .gap(6.0)
         .height(Length::Fixed(RECOVERY_HEIGHT))
@@ -356,25 +403,35 @@ fn recovery_block<'a>(
                 TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating(),
             ),
             grana_ui::row().gap(8.0).children([
-                grana_ui::widget::action_button(&theme, Icon::Undo, "Recover", Role::Prominent)
-                    .named("shell.recover")
-                    .press(Message::Command(Command::RecoverAnalysis)),
-                grana_ui::widget::action_button(&theme, Icon::Trash, "Discard", Role::Control)
-                    .named("shell.discard")
-                    .press(Message::Command(Command::DiscardAnalysis)),
+                grana_ui::widget::action_button(
+                    &theme,
+                    Icon::Undo,
+                    grana_i18n::shell::recover(language),
+                    Role::Prominent,
+                )
+                .named("shell.recover")
+                .press(Message::Command(Command::RecoverAnalysis)),
+                grana_ui::widget::action_button(
+                    &theme,
+                    Icon::Trash,
+                    grana_i18n::shell::discard(language),
+                    Role::Control,
+                )
+                .named("shell.discard")
+                .press(Message::Command(Command::DiscardAnalysis)),
             ]),
         ])
 }
 
-fn ago(seconds: u64) -> String {
+fn ago(language: grana_i18n::Language, seconds: u64) -> String {
     match seconds {
-        0..=59 => "moments ago".to_string(),
-        60..=119 => "a minute ago".to_string(),
-        120..=3599 => format!("{} minutes ago", seconds / 60),
-        3600..=7199 => "an hour ago".to_string(),
-        7200..=86399 => format!("{} hours ago", seconds / 3600),
-        86400..=172799 => "a day ago".to_string(),
-        _ => format!("{} days ago", seconds / 86400),
+        0..=59 => grana_i18n::shell::moments_ago(language).to_string(),
+        60..=119 => grana_i18n::shell::minute_ago(language).to_string(),
+        120..=3599 => grana_i18n::shell::minutes_ago(language, seconds / 60),
+        3600..=7199 => grana_i18n::shell::hour_ago(language).to_string(),
+        7200..=86399 => grana_i18n::shell::hours_ago(language, seconds / 3600),
+        86400..=172799 => grana_i18n::shell::day_ago(language).to_string(),
+        _ => grana_i18n::shell::days_ago(language, seconds / 86400),
     }
 }
 
@@ -394,6 +451,7 @@ fn recent_block<'a>(
         },
         palette.text_tertiary,
     );
+    let recent_label = grana_i18n::shell::recent(ctx.language());
     let mut children = vec![
         grana_ui::canvas(Length::Fill, RECENT_HEADER, move |painter, info| {
             painter.text_in(
@@ -401,7 +459,7 @@ fn recent_block<'a>(
                     Vec2::new(info.rect.min.x + 4.0, info.rect.min.y),
                     info.rect.max,
                 ),
-                "RECENT",
+                recent_label,
                 header_style,
                 Align::Center,
             );

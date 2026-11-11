@@ -16,6 +16,7 @@ pub(super) fn relations<'a>(
     let Some(set) = state.scene.objects.get(id) else {
         return Vec::new();
     };
+    let language = ctx.language();
     let frames = state.scene.frame_count();
     let targets = state
         .scene
@@ -52,7 +53,7 @@ pub(super) fn relations<'a>(
     vec![crate::inspector::disclosure(
         ctx,
         &salt,
-        "Relations",
+        grana_i18n::object::relations(language),
         open,
         children,
     )]
@@ -73,10 +74,13 @@ pub(super) fn relation_row<'a>(
         computed,
         total,
     } = entry;
+    let language = ctx.language();
     let name = targets
         .iter()
         .find(|(candidate, _)| *candidate == target)
-        .map_or("Object Set", |(_, name)| name.as_str());
+        .map_or(grana_i18n::object::object_set(language), |(_, name)| {
+            name.as_str()
+        });
     let running = view::progress(
         state.jobs,
         Job::Relation {
@@ -101,7 +105,7 @@ pub(super) fn relation_row<'a>(
         Icon::Grid,
         22.0,
         Role::Quiet,
-        "Open pair matrix",
+        grana_i18n::object::open_pair_matrix(language),
         Message::OpenRelation {
             source: id,
             target,
@@ -114,7 +118,7 @@ pub(super) fn relation_row<'a>(
         Icon::Close,
         22.0,
         Role::Quiet,
-        "Remove relation",
+        grana_i18n::object::remove_relation(language),
         Message::Command(Command::RemoveRelation {
             source: id,
             target,
@@ -143,7 +147,7 @@ pub(super) fn relation_row<'a>(
                 Icon::ChevronLeft,
                 20.0,
                 Role::Quiet,
-                "Earlier frame",
+                grana_i18n::object::earlier_frame(language),
                 Message::Command(Command::MoveRelation {
                     source: id,
                     target,
@@ -154,7 +158,7 @@ pub(super) fn relation_row<'a>(
         }
         cell.push(crate::inspector::centered(
             20.0,
-            view::caption(ctx, &shift_label(shift)),
+            view::caption(ctx, &shift_label(language, shift)),
         ));
         if shift < limit && !taken.contains(&(shift + 1)) {
             cell.push(view::icon_button(
@@ -163,7 +167,7 @@ pub(super) fn relation_row<'a>(
                 Icon::ChevronRight,
                 20.0,
                 Role::Quiet,
-                "Later frame",
+                grana_i18n::object::later_frame(language),
                 Message::Command(Command::MoveRelation {
                     source: id,
                     target,
@@ -180,19 +184,23 @@ pub(super) fn relation_row<'a>(
                 Icon::Plus,
                 20.0,
                 Role::Quiet,
-                "Add offset relation",
+                grana_i18n::object::add_offset_relation(language),
                 Message::Noop,
             ));
         }
         let row = grana_ui::row().gap(4.0).align(Align::Center).children(cell);
-        children.push(view::form_row(ctx, "Shift", row));
+        children.push(view::form_row(
+            ctx,
+            grana_i18n::object::shift(language),
+            row,
+        ));
         if !free.is_empty() {
             let mut rows = Vec::new();
             for (index, offset) in free.iter().enumerate() {
                 rows.push(view::menu_row(
                     ctx,
                     &format!("{offset_key}.{index}"),
-                    &shift_label(*offset),
+                    &shift_label(language, *offset),
                     false,
                     Some(Message::Command(Command::AddRelation {
                         source: id,
@@ -215,13 +223,13 @@ pub(super) fn free_offsets(limit: i32, taken: &[i32]) -> Vec<i32> {
     free
 }
 
-pub(super) fn shift_label(shift: i32) -> String {
+pub(super) fn shift_label(language: Language, shift: i32) -> String {
     match shift {
-        0 => "Same frame".to_string(),
-        1 => "Target +1f".to_string(),
-        -1 => "Target −1f".to_string(),
-        value if value > 0 => format!("Target +{value}f"),
-        value => format!("Target {value}f"),
+        0 => grana_i18n::object::same_frame(language).to_string(),
+        1 => grana_i18n::object::target_shift(language, "+1"),
+        -1 => grana_i18n::object::target_shift(language, "−1"),
+        value if value > 0 => grana_i18n::object::target_shift(language, &format!("+{value}")),
+        value => grana_i18n::object::target_shift(language, &format!("{value}")),
     }
 }
 
@@ -231,6 +239,7 @@ pub(super) fn unlinked<'a>(
     relations: &[RelationEntry],
     targets: &[(ObjectSetId, String)],
 ) -> Vec<Element<'a, Message>> {
+    let language = ctx.language();
     let unlinked = targets
         .iter()
         .filter(|(target, _)| {
@@ -240,7 +249,7 @@ pub(super) fn unlinked<'a>(
         })
         .map(|(target, name)| {
             let label = if *target == id {
-                format!("{name} · Nearest Neighbour")
+                grana_i18n::object::nearest(language, name)
             } else {
                 name.clone()
             };
@@ -265,9 +274,14 @@ pub(super) fn unlinked<'a>(
             })),
         ));
     }
-    let anchor = view::button_with(ctx, "Relate to Object Set…", Role::Control, Length::Fill)
-        .named(&key)
-        .press(Message::Noop);
+    let anchor = view::button_with(
+        ctx,
+        grana_i18n::object::relate_to_set(language),
+        Role::Control,
+        Length::Fill,
+    )
+    .named(&key)
+    .press(Message::Noop);
     let menu = view::menu(ctx, Key::new(&key), 208.0, rows);
     vec![anchor, menu]
 }

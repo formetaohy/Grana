@@ -15,9 +15,10 @@ pub fn edit<'a>(
     width: f32,
 ) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let base = coloring.clone();
     let mut children = Vec::new();
-    let mut options = vec![(None, "Uniform".to_string())];
+    let mut options = vec![(None, grana_i18n::inspector::uniform(language).to_string())];
     options.extend(
         measurements
             .iter()
@@ -27,7 +28,7 @@ pub fn edit<'a>(
     children.push(crate::inspector::form_combo(
         ctx,
         &format!("{salt}.metric"),
-        "Color by",
+        grana_i18n::inspector::color_by(language),
         &options,
         Some(current),
         width - crate::panel::FORM_LABEL,
@@ -70,21 +71,29 @@ pub fn edit<'a>(
             }
         },
     );
-    let reverse = grana_ui::widget::checkbox(&theme, "Rev", coloring.reversed())
-        .named(&format!("{salt}.reverse"))
-        .on_toggle({
-            let base = base.clone();
-            move |value| {
-                let mut next = base.clone();
-                next.set_reversed(value);
-                apply(set, next)
-            }
-        });
+    let reverse = grana_ui::widget::checkbox(
+        &theme,
+        grana_i18n::inspector::reverse(language),
+        coloring.reversed(),
+    )
+    .named(&format!("{salt}.reverse"))
+    .on_toggle({
+        let base = base.clone();
+        move |value| {
+            let mut next = base.clone();
+            next.set_reversed(value);
+            apply(set, next)
+        }
+    });
     let palette_row = grana_ui::row()
         .gap(8.0)
         .align(Align::Center)
         .children([palette_combo, reverse]);
-    children.push(crate::view::form_row(ctx, "Palette", palette_row));
+    children.push(crate::view::form_row(
+        ctx,
+        grana_i18n::inspector::palette(language),
+        palette_row,
+    ));
     let samples = 64;
     let colors = (0..samples)
         .map(|index| {
@@ -114,6 +123,7 @@ fn range<'a>(
 ) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let palette = theme.palette;
+    let language = ctx.language();
     let base = coloring.clone();
     let unit = metric.unit();
     let decimals = metric.decimals();
@@ -141,28 +151,34 @@ fn range<'a>(
                         apply(set, next)
                     }
                 });
-            let auto = crate::view::button(ctx, "Auto", Role::Quiet).press({
-                let mut next = base.clone();
-                next.set_manual(None);
-                apply(set, next)
-            });
+            let auto = crate::view::button(ctx, grana_i18n::inspector::auto(language), Role::Quiet)
+                .press({
+                    let mut next = base.clone();
+                    next.set_manual(None);
+                    apply(set, next)
+                });
             let row = grana_ui::row()
                 .gap(6.0)
                 .align(Align::Center)
                 .children([low, high, auto]);
-            children.push(crate::view::form_row(ctx, "Range", row));
+            children.push(crate::view::form_row(
+                ctx,
+                grana_i18n::inspector::range(language),
+                row,
+            ));
         }
         (None, Some((minimum, maximum))) => {
-            let text = format!(
-                "Auto: {} – {}",
-                grana_figure::value(minimum, unit, decimals),
-                grana_figure::value(maximum, unit, decimals)
+            let text = grana_i18n::inspector::auto_range(
+                language,
+                &grana_figure::value(minimum, unit, decimals),
+                &grana_figure::value(maximum, unit, decimals),
             );
             let style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
             let inset = (theme.metrics.control_height * 0.5).round() - 3.0;
+            let fix_label = grana_i18n::inspector::fix_range(language);
             let button =
                 ctx.measure(
-                    "Fix Range",
+                    fix_label,
                     TextStyle::new(theme.button_font(), palette.text_primary),
                 )
                 .x + inset * 2.0;
@@ -170,7 +186,7 @@ fn range<'a>(
             let label = grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
                 painter.text_in(info.rect, &text, style, Align::Center);
             });
-            let fix = crate::view::button(ctx, "Fix Range", Role::Quiet).press({
+            let fix = crate::view::button(ctx, fix_label, Role::Quiet).press({
                 let mut next = base.clone();
                 next.set_manual(Some((minimum, maximum)));
                 apply(set, next)
@@ -180,7 +196,10 @@ fn range<'a>(
                 fix,
             ]));
         }
-        (None, None) => children.push(crate::view::weak(ctx, "No measured values to map yet.")),
+        (None, None) => children.push(crate::view::weak(
+            ctx,
+            grana_i18n::inspector::no_measured(language),
+        )),
     }
     children
 }

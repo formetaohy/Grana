@@ -85,6 +85,7 @@ pub(crate) fn resolve(
 }
 
 fn catalog(view: &SessionView<'_>, workspace: &Workspace, query: &str) -> Vec<Entry> {
+    let language = workspace.language;
     let scene = view.scene.is_some();
     let mut entries = Vec::new();
     for group in Group::ALL {
@@ -96,27 +97,33 @@ fn catalog(view: &SessionView<'_>, workspace: &Workspace, query: &str) -> Vec<En
                 continue;
             }
             entries.push(Entry {
-                title: spec.title.to_string(),
+                title: crate::text::command(language, spec.id).to_string(),
                 group,
                 symbol: spec.symbol,
                 shortcut: spec.shortcut,
                 message: spec.action.message(),
             });
         }
-        for extra in dynamic(view, workspace, group, scene) {
+        for extra in dynamic(view, workspace, language, group, scene) {
             entries.push(extra);
         }
     }
-    filter(entries, query)
+    filter(entries, query, language)
 }
 
-fn dynamic(view: &SessionView<'_>, workspace: &Workspace, group: Group, scene: bool) -> Vec<Entry> {
+fn dynamic(
+    view: &SessionView<'_>,
+    workspace: &Workspace,
+    language: grana_i18n::Language,
+    group: Group,
+    scene: bool,
+) -> Vec<Entry> {
     let mut entries = Vec::new();
     match group {
         Group::File => {
             for (index, recent) in view.recent.iter().enumerate() {
                 entries.push(Entry {
-                    title: format!("Open {}", recent.name()),
+                    title: grana_i18n::palette::open_recent(language, recent.name()),
                     group,
                     symbol: match recent.kind() {
                         RecentKind::Image => Icon::Cube,
@@ -131,7 +138,7 @@ fn dynamic(view: &SessionView<'_>, workspace: &Workspace, group: Group, scene: b
         Group::View if scene => {
             for (index, named) in view.views.iter().enumerate() {
                 entries.push(Entry {
-                    title: format!("Apply View {}", named.name),
+                    title: grana_i18n::palette::apply_view(language, &named.name),
                     group,
                     symbol: Icon::Camera,
                     shortcut: None,
@@ -141,9 +148,9 @@ fn dynamic(view: &SessionView<'_>, workspace: &Workspace, group: Group, scene: b
         }
         Group::Time if scene => entries.push(Entry {
             title: if workspace.playback.playing {
-                "Pause Playback".to_string()
+                grana_i18n::palette::pause_playback(language).to_string()
             } else {
-                "Play".to_string()
+                grana_i18n::palette::play(language).to_string()
             },
             group,
             symbol: if workspace.playback.playing {
@@ -163,7 +170,7 @@ fn dynamic(view: &SessionView<'_>, workspace: &Workspace, group: Group, scene: b
     entries
 }
 
-fn filter(entries: Vec<Entry>, query: &str) -> Vec<Entry> {
+fn filter(entries: Vec<Entry>, query: &str, language: grana_i18n::Language) -> Vec<Entry> {
     let tokens = query
         .split_whitespace()
         .map(str::to_lowercase)
@@ -174,7 +181,7 @@ fn filter(entries: Vec<Entry>, query: &str) -> Vec<Entry> {
     let mut kept = Vec::new();
     for (index, entry) in entries.into_iter().enumerate() {
         let title = entry.title.to_lowercase();
-        let group = entry.group.title().to_lowercase();
+        let group = entry.group.title(language).to_lowercase();
         let mut score = 0i32;
         let mut matched = true;
         for token in &tokens {
@@ -281,11 +288,12 @@ pub(crate) fn view<'a>(
         children.push(row(ctx, entry, index, index == palette.selected));
     }
     if palette.entries.is_empty() {
+        let empty = grana_i18n::palette::no_matches(ctx.language());
         children.push(
             grana_ui::canvas(Length::Fill, ROW, move |painter, info| {
                 painter.text_in(
                     info.rect,
-                    "No command matches",
+                    empty,
                     TextStyle::new(theme.font(Level::Callout), theme.palette.text_tertiary),
                     Align::Center,
                 );
@@ -327,7 +335,7 @@ fn group_header<'a>(ctx: &mut BuildContext<'_, Message>, group: Group) -> Elemen
         tracking: 0.7,
         ..grana_ui::TypeStyle::new(10.0, 600.0, 14.0)
     };
-    let title = group.title().to_uppercase();
+    let title = group.title(ctx.language()).to_uppercase();
     grana_ui::canvas(Length::Fill, HEADER, move |painter, info| {
         painter.text_in(
             Rect::from_min_max(
@@ -401,13 +409,14 @@ fn row<'a>(
 fn footer<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
     let font = ctx.theme().font(Level::Caption);
+    let hint = grana_i18n::palette::footer_hint(ctx.language());
     grana_ui::canvas(Length::Fill, FOOTER, move |painter, info| {
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(info.rect.min.x + 8.0, info.rect.min.y),
                 info.rect.max,
             ),
-            "↑↓ choose · ↩ run · esc close",
+            hint,
             TextStyle::new(font, palette.text_quaternary),
             Align::Center,
         );

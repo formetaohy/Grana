@@ -27,19 +27,19 @@ impl App {
             self.request_redraw();
         }
         if effects.open_dataset
-            && let Some(path) = Self::pick_folder()
+            && let Some(path) = self.pick_folder()
         {
             self.session.begin_load(path);
             return true;
         }
         if effects.open_image
-            && let Some(path) = Self::pick_image()
+            && let Some(path) = self.pick_image()
         {
             self.session.begin_load(path);
             return true;
         }
         if effects.open_project
-            && let Some(path) = Self::pick_project()
+            && let Some(path) = self.pick_project()
         {
             self.session.begin_project(path);
             return true;
@@ -105,9 +105,10 @@ impl App {
         if !self.session.dirty() {
             return true;
         }
+        let language = self.workspace.language;
         let answer = rfd::MessageDialog::new()
-            .set_title("Unsaved analysis")
-            .set_description("The analysis has unsaved changes. Save them before continuing?")
+            .set_title(grana_i18n::app::unsaved_analysis(language))
+            .set_description(grana_i18n::app::unsaved_detail(language))
             .set_level(rfd::MessageLevel::Warning)
             .set_buttons(rfd::MessageButtons::YesNoCancel)
             .show();
@@ -150,17 +151,20 @@ impl App {
         }
     }
 
-    pub(super) fn pick_folder() -> Option<PathBuf> {
+    pub(super) fn pick_folder(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title("Open an OME-Zarr folder")
+            .set_title(grana_i18n::app::open_ome_zarr_folder(
+                self.workspace.language,
+            ))
             .pick_folder()
     }
 
-    pub(super) fn pick_image() -> Option<PathBuf> {
+    pub(super) fn pick_image(&self) -> Option<PathBuf> {
+        let language = self.workspace.language;
         rfd::FileDialog::new()
-            .set_title("Open a microscopy image")
+            .set_title(grana_i18n::app::open_microscopy_image(language))
             .add_filter(
-                "Microscopy image",
+                grana_i18n::app::microscopy_image(language),
                 &[
                     "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
                 ],
@@ -173,10 +177,11 @@ impl App {
             .pick_file()
     }
 
-    pub(super) fn pick_project() -> Option<PathBuf> {
+    pub(super) fn pick_project(&self) -> Option<PathBuf> {
+        let language = self.workspace.language;
         rfd::FileDialog::new()
-            .set_title("Open a grana project")
-            .add_filter("grana project", &["grana"])
+            .set_title(grana_i18n::app::open_grana_project(language))
+            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
             .pick_file()
     }
 
@@ -184,10 +189,11 @@ impl App {
         if !choose && let Some(path) = self.session.project() {
             return Some(path.to_path_buf());
         }
+        let language = self.workspace.language;
         rfd::FileDialog::new()
-            .set_title("Save a grana project")
+            .set_title(grana_i18n::app::save_grana_project(language))
             .set_file_name(self.session.suggested_project())
-            .add_filter("grana project", &["grana"])
+            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
             .save_file()
     }
 }

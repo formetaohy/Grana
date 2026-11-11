@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use grana_i18n::Language;
 use grana_ui::Appearance;
 use serde::{Deserialize, Serialize};
 
@@ -34,9 +35,36 @@ impl From<StoredAppearance> for Appearance {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum StoredLanguage {
+    English,
+    Chinese,
+}
+
+impl From<Language> for StoredLanguage {
+    fn from(language: Language) -> Self {
+        match language {
+            Language::English => Self::English,
+            Language::Chinese => Self::Chinese,
+        }
+    }
+}
+
+impl From<StoredLanguage> for Language {
+    fn from(language: StoredLanguage) -> Self {
+        match language {
+            StoredLanguage::English => Self::English,
+            StoredLanguage::Chinese => Self::Chinese,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
     appearance: StoredAppearance,
+    #[serde(default)]
+    language: Option<StoredLanguage>,
     contrast: bool,
     #[serde(default)]
     reduce_transparency: bool,
@@ -45,6 +73,7 @@ struct Stored {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
     pub appearance: Appearance,
+    pub language: Language,
     pub contrast: bool,
     pub reduce_transparency: bool,
 }
@@ -53,6 +82,7 @@ impl Default for Preference {
     fn default() -> Self {
         Self {
             appearance: Appearance::System,
+            language: Language::system(),
             contrast: false,
             reduce_transparency: false,
         }
@@ -73,6 +103,7 @@ impl Preference {
         };
         Self {
             appearance: stored.appearance.into(),
+            language: stored.language.map_or_else(Language::system, Into::into),
             contrast: stored.contrast,
             reduce_transparency: stored.reduce_transparency,
         }
@@ -88,6 +119,7 @@ impl Preference {
         }
         let stored = Stored {
             appearance: self.appearance.into(),
+            language: Some(self.language.into()),
             contrast: self.contrast,
             reduce_transparency: self.reduce_transparency,
         };

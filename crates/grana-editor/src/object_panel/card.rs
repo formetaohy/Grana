@@ -37,6 +37,7 @@ pub(super) fn header_row<'a>(
         .map(|frame| (frame.object_count(), frame.level()));
     let expanded = state.workspace.expanded(id);
     let width = width();
+    let language = ctx.language();
     let name_key = Key::new(format!("object.{raw}.name"));
     let editing = ctx.is_editing(name_key) || state.workspace.renaming == Some(id);
     let arrow = ctx.animate(
@@ -46,23 +47,22 @@ pub(super) fn header_row<'a>(
     );
     let subtitle = match current {
         Some((count, _level)) => {
+            let noun = count_noun(language, kind);
             if frames > 1 {
-                format!(
-                    "{channel_name} · {count} {} · {detected}f",
-                    kind.count_noun()
-                )
+                grana_i18n::object::header_frames(language, &channel_name, count, noun, detected)
             } else {
-                format!("{channel_name} · {count} {}", kind.count_noun())
+                grana_i18n::object::header_single(language, &channel_name, count, noun)
             }
         }
-        None if detected > 0 => {
-            format!("{channel_name} · 0 on frame {}", time + 1)
-        }
-        None if imported => format!("{channel_name} · Ready to import"),
-        None => format!("{channel_name} · Ready to detect"),
+        None if detected > 0 => grana_i18n::object::header_empty(language, &channel_name, time + 1),
+        None if imported => grana_i18n::object::ready_import(language, &channel_name),
+        None => grana_i18n::object::ready_detect(language, &channel_name),
     };
     let subtitle = if hidden > 0 {
-        format!("{subtitle} · {hidden} hidden")
+        format!(
+            "{subtitle}{}",
+            grana_i18n::object::hidden_suffix(language, hidden)
+        )
     } else {
         subtitle
     };
@@ -143,9 +143,9 @@ pub(super) fn header_row<'a>(
         24.0,
         Role::Quiet,
         if visible {
-            "Hide object set"
+            grana_i18n::object::hide_set(language)
         } else {
-            "Show object set"
+            grana_i18n::object::show_set(language)
         },
         Message::Command(Command::SetObjectVisible {
             set: id,
@@ -158,7 +158,7 @@ pub(super) fn header_row<'a>(
         Icon::Ellipsis,
         24.0,
         Role::Quiet,
-        "Object commands",
+        grana_i18n::object::object_commands(language),
         Message::Noop,
     );
     let chevron = grana_ui::canvas(Length::Fixed(16.0), 24.0, move |painter, info| {
@@ -208,6 +208,7 @@ pub(super) fn object_menu<'a>(
         return Vec::new();
     };
     let kind = set.kind();
+    let language = ctx.language();
     let merges = state
         .scene
         .objects
@@ -220,14 +221,14 @@ pub(super) fn object_menu<'a>(
         ctx,
         &format!("object.{}.menu.rename", id.raw()),
         Icon::Pencil,
-        "Rename",
+        grana_i18n::object::rename(language),
         Message::BeginRename(id),
     ));
     rows.push(action_row(
         ctx,
         &format!("object.{}.menu.duplicate", id.raw()),
         Icon::Layers,
-        "Duplicate",
+        grana_i18n::object::duplicate(language),
         Message::Command(Command::DuplicateObject(id)),
     ));
     if set.detected() > 0 {
@@ -235,14 +236,14 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.mask", id.raw()),
             Icon::Channel,
-            "Mask Channel",
+            grana_i18n::object::mask_channel(language),
             Message::Command(Command::AddMaskChannel { set: id }),
         ));
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.coloc", id.raw()),
             Icon::Target,
-            "Colocalize Objects",
+            grana_i18n::object::colocalize_objects(language),
             Message::Command(Command::ComputeObjectColoc(id)),
         ));
     }
@@ -251,7 +252,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.cancel.coloc", id.raw()),
             Icon::Close,
-            "Cancel Object Colocalization",
+            grana_i18n::object::cancel_object_coloc(language),
             Message::Command(Command::CancelObjectColoc(id)),
         ));
     }
@@ -260,7 +261,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.clear.coloc", id.raw()),
             Icon::Reset,
-            "Clear Object Colocalization",
+            grana_i18n::object::clear_object_coloc(language),
             Message::Command(Command::ClearObjectColoc(id)),
         ));
     }
@@ -269,7 +270,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.paint", id.raw()),
             Icon::Pencil,
-            "Paint Mask",
+            grana_i18n::object::paint_mask(language),
             Message::ArmMask(id),
         ));
     }
@@ -278,7 +279,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.clear.mask", id.raw()),
             Icon::Reset,
-            "Clear Mask Edits",
+            grana_i18n::object::clear_mask_edits(language),
             Message::Command(Command::ClearMask(id)),
         ));
     }
@@ -287,7 +288,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.export.obj", id.raw()),
             Icon::Export,
-            "Export Mesh OBJ…",
+            grana_i18n::object::export_mesh_obj(language),
             Message::Command(Command::ExportMesh {
                 set: id,
                 format: MeshFormat::Obj,
@@ -297,7 +298,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.export.stl", id.raw()),
             Icon::Export,
-            "Export Mesh STL…",
+            grana_i18n::object::export_mesh_stl(language),
             Message::Command(Command::ExportMesh {
                 set: id,
                 format: MeshFormat::Stl,
@@ -307,7 +308,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.export.glb", id.raw()),
             Icon::Export,
-            "Export Mesh GLB…",
+            grana_i18n::object::export_mesh_glb(language),
             Message::Command(Command::ExportMesh {
                 set: id,
                 format: MeshFormat::Glb,
@@ -318,7 +319,7 @@ pub(super) fn object_menu<'a>(
         ctx,
         &format!("object.{}.menu.labels", id.raw()),
         Icon::Export,
-        "Export Labels…",
+        grana_i18n::object::export_labels(language),
         Message::Command(Command::ExportLabels(id)),
     ));
     if set.kind().trackable() && set.tracks().is_some() {
@@ -326,20 +327,20 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.tracks", id.raw()),
             Icon::Export,
-            "Export Tracks…",
+            grana_i18n::object::export_tracks(language),
             Message::Command(Command::ExportTracks(id)),
         ));
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.geff", id.raw()),
             Icon::Export,
-            "Export GEFF…",
+            grana_i18n::object::export_geff(language),
             Message::Command(Command::ExportGeff(id)),
         ));
     }
     if !merges.is_empty() {
         rows.push(view::menu_separator(ctx));
-        rows.push(view::caption(ctx, "Merge Into"));
+        rows.push(view::caption(ctx, grana_i18n::object::merge_into(language)));
         for (index, (candidate, label)) in merges.iter().enumerate() {
             rows.push(view::menu_row(
                 ctx,
@@ -360,7 +361,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.up", id.raw()),
             Icon::ChevronUp,
-            "Move Up",
+            grana_i18n::object::move_up(language),
             Message::Command(Command::ReorderObject {
                 set: id,
                 index: position - 1,
@@ -372,7 +373,7 @@ pub(super) fn object_menu<'a>(
             ctx,
             &format!("object.{}.menu.down", id.raw()),
             Icon::ChevronDown,
-            "Move Down",
+            grana_i18n::object::move_down(language),
             Message::Command(Command::ReorderObject {
                 set: id,
                 index: position + 1,
@@ -383,7 +384,7 @@ pub(super) fn object_menu<'a>(
         ctx,
         &format!("object.{}.menu.remove", id.raw()),
         Icon::Trash,
-        "Delete Object Set",
+        grana_i18n::object::delete_set(language),
         Message::Command(Command::RemoveObject(id)),
     ));
     rows
@@ -400,6 +401,7 @@ pub(super) fn object_edit_rows<'a>(
     if set.kind() != ObjectKind::Surfaces {
         return Vec::new();
     }
+    let language = ctx.language();
     let mut selected = state
         .scene
         .selections()
@@ -424,13 +426,13 @@ pub(super) fn object_edit_rows<'a>(
     }
     let mut rows = vec![
         view::menu_separator(ctx),
-        view::caption(ctx, "Edit Objects"),
+        view::caption(ctx, grana_i18n::object::edit_objects(language)),
     ];
     if selected.len() > 1 {
         rows.push(view::menu_row(
             ctx,
             &format!("object.{}.edit.merge.selected", id.raw()),
-            &format!("Merge {} Selected Objects", selected.len()),
+            &grana_i18n::object::merge_selected(language, selected.len()),
             false,
             Some(Message::Command(Command::MergeSurfaces {
                 set: id,
@@ -460,7 +462,7 @@ pub(super) fn object_edit_rows<'a>(
         rows.push(view::menu_row(
             ctx,
             &format!("object.{}.edit.merge.{index}", id.raw()),
-            &format!("Merge Into Object {}", candidate + 1),
+            &grana_i18n::object::merge_into_object(language, candidate + 1),
             false,
             Some(Message::Command(Command::MergeSurfaces {
                 set: id,
@@ -472,7 +474,7 @@ pub(super) fn object_edit_rows<'a>(
     rows.push(view::menu_row(
         ctx,
         &format!("object.{}.edit.split", id.raw()),
-        "Split Object",
+        grana_i18n::object::split_object(language),
         false,
         Some(Message::Command(Command::SplitSurface {
             set: id,

@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_measure::Plot;
 use grana_ui::{Align, Corners, Mark, Painter, Rect, TextStyle, Ui};
 
@@ -18,6 +19,8 @@ pub struct Heading {
     pub y: String,
     pub x: String,
     pub summary: String,
+    pub empty: Option<String>,
+    pub language: Language,
 }
 
 impl Heading {
@@ -27,11 +30,23 @@ impl Heading {
             y: y.into(),
             x: x.into(),
             summary: String::new(),
+            empty: None,
+            language: Language::English,
         }
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
     }
 
     pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
         self.summary = summary.into();
+        self
+    }
+
+    pub fn with_empty(mut self, empty: impl Into<String>) -> Self {
+        self.empty = Some(empty.into());
         self
     }
 }
@@ -47,6 +62,10 @@ impl View<'_> {
     pub fn paint(&self, painter: &mut Painter, rect: Rect) {
         let metrics = self.style.metrics;
         let palette = self.style.palette;
+        let style = Style {
+            language: self.heading.language,
+            ..self.style
+        };
         if !self.heading.title.is_empty() {
             painter.text_in(
                 metrics.title_band(rect),
@@ -72,17 +91,18 @@ impl View<'_> {
                 Align::Center,
             );
         }
+        let empty = self.heading.empty.as_deref();
         match self.plot {
             Plot::Histogram(histogram) => {
-                histogram_paint(painter, rect, histogram, &self.style, &self.decor)
+                histogram_paint(painter, rect, histogram, &style, &self.decor, empty)
             }
             Plot::Scatter(scatter) => {
-                scatter_paint(painter, rect, scatter, &self.style, &self.decor)
+                scatter_paint(painter, rect, scatter, &style, &self.decor, empty)
             }
             Plot::Distribution(distribution) => {
-                distribution_paint(painter, rect, distribution, &self.style, &self.decor)
+                distribution_paint(painter, rect, distribution, &style, &self.decor, empty)
             }
-            Plot::Trend(trend) => trend_paint(painter, rect, trend, &self.style, &self.decor),
+            Plot::Trend(trend) => trend_paint(painter, rect, trend, &style, &self.decor, empty),
         }
     }
 }

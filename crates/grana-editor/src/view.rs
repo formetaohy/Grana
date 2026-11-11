@@ -552,8 +552,8 @@ pub fn empty_state<'a>(
     })
 }
 
-pub fn column_label(column: &grana_measure::Column) -> String {
-    let raw = column.label();
+pub fn column_label(language: grana_i18n::Language, column: &grana_measure::Column) -> String {
+    let raw = crate::text::column(language, column.label());
     let mut chars = raw.chars();
     let label = match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
@@ -578,6 +578,7 @@ pub fn progress(
 }
 
 pub fn progress_caption(
+    language: grana_i18n::Language,
     kind: grana_scene::ObjectKind,
     job: grana_scene::Job,
     progress: grana_scene::Progress,
@@ -585,22 +586,22 @@ pub fn progress_caption(
 ) -> String {
     let unit = match job {
         grana_scene::Job::Detect(_) => match kind {
-            grana_scene::ObjectKind::Spots => "blocks",
-            grana_scene::ObjectKind::Surfaces => "tiles",
-            grana_scene::ObjectKind::Filaments => "frames",
+            grana_scene::ObjectKind::Spots => grana_i18n::common::blocks(language),
+            grana_scene::ObjectKind::Surfaces => grana_i18n::common::tiles(language),
+            grana_scene::ObjectKind::Filaments => grana_i18n::common::frames(language),
         },
-        grana_scene::Job::Import(_) => "tiles",
+        grana_scene::Job::Import(_) => grana_i18n::common::tiles(language),
         grana_scene::Job::Track(_)
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
         | grana_scene::Job::ObjectColoc(_)
-        | grana_scene::Job::Drift => "frames",
-        grana_scene::Job::Calibrate => "beads",
+        | grana_scene::Job::Drift => grana_i18n::common::frames(language),
+        grana_scene::Job::Calibrate => grana_i18n::common::beads(language),
     };
     let prefix = match job {
         grana_scene::Job::Detect(_) | grana_scene::Job::Import(_) if frames > 1 => {
-            format!("Frame {} · ", progress.time + 1)
+            grana_i18n::common::frame_prefix(language, progress.time + 1)
         }
         grana_scene::Job::Detect(_)
         | grana_scene::Job::Import(_)
@@ -613,8 +614,11 @@ pub fn progress_caption(
         | grana_scene::Job::Calibrate => String::new(),
     };
     if progress.total > 0 {
-        format!("{prefix}{}/{} {unit}", progress.done, progress.total)
+        format!(
+            "{prefix}{}",
+            grana_i18n::common::progress(language, progress.done, progress.total, unit)
+        )
     } else {
-        format!("{prefix}Preparing")
+        format!("{prefix}{}", grana_i18n::common::preparing(language))
     }
 }

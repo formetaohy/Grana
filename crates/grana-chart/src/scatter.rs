@@ -15,6 +15,7 @@ pub fn paint(
     scatter: &Scatter,
     style: &Style,
     decor: &Decor<'_>,
+    empty: Option<&str>,
 ) {
     let palette = style.palette;
     let accent = palette.accent;
@@ -184,13 +185,10 @@ pub fn paint(
             line,
         );
     }
-    if scatter.peak() == 0 {
-        painter.text_in(
-            frame,
-            "No objects to plot",
-            empty_style(style),
-            Align::Center,
-        );
+    if scatter.peak() == 0
+        && let Some(empty) = empty
+    {
+        painter.text_in(frame, empty, empty_style(style), Align::Center);
     }
 }
 

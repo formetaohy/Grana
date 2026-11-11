@@ -16,6 +16,7 @@ pub(super) fn appearance_fields<'a>(
     let label_metric = set.label_metric();
     let hidden = set.hidden_count();
     let time = state.scene.time();
+    let language = ctx.language();
     let selected = state
         .scene
         .selection()
@@ -30,7 +31,7 @@ pub(super) fn appearance_fields<'a>(
     children.push(view::slider_readout(
         ctx,
         &format!("object.{raw}.opacity"),
-        Some("Opacity"),
+        Some(grana_i18n::object::opacity(language)),
         opacity,
         0.0..=1.0,
         false,
@@ -45,7 +46,7 @@ pub(super) fn appearance_fields<'a>(
     children.push(view::slider_readout(
         ctx,
         &format!("object.{raw}.roughness"),
-        Some("Roughness"),
+        Some(grana_i18n::object::roughness(language)),
         material.roughness(),
         0.0..=1.0,
         false,
@@ -59,7 +60,7 @@ pub(super) fn appearance_fields<'a>(
     children.push(view::slider_readout(
         ctx,
         &format!("object.{raw}.metallic"),
-        Some("Metallic"),
+        Some(grana_i18n::object::metallic(language)),
         material.metallic(),
         0.0..=1.0,
         false,
@@ -70,7 +71,7 @@ pub(super) fn appearance_fields<'a>(
         },
     ));
     children.push(
-        grana_ui::widget::toggle_row(&theme, "Object Labels", labels)
+        grana_ui::widget::toggle_row(&theme, grana_i18n::object::object_labels(language), labels)
             .named(&format!("object.{raw}.labels"))
             .on_toggle(move |value| {
                 Message::Command(Command::SetObjectLabels {
@@ -80,11 +81,11 @@ pub(super) fn appearance_fields<'a>(
             }),
     );
     if labels {
-        let options = label_metrics(state.scene, set);
+        let options = label_metrics(language, state.scene, set);
         children.push(crate::inspector::form_combo(
             ctx,
             &format!("object.{raw}.label.metric"),
-            "Label by",
+            grana_i18n::object::label_by(language),
             &options,
             Some(label_metric),
             width - crate::panel::FORM_LABEL,
@@ -102,23 +103,26 @@ pub(super) fn appearance_fields<'a>(
         if hidden > 0 {
             row.push(crate::inspector::centered(
                 control,
-                view::caption(ctx, &format!("{hidden} hidden")),
+                view::caption(ctx, &grana_i18n::object::hidden_count(language, hidden)),
             ));
             row.push(
-                view::button(ctx, "Show All", Role::Quiet)
+                view::button(ctx, grana_i18n::object::show_all(language), Role::Quiet)
                     .press(Message::Command(Command::ClearHidden(id))),
             );
         }
         if let Some(object) = selected {
             row.push(
-                view::button(ctx, "Hide Selected", Role::Quiet).press(Message::Command(
-                    Command::SetObjectHidden {
-                        set: id,
-                        time,
-                        objects: vec![object],
-                        hidden: true,
-                    },
-                )),
+                view::button(
+                    ctx,
+                    grana_i18n::object::hide_selected(language),
+                    Role::Quiet,
+                )
+                .press(Message::Command(Command::SetObjectHidden {
+                    set: id,
+                    time,
+                    objects: vec![object],
+                    hidden: true,
+                })),
             );
         }
         children.push(grana_ui::row().gap(6.0).align(Align::Center).children(row));
@@ -135,6 +139,7 @@ pub(super) fn appearance<'a>(
     let Some(set) = state.scene.objects.get(id) else {
         return Vec::new();
     };
+    let language = ctx.language();
     let names = state
         .scene
         .dataset
@@ -148,16 +153,15 @@ pub(super) fn appearance<'a>(
         .map(|measurement| {
             (
                 ObjectColor::Measurement(measurement),
-                measurement.label(&names),
+                crate::text::column(language, &measurement.label(&names)),
             )
         })
         .collect::<Vec<_>>();
     for relation in set.relations() {
-        let target = state
-            .scene
-            .objects
-            .get(relation.target())
-            .map_or_else(|| "Target".to_string(), |target| target.name().to_string());
+        let target = state.scene.objects.get(relation.target()).map_or_else(
+            || grana_i18n::object::target(language).to_string(),
+            |target| target.name().to_string(),
+        );
         let shift = match relation.shift() {
             0 => String::new(),
             shift => format!(" · t{shift:+}"),
@@ -168,13 +172,18 @@ pub(super) fn appearance<'a>(
                 field,
                 shift: relation.shift(),
             };
-            metrics.push((metric, format!("{target} · {}{shift}", field.label())));
+            let field_label = grana_i18n::measure::term(language, field.label())
+                .unwrap_or_else(|| field.label().to_string());
+            metrics.push((metric, format!("{target} · {field_label}{shift}")));
         }
     }
-    metrics.extend(child_metrics(state.scene, set, &names));
-    metrics.extend(coloc_metrics(set, &names));
+    metrics.extend(child_metrics(language, state.scene, set, &names));
+    metrics.extend(coloc_metrics(language, set, &names));
     if set.classifier().is_some() {
-        metrics.push((ObjectColor::Score, "Classifier score".to_string()));
+        metrics.push((
+            ObjectColor::Score,
+            grana_i18n::object::classifier_score(language).to_string(),
+        ));
     }
     let extent = state.scene.object_extent(set);
     let coloring = set.object_coloring().clone();
@@ -188,6 +197,10 @@ pub(super) fn appearance<'a>(
         ));
     }
     vec![crate::inspector::disclosure(
-        ctx, &salt, "Coloring", open, children,
+        ctx,
+        &salt,
+        grana_i18n::object::coloring(language),
+        open,
+        children,
     )]
 }

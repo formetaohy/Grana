@@ -35,30 +35,39 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
     let has_protocol = state.batch_protocol().is_some();
     let mut actions = Vec::new();
     let theme = *ctx.theme();
+    let language = ctx.language();
     if !running {
         actions.push(
-            grana_ui::widget::action_button(&theme, Icon::Camera, "Capture", Role::Control)
-                .named("batch.capture")
-                .press(Message::Command(Command::CaptureProtocol)),
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Camera,
+                grana_i18n::batch::capture(language),
+                Role::Control,
+            )
+            .named("batch.capture")
+            .press(Message::Command(Command::CaptureProtocol)),
         );
         actions.push(
-            view::button(ctx, "Load", Role::Quiet).press(Message::Command(Command::LoadProtocol)),
+            view::button(ctx, grana_i18n::batch::load(language), Role::Quiet)
+                .press(Message::Command(Command::LoadProtocol)),
         );
         actions.push(
-            view::button(ctx, "Save", Role::Quiet).press(Message::Command(Command::SaveProtocol)),
+            view::button(ctx, grana_i18n::common::save(language), Role::Quiet)
+                .press(Message::Command(Command::SaveProtocol)),
         );
         actions.push(
-            view::button(ctx, "Provenance", Role::Quiet)
+            view::button(ctx, grana_i18n::batch::provenance(language), Role::Quiet)
                 .press(Message::Command(Command::ExportProvenance)),
         );
         if has_protocol {
             actions.push(
-                view::button(ctx, "Apply", Role::Quiet)
+                view::button(ctx, grana_i18n::common::apply(language), Role::Quiet)
                     .press(Message::Command(Command::ApplyProtocol)),
             );
             if let Some(text) = state.batch_protocol() {
                 actions.push(
-                    view::button(ctx, "Copy", Role::Quiet).press(Message::Copy(text.to_string())),
+                    view::button(ctx, grana_i18n::batch::copy(language), Role::Quiet)
+                        .press(Message::Copy(text.to_string())),
                 );
             }
         }
@@ -71,8 +80,12 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         view::card_title(
             ctx,
             Icon::Sliders,
-            "Protocol",
-            if has_protocol { Some("Ready") } else { None },
+            grana_i18n::batch::protocol(language),
+            if has_protocol {
+                Some(grana_i18n::batch::ready(language))
+            } else {
+                None
+            },
         ),
         row,
     ];
@@ -93,31 +106,23 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                     .children([body]),
             );
         }
-        None => children.push(view::weak(
-            ctx,
-            "Capture the current region, objects and settings into a reusable protocol.",
-        )),
+        None => children.push(view::weak(ctx, grana_i18n::batch::capture_hint(language))),
     }
     view::card(ctx, 6.0, children)
 }
 
 fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let running = state.batch_running();
+    let language = ctx.language();
     let count = state.batch_datasets().len();
     let mut children = vec![view::card_title(
         ctx,
         Icon::Folder,
-        "Datasets",
-        Some(&format!(
-            "{count} item{}",
-            if count == 1 { "" } else { "s" }
-        )),
+        grana_i18n::batch::datasets(language),
+        Some(&grana_i18n::batch::item_count(language, count)),
     )];
     if state.batch_datasets().is_empty() {
-        children.push(view::weak(
-            ctx,
-            "Choose a folder of datasets that share this protocol.",
-        ));
+        children.push(view::weak(ctx, grana_i18n::batch::datasets_hint(language)));
     } else {
         let theme = *ctx.theme();
         let palette = theme.palette;
@@ -128,7 +133,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         for (index, dataset) in state.batch_datasets().iter().enumerate() {
             let tint = state_tint(&dataset.state, &theme);
             let name = dataset.name.clone();
-            let label = state_label(&dataset.state).to_string();
+            let label = state_label(language, &dataset.state).to_string();
             let detail = dataset.detail.clone();
             let mut row = grana_ui::canvas(Length::Fill, 30.0, move |painter, info| {
                 if info.hover > 0.01 {
@@ -186,13 +191,18 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
     if !running {
         let theme = *ctx.theme();
         actions.push(
-            grana_ui::widget::action_button(&theme, Icon::Plus, "Add Folder…", Role::Control)
-                .named("batch.add")
-                .press(Message::Command(Command::AddBatchDatasets)),
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Plus,
+                grana_i18n::batch::add_folder(language),
+                Role::Control,
+            )
+            .named("batch.add")
+            .press(Message::Command(Command::AddBatchDatasets)),
         );
         if !state.batch_datasets().is_empty() {
             actions.push(
-                view::button(ctx, "Clear", Role::Quiet)
+                view::button(ctx, grana_i18n::common::clear(language), Role::Quiet)
                     .press(Message::Command(Command::ClearBatchDatasets)),
             );
         }
@@ -204,16 +214,14 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             .children(actions),
     );
     if let Some(index) = state.batch_review() {
-        let name = state
-            .batch_datasets()
-            .get(index)
-            .map_or_else(|| "the dataset".to_string(), |dataset| dataset.name.clone());
+        let name = state.batch_datasets().get(index).map_or_else(
+            || grana_i18n::batch::dataset_fallback(language).to_string(),
+            |dataset| dataset.name.clone(),
+        );
         children.push(view::divider(ctx));
         children.push(view::caption(
             ctx,
-            &format!(
-                "Reviewing {name}. Edit its objects or parameters, then record the correction."
-            ),
+            &grana_i18n::batch::reviewing(language, &name),
         ));
         let ready = state.batch_review_ready() && !running;
         let corrected = state
@@ -223,7 +231,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         let theme = *ctx.theme();
         let record = grana_ui::widget::button_enabled(
             &theme,
-            "Record Correction",
+            grana_i18n::batch::record_correction(language),
             Role::Prominent,
             Length::Fill,
             ready,
@@ -237,8 +245,12 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         let mut buttons = vec![record];
         if corrected && !running {
             buttons.push(
-                view::button(ctx, "Clear Correction", Role::Quiet)
-                    .press(Message::Command(Command::ClearBatchCorrection)),
+                view::button(
+                    ctx,
+                    grana_i18n::batch::clear_correction(language),
+                    Role::Quiet,
+                )
+                .press(Message::Command(Command::ClearBatchCorrection)),
             );
         }
         children.push(
@@ -249,17 +261,18 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         );
         children.push(view::weak(
             ctx,
-            "The next run applies the correction to this dataset only.",
+            grana_i18n::batch::correction_hint(language),
         ));
     }
     view::card(ctx, 6.0, children)
 }
 
 fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let mut children = vec![view::card_title(
         ctx,
         Icon::Export,
-        "Output & Execution",
+        grana_i18n::batch::output_execution(language),
         None,
     )];
     if let Some(path) = state.batch_output() {
@@ -282,18 +295,19 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             },
         ));
     } else {
-        children.push(view::weak(
-            ctx,
-            "Choose a destination folder for the exported tables.",
-        ));
+        children.push(view::weak(ctx, grana_i18n::batch::output_hint(language)));
     }
     if !state.batch_running() {
         let theme = *ctx.theme();
-        let choose =
-            grana_ui::widget::action_button(&theme, Icon::Folder, "Choose Folder…", Role::Control)
-                .named("batch.output")
-                .press(Message::Command(Command::ChooseBatchOutput));
-        let open = view::button(ctx, "Open Run", Role::Quiet)
+        let choose = grana_ui::widget::action_button(
+            &theme,
+            Icon::Folder,
+            grana_i18n::batch::choose_folder(language),
+            Role::Control,
+        )
+        .named("batch.output")
+        .press(Message::Command(Command::ChooseBatchOutput));
+        let open = view::button(ctx, grana_i18n::batch::open_run(language), Role::Quiet)
             .named("batch.open")
             .press(Message::Command(Command::OpenBatchRun));
         children.push(
@@ -313,22 +327,26 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                     Message::Noop
                 }
             });
-        let workers = grana_ui::row()
-            .gap(8.0)
-            .align(Align::Center)
-            .children([workers, view::caption(ctx, &format!("{jobs} concurrent"))]);
-        children.push(view::form_row(ctx, "Workers", workers));
+        let workers = grana_ui::row().gap(8.0).align(Align::Center).children([
+            workers,
+            view::caption(ctx, &grana_i18n::batch::concurrent(language, jobs)),
+        ]);
+        children.push(view::form_row(
+            ctx,
+            grana_i18n::batch::workers(language),
+            workers,
+        ));
         children.push(view::toggle_row(
             ctx,
             "batch.project",
-            "Save Project per Dataset",
+            grana_i18n::batch::save_project(language),
             state.batch_project(),
             Command::SetBatchProject,
         ));
         children.push(view::toggle_row(
             ctx,
             "batch.channels",
-            "Export Derived Channels",
+            grana_i18n::batch::export_channels(language),
             state.batch_channels(),
             Command::SetBatchChannels,
         ));
@@ -341,29 +359,40 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             view::caption(
                 ctx,
                 if paused {
-                    "Paused between analysis steps"
+                    grana_i18n::batch::paused(language)
                 } else {
-                    "Running protocol across datasets…"
+                    grana_i18n::batch::running_protocol(language)
                 },
             ),
         ];
         if paused {
             let theme = *ctx.theme();
             actions.push(
-                grana_ui::widget::action_button(&theme, Icon::Play, "Resume", Role::Quiet)
-                    .named("batch.resume")
-                    .press(Message::Command(Command::ResumeBatch)),
+                grana_ui::widget::action_button(
+                    &theme,
+                    Icon::Play,
+                    grana_i18n::batch::resume(language),
+                    Role::Quiet,
+                )
+                .named("batch.resume")
+                .press(Message::Command(Command::ResumeBatch)),
             );
         } else {
             let theme = *ctx.theme();
             actions.push(
-                grana_ui::widget::action_button(&theme, Icon::Pause, "Pause", Role::Quiet)
-                    .named("batch.pause")
-                    .press(Message::Command(Command::PauseBatch)),
+                grana_ui::widget::action_button(
+                    &theme,
+                    Icon::Pause,
+                    grana_i18n::batch::pause(language),
+                    Role::Quiet,
+                )
+                .named("batch.pause")
+                .press(Message::Command(Command::PauseBatch)),
             );
         }
         actions.push(
-            view::button(ctx, "Cancel", Role::Quiet).press(Message::Command(Command::CancelBatch)),
+            view::button(ctx, grana_i18n::common::cancel(language), Role::Quiet)
+                .press(Message::Command(Command::CancelBatch)),
         );
         children.push(
             grana_ui::row()
@@ -378,7 +407,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         let theme = *ctx.theme();
         let run = grana_ui::widget::button_enabled(
             &theme,
-            "Run Batch",
+            grana_i18n::batch::run_batch(language),
             Role::Prominent,
             Length::Fill,
             ready,
@@ -395,10 +424,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             TextStyle::new(ctx.theme().font(Level::Caption), ctx.theme().palette.danger).wrapping();
         children.push(grana_ui::text(message, style));
     }
-    children.push(view::weak(
-        ctx,
-        "Re-running the same protocol resumes where it stopped.",
-    ));
+    children.push(view::weak(ctx, grana_i18n::batch::resume_hint(language)));
     view::card(ctx, 7.0, children)
 }
 
@@ -408,6 +434,7 @@ fn comparison<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let rows = state.batch_comparison();
     let significant = state
         .batch_significance()
@@ -417,26 +444,26 @@ fn comparison<'a>(
     let tests = state.batch_significance().len();
     let note = (!rows.is_empty()).then(|| {
         if tests == 0 {
-            "no group test".to_string()
+            grana_i18n::batch::no_group_test(language).to_string()
         } else {
-            format!("{significant}/{tests} significant")
+            grana_i18n::batch::significant(language, significant, tests)
         }
     });
     let mut children = vec![view::card_title(
         ctx,
         Icon::Table,
-        "Comparison",
+        grana_i18n::batch::comparison(language),
         note.as_deref(),
     )];
     if rows.is_empty() {
         children.push(view::weak(
             ctx,
-            "Run the batch, or open a run record, to compare the reported groups.",
+            grana_i18n::batch::comparison_hint(language),
         ));
         return view::card(ctx, 6.0, children);
     }
     let metric = state.workspace.comparison_metric;
-    let labels = ComparisonMetric::ALL.map(ComparisonMetric::name);
+    let labels = ComparisonMetric::ALL.map(|metric| metric_label(language, metric));
     children.push(grana_ui::row().gap(8.0).align(Align::Center).children([
         view::segmented(
             ctx,
@@ -451,7 +478,7 @@ fn comparison<'a>(
             Icon::Export,
             28.0,
             Role::Quiet,
-            "Export comparison (SVG/PDF)",
+            grana_i18n::batch::export_comparison(language),
             Message::Command(Command::SaveComparison),
         ),
     ]));
@@ -462,7 +489,7 @@ fn comparison<'a>(
         .clone()
         .filter(|group| groups.contains(group));
     if groups.len() > 1 {
-        let mut items = vec![(None, "All groups".to_string())];
+        let mut items = vec![(None, grana_i18n::batch::all_groups(language).to_string())];
         items.extend(
             groups
                 .iter()
@@ -477,7 +504,11 @@ fn comparison<'a>(
             Some(group.clone()),
             Message::SetComparisonGroup,
         );
-        children.push(view::form_row(ctx, "Group", group_combo));
+        children.push(view::form_row(
+            ctx,
+            grana_i18n::batch::group(language),
+            group_combo,
+        ));
     }
     let sets = set_names(rows, group.as_deref());
     let key = state
@@ -486,7 +517,7 @@ fn comparison<'a>(
         .clone()
         .filter(|key| sets.iter().any(|(other, _)| other == key));
     if sets.len() > 1 {
-        let mut items = vec![(None, "All sets".to_string())];
+        let mut items = vec![(None, grana_i18n::batch::all_sets(language).to_string())];
         items.extend(sets.iter().cloned().map(|(key, name)| (Some(key), name)));
         let set_combo = crate::inspector::combo(
             ctx,
@@ -497,7 +528,11 @@ fn comparison<'a>(
             Some(key.clone()),
             Message::SetComparisonKey,
         );
-        children.push(view::form_row(ctx, "Set", set_combo));
+        children.push(view::form_row(
+            ctx,
+            grana_i18n::batch::set(language),
+            set_combo,
+        ));
     }
     let visible = rows
         .iter()
@@ -505,7 +540,7 @@ fn comparison<'a>(
         .filter(|row| key.as_ref().is_none_or(|key| key == &row.key))
         .collect::<Vec<_>>();
     if visible.is_empty() {
-        children.push(view::weak(ctx, "No reported group matches this filter."));
+        children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     }
     let Some(built) = comparison_chart(
@@ -515,13 +550,14 @@ fn comparison<'a>(
         group.as_deref(),
         key.as_deref(),
         state.workspace.distribution_style,
+        ctx.language(),
     ) else {
-        children.push(view::weak(ctx, "No reported group matches this filter."));
+        children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     };
     let slots = built.slots;
     let chart = built.chart;
-    let style = Style::card(ctx.theme(), chart.style);
+    let style = Style::card(ctx.theme(), chart.style).with_language(ctx.language());
     let pointer = ctx.pointer();
     let count = slots.len();
     let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT, move |painter, info| {
@@ -559,7 +595,7 @@ fn comparison<'a>(
     }
     children.push(view::weak(
         ctx,
-        "Objects are the samples and images are the clusters; the Welch test corrects for the clustering and the rank test compares image means. q is the Benjamini–Hochberg correction over the run. Click a condition for its numbers.",
+        grana_i18n::batch::comparison_note(language),
     ));
     view::card(ctx, 6.0, children)
 }
@@ -570,6 +606,7 @@ fn detail<'a>(
     row: &grana_session::BatchComparison,
     metric: ComparisonMetric,
 ) -> Vec<Element<'a, Message>> {
+    let language = ctx.language();
     let theme = *ctx.theme();
     let palette = theme.palette;
     let tests = state
@@ -579,21 +616,28 @@ fn detail<'a>(
         .collect::<Vec<_>>();
     let best = tests.iter().map(|test| test.adjusted).fold(1.0, f64::min);
     let mut readout = match (metric.value(row), metric.deviation(row)) {
-        (Some(mean), Some(deviation)) => format!(
-            "{} · {} ± {}",
-            title(row),
-            metric.format(mean),
-            metric.format(deviation)
+        (Some(mean), Some(deviation)) => grana_i18n::batch::value_deviation(
+            language,
+            &title(row),
+            &metric.format(mean),
+            &metric.format(deviation),
         ),
-        (Some(mean), None) => format!("{} · {}", title(row), metric.format(mean)),
-        (None, _) => format!("{} · no value", title(row)),
+        (Some(mean), None) => {
+            grana_i18n::batch::value_mean(language, &title(row), &metric.format(mean))
+        }
+        (None, _) => grana_i18n::batch::value_missing(language, &title(row)),
     };
-    readout.push_str(&format!(
-        " · {} objects in {} images",
-        row.objects, row.images
+    readout.push_str(&grana_i18n::batch::objects_in_images(
+        language,
+        row.objects,
+        row.images,
     ));
     if best < 0.05 {
-        readout.push_str(&format!(" · q {:.3} {}", best, grana_measure::stars(best)));
+        readout.push_str(&grana_i18n::batch::q_value(
+            language,
+            best,
+            grana_measure::stars(best),
+        ));
     }
     let mut parts = vec![
         grana_ui::text(
@@ -601,13 +645,13 @@ fn detail<'a>(
             TextStyle::new(theme.font(Level::Callout), palette.text_primary).wrapping(),
         ),
         grana_ui::text(
-            sample_line(row, metric),
+            sample_line(language, row, metric),
             TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
         ),
     ];
     if !tests.is_empty() {
         parts.push(grana_ui::text(
-            test_line(&row.group, &tests),
+            test_line(language, &row.group, &tests),
             TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
         ));
     }
@@ -618,58 +662,82 @@ fn title(row: &grana_session::BatchComparison) -> String {
     format!("{} · {}", row.group, row.name)
 }
 
-fn sample_line(row: &grana_session::BatchComparison, metric: ComparisonMetric) -> String {
+fn sample_line(
+    language: grana_i18n::Language,
+    row: &grana_session::BatchComparison,
+    metric: ComparisonMetric,
+) -> String {
     const LIMIT: usize = 12;
     if row.samples.is_empty() {
-        return "The run recorded no dataset samples.".to_string();
+        return grana_i18n::batch::no_samples(language).to_string();
     }
     let mut parts = row
         .samples
         .iter()
         .take(LIMIT)
         .map(|sample| match metric.sample(sample) {
-            Some(value) => format!(
-                "{}: {} ({} objects)",
-                sample.dataset,
-                metric.format(value),
-                sample.objects
+            Some(value) => grana_i18n::batch::sample_value(
+                language,
+                &sample.dataset,
+                &metric.format(value),
+                sample.objects,
             ),
-            None => format!("{}: no value", sample.dataset),
+            None => grana_i18n::batch::sample_missing(language, &sample.dataset),
         })
         .collect::<Vec<_>>();
     if row.samples.len() > LIMIT {
-        parts.push(format!("{} more", row.samples.len() - LIMIT));
+        parts.push(grana_i18n::batch::more_samples(
+            language,
+            row.samples.len() - LIMIT,
+        ));
     }
     parts.join("   ·   ")
 }
 
-fn test_line(group: &str, tests: &[&grana_session::BatchSignificance]) -> String {
+fn test_line(
+    language: grana_i18n::Language,
+    group: &str,
+    tests: &[&grana_session::BatchSignificance],
+) -> String {
     tests
         .iter()
         .map(|test| {
             let effect = test
                 .effect
                 .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}"));
-            let interval = test
-                .interval_text()
-                .unwrap_or_else(|| "-".to_string());
-            format!(
-                "{} vs {} · {} samples in {} images · Welch p={} q={} · image rank p={} q={} · g={} Δ={:.2} · CI {interval} {}",
+            let interval = test.interval_text().unwrap_or_else(|| "-".to_string());
+            let experiment = grana_i18n::batch::test_groups(
+                language,
                 group,
                 test.other(group),
                 test.test.samples_a(),
                 test.test.clusters_a(),
-                test.p_text(),
-                test.q_text(),
-                test.rank_p_text(),
-                test.rank_q_text(),
-                effect,
+                &test.p_text(),
+                &test.q_text(),
+            );
+            let rank = grana_i18n::batch::test_rank(
+                language,
+                &test.rank_p_text(),
+                &test.rank_q_text(),
+                &effect,
                 test.rank.delta(),
-                test.mark()
-            )
+                &interval,
+                test.mark(),
+            );
+            format!("{experiment} · {rank}")
         })
         .collect::<Vec<_>>()
         .join("   ·   ")
+}
+
+fn metric_label(language: grana_i18n::Language, metric: ComparisonMetric) -> &'static str {
+    match metric {
+        ComparisonMetric::Objects => grana_i18n::batch::metric_objects(language),
+        ComparisonMetric::Volume => grana_i18n::batch::metric_volume(language),
+        ComparisonMetric::Area => grana_i18n::batch::metric_area(language),
+        ComparisonMetric::Size => grana_i18n::batch::metric_size(language),
+        ComparisonMetric::Intensity => grana_i18n::batch::metric_intensity(language),
+    }
 }
 
 fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {
@@ -682,15 +750,15 @@ fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {
     }
 }
 
-fn state_label(state: &str) -> &str {
+fn state_label(language: grana_i18n::Language, state: &str) -> &str {
     match state {
-        "complete" | "done" => "Complete",
-        "resumed" => "Resumed",
-        "corrected" => "Corrected",
-        "failed" => "Failed",
-        "running" => "Running",
-        "pending" => "Pending",
-        "queued" => "Queued",
+        "complete" | "done" => grana_i18n::batch::complete(language),
+        "resumed" => grana_i18n::batch::resumed(language),
+        "corrected" => grana_i18n::batch::corrected(language),
+        "failed" => grana_i18n::batch::failed(language),
+        "running" => grana_i18n::batch::running_state(language),
+        "pending" => grana_i18n::batch::pending(language),
+        "queued" => grana_i18n::batch::queued(language),
         other => other,
     }
 }

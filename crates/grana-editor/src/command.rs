@@ -29,16 +29,16 @@ impl Group {
         Group::Analysis,
     ];
 
-    pub fn title(self) -> &'static str {
+    pub fn title(self, language: grana_i18n::Language) -> &'static str {
         match self {
-            Self::File => "File",
-            Self::Edit => "Edit",
-            Self::View => "View",
-            Self::Time => "Time",
-            Self::Protocol => "Protocol",
-            Self::Export => "Export",
-            Self::Batch => "Batch",
-            Self::Analysis => "Analysis",
+            Self::File => grana_i18n::palette::file(language),
+            Self::Edit => grana_i18n::palette::edit(language),
+            Self::View => grana_i18n::palette::view(language),
+            Self::Time => grana_i18n::palette::time(language),
+            Self::Protocol => grana_i18n::palette::protocol(language),
+            Self::Export => grana_i18n::palette::export(language),
+            Self::Batch => grana_i18n::palette::batch(language),
+            Self::Analysis => grana_i18n::palette::analysis(language),
         }
     }
 }
@@ -93,6 +93,7 @@ pub enum Action {
     Undo,
     Redo,
     Appearance(grana_ui::Appearance),
+    Language(grana_i18n::Language),
     ToggleContrast,
     ToggleReduceTransparency,
     ToggleSidebar,
@@ -144,6 +145,7 @@ impl Action {
             Self::Undo => Message::Command(Command::Undo),
             Self::Redo => Message::Command(Command::Redo),
             Self::Appearance(appearance) => Message::SetAppearance(appearance),
+            Self::Language(language) => Message::SetLanguage(language),
             Self::ToggleContrast => Message::ToggleContrast,
             Self::ToggleReduceTransparency => Message::ToggleReduceTransparency,
             Self::ToggleSidebar => Message::ToggleSidebar,
@@ -183,7 +185,6 @@ impl Action {
 
 pub struct Spec {
     pub id: &'static str,
-    pub title: &'static str,
     pub group: Group,
     pub symbol: Icon,
     pub scope: Scope,
@@ -194,7 +195,6 @@ pub struct Spec {
 pub const SPECS: &[Spec] = &[
     Spec {
         id: "palette.open",
-        title: "Search Commands…",
         group: Group::File,
         symbol: Icon::Search,
         scope: Scope::Always,
@@ -203,7 +203,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "open.image",
-        title: "Open Image…",
         group: Group::File,
         symbol: Icon::Cube,
         scope: Scope::Always,
@@ -212,7 +211,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "open.folder",
-        title: "Open OME-Zarr Folder…",
         group: Group::File,
         symbol: Icon::Folder,
         scope: Scope::Always,
@@ -221,7 +219,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "open.remote",
-        title: "Open Remote OME-Zarr…",
         group: Group::File,
         symbol: Icon::Globe,
         scope: Scope::Always,
@@ -230,7 +227,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "open.project",
-        title: "Open Project…",
         group: Group::File,
         symbol: Icon::Folder,
         scope: Scope::Always,
@@ -239,7 +235,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "save.project",
-        title: "Save Project",
         group: Group::File,
         symbol: Icon::Save,
         scope: Scope::Always,
@@ -248,7 +243,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "save.as",
-        title: "Save Project As…",
         group: Group::File,
         symbol: Icon::Save,
         scope: Scope::Always,
@@ -257,7 +251,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "snapshot",
-        title: "Save Snapshot…",
         group: Group::File,
         symbol: Icon::Camera,
         scope: Scope::Scene,
@@ -266,7 +259,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "figure",
-        title: "Save Vector Figure…",
         group: Group::Export,
         symbol: Icon::Export,
         scope: Scope::Scene,
@@ -275,7 +267,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "lineage",
-        title: "Save Track Lineage…",
         group: Group::Export,
         symbol: Icon::Target,
         scope: Scope::Scene,
@@ -284,7 +275,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "labels",
-        title: "Export Labels Only…",
         group: Group::Export,
         symbol: Icon::Export,
         scope: Scope::Scene,
@@ -293,7 +283,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "undo",
-        title: "Undo",
         group: Group::Edit,
         symbol: Icon::Undo,
         scope: Scope::Scene,
@@ -302,7 +291,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "redo",
-        title: "Redo",
         group: Group::Edit,
         symbol: Icon::Redo,
         scope: Scope::Scene,
@@ -311,7 +299,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "sidebar.toggle",
-        title: "Toggle Sidebar",
         group: Group::View,
         symbol: Icon::Sidebar,
         scope: Scope::Scene,
@@ -320,7 +307,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "appearance.system",
-        title: "Appearance: Follow System",
         group: Group::View,
         symbol: Icon::Sparkles,
         scope: Scope::Always,
@@ -329,7 +315,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "appearance.light",
-        title: "Appearance: Light",
         group: Group::View,
         symbol: Icon::Sparkles,
         scope: Scope::Always,
@@ -338,7 +323,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "appearance.dark",
-        title: "Appearance: Dark",
         group: Group::View,
         symbol: Icon::Sparkles,
         scope: Scope::Always,
@@ -346,8 +330,23 @@ pub const SPECS: &[Spec] = &[
         action: Action::Appearance(grana_ui::Appearance::Dark),
     },
     Spec {
+        id: "language.english",
+        group: Group::View,
+        symbol: Icon::Globe,
+        scope: Scope::Always,
+        shortcut: None,
+        action: Action::Language(grana_i18n::Language::English),
+    },
+    Spec {
+        id: "language.chinese",
+        group: Group::View,
+        symbol: Icon::Globe,
+        scope: Scope::Always,
+        shortcut: None,
+        action: Action::Language(grana_i18n::Language::Chinese),
+    },
+    Spec {
         id: "appearance.contrast",
-        title: "Toggle Increased Contrast",
         group: Group::View,
         symbol: Icon::Eye,
         scope: Scope::Always,
@@ -356,7 +355,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "appearance.transparency",
-        title: "Toggle Reduced Transparency",
         group: Group::View,
         symbol: Icon::Eye,
         scope: Scope::Always,
@@ -365,7 +363,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "view.fit",
-        title: "Frame the Volume",
         group: Group::View,
         symbol: Icon::Fit,
         scope: Scope::Scene,
@@ -374,7 +371,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.close",
-        title: "Close Panel",
         group: Group::View,
         symbol: Icon::Close,
         scope: Scope::Scene,
@@ -383,7 +379,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.statistics",
-        title: "Show Statistics",
         group: Group::View,
         symbol: Icon::Table,
         scope: Scope::Scene,
@@ -392,7 +387,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.tracks",
-        title: "Show Tracks",
         group: Group::View,
         symbol: Icon::Columns,
         scope: Scope::Scene,
@@ -401,7 +395,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.colocalization",
-        title: "Show Colocalization",
         group: Group::View,
         symbol: Icon::Target,
         scope: Scope::Scene,
@@ -410,7 +403,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.relations",
-        title: "Show Relations",
         group: Group::View,
         symbol: Icon::Grid,
         scope: Scope::Scene,
@@ -419,7 +411,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.annotations",
-        title: "Show Annotations",
         group: Group::View,
         symbol: Icon::Pencil,
         scope: Scope::Scene,
@@ -428,7 +419,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.plate",
-        title: "Show Plate",
         group: Group::View,
         symbol: Icon::Grid,
         scope: Scope::Scene,
@@ -437,7 +427,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.batch",
-        title: "Show Batch",
         group: Group::View,
         symbol: Icon::Layers,
         scope: Scope::Scene,
@@ -446,7 +435,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "panel.animation",
-        title: "Show Animation",
         group: Group::View,
         symbol: Icon::Film,
         scope: Scope::Scene,
@@ -455,7 +443,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "camera.perspective",
-        title: "Perspective Projection",
         group: Group::View,
         symbol: Icon::Cube,
         scope: Scope::Scene,
@@ -464,7 +451,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "camera.orthographic",
-        title: "Orthographic Projection",
         group: Group::View,
         symbol: Icon::Cube,
         scope: Scope::Scene,
@@ -473,7 +459,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "camera.focus",
-        title: "Focus Camera on Pivot",
         group: Group::View,
         symbol: Icon::Target,
         scope: Scope::Scene,
@@ -482,7 +467,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "view.save",
-        title: "Save View",
         group: Group::View,
         symbol: Icon::Camera,
         scope: Scope::Scene,
@@ -491,7 +475,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "keyframe.save",
-        title: "Save Keyframe",
         group: Group::Time,
         symbol: Icon::Record,
         scope: Scope::Scene,
@@ -500,7 +483,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "keyframes.clear",
-        title: "Clear Keyframes",
         group: Group::Time,
         symbol: Icon::Trash,
         scope: Scope::Scene,
@@ -509,7 +491,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "protocol.capture",
-        title: "Capture Protocol",
         group: Group::Protocol,
         symbol: Icon::Record,
         scope: Scope::Scene,
@@ -518,7 +499,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "protocol.load",
-        title: "Load Protocol…",
         group: Group::Protocol,
         symbol: Icon::Folder,
         scope: Scope::Always,
@@ -527,7 +507,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "protocol.save",
-        title: "Save Protocol…",
         group: Group::Protocol,
         symbol: Icon::Save,
         scope: Scope::Scene,
@@ -536,7 +515,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "protocol.apply",
-        title: "Apply Protocol",
         group: Group::Protocol,
         symbol: Icon::Play,
         scope: Scope::Scene,
@@ -545,7 +523,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "movie",
-        title: "Export Movie…",
         group: Group::Export,
         symbol: Icon::Film,
         scope: Scope::Scene,
@@ -554,7 +531,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "movie.transparent",
-        title: "Export Transparent Movie…",
         group: Group::Export,
         symbol: Icon::Film,
         scope: Scope::Scene,
@@ -563,7 +539,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "sequence",
-        title: "Export Frame Sequence…",
         group: Group::Export,
         symbol: Icon::Film,
         scope: Scope::Scene,
@@ -572,7 +547,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "measure.export",
-        title: "Export Measurements…",
         group: Group::Export,
         symbol: Icon::Table,
         scope: Scope::Scene,
@@ -581,7 +555,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "provenance.export",
-        title: "Export Provenance Crate…",
         group: Group::Export,
         symbol: Icon::Info,
         scope: Scope::Scene,
@@ -590,7 +563,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "dataset.export",
-        title: "Export Dataset…",
         group: Group::Export,
         symbol: Icon::Export,
         scope: Scope::Scene,
@@ -599,7 +571,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "plate.export",
-        title: "Export Plate…",
         group: Group::Export,
         symbol: Icon::Grid,
         scope: Scope::Scene,
@@ -608,7 +579,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "batch.run",
-        title: "Run Batch",
         group: Group::Batch,
         symbol: Icon::Play,
         scope: Scope::Always,
@@ -617,7 +587,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "batch.pause",
-        title: "Pause Batch",
         group: Group::Batch,
         symbol: Icon::Pause,
         scope: Scope::Always,
@@ -626,7 +595,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "batch.resume",
-        title: "Resume Batch",
         group: Group::Batch,
         symbol: Icon::Play,
         scope: Scope::Always,
@@ -635,7 +603,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "batch.cancel",
-        title: "Cancel Batch",
         group: Group::Batch,
         symbol: Icon::Close,
         scope: Scope::Always,
@@ -644,7 +611,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "coloc.compute",
-        title: "Compute Colocalization",
         group: Group::Analysis,
         symbol: Icon::Target,
         scope: Scope::Scene,
@@ -653,7 +619,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         id: "drift.compute",
-        title: "Correct Drift",
         group: Group::Analysis,
         symbol: Icon::Ruler,
         scope: Scope::Scene,

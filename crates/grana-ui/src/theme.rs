@@ -69,14 +69,6 @@ pub enum Appearance {
 impl Appearance {
     pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::System => "Follow System",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
-        }
-    }
-
     pub fn dark(self, system_dark: bool) -> bool {
         match self {
             Self::System => system_dark,

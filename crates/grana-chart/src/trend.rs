@@ -8,7 +8,14 @@ use crate::distribution::empty_style;
 use crate::grid;
 use crate::style::Style;
 
-pub fn paint(painter: &mut Painter, rect: Rect, trend: &Trend, style: &Style, decor: &Decor<'_>) {
+pub fn paint(
+    painter: &mut Painter,
+    rect: Rect,
+    trend: &Trend,
+    style: &Style,
+    decor: &Decor<'_>,
+    empty: Option<&str>,
+) {
     let palette = style.palette;
     let accent = palette.accent;
     let frame = style.metrics.frame(rect);
@@ -17,12 +24,9 @@ pub fn paint(painter: &mut Painter, rect: Rect, trend: &Trend, style: &Style, de
     let y = Axis::new(trend.low(), trend.high(), 4);
     grid::grid(painter, rect, style, x, y);
     if trend.points().is_empty() {
-        painter.text_in(
-            frame,
-            "No frames to trend",
-            empty_style(style),
-            Align::Center,
-        );
+        if let Some(empty) = empty {
+            painter.text_in(frame, empty, empty_style(style), Align::Center);
+        }
         return;
     }
     if let Some((low, high)) = decor.gates.y {

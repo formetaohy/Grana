@@ -29,10 +29,11 @@ fn navigation<'a>(
 ) -> Element<'a, Message> {
     let group = Key::new("header.navigation.group");
     let hidden = state.workspace.sidebar_hidden;
+    let language = ctx.language();
     let tooltip = if hidden {
-        "Show sidebar"
+        grana_i18n::header::show_sidebar(language)
     } else {
-        "Hide sidebar"
+        grana_i18n::header::hide_sidebar(language)
     };
     let toggle = crate::view::glass_icon_button(
         ctx,
@@ -69,7 +70,7 @@ fn project_pill<'a>(
         .io
         .project
         .as_deref()
-        .unwrap_or("Untitled")
+        .unwrap_or(grana_i18n::common::untitled(ctx.language()))
         .to_string();
     let dirty = state.io.dirty;
     let measured = ctx
@@ -162,6 +163,7 @@ fn open_pill<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Element<'a,
     let font = ctx.theme().font(Level::Callout).medium();
     let key = Key::new("open.menu");
     let open = ctx.popup_open(key);
+    let label = grana_i18n::header::open(ctx.language());
     grana_ui::canvas(Length::Fixed(84.0), 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
@@ -189,7 +191,7 @@ fn open_pill<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Element<'a,
                 Vec2::new(frame.min.x + 26.0, frame.min.y),
                 Vec2::new(frame.max.x - 18.0, frame.max.y),
             ),
-            "Open",
+            label,
             TextStyle::new(font, color),
             Align::Center,
         );
@@ -218,12 +220,22 @@ fn actions<'a>(
     let undo = state.history.undo;
     let redo = state.history.redo;
     let undo_tooltip = undo.map_or_else(
-        || "Nothing to undo".to_string(),
-        |action| format!("Undo {}", action.label()),
+        || grana_i18n::header::nothing_to_undo(ctx.language()).to_string(),
+        |action| {
+            grana_i18n::header::undo_action(
+                ctx.language(),
+                crate::text::action(ctx.language(), action),
+            )
+        },
     );
     let redo_tooltip = redo.map_or_else(
-        || "Nothing to redo".to_string(),
-        |action| format!("Redo {}", action.label()),
+        || grana_i18n::header::nothing_to_redo(ctx.language()).to_string(),
+        |action| {
+            grana_i18n::header::redo_action(
+                ctx.language(),
+                crate::text::action(ctx.language(), action),
+            )
+        },
     );
     let undo_element = if undo.is_some() {
         crate::view::glass_icon_button(
@@ -273,7 +285,7 @@ fn actions<'a>(
         Icon::Fit,
         36.0,
         GlassStyle::button(),
-        "Frame the volume",
+        grana_i18n::header::frame_volume(ctx.language()),
         Message::FitView,
     )
     .glass_group(group);
@@ -309,7 +321,7 @@ fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Elemen
     let shortcut = crate::command::spec("palette.open")
         .and_then(|spec| spec.shortcut)
         .map_or_else(String::new, |shortcut| shortcut.label());
-    let tooltip = format!("Search commands ({shortcut})");
+    let tooltip = grana_i18n::header::search_commands(ctx.language(), &shortcut);
     crate::view::glass_icon_button(
         ctx,
         "header.palette",
@@ -340,6 +352,7 @@ fn analysis<'a>(
     } else {
         Message::SetPanel(Some(state.workspace.last_panel))
     };
+    let label = grana_i18n::header::analysis(ctx.language());
     grana_ui::canvas(Length::Fill, 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let mark = Rect::from_center_size(
@@ -352,7 +365,7 @@ fn analysis<'a>(
                 Vec2::new(mark.max.x + 7.0, frame.min.y),
                 Vec2::new(frame.max.x - 14.0, frame.max.y),
             ),
-            "Analysis",
+            label,
             TextStyle::new(font, Color::WHITE).aligned(Align::Start),
             Align::Center,
         );
@@ -388,7 +401,11 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     ];
     if !state.recent.is_empty() {
         rows.push(menu_separator(ctx));
-        rows.push(crate::view::section_header(ctx, "Recent", None));
+        rows.push(crate::view::section_header(
+            ctx,
+            grana_i18n::header::recent(ctx.language()),
+            None,
+        ));
         for (index, entry) in state.recent.iter().take(crate::RECENT_LIMIT).enumerate() {
             rows.push(crate::view::action_menu_message(
                 ctx,
@@ -430,7 +447,7 @@ fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a,
         ctx,
         id,
         spec.symbol,
-        spec.title,
+        crate::text::command(ctx.language(), id),
         shortcut.as_deref(),
         spec.action.message(),
     )

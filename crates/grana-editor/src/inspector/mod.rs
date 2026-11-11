@@ -95,17 +95,19 @@ pub fn view_body<'a>(
 fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let camera = state.camera();
     let projection = camera.projection();
+    let language = ctx.language();
     let mut children = vec![view::card_title(
         ctx,
         Icon::Cube,
-        "Camera",
-        Some(projection.label()),
+        grana_i18n::inspector::camera(language),
+        Some(projection_label(language, projection)),
     )];
-    let modes = grana_display::CameraProjection::ALL.map(grana_display::CameraProjection::label);
+    let modes = grana_display::CameraProjection::ALL
+        .map(|projection| projection_label(language, projection));
     if camera.slice().is_some() {
         children.push(view::caption(
             ctx,
-            "A slice view samples one plane orthographically.",
+            grana_i18n::inspector::slice_caption(language),
         ));
     } else {
         let selector = view::segmented_fill(
@@ -115,12 +117,16 @@ fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             projection.index(),
             Message::SetCameraProjection,
         );
-        children.push(view::form_row(ctx, "Projection", selector));
+        children.push(view::form_row(
+            ctx,
+            grana_i18n::inspector::projection(language),
+            selector,
+        ));
     }
     if projection.orthographic() {
         children.push(view::caption(
             ctx,
-            "Parallel rays hold one scale across depth.",
+            grana_i18n::inspector::parallel_caption(language),
         ));
     } else {
         let world = state.scene.dataset.world_size();
@@ -129,12 +135,12 @@ fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         let readout = if aperture > 0.0 {
             format!("{aperture:.2} µm")
         } else {
-            "off".to_string()
+            grana_i18n::inspector::aperture_off(language).to_string()
         };
         children.push(view::slider_event(
             ctx,
             "camera.aperture",
-            Some("Aperture"),
+            Some(grana_i18n::inspector::aperture(language)),
             aperture.clamp(0.0, limit),
             0.0..=limit,
             &readout,
@@ -147,7 +153,7 @@ fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         children.push(view::slider_event(
             ctx,
             "camera.focus",
-            Some("Focus"),
+            Some(grana_i18n::inspector::focus(language)),
             focus.clamp(*range.start(), *range.end()),
             range,
             &readout,
@@ -155,32 +161,51 @@ fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         ));
         if aperture > 0.0 {
             children.push(
-                view::button(ctx, "Focus Pivot", Role::Quiet)
-                    .named("camera.focus_pivot")
-                    .press(Message::FocusCamera),
+                view::button(
+                    ctx,
+                    grana_i18n::inspector::focus_pivot(language),
+                    Role::Quiet,
+                )
+                .named("camera.focus_pivot")
+                .press(Message::FocusCamera),
             );
         }
     }
     view::card(ctx, 8.0, children)
 }
 
+fn projection_label(
+    language: grana_i18n::Language,
+    projection: grana_display::CameraProjection,
+) -> &'static str {
+    match projection {
+        grana_display::CameraProjection::Perspective => {
+            grana_i18n::inspector::perspective(language)
+        }
+        grana_display::CameraProjection::Orthographic => {
+            grana_i18n::inspector::orthographic(language)
+        }
+    }
+}
+
 fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let count = state.views.len();
-    let detail = match count {
-        1 => Some("1 saved".to_string()),
-        0 => None,
-        count => Some(format!("{count} saved")),
-    };
+    let language = ctx.language();
+    let detail = (count > 0).then(|| grana_i18n::inspector::saved_views(language, count));
     let mut children = vec![view::card_title(
         ctx,
         Icon::Camera,
-        "Views",
+        grana_i18n::inspector::views(language),
         detail.as_deref(),
     )];
     children.push(
-        view::button(ctx, "Save Current View", Role::Control)
-            .named("view.save")
-            .press(Message::Command(Command::SaveView)),
+        view::button(
+            ctx,
+            grana_i18n::inspector::save_current_view(language),
+            Role::Control,
+        )
+        .named("view.save")
+        .press(Message::Command(Command::SaveView)),
     );
     for (index, named) in state.views.iter().enumerate() {
         let name = named.name.clone();
@@ -193,7 +218,7 @@ fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             Icon::Close,
             26.0,
             Role::Quiet,
-            "Remove view",
+            grana_i18n::inspector::remove_view(language),
             Message::Command(Command::RemoveView(index)),
         );
         children.push(
@@ -204,7 +229,10 @@ fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         );
     }
     if count == 0 {
-        children.push(view::caption(ctx, "Keep this camera and timeline."));
+        children.push(view::caption(
+            ctx,
+            grana_i18n::inspector::keep_camera(language),
+        ));
     }
     view::card(ctx, 6.0, children)
 }
@@ -214,28 +242,33 @@ fn plate<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         return hidden();
     };
     let source = view.plate;
-    let detail = format!(
-        "{} × {} wells · {} fields",
+    let language = ctx.language();
+    let detail = grana_i18n::inspector::plate_summary(
+        language,
         source.rows(),
         source.columns(),
-        source.len()
+        source.len(),
     );
     let title = view::card_title(ctx, Icon::Grid, source.name(), Some(&detail));
     let current = view.selected_well().map_or_else(
-        || "no field of view".to_string(),
+        || grana_i18n::inspector::no_field_of_view(language).to_string(),
         |well| {
-            format!(
-                "Well {} · {} field{}",
-                well.label(),
-                well.fields().len(),
-                if well.fields().len() == 1 { "" } else { "s" }
-            )
+            let fields = well.fields().len();
+            if fields == 1 {
+                grana_i18n::inspector::well_single_field(language, well.label(), fields)
+            } else {
+                grana_i18n::inspector::well_fields(language, well.label(), fields)
+            }
         },
     );
     let caption = view::caption(ctx, &current);
-    let browse = view::button(ctx, "Browse Wells", Role::Control)
-        .named("plate.browse")
-        .press(Message::SetPanel(Some(crate::panel::Panel::Plate)));
+    let browse = view::button(
+        ctx,
+        grana_i18n::inspector::browse_wells(language),
+        Role::Control,
+    )
+    .named("plate.browse")
+    .press(Message::SetPanel(Some(crate::panel::Panel::Plate)));
     view::card(ctx, 6.0, vec![title, caption, browse])
 }
 
@@ -261,9 +294,10 @@ pub(crate) fn centered<'a>(height: f32, child: Element<'a, Message>) -> Element<
 }
 
 fn series<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let unit = match state.scene.dataset.origin() {
-        grana_scene::Origin::Czi => "Scene",
-        _ => "Series",
+        grana_scene::Origin::Czi => grana_i18n::inspector::scene(language),
+        _ => grana_i18n::inspector::series(language),
     };
     let options = state
         .series

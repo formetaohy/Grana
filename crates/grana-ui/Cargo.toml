@@ -11,6 +11,7 @@ bytemuck = { workspace = true }
 glam = { workspace = true }
 grana-glass = { workspace = true }
 grana-gpu = { workspace = true }
+grana-i18n = { workspace = true }
 grana-raster = { workspace = true }
 grana-text = { workspace = true }
 slotmap = { workspace = true }

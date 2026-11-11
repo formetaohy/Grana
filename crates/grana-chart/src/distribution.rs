@@ -23,6 +23,7 @@ pub fn paint(
     distribution: &Distribution,
     style: &Style,
     decor: &Decor<'_>,
+    empty: Option<&str>,
 ) {
     let metrics = style.metrics;
     let palette = style.palette;
@@ -30,12 +31,9 @@ pub fn paint(
     let frame = metrics.frame(rect);
     let groups = distribution.groups();
     if groups.is_empty() {
-        painter.text_in(
-            frame,
-            "No objects to plot",
-            empty_style(style),
-            Align::Center,
-        );
+        if let Some(empty) = empty {
+            painter.text_in(frame, empty, empty_style(style), Align::Center);
+        }
         return;
     }
     let y = Axis::new(distribution.low(), distribution.high(), 4);
@@ -83,12 +81,13 @@ pub fn paint(
         }
         if index % step == 0 || hovered == Some(index) {
             let reach = (slot_width(frame, groups.len()) * step as f32).max(28.0);
+            let label = grana_i18n::measure::distribution_group(style.language, group.label());
             painter.text_in(
                 Rect::from_center_size(
                     Vec2::new(centre, tick.center().y),
                     Vec2::new(reach, metrics.tick_height),
                 ),
-                group.label(),
+                &label,
                 if hovered == Some(index) { hot } else { cold },
                 Align::Center,
             );

@@ -32,13 +32,14 @@ pub(super) fn transport<'a>(
     let frame = state.scene.time();
     let frames = state.scene.frame_count();
     let playing = state.workspace.playback.playing;
+    let language = ctx.language();
     let back_element = crate::view::icon_button(
         ctx,
         "timeline.back",
         Icon::StepBack,
         28.0,
         Role::Quiet,
-        "Previous frame",
+        grana_i18n::timeline::previous_frame(language),
         Message::Command(Command::SetTime(frame.saturating_sub(1))),
     )
     .at(back);
@@ -48,7 +49,11 @@ pub(super) fn transport<'a>(
         if playing { Icon::Pause } else { Icon::Play },
         30.0,
         Role::Prominent,
-        if playing { "Pause" } else { "Play" },
+        if playing {
+            grana_i18n::timeline::pause(language)
+        } else {
+            grana_i18n::timeline::play(language)
+        },
         Message::SetPlaying(!playing),
     )
     .at(play);
@@ -58,7 +63,7 @@ pub(super) fn transport<'a>(
         Icon::StepForward,
         28.0,
         Role::Quiet,
-        "Next frame",
+        grana_i18n::timeline::next_frame(language),
         Message::Command(Command::SetTime((frame + 1) % frames.max(1))),
     )
     .at(forward);

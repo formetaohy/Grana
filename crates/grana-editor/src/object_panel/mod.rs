@@ -1,5 +1,6 @@
 use glam::Vec2;
-use grana_measure::{ColocMetric, Group, Measurement};
+use grana_i18n::Language;
+use grana_measure::{ChildField, ColocMetric, Group, Measurement};
 use grana_scene::{
     IntensitySource, Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId,
     ParamField, ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
@@ -52,6 +53,7 @@ pub fn view<'a>(
     let channel = state.scene.selected;
     let channel_name = state.scene.channel(channel).name().to_string();
     let count = state.scene.objects.len();
+    let language = ctx.language();
     let mut elements = add_menu(ctx, state);
     elements.insert(0, header(ctx, count));
     if !state.import.is_empty() {
@@ -61,10 +63,8 @@ pub fn view<'a>(
         elements.push(view::empty_state(
             ctx,
             Icon::Layers,
-            "No Object Sets",
-            &format!(
-                "Detect spots, surfaces or filaments in {channel_name} to measure structures."
-            ),
+            grana_i18n::object::no_sets(language),
+            &grana_i18n::object::no_sets_detail(language, &channel_name),
         ));
         return elements;
     }
@@ -86,11 +86,12 @@ fn notes<'a>(
     notes: &[grana_session::ImportNote],
 ) -> Element<'a, Message> {
     let shown = notes.len().min(4);
-    let detail = format!("{} unread", notes.len());
+    let language = ctx.language();
+    let detail = grana_i18n::object::unread(language, notes.len());
     let mut children = vec![view::card_title(
         ctx,
         Icon::Warning,
-        "IMPORT",
+        grana_i18n::object::import_title(language),
         Some(&detail),
     )];
     for note in &notes[..shown] {
@@ -100,7 +101,7 @@ fn notes<'a>(
         children.push(view::labelled(
             ctx,
             "…",
-            &format!("{} more", notes.len() - shown),
+            &grana_i18n::object::more_notes(language, notes.len() - shown),
         ));
     }
     view::card(ctx, 6.0, children)
@@ -114,9 +115,15 @@ fn header<'a>(ctx: &mut BuildContext<'_, Message>, count: usize) -> Element<'a, 
     let detail_style =
         TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     let detail = count.to_string();
+    let language = ctx.language();
     let canvas = grana_ui::canvas(Length::Fixed(total - 24.0), 26.0, move |painter, info| {
         let rect = info.rect;
-        painter.text_in(rect, "OBJECT SETS", label_style, Align::Center);
+        painter.text_in(
+            rect,
+            grana_i18n::object::object_sets(language),
+            label_style,
+            Align::Center,
+        );
         painter.text_in(
             Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 8.0, rect.max.y)),
             &detail,
@@ -130,7 +137,7 @@ fn header<'a>(ctx: &mut BuildContext<'_, Message>, count: usize) -> Element<'a, 
         Icon::Plus,
         24.0,
         Role::Quiet,
-        "Add object set",
+        grana_i18n::object::add_object_set(language),
         Message::Noop,
     );
     grana_ui::row()
@@ -145,23 +152,25 @@ fn add_menu<'a>(
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
     let loading = state.io.loading.is_some();
+    let language = ctx.language();
     let mut rows = Vec::new();
-    for (key, symbol, label, kind) in [
-        ("add.spots", Icon::Target, "Spots", ObjectKind::Spots),
-        ("add.surfaces", Icon::Cube, "Surfaces", ObjectKind::Surfaces),
-        (
-            "add.filaments",
-            Icon::Channel,
-            "Filaments",
-            ObjectKind::Filaments,
-        ),
+    for (key, symbol, kind) in [
+        ("add.spots", Icon::Target, ObjectKind::Spots),
+        ("add.surfaces", Icon::Cube, ObjectKind::Surfaces),
+        ("add.filaments", Icon::Channel, ObjectKind::Filaments),
     ] {
         let message = if loading {
             Message::Noop
         } else {
             Message::Command(Command::AddObject(kind))
         };
-        rows.push(action_row(ctx, key, symbol, label, message));
+        rows.push(action_row(
+            ctx,
+            key,
+            symbol,
+            kind_name(language, kind),
+            message,
+        ));
     }
     let message = if loading {
         Message::Noop
@@ -170,8 +179,14 @@ fn add_menu<'a>(
     };
     let licensed = grana_scene::SegmentModel::preferred();
     let (label, message) = match licensed {
-        Some(model) => (format!("Segments · {}", model.license().name()), message),
-        None => ("Segments · unlicensed".to_string(), Message::Noop),
+        Some(model) => (
+            grana_i18n::object::segments(language, model.license().name()),
+            message,
+        ),
+        None => (
+            grana_i18n::object::segments_unlicensed(language).to_string(),
+            Message::Noop,
+        ),
     };
     rows.push(action_row(
         ctx,
@@ -182,7 +197,10 @@ fn add_menu<'a>(
     ));
     if !state.labels.is_empty() {
         rows.push(view::menu_separator(ctx));
-        rows.push(view::caption(ctx, "Import Labels"));
+        rows.push(view::caption(
+            ctx,
+            grana_i18n::object::import_labels(language),
+        ));
         for (index, label) in state.labels.iter().enumerate() {
             let message = if loading {
                 Message::Noop
@@ -201,7 +219,10 @@ fn add_menu<'a>(
         }
     }
     rows.push(view::menu_separator(ctx));
-    rows.push(view::caption(ctx, "Import Tracks"));
+    rows.push(view::caption(
+        ctx,
+        grana_i18n::object::import_tracks(language),
+    ));
     let message = if loading {
         Message::Noop
     } else {
@@ -238,6 +259,30 @@ fn kind_icon(kind: ObjectKind) -> Icon {
     }
 }
 
+fn kind_name(language: Language, kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Spots => grana_i18n::object::spots(language),
+        ObjectKind::Surfaces => grana_i18n::object::surfaces(language),
+        ObjectKind::Filaments => grana_i18n::object::filaments(language),
+    }
+}
+
+fn count_noun(language: Language, kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Spots => grana_i18n::object::spots_noun(language),
+        ObjectKind::Surfaces => grana_i18n::object::objects_noun(language),
+        ObjectKind::Filaments => grana_i18n::object::filaments_noun(language),
+    }
+}
+
+fn description(language: Language, kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Spots => grana_i18n::object::spots_description(language),
+        ObjectKind::Surfaces => grana_i18n::object::surfaces_description(language),
+        ObjectKind::Filaments => grana_i18n::object::filaments_description(language),
+    }
+}
+
 fn object<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
@@ -251,6 +296,7 @@ fn object<'a>(
     let theme = *ctx.theme();
     let look = theme.surface(Role::Card, grana_ui::State::Rest);
     let width = width();
+    let language = ctx.language();
     let kind = set.kind();
     let merged = set.provenance().is_merged();
     let imported = set.provenance().is_external();
@@ -297,11 +343,11 @@ fn object<'a>(
         if let Some(export) = set.label_export() {
             children.push(view::weak(
                 ctx,
-                &format!(
-                    "Labels written to {} · {} objects over {} frames.",
+                &grana_i18n::object::labels_written(
+                    language,
                     export.path(),
                     export.labels(),
-                    export.frames()
+                    export.frames(),
                 ),
             ));
         }
@@ -321,8 +367,13 @@ fn object<'a>(
         if detected > 0 {
             children.push(view::divider(ctx));
             children.push(
-                view::button_with(ctx, "Clear Objects", Role::Danger, Length::Fill)
-                    .press(Message::Command(Command::ClearObject(id))),
+                view::button_with(
+                    ctx,
+                    grana_i18n::object::clear_objects(language),
+                    Role::Danger,
+                    Length::Fill,
+                )
+                .press(Message::Command(Command::ClearObject(id))),
             );
         }
     }

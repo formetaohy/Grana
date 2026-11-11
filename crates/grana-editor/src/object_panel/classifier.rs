@@ -13,6 +13,7 @@ pub(super) fn classifier<'a>(
     if available.is_empty() {
         return Vec::new();
     }
+    let language = ctx.language();
     let salt = format!("object.{}.classifier", id.raw());
     let features_key = format!("{salt}.features");
     let key = Key::new(&salt);
@@ -27,23 +28,23 @@ pub(super) fn classifier<'a>(
         match current {
             Some(classifier) => children.push(view::caption(
                 ctx,
-                &format!(
-                    "{} measurements · {} kept / {} excluded · {:.0}% balanced fit",
+                &grana_i18n::object::classifier_fit(
+                    language,
                     classifier.features().len(),
                     classifier.positives(),
                     classifier.negatives(),
-                    classifier.accuracy() * 100.0
+                    classifier.accuracy() * 100.0,
                 ),
             )),
             None => children.push(view::weak(
                 ctx,
-                "Trains on the objects kept by the statistics gate and scores every object of the set.",
+                grana_i18n::object::classifier_intro(language),
             )),
         }
         children.push(
             view::button_with(
                 ctx,
-                &format!("{} Measurements", features.len()),
+                &grana_i18n::object::measurements(language, features.len()),
                 Role::Control,
                 Length::Fill,
             )
@@ -56,22 +57,22 @@ pub(super) fn classifier<'a>(
         if gated {
             children.push(view::weak(
                 ctx,
-                &format!(
-                    "The gate keeps {} of {} rows.",
+                &grana_i18n::object::gate_rows(
+                    language,
                     state.measure.rows().len(),
-                    state.measure.total()
+                    state.measure.total(),
                 ),
             ));
         } else {
             children.push(view::weak(
                 ctx,
-                "Open Statistics for this set and add a filter or lasso to choose the kept objects.",
+                grana_i18n::object::classifier_gate_hint(language),
             ));
         }
         let label = if current.is_some() {
-            "Retrain Classifier"
+            grana_i18n::object::retrain_classifier(language)
         } else {
-            "Train Classifier"
+            grana_i18n::object::train_classifier(language)
         };
         children.push(
             view::button_with(ctx, label, Role::Tinted, Length::Fill).press(Message::Command(
@@ -83,15 +84,20 @@ pub(super) fn classifier<'a>(
         );
         if current.is_some() {
             children.push(
-                view::button_with(ctx, "Clear Classifier", Role::Danger, Length::Fill)
-                    .press(Message::Command(Command::ClearClassifier(id))),
+                view::button_with(
+                    ctx,
+                    grana_i18n::object::clear_classifier(language),
+                    Role::Danger,
+                    Length::Fill,
+                )
+                .press(Message::Command(Command::ClearClassifier(id))),
             );
         }
     }
     vec![crate::inspector::disclosure(
         ctx,
         &salt,
-        "Classifier",
+        grana_i18n::object::classifier(language),
         open,
         children,
     )]

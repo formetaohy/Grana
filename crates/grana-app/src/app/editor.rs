@@ -21,6 +21,7 @@ impl App {
         let size = surface.gpu.size();
         let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
         surface.ui.resize(size);
+        surface.ui.set_language(workspace.language);
         surface.ui.set_accessibility(grana_ui::Accessibility {
             reduce_transparency: workspace.reduce_transparency,
             increase_contrast: workspace.contrast,

@@ -1,6 +1,7 @@
 use glam::Vec2;
 use grana_display::Palette;
-use grana_measure::Aggregate;
+use grana_i18n::Language;
+use grana_measure::{Aggregate, TrackMeasurement};
 use grana_object::{TrackParams, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
@@ -24,6 +25,7 @@ pub fn view<'a>(
     state: &'a View<'a>,
     rect: Rect,
 ) -> Vec<Element<'a, Message>> {
+    let language = ctx.language();
     let scene = state.scene;
     let sets = scene
         .objects
@@ -36,8 +38,8 @@ pub fn view<'a>(
             view::empty_state(
                 ctx,
                 Icon::Channel,
-                "No Trackable Objects",
-                "Add spots or surfaces, detect them, then follow their trajectories through time.",
+                grana_i18n::track::no_trackable_objects(language),
+                grana_i18n::track::no_trackable_objects_detail(language),
             )
             .at(rect),
         ];
@@ -47,8 +49,8 @@ pub fn view<'a>(
             view::empty_state(
                 ctx,
                 Icon::Clock,
-                "Single Time Frame",
-                "Tracking follows objects across the frames of a time-series dataset.",
+                grana_i18n::track::single_time_frame(language),
+                grana_i18n::track::single_time_frame_detail(language),
             )
             .at(rect),
         ];
@@ -81,8 +83,8 @@ pub fn view<'a>(
             view::empty_state(
                 ctx,
                 Icon::Channel,
-                "No Trajectories Yet",
-                "Detect objects in this set first, then press Track to link their lineage across frames.",
+                grana_i18n::track::no_trajectories(language),
+                grana_i18n::track::no_trajectories_detail(language),
             )
             .at(left),
         ),
@@ -111,6 +113,7 @@ pub fn entry<'a>(
     state: &'a View<'a>,
     set: ObjectSetId,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let Some(object) = state.scene.objects.get(set) else {
         return grana_ui::column();
     };
@@ -121,8 +124,8 @@ pub fn entry<'a>(
         .tracks()
         .map(|layer| (layer.set().len(), layer.set().divisions()));
     let detail = match counts {
-        Some((tracks, divisions)) => format!("{tracks} tracks · {divisions} divisions"),
-        None => "Not tracked yet".to_string(),
+        Some((tracks, divisions)) => grana_i18n::track::track_counts(language, tracks, divisions),
+        None => grana_i18n::track::not_tracked_yet(language).to_string(),
     };
     let selected = state.scene.selected_track(set);
     let mut controls = vec![lineage_button(ctx, set)];
@@ -135,7 +138,7 @@ pub fn entry<'a>(
         &format!("tracks.entry.{}", set.raw()),
     ));
     let mut children = vec![
-        view::section_header(ctx, "Tracking", Some(&detail)),
+        view::section_header(ctx, grana_i18n::track::tracking(language), Some(&detail)),
         grana_ui::row()
             .width(Length::Fill)
             .gap(6.0)
@@ -159,6 +162,7 @@ fn lineage_button<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
+    let label = grana_i18n::track::lineage(ctx.language());
     let style = TextStyle::new(theme.button_font(), palette.text_primary);
     let rest = theme.surface(Role::Control, State::Rest);
     let hover = theme.surface(Role::Control, State::Hover);
@@ -173,7 +177,7 @@ fn lineage_button<'a>(
         );
         painter.text_in(
             info.rect,
-            "Lineage",
+            label,
             style.aligned(Align::Center),
             Align::Center,
         );
@@ -216,12 +220,18 @@ fn tracking_controls<'a>(
             .then_some((last.time(), last.object()))
     });
     let joining = state.workspace.join.is_some();
+    let language = ctx.language();
+    let join = if joining {
+        grana_i18n::track::cancel_join(language)
+    } else {
+        grana_i18n::track::join(language)
+    };
     let mut buttons = Vec::new();
     if object.tracks().is_some() {
         buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.cut"),
-            "Cut",
+            grana_i18n::track::cut(language),
             Role::Control,
             cuts.is_some(),
             cuts.map(|(time, object)| {
@@ -235,7 +245,7 @@ fn tracking_controls<'a>(
         buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.join"),
-            if joining { "Cancel Join" } else { "Join" },
+            join,
             if joining { Role::Tinted } else { Role::Control },
             joining || joins.is_some(),
             Some(Message::SetJoin(if joining { None } else { joins })),
@@ -243,7 +253,7 @@ fn tracking_controls<'a>(
         buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.export"),
-            "Export",
+            grana_i18n::track::export(language),
             Role::Quiet,
             !busy,
             Some(Message::ExportLineage(id)),
@@ -251,7 +261,7 @@ fn tracking_controls<'a>(
         buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.recompute"),
-            "Recompute",
+            grana_i18n::track::recompute(language),
             Role::Quiet,
             !busy,
             Some(Message::Command(Command::Track(id))),
@@ -269,7 +279,7 @@ fn tracking_controls<'a>(
             buttons.push(enabled_button(
                 ctx,
                 &format!("{prefix}.cancel"),
-                "Cancel",
+                grana_i18n::common::cancel(language),
                 Role::Quiet,
                 true,
                 Some(Message::Command(Command::CancelTrack(id))),
@@ -278,7 +288,7 @@ fn tracking_controls<'a>(
         None => buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.track"),
-            "Track",
+            grana_i18n::track::track(language),
             Role::Prominent,
             detected > 0 && !busy,
             Some(Message::Command(Command::Track(id))),
@@ -312,23 +322,26 @@ fn header<'a>(
     let divisions = object.tracks().map_or(0, |layer| layer.set().divisions());
     let tracks = object.tracks().map_or(0, |layer| layer.set().len());
     let joining = state.workspace.join.is_some();
+    let language = ctx.language();
+    let join = if joining {
+        grana_i18n::track::cancel_join(language)
+    } else {
+        grana_i18n::track::join(language)
+    };
     let mut widths = Vec::new();
     if object.tracks().is_some() {
-        widths.push(button_width(ctx, "Cut"));
-        widths.push(button_width(
-            ctx,
-            if joining { "Cancel Join" } else { "Join" },
-        ));
-        widths.push(button_width(ctx, "Export"));
-        widths.push(button_width(ctx, "Recompute"));
+        widths.push(button_width(ctx, grana_i18n::track::cut(language)));
+        widths.push(button_width(ctx, join));
+        widths.push(button_width(ctx, grana_i18n::track::export(language)));
+        widths.push(button_width(ctx, grana_i18n::track::recompute(language)));
     }
     match tracking {
         Some(_) => {
             widths.push(110.0);
             widths.push(14.0);
-            widths.push(button_width(ctx, "Cancel"));
+            widths.push(button_width(ctx, grana_i18n::common::cancel(language)));
         }
-        None => widths.push(button_width(ctx, "Track")),
+        None => widths.push(button_width(ctx, grana_i18n::track::track(language))),
     }
     let right_width = widths.iter().sum::<f32>() + (widths.len() - 1) as f32 * 6.0;
     let right_rect = Rect::from_min_size(
@@ -353,28 +366,28 @@ fn header<'a>(
         },
     );
     let mut left_items = vec![
-        field_label(ctx, "Set"),
+        field_label(ctx, grana_i18n::track::set(language)),
         set_combo,
         view::caption(
             ctx,
-            &format!("{tracks} tracks · {divisions} divisions · {detected} frames"),
+            &grana_i18n::track::track_summary(language, tracks, divisions, detected),
         ),
     ];
     if joining {
         left_items.push(grana_ui::widget::badge(
-            "Select target track to join",
+            grana_i18n::track::select_join_target(language),
             ctx.theme().palette.accent,
         ));
     }
     if state.workspace.divide.is_some() {
         left_items.push(grana_ui::widget::badge(
-            "Select two daughter tracks",
+            grana_i18n::track::select_daughters(language),
             ctx.theme().palette.accent,
         ));
     }
     if state.workspace.reparent.is_some() {
         left_items.push(grana_ui::widget::badge(
-            "Select the parent track",
+            grana_i18n::track::select_parent(language),
             ctx.theme().palette.accent,
         ));
     }
@@ -819,21 +832,28 @@ fn summary<'a>(
     selected: Option<usize>,
     id: ObjectSetId,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let Some(index) = selected else {
-        let title = view::card_title(ctx, Icon::Target, "Selected Track", Some("None"));
-        let caption = view::caption(ctx, "Click a track in the lineage to inspect metrics.");
+        let title = view::card_title(
+            ctx,
+            Icon::Target,
+            grana_i18n::track::selected_track(language),
+            Some(grana_i18n::common::none(language)),
+        );
+        let caption = view::caption(ctx, grana_i18n::track::click_track(language));
         return view::card(ctx, 4.0, vec![title, caption]);
     };
     let Some(track) = set.track(index) else {
         return grana_ui::column();
     };
     let statistics = track.statistics(set.frame_interval());
-    let parent = track
-        .parent()
-        .map_or_else(|| "Root".to_string(), |parent| format!("#{}", parent + 1));
+    let parent = track.parent().map_or_else(
+        || grana_i18n::track::root(language).to_string(),
+        |parent| format!("#{}", parent + 1),
+    );
     let children = set.children(index).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
-        "None".to_string()
+        grana_i18n::common::none(language).to_string()
     } else {
         children
             .iter()
@@ -841,11 +861,11 @@ fn summary<'a>(
             .collect::<Vec<_>>()
             .join(" · ")
     };
-    let detail = format!("{} frames", statistics.frames());
+    let detail = grana_i18n::track::frame_count(language, statistics.frames());
     let title = view::card_title(
         ctx,
         Icon::Target,
-        &format!("Track #{}", index + 1),
+        &grana_i18n::track::track_number(language, index + 1),
         Some(&detail),
     );
     let parented = track.parent().is_some();
@@ -857,16 +877,22 @@ fn summary<'a>(
         .nodes()
         .last()
         .map(|node| (node.time(), node.object()));
+    let divide = if state.workspace.divide.is_some() {
+        grana_i18n::common::cancel(language)
+    } else {
+        grana_i18n::track::divide(language)
+    };
+    let reparent = if state.workspace.reparent.is_some() {
+        grana_i18n::common::cancel(language)
+    } else {
+        grana_i18n::track::parent_action(language)
+    };
     let mut actions = Vec::new();
     if let Some(last) = last {
         actions.push(enabled_button(
             ctx,
             "tracks.summary.divide",
-            if state.workspace.divide.is_some() {
-                "Cancel"
-            } else {
-                "Divide"
-            },
+            divide,
             if state.workspace.divide.is_some() {
                 Role::Tinted
             } else {
@@ -884,11 +910,7 @@ fn summary<'a>(
         actions.push(enabled_button(
             ctx,
             "tracks.summary.parent",
-            if state.workspace.reparent.is_some() {
-                "Cancel"
-            } else {
-                "Parent"
-            },
+            reparent,
             if state.workspace.reparent.is_some() {
                 Role::Tinted
             } else {
@@ -904,7 +926,7 @@ fn summary<'a>(
         actions.push(enabled_button(
             ctx,
             "tracks.summary.detach",
-            "Detach",
+            grana_i18n::track::detach(language),
             Role::Quiet,
             parented,
             Some(Message::Command(Command::DetachTrack {
@@ -916,19 +938,31 @@ fn summary<'a>(
     let actions = grana_ui::row().gap(6.0).children(actions);
     let rows = vec![
         title,
-        view::labelled(ctx, "Parent", &parent),
-        view::labelled(ctx, "Daughters", &daughters),
-        view::labelled(ctx, "Duration", &format!("{:.2} s", statistics.duration())),
-        view::labelled(ctx, "Length", &format!("{:.2} µm", statistics.length())),
+        view::labelled(ctx, grana_i18n::track::parent(language), &parent),
+        view::labelled(ctx, grana_i18n::track::daughters(language), &daughters),
         view::labelled(
             ctx,
-            "Displacement",
+            grana_i18n::track::duration(language),
+            &format!("{:.2} s", statistics.duration()),
+        ),
+        view::labelled(
+            ctx,
+            grana_i18n::track::length(language),
+            &format!("{:.2} µm", statistics.length()),
+        ),
+        view::labelled(
+            ctx,
+            grana_i18n::track::displacement(language),
             &format!("{:.2} µm", statistics.displacement()),
         ),
-        view::labelled(ctx, "Speed", &format!("{:.3} µm/s", statistics.speed())),
         view::labelled(
             ctx,
-            "Straightness",
+            grana_i18n::track::speed(language),
+            &format!("{:.3} µm/s", statistics.speed()),
+        ),
+        view::labelled(
+            ctx,
+            grana_i18n::track::straightness(language),
             &format!("{:.3}", statistics.straightness()),
         ),
         actions,
@@ -942,7 +976,13 @@ fn parameters<'a>(
     id: ObjectSetId,
     object: &'a ObjectSet,
 ) -> Element<'a, Message> {
-    let mut children = vec![view::card_title(ctx, Icon::Sliders, "Parameters", None)];
+    let language = ctx.language();
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Sliders,
+        grana_i18n::track::parameters(language),
+        None,
+    )];
     children.extend(parameter_rows(ctx, state, id, object, "tracks.panel"));
     view::card(ctx, 6.0, children)
 }
@@ -958,6 +998,7 @@ fn parameter_rows<'a>(
         return Vec::new();
     };
     let params = style.params();
+    let language = ctx.language();
     let voxel = state.scene.dataset.voxel_size().min_element();
     let world = state.scene.dataset.world_size().max_element();
     let visible = style.visible();
@@ -975,7 +1016,7 @@ fn parameter_rows<'a>(
         view::slider_readout(
             ctx,
             &format!("{prefix}.step"),
-            Some("Max step"),
+            Some(grana_i18n::track::max_step(language)),
             step,
             voxel..=step_max,
             true,
@@ -988,7 +1029,7 @@ fn parameter_rows<'a>(
         view::slider_readout(
             ctx,
             &format!("{prefix}.gap"),
-            Some("Max gap"),
+            Some(grana_i18n::track::max_gap(language)),
             gap,
             0.0..=10.0,
             false,
@@ -1001,7 +1042,7 @@ fn parameter_rows<'a>(
         view::toggle_row(
             ctx,
             &format!("{prefix}.division"),
-            "Allow Division",
+            grana_i18n::track::allow_division(language),
             division,
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1014,7 +1055,7 @@ fn parameter_rows<'a>(
         children.push(view::slider_readout(
             ctx,
             &format!("{prefix}.division.range"),
-            Some("Div. range"),
+            Some(grana_i18n::track::division_range(language)),
             clamped,
             minimum..=maximum,
             false,
@@ -1029,7 +1070,7 @@ fn parameter_rows<'a>(
     children.push(view::toggle_row(
         ctx,
         &format!("{prefix}.visible"),
-        "Show Tubes",
+        grana_i18n::track::show_tubes(language),
         visible,
         move |value| Command::SetTrackVisible {
             set: id,
@@ -1039,7 +1080,7 @@ fn parameter_rows<'a>(
     children.push(view::slider_readout(
         ctx,
         &format!("{prefix}.width"),
-        Some("Tube width"),
+        Some(grana_i18n::track::tube_width(language)),
         thickness,
         min_thickness..=max_thickness,
         true,
@@ -1059,27 +1100,28 @@ fn appearance<'a>(
     object: &'a ObjectSet,
 ) -> Option<Element<'a, Message>> {
     object.tracks()?;
+    let language = ctx.language();
     let mut metrics = object
         .colorable_track_measurements()
         .into_iter()
         .map(|measurement| {
             (
                 TrackColor::Measurement(measurement),
-                measurement.label().to_string(),
+                measurement_label(language, measurement),
             )
         })
         .collect::<Vec<_>>();
     for relation in object.relations() {
-        let name = state
-            .scene
-            .objects
-            .get(relation.target())
-            .map_or_else(|| "Target".to_string(), |target| target.name().to_string());
+        let name = state.scene.objects.get(relation.target()).map_or_else(
+            || grana_i18n::track::target(language).to_string(),
+            |target| target.name().to_string(),
+        );
         let shift = match relation.shift() {
             0 => String::new(),
             shift => format!(" t{shift:+}"),
         };
         for field in RelationField::CONTINUOUS {
+            let field_text = relation_field_label(language, field);
             for aggregate in Aggregate::ALL {
                 metrics.push((
                     TrackColor::Relation {
@@ -1088,7 +1130,13 @@ fn appearance<'a>(
                         aggregate,
                         shift: relation.shift(),
                     },
-                    format!("{name} {}{shift} · {}", field.label(), aggregate.name()),
+                    grana_i18n::track::relation_metric(
+                        language,
+                        &name,
+                        &field_text,
+                        &shift,
+                        &aggregate_label(language, aggregate),
+                    ),
                 ));
             }
         }
@@ -1098,8 +1146,13 @@ fn appearance<'a>(
     }
     let coloring = object.track_coloring().clone();
     let extent = object.track_extent();
-    let mut children = vec![view::card_title(ctx, Icon::Sparkles, "Tube Coloring", None)];
-    let mut labels = vec!["Uniform".to_string()];
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Sparkles,
+        grana_i18n::track::tube_coloring(language),
+        None,
+    )];
+    let mut labels = vec![grana_i18n::track::uniform(language).to_string()];
     labels.extend(metrics.iter().map(|(_, label)| label.clone()));
     let selected = coloring
         .metric()
@@ -1112,7 +1165,7 @@ fn appearance<'a>(
     let metrics_for_select = metrics.clone();
     let coloring_for_select = coloring.clone();
     children.push(grana_ui::row().gap(8.0).align(Align::Center).children([
-        field_label(ctx, "Color by"),
+        field_label(ctx, grana_i18n::track::color_by(language)),
         combo(
             ctx,
             &format!("tracks.{}.metric", id.raw()),
@@ -1153,7 +1206,7 @@ fn appearance<'a>(
         let coloring_for_reverse = coloring.clone();
         children.push(
             grana_ui::row().gap(8.0).align(Align::Center).children([
-                field_label(ctx, "Palette"),
+                field_label(ctx, grana_i18n::track::palette(language)),
                 combo(
                     ctx,
                     &format!("tracks.{}.palette", id.raw()),
@@ -1175,19 +1228,23 @@ fn appearance<'a>(
                         }
                     },
                 ),
-                grana_ui::widget::checkbox(ctx.theme(), "Rev", coloring.reversed())
-                    .key(Key::new(format!("tracks.{}.reverse", id.raw())))
-                    .on_toggle(move |value| {
-                        let mut next = coloring_for_reverse.clone();
-                        if next.set_reversed(value) {
-                            Message::Command(Command::SetTrackColoring {
-                                set: id,
-                                coloring: next,
-                            })
-                        } else {
-                            Message::Noop
-                        }
-                    }),
+                grana_ui::widget::checkbox(
+                    ctx.theme(),
+                    grana_i18n::track::reverse(language),
+                    coloring.reversed(),
+                )
+                .key(Key::new(format!("tracks.{}.reverse", id.raw())))
+                .on_toggle(move |value| {
+                    let mut next = coloring_for_reverse.clone();
+                    if next.set_reversed(value) {
+                        Message::Command(Command::SetTrackColoring {
+                            set: id,
+                            coloring: next,
+                        })
+                    } else {
+                        Message::Noop
+                    }
+                }),
             ]),
         );
         let samples = 64;
@@ -1211,7 +1268,7 @@ fn appearance<'a>(
                 let coloring_auto = coloring.clone();
                 children.push(
                     grana_ui::row().gap(6.0).align(Align::Center).children([
-                        field_label(ctx, "Range"),
+                        field_label(ctx, grana_i18n::track::range(language)),
                         grana_ui::widget::drag_value(ctx.theme(), minimum, decimals as usize)
                             .key(Key::new(format!("tracks.{}.low", id.raw())))
                             .on_drag_value(speed, move |value| {
@@ -1238,44 +1295,58 @@ fn appearance<'a>(
                                     Message::Noop
                                 }
                             }),
-                        view::button(ctx, "Auto", Role::Quiet).press(Message::Command(
-                            Command::SetTrackColoring {
+                        view::button(ctx, grana_i18n::track::auto(language), Role::Quiet).press(
+                            Message::Command(Command::SetTrackColoring {
                                 set: id,
                                 coloring: {
                                     let mut next = coloring_auto;
                                     next.set_manual(None);
                                     next
                                 },
-                            },
-                        )),
+                            }),
+                        ),
                     ]),
                 );
             }
             (None, Some((minimum, maximum))) => {
-                let text = format!(
-                    "Auto: {} – {}",
-                    grana_figure::value(minimum, unit, decimals),
-                    grana_figure::value(maximum, unit, decimals)
+                let text = grana_i18n::track::auto_range(
+                    language,
+                    &grana_figure::value(minimum, unit, decimals),
+                    &grana_figure::value(maximum, unit, decimals),
                 );
                 let coloring_fix = coloring.clone();
                 children.push(grana_ui::row().gap(6.0).align(Align::Center).children([
                     view::caption(ctx, &text),
-                    view::button(ctx, "Fix Range", Role::Quiet).press(Message::Command(
-                        Command::SetTrackColoring {
+                    view::button(ctx, grana_i18n::track::fix_range(language), Role::Quiet).press(
+                        Message::Command(Command::SetTrackColoring {
                             set: id,
                             coloring: {
                                 let mut next = coloring_fix;
                                 next.set_manual(Some((minimum, maximum)));
                                 next
                             },
-                        },
-                    )),
+                        }),
+                    ),
                 ]));
             }
-            (None, None) => children.push(view::weak(ctx, "No measured values to map yet.")),
+            (None, None) => children.push(view::weak(ctx, grana_i18n::track::no_values(language))),
         }
     }
     Some(view::card(ctx, 6.0, children))
+}
+
+fn measurement_label(language: Language, measurement: TrackMeasurement) -> String {
+    grana_i18n::measure::term(language, measurement.label())
+        .unwrap_or_else(|| measurement.label().to_string())
+}
+
+fn relation_field_label(language: Language, field: RelationField) -> String {
+    grana_i18n::measure::term(language, field.label()).unwrap_or_else(|| field.label().to_string())
+}
+
+fn aggregate_label(language: Language, aggregate: Aggregate) -> String {
+    grana_i18n::measure::term(language, aggregate.name())
+        .unwrap_or_else(|| aggregate.name().to_string())
 }
 
 fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'a, Message> {

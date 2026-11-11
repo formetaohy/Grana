@@ -6,6 +6,7 @@ use grana_display::Camera;
 use grana_editor::{Stage, Workspace};
 use grana_engine::{Engine, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
+use grana_i18n::Language;
 use grana_scene::Revision;
 use grana_session::{Command, Session};
 use grana_ui::{Appearance, Ui};
@@ -84,6 +85,7 @@ pub struct App {
     changed_at: Option<Instant>,
     revision: Revision,
     appearance: Appearance,
+    language: Language,
     contrast: bool,
     reduce_transparency: bool,
     system_dark: bool,
@@ -99,8 +101,10 @@ impl App {
         session.attach_recovery_store();
         session.set_capture_factory(Arc::new(|| Arc::new(crate::capture::OfflineCapture::new())));
         let preference = Preference::load();
+        let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
         workspace.appearance = preference.appearance;
+        workspace.language = language;
         workspace.contrast = preference.contrast;
         workspace.reduce_transparency = preference.reduce_transparency;
         Self {
@@ -136,6 +140,7 @@ impl App {
             changed_at: None,
             revision: Revision::ZERO,
             appearance: preference.appearance,
+            language,
             contrast: preference.contrast,
             reduce_transparency: preference.reduce_transparency,
             system_dark: true,

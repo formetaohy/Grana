@@ -48,9 +48,15 @@ impl Export {
         self.progress
     }
 
-    pub fn start(&mut self, plan: Plan, image: Arc<Image>, scene: &Scene) -> Result<(), String> {
+    pub fn start(
+        &mut self,
+        plan: Plan,
+        image: Arc<Image>,
+        scene: &Scene,
+        language: grana_i18n::Language,
+    ) -> Result<(), String> {
         if self.active.is_some() {
-            return Err("an export is already running".to_string());
+            return Err(grana_i18n::app::export_running_error(language).to_string());
         }
         let scene = scene.snapshot().into_scene();
         let channels = Channels::render(image, &scene);
@@ -99,14 +105,17 @@ impl Export {
 
 impl App {
     pub(super) fn poll_export(&mut self) {
+        let language = self.workspace.language;
         for report in self.export.poll() {
             self.output = Some(match report {
                 Report::Finished(Outcome::Complete { path }) => {
-                    format!("saved {}", grana_offline::name(&path))
+                    grana_i18n::app::saved(language, &grana_offline::name(&path))
                 }
                 Report::Finished(Outcome::Failed { detail }) => detail,
-                Report::Finished(Outcome::Cancelled) => "the export was cancelled".to_string(),
-                Report::Closed => "the export worker stopped".to_string(),
+                Report::Finished(Outcome::Cancelled) => {
+                    grana_i18n::app::export_cancelled(language).to_string()
+                }
+                Report::Closed => grana_i18n::app::export_worker_stopped(language).to_string(),
             });
         }
     }
@@ -133,31 +142,33 @@ impl App {
     }
 
     pub(super) fn export_ready(&mut self) -> bool {
+        let language = self.workspace.language;
         if self.export.running() {
-            self.set_output_message("wait for the running export to finish");
+            self.set_output_message(grana_i18n::app::wait_export(language));
             return false;
         }
         if self.session.loading().is_some() {
-            self.set_output_message("the dataset is still opening");
+            self.set_output_message(grana_i18n::app::dataset_opening(language));
             return false;
         }
         if self.session.analysing() {
-            self.set_output_message("wait for the running analysis before exporting");
+            self.set_output_message(grana_i18n::app::wait_analysis(language));
             return false;
         }
         true
     }
 
     pub(super) fn start_export(&mut self, plan: Plan) {
+        let language = self.workspace.language;
         let Some(scene) = self.session.scene() else {
-            self.set_output_message("open a dataset before exporting");
+            self.set_output_message(grana_i18n::app::open_dataset_first(language));
             return;
         };
         let Some(image) = self.session.image() else {
-            self.set_output_message("the dataset is still opening");
+            self.set_output_message(grana_i18n::app::dataset_opening(language));
             return;
         };
-        match self.export.start(plan, image, scene) {
+        match self.export.start(plan, image, scene, language) {
             Ok(()) => {
                 self.output = None;
                 self.repaint_at = Some(Instant::now());
@@ -181,11 +192,12 @@ impl App {
             export.image
         };
         let suggested = format!("{slug}-image.png");
+        let language = self.workspace.language;
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save an image")
+            .set_title(grana_i18n::app::save_image(language))
             .set_file_name(suggested)
-            .add_filter("PNG (8-bit)", &["png"])
-            .add_filter("OME-TIFF (16-bit)", &["tif", "tiff"])
+            .add_filter(grana_i18n::app::png_8(language), &["png"])
+            .add_filter(grana_i18n::app::ome_tiff_16(language), &["tif", "tiff"])
             .save_file()
         else {
             return;
@@ -217,10 +229,16 @@ impl App {
             export.image
         };
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save a vector figure")
+            .set_title(grana_i18n::app::save_figure(self.workspace.language))
             .set_file_name(format!("{slug}-figure.svg"))
-            .add_filter("SVG (vector)", &["svg"])
-            .add_filter("PDF (vector)", &["pdf"])
+            .add_filter(
+                grana_i18n::app::svg_vector(self.workspace.language),
+                &["svg"],
+            )
+            .add_filter(
+                grana_i18n::app::pdf_vector(self.workspace.language),
+                &["pdf"],
+            )
             .save_file()
         else {
             return;
@@ -238,19 +256,23 @@ impl App {
 
     pub(super) fn begin_chart(&mut self) {
         let stem = self.session.measure().view().name().to_string();
+        let language = self.workspace.language;
         self.begin_page(
-            "Save a statistics chart",
+            grana_i18n::app::save_statistics_chart(language),
             &stem,
-            "choose a statistics plot before exporting its chart",
-            |view, workspace| grana_editor::chart_page(view, workspace.distribution_style),
+            grana_i18n::app::choose_plot(language),
+            |view, workspace| {
+                grana_editor::chart_page(view, workspace.distribution_style, workspace.language)
+            },
         );
     }
 
     pub(super) fn begin_comparison(&mut self) {
+        let language = self.workspace.language;
         self.begin_page(
-            "Save a comparison chart",
+            grana_i18n::app::save_comparison_chart(language),
             "comparison",
-            "choose a compared condition before exporting its comparison",
+            grana_i18n::app::choose_condition(language),
             grana_editor::comparison_page,
         );
     }
@@ -299,18 +321,19 @@ impl App {
             })
         };
         let Some((page, region, slug)) = prepared else {
-            self.set_output_message("open a dataset before exporting a chart");
+            self.set_output_message(grana_i18n::app::open_dataset_chart(self.workspace.language));
             return;
         };
         let Some(page) = page else {
             self.set_output_message(missing);
             return;
         };
+        let language = self.workspace.language;
         let Some(path) = rfd::FileDialog::new()
             .set_title(title)
             .set_file_name(format!("{slug}-{stem}.svg"))
-            .add_filter("SVG (vector)", &["svg"])
-            .add_filter("PDF (vector)", &["pdf"])
+            .add_filter(grana_i18n::app::svg_vector(language), &["svg"])
+            .add_filter(grana_i18n::app::pdf_vector(language), &["pdf"])
             .save_file()
         else {
             return;
@@ -351,14 +374,15 @@ impl App {
                 })
         };
         let Some((set, tracks, slug, region)) = prepared else {
-            self.set_output_message("open a tracked object set before exporting its lineage");
+            self.set_output_message(grana_i18n::app::open_tracked_set(self.workspace.language));
             return;
         };
+        let language = self.workspace.language;
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save a track lineage")
+            .set_title(grana_i18n::app::save_lineage(language))
             .set_file_name(format!("{slug}-lineage.svg"))
-            .add_filter("SVG (vector)", &["svg"])
-            .add_filter("PDF (vector)", &["pdf"])
+            .add_filter(grana_i18n::app::svg_vector(language), &["svg"])
+            .add_filter(grana_i18n::app::pdf_vector(language), &["pdf"])
             .save_file()
         else {
             return;
@@ -386,7 +410,7 @@ impl App {
             return;
         }
         if self.session.timeline().is_empty() {
-            self.set_output_message("set a keyframe before exporting");
+            self.set_output_message(grana_i18n::app::set_keyframe(self.workspace.language));
             return;
         }
         let Some(scene) = self.session.scene() else {
@@ -397,14 +421,14 @@ impl App {
         let (suggested, title, filter, extensions) = if transparent {
             (
                 format!("{slug}-movie.mov"),
-                "Save a transparent movie",
+                grana_i18n::app::save_transparent_movie(self.workspace.language),
                 "MOV",
                 &["mov"][..],
             )
         } else {
             (
                 format!("{slug}-movie.mp4"),
-                "Save a movie",
+                grana_i18n::app::save_movie(self.workspace.language),
                 "MP4",
                 &["mp4"][..],
             )
@@ -440,13 +464,15 @@ impl App {
         let export = self.session.export();
         let frames = scene.frame_count();
         if frames == 0 {
-            self.set_output_message("the dataset has no time point to export");
+            self.set_output_message(grana_i18n::app::no_time_point(self.workspace.language));
             return;
         }
         let stem = grana_session::slug(scene.dataset.name());
         let camera = self.camera.state();
         let Some(parent) = rfd::FileDialog::new()
-            .set_title("Choose a folder for the frame sequence")
+            .set_title(grana_i18n::app::choose_sequence_folder(
+                self.workspace.language,
+            ))
             .pick_folder()
         else {
             return;
@@ -479,9 +505,10 @@ impl App {
     }
 
     pub(super) fn confirm_export_close(&self) {
+        let language = self.workspace.language;
         rfd::MessageDialog::new()
-            .set_title("Export running")
-            .set_description("An export is still writing its file. Cancel it before closing grana.")
+            .set_title(grana_i18n::app::export_running(language))
+            .set_description(grana_i18n::app::export_running_detail(language))
             .set_level(rfd::MessageLevel::Info)
             .set_buttons(rfd::MessageButtons::Ok)
             .show();

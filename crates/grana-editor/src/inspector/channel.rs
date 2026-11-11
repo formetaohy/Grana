@@ -15,8 +15,14 @@ pub(super) fn channels<'a>(
         .iter()
         .filter(|channel| channel.enabled)
         .count();
-    let detail = format!("{enabled}/{count} visible");
-    let title = view::card_title(ctx, Icon::Layers, "Channels", Some(&detail));
+    let language = ctx.language();
+    let detail = grana_i18n::inspector::visible_channels(language, enabled, count);
+    let title = view::card_title(
+        ctx,
+        Icon::Layers,
+        grana_i18n::inspector::channels(language),
+        Some(&detail),
+    );
     let mut children = Vec::new();
     children.push(
         grana_ui::column()

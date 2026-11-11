@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_measure::{
     COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocPair, ColocPrecision, ColocSeries, ColocSettings,
     ColocStatistics, ColocThresholds,
@@ -18,12 +19,13 @@ const PLOT_CELLS: usize = 160;
 const PLOT_SIDE: f32 = 186.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let Some(pair) = state.scene.coloc.pair() else {
         return view::empty_state(
             ctx,
             Icon::Grid,
-            "Two Channels Required",
-            "Colocalization compares two channels across every frame in the region and analysis mask.",
+            grana_i18n::coloc::two_channels_title(language),
+            grana_i18n::coloc::two_channels_detail(language),
         );
     };
     let running = view::progress(state.jobs, Job::Coloc);
@@ -32,11 +34,11 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         view::empty_state(
             ctx,
             Icon::Grid,
-            "No Colocalization Yet",
+            grana_i18n::coloc::no_coloc_title(language),
             if running.is_some() {
-                "Streaming both channels over every frame of the current region and analysis mask."
+                grana_i18n::coloc::no_coloc_streaming(language)
             } else {
-                "Choose a channel pair, then compute Pearson overlap, Manders coefficients and a block permutation p-value."
+                grana_i18n::coloc::no_coloc_detail(language)
             },
         )
     } else {
@@ -69,6 +71,7 @@ fn header<'a>(
     pair: ColocPair,
     running: Option<Progress>,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let names = state
         .scene
         .dataset
@@ -105,7 +108,7 @@ fn header<'a>(
     let selected_a = indices_a.iter().position(|index| *index == a).unwrap_or(0);
     let selected_b = indices_b.iter().position(|index| *index == b).unwrap_or(0);
     let mut items = vec![
-        field_label(ctx, "Pair"),
+        field_label(ctx, grana_i18n::coloc::pair(language)),
         combo(
             ctx,
             "coloc.a",
@@ -140,7 +143,7 @@ fn header<'a>(
             items.push(view::spinner(ctx, 13.0));
             items.push(view::caption(
                 ctx,
-                &format!("{}/{} samples", running.done, running.total),
+                &grana_i18n::coloc::samples(language, running.done, running.total),
             ));
             items.push(view::icon_button(
                 ctx,
@@ -148,15 +151,19 @@ fn header<'a>(
                 Icon::Close,
                 28.0,
                 Role::Quiet,
-                "Cancel",
+                grana_i18n::common::cancel(language),
                 Message::Command(Command::CancelColoc),
             ));
         }
         None => {
             let theme = *ctx.theme();
-            let compute =
-                grana_ui::widget::action_button(&theme, Icon::Target, "Compute", Role::Prominent)
-                    .named("coloc.compute");
+            let compute = grana_ui::widget::action_button(
+                &theme,
+                Icon::Target,
+                grana_i18n::coloc::compute(language),
+                Role::Prominent,
+            )
+            .named("coloc.compute");
             items.push(if busy {
                 compute.enabled(false)
             } else {
@@ -171,7 +178,7 @@ fn header<'a>(
             Icon::Export,
             28.0,
             Role::Quiet,
-            "Export CSV",
+            grana_i18n::coloc::export_csv(language),
             Message::Command(Command::ExportColoc),
         ));
     }
@@ -197,7 +204,7 @@ fn header<'a>(
             Icon::Trash,
             28.0,
             Role::Quiet,
-            "Remove this result",
+            grana_i18n::coloc::remove_result(language),
             Message::Command(Command::RemoveColocResult(pair)),
         ));
     }
@@ -215,6 +222,7 @@ fn thresholds<'a>(
         return grana_ui::column();
     };
     let pair = result.pair();
+    let language = ctx.language();
     let thresholds = result.thresholds();
     let series = result.series();
     let tints = [
@@ -282,13 +290,11 @@ fn thresholds<'a>(
                 .press(Message::Command(Command::SetColocThresholds(range.high()))),
         );
     }
+    let raw_a = channels[pair.a()].intensity().value(thresholds.a());
+    let raw_b = channels[pair.b()].intensity().value(thresholds.b());
     buttons.push(view::caption(
         ctx,
-        &format!(
-            "Raw {:.0} · {:.0}",
-            channels[pair.a()].intensity().value(thresholds.a()),
-            channels[pair.b()].intensity().value(thresholds.b())
-        ),
+        &grana_i18n::coloc::raw(language, raw_a, raw_b),
     ));
     rows.push(
         grana_ui::row()
@@ -310,7 +316,12 @@ fn thresholds<'a>(
             ),
         ));
     }
-    let title = view::card_title(ctx, Icon::Sliders, "Thresholds", None);
+    let title = view::card_title(
+        ctx,
+        Icon::Sliders,
+        grana_i18n::coloc::thresholds(language),
+        None,
+    );
     let mut children = vec![title];
     children.extend(rows);
     view::card(ctx, 7.0, children)
@@ -321,6 +332,7 @@ fn diagnostics<'a>(
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
     let mut cards = Vec::new();
+    let language = ctx.language();
     if let Some(series) = state.scene.coloc.series_statistics() {
         let current = state.scene.coloc.statistics(state.scene.time());
         let theme = *ctx.theme();
@@ -336,9 +348,19 @@ fn diagnostics<'a>(
         let series_values = metrics_values(series);
         let current_values = current.map(metrics_values);
         let time = state.scene.time();
+        let headers = [
+            grana_i18n::coloc::scope(language),
+            "Pearson",
+            grana_i18n::coloc::overlap(language),
+            "M1",
+            "M2",
+            grana_i18n::coloc::voxels(language),
+            "p",
+        ];
+        let series_label = grana_i18n::coloc::series(language);
+        let frame_label = grana_i18n::coloc::frame_row(language, time + 1);
         let canvas = grana_ui::canvas(Length::Fill, height, move |painter, info| {
             let widths = statistic_widths(info.rect.width());
-            let headers = ["Scope", "Pearson", "Overlap", "M1", "M2", "Voxels", "p"];
             let mut left = info.rect.min.x;
             for (index, (label, width)) in headers.iter().zip(widths.iter()).enumerate() {
                 painter.text_in(
@@ -361,7 +383,7 @@ fn diagnostics<'a>(
             let mut y = info.rect.min.y + 18.0 + 9.0;
             painter.text_in(
                 Rect::from_min_size(Vec2::new(info.rect.min.x, y), Vec2::new(widths[0], 20.0)),
-                "Series",
+                series_label,
                 caption_style,
                 Align::Center,
             );
@@ -376,7 +398,7 @@ fn diagnostics<'a>(
             if let Some(values) = &current_values {
                 painter.text_in(
                     Rect::from_min_size(Vec2::new(info.rect.min.x, y), Vec2::new(widths[0], 20.0)),
-                    &format!("Frame {}", time + 1),
+                    &frame_label,
                     caption_style,
                     Align::Center,
                 );
@@ -389,7 +411,12 @@ fn diagnostics<'a>(
                 );
             }
         });
-        let title = view::card_title(ctx, Icon::Table, "Statistics", None);
+        let title = view::card_title(
+            ctx,
+            Icon::Table,
+            grana_i18n::panel::statistics(language),
+            None,
+        );
         cards.push(view::card(ctx, 4.0, vec![title, canvas]));
     }
     if let Some(card) = method(ctx, state) {
@@ -448,6 +475,7 @@ fn method<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Option<Element<'a, Message>> {
+    let language = ctx.language();
     let result = state.scene.coloc.result()?;
     let settings = state.scene.coloc.settings();
     let cost = result.cost();
@@ -458,21 +486,25 @@ fn method<'a>(
         .mask()
         .and_then(ObjectSetId::from_raw)
         .and_then(|id| state.scene.objects.get(id))
-        .map_or_else(|| "Whole volume".to_string(), |set| set.name().to_string());
+        .map_or_else(
+            || grana_i18n::common::whole_volume(language).to_string(),
+            |set| set.name().to_string(),
+        );
     let permutations = settings.permutations() as f32;
     let block = settings.block() as f32;
     let max_permutations = COLOC_PERMUTATIONS_MAX as f32;
     let max_block = COLOC_BLOCK_MAX as f32;
     let theme = *ctx.theme();
-    let sample = format!(
-        "{:.1}% · {} vx · {}f · {} blocks (s{stride})",
+    let sample = grana_i18n::coloc::sampling_detail(
+        language,
         100.0 * result.coverage(),
         cost.voxels(),
         frames,
-        cost.blocks()
+        cost.blocks(),
+        stride,
     );
     let precision = settings.precision();
-    let labels = ColocPrecision::ALL.map(ColocPrecision::label);
+    let labels = ColocPrecision::ALL.map(|value| precision_label(language, value));
     let precision_row = view::segmented(
         ctx,
         "coloc.precision",
@@ -517,10 +549,15 @@ fn method<'a>(
         block_value,
     ]);
     let detail = format!("L{level} · s{stride} · {mask}");
-    let title = view::card_title(ctx, Icon::Sparkles, "Method", Some(&detail));
-    let sampling = view::labelled(ctx, "Sampling", &sample);
-    let shuffles = view::form_row(ctx, "Shuffles", shuffles);
-    let precision = view::form_row(ctx, "Precision", precision_row);
+    let title = view::card_title(
+        ctx,
+        Icon::Sparkles,
+        grana_i18n::coloc::method(language),
+        Some(&detail),
+    );
+    let sampling = view::labelled(ctx, grana_i18n::coloc::sampling(language), &sample);
+    let shuffles = view::form_row(ctx, grana_i18n::coloc::shuffles(language), shuffles);
+    let precision = view::form_row(ctx, grana_i18n::coloc::precision(language), precision_row);
     Some(view::card(
         ctx,
         4.0,
@@ -528,7 +565,16 @@ fn method<'a>(
     ))
 }
 
+fn precision_label(language: Language, precision: ColocPrecision) -> &'static str {
+    match precision {
+        ColocPrecision::Full => grana_i18n::coloc::precision_full(language),
+        ColocPrecision::Balanced => grana_i18n::coloc::precision_balanced(language),
+        ColocPrecision::Fast => grana_i18n::coloc::precision_fast(language),
+    }
+}
+
 fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let Some(pair) = state.scene.coloc.pair() else {
         return grana_ui::column();
     };
@@ -542,7 +588,7 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let names = [channels[pair.a()].name(), channels[pair.b()].name()];
     let bins = series.bins();
     let theme = *ctx.theme();
-    let subtitle = format!("All frames · {bins} bins");
+    let subtitle = grana_i18n::coloc::all_frames_bins(language, bins);
     let background = theme.surface(Role::Field, State::Rest);
     let grid = Color::white_alpha(0.05);
     let line = Color::rgba(0.95, 0.96, 1.0, 0.55);
@@ -631,7 +677,12 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             Align::Center,
         );
     });
-    let title = view::card_title(ctx, Icon::Grid, "Joint Histogram", Some(&subtitle));
+    let title = view::card_title(
+        ctx,
+        Icon::Grid,
+        grana_i18n::coloc::joint_histogram(language),
+        Some(&subtitle),
+    );
     view::card(ctx, 6.0, vec![title, canvas])
 }
 

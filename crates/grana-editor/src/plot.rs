@@ -2,6 +2,7 @@ use glam::Vec2;
 use grana_chart::{
     Axis, Brush, BrushKind, Decor, Gates, Heading, Highlight, Style, View as ChartView,
 };
+use grana_i18n::Language;
 use grana_measure::{
     Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Scatter, Table, Trend,
 };
@@ -16,8 +17,6 @@ const POINT_LIMIT: u64 = 4096;
 const BRUSH_SLOP: f32 = 0.005;
 const LASSO_STEP: f32 = 0.002;
 const HOVER_REACH: f32 = 11.0;
-const SCATTER_HINT: &str = "Drag: Lasso · Shift-Drag: Box · Click: Locate";
-const GATE_HINT: &str = "Drag: Gate · Click: Locate";
 
 enum Readout {
     None,
@@ -136,9 +135,10 @@ pub fn view<'a>(
     let (Some(table), Some(plot)) = (measure.table(), measure.plot()) else {
         return Vec::new();
     };
+    let language = ctx.language();
     let theme = *ctx.theme();
     let distribution = state.workspace.distribution_style;
-    let style = Style::card(&theme, distribution);
+    let style = Style::card(&theme, distribution).with_language(language);
     let frame = style.metrics.frame(rect);
     if rect.width() < 140.0 || rect.height() < 80.0 {
         return Vec::new();
@@ -160,9 +160,10 @@ pub fn view<'a>(
             Readout::None
         }
     };
-    let (title_y, title_x) = titles(plot, table);
-    let heading =
-        Heading::new("", title_y, title_x).with_summary(summary_text(plot, table, readout));
+    let (title_y, title_x) = titles(plot, table, language);
+    let heading = Heading::new("", title_y, title_x)
+        .with_summary(summary_text(plot, table, readout, language))
+        .with_empty(empty_text(language, plot));
     let chart = PlotView {
         plot,
         table,
@@ -187,7 +188,7 @@ pub fn view<'a>(
             surface.border,
             surface.shadow,
         );
-        let style = Style::card(&theme, distribution);
+        let style = Style::card(&theme, distribution).with_language(language);
         let view = ChartView {
             heading: &heading,
             plot: chart.plot,
@@ -226,35 +227,54 @@ fn range(filters: &[Filter], column: usize) -> Option<(f32, f32)> {
         .map(|filter| (filter.minimum(), filter.maximum()))
 }
 
-fn titles(plot: &Plot, table: &Table) -> (String, String) {
+fn empty_text(language: Language, plot: &Plot) -> &'static str {
+    match plot {
+        Plot::Histogram(_) | Plot::Scatter(_) | Plot::Distribution(_) => {
+            grana_i18n::measure::no_objects(language)
+        }
+        Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
+    }
+}
+
+fn titles(plot: &Plot, table: &Table, language: Language) -> (String, String) {
     let columns = table.columns();
     match plot {
         Plot::Histogram(histogram) => (
-            "Y: Objects".to_string(),
+            grana_i18n::measure::y_objects(language).to_string(),
             format!(
                 "X: {}",
-                crate::view::column_label(&columns[histogram.column()])
+                crate::view::column_label(language, &columns[histogram.column()])
             ),
         ),
         Plot::Scatter(scatter) => (
-            format!("Y: {}", crate::view::column_label(&columns[scatter.y()])),
-            format!("X: {}", crate::view::column_label(&columns[scatter.x()])),
+            format!(
+                "Y: {}",
+                crate::view::column_label(language, &columns[scatter.y()])
+            ),
+            format!(
+                "X: {}",
+                crate::view::column_label(language, &columns[scatter.x()])
+            ),
         ),
         Plot::Distribution(distribution) => (
             format!(
                 "Y: {}",
-                crate::view::column_label(&columns[distribution.column()])
+                crate::view::column_label(language, &columns[distribution.column()])
             ),
-            "X: Groups".to_string(),
+            grana_i18n::measure::x_groups(language).to_string(),
         ),
         Plot::Trend(trend) => (
-            format!("Y: {}", crate::view::column_label(&columns[trend.column()])),
-            "X: Frame".to_string(),
+            format!(
+                "Y: {}",
+                crate::view::column_label(language, &columns[trend.column()])
+            ),
+            grana_i18n::measure::x_frame(language).to_string(),
         ),
     }
 }
 
-fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
+fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language) -> String {
+    let gate_hint = grana_i18n::measure::gate_hint(language);
     let total = table.rows() as u64;
     match (plot, readout) {
         (
@@ -269,7 +289,14 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let column = &table.columns()[histogram.column()];
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
-            format!("{low:.places$} – {high:.places$} {unit} · {gated} of {bin_total}")
+            grana_i18n::measure::bin_readout(
+                language,
+                &format!("{low:.places$}"),
+                &format!("{high:.places$}"),
+                unit,
+                gated,
+                bin_total,
+            )
         }
         (Plot::Scatter(scatter), Readout::Cell { x, y, observation }) => {
             let first = &table.columns()[scatter.x()];
@@ -278,20 +305,21 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let y_places = second.decimals() as usize;
             let mut text = format!(
                 "{} {x:.x_places$} {} · {} {y:.y_places$} {}",
-                first.label(),
+                crate::text::column(language, first.label()),
                 first.unit().suffix(),
-                second.label(),
+                crate::text::column(language, second.label()),
                 second.unit().suffix()
             );
             if let Some(observation) = observation {
-                text.push_str(&located(observation));
+                text.push_str(&located(observation, language));
             }
             text
         }
         (Plot::Distribution(distribution), Readout::Group(index)) => {
             let Some(group) = distribution.groups().get(index) else {
-                return GATE_HINT.to_string();
+                return gate_hint.to_string();
             };
+            let group_label = grana_i18n::measure::distribution_group(language, group.label());
             let column = &table.columns()[distribution.column()];
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
@@ -302,42 +330,54 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                 Some(group.total())
             };
             let Some(series) = series else {
-                return format!("{} · no gated samples · {GATE_HINT}", group.label());
+                return format!(
+                    "{group_label} · {} · {gate_hint}",
+                    grana_i18n::measure::no_gated_samples(language)
+                );
             };
+            let median = format!("{:.places$}", series.median());
+            let low = format!("{:.places$}", series.lower_quartile());
+            let high = format!("{:.places$}", series.upper_quartile());
+            let mean = format!("{:.places$}", series.mean());
+            let deviation = format!("{:.places$}", series.deviation());
             let mut text = format!(
-                "{} · n={} · Median {:.places$} {unit} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$}",
-                group.label(),
+                "{group_label} · n={} · {} · IQR {low}–{high} · {} · σ {deviation}",
                 series.count(),
-                series.median(),
-                series.lower_quartile(),
-                series.upper_quartile(),
-                series.mean(),
-                series.deviation()
+                grana_i18n::measure::median(language, &median, unit),
+                grana_i18n::measure::mean(language, &mean, unit)
             );
             if series.count() < group.total().count() {
                 text.push_str(&format!(
-                    " · {} of {} gated",
-                    series.count(),
-                    group.total().count()
+                    " · {}",
+                    grana_i18n::measure::gated_count(
+                        language,
+                        series.count(),
+                        group.total().count()
+                    )
                 ));
             }
-            text.push_str(&format!(" · {GATE_HINT}"));
+            text.push_str(&format!(" · {gate_hint}"));
             text
         }
         (Plot::Distribution(distribution), _) => {
             let groups = distribution.groups().len();
             if distribution.total() == 0 {
-                "No objects to plot".to_string()
+                grana_i18n::measure::no_objects(language).to_string()
             } else if distribution.gated() < distribution.total() {
                 format!(
-                    "{} of {} gated · {groups} groups · {GATE_HINT}",
-                    distribution.gated(),
-                    distribution.total()
+                    "{} · {} · {gate_hint}",
+                    grana_i18n::measure::gated_count(
+                        language,
+                        distribution.gated(),
+                        distribution.total()
+                    ),
+                    grana_i18n::measure::groups(language, groups)
                 )
             } else {
                 format!(
-                    "{} objects · {groups} groups · {GATE_HINT}",
-                    distribution.total()
+                    "{} · {} · {gate_hint}",
+                    grana_i18n::measure::objects(language, distribution.total()),
+                    grana_i18n::measure::groups(language, groups)
                 )
             }
         }
@@ -346,32 +386,45 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
             match point.and_then(|index| trend.points().get(index)) {
-                Some(point) => format!(
-                    "Frame {} · Mean {:.places$} {unit} · 95% CI {:.places$}–{:.places$} · n={} · {GATE_HINT}",
-                    time + 1,
-                    point.mean(),
-                    point.lower(),
-                    point.upper(),
-                    point.count()
+                Some(point) => {
+                    let mean = format!("{:.places$}", point.mean());
+                    let low = format!("{:.places$}", point.lower());
+                    let high = format!("{:.places$}", point.upper());
+                    format!(
+                        "{} · {} · 95% CI {low}–{high} · n={} · {gate_hint}",
+                        grana_i18n::measure::frame(language, time + 1),
+                        grana_i18n::measure::mean(language, &mean, unit),
+                        point.count()
+                    )
+                }
+                None => format!(
+                    "{} · {} · {gate_hint}",
+                    grana_i18n::measure::frame(language, time + 1),
+                    grana_i18n::measure::no_samples(language)
                 ),
-                None => format!("Frame {} · no samples · {GATE_HINT}", time + 1),
             }
         }
         (Plot::Trend(trend), _) => {
             if trend.points().is_empty() {
-                "No frames to trend".to_string()
+                grana_i18n::measure::no_frames_trend(language).to_string()
             } else if trend.gated() < trend.total() {
                 format!(
-                    "{} of {} values over {} frames · {GATE_HINT}",
-                    trend.gated(),
-                    trend.total(),
-                    trend.frames()
+                    "{} · {gate_hint}",
+                    grana_i18n::measure::gated_values_over_frames(
+                        language,
+                        trend.gated(),
+                        trend.total(),
+                        trend.frames()
+                    )
                 )
             } else {
                 format!(
-                    "{} values over {} frames · {GATE_HINT}",
-                    trend.total(),
-                    trend.frames()
+                    "{} · {gate_hint}",
+                    grana_i18n::measure::values_over_frames(
+                        language,
+                        trend.total(),
+                        trend.frames()
+                    )
                 )
             }
         }
@@ -381,17 +434,23 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
             if statistics.count() == 0 {
-                format!("{total} objects · Ungated · {GATE_HINT}")
-            } else {
                 format!(
-                    "{} of {total} gated · Median {:.places$} {unit} · MAD {:.places$} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$} · {GATE_HINT}",
-                    statistics.count(),
-                    statistics.median(),
-                    statistics.mad(),
-                    statistics.lower_quartile(),
-                    statistics.upper_quartile(),
-                    statistics.mean(),
-                    statistics.deviation()
+                    "{} · {} · {gate_hint}",
+                    grana_i18n::measure::objects(language, total),
+                    grana_i18n::measure::ungated(language)
+                )
+            } else {
+                let median = format!("{:.places$}", statistics.median());
+                let mad = format!("{:.places$}", statistics.mad());
+                let low = format!("{:.places$}", statistics.lower_quartile());
+                let high = format!("{:.places$}", statistics.upper_quartile());
+                let mean = format!("{:.places$}", statistics.mean());
+                let deviation = format!("{:.places$}", statistics.deviation());
+                format!(
+                    "{} · {} · MAD {mad} · IQR {low}–{high} · {} · σ {deviation} · {gate_hint}",
+                    grana_i18n::measure::gated_count(language, statistics.count(), total),
+                    grana_i18n::measure::median(language, &median, unit),
+                    grana_i18n::measure::mean(language, &mean, unit)
                 )
             }
         }
@@ -399,27 +458,34 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
             let correlation = scatter
                 .correlation()
                 .map_or_else(|| "r —".to_string(), |value| format!("r = {value:.2}"));
+            let hint = grana_i18n::measure::scatter_hint(language);
             if scatter.x_summary().count() == 0 {
-                format!("{total} objects · Ungated · {SCATTER_HINT}")
+                format!(
+                    "{} · {} · {hint}",
+                    grana_i18n::measure::objects(language, total),
+                    grana_i18n::measure::ungated(language)
+                )
             } else {
                 format!(
-                    "{} of {total} gated · {correlation} · {SCATTER_HINT}",
-                    scatter.x_summary().count()
+                    "{} · {correlation} · {hint}",
+                    grana_i18n::measure::gated_count(language, scatter.x_summary().count(), total)
                 )
             }
         }
     }
 }
 
-fn located(observation: Observation) -> String {
+fn located(observation: Observation, language: Language) -> String {
     match (
         observation.time(),
         observation.object(),
         observation.track(),
     ) {
-        (Some(time), Some(object), _) => format!(" · Frame {} · Object {}", time + 1, object + 1),
-        (_, _, Some(track)) => format!(" · Track {}", track + 1),
-        (Some(time), _, _) => format!(" · Frame {}", time + 1),
+        (Some(time), Some(object), _) => {
+            grana_i18n::measure::located_object(language, time + 1, object + 1)
+        }
+        (_, _, Some(track)) => grana_i18n::measure::located_track(language, track + 1),
+        (Some(time), _, _) => grana_i18n::measure::located_frame(language, time + 1),
         _ => String::new(),
     }
 }

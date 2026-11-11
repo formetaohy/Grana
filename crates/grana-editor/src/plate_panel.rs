@@ -17,12 +17,13 @@ pub fn view<'a>(
     state: &'a View<'a>,
     width: f32,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let Some(plate) = state.plate.as_ref() else {
         return view::empty_state(
             ctx,
             Icon::Grid,
-            "No plate loaded",
-            "Open an OME-Zarr plate to browse its wells and jump between fields of view.",
+            grana_i18n::plate::no_plate(language),
+            grana_i18n::plate::no_plate_detail(language),
         );
     };
     let mut children = vec![summary(ctx, plate)];
@@ -37,31 +38,35 @@ pub fn view<'a>(
 }
 
 fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Element<'a, Message> {
+    let language = ctx.language();
     let plate = view.plate;
     let fields = plate.len();
     let wells = plate.wells().len();
     let previews = if view.previews == 0 || view.previews == fields {
-        format!("{fields} fields")
+        grana_i18n::plate::summary(language, fields)
     } else {
-        format!("{fields} fields · {} previews", view.previews)
+        grana_i18n::plate::summary_previews(language, fields, view.previews)
     };
     let title = view::card_title(
         ctx,
         Icon::Grid,
         plate.name(),
-        Some(&format!(
-            "{} × {} wells · {wells} wells · {previews}",
+        Some(&grana_i18n::plate::grid_detail(
+            language,
             plate.rows(),
-            plate.columns()
+            plate.columns(),
+            wells,
+            &previews,
         )),
     );
-    let hint = view::weak(
+    let hint = view::weak(ctx, grana_i18n::plate::every_well(language));
+    let export = view::button(
         ctx,
-        "Every well shows the projection of its first field of view; choose a well to open it.",
-    );
-    let export = view::button(ctx, "Export Montage", grana_ui::Role::Control)
-        .named("plate.export")
-        .press(Message::Command(Command::ExportPlate));
+        grana_i18n::plate::export_montage(language),
+        grana_ui::Role::Control,
+    )
+    .named("plate.export")
+    .press(Message::Command(Command::ExportPlate));
     view::card(ctx, 8.0, vec![title, hint, export])
 }
 
@@ -188,10 +193,10 @@ fn cell<'a>(
     .named(&format!("plate.{row}.{column}"));
     match well.and_then(|well| well.fields().first()) {
         Some(field) => {
-            let detail = format!(
-                "{} · {} fields",
-                label,
-                well.map_or(0, |well| well.fields().len())
+            let detail = grana_i18n::plate::well_fields(
+                ctx.language(),
+                &label,
+                well.map_or(0, |well| well.fields().len()),
             );
             let series = field.series();
             element
@@ -207,17 +212,15 @@ fn fields<'a>(
     view: &PlateView<'_>,
     well: &Well,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     let count = well.fields().len();
     let mut children = vec![view::section_header(
         ctx,
-        &format!("Well {}", well.label()),
-        Some(&format!(
-            "{count} field{}",
-            if count == 1 { "" } else { "s" }
-        )),
+        &grana_i18n::plate::well_header(language, well.label()),
+        Some(&grana_i18n::plate::field_count(language, count)),
     )];
     if well.fields().is_empty() {
-        children.push(view::weak(ctx, "This well holds no field of view."));
+        children.push(view::weak(ctx, grana_i18n::plate::no_field(language)));
     }
     let mut buttons = Vec::new();
     for (index, field) in well.fields().iter().enumerate() {
@@ -228,8 +231,8 @@ fn fields<'a>(
             Role::Control
         };
         let name = field.name().strip_prefix(well.label()).map_or_else(
-            || format!("Field {}", index + 1),
-            |suffix| format!("Field {}", suffix.trim_start_matches('/')),
+            || grana_i18n::plate::field_name(language, index + 1),
+            |suffix| grana_i18n::plate::field_suffix(language, suffix.trim_start_matches('/')),
         );
         buttons.push(
             view::button(ctx, &name, role)

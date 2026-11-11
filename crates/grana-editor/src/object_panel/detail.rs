@@ -6,41 +6,47 @@ pub(super) fn origin<'a>(
     id: ObjectSetId,
 ) -> Option<Element<'a, Message>> {
     let set = state.scene.objects.get(id)?;
+    let language = ctx.language();
     let name = |id: ObjectSetId| {
-        state
-            .scene
-            .objects
-            .get(id)
-            .map_or("Object Set".to_string(), |set| set.name().to_string())
+        state.scene.objects.get(id).map_or_else(
+            || grana_i18n::object::object_set(language).to_string(),
+            |set| set.name().to_string(),
+        )
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
-        Provenance::Segmented { params } => format!(
-            "Segmented with {} · {} weights",
+        Provenance::Segmented { params } => grana_i18n::object::segmented(
+            language,
             params.model().label(),
-            params.model().license().name()
+            params.model().license().name(),
         ),
-        Provenance::Imported { label } => format!("Imported from {label}"),
-        Provenance::Interop { file } => format!("Imported from {file}"),
-        Provenance::Attached { file, .. } => format!("Attached from {file}"),
-        Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
-        Provenance::Copied { source } => format!("Copy of {}", name(*source)),
+        Provenance::Imported { label } => grana_i18n::object::imported_from(language, label),
+        Provenance::Interop { file } => grana_i18n::object::imported_from(language, file),
+        Provenance::Attached { file, .. } => grana_i18n::object::attached_from(language, file),
+        Provenance::Filtered { source, .. } => {
+            grana_i18n::object::filtered_from(language, &name(*source))
+        }
+        Provenance::Copied { source } => grana_i18n::object::copy_of(language, &name(*source)),
         Provenance::Edited { source, edits } => {
-            format!("Edited from {} · {} edits", name(*source), edits.len())
+            grana_i18n::object::edited_from(language, &name(*source), edits.len())
         }
         Provenance::Masked { source, strokes } => {
-            format!("Painted from {} · {} strokes", name(*source), strokes.len())
+            grana_i18n::object::painted_from(language, &name(*source), strokes.len())
         }
-        Provenance::Merged { parts } => format!(
-            "Merged from {}",
-            parts
+        Provenance::Merged { parts } => grana_i18n::object::merged_from(
+            language,
+            &parts
                 .iter()
                 .map(|part| part.name())
                 .collect::<Vec<_>>()
-                .join(" + ")
+                .join(" + "),
         ),
     };
-    Some(view::labelled(ctx, "Origin", &text))
+    Some(view::labelled(
+        ctx,
+        grana_i18n::object::origin(language),
+        &text,
+    ))
 }
 
 pub(super) fn attached<'a>(
@@ -50,6 +56,7 @@ pub(super) fn attached<'a>(
 ) -> Option<Element<'a, Message>> {
     let set = state.scene.objects.get(id)?;
     let intensities = set.provenance().intensities()?;
+    let language = ctx.language();
     let frames = (0..state.scene.frame_count())
         .filter(|time| set.frame(*time).is_some())
         .count();
@@ -59,13 +66,15 @@ pub(super) fn attached<'a>(
         .sum::<usize>();
     let text = match intensities {
         IntensitySource::Statistics => {
-            format!("{frames} frames · {objects} objects · intensities from the file statistics")
+            grana_i18n::object::import_statistics(language, frames, objects)
         }
-        IntensitySource::Sampled => format!(
-            "{frames} frames · {objects} objects · intensities sampled from the voxels inside"
-        ),
+        IntensitySource::Sampled => grana_i18n::object::import_sampled(language, frames, objects),
     };
-    Some(view::labelled(ctx, "Import", &text))
+    Some(view::labelled(
+        ctx,
+        grana_i18n::object::import(language),
+        &text,
+    ))
 }
 
 pub(super) fn curated<'a>(
@@ -78,27 +87,31 @@ pub(super) fn curated<'a>(
     if curation.is_empty() && curation.dropped() == 0 {
         return None;
     }
+    let language = ctx.language();
     let mut parts = Vec::new();
     let removed = curation.removal_count();
     if removed > 0 {
-        parts.push(format!("{removed} removed"));
+        parts.push(grana_i18n::object::removed(language, removed));
     }
     let edits = curation.edit_count();
-    if edits > 0 {
-        parts.push(format!(
-            "{edits} track edit{}",
-            if edits == 1 { "" } else { "s" }
-        ));
+    if edits == 1 {
+        parts.push(grana_i18n::object::track_edit(language, edits));
+    } else if edits > 0 {
+        parts.push(grana_i18n::object::track_edits(language, edits));
     }
     let pending = curation.pending();
     if pending > 0 {
-        parts.push(format!("{pending} pending"));
+        parts.push(grana_i18n::object::pending(language, pending));
     }
     let dropped = curation.dropped();
     if dropped > 0 {
-        parts.push(format!("{dropped} dropped"));
+        parts.push(grana_i18n::object::dropped(language, dropped));
     }
-    Some(view::labelled(ctx, "Curated", &parts.join(" · ")))
+    Some(view::labelled(
+        ctx,
+        grana_i18n::object::curated(language),
+        &parts.join(" · "),
+    ))
 }
 
 pub(super) fn params<'a>(
@@ -113,6 +126,7 @@ pub(super) fn params<'a>(
     let voxel = state.scene.dataset.voxel_size().min_element();
     let world = state.scene.dataset.world_size().max_element();
     let params = set.params();
+    let language = ctx.language();
     let mut children = Vec::new();
     if let Some(segment) = set.provenance().segment() {
         let models = grana_scene::SegmentModel::available()
@@ -127,13 +141,13 @@ pub(super) fn params<'a>(
         if models.is_empty() {
             children.push(crate::view::caption(
                 ctx,
-                "This build licenses no segmentation weights.",
+                grana_i18n::object::no_segmentation_weights(language),
             ));
         } else if models.iter().any(|(model, _)| *model == segment.model()) {
             children.push(crate::inspector::form_combo(
                 ctx,
                 &format!("object.{}.segment.model", id.raw()),
-                "Model",
+                grana_i18n::object::model(language),
                 &models,
                 Some(segment.model()),
                 220.0,
@@ -147,23 +161,23 @@ pub(super) fn params<'a>(
         } else {
             children.push(crate::view::labelled(
                 ctx,
-                "Model",
-                &format!(
-                    "{} · {} weights",
+                grana_i18n::object::model(language),
+                &grana_i18n::object::model_weights(
+                    language,
                     segment.model().label(),
-                    segment.model().license().name()
+                    segment.model().license().name(),
                 ),
             ));
             children.push(crate::view::caption(
                 ctx,
-                "This build licenses no weights for the model the object set was segmented with.",
+                grana_i18n::object::no_model_weights(language),
             ));
         }
         for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
             let (minimum, maximum) = bounds(field, voxel, world);
             let value = segment.field(index).clamp(minimum, maximum);
             let readout = format!("{value:.3}{}", field.suffix);
-            let label = capitalized(field.label);
+            let label = capitalized(&grana_i18n::object::parameter(language, field.label));
             let segment = segment.clone();
             children.push(crate::view::slider_readout(
                 ctx,
@@ -189,7 +203,7 @@ pub(super) fn params<'a>(
         let (minimum, maximum) = bounds(field, voxel, world);
         let value = params.value(index).clamp(minimum, maximum);
         let readout = format!("{value:.3}{}", field.suffix);
-        let label = capitalized(field.label);
+        let label = capitalized(&grana_i18n::object::parameter(language, field.label));
         children.push(crate::view::slider_readout(
             ctx,
             &format!("object.{}.param.{index}", id.raw()),
@@ -247,6 +261,7 @@ pub(super) fn detect<'a>(
         .objects
         .get(root)
         .map_or_else(String::new, |set| set.name().to_string());
+    let language = ctx.language();
     let running = view::progress(state.jobs, Job::Detect(root))
         .map(|running| (Job::Detect(root), running))
         .or_else(|| {
@@ -260,10 +275,18 @@ pub(super) fn detect<'a>(
                 0.0
             };
             let spinner = view::spinner(ctx, 13.0);
-            let caption = view::caption(ctx, &view::progress_caption(kind, job, running, frames));
+            let caption = view::caption(
+                ctx,
+                &view::progress_caption(language, kind, job, running, frames),
+            );
             let progress = grana_ui::widget::progress(fraction, width());
-            let cancel = view::button_with(ctx, "Cancel", Role::Control, Length::Fill)
-                .press(Message::Command(Command::CancelDetect(id)));
+            let cancel = view::button_with(
+                ctx,
+                grana_i18n::common::cancel(language),
+                Role::Control,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::CancelDetect(id)));
             grana_ui::column().gap(6.0).children([
                 grana_ui::row()
                     .gap(6.0)
@@ -275,9 +298,9 @@ pub(super) fn detect<'a>(
         }
         None => {
             let label = if root == id {
-                "Detect".to_string()
+                grana_i18n::object::detect(language).to_string()
             } else {
-                format!("Detect {root_name}")
+                grana_i18n::object::detect_root(language, &root_name)
             };
             view::button_with(ctx, &label, Role::Prominent, Length::Fill)
                 .press(Message::Command(Command::Detect(id)))
@@ -294,6 +317,7 @@ pub(super) fn importing<'a>(
     let Some(running) = view::progress(state.jobs, Job::Import(id)) else {
         return Vec::new();
     };
+    let language = ctx.language();
     let fraction = if running.total > 0 {
         running.done as f32 / running.total as f32
     } else {
@@ -302,11 +326,22 @@ pub(super) fn importing<'a>(
     let spinner = view::spinner(ctx, 13.0);
     let caption = view::caption(
         ctx,
-        &view::progress_caption(kind, Job::Import(id), running, state.scene.frame_count()),
+        &view::progress_caption(
+            language,
+            kind,
+            Job::Import(id),
+            running,
+            state.scene.frame_count(),
+        ),
     );
     let progress = grana_ui::widget::progress(fraction, width());
-    let cancel = view::button_with(ctx, "Cancel", Role::Control, Length::Fill)
-        .press(Message::Command(Command::CancelDetect(id)));
+    let cancel = view::button_with(
+        ctx,
+        grana_i18n::common::cancel(language),
+        Role::Control,
+        Length::Fill,
+    )
+    .press(Message::Command(Command::CancelDetect(id)));
     vec![
         grana_ui::row()
             .gap(6.0)
@@ -323,6 +358,7 @@ pub(super) fn seeds<'a>(
     id: ObjectSetId,
 ) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
+    let language = ctx.language();
     let source = state.scene.seed_source(id);
     let count = state.scene.seed_count(id);
     let candidates = state
@@ -333,12 +369,15 @@ pub(super) fn seeds<'a>(
         .filter(|set| !state.scene.depends_on(set.id(), id))
         .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
-    let mut options = vec![(0usize, "Manual Seeds".to_string())];
+    let mut options = vec![(
+        0usize,
+        grana_i18n::object::manual_seeds(language).to_string(),
+    )];
     options.extend(
         candidates
             .iter()
             .enumerate()
-            .map(|(index, (_, name))| (index + 1, format!("From {name}"))),
+            .map(|(index, (_, name))| (index + 1, grana_i18n::object::from_source(language, name))),
     );
     let selected = source.and_then(|source| {
         candidates
@@ -360,7 +399,7 @@ pub(super) fn seeds<'a>(
     children.push(crate::inspector::form_combo(
         ctx,
         &format!("object.{}.seed.source", id.raw()),
-        "Seeds",
+        grana_i18n::object::seeds(language),
         &options,
         selected.or(Some(0)),
         width() - crate::panel::FORM_LABEL,
@@ -370,21 +409,30 @@ pub(super) fn seeds<'a>(
         let name = candidates
             .iter()
             .find(|(candidate, _)| *candidate == source)
-            .map_or("seed source", |(_, name)| name.as_str());
+            .map_or_else(
+                || grana_i18n::object::seed_source(language),
+                |(_, name)| name.as_str(),
+            );
         children.push(view::labelled(
             ctx,
-            "Active seeds",
-            &format!("{count} from {name}"),
+            grana_i18n::object::active_seeds(language),
+            &grana_i18n::object::active_seeds_detail(language, count, name),
         ));
         return children;
     }
     let armed = state.workspace.seed == Some(id);
     let control = theme.metrics.control_height;
-    let placed =
-        crate::inspector::centered(control, view::caption(ctx, &format!("{count} placed")));
+    let placed = crate::inspector::centered(
+        control,
+        view::caption(ctx, &grana_i18n::object::placed(language, count)),
+    );
     let place = view::button(
         ctx,
-        if armed { "Stop Placing" } else { "Place Seeds" },
+        if armed {
+            grana_i18n::object::stop_placing(language)
+        } else {
+            grana_i18n::object::place_seeds(language)
+        },
         if armed { Role::Tinted } else { Role::Control },
     )
     .press(Message::SetSeed((!armed).then_some(id)));
@@ -393,12 +441,13 @@ pub(super) fn seeds<'a>(
         cell.push(crate::inspector::centered(control, clear_seeds(ctx, id)));
     }
     let row = grana_ui::row().gap(6.0).align(Align::Center).children(cell);
-    children.push(view::form_row(ctx, "Manual", row));
+    children.push(view::form_row(
+        ctx,
+        grana_i18n::object::manual(language),
+        row,
+    ));
     if armed {
-        children.push(view::weak(
-            ctx,
-            "Click an object or the plane to place a seed · Alt-click to remove.",
-        ));
+        children.push(view::weak(ctx, grana_i18n::object::seed_hint(language)));
     }
     children
 }
@@ -407,13 +456,14 @@ pub(super) fn clear_seeds<'a>(
     ctx: &mut BuildContext<'_, Message>,
     id: ObjectSetId,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     view::icon_button(
         ctx,
         &format!("object.{}.seed.clear", id.raw()),
         Icon::Trash,
         22.0,
         Role::Quiet,
-        "Clear seeds",
+        grana_i18n::object::clear_seeds(language),
         Message::Command(Command::ClearSeeds(id)),
     )
 }
@@ -427,20 +477,29 @@ pub(super) fn summary<'a>(
     frames: u32,
     time: u32,
 ) -> Element<'a, Message> {
+    let language = ctx.language();
     match current {
         Some((count, level)) => {
-            let mut text = format!("{count} {} · Level {}", kind.count_noun(), level + 1);
+            let noun = count_noun(language, kind);
+            let mut text = grana_i18n::object::summary_count(language, count, noun, level + 1);
             if let Some(mean) = mean {
-                text.push_str(&format!(" · Contrast {mean:.2}"));
+                let contrast = capitalized(
+                    &grana_i18n::measure::term(language, "contrast")
+                        .unwrap_or_else(|| "contrast".to_string()),
+                );
+                text.push_str(&grana_i18n::object::summary_contrast(
+                    language, &contrast, mean,
+                ));
             }
             view::caption(ctx, &text)
         }
-        None if detected == 0 => {
-            view::weak(ctx, &format!("{} across all frames.", kind.description()))
-        }
+        None if detected == 0 => view::weak(
+            ctx,
+            &grana_i18n::object::detect_summary(language, description(language, kind)),
+        ),
         None => view::weak(
             ctx,
-            &format!("No objects on frame {} of {frames}.", time + 1),
+            &grana_i18n::object::no_objects_frame(language, time + 1, frames),
         ),
     }
 }

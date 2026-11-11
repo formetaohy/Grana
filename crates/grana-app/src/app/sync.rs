@@ -32,16 +32,19 @@ impl App {
 
     pub(super) fn sync_preference(&mut self) {
         if self.workspace.appearance == self.appearance
+            && self.workspace.language == self.language
             && self.workspace.contrast == self.contrast
             && self.workspace.reduce_transparency == self.reduce_transparency
         {
             return;
         }
         self.appearance = self.workspace.appearance;
+        self.language = self.workspace.language;
         self.contrast = self.workspace.contrast;
         self.reduce_transparency = self.workspace.reduce_transparency;
         let preference = Preference {
             appearance: self.appearance,
+            language: self.language,
             contrast: self.contrast,
             reduce_transparency: self.reduce_transparency,
         };
@@ -127,7 +130,7 @@ impl App {
         let name = self
             .session
             .project_name()
-            .unwrap_or_else(|| "untitled".to_string());
+            .unwrap_or_else(|| grana_i18n::common::untitled(self.workspace.language).to_string());
         let marker = if self.dirty() { " •" } else { "" };
         let title = format!("Grana — {name}{marker}");
         if self.title.as_deref() == Some(title.as_str()) {

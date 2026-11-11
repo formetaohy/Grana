@@ -41,6 +41,7 @@ pub use element::{
 pub use geometry::{Corners, Edges, Rect};
 pub use glam::Vec2;
 pub use glass::GlassStyle;
+pub use grana_i18n::Language;
 pub use grana_raster::Bitmap;
 pub use icon::Icon;
 pub use image::ImageAtlas;

@@ -18,6 +18,7 @@ mod relation_panel;
 mod shell;
 mod stage;
 mod state;
+mod text;
 mod track_panel;
 mod transfer;
 mod view;

@@ -33,6 +33,7 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
 }
 
 fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let duration = state.timeline.duration();
     let position = state.workspace.playback.position.clamp(0.0, duration);
     let previewing = state.workspace.playback.previewing;
@@ -43,28 +44,29 @@ fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         .timeline
         .sample(position)
         .map_or(1, |sample| sample.time + 1);
-    let key_subtitle = format!(
-        "{} keyframe{}",
-        keys.len(),
-        if keys.len() == 1 { "" } else { "s" }
-    );
+    let key_subtitle = grana_i18n::animation::keyframe_count(language, keys.len());
     let theme = *ctx.theme();
     let (symbol, label) = if previewing {
-        (Icon::Pause, "Pause")
+        (Icon::Pause, grana_i18n::animation::pause(language))
     } else {
-        (Icon::Play, "Preview")
+        (Icon::Play, grana_i18n::animation::preview(language))
     };
     let mut controls = vec![
         grana_ui::widget::action_button(&theme, symbol, label, Role::Prominent)
             .named("animation.preview")
             .press(Message::SetPreviewing(!previewing)),
-        grana_ui::widget::action_button(&theme, Icon::Plus, "Keyframe", Role::Control)
-            .named("animation.keyframe")
-            .press(Message::Command(Command::SetKeyframe)),
+        grana_ui::widget::action_button(
+            &theme,
+            Icon::Plus,
+            grana_i18n::animation::keyframe(language),
+            Role::Control,
+        )
+        .named("animation.keyframe")
+        .press(Message::Command(Command::SetKeyframe)),
     ];
     if !empty {
         controls.push(
-            view::button(ctx, "Clear", Role::Quiet)
+            view::button(ctx, grana_i18n::common::clear(language), Role::Quiet)
                 .press(Message::Command(Command::ClearKeyframes)),
         );
     }
@@ -73,7 +75,12 @@ fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         TextStyle::new(theme.font(Level::Monospace), theme.palette.text_tertiary),
     ));
     let mut children = vec![
-        view::card_title(ctx, Icon::Film, "Timeline", Some(&key_subtitle)),
+        view::card_title(
+            ctx,
+            Icon::Film,
+            grana_i18n::animation::timeline(language),
+            Some(&key_subtitle),
+        ),
         grana_ui::row()
             .gap(6.0)
             .align(Align::Center)
@@ -104,6 +111,7 @@ fn keyframe_track<'a>(
         theme.palette.text_tertiary,
     )
     .aligned(Align::Center);
+    let hint = grana_i18n::animation::add_keyframe(ctx.language());
     let tick_color = Color::white_alpha(0.14);
     let track_key = Key::new("animation.track");
     let track_rect = ctx.rect_of(track_key).unwrap_or(Rect::ZERO);
@@ -212,7 +220,7 @@ fn keyframe_track<'a>(
                     Vec2::new(rect.min.x, rect.min.y),
                     Vec2::new(rect.max.x, rect.max.y - 12.0),
                 ),
-                "Add a keyframe to animate the camera and time",
+                hint,
                 empty,
                 Align::Center,
             );
@@ -281,7 +289,7 @@ fn keyframe_list<'a>(
             Icon::Trash,
             18.0,
             Role::Quiet,
-            "Delete keyframe",
+            grana_i18n::animation::delete_keyframe(ctx.language()),
             Message::Command(Command::DeleteKeyframe(index)),
         );
         rows.push(
@@ -298,6 +306,7 @@ fn keyframe_list<'a>(
 }
 
 fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let export = state.export;
     let width = export.movie;
     let fps = state.timeline.fps();
@@ -341,7 +350,10 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         });
     let fps_row = grana_ui::row().gap(6.0).align(Align::Center).children([
         fps_value,
-        view::caption(ctx, &format!("fps · {} frames", state.timeline.frames())),
+        view::caption(
+            ctx,
+            &grana_i18n::animation::fps_frames(language, state.timeline.frames()),
+        ),
     ]);
     let duration_value = grana_ui::widget::drag_value(&theme, duration, 2)
         .named("animation.duration")
@@ -350,18 +362,21 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         });
     let duration_row = grana_ui::row().gap(6.0).align(Align::Center).children([
         duration_value,
-        view::caption(ctx, &format!("s ({:.1} s data)", frames as f32 * interval)),
+        view::caption(
+            ctx,
+            &grana_i18n::animation::duration_data(language, frames as f32 * interval),
+        ),
     ]);
     let mut children = vec![
         view::card_title(
             ctx,
             Icon::Film,
-            "Movie",
+            grana_i18n::animation::movie(language),
             Some(&format!("{} × {}", movie_size[0], movie_size[1])),
         ),
-        view::form_row(ctx, "Width", width_combo),
-        view::form_row(ctx, "Frame rate", fps_row),
-        view::form_row(ctx, "Duration", duration_row),
+        view::form_row(ctx, grana_i18n::animation::width(language), width_combo),
+        view::form_row(ctx, grana_i18n::animation::frame_rate(language), fps_row),
+        view::form_row(ctx, grana_i18n::animation::duration(language), duration_row),
         view::divider(ctx),
     ];
     match running {
@@ -370,8 +385,11 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             children.push(grana_ui::widget::progress(fraction, 240.0));
             children.push(
                 grana_ui::row().gap(8.0).align(Align::Center).children([
-                    view::caption(ctx, &format!("Exporting {frame}/{total}")),
-                    view::button(ctx, "Cancel", Role::Quiet)
+                    view::caption(
+                        ctx,
+                        &grana_i18n::animation::exporting(language, frame, total),
+                    ),
+                    view::button(ctx, grana_i18n::common::cancel(language), Role::Quiet)
                         .press(Message::Command(Command::CancelExport)),
                 ]),
             );
@@ -380,7 +398,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             let empty = state.timeline.is_empty();
             let mp4 = grana_ui::widget::button_enabled(
                 &theme,
-                "Export Movie (MP4)",
+                grana_i18n::animation::export_movie(language),
                 Role::Prominent,
                 Length::Fill,
                 !empty,
@@ -388,7 +406,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             .named("animation.export.mp4");
             let mov = grana_ui::widget::button_enabled(
                 &theme,
-                "Transparent Movie (MOV)",
+                grana_i18n::animation::export_transparent(language),
                 Role::Control,
                 Length::Fill,
                 !empty,
@@ -412,6 +430,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
 }
 
 fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let language = ctx.language();
     let theme = *ctx.theme();
     let export = state.export;
     let image_width = export.image;
@@ -428,7 +447,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     };
     let labels = IMAGE_WIDTHS
         .iter()
-        .map(|width| width_label(*width))
+        .map(|width| width_label(language, *width))
         .collect::<Vec<_>>();
     let selected = IMAGE_WIDTHS
         .iter()
@@ -448,31 +467,43 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             None => Message::Noop,
         },
     );
-    let transparent_row =
-        grana_ui::widget::toggle_row(&theme, "Transparent Background", transparent)
-            .named("animation.transparent")
-            .on_toggle(move |value| {
-                Message::SetExport(Export {
-                    transparent: value,
-                    ..export
-                })
-            });
+    let transparent_row = grana_ui::widget::toggle_row(
+        &theme,
+        grana_i18n::animation::transparent_background(language),
+        transparent,
+    )
+    .named("animation.transparent")
+    .on_toggle(move |value| {
+        Message::SetExport(Export {
+            transparent: value,
+            ..export
+        })
+    });
     let mut children = vec![
         view::card_title(
             ctx,
             Icon::Camera,
-            "Still & Sequence",
+            grana_i18n::animation::still_sequence(language),
             Some(&format!("{resolved_width} px")),
         ),
-        view::form_row(ctx, "Width", width_combo),
+        view::form_row(ctx, grana_i18n::animation::width(language), width_combo),
         transparent_row,
-        view::labelled(ctx, "Sequence", &format!("{frames} PNG frames")),
+        view::labelled(
+            ctx,
+            grana_i18n::animation::sequence(language),
+            &grana_i18n::animation::png_frames(language, frames),
+        ),
         view::divider(ctx),
     ];
     let idle = running.is_none();
-    let save =
-        grana_ui::widget::button_enabled(&theme, "Save Image", Role::Prominent, Length::Fill, idle)
-            .named("animation.save.image");
+    let save = grana_ui::widget::button_enabled(
+        &theme,
+        grana_i18n::animation::save_image(language),
+        Role::Prominent,
+        Length::Fill,
+        idle,
+    )
+    .named("animation.save.image");
     children.push(if idle {
         save.press(Message::Command(Command::SaveSnapshot))
     } else {
@@ -480,11 +511,11 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     });
     children.push(view::caption(
         ctx,
-        "Eight bit PNG or sixteen bit OME-TIFF, chosen by the saved extension.",
+        grana_i18n::animation::image_detail(language),
     ));
     let figure = grana_ui::widget::button_enabled(
         &theme,
-        "Save Vector Figure",
+        grana_i18n::animation::save_figure(language),
         Role::Control,
         Length::Fill,
         idle,
@@ -497,11 +528,11 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     });
     children.push(view::caption(
         ctx,
-        "SVG or PDF with outlined text over the rendered volume.",
+        grana_i18n::animation::figure_detail(language),
     ));
     let sequence = grana_ui::widget::button_enabled(
         &theme,
-        "Export Frame Sequence",
+        grana_i18n::animation::export_sequence(language),
         Role::Control,
         Length::Fill,
         idle && frames > 0,
@@ -518,9 +549,9 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     view::card(ctx, 6.0, children)
 }
 
-fn width_label(width: u32) -> String {
+fn width_label(language: grana_i18n::Language, width: u32) -> String {
     if width == 0 {
-        "Native Screen".to_string()
+        grana_i18n::animation::native_screen(language).to_string()
     } else {
         format!("{width} px")
     }

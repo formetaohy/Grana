@@ -16,6 +16,7 @@ pub(super) fn restore_fields<'a>(
     spec: &grana_scene::RestoreSpec,
     depth_limit: f32,
 ) -> Vec<crate::view::View<'a>> {
+    let language = ctx.language();
     let iterations = spec.iterations();
     let psf = spec.psf().clone();
     let set = move |psf: Psf, iterations: u32| Command::SetRestore {
@@ -27,7 +28,7 @@ pub(super) fn restore_fields<'a>(
     rows.push(view::slider_readout(
         ctx,
         "restore.iterations",
-        Some("Iterations"),
+        Some(grana_i18n::inspector::iterations(language)),
         iterations as f32,
         1.0..=50.0,
         false,
@@ -40,7 +41,7 @@ pub(super) fn restore_fields<'a>(
             rows.push(view::slider_readout(
                 ctx,
                 "restore.aperture",
-                Some("Aperture"),
+                Some(grana_i18n::inspector::aperture(language)),
                 params.numerical_aperture(),
                 0.3..=1.45,
                 false,
@@ -61,7 +62,7 @@ pub(super) fn restore_fields<'a>(
             rows.push(view::slider_readout(
                 ctx,
                 "restore.wavelength",
-                Some("Emission"),
+                Some(grana_i18n::inspector::emission(language)),
                 params.wavelength(),
                 0.35..=0.8,
                 false,
@@ -82,7 +83,7 @@ pub(super) fn restore_fields<'a>(
             rows.push(view::slider_readout(
                 ctx,
                 "restore.immersion",
-                Some("Immersion"),
+                Some(grana_i18n::inspector::immersion(language)),
                 params.immersion(),
                 1.3..=1.6,
                 false,
@@ -103,7 +104,7 @@ pub(super) fn restore_fields<'a>(
             rows.push(view::slider_readout(
                 ctx,
                 "restore.sample",
-                Some("Specimen"),
+                Some(grana_i18n::inspector::specimen(language)),
                 params.sample(),
                 1.0..=1.6,
                 false,
@@ -124,7 +125,7 @@ pub(super) fn restore_fields<'a>(
             rows.push(view::slider_readout(
                 ctx,
                 "restore.depth",
-                Some("Depth"),
+                Some(grana_i18n::inspector::depth(language)),
                 params.depth(),
                 0.0..=depth_limit,
                 false,
@@ -147,12 +148,12 @@ pub(super) fn restore_fields<'a>(
             let dims = psf.dims();
             rows.push(view::caption(
                 ctx,
-                &format!(
-                    "Measured from beads · {} depth bands · {}×{}×{}",
+                &grana_i18n::inspector::measured_psf(
+                    language,
                     psf.layers(),
                     dims[0],
                     dims[1],
-                    dims[2]
+                    dims[2],
                 ),
             ));
             rows.push(
@@ -161,7 +162,7 @@ pub(super) fn restore_fields<'a>(
                     .width(Length::Fill)
                     .children([view::button_with(
                         ctx,
-                        "Theoretical Model",
+                        grana_i18n::inspector::theoretical_model(language),
                         Role::Quiet,
                         Length::Fixed(panel_width()),
                     )
@@ -201,11 +202,12 @@ pub(super) fn display<'a>(
     let transfer = scene.channels[index].transfer().clone();
     let gradient = transfer_colors(&transfer);
     let width = card_width();
+    let language = ctx.language();
     let mut children = Vec::new();
     children.push(view::card_title(
         ctx,
         Icon::Sliders,
-        "Display",
+        grana_i18n::inspector::display(language),
         Some(&channel_name),
     ));
     children.push(
@@ -219,8 +221,8 @@ pub(super) fn display<'a>(
             }),
     );
     let mono = theme.font(Level::Monospace);
-    let minimum = format!("Min {start:.0}");
-    let maximum = format!("Max {end:.0}");
+    let minimum = grana_i18n::inspector::minimum_readout(language, start);
+    let maximum = grana_i18n::inspector::maximum_readout(language, end);
     children.push(grana_ui::canvas(
         Length::Fill,
         14.0,
@@ -245,7 +247,7 @@ pub(super) fn display<'a>(
     children.push(view::slider_readout(
         ctx,
         "display.opacity",
-        Some("Opacity"),
+        Some(grana_i18n::inspector::opacity(language)),
         opacity,
         0.0..=1.0,
         false,
@@ -256,7 +258,7 @@ pub(super) fn display<'a>(
         },
     ));
     let volume = scene.channels[index].volume();
-    let modes = VolumeMode::ALL.map(VolumeMode::label);
+    let modes = VolumeMode::ALL.map(|mode| volume_mode_label(language, mode));
     children.push(view::segmented_fill(
         ctx,
         "display.volume",
@@ -275,7 +277,7 @@ pub(super) fn display<'a>(
         children.push(view::slider_readout(
             ctx,
             "display.isovalue",
-            Some("Iso Value"),
+            Some(grana_i18n::inspector::iso_value(language)),
             isovalue,
             0.0..=1.0,
             false,
@@ -287,20 +289,33 @@ pub(super) fn display<'a>(
         ));
     }
     let preset = (width - 12.0) / 3.0;
-    let auto = view::button_with(ctx, "Auto", Role::Control, Length::Fixed(preset))
-        .press(Message::Command(Command::ResetWindow(index)));
-    let tinted = view::button_with(ctx, "Tinted", Role::Control, Length::Fixed(preset)).press(
-        Message::Command(Command::SetTransfer {
-            channel: index,
-            transfer: TransferFunction::tinted(tint),
-        }),
-    );
-    let gray = view::button_with(ctx, "Gray", Role::Control, Length::Fixed(preset)).press(
-        Message::Command(Command::SetTransfer {
-            channel: index,
-            transfer: TransferFunction::grayscale(),
-        }),
-    );
+    let auto = view::button_with(
+        ctx,
+        grana_i18n::inspector::auto(language),
+        Role::Control,
+        Length::Fixed(preset),
+    )
+    .press(Message::Command(Command::ResetWindow(index)));
+    let tinted = view::button_with(
+        ctx,
+        grana_i18n::inspector::tinted(language),
+        Role::Control,
+        Length::Fixed(preset),
+    )
+    .press(Message::Command(Command::SetTransfer {
+        channel: index,
+        transfer: TransferFunction::tinted(tint),
+    }));
+    let gray = view::button_with(
+        ctx,
+        grana_i18n::inspector::gray(language),
+        Role::Control,
+        Length::Fixed(preset),
+    )
+    .press(Message::Command(Command::SetTransfer {
+        channel: index,
+        transfer: TransferFunction::grayscale(),
+    }));
     children.push(
         grana_ui::row()
             .gap(6.0)
@@ -323,7 +338,7 @@ pub(super) fn display<'a>(
             grana_scene::Operation::Smooth(smooth) => children.push(view::slider_event(
                 ctx,
                 "operator.sigma",
-                Some("Sigma"),
+                Some(grana_i18n::inspector::sigma(language)),
                 smooth.sigma(),
                 0.05..=8.0,
                 &format!("{:.2} µm", smooth.sigma()),
@@ -338,7 +353,7 @@ pub(super) fn display<'a>(
                 children.push(view::slider_event(
                     ctx,
                     "operator.radius",
-                    Some("Radius"),
+                    Some(grana_i18n::inspector::radius(language)),
                     background.radius(),
                     0.2..=40.0,
                     &format!("{:.2} µm", background.radius()),
@@ -354,11 +369,12 @@ pub(super) fn display<'a>(
                 let denominator = scene.channel(ratio.denominator()).name().to_string();
                 children.push(view::weak(
                     ctx,
-                    &format!(
-                        "Divides {} by {denominator}",
+                    &grana_i18n::inspector::divides(
+                        language,
                         scene
                             .channel(derived.as_ref().expect("a ratio channel exists").source())
-                            .name()
+                            .name(),
+                        &denominator,
                     ),
                 ));
             }
@@ -370,24 +386,42 @@ pub(super) fn display<'a>(
     let sigma = voxel.max(0.05);
     let radius = (10.0 * voxel).max(1.0);
     let third = (width - 12.0) / 3.0;
-    children.push(view::caption(ctx, "Channel operators"));
+    children.push(view::caption(
+        ctx,
+        grana_i18n::inspector::channel_operators(language),
+    ));
     children.push(
         grana_ui::row().gap(6.0).align(Align::Center).children([
-            view::button_with(ctx, "Smooth", Role::Quiet, Length::Fixed(third))
-                .named("operator.smooth")
-                .press(Message::Command(Command::AddSmoothChannel {
-                    source: index,
-                    sigma,
-                })),
-            view::button_with(ctx, "Background", Role::Quiet, Length::Fixed(third))
-                .named("operator.background")
-                .press(Message::Command(Command::AddBackgroundChannel {
-                    source: index,
-                    radius,
-                })),
-            view::button_with(ctx, "Ratio", Role::Quiet, Length::Fixed(third))
-                .named("display.ratio")
-                .press(Message::Noop),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::smooth(language),
+                Role::Quiet,
+                Length::Fixed(third),
+            )
+            .named("operator.smooth")
+            .press(Message::Command(Command::AddSmoothChannel {
+                source: index,
+                sigma,
+            })),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::background(language),
+                Role::Quiet,
+                Length::Fixed(third),
+            )
+            .named("operator.background")
+            .press(Message::Command(Command::AddBackgroundChannel {
+                source: index,
+                radius,
+            })),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::ratio(language),
+                Role::Quiet,
+                Length::Fixed(third),
+            )
+            .named("display.ratio")
+            .press(Message::Noop),
         ]),
     );
     let ratio_edit = matches!(
@@ -431,7 +465,7 @@ pub(super) fn display<'a>(
             .width(Length::Fill)
             .children([view::button_with(
                 ctx,
-                "Export Dataset",
+                grana_i18n::inspector::export_dataset(language),
                 Role::Quiet,
                 Length::Fixed(width),
             )
@@ -445,7 +479,7 @@ pub(super) fn display<'a>(
                 .width(Length::Fill)
                 .children([view::button_with(
                     ctx,
-                    "Remove Channel",
+                    grana_i18n::inspector::remove_channel(language),
                     Role::Quiet,
                     Length::Fixed(width),
                 )
@@ -464,7 +498,7 @@ pub(super) fn display<'a>(
             calibration.push(view::slider_event(
                 ctx,
                 "restore.bead_threshold",
-                Some("Bead Threshold"),
+                Some(grana_i18n::inspector::bead_threshold(language)),
                 state.workspace.psf_threshold,
                 2.0..=20.0,
                 &format!("{:.1} σ", state.workspace.psf_threshold),
@@ -473,7 +507,7 @@ pub(super) fn display<'a>(
             calibration.push(view::slider_event(
                 ctx,
                 "restore.bead_separation",
-                Some("Bead Spacing"),
+                Some(grana_i18n::inspector::bead_spacing(language)),
                 state.workspace.psf_separation,
                 0.3..=5.0,
                 &format!("{:.1} µm", state.workspace.psf_separation),
@@ -483,7 +517,7 @@ pub(super) fn display<'a>(
         children.push(disclosure(
             ctx,
             "display.psf",
-            "Bead Calibration",
+            grana_i18n::inspector::bead_calibration(language),
             psf_open,
             calibration,
         ));
@@ -493,26 +527,36 @@ pub(super) fn display<'a>(
                 .justify(Align::End)
                 .width(Length::Fill)
                 .children([
-                    view::button_with(ctx, "Deconvolve", Role::Quiet, Length::Fixed(button))
-                        .named("display.restore.add")
-                        .press(Message::Command(Command::AddRestoreChannel {
-                            source: index,
-                            psf: Psf::theoretical(PsfParams::new(
-                                DEFAULT_APERTURE,
-                                DEFAULT_WAVELENGTH,
-                                DEFAULT_IMMERSION,
-                                DEFAULT_SAMPLE,
-                                depth,
-                            )),
-                            iterations: DEFAULT_ITERATIONS,
-                        })),
-                    view::button_with(ctx, "From Beads", Role::Quiet, Length::Fixed(button))
-                        .named("display.restore.beads")
-                        .press(Message::Command(Command::CalibratePsf {
-                            source: index,
-                            threshold: state.workspace.psf_threshold,
-                            separation: state.workspace.psf_separation,
-                        })),
+                    view::button_with(
+                        ctx,
+                        grana_i18n::inspector::deconvolve(language),
+                        Role::Quiet,
+                        Length::Fixed(button),
+                    )
+                    .named("display.restore.add")
+                    .press(Message::Command(Command::AddRestoreChannel {
+                        source: index,
+                        psf: Psf::theoretical(PsfParams::new(
+                            DEFAULT_APERTURE,
+                            DEFAULT_WAVELENGTH,
+                            DEFAULT_IMMERSION,
+                            DEFAULT_SAMPLE,
+                            depth,
+                        )),
+                        iterations: DEFAULT_ITERATIONS,
+                    })),
+                    view::button_with(
+                        ctx,
+                        grana_i18n::inspector::from_beads(language),
+                        Role::Quiet,
+                        Length::Fixed(button),
+                    )
+                    .named("display.restore.beads")
+                    .press(Message::Command(Command::CalibratePsf {
+                        source: index,
+                        threshold: state.workspace.psf_threshold,
+                        separation: state.workspace.psf_separation,
+                    })),
                 ]),
         );
     }
@@ -534,11 +578,19 @@ pub(super) fn display<'a>(
     children.push(disclosure(
         ctx,
         "display.transfer",
-        "Transfer Curve",
+        grana_i18n::inspector::transfer_curve(language),
         open,
         curve,
     ));
     view::card(ctx, 7.0, children)
+}
+
+fn volume_mode_label(language: grana_i18n::Language, mode: VolumeMode) -> &'static str {
+    match mode {
+        VolumeMode::Blend => grana_i18n::inspector::blend(language),
+        VolumeMode::Maximum => grana_i18n::inspector::maximum_projection(language),
+        VolumeMode::Isosurface => grana_i18n::inspector::isosurface(language),
+    }
 }
 
 pub(super) fn transfer_colors(transfer: &TransferFunction) -> Vec<Color> {
