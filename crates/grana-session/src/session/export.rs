@@ -199,6 +199,14 @@ impl Session {
         self.tasks.defer_csv(path);
     }
 
+    pub(super) fn finish_plot(
+        &mut self,
+        key: grana_scene::PlotKey,
+        plot: Option<grana_measure::Plot>,
+    ) {
+        self.measure.install_plot(key, plot);
+    }
+
     pub(super) fn finish_measure(&mut self, key: MeasureKey, table: Option<Table>) {
         self.measure.install(key, table);
         let Some(path) = self.tasks.take_csv() else {

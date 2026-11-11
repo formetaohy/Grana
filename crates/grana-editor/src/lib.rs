@@ -1,6 +1,7 @@
 mod animation_panel;
 mod annotation_panel;
 mod batch_panel;
+mod chart;
 mod coloc_panel;
 mod coloring;
 mod command;
@@ -22,6 +23,7 @@ mod transfer;
 mod view;
 pub use grana_ui::widget;
 
+pub use chart::page as chart_page;
 pub use command::shortcut;
 pub use fitting::slice_step;
 pub use message::{Message, PlotEvent};

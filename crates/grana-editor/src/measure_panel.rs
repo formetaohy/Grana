@@ -217,7 +217,10 @@ fn toolbar<'a>(
     } else {
         0.0
     };
-    let right_width = view_label_width + view_width + caption_width + 3.0 * 28.0 + 4.0 * 8.0 + 4.0;
+    let chart = measured && mode != MeasureView::Table;
+    let icons = if chart { 4.0 } else { 3.0 };
+    let right_width =
+        view_label_width + view_width + caption_width + icons * 28.0 + (icons + 1.0) * 8.0 + 4.0;
     let right = Rect::from_min_size(
         Vec2::new((row.max.x - right_width).max(row.min.x), row.min.y),
         Vec2::new(right_width.min(row.width()), TOOLBAR_HEIGHT),
@@ -269,6 +272,17 @@ fn toolbar<'a>(
         "Export CSV",
         Message::Command(Command::ExportMeasure),
     ));
+    if chart {
+        right_items.push(view::icon_button(
+            ctx,
+            "measure.chart",
+            Icon::Chart,
+            28.0,
+            Role::Quiet,
+            "Export plot (SVG/PDF)",
+            Message::Command(Command::SaveChart),
+        ));
+    }
     let right_row = grana_ui::row()
         .gap(8.0)
         .align(Align::Center)

@@ -249,6 +249,7 @@ impl<A: Clone> Ui<A> {
                     phase,
                     button: Button::Primary,
                     modifiers: self.input.modifiers(),
+                    rect: node.rect,
                 })
             } else {
                 None

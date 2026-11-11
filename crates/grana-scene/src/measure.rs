@@ -44,6 +44,9 @@ pub struct Measure {
     view: MeasureView,
     axes: [usize; 2],
     plot: Option<Plot>,
+    plot_wanted: bool,
+    plot_pending: Option<PlotKey>,
+    plot_stamp: u64,
     origin: Option<MeasureKey>,
     pending: Option<MeasureKey>,
     time: u32,
@@ -76,6 +79,9 @@ impl Measure {
             view: MeasureView::Table,
             axes: [0; 2],
             plot: None,
+            plot_wanted: false,
+            plot_pending: None,
+            plot_stamp: 0,
             origin: None,
             pending: None,
             time: 0,
@@ -197,6 +203,32 @@ impl Measure {
 
     pub fn plot(&self) -> Option<&Plot> {
         self.plot.as_ref()
+    }
+
+    pub fn plot_request(&mut self) -> Option<PlotRequest> {
+        if !self.plot_wanted || self.plot_pending.is_some() || self.view.plot().is_none() {
+            return None;
+        }
+        let table = Arc::clone(self.table.as_ref()?);
+        self.plot_stamp += 1;
+        let key = PlotKey(self.plot_stamp);
+        self.plot_wanted = false;
+        self.plot_pending = Some(key);
+        Some(PlotRequest {
+            key,
+            table,
+            rows: self.rows.clone(),
+            view: self.view,
+            axes: self.axes,
+        })
+    }
+
+    pub fn install_plot(&mut self, key: PlotKey, plot: Option<Plot>) {
+        if self.plot_pending != Some(key) {
+            return;
+        }
+        self.plot_pending = None;
+        self.plot = plot.filter(|_| self.view.plot().is_some());
     }
 
     pub fn set_view(&mut self, view: MeasureView) {
@@ -402,7 +434,7 @@ impl Measure {
         self.sort = None;
         self.view = MeasureView::Table;
         self.axes = [0; 2];
-        self.plot = None;
+        self.clear_plot();
         self.origin = None;
         self.pending = None;
         self.time = 0;
@@ -417,7 +449,7 @@ impl Measure {
             self.pending = None;
             self.table = None;
             self.retained = None;
-            self.plot = None;
+            self.clear_plot();
             self.rows.clear();
             self.total = 0;
             self.visible.clear();
@@ -580,7 +612,7 @@ impl Measure {
         self.visibility = visibility;
         self.view = view;
         self.axes = axes;
-        self.plot = None;
+        self.clear_plot();
         self.origin = None;
         self.dirty = true;
         let Some(set) = set else {
@@ -669,7 +701,7 @@ impl Measure {
     pub fn rebuild(&mut self, scene: &Scene) {
         self.dirty = true;
         self.pending = None;
-        self.plot = None;
+        self.clear_plot();
         self.rows.clear();
         self.total = 0;
         self.origin = None;
@@ -700,7 +732,7 @@ impl Measure {
         self.dirty = true;
         self.pending = None;
         self.origin = None;
-        self.plot = None;
+        self.clear_plot();
         if let Some(table) = self.table.take() {
             let keys = column_keys(&table);
             self.retained = Some((keys, std::mem::take(&mut self.visible)));
@@ -713,7 +745,7 @@ impl Measure {
 
     fn adopt(&mut self, table: Option<Table>) {
         self.dirty = true;
-        self.plot = None;
+        self.clear_plot();
         self.rows.clear();
         self.total = 0;
         let previous = self
@@ -781,7 +813,7 @@ impl Measure {
         let Some(table) = self.table.as_ref() else {
             self.rows.clear();
             self.total = 0;
-            self.plot = None;
+            self.clear_plot();
             return;
         };
         let frame = self.scope_frame();
@@ -813,10 +845,38 @@ impl Measure {
     }
 
     fn refresh_plot(&mut self) {
-        self.plot = self
-            .table
-            .as_ref()
-            .and_then(|table| table.plot(self.view, self.axes, &self.rows));
+        if self.table.is_none() || self.view.plot().is_none() {
+            self.clear_plot();
+            return;
+        }
+        self.plot_wanted = true;
+    }
+
+    fn clear_plot(&mut self) {
+        self.plot = None;
+        self.plot_wanted = false;
+        self.plot_pending = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlotKey(u64);
+
+pub struct PlotRequest {
+    key: PlotKey,
+    table: Arc<Table>,
+    rows: Vec<usize>,
+    view: MeasureView,
+    axes: [usize; 2],
+}
+
+impl PlotRequest {
+    pub fn key(&self) -> PlotKey {
+        self.key
+    }
+
+    pub fn build(&self) -> Option<Plot> {
+        self.table.plot(self.view, self.axes, &self.rows)
     }
 }
 

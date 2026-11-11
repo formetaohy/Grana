@@ -1,0 +1,15 @@
+[package]
+name = "grana-chart"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+grana-measure = { workspace = true }
+grana-ui = { workspace = true }
+
+[lints]
+workspace = true

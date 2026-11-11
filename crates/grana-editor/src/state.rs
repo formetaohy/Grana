@@ -31,16 +31,10 @@ impl Default for Playback {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PlotGate {
-    Lasso,
-    Rectangle,
-}
-
 #[derive(Default)]
 pub(crate) struct PlotDrag {
     pub view: Option<MeasureView>,
-    pub gate: Option<PlotGate>,
+    pub gate: Option<grana_chart::BrushKind>,
     pub origin: Option<Vec2>,
     pub moved: bool,
     pub vertices: Vec<Vec2>,
@@ -133,29 +127,7 @@ pub struct MaskBrush {
     pub tolerance: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DistributionStyle {
-    Box,
-    Violin,
-}
-
-impl DistributionStyle {
-    pub const ALL: [Self; 2] = [Self::Box, Self::Violin];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Box => "Box",
-            Self::Violin => "Violin",
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            Self::Box => 0,
-            Self::Violin => 1,
-        }
-    }
-}
+pub use grana_chart::DistributionStyle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelationMetric {

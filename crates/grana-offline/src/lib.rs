@@ -1,4 +1,5 @@
 mod capture;
+mod chart;
 mod compose;
 mod export;
 mod figure;

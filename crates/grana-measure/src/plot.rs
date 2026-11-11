@@ -273,6 +273,20 @@ pub struct DistributionSeries {
 }
 
 impl DistributionSeries {
+    pub fn of(values: Vec<f64>, range: (f32, f32)) -> Option<Self> {
+        assert!(
+            range.0.is_finite() && range.1.is_finite() && range.0 <= range.1,
+            "a distribution series spans a finite range"
+        );
+        assert!(
+            values.iter().all(|value| !value.is_finite()
+                || (*value as f32) >= range.0 && (*value as f32) <= range.1),
+            "a distribution series holds values inside its density range"
+        );
+        let mut count = 0u64;
+        series_with(values, range.0, range.1, &mut count)
+    }
+
     pub fn count(&self) -> u64 {
         self.count
     }

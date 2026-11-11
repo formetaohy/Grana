@@ -3459,6 +3459,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-chart"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-measure",
+ "grana-ui",
+]
+
+[[package]]
 name = "grana-codec"
 version = "0.1.1"
 
@@ -3490,6 +3499,7 @@ version = "0.1.1"
 dependencies = [
  "glam",
  "grana-animation",
+ "grana-chart",
  "grana-display",
  "grana-figure",
  "grana-measure",
@@ -3640,6 +3650,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "grana-animation",
+ "grana-chart",
  "grana-display",
  "grana-engine",
  "grana-exec",

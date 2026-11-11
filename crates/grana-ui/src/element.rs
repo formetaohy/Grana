@@ -175,6 +175,7 @@ pub struct Pointer {
     pub phase: Phase,
     pub button: Button,
     pub modifiers: Modifiers,
+    pub rect: Rect,
 }
 
 pub struct CanvasInfo<'a> {

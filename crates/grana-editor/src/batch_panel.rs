@@ -1,8 +1,9 @@
 use glam::Vec2;
+use grana_chart::{Comparison, Decor, Heading, Style};
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Length, Level, Rect,
-    Role, State, TextStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Length, Level,
+    Phase, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -400,7 +401,8 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     view::card(ctx, 7.0, children)
 }
 
-const COMPARISON_ROW: f32 = 58.0;
+const CHART_HEIGHT: f32 = 214.0;
+const NOTE_LIMIT: usize = 3;
 
 fn comparison<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -413,7 +415,7 @@ fn comparison<'a>(
         .filter(|test| test.significant())
         .count();
     let tests = state.batch_significance().len();
-    let detail = (!rows.is_empty()).then(|| {
+    let note = (!rows.is_empty()).then(|| {
         if tests == 0 {
             "no group test".to_string()
         } else {
@@ -424,7 +426,7 @@ fn comparison<'a>(
         ctx,
         Icon::Table,
         "Comparison",
-        detail.as_deref(),
+        note.as_deref(),
     )];
     if rows.is_empty() {
         children.push(view::weak(
@@ -491,174 +493,182 @@ fn comparison<'a>(
         .filter(|row| group.as_ref().is_none_or(|group| group == &row.group))
         .filter(|row| key.as_ref().is_none_or(|key| key == &row.key))
         .collect::<Vec<_>>();
-    let max = visible
-        .iter()
-        .flat_map(|row| {
-            std::iter::once(metric.value(row))
-                .chain(row.samples.iter().map(|sample| metric.sample(sample)))
-        })
-        .flatten()
-        .fold(0.0f64, f64::max)
-        .max(f64::MIN_POSITIVE);
-    let mut entries = Vec::with_capacity(visible.len());
-    for row in &visible {
-        entries.push(comparison_row(ctx, state, row, metric, max));
+    if visible.is_empty() {
+        children.push(view::weak(ctx, "No reported group matches this filter."));
+        return view::card(ctx, 6.0, children);
     }
-    children.push(
-        Element::new(grana_ui::Layout::column())
-            .scroll(Axis::Column, Length::Fixed(240.0), None)
-            .clipped()
-            .children(entries),
-    );
+    let categories = visible
+        .iter()
+        .map(|row| grana_chart::Category {
+            label: category_label(row, groups.len(), sets.len()),
+            values: row
+                .samples
+                .iter()
+                .filter_map(|sample| metric.sample(sample))
+                .map(|value| value as f32)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let slots = visible
+        .iter()
+        .map(|row| (row.group.clone(), row.key.clone()))
+        .collect::<Vec<_>>();
+    let notes = comparison_notes(&slots, state.batch_significance(), metric);
+    let heading =
+        Heading::new("", format!("Y: {}", metric_axis(metric)), "X: Conditions").with_summary(
+            format!("{} categories · images are the samples", visible.len()),
+        );
+    let chart = Comparison {
+        heading,
+        categories,
+        notes,
+    };
+    let style = Style::card(ctx.theme(), state.workspace.distribution_style);
+    let pointer = ctx.pointer();
+    let count = slots.len();
+    let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT, move |painter, info| {
+        let decor = Decor {
+            pointer: info.rect.contains(pointer).then_some(pointer),
+            ..Decor::default()
+        };
+        chart.paint(painter, info.rect, &style, &decor);
+    })
+    .key(Key::new("comparison.chart"))
+    .cursor(Cursor::Crosshair)
+    .on_pointer(move |pointer| {
+        if pointer.phase != Phase::Up || !pointer.rect.contains(pointer.position) {
+            return None;
+        }
+        let frame = style.metrics.frame(pointer.rect);
+        let index = grana_chart::group_at(frame, count, pointer.position)?;
+        let (group, key) = slots.get(index)?.clone();
+        Some(Message::ToggleComparisonDetail { group, key })
+    });
+    children.push(canvas);
+    let open = state
+        .workspace
+        .comparison_open
+        .as_ref()
+        .and_then(|(group, key)| {
+            visible
+                .iter()
+                .find(|row| &row.group == group && &row.key == key)
+                .copied()
+        });
+    if let Some(row) = open {
+        children.push(view::divider(ctx));
+        children.extend(detail(ctx, state, row, metric));
+    }
     children.push(view::weak(
         ctx,
-        "Objects are the samples and images are the clusters; the Welch test corrects for the clustering and the rank test compares image means. q is the Benjamini–Hochberg correction over the run.",
+        "Objects are the samples and images are the clusters; the Welch test corrects for the clustering and the rank test compares image means. q is the Benjamini–Hochberg correction over the run. Click a condition for its numbers.",
     ));
     view::card(ctx, 6.0, children)
 }
 
-fn comparison_row<'a>(
+fn detail<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
     row: &grana_session::BatchComparison,
     metric: ComparisonMetric,
-    max: f64,
-) -> Element<'a, Message> {
+) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let callout = theme.font(Level::Callout);
-    let caption = theme.font(Level::Caption);
-    let micro = theme.font(Level::Micro);
-    let title = format!("{} · {}", row.group, row.name);
-    let kind = row.kind.clone();
-    let mean = metric.value(row);
     let tests = state
         .batch_significance()
         .iter()
         .filter(|test| test.key == row.key && test.metric == metric && test.involves(&row.group))
         .collect::<Vec<_>>();
     let best = tests.iter().map(|test| test.adjusted).fold(1.0, f64::min);
-    let mark = if best < 0.05 {
-        grana_measure::stars(best)
-    } else {
-        ""
+    let mut readout = match (metric.value(row), metric.deviation(row)) {
+        (Some(mean), Some(deviation)) => format!(
+            "{} · {} ± {}",
+            title(row),
+            metric.format(mean),
+            metric.format(deviation)
+        ),
+        (Some(mean), None) => format!("{} · {}", title(row), metric.format(mean)),
+        (None, _) => format!("{} · no value", title(row)),
     };
-    let readout = match metric.value(row) {
-        Some(mean) => match metric.deviation(row) {
-            Some(deviation) => format!("{} ± {}", metric.format(mean), metric.format(deviation)),
-            None => metric.format(mean),
-        },
-        None => "No value".to_string(),
-    };
-    let readout = match mark {
-        "" => readout,
-        mark => format!("{readout}   {mark}"),
-    };
-    let count = format!(
-        "{} object{} in {} image{}",
-        row.objects,
-        if row.objects == 1 { "" } else { "s" },
-        row.images,
-        if row.images == 1 { "" } else { "s" }
-    );
-    let samples = row
-        .samples
-        .iter()
-        .filter_map(|sample| metric.sample(sample))
-        .map(|value| (value / max).clamp(0.0, 1.0) as f32)
-        .collect::<Vec<_>>();
-    let fraction = mean.map(|mean| (mean / max).clamp(0.0, 1.0) as f32);
-    let open = state
-        .workspace
-        .comparison_open
-        .as_ref()
-        .is_some_and(|(group, key)| group == &row.group && key == &row.key);
-    let key = row.key.clone();
-    let group = row.group.clone();
-    let canvas = grana_ui::canvas(Length::Fill, COMPARISON_ROW, move |painter, info| {
-        let rect = info.rect;
-        if info.hover > 0.01 {
-            painter.rect(
-                rect,
-                Corners::all(8.0),
-                Color::white_alpha(0.05 * info.hover),
-            );
-        }
-        let top = Rect::from_min_max(
-            Vec2::new(rect.min.x + 10.0, rect.min.y + 5.0),
-            Vec2::new(rect.max.x - 10.0, rect.min.y + 22.0),
-        );
-        painter.text_in(
-            top,
-            &title,
-            TextStyle::new(callout, palette.text_primary).truncating(),
-            Align::Center,
-        );
-        painter.text_in(
-            top,
-            &kind,
-            TextStyle::new(micro, palette.text_tertiary).aligned(Align::End),
-            Align::Center,
-        );
-        let track = Rect::from_min_size(
-            Vec2::new(rect.min.x + 10.0, rect.min.y + 26.0),
-            Vec2::new((rect.width() - 20.0).max(1.0), 6.0),
-        );
-        painter.rect(track, Corners::capsule(), palette.track.with_alpha(0.55));
-        if let Some(fraction) = fraction.filter(|fraction| *fraction > 0.0) {
-            painter.rect(
-                Rect::from_min_size(
-                    track.min,
-                    Vec2::new(track.width() * fraction, track.height()),
-                ),
-                Corners::capsule(),
-                palette.accent.with_alpha(0.55),
-            );
-        }
-        for sample in &samples {
-            painter.ring(
-                Vec2::new(track.min.x + track.width() * sample, track.center().y),
-                3.0,
-                1.6,
-                0.0,
-                std::f32::consts::TAU,
-                palette.success,
-            );
-        }
-        let bottom = Rect::from_min_max(
-            Vec2::new(rect.min.x + 10.0, rect.min.y + 34.0),
-            Vec2::new(rect.max.x - 10.0, rect.max.y - 2.0),
-        );
-        painter.text_in(
-            bottom,
-            &readout,
-            TextStyle::new(caption, palette.text_secondary).truncating(),
-            Align::Center,
-        );
-        painter.text_in(
-            bottom,
-            &count,
-            TextStyle::new(micro, palette.text_tertiary).aligned(Align::End),
-            Align::Center,
-        );
-    })
-    .press(Message::ToggleComparisonDetail { group, key })
-    .cursor(Cursor::Pointing)
-    .focus_ring(Corners::all(8.0));
-    let mut parts = vec![canvas];
-    if open {
-        parts.push(grana_ui::text(
-            sample_line(row, metric),
-            TextStyle::new(caption, palette.text_secondary).wrapping(),
-        ));
-        if !tests.is_empty() {
-            parts.push(grana_ui::text(
-                test_line(&row.group, &tests),
-                TextStyle::new(caption, palette.text_secondary).wrapping(),
-            ));
-        }
+    readout.push_str(&format!(
+        " · {} objects in {} images",
+        row.objects, row.images
+    ));
+    if best < 0.05 {
+        readout.push_str(&format!(" · q {:.3} {}", best, grana_measure::stars(best)));
     }
-    grana_ui::column().gap(4.0).children(parts)
+    let mut parts = vec![
+        grana_ui::text(
+            readout,
+            TextStyle::new(theme.font(Level::Callout), palette.text_primary).wrapping(),
+        ),
+        grana_ui::text(
+            sample_line(row, metric),
+            TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
+        ),
+    ];
+    if !tests.is_empty() {
+        parts.push(grana_ui::text(
+            test_line(&row.group, &tests),
+            TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
+        ));
+    }
+    parts
+}
+
+fn title(row: &grana_session::BatchComparison) -> String {
+    format!("{} · {}", row.group, row.name)
+}
+
+fn category_label(row: &grana_session::BatchComparison, groups: usize, sets: usize) -> String {
+    match (groups, sets) {
+        (1, _) => row.name.clone(),
+        (_, 1) => row.group.clone(),
+        _ => title(row),
+    }
+}
+
+fn metric_axis(metric: ComparisonMetric) -> String {
+    match metric.unit() {
+        "" => metric.name().to_string(),
+        unit => format!("{} ({unit})", metric.name()),
+    }
+}
+
+fn comparison_notes(
+    slots: &[(String, String)],
+    tests: &[grana_session::BatchSignificance],
+    metric: ComparisonMetric,
+) -> Vec<grana_chart::Note> {
+    let mut notes = tests
+        .iter()
+        .filter(|test| test.metric == metric && test.significant())
+        .filter_map(|test| {
+            let from = slots
+                .iter()
+                .position(|(group, key)| group == &test.group_a && key == &test.key)?;
+            let to = slots
+                .iter()
+                .position(|(group, key)| group == &test.group_b && key == &test.key)?;
+            if from == to {
+                return None;
+            }
+            Some((
+                (from.abs_diff(to), from.min(to), from.max(to)),
+                grana_chart::Note {
+                    from,
+                    to,
+                    mark: test.mark().to_string(),
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    notes.sort_by_key(|(order, _)| *order);
+    notes
+        .into_iter()
+        .take(NOTE_LIMIT)
+        .map(|(_, note)| note)
+        .collect()
 }
 
 fn group_names(rows: &[grana_session::BatchComparison]) -> Vec<String> {

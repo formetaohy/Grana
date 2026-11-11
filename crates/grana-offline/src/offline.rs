@@ -63,6 +63,18 @@ impl Offline {
         if let Err(detail) = plan::validate(&plan) {
             return Outcome::Failed { detail };
         }
+        if let Destination::Chart { path, chart } = &plan.destination {
+            progress(0, 1);
+            let outcome =
+                match crate::chart::write(&self.device, &self.queue, self.format, chart, path) {
+                    Ok(path) => Outcome::Complete { path },
+                    Err(detail) => Outcome::Failed { detail },
+                };
+            if matches!(outcome, Outcome::Complete { .. }) {
+                progress(1, 1);
+            }
+            return outcome;
+        }
         if let Destination::Lineage { path, set } = &plan.destination {
             progress(0, 1);
             let outcome = match crate::lineage::write(

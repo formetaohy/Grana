@@ -70,8 +70,11 @@ impl Export {
             region: _,
         } = plan;
         assert!(!poses.is_empty(), "an export holds at least one pose");
-        if matches!(destination, Destination::Lineage { .. }) {
-            return Err("a lineage page is written without a renderer".to_string());
+        if matches!(
+            destination,
+            Destination::Lineage { .. } | Destination::Chart { .. }
+        ) {
+            return Err("a vector page is written without a renderer".to_string());
         }
         if !matches!(
             format,
@@ -122,8 +125,8 @@ impl Export {
                 Still::Tiff => Sink::Tiff { path },
             },
             Destination::Figure { path } => Sink::Figure { path },
-            Destination::Lineage { .. } => {
-                unreachable!("a lineage page never reaches the renderer")
+            Destination::Lineage { .. } | Destination::Chart { .. } => {
+                unreachable!("a vector page never reaches the renderer")
             }
             Destination::Movie { path } => Sink::Movie {
                 recorder: grana_video::Recorder::start(&path, viewport.size, fps, transparent)

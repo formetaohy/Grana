@@ -42,6 +42,7 @@ pub enum Icon {
     Search,
     Sliders,
     Table,
+    Chart,
     Grid,
     Sparkles,
     Info,
@@ -364,6 +365,13 @@ pub fn paint(
             line(painter, (3.0, 8.2), (17.0, 8.2));
             line(painter, (8.4, 8.2), (8.4, 15.8));
             line(painter, (12.6, 8.2), (12.6, 15.8));
+        }
+        Icon::Chart => {
+            line(painter, (3.4, 3.4), (3.4, 16.0));
+            line(painter, (3.4, 16.0), (16.8, 16.0));
+            for (x, top) in [(6.4, 12.6), (10.0, 7.4), (13.6, 10.2)] {
+                line(painter, (x, 15.0), (x, top));
+            }
         }
         Icon::Grid => {
             for (x, y) in [(3.0, 3.0), (11.0, 3.0), (3.0, 11.0), (11.0, 11.0)] {

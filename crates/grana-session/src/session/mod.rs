@@ -83,6 +83,7 @@ pub struct Effects {
     pub snapshot: bool,
     pub figure: bool,
     pub lineage: bool,
+    pub chart: bool,
     pub movie: Option<bool>,
     pub sequence: bool,
     pub cancel_export: bool,
@@ -479,10 +480,15 @@ impl Session {
         if self.tasks.measuring() {
             return;
         }
-        let Some(request) = self.measure.request(scene, busy) else {
+        if let Some(request) = self.measure.request(scene, busy) {
+            self.tasks.start_measure(request);
             return;
-        };
-        self.tasks.start_measure(request);
+        }
+        if !self.tasks.plotting()
+            && let Some(request) = self.measure.plot_request()
+        {
+            self.tasks.start_plot(request);
+        }
     }
     pub fn settle_measure(&mut self) -> bool {
         let Some(slot) = self.tasks.measure.as_mut() else {
@@ -543,6 +549,9 @@ impl Session {
     }
     pub fn measuring(&self) -> bool {
         self.tasks.measuring()
+    }
+    pub fn plotting(&self) -> bool {
+        self.tasks.plotting()
     }
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         self.tasks.progress()

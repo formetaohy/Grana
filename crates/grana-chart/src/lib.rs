@@ -1,0 +1,20 @@
+mod axis;
+mod chart;
+mod comparison;
+mod decor;
+mod distribution;
+mod grid;
+mod histogram;
+mod layout;
+mod scatter;
+mod style;
+
+pub use axis::{Axis, decimals, number, step};
+pub use chart::{Chart, HEIGHT, Heading, View, WIDTH};
+pub use comparison::{Category, Comparison, Note};
+pub use decor::{Brush, BrushKind, Decor, Gates, Highlight};
+pub use distribution::paint as distribution;
+pub use histogram::paint as histogram;
+pub use layout::{Insets, cell_centre, cell_size, group_at, group_centre, slot};
+pub use scatter::paint as scatter;
+pub use style::{DistributionStyle, Metrics, Style};

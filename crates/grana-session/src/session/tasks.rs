@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use grana_measure::Table;
+use grana_measure::{Plot, Table};
 use grana_pipeline::export::Summary;
-use grana_scene::{MeasureKey, ObjectSetId, TableRequest};
+use grana_scene::{MeasureKey, ObjectSetId, PlotKey, PlotRequest, TableRequest};
 use grana_volume::Intensity;
 use grana_zarr::Written;
 
@@ -23,6 +23,10 @@ pub(super) enum Completion {
     Measure {
         key: MeasureKey,
         table: Option<Table>,
+    },
+    Plot {
+        key: PlotKey,
+        plot: Option<Plot>,
     },
     Document {
         path: PathBuf,
@@ -66,9 +70,35 @@ impl Measure {
     }
 }
 
+pub(super) struct PlotJob {
+    key: PlotKey,
+    task: Progress<Option<Plot>>,
+}
+
+impl PlotJob {
+    fn start(request: PlotRequest) -> Self {
+        let key = request.key();
+        let task = Progress::spawn(grana_exec::Role::Compute, move |_, _| request.build());
+        Self { key, task }
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Option<Plot>> {
+        self.task.poll()
+    }
+
+    pub(super) fn key(&self) -> PlotKey {
+        self.key
+    }
+
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Tasks {
     pub measure: Option<Measure>,
+    pub plot: Option<PlotJob>,
     pub document: Option<Document>,
     pub labels: Option<Labels>,
     pub csv: Option<Csv>,
@@ -97,6 +127,21 @@ impl Tasks {
                 Poll::Closed => {
                     self.measure = None;
                     completions.push(Completion::Measure { key, table: None });
+                }
+            }
+        }
+        if let Some(slot) = self.plot.as_mut() {
+            stepped |= slot.stepped();
+            let key = slot.key();
+            match slot.poll() {
+                Poll::Event(plot) => {
+                    self.plot = None;
+                    completions.push(Completion::Plot { key, plot });
+                }
+                Poll::Empty => {}
+                Poll::Closed => {
+                    self.plot = None;
+                    completions.push(Completion::Plot { key, plot: None });
                 }
             }
         }
@@ -271,6 +316,10 @@ impl Tasks {
         self.measure.is_some()
     }
 
+    pub(super) fn plotting(&self) -> bool {
+        self.plot.is_some()
+    }
+
     pub(super) fn start_previews(&mut self, previews: Previews) {
         if self.previews.is_none() {
             self.previews = Some(previews);
@@ -340,6 +389,10 @@ impl Tasks {
         self.measure = Some(Measure::start(request));
     }
 
+    pub(super) fn start_plot(&mut self, request: PlotRequest) {
+        self.plot = Some(PlotJob::start(request));
+    }
+
     pub(super) fn defer_csv(&mut self, path: PathBuf) {
         self.pending_csv = Some(path);
     }
@@ -354,6 +407,7 @@ impl Tasks {
 
     pub(super) fn clear(&mut self) {
         self.measure = None;
+        self.plot = None;
         self.document = None;
         self.labels = None;
         self.csv = None;
@@ -370,6 +424,7 @@ impl Session {
     pub(super) fn finish(&mut self, completion: Completion) {
         match completion {
             Completion::Measure { key, table } => self.finish_measure(key, table),
+            Completion::Plot { key, plot } => self.finish_plot(key, plot),
             Completion::Document {
                 path,
                 hash,

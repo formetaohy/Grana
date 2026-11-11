@@ -881,16 +881,8 @@ pub fn apply(
             Message::SetExport(export) => {
                 commands.push(Command::SetExport(export));
             }
-            Message::Plot(event) => {
-                if let Some(scene) = view.scene {
-                    crate::plot::apply(event, scene, view.measure, workspace, commands);
-                }
-            }
-            Message::Locate(row) => {
-                if let Some(scene) = view.scene {
-                    crate::plot::locate(scene, view.measure, row, commands);
-                }
-            }
+            Message::Plot(event) => crate::plot::apply(event, view.measure, workspace, commands),
+            Message::Locate(row) => crate::plot::locate(view.measure, row, commands),
             Message::ClearGates => crate::plot::clear_gates(view.measure, commands),
             Message::Region { axis, side, delta } => {
                 let Some(scene) = view.scene else {

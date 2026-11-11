@@ -23,6 +23,10 @@ pub enum Destination {
         path: PathBuf,
         set: grana_scene::ObjectSetId,
     },
+    Chart {
+        path: PathBuf,
+        chart: Box<grana_chart::Chart>,
+    },
     Movie {
         path: PathBuf,
     },
@@ -68,12 +72,33 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
             return Err("a lineage page paints its own backdrop".to_string());
         }
     }
+    if let Destination::Chart { path, .. } = &plan.destination {
+        if plan.poses.len() != 1 {
+            return Err("a statistics chart names exactly one frame".to_string());
+        }
+        if plan.transparent {
+            return Err("a statistics chart paints its own backdrop".to_string());
+        }
+        if !matches!(
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("svg" | "pdf")
+        ) {
+            return Err(format!(
+                "a statistics chart is saved as SVG or PDF, not `{}`",
+                path.display()
+            ));
+        }
+    }
     let wide = match &plan.destination {
         Destination::Image { path } => still(path)? == Still::Tiff,
         Destination::Figure { .. } => true,
-        Destination::Lineage { .. } | Destination::Movie { .. } | Destination::Sequence { .. } => {
-            false
-        }
+        Destination::Lineage { .. }
+        | Destination::Chart { .. }
+        | Destination::Movie { .. }
+        | Destination::Sequence { .. } => false,
     };
     if wide {
         let size = plan.size.to_array();
