@@ -50,6 +50,7 @@ pub(crate) struct Layouts {
     pub ao_marker: PipelineLayout,
     pub section: BindGroupLayout,
     pub section_pipeline: PipelineLayout,
+    pub oit_resolve: PipelineLayout,
 }
 
 impl Layouts {
@@ -439,6 +440,11 @@ impl Layouts {
         });
         let section_pipeline =
             pipeline_layout(device, "grana.section.pipeline.layout", &[&scene, &section]);
+        let oit_resolve = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.oit.resolve.layout"),
+            bind_group_layouts: &[Some(&scene), None, None, None, Some(&oit_read)],
+            immediate_size: 0,
+        });
         Self {
             scene,
             level,
@@ -480,6 +486,7 @@ impl Layouts {
             ao_marker,
             section,
             section_pipeline,
+            oit_resolve,
         }
     }
 }

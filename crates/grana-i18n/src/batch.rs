@@ -31,6 +31,7 @@ labels! {
     resumed => "Resumed" / "已继续";
     corrected => "Corrected" / "已修正";
     failed => "Failed" / "失败";
+    cancelled => "Cancelled" / "已取消";
     running_state => "Running" / "运行中";
     pending => "Pending" / "待处理";
     queued => "Queued" / "排队中";

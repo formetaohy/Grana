@@ -181,7 +181,10 @@ impl App {
         let language = self.workspace.language;
         rfd::FileDialog::new()
             .set_title(grana_i18n::app::open_grana_project(language))
-            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
+            .add_filter(
+                grana_i18n::app::grana_project(language),
+                &[grana_session::PROJECT_EXTENSION],
+            )
             .pick_file()
     }
 
@@ -193,7 +196,10 @@ impl App {
         rfd::FileDialog::new()
             .set_title(grana_i18n::app::save_grana_project(language))
             .set_file_name(self.session.suggested_project())
-            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
+            .add_filter(
+                grana_i18n::app::grana_project(language),
+                &[grana_session::PROJECT_EXTENSION],
+            )
             .save_file()
     }
 }

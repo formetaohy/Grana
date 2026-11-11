@@ -25,6 +25,8 @@ const COMPOSITE: &str = concat!(
     "\n",
     include_str!("shader/slice.wgsl"),
     "\n",
+    include_str!("shader/oit_layers.wgsl"),
+    "\n",
     include_str!("shader/ray.wgsl"),
     "\n",
     include_str!("shader/volume.wgsl")
@@ -45,6 +47,8 @@ const PROJECTION: &str = concat!(
     include_str!("shader/composite.wgsl"),
     "\n",
     include_str!("shader/slice.wgsl"),
+    "\n",
+    include_str!("shader/oit_layers.wgsl"),
     "\n",
     include_str!("shader/ray.wgsl"),
     "\n",

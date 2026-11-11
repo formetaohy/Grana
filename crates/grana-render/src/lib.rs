@@ -11,6 +11,7 @@ mod marker;
 mod mesh;
 mod occupancy;
 mod oit;
+mod oit_resolve;
 mod pick;
 mod planner;
 mod present;

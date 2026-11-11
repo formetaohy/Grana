@@ -533,7 +533,7 @@ fn keeps_a_translucent_layer() {
         .iter()
         .map(|channel| TransferFunction::tinted(channel.tint()))
         .collect::<Vec<_>>();
-    let channels = channels(&pyramid, &transfers);
+    let mut channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let mesh = PackedMesh::new(quad(8.0));
@@ -579,6 +579,32 @@ fn keeps_a_translucent_layer() {
         shot.contrast(shot.middle()) > 10.0,
         "the translucent layer is invisible against the background: {:.1}",
         shot.contrast(shot.middle())
+    );
+    for channel in &mut channels {
+        channel.visible = false;
+    }
+    let hidden = SceneFrame {
+        revision: revision(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &hidden,
+        viewport: WHOLE,
+        assured: false,
+    };
+    let hidden_shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    assert!(
+        hidden_shot.painted(WHOLE) > 400,
+        "hiding every channel dropped the translucent layer: {} painted pixels",
+        hidden_shot.painted(WHOLE)
     );
 }
 

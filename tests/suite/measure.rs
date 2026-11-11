@@ -185,6 +185,21 @@ fn estimates_spatial_point_patterns() {
             .count()
             >= 8
     );
+    let text = ripley.table();
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some("radius_um,l_minus_r,frames,ci_low,ci_high,csr_low,csr_high,outside,simulations,p")
+    );
+    assert_eq!(lines.count(), ripley.points().len());
+    assert!(
+        text.contains(&format!(
+            ",{},{}",
+            ripley.simulations(),
+            grana_measure::csv::scientific(test.p())
+        )),
+        "the table carries the CSR test: {text}"
+    );
 
     let plane = (0..64)
         .map(|index| [(index % 8) as f32 * 3.0, (index / 8) as f32 * 3.0, 0.0])

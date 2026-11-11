@@ -33,6 +33,7 @@ use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::occupancy::Occupancy;
 use crate::oit::Oit;
+use crate::oit_resolve::OitResolve;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
     self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, bucket_scale, capacities,
@@ -143,6 +144,7 @@ pub struct Renderer {
     planner: Option<Planner>,
     shadow: Option<Shadow>,
     volume: VolumePass,
+    oit_resolve: OitResolve,
     gtao: crate::ao::AoPipeline,
     meshes: MeshPasses,
     markers: MarkerPasses,
@@ -226,6 +228,7 @@ impl Renderer {
             planner: None,
             shadow: None,
             volume: VolumePass::new(device, &layouts),
+            oit_resolve: OitResolve::new(device, &layouts),
             gtao: crate::ao::AoPipeline::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),

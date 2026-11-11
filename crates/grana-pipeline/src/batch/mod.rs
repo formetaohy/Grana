@@ -284,6 +284,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             });
         }
     });
+    if cancel.load(Ordering::Relaxed) {
+        let mut rows = lock(&rows);
+        for row in rows.iter_mut() {
+            if row.is_none() {
+                *row = Some(Row {
+                    status: "cancelled",
+                    objects: 0,
+                    detail: "the run was cancelled".to_string(),
+                    quality: Vec::new(),
+                });
+            }
+        }
+    }
     let mut summary = vec![grana_measure::csv::line(&[
         "dataset", "group", "well", "row", "column", "field", "status", "objects", "detail",
     ])];
@@ -492,6 +505,16 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
         }
         Err(detail) => {
             if task.cancel.load(Ordering::Relaxed) {
+                store(
+                    rows,
+                    index,
+                    Row {
+                        status: "cancelled",
+                        objects: 0,
+                        detail: "the run was cancelled".to_string(),
+                        quality: Vec::new(),
+                    },
+                );
                 return;
             }
             let _ = task.events.send(Event::Dataset {

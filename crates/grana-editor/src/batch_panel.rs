@@ -764,6 +764,7 @@ fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {
         "complete" | "done" | "resumed" => theme.palette.success,
         "corrected" => theme.palette.warning,
         "failed" => theme.palette.danger,
+        "cancelled" => theme.palette.text_tertiary,
         "running" => theme.palette.warning,
         _ => theme.palette.text_secondary,
     }
@@ -775,6 +776,7 @@ fn state_label(language: grana_i18n::Language, state: &str) -> &str {
         "resumed" => grana_i18n::batch::resumed(language),
         "corrected" => grana_i18n::batch::corrected(language),
         "failed" => grana_i18n::batch::failed(language),
+        "cancelled" => grana_i18n::batch::cancelled(language),
         "running" => grana_i18n::batch::running_state(language),
         "pending" => grana_i18n::batch::pending(language),
         "queued" => grana_i18n::batch::queued(language),

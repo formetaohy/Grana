@@ -1,4 +1,4 @@
-use std::path::Path;
+﻿use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -461,7 +461,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 .collect(),
             fingerprint,
         );
-        let file = format!("{}.granaproj", slug(&name));
+        let file = format!("{}.grana", slug(&name));
         let mut progress = |done: usize, total: usize| {
             let _ = task.events.send(Event::Progress {
                 index: task.index,
@@ -1255,7 +1255,7 @@ pub(super) fn artifacts(
         }
     }
     if project {
-        artifacts.push(format!("{}.granaproj", slug(name)));
+        artifacts.push(format!("{}.grana", slug(name)));
     }
     artifacts
 }
@@ -1418,7 +1418,7 @@ fn colocalization(
     let statistics = result.statistics();
     let manders = statistics.manders();
     let caption = format!(
-        "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
+        "Pearson {} 路 Overlap {} 路 M1 {} 路 M2 {} 路 p {}",
         number(statistics.pearson()),
         number(statistics.overlap()),
         number(manders[0]),

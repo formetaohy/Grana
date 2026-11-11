@@ -41,38 +41,17 @@ impl App {
         if event.state != ElementState::Pressed || event.repeat {
             return;
         }
-        if self
-            .surface
-            .as_ref()
-            .is_some_and(|surface| surface.ui.editing())
-        {
-            self.request_redraw();
-            return;
-        }
-        let focused = self
-            .surface
-            .as_ref()
-            .is_some_and(|surface| surface.ui.focus_visible() || surface.ui.popup_open_any());
-        if focused
-            && matches!(
-                event.logical_key,
-                Key::Named(NamedKey::Space)
-                    | Key::Named(NamedKey::ArrowLeft)
-                    | Key::Named(NamedKey::ArrowRight)
-                    | Key::Named(NamedKey::ArrowUp)
-                    | Key::Named(NamedKey::ArrowDown)
-                    | Key::Named(NamedKey::Delete)
-                    | Key::Named(NamedKey::Home)
-                    | Key::Named(NamedKey::End)
-            )
-        {
-            self.request_redraw();
-            return;
-        }
+        let key = interface_key(&event.logical_key);
+        let claimed = key.is_some_and(|key| {
+            self.surface
+                .as_ref()
+                .is_some_and(|surface| surface.ui.claims_key(key))
+        });
         if shortcut(self.modifiers) {
             if let Key::Character(text) = &event.logical_key
-                && let Some(key) = text.chars().next()
-                && let Some(message) = grana_editor::shortcut(key, self.modifiers.shift_key())
+                && let Some(character) = text.chars().next()
+                && let Some(message) = grana_editor::shortcut(character, self.modifiers.shift_key())
+                && !claimed
             {
                 self.dispatch(message);
             }
@@ -83,6 +62,10 @@ impl App {
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
                 self.dispatch(grana_editor::Message::ClosePalette);
             }
+            self.request_redraw();
+            return;
+        }
+        if claimed {
             self.request_redraw();
             return;
         }

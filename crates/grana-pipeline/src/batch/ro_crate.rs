@@ -242,7 +242,7 @@ fn media_of(file: &str) -> &'static str {
         Some("png") => "image/png",
         Some("mp4") => "video/mp4",
         Some("ome") => "application/octet-stream",
-        Some("zarr") | Some("granaproj") => "application/octet-stream",
+        Some("zarr") | Some("grana") => "application/octet-stream",
         _ => "application/octet-stream",
     }
 }

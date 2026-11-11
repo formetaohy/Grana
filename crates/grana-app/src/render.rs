@@ -293,10 +293,7 @@ fn open(input: &Path) -> Result<Session, String> {
         return Err(format!("{} does not exist", input.display()));
     }
     let mut session = Session::new();
-    let project = input
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("grana"));
+    let project = grana_session::is_project(input);
     if project {
         session.begin_project(input.to_path_buf());
     } else {

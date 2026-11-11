@@ -8,11 +8,11 @@ const REACH: f32 = 0.25;
 
 const SAMPLE_LIMIT: usize = 20_000;
 
-const SIMULATIONS: u32 = 39;
+const SIMULATIONS: u32 = 199;
 
 const SIMULATION_MINIMUM: u32 = 9;
 
-const SIMULATION_VISITS: u64 = 200_000_000;
+const SIMULATION_VISITS: u64 = 400_000_000;
 
 const VISIT_NEIGHBOURS: u64 = 27;
 
@@ -269,6 +269,41 @@ impl Ripley {
 
     pub fn simulations(&self) -> u32 {
         self.test.map_or(0, RipleyTest::simulations)
+    }
+
+    pub fn table(&self) -> String {
+        let simulations = self.simulations();
+        let p = self
+            .test
+            .map_or_else(String::new, |test| crate::csv::scientific(test.p()));
+        let mut text = crate::csv::line(&[
+            "radius_um",
+            "l_minus_r",
+            "frames",
+            "ci_low",
+            "ci_high",
+            "csr_low",
+            "csr_high",
+            "outside",
+            "simulations",
+            "p",
+        ]);
+        for point in &self.points {
+            let envelope = point.envelope();
+            text.push_str(&crate::csv::line(&[
+                &format!("{:.3}", point.radius()),
+                &format!("{:.4}", point.value()),
+                &point.frames().to_string(),
+                &format!("{:.4}", point.lower()),
+                &format!("{:.4}", point.upper()),
+                &envelope.map_or_else(String::new, |(low, _)| format!("{low:.4}")),
+                &envelope.map_or_else(String::new, |(_, high)| format!("{high:.4}")),
+                if point.beyond() { "1" } else { "0" },
+                &simulations.to_string(),
+                &p,
+            ]));
+        }
+        text
     }
 }
 

@@ -145,6 +145,10 @@ impl Session {
     }
 
     pub(super) fn export_measure(&mut self) {
+        if self.measure.view() == grana_measure::MeasureView::Ripley {
+            self.export_ripley();
+            return;
+        }
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
@@ -197,6 +201,48 @@ impl Session {
             return;
         }
         self.tasks.defer_csv(path);
+    }
+
+    fn export_ripley(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = self.measure.set() else {
+            self.message = Some(Message::info(
+                "choose an object set before exporting its Ripley curve",
+            ));
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let Some(grana_measure::Plot::Ripley(ripley)) = self.measure.plot() else {
+            self.message = Some(Message::info(
+                "the Ripley curve is still being computed before it is exported",
+            ));
+            return;
+        };
+        let text = ripley.table();
+        let file_name = format!(
+            "{}-{}-ripley.csv",
+            crate::slug(scene.dataset.name()),
+            crate::slug(object.key().as_str())
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export the Ripley curve")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        self.message = match std::fs::write(&path, text) {
+            Ok(()) => None,
+            Err(error) => Some(Message::error(format!(
+                "failed to export the Ripley curve to {}: {error}",
+                path.display()
+            ))),
+        };
     }
 
     pub(super) fn finish_plot(

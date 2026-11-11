@@ -14,6 +14,17 @@ pub fn line(fields: &[&str]) -> String {
     text
 }
 
+pub fn scientific(value: f64) -> String {
+    let text = format!("{value:.3e}");
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        return text;
+    };
+    let exponent = exponent
+        .parse::<i32>()
+        .expect("a formatted exponent is an integer");
+    format!("{mantissa}e{exponent:+03}")
+}
+
 pub(crate) fn write(
     columns: &[Column],
     rows: usize,

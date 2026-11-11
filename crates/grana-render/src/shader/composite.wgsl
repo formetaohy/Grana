@@ -7,7 +7,6 @@ const CELL_LIMIT: u32 = 1024u;
 const SEGMENT_ERROR: f32 = 0.02;
 const SEGMENT_STRIDE: f32 = 8.0;
 const MINIMUM_TAU: f32 = 1.0e-4;
-const MINIMUM_TRANSMITTANCE: f32 = 0.003;
 
 struct March {
     radiance: vec3<f32>,

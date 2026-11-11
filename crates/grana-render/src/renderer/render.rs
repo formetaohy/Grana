@@ -1,4 +1,4 @@
-use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
+﻿use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
 use super::*;
 
 const AMBIENT_REACH: f32 = 40.0;
@@ -58,6 +58,7 @@ impl Renderer {
             bricks,
             planner,
             volume,
+            oit_resolve,
             gtao,
             meshes,
             markers,
@@ -745,6 +746,15 @@ impl Renderer {
                 }
                 if let Some(slot) = oit_readback.reserve() {
                     oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
+                }
+                if !volume_visible {
+                    oit_resolve.draw(
+                        &mut encoder,
+                        target.scene.color(),
+                        viewport,
+                        group,
+                        oit.read_group(),
+                    );
                 }
             }
             if volume_visible && !slice {

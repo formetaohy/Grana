@@ -170,10 +170,7 @@ impl App {
                 self.session.begin_remote(target);
             } else {
                 let path = PathBuf::from(target);
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension == "grana")
-                {
+                if grana_session::is_project(&path) {
                     self.session.begin_project(path);
                 } else {
                     self.session.begin_load(path);

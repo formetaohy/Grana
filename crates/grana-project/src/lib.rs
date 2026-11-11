@@ -5,4 +5,4 @@ mod error;
 mod project;
 
 pub use error::Error;
-pub use project::{Export, Mismatch, NamedView, Project, Source, ViewState};
+pub use project::{EXTENSION, Export, Mismatch, NamedView, Project, Source, ViewState, is_project};

@@ -8,7 +8,7 @@ use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
 use crate::geometry::{Corners, Rect};
 use crate::image::ImageAtlas;
-use crate::input::{Cursor, Input};
+use crate::input::{Cursor, Input, Key as InputKey};
 use crate::layout::LayoutEngine;
 use crate::motion::Motion;
 use crate::node::NodeId;
@@ -283,6 +283,49 @@ impl<A: Clone> Ui<A> {
         self.popup_anchors
             .values()
             .any(|id| self.tree.nodes[*id].runtime.open)
+    }
+
+    pub fn claims_key(&self, key: InputKey) -> bool {
+        let modifiers = self.input.modifiers();
+        let command = modifiers.control || modifiers.logo;
+        if self.edit.is_some() {
+            return match key {
+                InputKey::Character(character) if command => {
+                    matches!(character.to_ascii_lowercase(), 'a' | 'c' | 'v' | 'x' | 'z')
+                }
+                InputKey::Character(_) | InputKey::Space => true,
+                InputKey::Backspace
+                | InputKey::Delete
+                | InputKey::Enter
+                | InputKey::Escape
+                | InputKey::Tab
+                | InputKey::Left
+                | InputKey::Right
+                | InputKey::Up
+                | InputKey::Down
+                | InputKey::Home
+                | InputKey::End => true,
+                InputKey::PageUp | InputKey::PageDown => false,
+            };
+        }
+        if self.focus_visible || self.popup_open_any() {
+            return matches!(
+                key,
+                InputKey::Tab
+                    | InputKey::Escape
+                    | InputKey::Enter
+                    | InputKey::Space
+                    | InputKey::Left
+                    | InputKey::Right
+                    | InputKey::Up
+                    | InputKey::Down
+                    | InputKey::Home
+                    | InputKey::End
+                    | InputKey::PageUp
+                    | InputKey::PageDown
+            );
+        }
+        false
     }
 
     pub fn update(&mut self, size: Vec2, scale: f32, time: f64) -> Vec<A> {

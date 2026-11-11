@@ -25,6 +25,14 @@ const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
 const STALE_AGE: Duration = Duration::from_secs(3600);
 
+pub const EXTENSION: &str = "grana";
+
+pub fn is_project(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(EXTENSION))
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Project {
     pub shape: Shape,

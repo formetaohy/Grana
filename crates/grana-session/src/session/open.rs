@@ -108,10 +108,7 @@ impl Session {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "grana")
-        {
+        if grana_project::is_project(&path) {
             self.begin_project(path);
         } else if grana_image::is_image(&path) {
             self.begin_load(path);
@@ -243,7 +240,7 @@ impl Session {
             .scene
             .as_ref()
             .map_or("project", |scene| scene.dataset.name());
-        format!("{}.grana", crate::slug(name))
+        format!("{}.{}", crate::slug(name), grana_project::EXTENSION)
     }
 
     pub fn transferring(&self) -> bool {
