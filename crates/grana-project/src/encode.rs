@@ -10,8 +10,9 @@ use grana_measure::{
     ObjectColocValue,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, RelationFrame,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackLink, TrackNode,
+    TrackSet,
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
@@ -733,13 +734,25 @@ impl Encode for TrackSet {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.frame_interval());
         self.tracks().encode(writer);
+        self.links().encode(writer);
     }
 }
 
 impl Encode for Track {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        self.parent().encode(writer);
         self.nodes().encode(writer);
+    }
+}
+
+impl Encode for TrackLink {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.parent());
+        writer.u32(self.child());
+        writer.u8(match self.kind() {
+            Link::Gap => 0,
+            Link::Division => 1,
+            Link::Merge => 2,
+        });
     }
 }
 

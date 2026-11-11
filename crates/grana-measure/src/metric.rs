@@ -442,7 +442,7 @@ impl TrackMeasurement {
         let statistics = set.statistics(track).expect("the track has statistics");
         match self {
             Self::Track => (track + 1) as f32,
-            Self::Parent => entry.parent().map_or(0.0, |parent| (parent + 1) as f32),
+            Self::Parent => set.parent(track).map_or(0.0, |parent| (parent + 1) as f32),
             Self::Daughters => set.children(track).count() as f32,
             Self::First => (entry.start() + 1) as f32,
             Self::Last => (entry.end() + 1) as f32,

@@ -117,10 +117,7 @@ fn renders_a_track_lineage_without_a_window() {
         set,
         TrackSet::new(
             1.0,
-            vec![Track::new(
-                None,
-                vec![TrackNode::new(0, 0, [16.0, 16.0, 1.0])],
-            )],
+            vec![Track::new(vec![TrackNode::new(0, 0, [16.0, 16.0, 1.0])])],
         ),
     );
     let name = scene
@@ -378,6 +375,13 @@ fn captures_a_protocol_film_without_a_window() {
     assert!(
         pdf.starts_with(b"%PDF-1.7") && pdf.ends_with(b"%%EOF\n"),
         "the report is a PDF"
+    );
+    let pages = find(&output, "pages.json").expect("the batch records the pages of a dataset");
+    assert!(
+        std::fs::read_to_string(pages)
+            .expect("the recorded pages read")
+            .starts_with('['),
+        "the recorded pages list their marks"
     );
     let text = String::from_utf8_lossy(&pdf);
     assert!(

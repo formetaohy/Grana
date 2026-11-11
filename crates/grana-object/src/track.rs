@@ -1,4 +1,4 @@
-use crate::graph::TrackGraph;
+use crate::lineage::Lineage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackNode {
@@ -30,6 +30,43 @@ impl TrackNode {
 
     pub fn centroid(self) -> [f32; 3] {
         self.centroid
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Link {
+    Gap,
+    Division,
+    Merge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackLink {
+    parent: u32,
+    child: u32,
+    kind: Link,
+}
+
+impl TrackLink {
+    pub fn new(parent: u32, child: u32, kind: Link) -> Self {
+        assert!(parent != child, "a track link joins two tracks");
+        Self {
+            parent,
+            child,
+            kind,
+        }
+    }
+
+    pub fn parent(self) -> u32 {
+        self.parent
+    }
+
+    pub fn child(self) -> u32 {
+        self.child
+    }
+
+    pub fn kind(self) -> Link {
+        self.kind
     }
 }
 
@@ -71,24 +108,19 @@ impl TrackStatistics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
-    parent: Option<u32>,
     nodes: Vec<TrackNode>,
 }
 
 impl Track {
-    pub fn new(parent: Option<u32>, nodes: Vec<TrackNode>) -> Self {
+    pub fn new(nodes: Vec<TrackNode>) -> Self {
         assert!(!nodes.is_empty(), "a track holds at least one node");
         for pair in nodes.windows(2) {
             assert!(
-                pair[1].time > pair[0].time,
-                "track nodes follow the time axis"
+                pair[1].time == pair[0].time + 1,
+                "track nodes follow consecutive frames"
             );
         }
-        Self { parent, nodes }
-    }
-
-    pub fn parent(&self) -> Option<u32> {
-        self.parent
+        Self { nodes }
     }
 
     pub fn nodes(&self) -> &[TrackNode] {
@@ -110,7 +142,7 @@ impl Track {
         );
         let first = self.nodes.first().expect("a track holds nodes");
         let last = self.nodes.last().expect("a track holds nodes");
-        let frames = last.time - first.time + 1;
+        let frames = self.nodes.len() as u32;
         let duration = f64::from(frames - 1) * f64::from(frame_interval);
         let length = self
             .nodes
@@ -143,23 +175,44 @@ impl Track {
 pub struct TrackSet {
     frame_interval: f32,
     tracks: Vec<Track>,
-    links: Vec<(u32, usize, u32)>,
+    links: Vec<TrackLink>,
+    detections: Vec<(u32, usize, u32)>,
     divisions: usize,
+    merges: usize,
 }
 
 impl TrackSet {
     pub fn new(frame_interval: f32, tracks: Vec<Track>) -> Self {
-        match Self::try_new(frame_interval, tracks) {
+        Self::with_links(frame_interval, tracks, Vec::new())
+    }
+
+    pub fn with_links(frame_interval: f32, tracks: Vec<Track>, links: Vec<TrackLink>) -> Self {
+        match Self::try_with_links(frame_interval, tracks, links) {
             Ok(set) => set,
             Err(detail) => panic!("{detail}"),
         }
     }
 
     pub fn try_new(frame_interval: f32, tracks: Vec<Track>) -> Result<Self, String> {
+        Self::try_with_links(frame_interval, tracks, Vec::new())
+    }
+
+    pub fn try_with_links(
+        frame_interval: f32,
+        tracks: Vec<Track>,
+        mut links: Vec<TrackLink>,
+    ) -> Result<Self, String> {
         if !(frame_interval.is_finite() && frame_interval > 0.0) {
             return Err("the frame interval is a positive duration".to_string());
         }
-        let mut children = vec![0usize; tracks.len()];
+        links.sort_unstable_by_key(|link| (link.parent, link.child));
+        if links
+            .windows(2)
+            .any(|pair| (pair[0].parent, pair[0].child) == (pair[1].parent, pair[1].child))
+        {
+            return Err("a track link appears twice".to_string());
+        }
+        let mut detections = Vec::new();
         for (index, track) in tracks.iter().enumerate() {
             if track.nodes().is_empty() {
                 return Err("a track holds at least one node".to_string());
@@ -167,56 +220,70 @@ impl TrackSet {
             if track
                 .nodes()
                 .windows(2)
-                .any(|pair| pair[1].time() <= pair[0].time())
+                .any(|pair| pair[1].time() != pair[0].time() + 1)
             {
-                return Err("track nodes follow the time axis".to_string());
+                return Err("track nodes follow consecutive frames".to_string());
             }
-            if let Some(parent) = track.parent() {
-                let parent = parent as usize;
-                if parent >= index {
-                    return Err("a track follows its parent".to_string());
-                }
-                if tracks[parent].end() >= track.start() {
-                    return Err("a child track starts after its parent ends".to_string());
-                }
-                children[parent] += 1;
-            }
-        }
-        for count in &children {
-            if *count > 2 {
-                return Err("a track leads to at most two daughter tracks".to_string());
-            }
-        }
-        let divisions = children.iter().filter(|count| **count == 2).count();
-        let mut links = Vec::new();
-        for (index, track) in tracks.iter().enumerate() {
             for node in track.nodes() {
-                links.push((node.time(), node.object(), index as u32));
+                detections.push((node.time(), node.object(), index as u32));
             }
         }
-        links.sort_unstable();
-        if links
+        detections.sort_unstable();
+        if detections
             .windows(2)
             .any(|pair| (pair[0].0, pair[0].1) == (pair[1].0, pair[1].1))
         {
             return Err("every detection belongs to one track".to_string());
         }
+        let mut incoming = vec![0u8; tracks.len()];
+        let mut outgoing = vec![0u8; tracks.len()];
+        for link in &links {
+            let parent = link.parent as usize;
+            let child = link.child as usize;
+            if parent >= tracks.len() || child >= tracks.len() {
+                return Err("a track link names a missing track".to_string());
+            }
+            if parent >= child {
+                return Err("a track link follows its parent".to_string());
+            }
+            if tracks[parent].end() >= tracks[child].start() {
+                return Err("a child track starts after its parent ends".to_string());
+            }
+            if incoming[child] == 2 || outgoing[parent] == 2 {
+                return Err("a track follows at most two tracks and leads to two".to_string());
+            }
+            incoming[child] += 1;
+            outgoing[parent] += 1;
+        }
+        for link in &links {
+            let parent = link.parent as usize;
+            let child = link.child as usize;
+            if outgoing[parent] == 2 && incoming[child] == 2 {
+                return Err("a track divides into a merge".to_string());
+            }
+            let kind = if outgoing[parent] == 2 {
+                Link::Division
+            } else if incoming[child] == 2 {
+                Link::Merge
+            } else {
+                Link::Gap
+            };
+            if link.kind != kind {
+                return Err("a track link carries the wrong kind".to_string());
+            }
+        }
+        let divisions = outgoing.iter().filter(|count| **count == 2).count();
+        let merges = incoming.iter().filter(|count| **count == 2).count();
         Ok(Self {
             frame_interval,
             tracks,
             links,
+            detections,
             divisions,
+            merges,
         })
     }
 
-    pub fn frame_interval(&self) -> f32 {
-        self.frame_interval
-    }
-
-    /// Builds the set from the edges a file records between detections: every edge joins a node of
-    /// an earlier frame to a node of a later one, and a node follows at most one predecessor and
-    /// leads to at most two daughters. `nodes` lists every detection as `(time, object)` together
-    /// with the centroid the track tube passes through.
     pub fn linked(
         frame_interval: f32,
         nodes: &[(u32, usize, [f32; 3])],
@@ -225,85 +292,13 @@ impl TrackSet {
         if nodes.is_empty() {
             return Ok(None);
         }
-        let mut slots = std::collections::HashMap::with_capacity(nodes.len());
-        for (slot, (time, object, _)) in nodes.iter().enumerate() {
-            if slots.insert((*time, *object), slot).is_some() {
-                return Err(format!(
-                    "the detection {object} of the frame {time} appears twice"
-                ));
-            }
-        }
-        let mut successors: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-        let mut predecessors: Vec<Option<usize>> = vec![None; nodes.len()];
-        for (source, target) in edges {
-            let (Some(source), Some(target)) = (
-                slots.get(&(source[0], source[1] as usize)).copied(),
-                slots.get(&(target[0], target[1] as usize)).copied(),
-            ) else {
-                continue;
-            };
-            if source == target || nodes[source].0 >= nodes[target].0 {
-                continue;
-            }
-            if let Some(previous) = predecessors[target]
-                && previous != source
-            {
-                return Err(format!(
-                    "the detection {} of the frame {} follows both {} and {}",
-                    target, nodes[target].0, previous, source
-                ));
-            }
-            predecessors[target] = Some(source);
-            if !successors[source].contains(&target) {
-                successors[source].push(target);
-            }
-        }
-        for next in &successors {
-            if next.len() > 2 {
-                return Err(format!("a detection links to {} daughters", next.len()));
-            }
-        }
-        let mut tracks: Vec<Track> = Vec::new();
-        let mut visited = vec![false; nodes.len()];
-        let mut pending = predecessors
-            .iter()
-            .enumerate()
-            .filter(|(_, previous)| previous.is_none())
-            .map(|(slot, _)| (slot, None))
-            .collect::<Vec<_>>();
-        pending.reverse();
-        while let Some((start, parent)) = pending.pop() {
-            let mut held = Vec::new();
-            let mut current = start;
-            let mut daughters = Vec::new();
-            loop {
-                if visited[current] {
-                    return Err("a detection belongs to two tracks".to_string());
-                }
-                visited[current] = true;
-                let (time, object, centroid) = nodes[current];
-                held.push(TrackNode::new(time, object, centroid));
-                match successors[current].as_slice() {
-                    [] => break,
-                    [only] => current = *only,
-                    [first, second] => {
-                        daughters = vec![*first, *second];
-                        break;
-                    }
-                    _ => unreachable!("a detection links to at most two daughters"),
-                }
-            }
-            let index = tracks.len() as u32;
-            tracks.push(Track::new(parent, held));
-            daughters.reverse();
-            for daughter in daughters {
-                pending.push((daughter, Some(index)));
-            }
-        }
-        if visited.iter().any(|visited| !visited) {
-            return Err("the track edges close a cycle".to_string());
-        }
-        Self::try_new(frame_interval, tracks).map(Some)
+        Lineage::from_edges(nodes, edges)
+            .and_then(|lineage| lineage.into_set(frame_interval))
+            .map(Some)
+    }
+
+    pub fn frame_interval(&self) -> f32 {
+        self.frame_interval
     }
 
     pub fn tracks(&self) -> &[Track] {
@@ -319,11 +314,19 @@ impl TrackSet {
     }
 
     pub fn node_count(&self) -> usize {
-        self.links.len()
+        self.detections.len()
+    }
+
+    pub fn links(&self) -> &[TrackLink] {
+        &self.links
     }
 
     pub fn divisions(&self) -> usize {
         self.divisions
+    }
+
+    pub fn merges(&self) -> usize {
+        self.merges
     }
 
     pub fn track(&self, index: usize) -> Option<&Track> {
@@ -331,10 +334,10 @@ impl TrackSet {
     }
 
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
-        self.links
-            .binary_search_by_key(&(time, object), |link| (link.0, link.1))
+        self.detections
+            .binary_search_by_key(&(time, object), |detection| (detection.0, detection.1))
             .ok()
-            .map(|index| self.links[index].2 as usize)
+            .map(|index| self.detections[index].2 as usize)
     }
 
     pub fn statistics(&self, index: usize) -> Option<TrackStatistics> {
@@ -342,57 +345,54 @@ impl TrackSet {
             .map(|track| track.statistics(self.frame_interval))
     }
 
-    pub fn children(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
-        self.tracks
+    pub fn parents(&self, index: usize) -> impl Iterator<Item = TrackLink> + '_ {
+        self.links
             .iter()
-            .enumerate()
-            .filter(move |(_, track)| track.parent() == Some(index as u32))
-            .map(|(child, _)| child)
+            .copied()
+            .filter(move |link| link.child as usize == index)
+    }
+
+    pub fn parent(&self, index: usize) -> Option<usize> {
+        self.parents(index).next().map(|link| link.parent as usize)
+    }
+
+    pub fn child_links(&self, index: usize) -> impl Iterator<Item = TrackLink> + '_ {
+        self.links
+            .iter()
+            .copied()
+            .filter(move |link| link.parent as usize == index)
+    }
+
+    pub fn children(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
+        self.child_links(index).map(|link| link.child as usize)
     }
 
     pub fn cut(&self, time: u32, object: usize) -> Option<Self> {
-        let mut graph = TrackGraph::from_set(self);
-        let node = graph.node_at(time, object)?;
-        if !graph.cut(node) {
-            return None;
-        }
-        Some(graph.into_set(self.frame_interval))
+        self.edit(|lineage| {
+            let node = lineage.node_at(time, object)?;
+            lineage.cut(node).then_some(())
+        })
     }
 
     pub fn can_join(&self, source: (u32, usize), target: (u32, usize)) -> bool {
-        let Some(source_track) = self.track_at(source.0, source.1) else {
+        let lineage = Lineage::of(self);
+        let (Some(source), Some(target)) = (
+            lineage.node_at(source.0, source.1),
+            lineage.node_at(target.0, target.1),
+        ) else {
             return false;
         };
-        let Some(target_track) = self.track_at(target.0, target.1) else {
-            return false;
-        };
-        let Some(track) = self.track(source_track) else {
-            return false;
-        };
-        let Some(last) = track.nodes().last() else {
-            return false;
-        };
-        if (last.time(), last.object()) != source || self.children(source_track).next().is_some() {
-            return false;
-        }
-        let Some(track) = self.track(target_track) else {
-            return false;
-        };
-        let Some(first) = track.nodes().first() else {
-            return false;
-        };
-        (first.time(), first.object()) == target && track.parent().is_none() && target.0 > source.0
+        lineage.can_join(source, target)
     }
 
     pub fn join(&self, source: (u32, usize), target: (u32, usize)) -> Option<Self> {
-        let mut graph = TrackGraph::from_set(self);
-        let source = graph.node_at(source.0, source.1)?;
-        let target = graph.node_at(target.0, target.1)?;
-        if !graph.can_join(source, target) {
-            return None;
-        }
-        graph.join(source, target);
-        Some(graph.into_set(self.frame_interval))
+        self.edit(|lineage| {
+            let source = lineage.node_at(source.0, source.1)?;
+            let target = lineage.node_at(target.0, target.1)?;
+            lineage.can_join(source, target).then_some(())?;
+            lineage.join(source, target);
+            Some(())
+        })
     }
 
     pub fn can_divide(
@@ -401,17 +401,15 @@ impl TrackSet {
         first: (u32, usize),
         second: (u32, usize),
     ) -> bool {
-        let graph = TrackGraph::from_set(self);
-        let Some(parent) = graph.node_at(parent.0, parent.1) else {
+        let lineage = Lineage::of(self);
+        let (Some(parent), Some(first), Some(second)) = (
+            lineage.node_at(parent.0, parent.1),
+            lineage.node_at(first.0, first.1),
+            lineage.node_at(second.0, second.1),
+        ) else {
             return false;
         };
-        let Some(first) = graph.node_at(first.0, first.1) else {
-            return false;
-        };
-        let Some(second) = graph.node_at(second.0, second.1) else {
-            return false;
-        };
-        graph.can_divide(parent, first, second)
+        lineage.can_divide(parent, first, second)
     }
 
     pub fn divide(
@@ -420,94 +418,56 @@ impl TrackSet {
         first: (u32, usize),
         second: (u32, usize),
     ) -> Option<Self> {
-        let mut graph = TrackGraph::from_set(self);
-        let parent = graph.node_at(parent.0, parent.1)?;
-        let first = graph.node_at(first.0, first.1)?;
-        let second = graph.node_at(second.0, second.1)?;
-        if !graph.can_divide(parent, first, second) {
-            return None;
-        }
-        graph.divide(parent, first, second);
-        Some(graph.into_set(self.frame_interval))
+        self.edit(|lineage| {
+            let parent = lineage.node_at(parent.0, parent.1)?;
+            let first = lineage.node_at(first.0, first.1)?;
+            let second = lineage.node_at(second.0, second.1)?;
+            lineage.can_divide(parent, first, second).then_some(())?;
+            lineage.divide(parent, first, second);
+            Some(())
+        })
     }
 
     pub fn can_reparent(&self, child: (u32, usize), parent: (u32, usize)) -> bool {
-        let graph = TrackGraph::from_set(self);
-        let Some(child) = graph.node_at(child.0, child.1) else {
+        let lineage = Lineage::of(self);
+        let (Some(child), Some(parent)) = (
+            lineage.node_at(child.0, child.1),
+            lineage.node_at(parent.0, parent.1),
+        ) else {
             return false;
         };
-        let Some(parent) = graph.node_at(parent.0, parent.1) else {
-            return false;
-        };
-        graph.can_reparent(child, parent)
+        lineage.can_reparent(child, parent)
     }
 
     pub fn reparent(&self, child: (u32, usize), parent: (u32, usize)) -> Option<Self> {
-        let mut graph = TrackGraph::from_set(self);
-        let child = graph.node_at(child.0, child.1)?;
-        let parent = graph.node_at(parent.0, parent.1)?;
-        if !graph.can_reparent(child, parent) {
-            return None;
-        }
-        graph.reparent(child, parent);
-        Some(graph.into_set(self.frame_interval))
+        self.edit(|lineage| {
+            let child = lineage.node_at(child.0, child.1)?;
+            let parent = lineage.node_at(parent.0, parent.1)?;
+            lineage.can_reparent(child, parent).then_some(())?;
+            lineage.reparent(child, parent);
+            Some(())
+        })
     }
 
     pub fn can_detach(&self, child: (u32, usize)) -> bool {
-        let graph = TrackGraph::from_set(self);
-        let Some(child) = graph.node_at(child.0, child.1) else {
+        let lineage = Lineage::of(self);
+        let Some(child) = lineage.node_at(child.0, child.1) else {
             return false;
         };
-        graph.can_detach(child)
+        lineage.can_detach(child)
     }
 
     pub fn detach(&self, child: (u32, usize)) -> Option<Self> {
-        let mut graph = TrackGraph::from_set(self);
-        let child = graph.node_at(child.0, child.1)?;
-        if !graph.can_detach(child) {
-            return None;
-        }
-        graph.detach(child);
-        Some(graph.into_set(self.frame_interval))
+        self.edit(|lineage| {
+            let child = lineage.node_at(child.0, child.1)?;
+            lineage.can_detach(child).then_some(())?;
+            lineage.detach(child);
+            Some(())
+        })
     }
 
     pub fn without(&self, time: u32, object: usize) -> Option<Self> {
         self.without_objects(time, &[object])
-    }
-
-    pub fn shift(&self, offsets: &[usize]) -> Self {
-        let tracks = self
-            .tracks
-            .iter()
-            .map(|track| {
-                let nodes = track
-                    .nodes()
-                    .iter()
-                    .map(|node| {
-                        let offset = offsets.get(node.time() as usize).copied().unwrap_or(0);
-                        TrackNode::new(node.time(), node.object() + offset, node.centroid())
-                    })
-                    .collect::<Vec<_>>();
-                Track::new(track.parent(), nodes)
-            })
-            .collect::<Vec<_>>();
-        Self::new(self.frame_interval, tracks)
-    }
-
-    pub fn append(&self, other: &Self) -> Self {
-        assert_eq!(
-            self.frame_interval, other.frame_interval,
-            "a merged track set spans one frame interval"
-        );
-        let base = self.tracks.len() as u32;
-        let mut tracks = self.tracks.clone();
-        tracks.extend(other.tracks.iter().map(|track| {
-            Track::new(
-                track.parent().map(|parent| parent + base),
-                track.nodes().to_vec(),
-            )
-        }));
-        Self::new(self.frame_interval, tracks)
     }
 
     pub fn without_objects(&self, time: u32, objects: &[usize]) -> Option<Self> {
@@ -518,51 +478,33 @@ impl TrackSet {
             objects.windows(2).all(|pair| pair[0] < pair[1]),
             "removed track nodes are ordered and unique"
         );
-        let mut changed = false;
-        let mut tracks = Vec::with_capacity(self.tracks.len());
-        for track in &self.tracks {
-            let mut nodes = Vec::with_capacity(track.nodes().len());
-            for node in track.nodes().iter().copied() {
-                let removed = if node.time() == time {
-                    objects.partition_point(|object| *object < node.object())
-                } else {
-                    0
-                };
-                if node.time() == time && objects.get(removed) == Some(&node.object()) {
-                    changed = true;
-                    continue;
-                }
-                changed |= removed > 0;
-                nodes.push(TrackNode::new(
-                    node.time(),
-                    node.object() - removed,
-                    node.centroid(),
-                ));
-            }
-            tracks.push((track.parent(), nodes));
-        }
-        if !changed {
-            return None;
-        }
-        let mut index = vec![None; tracks.len()];
-        let mut kept = Vec::with_capacity(tracks.len());
-        for (old, (parent, nodes)) in tracks.into_iter().enumerate() {
-            if nodes.is_empty() {
-                continue;
-            }
-            index[old] = Some(kept.len());
-            kept.push((parent, nodes));
-        }
-        let parents = kept
-            .iter()
-            .map(|(parent, _)| parent.and_then(|parent| index[parent as usize]))
-            .collect::<Vec<_>>();
-        let tracks = kept
-            .into_iter()
-            .zip(parents)
-            .map(|((_, nodes), parent)| Track::new(parent.map(|parent| parent as u32), nodes))
-            .collect::<Vec<_>>();
-        Some(Self::new(self.frame_interval, tracks))
+        self.edit(|lineage| lineage.without_objects(time, objects).then_some(()))
+    }
+
+    pub fn shift(&self, offsets: &[usize]) -> Self {
+        self.edit(|lineage| {
+            lineage.shift(offsets);
+            Some(())
+        })
+        .expect("shifting keeps every track")
+    }
+
+    pub fn append(&self, other: &Self) -> Self {
+        assert_eq!(
+            self.frame_interval, other.frame_interval,
+            "a merged track set spans one frame interval"
+        );
+        let base = self.tracks.len() as u32;
+        let mut tracks = self.tracks.clone();
+        tracks.extend(other.tracks.iter().cloned());
+        let mut links = self.links.clone();
+        links.extend(
+            other
+                .links
+                .iter()
+                .map(|link| TrackLink::new(link.parent + base, link.child + base, link.kind)),
+        );
+        Self::with_links(self.frame_interval, tracks, links)
     }
 
     pub fn mesh(&self, radius: f32) -> grana_geometry::Mesh {
@@ -574,61 +516,66 @@ impl TrackSet {
         let mut indices = Vec::new();
         for (index, track) in self.tracks.iter().enumerate() {
             let object = index as u32;
-            let mut points = Vec::with_capacity(track.nodes().len() + 1);
-            if let Some(parent) = track.parent() {
-                let parent = self
-                    .track(parent as usize)
-                    .expect("the parent track exists");
-                let end = parent.nodes().last().expect("the parent holds nodes");
-                points.push(glam::Vec3::from(end.centroid()));
-            }
-            points.extend(
-                track
-                    .nodes()
-                    .iter()
-                    .map(|node| glam::Vec3::from(node.centroid())),
-            );
-            deduplicate(&mut points);
-            match points.len() {
-                0 => {}
-                1 => grana_geometry::push_sphere(
-                    &mut vertices,
-                    &mut indices,
-                    points[0].to_array(),
-                    radius,
-                    object,
-                ),
-                _ => {
-                    let positions = points
-                        .iter()
-                        .map(|point| point.to_array())
-                        .collect::<Vec<_>>();
-                    let radii = vec![radius; positions.len()];
-                    grana_geometry::push_tube(
-                        &mut vertices,
-                        &mut indices,
-                        &positions,
-                        &radii,
-                        object,
-                    );
-                }
-            }
+            let points = track
+                .nodes()
+                .iter()
+                .map(|node| glam::Vec3::from(node.centroid()))
+                .collect::<Vec<_>>();
+            push(&mut vertices, &mut indices, object, &points, radius);
+        }
+        for link in &self.links {
+            let parent = self
+                .track(link.parent as usize)
+                .and_then(|track| track.nodes().last())
+                .expect("the parent track holds nodes");
+            let child = self
+                .track(link.child as usize)
+                .and_then(|track| track.nodes().first())
+                .expect("the child track holds nodes");
+            let points = [
+                glam::Vec3::from(parent.centroid()),
+                glam::Vec3::from(child.centroid()),
+            ];
+            push(&mut vertices, &mut indices, link.child, &points, radius);
         }
         grana_geometry::Mesh::new(vertices, indices)
     }
+
+    fn edit(&self, mutate: impl FnOnce(&mut Lineage) -> Option<()>) -> Option<Self> {
+        let mut lineage = Lineage::of(self);
+        mutate(&mut lineage)?;
+        lineage.into_set(self.frame_interval).ok()
+    }
 }
 
-fn deduplicate(points: &mut Vec<glam::Vec3>) {
+fn push(
+    vertices: &mut Vec<grana_geometry::MeshVertex>,
+    indices: &mut Vec<u32>,
+    object: u32,
+    points: &[glam::Vec3],
+    radius: f32,
+) {
     let mut unique = Vec::with_capacity(points.len());
-    for point in points.drain(..) {
+    for point in points {
         if unique
             .last()
-            .is_none_or(|last: &glam::Vec3| last.distance_squared(point) > 1.0e-12)
+            .is_none_or(|last: &glam::Vec3| last.distance_squared(*point) > 1.0e-12)
         {
-            unique.push(point);
+            unique.push(*point);
         }
     }
-    *points = unique;
+    match unique.len() {
+        0 => {}
+        1 => grana_geometry::push_sphere(vertices, indices, unique[0].to_array(), radius, object),
+        _ => {
+            let positions = unique
+                .iter()
+                .map(|point| point.to_array())
+                .collect::<Vec<_>>();
+            let radii = vec![radius; positions.len()];
+            grana_geometry::push_tube(vertices, indices, &positions, &radii, object);
+        }
+    }
 }
 
 fn distance(left: [f32; 3], right: [f32; 3]) -> f64 {

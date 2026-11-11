@@ -8,21 +8,21 @@ pub struct TrackLayout {
 
 impl TrackLayout {
     pub fn of(set: &TrackSet) -> Self {
-        let mut children = vec![Vec::new(); set.len()];
-        let mut roots = Vec::new();
-        for index in 0..set.len() {
-            match set.track(index).and_then(|track| track.parent()) {
-                Some(parent) => children[parent as usize].push(index),
-                None => roots.push(index),
-            }
-        }
+        let mut roots = (0..set.len())
+            .filter(|index| set.parents(*index).next().is_none())
+            .collect::<Vec<_>>();
+        roots.reverse();
+        let mut seen = vec![false; set.len()];
         let mut order = Vec::with_capacity(set.len());
-        let mut stack = roots.iter().rev().copied().collect::<Vec<_>>();
+        let mut stack = roots;
         while let Some(index) = stack.pop() {
-            order.push(index);
-            for child in children[index].iter().rev() {
-                stack.push(*child);
+            if std::mem::replace(&mut seen[index], true) {
+                continue;
             }
+            order.push(index);
+            let mut children = set.children(index).collect::<Vec<_>>();
+            children.reverse();
+            stack.extend(children);
         }
         assert_eq!(
             order.len(),

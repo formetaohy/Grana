@@ -5,7 +5,8 @@ use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::{
-    Frame, Layer, LayerKey, Marker, PickId, Renderer, Requests, SceneFrame, Style, Versions,
+    Frame, Layer, LayerKey, Marker, MarkerChunk, Marks, PickId, Renderer, Requests, SceneFrame,
+    Style, Versions,
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
@@ -199,7 +200,7 @@ fn background(
         step_scale: view.scene.step_scale,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let blank = View {
         target: view.target,
@@ -244,7 +245,7 @@ fn measures_the_convergence_of_a_volume() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -331,7 +332,7 @@ fn streams_and_shades_two_channels() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -415,7 +416,7 @@ fn renders_a_rotated_placement() {
         step_scale: 1.0,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -499,7 +500,7 @@ fn composites_a_mesh_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -555,7 +556,7 @@ fn keeps_a_translucent_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -594,7 +595,7 @@ fn keeps_a_translucent_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: &[],
+        markers: Marks::empty(),
     };
     let view = View {
         target: &view_texture,
@@ -649,7 +650,7 @@ fn clips_an_oriented_region() {
         step_scale: 1.0,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -735,7 +736,7 @@ fn assured_pixels(
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(gpu, pyramid);
     let target = texture(gpu, SIDE);
@@ -884,7 +885,7 @@ fn render_volume(
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(gpu, &pyramid);
     let target = texture(gpu, SIDE);
@@ -1076,7 +1077,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = Renderer::new(
         gpu.device(),
@@ -1136,7 +1137,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let detail = grana_render::residency(&pyramid, &camera, SIDE, Region::none());
     assert_eq!(
@@ -1195,7 +1196,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1316,7 +1317,7 @@ fn reuses_the_history_of_a_still_camera() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1415,7 +1416,7 @@ fn reprojects_the_history_of_a_moving_camera() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1508,7 +1509,7 @@ fn drops_the_history_of_another_shot() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
     let second_channels = channels(&pyramid, &second_transfers);
@@ -1519,7 +1520,7 @@ fn drops_the_history_of_another_shot() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1685,7 +1686,7 @@ fn bare_scene<'a>(versions: Versions, channels: &'a [grana_render::ChannelRow]) 
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     }
 }
 
@@ -1764,7 +1765,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let target = texture(&gpu, SIDE);
     let view = target.create_view(&Default::default());
@@ -1887,7 +1888,7 @@ fn cuts_the_object_surfaces_of_a_slice() {
         step_scale: 0.5,
         styles: &styles,
         layers: &layers,
-        markers: &[],
+        markers: Marks::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1938,6 +1939,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         Marker::new([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
         Marker::new([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
+    let chunks = [MarkerChunk::new(0, markers.to_vec())];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -1945,7 +1947,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &markers,
+        markers: Marks::new(&chunks),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1991,7 +1993,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &[],
+        markers: Marks::empty(),
     };
     let target = texture(&gpu, SIDE);
     let camera = slice_camera(&pyramid, 16);

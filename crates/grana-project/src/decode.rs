@@ -16,9 +16,9 @@ use grana_measure::{
     ColocSettings, ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, MaskEdit, MaskMode,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit, MaskMode,
     MaskTool, RelationFrame, RelationPair, SampleStatistics, Spot, SpotSet, SurfaceSet,
-    SurfaceStatistics, SurfaceTopology, Track, TrackNode, TrackSet,
+    SurfaceStatistics, SurfaceTopology, Track, TrackLink, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -1172,31 +1172,39 @@ impl Decode for TrackSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let frame_interval = positive(reader.f32()?)?;
         let tracks = Vec::<Track>::decode(reader)?;
-        let mut children = vec![0usize; tracks.len()];
-        for (index, track) in tracks.iter().enumerate() {
-            if let Some(parent) = track.parent() {
-                let parent = parent as usize;
-                if parent >= index || tracks[parent].end() >= track.start() {
-                    return Err(FAULT_SHAPE);
-                }
-                children[parent] += 1;
-            }
-        }
-        if children.iter().any(|count| *count != 0 && *count != 2) {
-            return Err(FAULT_SHAPE);
-        }
-        Ok(Self::new(frame_interval, tracks))
+        let links = Vec::<TrackLink>::decode(reader)?;
+        Self::try_with_links(frame_interval, tracks, links).map_err(|_| FAULT_SHAPE)
     }
 }
 
 impl Decode for Track {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let parent = Option::<u32>::decode(reader)?;
         let nodes = Vec::<TrackNode>::decode(reader)?;
-        if nodes.is_empty() || !nodes.windows(2).all(|pair| pair[1].time() > pair[0].time()) {
+        if nodes.is_empty()
+            || !nodes
+                .windows(2)
+                .all(|pair| pair[1].time() == pair[0].time() + 1)
+        {
             return Err(FAULT_SHAPE);
         }
-        Ok(Self::new(parent, nodes))
+        Ok(Self::new(nodes))
+    }
+}
+
+impl Decode for TrackLink {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let parent = reader.u32()?;
+        let child = reader.u32()?;
+        let kind = match reader.u8()? {
+            0 => Link::Gap,
+            1 => Link::Division,
+            2 => Link::Merge,
+            _ => return Err(FAULT_VALUE),
+        };
+        if parent == child {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(Self::new(parent, child, kind))
     }
 }
 

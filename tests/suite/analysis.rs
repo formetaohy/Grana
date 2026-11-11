@@ -10,7 +10,8 @@ use grana_geometry::GeometryStore;
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
-    FilamentParams, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
+    FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet,
+    TrackParams,
 };
 use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
@@ -734,11 +735,20 @@ fn links_motion_and_splits_lineages() {
     builder.push(1, &[[0.5, 0.0, 0.0]]);
     builder.push(2, &[[1.0, 0.0, 0.0], [5.2, 0.0, 0.0]]);
     let set = builder.finish(1.0);
-    assert_eq!(set.len(), 2);
+    assert_eq!(set.len(), 3);
     let moving = set.track_at(2, 0).expect("the moving object is tracked");
     assert_eq!(
         set.track(moving).expect("the track exists").nodes().len(),
         3
+    );
+    assert_eq!(set.links().len(), 1);
+    assert_eq!(set.links()[0].kind(), Link::Gap);
+    assert_eq!(set.parent(2), Some(1));
+    assert_eq!(
+        set.statistics(2)
+            .expect("the gap track holds one node")
+            .frames(),
+        1
     );
 
     let mut builder = TrackBuilder::new(TrackParams::new(0.8, 0, true, 2.0));

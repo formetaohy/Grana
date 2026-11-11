@@ -163,7 +163,7 @@ fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
     let mut edges = Vec::new();
     if let Some(tracks) = set.tracks() {
         let tracks = tracks.set();
-        for track in tracks.tracks() {
+        for (index, track) in tracks.tracks().iter().enumerate() {
             for pair in track.nodes().windows(2) {
                 let source = ids.get(&(pair[0].time(), pair[0].object()));
                 let target = ids.get(&(pair[1].time(), pair[1].object()));
@@ -171,10 +171,11 @@ fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
                     edges.push(Edge::new(*source, *target));
                 }
             }
-            if let Some(parent) = track
-                .parent()
-                .and_then(|parent| tracks.track(parent as usize))
-                && let (Some(source), Some(target)) = (
+            for link in tracks.parents(index) {
+                let Some(parent) = tracks.track(link.parent() as usize) else {
+                    continue;
+                };
+                let ends = (
                     parent
                         .nodes()
                         .last()
@@ -183,9 +184,10 @@ fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
                         .nodes()
                         .first()
                         .and_then(|node| ids.get(&(node.time(), node.object()))),
-                )
-            {
-                edges.push(Edge::new(*source, *target));
+                );
+                if let (Some(source), Some(target)) = ends {
+                    edges.push(Edge::new(*source, *target));
+                }
             }
         }
     }

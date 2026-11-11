@@ -12,6 +12,8 @@ grana-file = { workspace = true }
 grana-text = { workspace = true }
 grana-ui = { workspace = true }
 grana-vector = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

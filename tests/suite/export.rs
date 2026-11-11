@@ -3,7 +3,9 @@ use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
-use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
+use grana_object::{
+    IntensityTable, Link, SampleStatistics, Spot, SpotSet, Track, TrackLink, TrackNode, TrackSet,
+};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
@@ -197,21 +199,16 @@ fn exports_a_track_lineage_as_a_vector_page() {
             ObjectFrame::Spots(SpotSet::new(0, vec![spot], intensities)),
         );
     }
-    let mother = Track::new(
-        None,
-        vec![
-            TrackNode::new(0, 0, [16.0, 64.0, 32.0]),
-            TrackNode::new(1, 0, [17.0, 64.0, 32.0]),
-        ],
-    );
-    let daughter = Track::new(
-        Some(0),
-        vec![
-            TrackNode::new(2, 0, [18.0, 64.0, 32.0]),
-            TrackNode::new(3, 0, [19.0, 64.0, 32.0]),
-        ],
-    );
-    let tracks = TrackSet::new(1.0, vec![mother, daughter]);
+    let mother = Track::new(vec![
+        TrackNode::new(0, 0, [16.0, 64.0, 32.0]),
+        TrackNode::new(1, 0, [17.0, 64.0, 32.0]),
+    ]);
+    let daughter = Track::new(vec![
+        TrackNode::new(2, 0, [18.0, 64.0, 32.0]),
+        TrackNode::new(3, 0, [19.0, 64.0, 32.0]),
+    ]);
+    let links = vec![TrackLink::new(0, 1, Link::Gap)];
+    let tracks = TrackSet::with_links(1.0, vec![mother, daughter], links);
     assert_eq!(grana_object::TrackLayout::of(&tracks).order(), &[0, 1]);
     scene.install_tracks(set, tracks);
     let size = grana_figure::lineage::page_size(2, 960).expect("two tracks fit a page");

@@ -1,4 +1,4 @@
-﻿use std::path::Path;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -317,6 +317,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             write(&folder.join(&file), &export.text())?;
         }
     }
+    let mut pages = Vec::new();
     if scene
         .annotations
         .iter()
@@ -326,7 +327,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             index: task.index,
             label: format!("exporting the intensity profiles of {}", reader.name()),
         });
-        profile::write(&scene, folder, language())?;
+        pages.extend(profile::write(&scene, folder, language())?);
     }
     if task.protocol.coloc().is_some() {
         let channels = scene
@@ -357,11 +358,20 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 &channels[pair.a()],
                 &channels[pair.b()],
                 [tints[pair.a()], tints[pair.b()]],
+                &name,
                 language(),
             );
             grana_page::write_page(&page, &folder.join(format!("{stem}.svg")))?;
+            pages.push(page);
         }
     }
+    grana_page::Recorded::write(
+        &folder.join(super::PAGES),
+        &pages
+            .iter()
+            .map(grana_page::Recorded::of)
+            .collect::<Vec<_>>(),
+    )?;
     if task
         .protocol
         .sets()
@@ -1411,6 +1421,7 @@ fn colocalization(
     x: &str,
     y: &str,
     tints: [[f32; 3]; 2],
+    name: &str,
     language: grana_i18n::Language,
 ) -> grana_chart::Page {
     let series = result.series();
@@ -1418,7 +1429,7 @@ fn colocalization(
     let statistics = result.statistics();
     let manders = statistics.manders();
     let caption = format!(
-        "Pearson {} 路 Overlap {} 路 M1 {} 路 M2 {} 路 p {}",
+        "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
         number(statistics.pearson()),
         number(statistics.overlap()),
         number(manders[0]),
@@ -1433,7 +1444,7 @@ fn colocalization(
         format!("Y: {y}"),
         format!("X: {x}"),
     )
-    .with_summary(caption)
+    .with_summary(format!("{name} · {caption}"))
     .with_language(language);
     grana_chart::Page::Joint(Box::new(grana_chart::Joint::total(
         heading,

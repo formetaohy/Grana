@@ -55,8 +55,8 @@ labels! {
 use crate::messages;
 
 messages! {
-    track_counts(tracks: usize, divisions: usize) => "{tracks} tracks · {divisions} divisions" / "{tracks} 条轨迹 · {divisions} 次分裂";
-    track_summary(tracks: usize, divisions: usize, frames: usize) => "{tracks} tracks · {divisions} divisions · {frames} frames" / "{tracks} 条轨迹 · {divisions} 次分裂 · {frames} 帧";
+    track_counts(tracks: usize, divisions: usize, merges: usize) => "{tracks} tracks · {divisions} divisions · {merges} merges" / "{tracks} 条轨迹 · {divisions} 次分裂 · {merges} 次融合";
+    track_summary(tracks: usize, divisions: usize, merges: usize, frames: usize) => "{tracks} tracks · {divisions} divisions · {merges} merges · {frames} frames" / "{tracks} 条轨迹 · {divisions} 次分裂 · {merges} 次融合 · {frames} 帧";
     frame_count(frames: u32) => "{frames} frames" / "{frames} 帧";
     track_number(track: usize) => "Track #{track}" / "轨迹 #{track}";
     relation_metric(name: &str, field: &str, shift: &str, aggregate: &str) => "{name} {field}{shift} · {aggregate}" / "{name} {field}{shift} · {aggregate}";

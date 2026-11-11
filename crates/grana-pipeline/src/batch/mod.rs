@@ -45,6 +45,8 @@ const COMPARISON: &str = "comparison.svg";
 
 const REPORT: &str = "report.pdf";
 
+const PAGES: &str = "pages.json";
+
 const TREND: &str = "comparison_trend.csv";
 
 const PARTIAL: &str = "partial";
@@ -385,10 +387,20 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         grana_chart::DistributionStyle::Box,
         pipeline::language(),
     );
+    let recorded = plan
+        .datasets
+        .iter()
+        .flat_map(|dataset| {
+            grana_page::Recorded::read(&plan.output.join(dataset.folder()).join(PAGES))
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    if (!pages.is_empty() || !recorded.is_empty())
+        && let Err(detail) = grana_page::write_report(&pages, &recorded, &plan.output.join(REPORT))
+    {
+        let _ = events.send(Event::Failed(detail));
+    }
     if !pages.is_empty() {
-        if let Err(detail) = grana_page::write_pages(&pages, &plan.output.join(REPORT)) {
-            let _ = events.send(Event::Failed(detail));
-        }
         let sheet = grana_chart::Page::Sheet(Box::new(grana_chart::Sheet::new(pages, 2)));
         if let Err(detail) = grana_page::write_page(&sheet, &plan.output.join(COMPARISON)) {
             let _ = events.send(Event::Failed(detail));

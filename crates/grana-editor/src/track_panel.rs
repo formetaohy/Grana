@@ -120,11 +120,17 @@ pub fn entry<'a>(
     if !object.kind().trackable() {
         return grana_ui::column();
     }
-    let counts = object
-        .tracks()
-        .map(|layer| (layer.set().len(), layer.set().divisions()));
+    let counts = object.tracks().map(|layer| {
+        (
+            layer.set().len(),
+            layer.set().divisions(),
+            layer.set().merges(),
+        )
+    });
     let detail = match counts {
-        Some((tracks, divisions)) => grana_i18n::track::track_counts(language, tracks, divisions),
+        Some((tracks, divisions, merges)) => {
+            grana_i18n::track::track_counts(language, tracks, divisions, merges)
+        }
         None => grana_i18n::track::not_tracked_yet(language).to_string(),
     };
     let selected = state.scene.selected_track(set);
@@ -320,6 +326,7 @@ fn header<'a>(
     let tracking = view::progress(state.jobs, Job::Track(id));
     let detected = object.detected();
     let divisions = object.tracks().map_or(0, |layer| layer.set().divisions());
+    let merges = object.tracks().map_or(0, |layer| layer.set().merges());
     let tracks = object.tracks().map_or(0, |layer| layer.set().len());
     let joining = state.workspace.join.is_some();
     let language = ctx.language();
@@ -370,7 +377,7 @@ fn header<'a>(
         set_combo,
         view::caption(
             ctx,
-            &grana_i18n::track::track_summary(language, tracks, divisions, detected),
+            &grana_i18n::track::track_summary(language, tracks, divisions, merges, detected),
         ),
     ];
     if joining {
@@ -681,20 +688,21 @@ fn lineage<'a>(
                 } else {
                     Color::from_rgb_f32(colors.get(*index).copied().unwrap_or([0.6, 0.6, 0.6]))
                 };
-                if let Some(parent) = track.parent() {
-                    let parent = parent as usize;
-                    if let Some(parent_track) = set.track(parent) {
-                        let parent_end = info.rect.min.x
-                            + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
-                                * info.rect.width();
-                        let parent_y = info.rect.min.y + lane_of[parent] as f32 * ROW + ROW * 0.5;
-                        painter.segment(
-                            Vec2::new(parent_end, parent_y),
-                            Vec2::new(start, y),
-                            1.0,
-                            tint.with_alpha(0.35),
-                        );
-                    }
+                for link in set.parents(*index) {
+                    let parent = link.parent() as usize;
+                    let Some(parent_track) = set.track(parent) else {
+                        continue;
+                    };
+                    let parent_end = info.rect.min.x
+                        + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
+                            * info.rect.width();
+                    let parent_y = info.rect.min.y + lane_of[parent] as f32 * ROW + ROW * 0.5;
+                    painter.segment(
+                        Vec2::new(parent_end, parent_y),
+                        Vec2::new(start, y),
+                        1.0,
+                        tint.with_alpha(0.35),
+                    );
                 }
                 painter.segment(
                     Vec2::new(start, y),
@@ -847,7 +855,7 @@ fn summary<'a>(
         return grana_ui::column();
     };
     let statistics = track.statistics(set.frame_interval());
-    let parent = track.parent().map_or_else(
+    let parent = set.parent(index).map_or_else(
         || grana_i18n::track::root(language).to_string(),
         |parent| format!("#{}", parent + 1),
     );
@@ -868,7 +876,7 @@ fn summary<'a>(
         &grana_i18n::track::track_number(language, index + 1),
         Some(&detail),
     );
-    let parented = track.parent().is_some();
+    let parented = set.parents(index).next().is_some();
     let first = track
         .nodes()
         .first()

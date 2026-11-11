@@ -1,12 +1,16 @@
 use glam::Vec3;
 use grana_display::{Camera, Shading};
-use grana_render::{ChannelRow, Digest, Layer, LayerKey, Marker, SceneFrame, Style, Versions};
+use grana_render::{
+    ChannelRow, Digest, Layer, LayerKey, Marker, MarkerChunk, Marks, SceneFrame, Style, Versions,
+};
 use grana_scene::{Item, ObjectFrame, Scene, Selection};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
+const SEED_PART: u64 = 0;
+const DETECTION_PART: u64 = 1;
 const PIXEL_TRIANGLE_AREA: f32 = 4.0;
 const MINIMUM_TARGET: f32 = 512.0;
 
@@ -21,7 +25,7 @@ pub struct RenderedScene {
     pub channels: Vec<ChannelRow>,
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
-    pub markers: Vec<Marker>,
+    pub markers: Vec<MarkerChunk>,
     pub style_ids: Vec<Selection>,
     pub marker_ids: Vec<Option<Selection>>,
     pub shading: Shading,
@@ -37,7 +41,7 @@ impl RenderedScene {
             step_scale: self.step_scale,
             styles: &self.styles,
             layers: &self.layers,
-            markers: &self.markers,
+            markers: Marks::new(&self.markers),
         }
     }
 }
@@ -145,13 +149,20 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 .map_or(u64::MAX, |tracks| tracks.revision().raw()),
         );
         objects.mix(wanted as u64);
+        let mut seeded = Vec::new();
         for seed in scene.seeds(set.id()) {
             let [x, y, z] = *seed;
             objects.real(x);
             objects.real(y);
             objects.real(z);
-            markers.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
+            seeded.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
             marker_ids.push(None);
+        }
+        if !seeded.is_empty() {
+            markers.push(MarkerChunk::new(
+                marker_key(set.id().raw(), SEED_PART),
+                seeded,
+            ));
         }
         let Some(frame) = set.frame(scene.time()) else {
             continue;
@@ -164,6 +175,7 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 .unwrap_or_else(|| set.color())
         };
         if let Some(spots) = frame.spots() {
+            let mut detected = Vec::new();
             for (index, spot) in spots.spots().iter().enumerate() {
                 if !set.visible_object(scene.time(), index) {
                     continue;
@@ -184,11 +196,17 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 appearance.real(green);
                 appearance.real(blue);
                 appearance.real(set.opacity());
-                markers.push(Marker::new(spot.center(), radius, tint, set.opacity()));
+                detected.push(Marker::new(spot.center(), radius, tint, set.opacity()));
                 marker_ids.push(Some(Selection {
                     set: set.id(),
                     item: Item::Object(index),
                 }));
+            }
+            if !detected.is_empty() {
+                markers.push(MarkerChunk::new(
+                    marker_key(set.id().raw(), DETECTION_PART),
+                    detected,
+                ));
             }
         }
         let (geometry, level) = match frame {
@@ -298,6 +316,13 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
+}
+
+fn marker_key(set: u64, part: u64) -> u64 {
+    let mut key = Digest::new();
+    key.mix(set);
+    key.mix(part);
+    key.finish()
 }
 
 fn triangle_target(surfaces: &grana_object::SurfaceSet, lens: Lens<'_>) -> usize {

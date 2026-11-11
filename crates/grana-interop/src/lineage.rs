@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use grana_object::{Spot, Track, TrackNode, TrackSet};
+use grana_object::{Spot, TrackSet};
 
 use crate::error::Error;
 
@@ -112,7 +112,7 @@ impl Lineage {
         }
         edges.sort_by_key(|edge| (edge.source, edge.target));
         edges.dedup();
-        let mut parents: HashMap<u64, u64> = HashMap::with_capacity(edges.len());
+        let mut parents: HashMap<u64, Vec<u64>> = HashMap::with_capacity(edges.len());
         for edge in &edges {
             let source = *slots.get(&edge.source).ok_or_else(|| Error::Format {
                 detail: format!("the link starts at the unknown spot {}", edge.source),
@@ -133,14 +133,13 @@ impl Lineage {
                     ),
                 });
             }
-            if let Some(previous) = parents.insert(edge.target, edge.source) {
+            let previous = parents.entry(edge.target).or_default();
+            if previous.len() == 2 {
                 return Err(Error::Format {
-                    detail: format!(
-                        "the spot {} follows both {previous} and {}",
-                        edge.target, edge.source
-                    ),
+                    detail: format!("the spot {} follows more than two spots", edge.target),
                 });
             }
+            previous.push(edge.source);
         }
         Ok(Self { detections, edges })
     }
@@ -184,94 +183,26 @@ impl Lineage {
     }
 
     pub fn tracks(&self, frame_interval: f32) -> Result<TrackSet, Error> {
-        let n = self.detections.len();
-        let mut slots: HashMap<u64, usize> = HashMap::with_capacity(n);
-        for (slot, detection) in self.detections.iter().enumerate() {
-            slots.insert(detection.id, slot);
-        }
-        let mut objects = vec![0usize; n];
+        let mut keys: HashMap<u64, [u32; 2]> = HashMap::with_capacity(self.detections.len());
         let mut order: HashMap<u32, usize> = HashMap::new();
-        for (slot, detection) in self.detections.iter().enumerate() {
+        let mut nodes = Vec::with_capacity(self.detections.len());
+        for detection in &self.detections {
             let ordinal = order.entry(detection.time).or_insert(0);
-            objects[slot] = *ordinal;
+            keys.insert(detection.id, [detection.time, *ordinal as u32]);
+            nodes.push((detection.time, *ordinal, detection.position));
             *ordinal += 1;
         }
-        let mut successors = vec![Vec::new(); n];
-        let mut predecessors = vec![None; n];
-        for edge in &self.edges {
-            let source = slots[&edge.source];
-            let target = slots[&edge.target];
-            successors[source].push(target);
-            predecessors[target] = Some(source);
-        }
-        for (slot, next) in successors.iter().enumerate() {
-            if next.len() > 2 {
-                return Err(Error::Format {
-                    detail: format!(
-                        "the spot {} links to {} daughters",
-                        self.detections[slot].id,
-                        next.len()
-                    ),
-                });
-            }
-        }
-        let mut tracks: Vec<Track> = Vec::new();
-        let mut visited = vec![false; n];
-        let mut pending = predecessors
+        let edges = self
+            .edges
             .iter()
-            .enumerate()
-            .filter(|(_, previous)| previous.is_none())
-            .map(|(slot, _)| (slot, None))
+            .map(|edge| (keys[&edge.source], keys[&edge.target]))
             .collect::<Vec<_>>();
-        pending.reverse();
-        while let Some((start, parent)) = pending.pop() {
-            let mut nodes = Vec::new();
-            let mut current = start;
-            let mut daughters = Vec::new();
-            loop {
-                if visited[current] {
-                    return Err(Error::Format {
-                        detail: format!(
-                            "the spot {} belongs to two tracks",
-                            self.detections[current].id
-                        ),
-                    });
-                }
-                visited[current] = true;
-                let detection = self.detections[current];
-                nodes.push(TrackNode::new(
-                    detection.time,
-                    objects[current],
-                    detection.position,
-                ));
-                match successors[current].as_slice() {
-                    [] => break,
-                    [only] => current = *only,
-                    [first, second] => {
-                        daughters = vec![*first, *second];
-                        break;
-                    }
-                    _ => unreachable!("a spot links to at most two daughters"),
-                }
-            }
-            let index = tracks.len() as u32;
-            tracks.push(Track::new(parent, nodes));
-            daughters.reverse();
-            for daughter in daughters {
-                pending.push((daughter, Some(index)));
-            }
-        }
-        if let Some(slot) = visited.iter().position(|visited| !visited) {
-            return Err(Error::Format {
-                detail: format!(
-                    "the spot {} closes a cycle instead of following a track",
-                    self.detections[slot].id
-                ),
-            });
-        }
-        TrackSet::try_new(frame_interval, tracks).map_err(|detail| Error::Format { detail })
+        TrackSet::linked(frame_interval, &nodes, &edges)
+            .map_err(|detail| Error::Format { detail })?
+            .ok_or_else(|| Error::Format {
+                detail: "the lineage holds no spot to track".to_string(),
+            })
     }
-
     pub fn track_paths(&self, frame_interval: f32) -> Result<Vec<TrackPath>, Error> {
         let set = self.tracks(frame_interval)?;
         let mut ids = HashMap::with_capacity(self.detections.len());
@@ -281,12 +212,12 @@ impl Lineage {
             ids.insert((detection.time, *ordinal), detection.id);
             *ordinal += 1;
         }
-        Ok(set
-            .tracks()
-            .iter()
-            .map(|track| TrackPath {
-                parent: track.parent().map(|parent| parent as usize),
-                nodes: track
+        Ok((0..set.len())
+            .map(|index| TrackPath {
+                parent: set.parent(index),
+                nodes: set
+                    .track(index)
+                    .expect("the track exists")
                     .nodes()
                     .iter()
                     .map(|node| ids[&(node.time(), node.object())])

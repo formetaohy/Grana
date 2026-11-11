@@ -3707,6 +3707,8 @@ dependencies = [
  "grana-text",
  "grana-ui",
  "grana-vector",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,12 +1,11 @@
 use glam::Vec3;
-use grana_object::{Track, TrackNode, TrackSet};
+use grana_object::{Link, Track, TrackLink, TrackNode, TrackSet};
 
 use crate::assignment::{self, rejected};
 use grana_object::TrackParams;
 
 struct Segment {
     nodes: Vec<TrackNode>,
-    parent: Option<usize>,
     closed: bool,
 }
 
@@ -36,6 +35,7 @@ struct Division {
 pub struct TrackBuilder {
     params: TrackParams,
     segments: Vec<Segment>,
+    links: Vec<(usize, usize, Link)>,
     time: Option<u32>,
 }
 
@@ -44,6 +44,7 @@ impl TrackBuilder {
         Self {
             params,
             segments: Vec::new(),
+            links: Vec::new(),
             time: None,
         }
     }
@@ -79,13 +80,13 @@ impl TrackBuilder {
         for division in divisions {
             self.segments[division.parent].closed = true;
             self.push_segment(
-                Some(division.parent),
+                Some((division.parent, Link::Division)),
                 time,
                 division.first,
                 centroids[division.first],
             );
             self.push_segment(
-                Some(division.parent),
+                Some((division.parent, Link::Division)),
                 time,
                 division.second,
                 centroids[division.second],
@@ -95,9 +96,21 @@ impl TrackBuilder {
             let Some(detection) = matches[row] else {
                 continue;
             };
-            self.segments[index]
-                .nodes
-                .push(TrackNode::new(time, detection, centroids[detection]));
+            if self.segments[index].last_time() + 1 == time {
+                self.segments[index].nodes.push(TrackNode::new(
+                    time,
+                    detection,
+                    centroids[detection],
+                ));
+            } else {
+                self.segments[index].closed = true;
+                self.push_segment(
+                    Some((index, Link::Gap)),
+                    time,
+                    detection,
+                    centroids[detection],
+                );
+            }
         }
         for (detection, used) in used.into_iter().enumerate() {
             if !used {
@@ -110,9 +123,14 @@ impl TrackBuilder {
         let tracks = self
             .segments
             .into_iter()
-            .map(|segment| Track::new(segment.parent.map(|parent| parent as u32), segment.nodes))
-            .collect();
-        TrackSet::new(frame_interval, tracks)
+            .map(|segment| Track::new(segment.nodes))
+            .collect::<Vec<_>>();
+        let links = self
+            .links
+            .into_iter()
+            .map(|(parent, child, kind)| TrackLink::new(parent as u32, child as u32, kind))
+            .collect::<Vec<_>>();
+        TrackSet::with_links(frame_interval, tracks, links)
     }
 
     fn close_expired(&mut self, time: u32) {
@@ -272,14 +290,17 @@ impl TrackBuilder {
 
     fn push_segment(
         &mut self,
-        parent: Option<usize>,
+        parent: Option<(usize, Link)>,
         time: u32,
         object: usize,
         centroid: [f32; 3],
     ) {
+        let index = self.segments.len();
+        if let Some((parent, kind)) = parent {
+            self.links.push((parent, index, kind));
+        }
         self.segments.push(Segment {
             nodes: vec![TrackNode::new(time, object, centroid)],
-            parent,
             closed: false,
         });
     }

@@ -1,10 +1,10 @@
 mod algorithm;
 mod anchor;
 mod filament;
-mod graph;
 mod intensity;
 mod label;
 mod layout;
+mod lineage;
 mod mask;
 mod mask_edit;
 mod params;
@@ -32,4 +32,4 @@ pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
     SurfaceTopology, TopologyInfo,
 };
-pub use track::{Track, TrackNode, TrackSet, TrackStatistics};
+pub use track::{Link, Track, TrackLink, TrackNode, TrackSet, TrackStatistics};

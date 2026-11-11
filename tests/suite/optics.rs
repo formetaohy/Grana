@@ -1,6 +1,6 @@
 use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
-use grana_render::{ChannelRow, Frame, Marker, Renderer, Requests, SceneFrame};
+use grana_render::{ChannelRow, Frame, Marker, MarkerChunk, Marks, Renderer, Requests, SceneFrame};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
@@ -61,6 +61,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             1.0,
         ),
     ];
+    let chunks = [MarkerChunk::new(0, markers)];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -68,7 +69,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: &markers,
+        markers: Marks::new(&chunks),
     };
     let mut render = |camera: &Camera| {
         let frame = Frame {

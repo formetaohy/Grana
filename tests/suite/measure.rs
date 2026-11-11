@@ -431,53 +431,35 @@ fn spots() -> SpotSet {
 }
 
 fn tracks() -> TrackSet {
-    let first = Track::new(
-        None,
-        vec![
-            TrackNode::new(0, 0, [1.0, 2.0, 3.0]),
-            TrackNode::new(1, 0, [1.5, 2.0, 3.0]),
-        ],
-    );
-    let second = Track::new(
-        None,
-        vec![
-            TrackNode::new(0, 1, [4.0, 5.0, 6.0]),
-            TrackNode::new(1, 1, [4.0, 5.0, 6.5]),
-        ],
-    );
+    let first = Track::new(vec![
+        TrackNode::new(0, 0, [1.0, 2.0, 3.0]),
+        TrackNode::new(1, 0, [1.5, 2.0, 3.0]),
+    ]);
+    let second = Track::new(vec![
+        TrackNode::new(0, 1, [4.0, 5.0, 6.0]),
+        TrackNode::new(1, 1, [4.0, 5.0, 6.5]),
+    ]);
     TrackSet::new(1.0, vec![first, second])
 }
 
 #[test]
 fn edits_a_lineage_between_divisions_and_parents() {
-    let mother = Track::new(
-        None,
-        vec![
-            TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
-            TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
-        ],
-    );
-    let left = Track::new(
-        None,
-        vec![
-            TrackNode::new(2, 1, [2.0, 0.0, 0.0]),
-            TrackNode::new(3, 1, [3.0, 0.0, 0.0]),
-        ],
-    );
-    let right = Track::new(
-        None,
-        vec![
-            TrackNode::new(2, 2, [2.0, 1.0, 0.0]),
-            TrackNode::new(3, 2, [3.0, 1.0, 0.0]),
-        ],
-    );
-    let later = Track::new(
-        None,
-        vec![
-            TrackNode::new(4, 3, [4.0, 0.0, 0.0]),
-            TrackNode::new(5, 3, [5.0, 0.0, 0.0]),
-        ],
-    );
+    let mother = Track::new(vec![
+        TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
+        TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
+    ]);
+    let left = Track::new(vec![
+        TrackNode::new(2, 1, [2.0, 0.0, 0.0]),
+        TrackNode::new(3, 1, [3.0, 0.0, 0.0]),
+    ]);
+    let right = Track::new(vec![
+        TrackNode::new(2, 2, [2.0, 1.0, 0.0]),
+        TrackNode::new(3, 2, [3.0, 1.0, 0.0]),
+    ]);
+    let later = Track::new(vec![
+        TrackNode::new(4, 3, [4.0, 0.0, 0.0]),
+        TrackNode::new(5, 3, [5.0, 0.0, 0.0]),
+    ]);
     let set = TrackSet::new(1.0, vec![mother, left, right, later]);
     assert!(set.can_divide((1, 0), (2, 1), (2, 2)));
     let divided = set
@@ -485,27 +467,27 @@ fn edits_a_lineage_between_divisions_and_parents() {
         .expect("a division joins two daughter tracks");
     assert_eq!(divided.divisions(), 1);
     assert_eq!(divided.children(0).collect::<Vec<_>>(), vec![1, 2]);
-    assert_eq!(divided.track(1).and_then(Track::parent), Some(0));
+    assert_eq!(divided.parent(1), Some(0));
 
     let adopted = divided
         .reparent((4, 3), (3, 1))
         .expect("a root track adopts an earlier end");
-    assert_eq!(adopted.track(3).and_then(Track::parent), Some(1));
+    assert_eq!(adopted.parent(3), Some(1));
     assert_eq!(adopted.divisions(), 1);
     assert_eq!(adopted.children(1).collect::<Vec<_>>(), vec![3]);
 
     let detached = adopted
         .detach((4, 3))
         .expect("an adopted track returns to a lineage start");
-    assert_eq!(detached.track(3).and_then(Track::parent), None);
+    assert_eq!(detached.parent(3), None);
     assert_eq!(detached.divisions(), 1);
 
     let opened = divided
         .detach((2, 2))
         .expect("a division opens into separate lineages");
     assert_eq!(opened.divisions(), 0);
-    assert_eq!(opened.track(2).and_then(Track::parent), None);
-    assert_eq!(opened.track(1).and_then(Track::parent), Some(0));
+    assert_eq!(opened.parent(2), None);
+    assert_eq!(opened.parent(1), Some(0));
 }
 
 #[test]

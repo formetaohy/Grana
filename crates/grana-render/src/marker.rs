@@ -1,6 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, cast_slice};
 use grana_gpu::{InstanceCommands, Table};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BlendState, ColorTargetState, ColorWrites,
@@ -106,10 +107,85 @@ impl Hash for Marker {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MarkerChunk {
+    key: u64,
+    stamp: u64,
+    markers: Vec<Marker>,
+}
+
+impl MarkerChunk {
+    pub fn new(key: u64, markers: Vec<Marker>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        markers.hash(&mut hasher);
+        Self {
+            key,
+            stamp: hasher.finish(),
+            markers,
+        }
+    }
+
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+
+    pub fn stamp(&self) -> u64 {
+        self.stamp
+    }
+
+    pub fn markers(&self) -> &[Marker] {
+        &self.markers
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Marks<'a> {
+    chunks: &'a [MarkerChunk],
+}
+
+impl<'a> Marks<'a> {
+    pub fn empty() -> Self {
+        Self { chunks: &[] }
+    }
+
+    pub fn new(chunks: &'a [MarkerChunk]) -> Self {
+        Self { chunks }
+    }
+
+    pub fn chunks(self) -> &'a [MarkerChunk] {
+        self.chunks
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.chunks.iter().all(|chunk| chunk.markers.is_empty())
+    }
+
+    pub fn len(self) -> usize {
+        self.chunks.iter().map(|chunk| chunk.markers.len()).sum()
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = &'a Marker> {
+        self.chunks.iter().flat_map(|chunk| chunk.markers.iter())
+    }
+
+    pub fn translucent(self) -> bool {
+        self.iter().any(|marker| marker.transparent())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MarkerSlot {
+    key: u64,
+    stamp: u64,
+    offset: usize,
+    len: usize,
+}
+
 pub(crate) struct MarkerPasses {
     markers: Table<Marker>,
     opaque_order: Table<u32>,
     layer_order: Table<u32>,
+    slots: Vec<MarkerSlot>,
     opaque_group: BindGroup,
     layer_group: BindGroup,
     shadow_group: BindGroup,
@@ -364,6 +440,7 @@ impl MarkerPasses {
             markers,
             opaque_order,
             layer_order,
+            slots: Vec::new(),
             opaque_group: groups.opaque_render,
             layer_group: groups.layer_render,
             shadow_group: groups.shadow_render,
@@ -381,16 +458,18 @@ impl MarkerPasses {
         }
     }
 
-    pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, markers: &[Marker]) {
-        if markers.is_empty() {
-            self.count = 0;
+    pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, marks: Marks<'_>) {
+        let chunks = marks.chunks();
+        let total = marks.len();
+        self.count = total as u32;
+        if total == 0 {
+            self.slots.clear();
             return;
         }
-        self.count = markers.len() as u32;
-        let mut stale = self.markers.write(device, queue, markers);
-        stale |= self.opaque_order.reserve(device, markers.len());
-        stale |= self.layer_order.reserve(device, markers.len());
-        if stale {
+        let mut rebuilt = self.markers.reserve(device, total);
+        rebuilt |= self.opaque_order.reserve(device, total);
+        rebuilt |= self.layer_order.reserve(device, total);
+        if rebuilt {
             let groups = groups(
                 device,
                 layouts,
@@ -410,6 +489,30 @@ impl MarkerPasses {
                 &self.args,
             );
         }
+        let mut layout = Vec::with_capacity(chunks.len());
+        let mut offset = 0usize;
+        for chunk in chunks {
+            let len = chunk.markers().len();
+            let settled = !rebuilt
+                && self.slots.iter().any(|slot| {
+                    slot.key == chunk.key()
+                        && slot.stamp == chunk.stamp()
+                        && slot.offset == offset
+                        && slot.len == len
+                });
+            if !settled && len > 0 {
+                let start = (offset * size_of::<Marker>()) as u64;
+                queue.write_buffer(self.markers.buffer(), start, cast_slice(chunk.markers()));
+            }
+            layout.push(MarkerSlot {
+                key: chunk.key(),
+                stamp: chunk.stamp(),
+                offset,
+                len,
+            });
+            offset += len;
+        }
+        self.slots = layout;
     }
 
     pub fn rewind(&self, queue: &Queue) {

@@ -7,13 +7,14 @@ use grana_scene::{Annotation, Scene};
 
 const FALLBACK_TINT: [f32; 3] = [0.72, 0.78, 0.88];
 
-pub(super) fn write(scene: &Scene, folder: &Path, language: Language) -> Result<(), String> {
+pub(super) fn write(scene: &Scene, folder: &Path, language: Language) -> Result<Vec<Page>, String> {
     let tints = scene
         .dataset
         .channels()
         .iter()
         .map(|channel| channel.tint())
         .collect::<Vec<_>>();
+    let mut pages = Vec::new();
     for (index, annotation) in scene.annotations.iter().enumerate() {
         let Some(profile) = annotation.profile() else {
             continue;
@@ -26,10 +27,11 @@ pub(super) fn write(scene: &Scene, folder: &Path, language: Language) -> Result<
         let csv = format!("{stem}.csv");
         std::fs::write(folder.join(&csv), table(profile))
             .map_err(|error| format!("failed to write {csv}: {error}"))?;
-        let page = page(annotation, profile, &tints, language);
+        let page = page(annotation, profile, &tints, scene.dataset.name(), language);
         grana_page::write_page(&page, &folder.join(format!("{stem}.svg")))?;
+        pages.push(page);
     }
-    Ok(())
+    Ok(pages)
 }
 
 fn table(profile: &Profile) -> String {
@@ -52,6 +54,7 @@ fn page(
     annotation: &Annotation,
     profile: &Profile,
     tints: &[[f32; 3]],
+    dataset: &str,
     language: Language,
 ) -> Page {
     let heading = Heading::new(
@@ -59,10 +62,9 @@ fn page(
         grana_i18n::annotation::profile_axis(language),
         grana_i18n::annotation::profile_offset(language),
     )
-    .with_summary(grana_i18n::annotation::profile_span(
-        language,
-        profile.length(),
-        profile.spacing(),
+    .with_summary(format!(
+        "{dataset} · {}",
+        grana_i18n::annotation::profile_span(language, profile.length(), profile.spacing())
     ))
     .with_empty(grana_i18n::annotation::empty_profile(language))
     .with_language(language);

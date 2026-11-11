@@ -40,7 +40,7 @@ impl Renderer {
                 .styles
                 .iter()
                 .any(|style| style.visible() && style.transparent())
-                || scene.markers.iter().any(|marker| marker.transparent()));
+                || scene.markers.translucent());
         let motion = view_motion(camera, viewport, bounds, time, exposure);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);

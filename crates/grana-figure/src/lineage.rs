@@ -159,9 +159,10 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
         let color = Color::from_rgb_f32(lineage.colors[*index]);
         let start = x(track.start());
         let end = x(track.end());
-        if let Some(parent) = track.parent() {
-            let lane_of_parent = layout.lane(parent as usize);
-            if let Some(parent) = lineage.set.track(parent as usize) {
+        for link in lineage.set.parents(*index) {
+            let parent = link.parent() as usize;
+            let lane_of_parent = layout.lane(parent);
+            if let Some(parent) = lineage.set.track(parent) {
                 painter.segment(
                     UiVec2::new(x(parent.end()), y(lane_of_parent)),
                     UiVec2::new(start, y(lane)),

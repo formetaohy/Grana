@@ -9,6 +9,11 @@ use grana_object::{Mask, SpotParams};
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;
 const SIGMA_FLOOR: f32 = 1.0;
+const FIT_REACH: f32 = 1.5;
+const FIT_REACH_LIMIT: i64 = 8;
+const FIT_SAMPLES: f64 = 8.0;
+const FIT_MINIMUM: f64 = 0.5;
+const FIT_MAXIMUM: f64 = 2.0;
 const SPOT_VOXEL_LIMIT: u64 = 1 << 30;
 const CORE_MIN: u32 = 64;
 const CORE_MAX: u32 = 256;
@@ -360,6 +365,23 @@ impl SpotScan {
                 }
             }
         }
+        let mut bucket = Vec::with_capacity(
+            (core[0].end - core[0].start) as usize
+                * (core[1].end - core[1].start) as usize
+                * (core[2].end - core[2].start) as usize,
+        );
+        for z in core[2].clone() {
+            for y in core[1].clone() {
+                for x in core[0].clone() {
+                    let offset = (x as i64 - origin[0]) as usize
+                        + desired[0]
+                            * ((y as i64 - origin[1]) as usize
+                                + desired[1] * (z as i64 - origin[2]) as usize);
+                    bucket.push(self.source[offset]);
+                }
+            }
+        }
+        let (background, _) = crate::local::block_levels(&mut bucket).unwrap_or((0.0, self.span));
         let valid = [0, 1, 2].map(|axis| [0, desired[axis]]);
         let valid_x = shrink(&valid, 0, self.truncate[0]);
         blur_axis(
@@ -420,7 +442,7 @@ impl SpotScan {
                                     * (z as usize - core[2].start as usize
                                         + self.halo[2] as usize));
                     let value = self.source[base];
-                    if value <= self.threshold {
+                    if value <= 0.0 {
                         continue;
                     }
                     let mut best = f32::NEG_INFINITY;
@@ -444,6 +466,10 @@ impl SpotScan {
                     if best_index != base {
                         continue;
                     }
+                    let contrast = (self.blurred[base] - background) / self.span;
+                    if contrast < self.threshold {
+                        continue;
+                    }
                     let mut voxel = [x as f32, y as f32, z as f32];
                     for axis in 0..3 {
                         let step = strides[axis];
@@ -458,7 +484,8 @@ impl SpotScan {
                     if roi.is_some_and(|roi| !roi.contains(center)) {
                         continue;
                     }
-                    spots.push(Spot::new(center, self.radius, value));
+                    let radius = self.fit_radius(&origin, &desired, &response, voxel, background);
+                    spots.push(Spot::new(center, radius, contrast.clamp(0.0, 1.0)));
                 }
             }
         }
@@ -529,6 +556,79 @@ impl SpotScan {
                 accumulator
             })
             .collect()
+    }
+
+    fn fit_radius(
+        &self,
+        origin: &[i64; 3],
+        desired: &[usize; 3],
+        response: &Region,
+        voxel: [f32; 3],
+        background: f32,
+    ) -> f32 {
+        let peak = [0, 1, 2].map(|axis| voxel[axis].round() as i64);
+        let reach = [0, 1, 2].map(|axis| {
+            let sigma = (self.sigma_world / self.spacing[axis]).max(MIN_SIGMA);
+            ((FIT_REACH * sigma).ceil() as i64).clamp(1, FIT_REACH_LIMIT)
+        });
+        let center = self.level.voxel_center(voxel);
+        let mut count = 0.0f64;
+        let mut sum = 0.0f64;
+        let mut logs = 0.0f64;
+        let mut squares = 0.0f64;
+        let mut crosses = 0.0f64;
+        for dz in -reach[2]..=reach[2] {
+            let z = peak[2] + dz;
+            let local_z = z - origin[2];
+            if local_z < response[2][0] as i64 || local_z >= response[2][1] as i64 {
+                continue;
+            }
+            for dy in -reach[1]..=reach[1] {
+                let y = peak[1] + dy;
+                let local_y = y - origin[1];
+                if local_y < response[1][0] as i64 || local_y >= response[1][1] as i64 {
+                    continue;
+                }
+                for dx in -reach[0]..=reach[0] {
+                    let x = peak[0] + dx;
+                    let local_x = x - origin[0];
+                    if local_x < response[0][0] as i64 || local_x >= response[0][1] as i64 {
+                        continue;
+                    }
+                    let index = local_x as usize
+                        + desired[0] * (local_y as usize + desired[1] * local_z as usize);
+                    let value = self.blurred[index] - background;
+                    if value <= 0.0 {
+                        continue;
+                    }
+                    let sample = self.level.voxel_center([x as f32, y as f32, z as f32]);
+                    let squared = (0..3)
+                        .map(|axis| f64::from(sample[axis] - center[axis]).powi(2))
+                        .sum::<f64>();
+                    let logarithm = f64::from(value.ln());
+                    count += 1.0;
+                    sum += squared;
+                    logs += logarithm;
+                    squares += squared * squared;
+                    crosses += squared * logarithm;
+                }
+            }
+        }
+        let denominator = count * squares - sum * sum;
+        if count < FIT_SAMPLES || denominator.abs() <= 1.0e-12 {
+            return self.radius;
+        }
+        let slope = (count * crosses - sum * logs) / denominator;
+        if slope >= 0.0 {
+            return self.radius;
+        }
+        let fitted = -0.5 / slope - f64::from(self.sigma_world) * f64::from(self.sigma_world);
+        if fitted <= 0.0 {
+            return self.radius;
+        }
+        let diameter = FWHM_PER_SIGMA as f64 * fitted.sqrt();
+        let nominal = 2.0 * f64::from(self.radius);
+        (0.5 * diameter.clamp(FIT_MINIMUM * nominal, FIT_MAXIMUM * nominal)) as f32
     }
 
     fn core(&self, index: usize) -> [Range<u32>; 3] {
