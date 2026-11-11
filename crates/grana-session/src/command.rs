@@ -24,7 +24,6 @@ pub enum Command {
     OpenPath(PathBuf),
     OpenRemote(String),
     OpenRecent(usize),
-    OpenDemo,
     RecoverAnalysis,
     DiscardAnalysis,
     OpenProject,
@@ -589,10 +588,8 @@ impl Command {
                 | Self::OpenPath(_)
                 | Self::OpenRemote(_)
                 | Self::OpenRecent(_)
-                | Self::OpenDemo
                 | Self::OpenProject
                 | Self::RecoverAnalysis
-                | Self::DiscardAnalysis
         )
     }
 

@@ -6,7 +6,6 @@ mod loader;
 mod recent;
 mod recipe;
 mod recovery;
-mod sample;
 mod session;
 mod task;
 mod transfer;

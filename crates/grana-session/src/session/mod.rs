@@ -48,7 +48,6 @@ use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::recovery::Recovery;
-use crate::sample;
 use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{

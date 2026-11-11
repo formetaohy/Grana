@@ -169,14 +169,10 @@ impl App {
         let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
-        match self.startup.take() {
-            None => {
-                if self.capture.is_some() {
-                    self.session.open_sample();
-                }
-            }
-            Some(target) if grana_session::is_remote(&target) => self.session.begin_remote(target),
-            Some(target) => {
+        if let Some(target) = self.startup.take() {
+            if grana_session::is_remote(&target) {
+                self.session.begin_remote(target);
+            } else {
                 let path = PathBuf::from(target);
                 if path
                     .extension()

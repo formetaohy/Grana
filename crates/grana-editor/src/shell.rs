@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
-    Align, Border, BuildContext, Corners, Edges, Element, Fill, GlassStyle, Icon, Key, Layer,
-    Length, Level, Rect, Role, Shadow, TextStyle, TypeStyle,
+    Align, BuildContext, Corners, Edges, Element, GlassStyle, Icon, Key, Layer, Length, Level,
+    Rect, Role, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -16,7 +16,6 @@ const STATE_HEIGHT: f32 = 24.0;
 const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 38.0;
 const RECOVERY_HEIGHT: f32 = 76.0;
-const DEMO_HEIGHT: f32 = 68.0;
 const LANGUAGE_HEIGHT: f32 = 28.0;
 
 struct Status {
@@ -75,8 +74,6 @@ pub(crate) fn view<'a>(
         + button
         + recovered
         + CARD_GAP
-        + DEMO_HEIGHT
-        + CARD_GAP
         + LANGUAGE_HEIGHT
         + recents;
     let rect = Rect::from_min_size(
@@ -134,7 +131,6 @@ pub(crate) fn view<'a>(
             .press(Message::Command(Command::OpenProject)),
         ]),
     );
-    children.push(demo(ctx));
     children.push(language_switch(ctx));
     children.push(recent_block(ctx, view));
     let card = grana_ui::column()
@@ -263,95 +259,6 @@ fn actions<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     )
     .named("shell.open.image")
     .press(Message::Command(Command::OpenImage))
-}
-
-fn demo<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let accent = palette.accent;
-    let language = ctx.language();
-    let title = grana_i18n::shell::synthetic_fluorescence(language);
-    let detail = grana_i18n::shell::demo_detail(language);
-    let action = grana_i18n::shell::open_demo(language);
-    let tooltip = grana_i18n::shell::open_demo_tooltip(language);
-    let title_style = TextStyle::new(theme.font(Level::Headline).medium(), palette.text_primary);
-    let detail_style =
-        TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating();
-    let action_style = TextStyle::new(
-        TypeStyle {
-            tracking: 0.7,
-            ..TypeStyle::new(10.0, 600.0, 14.0)
-        },
-        accent,
-    )
-    .aligned(Align::End);
-    grana_ui::canvas(Length::Fill, DEMO_HEIGHT, move |painter, info| {
-        let rect = info.rect;
-        let engaged = info.hover.max(info.press);
-        painter.outlined(
-            rect,
-            Corners::all(14.0),
-            Fill::Solid(accent.with_alpha(0.05 + 0.05 * engaged)),
-            Border {
-                width: 1.0,
-                color: accent.with_alpha(0.16 + 0.22 * engaged),
-            },
-            Shadow::NONE,
-        );
-        let tile = Rect::from_center_size(
-            Vec2::new(rect.min.x + 34.0, rect.center().y),
-            Vec2::splat(40.0),
-        );
-        painter.rect(tile, Corners::all(12.0), accent.with_alpha(0.16));
-        grana_ui::icon::paint(
-            Icon::Sparkles,
-            painter,
-            tile.center(),
-            18.0,
-            accent.lerp(palette.text_primary, 0.35 * engaged),
-            1.6,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 62.0, rect.min.y + 12.0),
-                Vec2::new(rect.max.x - 78.0, rect.min.y + 38.0),
-            ),
-            title,
-            title_style,
-            Align::Center,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 62.0, rect.min.y + 35.0),
-                Vec2::new(rect.max.x - 104.0, rect.max.y - 10.0),
-            ),
-            detail,
-            detail_style,
-            Align::Center,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.max.x - 92.0, rect.min.y),
-                Vec2::new(rect.max.x - 28.0, rect.max.y),
-            ),
-            action,
-            action_style,
-            Align::Center,
-        );
-        grana_ui::icon::paint(
-            Icon::ChevronRight,
-            painter,
-            Vec2::new(rect.max.x - 16.0, rect.center().y),
-            9.0,
-            palette.text_quaternary.lerp(accent, 0.4 + 0.6 * engaged),
-            1.5,
-        );
-    })
-    .named("shell.demo")
-    .tooltip(tooltip)
-    .press(Message::Command(Command::OpenDemo))
-    .cursor(grana_ui::Cursor::Pointing)
-    .focus_ring(Corners::all(14.0))
 }
 
 fn language_switch<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {

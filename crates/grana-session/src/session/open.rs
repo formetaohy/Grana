@@ -39,19 +39,6 @@ impl Session {
         self.baseline = self.document_hash();
     }
 
-    pub fn open_sample(&mut self) {
-        self.open_series("synthetic fluorescence", sample::series());
-        let Some(scene) = self.scene.as_mut() else {
-            return;
-        };
-        let staged = sample::stage(scene);
-        for set in [staged.spots, staged.surfaces, staged.filaments] {
-            self.start_detect(set);
-        }
-        self.baseline = None;
-        self.deferred = true;
-    }
-
     pub fn set_capture_factory(&mut self, factory: CaptureFactory) {
         self.capturer = Some(factory);
     }
@@ -223,6 +210,9 @@ impl Session {
             return;
         };
         let Some(source) = self.source_ref() else {
+            self.message = Some(Message::error(
+                "this dataset has no file or remote source to record in a project",
+            ));
             return;
         };
         let Some(fingerprint) = self.fingerprint else {
@@ -274,19 +264,10 @@ impl Session {
     pub(super) fn open_project(&mut self, path: &Path, project: Project) {
         self.message = None;
         match &project.source {
-            ProjectSource::Synthetic { name } => {
-                let name = name.clone();
-                let (source, opened) = Loader::memory(sample::series());
-                self.source = Some(source);
-                self.loading = None;
-                self.pending = Some(Pending {
-                    path: path.to_path_buf(),
-                    project,
-                });
-                self.project = None;
-                self.baseline = None;
-                self.reset();
-                self.open_dataset(Dataset::synthetic(name, opened.pyramid), opened.fingerprint);
+            ProjectSource::Synthetic { .. } => {
+                self.message = Some(Message::error(
+                    "this project refers to an in-memory dataset, which the file does not contain",
+                ));
             }
             ProjectSource::File {
                 path: data, series, ..
@@ -357,7 +338,7 @@ impl Session {
         let scene = self.scene.as_ref()?;
         let name = scene.dataset.name().to_string();
         match scene.dataset.origin() {
-            Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
+            Origin::Synthetic => None,
             Origin::Zarr
             | Origin::Tiff
             | Origin::Czi
