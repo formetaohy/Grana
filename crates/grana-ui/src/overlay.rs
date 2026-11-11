@@ -40,7 +40,6 @@ impl<A: Clone> Ui<A> {
         let focus_visible = self.focus_visible;
         let pointer = self.pointer;
         let size = self.size;
-        let dark = self.theme.dark;
         let mut instances = LayerInstances::default();
         let mut tooltip_rect = None;
         {
@@ -50,7 +49,6 @@ impl<A: Clone> Ui<A> {
                 &mut self.text,
                 &mut self.images,
                 clip,
-                dark,
                 true,
                 None,
             );

@@ -228,12 +228,6 @@ fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
                 .children([apply, remove]),
         );
     }
-    if count == 0 {
-        children.push(view::caption(
-            ctx,
-            grana_i18n::inspector::keep_camera(language),
-        ));
-    }
     view::card(ctx, 6.0, children)
 }
 

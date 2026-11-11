@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use grana_editor::Panel;
 use grana_project::ViewState;
-use grana_ui::{Appearance, Theme};
+use grana_ui::Theme;
 
 use super::{AUTOSAVE_IDLE, AUTOSAVE_INTERVAL, App};
 use crate::preference::Preference;
@@ -11,39 +11,25 @@ impl App {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let key = (self.appearance, self.contrast);
-        if self.themed == Some(key) {
+        let theme = Theme::dark().with_contrast(self.contrast);
+        if *surface.ui.theme() == theme {
             return;
         }
-        self.themed = Some(key);
-        let theme = if self.appearance.dark(self.system_dark) {
-            Theme::dark()
-        } else {
-            Theme::light()
-        };
-        *surface.ui.theme_mut() = theme.with_contrast(self.contrast);
-        surface.window.set_theme(match self.appearance {
-            Appearance::System => None,
-            Appearance::Light => Some(winit::window::Theme::Light),
-            Appearance::Dark => Some(winit::window::Theme::Dark),
-        });
+        *surface.ui.theme_mut() = theme;
         surface.window.request_redraw();
     }
 
     pub(super) fn sync_preference(&mut self) {
-        if self.workspace.appearance == self.appearance
-            && self.workspace.language == self.language
+        if self.workspace.language == self.language
             && self.workspace.contrast == self.contrast
             && self.workspace.reduce_transparency == self.reduce_transparency
         {
             return;
         }
-        self.appearance = self.workspace.appearance;
         self.language = self.workspace.language;
         self.contrast = self.workspace.contrast;
         self.reduce_transparency = self.workspace.reduce_transparency;
         let preference = Preference {
-            appearance: self.appearance,
             language: self.language,
             contrast: self.contrast,
             reduce_transparency: self.reduce_transparency,
@@ -51,7 +37,6 @@ impl App {
         if let Err(detail) = preference.save() {
             self.output = Some(detail);
         }
-        self.themed = None;
         self.sync_theme();
         self.request_redraw();
     }

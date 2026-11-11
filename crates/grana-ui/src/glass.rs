@@ -89,7 +89,13 @@ impl GlassStyle {
     }
 
     pub fn popover() -> Self {
-        Self::regular(Shape::Rounded(24.0), MENU)
+        let mut style = Self::regular(Shape::Rounded(24.0), MENU);
+        style.material = style
+            .material
+            .tint(grana_glass::Color::hex(0x0B1118).with_alpha(0.86));
+        style.material.frost = 28.0;
+        style.material.dim = 0.12;
+        style
     }
 
     pub fn tooltip() -> Self {

@@ -9,7 +9,7 @@ use grana_gpu::Gpu;
 use grana_i18n::Language;
 use grana_scene::Revision;
 use grana_session::{Command, Session};
-use grana_ui::{Appearance, Ui};
+use grana_ui::Ui;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -84,12 +84,9 @@ pub struct App {
     autosave_at: Option<Instant>,
     changed_at: Option<Instant>,
     revision: Revision,
-    appearance: Appearance,
     language: Language,
     contrast: bool,
     reduce_transparency: bool,
-    system_dark: bool,
-    themed: Option<(Appearance, bool)>,
     interacting: bool,
     animating: bool,
 }
@@ -103,7 +100,6 @@ impl App {
         let preference = Preference::load();
         let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
-        workspace.appearance = preference.appearance;
         workspace.language = language;
         workspace.contrast = preference.contrast;
         workspace.reduce_transparency = preference.reduce_transparency;
@@ -139,23 +135,23 @@ impl App {
             autosave_at: None,
             changed_at: None,
             revision: Revision::ZERO,
-            appearance: preference.appearance,
             language,
             contrast: preference.contrast,
             reduce_transparency: preference.reduce_transparency,
-            system_dark: true,
-            themed: None,
             interacting: false,
             animating: false,
         }
     }
 
     pub(super) fn resume(&mut self, event_loop: &ActiveEventLoop) {
+        let icon = winit::window::Icon::from_rgba(grana_brand::icon(256), 256, 256)
+            .expect("the brand mark rasterizes to a window icon");
         let window = Arc::new(
             event_loop
                 .create_window(
                     Window::default_attributes()
                         .with_title("Grana")
+                        .with_window_icon(Some(icon))
                         .with_visible(self.capture.is_none())
                         .with_inner_size(LogicalSize::new(1440.0, 900.0))
                         .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
@@ -164,7 +160,7 @@ impl App {
         );
         let size = window.inner_size();
         window.set_ime_allowed(false);
-        self.system_dark = window.theme() != Some(winit::window::Theme::Light);
+        window.set_theme(Some(winit::window::Theme::Dark));
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
         let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
@@ -191,7 +187,6 @@ impl App {
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
         self.engine = Some(engine);
-        self.themed = None;
         self.sync_theme();
     }
 
@@ -369,13 +364,6 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Moved(_) => {}
-            WindowEvent::ThemeChanged(theme) => {
-                if self.appearance == Appearance::System {
-                    self.system_dark = theme == winit::window::Theme::Dark;
-                    self.themed = None;
-                    self.sync_theme();
-                }
-            }
             WindowEvent::DroppedFile(path) => {
                 self.apply(vec![Command::OpenPath(path)]);
                 self.request_redraw();

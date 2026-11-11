@@ -1,6 +1,5 @@
 use glam::Vec2;
 use grana_session::Command;
-use grana_ui::glass::GlassStyle;
 use grana_ui::popover::{
     action_row as action_row_widget, menu_row as menu_row_widget, separator as separator_widget,
 };
@@ -49,15 +48,27 @@ pub fn card_title<'a>(
             palette.text_secondary,
             1.5,
         );
+        let detail_width = detail
+            .as_ref()
+            .map_or(0.0, |detail| painter.measure(detail, detail_style).x);
+        let title_right = rect.max.x
+            - if detail.is_some() {
+                detail_width + 10.0
+            } else {
+                0.0
+            };
         painter.text_in(
-            Rect::from_min_max(Vec2::new(rect.min.x + 20.0, rect.min.y), rect.max),
+            Rect::from_min_max(
+                Vec2::new(rect.min.x + 20.0, rect.min.y),
+                Vec2::new(title_right.max(rect.min.x + 20.0), rect.max.y),
+            ),
             &title,
-            title_style,
+            title_style.truncating(),
             Align::Center,
         );
         if let Some(detail) = &detail {
             painter.text_in(
-                Rect::from_min_max(Vec2::new(rect.min.x + 96.0, rect.min.y), rect.max),
+                Rect::from_min_max(Vec2::new(rect.max.x - detail_width, rect.min.y), rect.max),
                 detail,
                 detail_style,
                 Align::Center,
@@ -101,11 +112,28 @@ pub fn section_header<'a>(
     let title = title.to_uppercase();
     let detail = detail.map(str::to_string);
     grana_ui::canvas(Length::Fill, 22.0, move |painter, info| {
-        painter.text_in(info.rect, &title, style, Align::Center);
+        let detail_width = detail
+            .as_ref()
+            .map_or(0.0, |detail| painter.measure(detail, detail_style).x);
+        let title_right = info.rect.max.x
+            - if detail.is_some() {
+                detail_width + 10.0
+            } else {
+                0.0
+            };
+        painter.text_in(
+            Rect::from_min_max(
+                info.rect.min,
+                Vec2::new(title_right.max(info.rect.min.x), info.rect.max.y),
+            ),
+            &title,
+            style.truncating(),
+            Align::Center,
+        );
         if let Some(detail) = &detail {
             painter.text_in(
                 Rect::from_min_max(
-                    Vec2::new(info.rect.min.x + 64.0, info.rect.min.y),
+                    Vec2::new(info.rect.max.x - detail_width, info.rect.min.y),
                     info.rect.max,
                 ),
                 detail,
@@ -168,19 +196,30 @@ fn disclosure_header<'a>(
                 .lerp(palette.text_primary, info.hover),
             1.5,
         );
+        let detail_width = detail
+            .as_ref()
+            .map_or(0.0, |detail| painter.measure(detail, detail_style).x);
+        let detail_left = rect.max.x - 20.0 - detail_width;
+        let title_right = rect.max.x
+            - 20.0
+            - if detail.is_some() {
+                detail_width + 8.0
+            } else {
+                0.0
+            };
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(rect.min.x + 20.0, rect.min.y),
-                Vec2::new(rect.max.x - 20.0, rect.max.y),
+                Vec2::new(title_right.max(rect.min.x + 20.0), rect.max.y),
             ),
             &title,
-            title_style,
+            title_style.truncating(),
             Align::Center,
         );
         if let Some(detail) = &detail {
             painter.text_in(
                 Rect::from_min_max(
-                    Vec2::new(rect.min.x + 96.0, rect.min.y),
+                    Vec2::new(detail_left.max(rect.min.x + 20.0), rect.min.y),
                     Vec2::new(rect.max.x - 20.0, rect.max.y),
                 ),
                 detail,
@@ -343,30 +382,6 @@ pub fn icon_button<'a>(
     grana_ui::widget::icon_button(symbol, size, role, tooltip)
         .named(key)
         .press(message)
-}
-
-pub fn glass_icon_button<'a>(
-    _ctx: &mut BuildContext<'_, Message>,
-    key: &str,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-    tooltip: &str,
-    message: Message,
-) -> View<'a> {
-    grana_ui::widget::glass_icon_button(None, symbol, size, style, tooltip)
-        .named(key)
-        .press(message)
-}
-
-pub fn glass_icon_button_disabled<'a>(
-    _ctx: &mut BuildContext<'_, Message>,
-    key: &str,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-) -> View<'a> {
-    grana_ui::widget::glass_icon_button_disabled(None, symbol, size, style).named(key)
 }
 
 #[expect(clippy::too_many_arguments)]

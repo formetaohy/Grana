@@ -1,0 +1,13 @@
+[package]
+name = "grana-brand"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-ui = { workspace = true }
+
+[lints]
+workspace = true

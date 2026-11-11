@@ -52,5 +52,5 @@ pub use record::Mark;
 pub use render::Figure;
 pub use style::{Border, Fill, Shadow, State, Surface};
 pub use text::{Align, Text, TextLayout, TextStyle};
-pub use theme::{Appearance, Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
+pub use theme::{Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
 pub use ui::{Accessibility, BuildContext, Ui};

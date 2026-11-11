@@ -10,6 +10,7 @@ repository.workspace = true
 arboard = { workspace = true }
 glam = { workspace = true }
 grana-animation = { workspace = true }
+grana-brand = { workspace = true }
 grana-dir = { workspace = true }
 grana-display = { workspace = true }
 grana-editor = { workspace = true }

@@ -143,7 +143,6 @@ impl<'a> Painter<'a> {
         text: &'a mut Text,
         images: &'a mut ImageAtlas,
         clip: Clip,
-        dark: bool,
         vibrancy: bool,
         marks: Option<&'a mut Vec<Mark>>,
     ) -> Self {
@@ -152,7 +151,7 @@ impl<'a> Painter<'a> {
             text,
             images,
             clip,
-            gamma: if dark { 0.86 } else { 1.0 },
+            gamma: 0.86,
             vibrancy,
             marks,
         }

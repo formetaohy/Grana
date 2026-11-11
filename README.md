@@ -1,3 +1,3 @@
 <p align="center">
-  <img src="docs/assets/grana-lockup-dark.svg" width="784" alt="Grana">
+  <img src="docs/assets/grana-mark-badge.svg" width="112" alt="Grana">
 </p>

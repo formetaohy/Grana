@@ -58,26 +58,6 @@ impl TypeStyle {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Appearance {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-impl Appearance {
-    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
-
-    pub fn dark(self, system_dark: bool) -> bool {
-        match self {
-            Self::System => system_dark,
-            Self::Light => false,
-            Self::Dark => true,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub text_primary: Color,
@@ -88,7 +68,6 @@ pub struct Palette {
     pub accent: Color,
     pub accent_hover: Color,
     pub accent_press: Color,
-    pub brand: Color,
     pub danger: Color,
     pub warning: Color,
     pub success: Color,
@@ -114,14 +93,13 @@ impl Palette {
     pub fn dark() -> Self {
         Self {
             text_primary: Color::white_alpha(0.95),
-            text_secondary: Color::white_alpha(0.68),
-            text_tertiary: Color::white_alpha(0.45),
-            text_quaternary: Color::white_alpha(0.26),
+            text_secondary: Color::white_alpha(0.74),
+            text_tertiary: Color::white_alpha(0.52),
+            text_quaternary: Color::white_alpha(0.30),
             text_on_accent: Color::bytes(255, 255, 255),
             accent: Color::bytes(10, 132, 255),
             accent_hover: Color::bytes(64, 156, 255),
             accent_press: Color::bytes(0, 112, 224),
-            brand: Color::bytes(214, 232, 92),
             danger: Color::bytes(255, 69, 58),
             warning: Color::bytes(255, 159, 10),
             success: Color::bytes(48, 209, 88),
@@ -141,39 +119,6 @@ impl Palette {
             hud_border: Color::white_alpha(0.14),
             track: Color::white_alpha(0.18),
             shade: Color::black_alpha(0.30),
-        }
-    }
-
-    pub fn light() -> Self {
-        Self {
-            text_primary: Color::black_alpha(0.92),
-            text_secondary: Color::black_alpha(0.62),
-            text_tertiary: Color::black_alpha(0.42),
-            text_quaternary: Color::black_alpha(0.24),
-            text_on_accent: Color::bytes(255, 255, 255),
-            accent: Color::bytes(0, 122, 255),
-            accent_hover: Color::bytes(51, 149, 255),
-            accent_press: Color::bytes(0, 100, 214),
-            brand: Color::bytes(121, 138, 22),
-            danger: Color::bytes(255, 59, 48),
-            warning: Color::bytes(255, 149, 0),
-            success: Color::bytes(52, 199, 89),
-            separator: Color::black_alpha(0.10),
-            border: Color::black_alpha(0.12),
-            selected: Color::black_alpha(0.12),
-            card: Color::white_alpha(0.46),
-            field: Color::white_alpha(0.60),
-            focus: Color::bytes(0, 122, 255),
-            scrim: Color::rgba(0.0, 0.0, 0.0, 0.35),
-            scene_backdrop: Color::bytes(238, 238, 240),
-            material_fill: Color::black_alpha(0.07),
-            material_hover: Color::black_alpha(0.11),
-            material_press: Color::black_alpha(0.17),
-            material_border: Color::black_alpha(0.10),
-            hud_fill: Color::white_alpha(0.72),
-            hud_border: Color::black_alpha(0.10),
-            track: Color::black_alpha(0.14),
-            shade: Color::black_alpha(0.14),
         }
     }
 
@@ -275,7 +220,6 @@ pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
     pub metrics: Metrics,
-    pub dark: bool,
 }
 
 impl Theme {
@@ -284,16 +228,6 @@ impl Theme {
             palette: Palette::dark(),
             typography: Typography::standard(),
             metrics: Metrics::standard(),
-            dark: true,
-        }
-    }
-
-    pub fn light() -> Self {
-        Self {
-            palette: Palette::light(),
-            typography: Typography::standard(),
-            metrics: Metrics::standard(),
-            dark: false,
         }
     }
 

@@ -101,7 +101,6 @@ labels! {
 
     slice_caption => "A slice view samples one plane orthographically." / "切片视图以正交投影采样单个平面。";
     parallel_caption => "Parallel rays hold one scale across depth." / "平行光线在纵深方向保持同一尺度。";
-    keep_camera => "Keep this camera and timeline." / "保留当前相机与时间轴。";
     slice_help => "One unlit voxel layer; drag pans, scroll zooms, ↑↓ or Ctrl-scroll steps." / "单个无光照体素层；拖动平移，滚轮缩放，↑↓ 或 Ctrl+滚轮逐层切换。";
 }
 

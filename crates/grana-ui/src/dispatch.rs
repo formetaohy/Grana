@@ -375,8 +375,10 @@ impl<A: Clone> Ui<A> {
     fn close_ancestor_popup(&mut self, node: NodeId) {
         let mut current = Some(node);
         while let Some(id) = current {
-            if self.tree.nodes[id].popup_spec.is_some() {
-                self.set_popup(id, false);
+            if let Some(spec) = self.tree.nodes[id].popup_spec {
+                if !spec.persistent {
+                    self.set_popup(id, false);
+                }
                 return;
             }
             current = self.tree.nodes[id].parent;

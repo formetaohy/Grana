@@ -2,7 +2,8 @@ use glam::Vec2;
 use grana_session::Command;
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Rect, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Edges, Element, Icon, Key, Length, Level, Rect, TextStyle,
+    icon,
 };
 
 use crate::message::Message;
@@ -35,16 +36,15 @@ fn navigation<'a>(
     } else {
         grana_i18n::header::hide_sidebar(language)
     };
-    let toggle = crate::view::glass_icon_button(
+    let toggle = chrome_icon_button(
         ctx,
         "sidebar.toggle",
         Icon::Sidebar,
         36.0,
-        GlassStyle::button(),
         tooltip,
         Message::ToggleSidebar,
-    )
-    .glass_group(group);
+        group,
+    );
     let project = project_pill(ctx, state, group);
     let open = open_pill(ctx, group);
     let project_menu = project_menu(ctx);
@@ -58,13 +58,66 @@ fn navigation<'a>(
         .children([toggle, project, open, project_menu, open_menu])
 }
 
+fn settings_menu<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let key = Key::new("settings.menu");
+    let width = 280.0;
+    if !ctx.popup_open(key) {
+        return grana_ui::popover::popup(key, width, std::iter::empty());
+    }
+    let language = ctx.language();
+    let english = grana_i18n::Language::English;
+    let chinese = grana_i18n::Language::Chinese;
+    let contrast = grana_ui::widget::toggle_row(
+        ctx.theme(),
+        grana_i18n::appearance::increase_contrast(language),
+        state.workspace.contrast,
+    )
+    .named("settings.contrast")
+    .on_toggle(Message::SetContrast);
+    let transparency = grana_ui::widget::toggle_row(
+        ctx.theme(),
+        grana_i18n::appearance::reduce_transparency(language),
+        state.workspace.reduce_transparency,
+    )
+    .named("settings.transparency")
+    .on_toggle(Message::SetReduceTransparency);
+    grana_ui::popover::popup(
+        key,
+        width,
+        [
+            crate::view::menu_row(
+                ctx,
+                "settings.language.english",
+                english.label(),
+                language == english,
+                Some(Message::SetLanguage(english)),
+            ),
+            crate::view::menu_row(
+                ctx,
+                "settings.language.chinese",
+                chinese.label(),
+                language == chinese,
+                Some(Message::SetLanguage(chinese)),
+            ),
+            menu_separator(ctx),
+            contrast,
+            transparency,
+        ],
+    )
+    .persistent()
+    .padding(Edges::all(12.0))
+    .gap(6.0)
+}
+
 fn project_pill<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
     group: Key,
 ) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
-    let brand_font = ctx.theme().font(Level::Callout).semibold();
     let project_font = ctx.theme().font(Level::Callout).medium();
     let project = state
         .io
@@ -73,15 +126,16 @@ fn project_pill<'a>(
         .unwrap_or(grana_i18n::common::untitled(ctx.language()))
         .to_string();
     let dirty = state.io.dirty;
-    let measured = ctx
+    let full = ctx
         .measure(&project, TextStyle::new(project_font, Color::WHITE))
-        .x
-        .min(136.0);
-    let width = 80.0 + 10.0 + measured + if dirty { 30.0 } else { 22.0 };
+        .x;
+    let measured = full.min(136.0);
+    let width = 12.0 + measured + if dirty { 12.0 } else { 0.0 } + 22.0;
     let key = Key::new("project.menu");
     let open = ctx.popup_open(key);
     let title = project.clone();
-    grana_ui::canvas(Length::Fixed(width), 36.0, move |painter, info| {
+    let tooltip = (full > measured).then_some(project.as_str());
+    let element = grana_ui::canvas(Length::Fixed(width), 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
         if engaged > 0.01 {
@@ -91,38 +145,11 @@ fn project_pill<'a>(
                 palette.material_fill.amplify(0.6 * engaged),
             );
         }
-        let widths = [6.5, 7.6, 8.7, 9.8, 10.9];
-        let mut y = frame.center().y - 7.4;
-        for bar_width in widths {
-            painter.rect(
-                Rect::from_min_size(Vec2::new(frame.min.x + 12.0, y), Vec2::new(bar_width, 2.0)),
-                Corners::capsule(),
-                palette.brand,
-            );
-            y += 3.2;
-        }
-        painter.text_in(
-            Rect::from_min_size(
-                Vec2::new(frame.min.x + 27.0, frame.min.y),
-                Vec2::new(46.0, frame.height()),
-            ),
-            "Grana",
-            TextStyle::new(brand_font, palette.text_primary),
-            Align::Center,
-        );
-        painter.rect(
-            Rect::from_center_size(
-                Vec2::new(frame.min.x + 78.0, frame.center().y),
-                Vec2::new(1.0, 14.0),
-            ),
-            Corners::ZERO,
-            palette.separator,
-        );
-        let title_left = frame.min.x + 87.0;
+        let title_left = frame.min.x + 12.0;
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(title_left, frame.min.y),
-                Vec2::new(title_left + measured + 2.0, frame.max.y),
+                Vec2::new(title_left + measured, frame.max.y),
             ),
             &title,
             TextStyle::new(
@@ -135,7 +162,7 @@ fn project_pill<'a>(
         if dirty {
             painter.rect(
                 Rect::from_center_size(
-                    Vec2::new(title_left + measured + 8.0, frame.center().y),
+                    Vec2::new(title_left + measured + 7.0, frame.center().y),
                     Vec2::splat(5.0),
                 ),
                 Corners::capsule(),
@@ -155,7 +182,11 @@ fn project_pill<'a>(
     .press(Message::Noop)
     .glass(GlassStyle::button().interactive())
     .glass_group(group)
-    .focus_ring(Corners::capsule())
+    .focus_ring(Corners::capsule());
+    match tooltip {
+        Some(tooltip) => element.tooltip(tooltip),
+        None => element,
+    }
 }
 
 fn open_pill<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Element<'a, Message> {
@@ -238,58 +269,60 @@ fn actions<'a>(
         },
     );
     let undo_element = if undo.is_some() {
-        crate::view::glass_icon_button(
+        chrome_icon_button(
             ctx,
             "undo",
             Icon::Undo,
             36.0,
-            GlassStyle::button(),
             &undo_tooltip,
             Message::Command(Command::Undo),
+            group,
         )
     } else {
-        crate::view::glass_icon_button_disabled(
-            ctx,
-            "undo",
-            Icon::Undo,
-            36.0,
-            GlassStyle::button_disabled(),
-        )
-    }
-    .glass_group(group);
+        chrome_icon_button_disabled(ctx, "undo", Icon::Undo, 36.0, group)
+    };
     let redo_element = if redo.is_some() {
-        crate::view::glass_icon_button(
+        chrome_icon_button(
             ctx,
             "redo",
             Icon::Redo,
             36.0,
-            GlassStyle::button(),
             &redo_tooltip,
             Message::Command(Command::Redo),
+            group,
         )
     } else {
-        crate::view::glass_icon_button_disabled(
-            ctx,
-            "redo",
-            Icon::Redo,
-            36.0,
-            GlassStyle::button_disabled(),
-        )
-    }
-    .glass_group(group);
+        chrome_icon_button_disabled(ctx, "redo", Icon::Redo, 36.0, group)
+    };
     let palette = ctx.theme().palette;
     let pending = state.io.pending > 0 || !state.jobs.is_empty();
-    let fit = crate::view::glass_icon_button(
+    let fit = chrome_icon_button(
         ctx,
         "view.fit",
         Icon::Fit,
         36.0,
-        GlassStyle::button(),
         grana_i18n::header::frame_volume(ctx.language()),
         Message::FitView,
-    )
-    .glass_group(group);
-    let mut children = vec![palette_button(ctx, group), undo_element, redo_element, fit];
+        group,
+    );
+    let settings = chrome_icon_button(
+        ctx,
+        "settings.menu",
+        Icon::Sliders,
+        36.0,
+        grana_i18n::header::settings(ctx.language()),
+        Message::Noop,
+        group,
+    );
+    let settings_popup = settings_menu(ctx, state);
+    let mut children = vec![
+        palette_button(ctx, group),
+        undo_element,
+        redo_element,
+        fit,
+        settings,
+        settings_popup,
+    ];
     if pending {
         let dot_rect = Rect::from_center_size(
             Vec2::new(
@@ -322,16 +355,59 @@ fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Elemen
         .and_then(|spec| spec.shortcut)
         .map_or_else(String::new, |shortcut| shortcut.label());
     let tooltip = grana_i18n::header::search_commands(ctx.language(), &shortcut);
-    crate::view::glass_icon_button(
+    chrome_icon_button(
         ctx,
         "header.palette",
         Icon::Search,
         36.0,
-        GlassStyle::button(),
         &tooltip,
         Message::OpenPalette,
+        group,
     )
+}
+
+fn chrome_icon_button<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    symbol: Icon,
+    size: f32,
+    tooltip: &str,
+    message: Message,
+    group: Key,
+) -> Element<'a, Message> {
+    let palette = ctx.theme().palette;
+    let glyph = (size * 0.5).clamp(11.0, 17.0);
+    grana_ui::canvas(Length::Fixed(size), size, move |painter, info| {
+        let color = palette
+            .text_secondary
+            .lerp(palette.text_primary, info.hover.max(info.press));
+        icon::paint(symbol, painter, info.rect.center(), glyph, color, 1.6);
+    })
+    .named(key)
+    .press(message)
+    .glass(GlassStyle::button().interactive())
     .glass_group(group)
+    .focus_ring(Corners::capsule())
+    .tooltip(tooltip)
+}
+
+fn chrome_icon_button_disabled<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    symbol: Icon,
+    size: f32,
+    group: Key,
+) -> Element<'a, Message> {
+    let color = ctx.theme().palette.text_quaternary;
+    let glyph = (size * 0.5).clamp(11.0, 17.0);
+    grana_ui::canvas(Length::Fixed(size), size, move |painter, info| {
+        icon::paint(symbol, painter, info.rect.center(), glyph, color, 1.6);
+    })
+    .named(key)
+    .enabled(false)
+    .glass(GlassStyle::button_disabled())
+    .glass_group(group)
+    .focus_ring(Corners::capsule())
 }
 
 fn analysis<'a>(

@@ -42,6 +42,7 @@ sha2 = "0.10"
 ureq = "3"
 zstd = "0.13"
 grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
+grana-brand = { version = "0.1.1", path = "crates/grana-brand" }
 grana-calibration = { version = "0.1.1", path = "crates/grana-calibration" }
 grana-chart = { version = "0.1.1", path = "crates/grana-chart" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }

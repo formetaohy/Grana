@@ -13,7 +13,7 @@ use crate::layout::LayoutEngine;
 use crate::motion::Motion;
 use crate::node::NodeId;
 use crate::paint::{Clip, Instance, LayerInstances, Painter};
-use crate::render::{Ink, PaintFrame, Renderer};
+use crate::render::{PaintFrame, Renderer};
 use crate::text::{Text, TextLayout, TextStyle};
 use crate::theme::Theme;
 use crate::tree::Tree;
@@ -91,7 +91,7 @@ pub struct Ui<A = ()> {
     pub(crate) hovered_since: Option<(NodeId, f32)>,
     pub(crate) tooltip: Option<(NodeId, String)>,
     pub(crate) clipboard: Box<dyn Clipboard>,
-    pub(crate) theme_stamp: Skin,
+    pub(crate) theme_stamp: Theme,
     pub(crate) scene_revision: Option<u64>,
     pub(crate) preedit: Option<String>,
     pub(crate) accessibility: Accessibility,
@@ -144,7 +144,7 @@ impl<A: Clone> Ui<A> {
             hovered_since: None,
             tooltip: None,
             clipboard: Box::new(NullClipboard),
-            theme_stamp: appearance(Theme::dark()),
+            theme_stamp: Theme::dark(),
             scene_revision: None,
             preedit: None,
             accessibility: Accessibility::default(),
@@ -307,7 +307,7 @@ impl<A: Clone> Ui<A> {
         self.edit_caret = None;
         self.inside = self.input.inside();
         self.pointer = self.input.position();
-        self.scene.appearance.dark = self.theme.dark;
+        self.scene.appearance.dark = true;
         self.scene.appearance.transparency = 0.5;
         self.scene.appearance.reduce_transparency = self.accessibility.reduce_transparency;
         self.scene.appearance.increase_contrast = self.accessibility.increase_contrast;
@@ -318,8 +318,8 @@ impl<A: Clone> Ui<A> {
         if rescaled {
             self.invalidate();
         }
-        if self.theme_appearance() != self.theme_stamp {
-            self.theme_stamp = self.theme_appearance();
+        if self.theme != self.theme_stamp {
+            self.theme_stamp = self.theme;
             self.invalidate();
         }
         self.advance_scroll();
@@ -390,7 +390,6 @@ impl<A: Clone> Ui<A> {
                 images,
                 layers,
                 scene: glass,
-                theme,
                 ..
             } = self;
             renderer.paint(
@@ -410,7 +409,6 @@ impl<A: Clone> Ui<A> {
                     glass,
                     base_changed,
                     interface_changed,
-                    ink: if theme.dark { Ink::Light } else { Ink::Dark },
                 },
             );
         }
@@ -430,7 +428,6 @@ impl<A: Clone> Ui<A> {
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
         );
-        let dark = self.theme.dark;
         let mut instances = LayerInstances::default();
         {
             let mut painter = Painter::new(
@@ -438,7 +435,6 @@ impl<A: Clone> Ui<A> {
                 &mut self.text,
                 &mut self.images,
                 clip,
-                dark,
                 false,
                 None,
             );
@@ -459,7 +455,6 @@ impl<A: Clone> Ui<A> {
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
         );
-        let dark = self.theme.dark;
         let mut instances = LayerInstances::default();
         let mut marks = Vec::new();
         {
@@ -468,7 +463,6 @@ impl<A: Clone> Ui<A> {
                 &mut self.text,
                 &mut self.images,
                 clip,
-                dark,
                 false,
                 Some(&mut marks),
             );
@@ -501,23 +495,6 @@ impl<A: Clone> Ui<A> {
         self.tree.mark_dirty();
         self.change.reset = true;
     }
-
-    fn theme_appearance(&self) -> Skin {
-        Skin {
-            dark: self.theme.dark,
-            palette: self.theme.palette,
-            typography: self.theme.typography,
-            metrics: self.theme.metrics,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Skin {
-    pub dark: bool,
-    pub palette: crate::theme::Palette,
-    pub typography: crate::theme::Typography,
-    pub metrics: crate::theme::Metrics,
 }
 
 pub struct BuildContext<'a, A> {
@@ -623,13 +600,4 @@ impl<A> BuildContext<'_, A> {
 
 pub(crate) fn glass_rect(rect: Rect) -> grana_glass::Rect {
     grana_glass::Rect::new(rect.min.x, rect.min.y, rect.width(), rect.height())
-}
-
-fn appearance(theme: Theme) -> Skin {
-    Skin {
-        dark: theme.dark,
-        palette: theme.palette,
-        typography: theme.typography,
-        metrics: theme.metrics,
-    }
 }

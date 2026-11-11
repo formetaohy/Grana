@@ -1,38 +1,9 @@
 use std::path::PathBuf;
 
 use grana_i18n::Language;
-use grana_ui::Appearance;
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "preferences.json";
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum StoredAppearance {
-    System,
-    Light,
-    Dark,
-}
-
-impl From<Appearance> for StoredAppearance {
-    fn from(appearance: Appearance) -> Self {
-        match appearance {
-            Appearance::System => Self::System,
-            Appearance::Light => Self::Light,
-            Appearance::Dark => Self::Dark,
-        }
-    }
-}
-
-impl From<StoredAppearance> for Appearance {
-    fn from(appearance: StoredAppearance) -> Self {
-        match appearance {
-            StoredAppearance::System => Self::System,
-            StoredAppearance::Light => Self::Light,
-            StoredAppearance::Dark => Self::Dark,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,7 +33,6 @@ impl From<StoredLanguage> for Language {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
-    appearance: StoredAppearance,
     #[serde(default)]
     language: Option<StoredLanguage>,
     contrast: bool,
@@ -72,7 +42,6 @@ struct Stored {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
-    pub appearance: Appearance,
     pub language: Language,
     pub contrast: bool,
     pub reduce_transparency: bool,
@@ -81,7 +50,6 @@ pub struct Preference {
 impl Default for Preference {
     fn default() -> Self {
         Self {
-            appearance: Appearance::System,
             language: Language::system(),
             contrast: false,
             reduce_transparency: false,
@@ -102,7 +70,6 @@ impl Preference {
             return Self::default();
         };
         Self {
-            appearance: stored.appearance.into(),
             language: stored.language.map_or_else(Language::system, Into::into),
             contrast: stored.contrast,
             reduce_transparency: stored.reduce_transparency,
@@ -118,7 +85,6 @@ impl Preference {
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
         let stored = Stored {
-            appearance: self.appearance.into(),
             language: Some(self.language.into()),
             contrast: self.contrast,
             reduce_transparency: self.reduce_transparency,

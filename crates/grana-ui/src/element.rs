@@ -159,6 +159,7 @@ pub struct Scroll {
 pub struct Popup {
     pub anchor: Key,
     pub width: f32,
+    pub persistent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,7 +355,18 @@ impl<'a, A> Element<'a, A> {
     }
 
     pub fn popup(mut self, anchor: Key, width: f32) -> Self {
-        self.popup = Some(Popup { anchor, width });
+        self.popup = Some(Popup {
+            anchor,
+            width,
+            persistent: false,
+        });
+        self
+    }
+
+    pub fn persistent(mut self) -> Self {
+        if let Some(popup) = self.popup.as_mut() {
+            popup.persistent = true;
+        }
         self
     }
 

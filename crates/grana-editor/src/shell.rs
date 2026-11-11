@@ -11,7 +11,7 @@ use crate::state::Workspace;
 const CARD_WIDTH: f32 = 468.0;
 const CARD_PADDING: f32 = 24.0;
 const CARD_GAP: f32 = 14.0;
-const BRAND_HEIGHT: f32 = 42.0;
+const BRAND_HEIGHT: f32 = 72.0;
 const STATE_HEIGHT: f32 = 24.0;
 const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 38.0;
@@ -95,7 +95,7 @@ pub(crate) fn view<'a>(
         .layer(Layer::Content),
     ];
     let mut children = vec![
-        brand(ctx),
+        brand(),
         state(ctx, &status),
         grana_ui::text(status.detail.clone(), detail_style),
         actions(ctx),
@@ -189,40 +189,10 @@ fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
     }
 }
 
-fn brand<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let palette = ctx.theme().palette;
-    let title = ctx.theme().font(Level::Title).semibold();
-    let caption = ctx.theme().font(Level::Caption);
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    grana_ui::canvas(Length::Fill, BRAND_HEIGHT, move |painter, info| {
-        let rect = info.rect;
-        let mut y = rect.center().y - 8.0;
-        for width in [6.5, 7.6, 8.7, 9.8, 10.9] {
-            painter.rect(
-                Rect::from_min_size(Vec2::new(rect.min.x, y), Vec2::new(width, 2.4)),
-                Corners::capsule(),
-                palette.brand,
-            );
-            y += 3.8;
-        }
-        painter.text_in(
-            Rect::from_min_size(
-                Vec2::new(rect.min.x + 20.0, rect.min.y),
-                Vec2::new(180.0, rect.height()),
-            ),
-            "Grana",
-            TextStyle::new(title, palette.text_primary),
-            Align::Center,
-        );
-        painter.text_in(
-            Rect::from_min_size(
-                Vec2::new(rect.max.x - 140.0, rect.min.y),
-                Vec2::new(140.0, rect.height()),
-            ),
-            &version,
-            TextStyle::new(caption, palette.text_quaternary).aligned(Align::End),
-            Align::Center,
-        );
+fn brand<'a>() -> Element<'a, Message> {
+    grana_ui::canvas(Length::Fill, BRAND_HEIGHT, |painter, info| {
+        let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(64.0));
+        grana_brand::paint(painter, badge);
     })
     .named("shell.brand")
 }
@@ -442,9 +412,7 @@ fn recent_row<'a>(
             painter,
             Vec2::new(rect.max.x - 12.0, rect.center().y),
             9.0,
-            palette
-                .text_quaternary
-                .lerp(palette.text_tertiary, info.hover),
+            palette.text_tertiary.with_alpha(0.8 * info.hover),
             1.5,
         );
     })

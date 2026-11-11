@@ -23,14 +23,13 @@ pub const FORM_LABEL: f32 = 72.0;
 pub const TOOLBAR_HEIGHT: f32 = 36.0;
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 pub const SIDEBAR_PAD: f32 = 14.0;
-pub const SIDEBAR_FOOTER: f32 = 156.0;
 pub const TRANSPORT_HEIGHT: f32 = 44.0;
 pub const DOCK_HEADER: f32 = 36.0;
 pub const DOCK_DEFAULT: f32 = 340.0;
 pub const DOCK_MINIMUM: f32 = 220.0;
 pub const ANALYSIS_WIDTH: f32 = 114.0;
 pub const TOOLBAR_LEFT: f32 = 320.0;
-pub const TOOLBAR_RIGHT: f32 = 168.0;
+pub const TOOLBAR_RIGHT: f32 = 212.0;
 pub const STAGE_INSET: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,10 +327,10 @@ fn sidebar<'a>(
         painter.rect(info.rect, Corners::ZERO, palette.separator);
     })
     .at(separator_rect);
-    let footer_top = rect.max.y - SIDEBAR_PAD - SIDEBAR_FOOTER;
+    let body_bottom = rect.max.y - SIDEBAR_PAD;
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, tabs_rect.max.y + 9.0),
-        Vec2::new(rect.max.x, footer_top - 6.0),
+        Vec2::new(rect.max.x, body_bottom),
     );
     let mut content = vec![crate::inspector::source(ctx, state)];
     match active {
@@ -353,120 +352,12 @@ fn sidebar<'a>(
         .scroll(Axis::Column, Length::Fill, None)
         .clipped()
         .children([column]);
-    let mut children = vec![tabs, separator, scroll];
-    children.extend(appearance(ctx, layout, state));
+    let children = vec![tabs, separator, scroll];
     Element::new(UiLayout::column())
         .named("sidebar")
         .at(rect)
         .glass(GlassStyle::panel())
         .children(children)
-}
-
-fn appearance<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
-    state: &'a View<'a>,
-) -> Vec<Element<'a, Message>> {
-    let rect = layout.sidebar;
-    let palette = ctx.theme().palette;
-    let width = SIDEBAR_WIDTH - SIDEBAR_PAD * 2.0;
-    let language = ctx.language();
-    let top = rect.max.y - SIDEBAR_PAD - SIDEBAR_FOOTER;
-    let separator_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, top),
-        Vec2::new(width, 1.0),
-    );
-    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, palette.separator);
-    })
-    .at(separator_rect);
-    let languages = grana_i18n::Language::ALL.map(grana_i18n::Language::label);
-    let selected_language = grana_i18n::Language::ALL
-        .iter()
-        .position(|candidate| *candidate == state.workspace.language)
-        .unwrap_or(0);
-    let language_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, separator_rect.max.y + 10.0),
-        Vec2::new(width, 28.0),
-    );
-    let language_switch = crate::view::segmented_fill(
-        ctx,
-        "language.mode",
-        &languages,
-        selected_language,
-        |index| match grana_i18n::Language::ALL.get(index) {
-            Some(language) => Message::SetLanguage(*language),
-            None => Message::Noop,
-        },
-    )
-    .at(language_rect);
-    let divider_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, language_rect.max.y + 8.0),
-        Vec2::new(width, 1.0),
-    );
-    let divider = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, palette.separator);
-    })
-    .at(divider_rect);
-    let modes = grana_ui::Appearance::ALL.map(|mode| appearance_label(language, mode));
-    let selected = grana_ui::Appearance::ALL
-        .iter()
-        .position(|mode| *mode == state.workspace.appearance)
-        .unwrap_or(0);
-    let modes_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, divider_rect.max.y + 8.0),
-        Vec2::new(width, 28.0),
-    );
-    let modes = crate::view::segmented_fill(ctx, "appearance.mode", &modes, selected, |index| {
-        match grana_ui::Appearance::ALL.get(index) {
-            Some(mode) => Message::SetAppearance(*mode),
-            None => Message::Noop,
-        }
-    })
-    .at(modes_rect);
-    let contrast_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, modes_rect.max.y + 6.0),
-        Vec2::new(width, 26.0),
-    );
-    let contrast = grana_ui::widget::toggle_row(
-        ctx.theme(),
-        grana_i18n::appearance::increase_contrast(language),
-        state.workspace.contrast,
-    )
-    .named("appearance.contrast")
-    .at(contrast_rect)
-    .on_toggle(Message::SetContrast);
-    let transparency_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, contrast_rect.max.y + 2.0),
-        Vec2::new(width, 26.0),
-    );
-    let transparency = grana_ui::widget::toggle_row(
-        ctx.theme(),
-        grana_i18n::appearance::reduce_transparency(language),
-        state.workspace.reduce_transparency,
-    )
-    .named("appearance.transparency")
-    .at(transparency_rect)
-    .on_toggle(Message::SetReduceTransparency);
-    vec![
-        separator,
-        language_switch,
-        divider,
-        modes,
-        contrast,
-        transparency,
-    ]
-}
-
-fn appearance_label(
-    language: grana_i18n::Language,
-    appearance: grana_ui::Appearance,
-) -> &'static str {
-    match appearance {
-        grana_ui::Appearance::System => grana_i18n::appearance::follow_system(language),
-        grana_ui::Appearance::Light => grana_i18n::appearance::light(language),
-        grana_ui::Appearance::Dark => grana_i18n::appearance::dark(language),
-    }
 }
 
 fn dock<'a>(
@@ -660,7 +551,6 @@ pub fn apply(
                 }
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
-            Message::SetAppearance(appearance) => workspace.appearance = appearance,
             Message::SetLanguage(language) => workspace.language = language,
             Message::SetContrast(contrast) => workspace.contrast = contrast,
             Message::ToggleContrast => workspace.contrast = !workspace.contrast,

@@ -49,25 +49,6 @@ const PLUS_LIGHTER: BlendState = BlendState {
     },
 };
 
-const MULTIPLY: BlendState = BlendState {
-    color: BlendComponent {
-        src_factor: BlendFactor::Dst,
-        dst_factor: BlendFactor::OneMinusSrcAlpha,
-        operation: BlendOperation::Add,
-    },
-    alpha: BlendComponent {
-        src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::OneMinusSrcAlpha,
-        operation: BlendOperation::Add,
-    },
-};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Ink {
-    Light,
-    Dark,
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
@@ -159,7 +140,6 @@ pub(crate) struct PaintFrame<'a> {
     pub glass: &'a GlassScene,
     pub base_changed: bool,
     pub interface_changed: bool,
-    pub ink: Ink,
 }
 
 struct PaintTarget<'a> {
@@ -271,7 +251,6 @@ pub struct Renderer {
     present_linear: RenderPipeline,
     ui: RenderPipeline,
     ui_add: RenderPipeline,
-    ui_multiply: RenderPipeline,
     figure: RenderPipeline,
     glass: GlassRenderer,
     ui_layout: BindGroupLayout,
@@ -373,14 +352,6 @@ impl Renderer {
             raw(encoded),
             PLUS_LIGHTER,
         );
-        let ui_multiply = instance_pipeline(
-            device,
-            "grana.ui.instances.multiply",
-            &ui_pipeline_layout,
-            &ui_shader,
-            raw(encoded),
-            MULTIPLY,
-        );
         let figure = instance_pipeline(
             device,
             "grana.ui.figure",
@@ -419,7 +390,6 @@ impl Renderer {
             present_linear,
             ui,
             ui_add,
-            ui_multiply,
             figure,
             glass: GlassRenderer::new(device, encoded),
             ui_layout,
@@ -545,7 +515,6 @@ impl Renderer {
             glass,
             base_changed,
             interface_changed,
-            ink,
         } = frame;
         assert!(
             self.size[0] > 0 && self.size[1] > 0,
@@ -627,7 +596,6 @@ impl Renderer {
             },
             &self.buffers.chrome,
             chrome,
-            ink,
         );
 
         let mut current = Slot::Front;
@@ -660,7 +628,6 @@ impl Renderer {
                 },
                 &self.buffers.labels,
                 labels,
-                ink,
             );
             current = current.other();
         } else {
@@ -674,7 +641,6 @@ impl Renderer {
                 },
                 &self.buffers.labels,
                 labels,
-                ink,
             );
         }
 
@@ -708,7 +674,6 @@ impl Renderer {
                 },
                 &self.buffers.popup,
                 popup,
-                ink,
             );
             current = target_slot;
         } else {
@@ -723,7 +688,6 @@ impl Renderer {
                 },
                 &self.buffers.popup,
                 popup,
-                ink,
             );
         }
 
@@ -757,7 +721,6 @@ impl Renderer {
                 },
                 &self.buffers.hud,
                 hud,
-                ink,
             );
             current = target_slot;
         } else {
@@ -772,7 +735,6 @@ impl Renderer {
                 },
                 &self.buffers.hud,
                 hud,
-                ink,
             );
         }
 
@@ -830,7 +792,6 @@ impl Renderer {
         target: &PaintTarget<'_>,
         buffers: &LayerBuffers,
         instances: &LayerInstances,
-        ink: Ink,
     ) {
         if instances.is_empty() {
             return;
@@ -861,10 +822,7 @@ impl Renderer {
         }
         if !instances.ink.is_empty() {
             let group = self.ui_group(atlases, target.scene, &buffers.ink.buffer, &self.uniforms);
-            pass.set_pipeline(match ink {
-                Ink::Light => &self.ui_add,
-                Ink::Dark => &self.ui_multiply,
-            });
+            pass.set_pipeline(&self.ui_add);
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..6, 0..instances.ink.len() as u32);
         }

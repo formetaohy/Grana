@@ -62,14 +62,12 @@ impl<A: Clone> Ui<A> {
             self.change.touched[layer_index] = true;
             instances.clear();
             let vibrancy = matches!(layer, Layer::Labels | Layer::Popup | Layer::Hud);
-            let dark = self.theme.dark;
             let time = self.time;
             let mut painter = Painter::new(
                 &mut instances,
                 &mut self.text,
                 &mut self.images,
                 Clip::new(clip, clip_corners),
-                dark,
                 vibrancy,
                 None,
             );
