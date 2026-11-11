@@ -109,7 +109,6 @@ impl App {
                     scene,
                     camera,
                     size: [viewport.region[2], viewport.region[3]],
-                    revision: session.revision().raw(),
                     prefetch: playing,
                     level_cap: cap,
                     interacting,

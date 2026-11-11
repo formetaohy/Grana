@@ -4,7 +4,7 @@ mod residency;
 mod signature;
 mod upload;
 
-use residency::{Content, FrameTarget, LevelKey, Levels, Mode, Residency, ViewState};
+use residency::{FrameTarget, LevelKey, Levels, Mode, Residency, Resident, ViewState};
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -41,7 +41,7 @@ use crate::planner::{
 };
 use crate::present::Present;
 use crate::sample;
-use crate::schema::SceneFrame;
+use crate::schema::{SceneFrame, Versions};
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::target::{self, SceneTarget};
@@ -167,7 +167,8 @@ pub struct Renderer {
     view_words: usize,
     view_bytes: u64,
     epoch: u64,
-    resident: Option<u64>,
+    resident: Option<Resident>,
+    channels_key: Option<u64>,
     uploads: u64,
     pin: u64,
     prefetch: bool,
@@ -253,6 +254,7 @@ impl Renderer {
             view_bytes: 0,
             epoch: 0,
             resident: None,
+            channels_key: None,
             uploads: 0,
             pin: 0,
             prefetch: false,
@@ -464,6 +466,7 @@ impl Renderer {
         self.pick_pending = false;
         self.epoch += 1;
         self.resident = None;
+        self.channels_key = None;
         self.pin = 0;
         self.prefetched.clear();
         self.prefetch_key = None;

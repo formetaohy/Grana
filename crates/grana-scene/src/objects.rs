@@ -735,17 +735,21 @@ impl Objects {
     }
 
     pub fn add_seed(&mut self, id: ObjectSetId, time: u32, position: [f32; 3]) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.add_seed(time, position))
+            .is_some_and(|set| set.add_seed(time, position, stamp))
     }
 
     pub fn remove_seed(&mut self, id: ObjectSetId, time: u32, index: usize) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.remove_seed(time, index))
+            .is_some_and(|set| set.remove_seed(time, index, stamp))
     }
 
     pub fn clear_seeds(&mut self, id: ObjectSetId, time: u32) -> bool {
-        self.get_mut(id).is_some_and(|set| set.clear_seeds(time))
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.clear_seeds(time, stamp))
     }
 
     pub fn set_seed_source(
@@ -759,8 +763,9 @@ impl Objects {
     }
 
     pub fn set_seed_frames(&mut self, id: ObjectSetId, seeds: Vec<Vec<[f32; 3]>>) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_seed_frames(seeds))
+            .is_some_and(|set| set.set_seed_frames(seeds, stamp))
     }
 
     pub fn join_tracks(

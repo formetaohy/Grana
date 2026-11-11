@@ -73,6 +73,7 @@ impl Renderer {
             view_bytes,
             epoch,
             resident,
+            channels_key,
             uploads,
             settled,
             planned,
@@ -186,25 +187,23 @@ impl Renderer {
         }
         let levels = Levels { ladder, capacity };
         *volume_level = Some(base);
+        let versions = scene.versions;
         let channel_key = channel_style(scene.channels);
-        let content = {
-            let mut hasher = DefaultHasher::new();
-            scene.revision.hash(&mut hasher);
-            scene.step_scale.to_bits().hash(&mut hasher);
-            scene.channels.len().hash(&mut hasher);
-            scene.layers.len().hash(&mut hasher);
-            scene.styles.len().hash(&mut hasher);
-            scene.markers.len().hash(&mut hasher);
-            hasher.finish()
+        if *channels_key != Some(channel_key) {
+            scene_table.prepare(device, queue, pyramid, scene.channels);
+            scene_table.write_channels(device, queue, pyramid, scene.channels);
+            *channels_key = Some(channel_key);
+        }
+        let stamp = digest(&[versions.data(), *uploads]);
+        let next = Resident {
+            objects: versions.objects(),
+            style: versions.style(),
         };
-        let stamp = digest(&[content, *uploads]);
-        let fresh = *resident != Some(content);
+        let fresh = *resident != Some(next);
         let residency = Residency::of(
             *epoch,
-            Content {
-                content: stamp,
-                style: channel_key,
-            },
+            stamp,
+            channel_key,
             Mode { prefetch, assured },
             time,
             ViewState {
@@ -243,7 +242,14 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
-        let shadow_keys = ShadowKeys::of(content, *uploads, time, channel_key, ladder, &space);
+        let shadow_keys = ShadowKeys::of(
+            versions.objects(),
+            *uploads,
+            time,
+            channel_key,
+            ladder,
+            &space,
+        );
         let tables = ladder
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
@@ -296,7 +302,8 @@ impl Renderer {
             camera: camera.state(),
             region: viewport,
             levels,
-            content,
+            versions,
+            channels: channel_key,
             uploads: *uploads,
             time,
             exposure,
@@ -366,14 +373,13 @@ impl Renderer {
             convergence.reset();
         }
         info.samples = target.samples;
+        info.rebuilt = false;
         if reset {
             info.rebuilt = fresh;
             if fresh {
                 meshes.set(device, queue, layouts, scene);
-            }
-            if fresh {
                 markers.set(device, queue, layouts, scene.markers);
-                *resident = Some(content);
+                *resident = Some(next);
             }
             markers.rewind(queue);
             markers.cull_volume(&mut encoder, scene_table.group());
@@ -397,12 +403,6 @@ impl Renderer {
             scene.step_scale.max(1.0e-3),
         ];
         data.lens = crate::frame::lens(camera, sample_index, samples, aspect);
-        if fresh {
-            scene_table.prepare(device, queue, pyramid, scene.channels);
-        }
-        if fresh {
-            scene_table.write_channels(device, queue, pyramid, scene.channels);
-        }
         scene_table.write_frame(queue, data);
         if replan {
             let scale = bucket_scale(

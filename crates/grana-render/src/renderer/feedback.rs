@@ -162,7 +162,8 @@ fn index_of(request: &BrickRequest, pyramid: &Pyramid) -> u32 {
 pub(super) fn view_key(meta: &Residency) -> u64 {
     let mut hasher = DefaultHasher::new();
     meta.epoch.hash(&mut hasher);
-    meta.style.hash(&mut hasher);
+    meta.data.hash(&mut hasher);
+    meta.channels.hash(&mut hasher);
     meta.prefetch.hash(&mut hasher);
     meta.assured.hash(&mut hasher);
     meta.time.hash(&mut hasher);

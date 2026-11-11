@@ -7,7 +7,8 @@ pub(super) struct Signature<'a> {
     pub(super) camera: CameraState,
     pub(super) region: [u32; 4],
     pub(super) levels: Levels,
-    pub(super) content: u64,
+    pub(super) versions: Versions,
+    pub(super) channels: u64,
     pub(super) uploads: u64,
     pub(super) time: u32,
     pub(super) exposure: f32,
@@ -22,7 +23,8 @@ impl Signature<'_> {
             camera,
             region,
             levels,
-            content,
+            versions,
+            channels,
             uploads,
             time,
             exposure,
@@ -43,7 +45,10 @@ impl Signature<'_> {
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        content.hash(&mut hasher);
+        versions.data().hash(&mut hasher);
+        versions.objects().hash(&mut hasher);
+        versions.style().hash(&mut hasher);
+        channels.hash(&mut hasher);
         uploads.hash(&mut hasher);
         hasher.finish()
     }
@@ -52,7 +57,8 @@ impl Signature<'_> {
         let Self {
             data,
             region,
-            content,
+            versions,
+            channels,
             exposure,
             epoch,
             size,
@@ -70,7 +76,10 @@ impl Signature<'_> {
         exposure.to_bits().hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        content.hash(&mut hasher);
+        versions.data().hash(&mut hasher);
+        versions.objects().hash(&mut hasher);
+        versions.style().hash(&mut hasher);
+        channels.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -79,7 +88,8 @@ impl Signature<'_> {
             data,
             camera,
             region,
-            content,
+            versions,
+            channels,
             time,
             exposure,
             epoch,
@@ -104,7 +114,10 @@ impl Signature<'_> {
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
-        content.hash(&mut hasher);
+        versions.data().hash(&mut hasher);
+        versions.objects().hash(&mut hasher);
+        versions.style().hash(&mut hasher);
+        channels.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -133,7 +146,7 @@ pub(super) struct ShadowKeys {
 
 impl ShadowKeys {
     pub(super) fn of(
-        content: u64,
+        objects: u64,
         uploads: u64,
         time: u32,
         style: u64,
@@ -150,7 +163,7 @@ impl ShadowKeys {
                 uploads,
                 space,
             ]),
-            objects: digest(&[content, space]),
+            objects: digest(&[objects, space]),
         }
     }
 

@@ -1,8 +1,7 @@
 use glam::Vec3;
 use grana_display::{Camera, Shading};
-use grana_object::Spot;
-use grana_render::{ChannelRow, Layer, LayerKey, Marker, SceneFrame, Style};
-use grana_scene::{Item, ObjectFrame, ObjectSet, Scene, Selection};
+use grana_render::{ChannelRow, Digest, Layer, LayerKey, Marker, SceneFrame, Style, Versions};
+use grana_scene::{Item, ObjectFrame, Scene, Selection};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
@@ -18,7 +17,7 @@ pub struct Lens<'a> {
 }
 
 pub struct RenderedScene {
-    pub revision: u64,
+    pub versions: Versions,
     pub channels: Vec<ChannelRow>,
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
@@ -32,7 +31,7 @@ pub struct RenderedScene {
 impl RenderedScene {
     pub fn frame(&self) -> SceneFrame<'_> {
         SceneFrame {
-            revision: self.revision,
+            versions: self.versions,
             channels: &self.channels,
             shading: self.shading,
             step_scale: self.step_scale,
@@ -41,6 +40,56 @@ impl RenderedScene {
             markers: &self.markers,
         }
     }
+}
+
+pub fn key(scene: &Scene) -> u64 {
+    let mut key = Digest::new();
+    key.mix(u64::from(scene.time()));
+    key.mix(scene.channels.len() as u64);
+    key.mix(scene.derived().len() as u64);
+    for channel in &scene.channels {
+        key.flag(channel.enabled);
+        key.real(channel.opacity);
+        key.real(channel.window.min());
+        key.real(channel.window.max());
+        key.mix(channel.volume().mode().index() as u64);
+        key.real(channel.volume().isovalue());
+        for stop in channel.transfer().stops() {
+            key.real(stop.position());
+            key.real(stop.opacity());
+            for component in stop.color() {
+                key.real(component);
+            }
+        }
+    }
+    key.real(scene.shading.ambient);
+    key.real(scene.shading.diffuse);
+    key.real(scene.shading.shadows);
+    key.real(scene.shading.azimuth);
+    key.real(scene.shading.elevation);
+    key.real(scene.step_scale);
+    for selection in scene.selections() {
+        key.mix(selection.set.raw());
+        key.mix(match selection.item {
+            Item::Object(index) => (index as u64) * 2,
+            Item::Track(index) => (index as u64) * 2 + 1,
+        });
+    }
+    for set in scene.objects.iter() {
+        key.mix(set.id().raw());
+        key.mix(set.revision().raw());
+        key.mix(set.document().raw());
+        key.mix(
+            set.frame_stamp(scene.time())
+                .map_or(u64::MAX, |stamp| stamp.raw()),
+        );
+        key.mix(
+            set.tracks()
+                .map_or(u64::MAX, |tracks| tracks.revision().raw()),
+        );
+        key.flag(scene.shown(set));
+    }
+    key.finish()
 }
 
 pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
@@ -63,23 +112,44 @@ pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
     details
 }
 
-pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedScene, String> {
+pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
     let mut style_ids = Vec::new();
     let mut marker_ids = Vec::new();
+    let mut data = Digest::new();
+    let mut objects = Digest::new();
+    let mut appearance = Digest::new();
     let mut ordinal = 0usize;
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
+    data.mix(scene.channels.len() as u64);
+    data.mix(scene.dataset.channels().len() as u64);
     for set in scene.objects.iter() {
-        if !scene.shown(set) {
+        objects.mix(set.id().raw());
+        objects.flag(scene.shown(set));
+        let Some(wanted) = scene
+            .shown(set)
+            .then(|| detail.get(ordinal).copied())
+            .flatten()
+        else {
             continue;
-        }
-        let wanted = *detail
-            .get(ordinal)
-            .expect("every shown set carries a detail level");
+        };
         ordinal += 1;
+        objects.mix(
+            set.frame_stamp(scene.time())
+                .map_or(u64::MAX, |stamp| stamp.raw()),
+        );
+        objects.mix(
+            set.tracks()
+                .map_or(u64::MAX, |tracks| tracks.revision().raw()),
+        );
+        objects.mix(wanted as u64);
         for seed in scene.seeds(set.id()) {
+            let [x, y, z] = *seed;
+            objects.real(x);
+            objects.real(y);
+            objects.real(z);
             markers.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
             marker_ids.push(None);
         }
@@ -98,7 +168,23 @@ pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedS
                 if !set.visible_object(scene.time(), index) {
                     continue;
                 }
-                markers.push(marker(scene, set, index, *spot, color(index)));
+                let selected = scene.object_selected(set.id(), index);
+                let (radius, tint) = if selected {
+                    (SELECTED_SCALE * spot.radius(), SELECTED_COLOR)
+                } else {
+                    (spot.radius(), color(index))
+                };
+                let [x, y, z] = spot.center();
+                objects.real(x);
+                objects.real(y);
+                objects.real(z);
+                objects.real(radius);
+                let [red, green, blue] = tint;
+                appearance.real(red);
+                appearance.real(green);
+                appearance.real(blue);
+                appearance.real(set.opacity());
+                markers.push(Marker::new(spot.center(), radius, tint, set.opacity()));
                 marker_ids.push(Some(Selection {
                     set: set.id(),
                     item: Item::Object(index),
@@ -118,53 +204,71 @@ pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedS
         {
             let start = styles.len();
             for index in 0..frame.object_count() {
-                styles.push(
-                    Style::new(
-                        color(index),
-                        set.visible_object(scene.time(), index),
-                        scene.object_selected(set.id(), index),
-                        set.opacity(),
-                    )
-                    .with_material(set.material()),
-                );
+                let visible = set.visible_object(scene.time(), index);
+                let selected = scene.object_selected(set.id(), index);
+                let opacity = set.opacity();
+                let [red, green, blue] = color(index);
+                let material = set.material();
+                appearance.real(red);
+                appearance.real(green);
+                appearance.real(blue);
+                appearance.flag(visible);
+                appearance.flag(selected);
+                appearance.real(opacity);
+                appearance.real(material.roughness());
+                appearance.real(material.metallic());
+                styles.push(Style::new([red, green, blue], visible, selected, opacity));
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Object(index),
                 });
             }
-            layers.push(Layer {
+            let layer = Layer {
                 key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp.raw(), level as u16),
                 mesh,
                 style_start: start,
                 style_count: frame.object_count(),
-            });
+            };
+            objects.mix(layer.key.digest());
+            layers.push(layer);
         }
         if let Some(tracks) = set.tracks()
             && !tracks.set().is_empty()
         {
             let visible = set.track_visible();
+            let opacity = set.opacity();
+            let material = set.material();
             let start = styles.len();
             for index in 0..tracks.set().len() {
-                styles.push(
-                    Style::new(
-                        set.track_color(index),
-                        visible && set.visible_track(index),
-                        scene.track_selected(set.id(), index),
-                        set.opacity(),
-                    )
-                    .with_material(set.material()),
-                );
+                let selected = scene.track_selected(set.id(), index);
+                let [red, green, blue] = set.track_color(index);
+                appearance.real(red);
+                appearance.real(green);
+                appearance.real(blue);
+                appearance.flag(visible && set.visible_track(index));
+                appearance.flag(selected);
+                appearance.real(opacity);
+                appearance.real(material.roughness());
+                appearance.real(material.metallic());
+                styles.push(Style::new(
+                    [red, green, blue],
+                    visible && set.visible_track(index),
+                    selected,
+                    opacity,
+                ));
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Track(index),
                 });
             }
-            layers.push(Layer {
+            let layer = Layer {
                 key: LayerKey::stable(set.id().raw(), 1, tracks.revision().raw()),
                 mesh: tracks.mesh(),
                 style_start: start,
                 style_count: tracks.set().len(),
-            });
+            };
+            objects.mix(layer.key.digest());
+            layers.push(layer);
         }
     }
     let channels = scene
@@ -184,7 +288,7 @@ pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedS
         "the detail levels cover every shown set"
     );
     Ok(RenderedScene {
-        revision,
+        versions: Versions::new(data.finish(), objects.finish(), appearance.finish()),
         channels,
         styles,
         layers,
@@ -194,19 +298,6 @@ pub fn frame(scene: &Scene, revision: u64, detail: &[usize]) -> Result<RenderedS
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
-}
-
-fn marker(scene: &Scene, set: &ObjectSet, index: usize, spot: Spot, color: [f32; 3]) -> Marker {
-    if scene.object_selected(set.id(), index) {
-        Marker::new(
-            spot.center(),
-            SELECTED_SCALE * spot.radius(),
-            SELECTED_COLOR,
-            set.opacity(),
-        )
-    } else {
-        Marker::new(spot.center(), spot.radius(), color, set.opacity())
-    }
 }
 
 fn triangle_target(surfaces: &grana_object::SurfaceSet, lens: Lens<'_>) -> usize {

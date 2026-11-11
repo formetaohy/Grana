@@ -81,6 +81,11 @@ pub fn revision() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+pub fn versions() -> grana_render::Versions {
+    let stamp = revision();
+    grana_render::Versions::new(stamp, stamp, stamp)
+}
+
 pub fn spheres(extent: Extent, spacing: Spacing, spheres: &[([f32; 3], f32)], peak: u16) -> Volume {
     let mut values = vec![0u16; extent.voxel_count() as usize];
     for z in 0..extent.z() {

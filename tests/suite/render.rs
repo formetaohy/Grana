@@ -3,12 +3,16 @@ use std::sync::Arc;
 use glam::{Vec3, Vec4};
 use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
-use grana_render::{Frame, Layer, LayerKey, Marker, PickId, Renderer, Requests, SceneFrame, Style};
+use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
+use grana_render::{
+    Frame, Layer, LayerKey, Marker, PickId, Renderer, Requests, SceneFrame, Style, Versions,
+};
+use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
     Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
-use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres};
+use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, versions};
 
 const SIDE: u32 = 128;
 const SAMPLES: u32 = 4;
@@ -189,7 +193,7 @@ fn background(
         })
         .collect::<Vec<_>>();
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &rows,
         shading: view.scene.shading,
         step_scale: view.scene.step_scale,
@@ -234,7 +238,7 @@ fn measures_the_convergence_of_a_volume() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -321,7 +325,7 @@ fn streams_and_shades_two_channels() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -405,7 +409,7 @@ fn renders_a_rotated_placement() {
     let mut camera = Camera::new(35.0);
     camera.fit(world, 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -489,7 +493,7 @@ fn composites_a_mesh_layer() {
         style_count: 1,
     }];
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -545,7 +549,7 @@ fn keeps_a_translucent_layer() {
         style_count: 1,
     }];
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -584,7 +588,7 @@ fn keeps_a_translucent_layer() {
         channel.visible = false;
     }
     let hidden = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -639,7 +643,7 @@ fn clips_an_oriented_region() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
@@ -725,7 +729,7 @@ fn assured_pixels(
     camera: &Camera,
 ) -> Vec<[u8; 4]> {
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -874,7 +878,7 @@ fn render_volume(
         volume: style,
     }];
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1066,7 +1070,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1126,7 +1130,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1185,7 +1189,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1306,7 +1310,7 @@ fn reuses_the_history_of_a_still_camera() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1405,7 +1409,7 @@ fn reprojects_the_history_of_a_moving_camera() {
     let mut moved = camera.clone();
     moved.orbit(glam::Vec2::new(0.1, 0.05));
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1498,7 +1502,7 @@ fn drops_the_history_of_another_shot() {
     let first_transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let first_channels = channels(&pyramid, &first_transfers);
     let first = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &first_channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1509,7 +1513,7 @@ fn drops_the_history_of_another_shot() {
     let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
     let second_channels = channels(&pyramid, &second_transfers);
     let second = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &second_channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1593,63 +1597,140 @@ fn drawn<'a, 'b>(
 }
 
 #[test]
-fn rebuilds_the_scene_only_when_its_content_changes() {
+fn separates_data_object_and_style_versions() {
     let Some(gpu) = gpu() else {
         return;
     };
     let volume = sphere_volume();
     let pyramid = volume.pyramid();
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let other_transfers = [TransferFunction::tinted([1.0, 0.4, 0.2])];
+    let other_channels = channels(&pyramid, &other_transfers);
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mut moved = camera.clone();
-    moved.orbit(glam::Vec2::new(0.2, 0.1));
-    let settled = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let changed = SceneFrame {
-        revision: revision(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
+    let base = versions();
     let target = texture(&gpu, SIDE);
     let view = target.create_view(&Default::default());
     let mut renderer = build_renderer(&gpu, &pyramid);
-    let first = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &settled));
+    let draw = |renderer: &mut Renderer, scene: &SceneFrame<'_>| {
+        renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, scene))
+    };
+    let first = draw(&mut renderer, &bare_scene(base, &channels));
     assert!(first.rebuilt, "the first frame reused an empty scene");
-    take(
-        &gpu,
+    assert_eq!(
+        first.samples, 1,
+        "the first frame reused accumulated samples"
+    );
+    let still = draw(&mut renderer, &bare_scene(base, &channels));
+    assert!(
+        !still.rebuilt,
+        "an unchanged scene rebuilt the object buffers"
+    );
+    assert_eq!(still.samples, 2, "an unchanged scene dropped its samples");
+    let mut shifted = camera.clone();
+    shifted.orbit(glam::Vec2::new(0.2, 0.1));
+    let orbiting = renderer.draw(
+        gpu.device(),
+        gpu.queue(),
+        drawn(&view, &shifted, &bare_scene(base, &channels)),
+    );
+    assert!(
+        !orbiting.rebuilt,
+        "a moved camera rebuilt the object buffers"
+    );
+    let styled = Versions::new(base.data(), base.objects(), revision());
+    let restyled = draw(&mut renderer, &bare_scene(styled, &channels));
+    assert!(
+        restyled.rebuilt,
+        "a style version kept the previous object styles"
+    );
+    assert_eq!(restyled.samples, 1, "a style version kept the samples");
+    let channel = draw(&mut renderer, &bare_scene(styled, &other_channels));
+    assert!(
+        !channel.rebuilt,
+        "a channel style rebuilt the object buffers"
+    );
+    assert_eq!(channel.samples, 1, "a channel style kept the samples");
+    let reloaded = draw(
         &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &settled,
-            time: 0,
-            samples: 8,
-            history: None,
-        },
+        &bare_scene(
+            Versions::new(revision(), styled.objects(), styled.style()),
+            &channels,
+        ),
     );
-    let moved_info = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &moved, &settled));
     assert!(
-        !moved_info.rebuilt,
-        "a moved camera rebuilt the scene it still shows"
+        !reloaded.rebuilt,
+        "a data version rebuilt the object buffers"
     );
-    let changed_info = renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &changed));
+    assert_eq!(reloaded.samples, 1, "a data version kept the samples");
+    let moved = draw(
+        &mut renderer,
+        &bare_scene(
+            Versions::new(styled.data(), revision(), styled.style()),
+            &channels,
+        ),
+    );
     assert!(
-        changed_info.rebuilt,
-        "a new content revision kept the previous scene"
+        moved.rebuilt,
+        "an object version kept the previous geometry"
+    );
+}
+
+fn bare_scene<'a>(versions: Versions, channels: &'a [grana_render::ChannelRow]) -> SceneFrame<'a> {
+    SceneFrame {
+        versions,
+        channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    }
+}
+
+#[test]
+fn keys_the_scene_by_its_render_versions() {
+    let volume = two_channel_volume();
+    let pyramid = volume.pyramid();
+    let mut scene = Scene::new(Dataset::synthetic("keyed", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = SampleStatistics::new(60.0, 40.0, 80.0, 2.0, 60.0);
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([32.0, 32.0, 16.0], 4.0, 1.0)],
+            IntensityTable::new(2, vec![statistics; 2]),
+        )),
+    );
+    let base = grana_engine::key(&scene);
+    assert_eq!(base, grana_engine::key(&scene), "an idle scene rekeyed");
+    scene.select_channel(1);
+    assert_eq!(
+        grana_engine::key(&scene),
+        base,
+        "a channel selection rebuilt the render state"
+    );
+    scene
+        .objects
+        .get_mut(set)
+        .expect("the set exists")
+        .set_color([0.2, 0.8, 0.3]);
+    let styled = grana_engine::key(&scene);
+    assert_ne!(styled, base, "an object colour kept the render state");
+    scene.select(Some(Selection {
+        set,
+        item: Item::Object(0),
+    }));
+    let selected = grana_engine::key(&scene);
+    assert_ne!(selected, styled, "a selection kept the render state");
+    scene.channels[1].opacity = 0.3;
+    assert_ne!(
+        grana_engine::key(&scene),
+        selected,
+        "a channel style kept the render state"
     );
 }
 
@@ -1677,7 +1758,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let channels = channels(&pyramid, &transfers);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1800,7 +1881,7 @@ fn cuts_the_object_surfaces_of_a_slice() {
         style_count: 1,
     }];
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1858,7 +1939,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         Marker::new([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
@@ -1904,7 +1985,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let channels = channels(&pyramid, &transfers);
     let scene = SceneFrame {
-        revision: revision(),
+        versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,

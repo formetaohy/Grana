@@ -1282,7 +1282,7 @@ impl ObjectSet {
         }
     }
 
-    pub(crate) fn add_seed(&mut self, time: u32, position: [f32; 3]) -> bool {
+    pub(crate) fn add_seed(&mut self, time: u32, position: [f32; 3], stamp: Revision) -> bool {
         assert_eq!(
             self.kind,
             ObjectKind::Surfaces,
@@ -1299,10 +1299,12 @@ impl ObjectSet {
             return false;
         };
         seeds.push(position);
+        self.revision = stamp;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn remove_seed(&mut self, time: u32, index: usize) -> bool {
+    pub(crate) fn remove_seed(&mut self, time: u32, index: usize, stamp: Revision) -> bool {
         let Some(frames) = self.manual_seeds() else {
             return false;
         };
@@ -1313,10 +1315,12 @@ impl ObjectSet {
             return false;
         }
         seeds.remove(index);
+        self.revision = stamp;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn clear_seeds(&mut self, time: u32) -> bool {
+    pub(crate) fn clear_seeds(&mut self, time: u32, stamp: Revision) -> bool {
         let Some(frames) = self.manual_seeds() else {
             return false;
         };
@@ -1327,6 +1331,8 @@ impl ObjectSet {
             return false;
         }
         seeds.clear();
+        self.revision = stamp;
+        self.document = self.document.next();
         true
     }
 
@@ -1334,7 +1340,7 @@ impl ObjectSet {
         self.seeds.manual()
     }
 
-    pub(crate) fn set_seed_frames(&mut self, seeds: Vec<Vec<[f32; 3]>>) -> bool {
+    pub(crate) fn set_seed_frames(&mut self, seeds: Vec<Vec<[f32; 3]>>, stamp: Revision) -> bool {
         assert_eq!(
             seeds.len(),
             self.frames.len(),
@@ -1355,6 +1361,7 @@ impl ObjectSet {
             return false;
         }
         self.seeds = Seeds::Points(seeds);
+        self.revision = stamp;
         self.document = self.document.next();
         true
     }

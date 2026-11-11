@@ -24,7 +24,6 @@ pub struct ViewportFrame<'a> {
     pub scene: &'a Scene,
     pub camera: &'a Camera,
     pub size: [u32; 2],
-    pub revision: u64,
     pub prefetch: bool,
     pub level_cap: usize,
     pub interacting: bool,
@@ -32,7 +31,7 @@ pub struct ViewportFrame<'a> {
 
 #[derive(Clone, Copy, PartialEq)]
 struct Request {
-    revision: u64,
+    scene: u64,
     camera: CameraState,
     size: [u32; 2],
     level_cap: usize,
@@ -61,7 +60,7 @@ struct Identities {
 }
 
 struct Prepared {
-    revision: u64,
+    scene_key: u64,
     detail: Vec<usize>,
     scene: RenderedScene,
 }
@@ -144,8 +143,9 @@ impl Engine {
         );
         self.renderer.set_exporting(false);
         let now = Instant::now();
+        let scene_key = view::key(frame.scene);
         let request = Request {
-            revision: frame.revision,
+            scene: scene_key,
             camera: frame.camera.state(),
             size: frame.size,
             level_cap: frame.level_cap,
@@ -200,11 +200,11 @@ impl Engine {
         if self
             .prepared
             .as_ref()
-            .is_none_or(|prepared| prepared.revision != frame.revision || prepared.detail != detail)
+            .is_none_or(|prepared| prepared.scene_key != scene_key || prepared.detail != detail)
         {
             self.prepared = Some(Prepared {
-                revision: frame.revision,
-                scene: view::frame(frame.scene, frame.revision, &detail)?,
+                scene_key,
+                scene: view::frame(frame.scene, &detail)?,
                 detail,
             });
         }

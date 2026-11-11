@@ -30,5 +30,5 @@ pub use image::{Image16, read16 as read_image16};
 pub use marker::Marker;
 pub use pick::PickId;
 pub use renderer::{Frame, FrameInfo, Renderer, Requests, ViewInfo};
-pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};
+pub use schema::{ChannelRow, Digest, Layer, LayerKey, SceneFrame, Style, Versions};
 pub use temporal::Temporal;
