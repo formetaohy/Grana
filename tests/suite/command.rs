@@ -363,6 +363,10 @@ fn captures_a_protocol_film_without_a_window() {
             > 0,
         "the sequence writes its frames"
     );
+    let comparison =
+        find(&output, "comparison_frames.csv").expect("the batch writes the per-frame comparison");
+    let text = std::fs::read_to_string(comparison).expect("the comparison frames read");
+    assert!(text.starts_with("group,set_key,set,kind,metric,frame,images,value,lower,upper"));
 }
 
 #[test]
