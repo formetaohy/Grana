@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use glam::Vec2;
 
 use crate::element::{CanvasInfo, CanvasPaint, Layer};
+use crate::glass::OVERLAY;
 use crate::node::NodeId;
-use crate::paint::{Clip, Instance, LayerInstances, Painter};
+use crate::paint::{Clip, Instance, KIND_GLYPH, KIND_IMAGE, LayerInstances, Painter};
 use crate::ui::Ui;
 use crate::widget::PaintInfo;
 
@@ -126,9 +127,35 @@ impl<A: Clone> Ui<A> {
             self.tree.nodes[id].paint_dirty = false;
         }
         self.tree.nodes[id].glass_rect = glass;
-        let target = &mut self.layers[layer_index];
-        target.material.extend(instances.material.iter().copied());
-        target.ink.extend(instances.ink.iter().copied());
+        let labels = Layer::Labels.index();
+        let lifted = layer_index != labels
+            && self.tree.nodes[id]
+                .sub_glass
+                .iter()
+                .any(|item| item.style.layer == OVERLAY)
+            && instances.material.iter().any(foreground);
+        if lifted {
+            self.layers[layer_index].material.extend(
+                instances
+                    .material
+                    .iter()
+                    .copied()
+                    .filter(|instance| !foreground(instance)),
+            );
+            self.layers[labels]
+                .material
+                .extend(instances.material.iter().copied().filter(foreground));
+            if dirty {
+                self.change.touched[labels] = true;
+            }
+        } else {
+            self.layers[layer_index]
+                .material
+                .extend(instances.material.iter().copied());
+        }
+        self.layers[layer_index]
+            .ink
+            .extend(instances.ink.iter().copied());
         self.tree.nodes[id].paint = instances;
         for index in 0..self.tree.nodes[id].children.len() {
             let child = self.tree.nodes[id].children[index];
@@ -160,6 +187,10 @@ impl<A: Clone> Ui<A> {
         self.change.base |= base;
         self.change.interface |= interface;
     }
+}
+
+fn foreground(instance: &Instance) -> bool {
+    matches!(instance.meta[0], KIND_GLYPH | KIND_IMAGE)
 }
 
 fn hash_layer(layer: &LayerInstances, mut hash: u64) -> u64 {
