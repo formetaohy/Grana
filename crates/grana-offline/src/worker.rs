@@ -76,6 +76,31 @@ fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
     if cancel.cancelled() {
         return finish(Outcome::Cancelled);
     }
+    if let Some(written) = crate::page::write(&task.plan) {
+        sender.send_until(
+            Event::Progress {
+                id,
+                frame: 0,
+                total: 1,
+            },
+            stopped,
+        );
+        let outcome = match written {
+            Ok(path) => {
+                sender.send_until(
+                    Event::Progress {
+                        id,
+                        frame: 1,
+                        total: 1,
+                    },
+                    stopped,
+                );
+                Outcome::Complete { path }
+            }
+            Err(detail) => Outcome::Failed { detail },
+        };
+        return finish(outcome);
+    }
     let mut context = match Offline::headless() {
         Ok(context) => context,
         Err(detail) => return finish(Outcome::Failed { detail }),

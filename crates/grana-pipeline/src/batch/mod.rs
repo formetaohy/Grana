@@ -41,7 +41,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 12;
+const ANALYSIS_REVISION: u32 = 13;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -307,6 +307,14 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch significance: {error}"
+        )));
+    }
+    if let Err(error) = std::fs::write(
+        plan.output.join("comparison_frames.csv"),
+        quality::comparison_frames(&report.groups),
+    ) {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch comparison frames: {error}"
         )));
     }
     if let Err(error) = std::fs::write(

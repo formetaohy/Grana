@@ -6,7 +6,7 @@ use grana_ui::{
     Phase, Rect, Role, State, TextStyle, icon,
 };
 
-use crate::chart::{comparison_chart, group_names, set_names};
+use crate::chart::{ComparisonRequest, comparison_chart, group_names, set_names};
 use crate::message::Message;
 use crate::state::{ComparisonMetric, View};
 use crate::view;
@@ -463,8 +463,20 @@ fn comparison<'a>(
         return view::card(ctx, 6.0, children);
     }
     let metric = state.workspace.comparison_metric;
+    let axis = state.workspace.comparison_axis;
     let labels = ComparisonMetric::ALL.map(|metric| metric_label(language, metric));
+    let axes = [
+        grana_i18n::batch::conditions(language),
+        grana_i18n::batch::frames(language),
+    ];
     children.push(grana_ui::row().gap(8.0).align(Align::Center).children([
+        view::segmented(
+            ctx,
+            "comparison.axis",
+            &axes,
+            axis.index(),
+            Message::SetComparisonAxis,
+        ),
         view::segmented(
             ctx,
             "comparison.metric",
@@ -543,21 +555,22 @@ fn comparison<'a>(
         children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     }
-    let Some(built) = comparison_chart(
+    let Some(built) = comparison_chart(ComparisonRequest {
         rows,
-        state.batch_significance(),
+        tests: state.batch_significance(),
         metric,
-        group.as_deref(),
-        key.as_deref(),
-        state.workspace.distribution_style,
-        ctx.language(),
-    ) else {
+        axis,
+        group: group.as_deref(),
+        key: key.as_deref(),
+        style: state.workspace.distribution_style,
+        language: ctx.language(),
+    }) else {
         children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     };
     let slots = built.slots;
-    let chart = built.chart;
-    let style = Style::card(ctx.theme(), chart.style).with_language(ctx.language());
+    let page = built.page;
+    let style = Style::card(ctx.theme(), page.distribution()).with_language(ctx.language());
     let pointer = ctx.pointer();
     let count = slots.len();
     let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT, move |painter, info| {
@@ -565,12 +578,12 @@ fn comparison<'a>(
             pointer: info.rect.contains(pointer).then_some(pointer),
             ..Decor::default()
         };
-        chart.paint(painter, info.rect, &style, &decor);
+        page.paint(painter, info.rect, &style, &decor);
     })
     .key(Key::new("comparison.chart"))
     .cursor(Cursor::Crosshair)
     .on_pointer(move |pointer| {
-        if pointer.phase != Phase::Up || !pointer.rect.contains(pointer.position) {
+        if pointer.phase != Phase::Up || !pointer.rect.contains(pointer.position) || count == 0 {
             return None;
         }
         let frame = style.metrics.frame(pointer.rect);

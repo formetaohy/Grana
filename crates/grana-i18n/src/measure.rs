@@ -41,6 +41,7 @@ pub fn term(language: Language, english: &str) -> Option<String> {
         "quantile" => "分位数",
         "SD (σ)" => "标准差 (σ)",
         "distance" => "距离",
+        "nearest neighbour" => "最近邻",
         "center distance" => "中心距离",
         "inside" => "内部占比",
         "partner" => "配对对象",
@@ -73,6 +74,9 @@ labels! {
     scatter => "Scatter" / "散点图";
     distribution => "Distribution" / "分布";
     trend => "Trend" / "趋势";
+    ripley => "Ripley" / "Ripley";
+    ripley_title => "Ripley L" / "Ripley L";
+    no_spatial => "No spatial frames" / "无可分析的空间帧";
     box_plot => "Box" / "箱线图";
     violin_plot => "Violin" / "小提琴图";
     value => "Value" / "数值";
@@ -114,7 +118,10 @@ labels! {
     y_objects => "Y: Objects" / "Y: 对象数";
     x_groups => "X: Groups" / "X: 组";
     x_frame => "X: Frame" / "X: 帧";
+    x_radius => "X: r (µm)" / "X: r (µm)";
+    y_ripley => "Y: L − r (µm)" / "Y: L − r (µm)";
     x_conditions => "X: Conditions" / "X: 条件";
+    x_frames => "X: Frames" / "X: 帧";
     aggregate_mean => "Mean" / "均值";
     aggregate_sum => "Sum" / "总和";
     aggregate_minimum => "Min" / "最小值";
@@ -159,6 +166,9 @@ messages! {
     scatter_title(vertical: &str, horizontal: &str) => "{vertical} against {horizontal}" / "{vertical} 对 {horizontal}";
     distribution_title(column: &str) => "Distribution of {column}" / "{column} 分布";
     trend_title(column: &str) => "Trend of {column}" / "{column} 趋势";
+    ripley_summary(frames: u32, objects: u64) => "{frames} frames · {objects} objects · L − r against the radius" / "{frames} 帧 · {objects} 个对象 · L − r 随半径变化";
+    radial_readout(radius: &str, value: &str, low: &str, high: &str, frames: u64) => "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} frames" / "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} 帧";
     comparison_title(metric: &str) => "Comparison of {metric}" / "{metric}比较";
     comparison_summary(count: usize) => "{count} categories · images are the samples" / "{count} 个类别 · 图像为样本";
+    comparison_frames_summary(count: usize, frames: u32) => "{count} series over {frames} frames · band is the 95% CI across images" / "{count} 条曲线，跨越 {frames} 帧 · 波带为跨图像的 95% CI";
 }

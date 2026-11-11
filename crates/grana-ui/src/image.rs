@@ -25,10 +25,10 @@ struct Upload {
 }
 
 pub struct ImageAtlas {
-    device: Device,
+    device: Option<Device>,
     texture: Option<Texture>,
-    view: TextureView,
-    sampler: Sampler,
+    view: Option<TextureView>,
+    sampler: Option<Sampler>,
     shelves: Vec<Shelf>,
     slots: HashMap<u64, [f32; 4]>,
     uploads: Vec<Upload>,
@@ -60,10 +60,22 @@ impl ImageAtlas {
             ..Default::default()
         });
         Self {
-            device: device.clone(),
+            device: Some(device.clone()),
             texture: None,
-            view,
-            sampler,
+            view: Some(view),
+            sampler: Some(sampler),
+            shelves: Vec::new(),
+            slots: HashMap::new(),
+            uploads: Vec::new(),
+        }
+    }
+
+    pub(crate) fn detached() -> Self {
+        Self {
+            device: None,
+            texture: None,
+            view: None,
+            sampler: None,
             shelves: Vec::new(),
             slots: HashMap::new(),
             uploads: Vec::new(),
@@ -71,14 +83,19 @@ impl ImageAtlas {
     }
 
     pub fn view(&self) -> &TextureView {
-        &self.view
+        self.view
+            .as_ref()
+            .expect("an image atlas is bound to a device")
     }
 
     pub fn sampler(&self) -> &Sampler {
-        &self.sampler
+        self.sampler
+            .as_ref()
+            .expect("an image atlas is bound to a device")
     }
 
     pub fn slot(&mut self, bitmap: &Bitmap) -> Option<[f32; 4]> {
+        self.device.as_ref()?;
         if let Some(slot) = self.slots.get(&bitmap.identity()) {
             return Some(*slot);
         }
@@ -148,7 +165,8 @@ impl ImageAtlas {
         if self.texture.is_some() {
             return Some(());
         }
-        let texture = self.device.create_texture(&TextureDescriptor {
+        let device = self.device.as_ref()?;
+        let texture = device.create_texture(&TextureDescriptor {
             label: Some("grana.ui.images"),
             size: Extent3d {
                 width: SIZE,
@@ -162,7 +180,7 @@ impl ImageAtlas {
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        self.view = texture.create_view(&TextureViewDescriptor::default());
+        self.view = Some(texture.create_view(&TextureViewDescriptor::default()));
         self.texture = Some(texture);
         Some(())
     }

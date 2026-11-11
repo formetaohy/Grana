@@ -1,4 +1,4 @@
-use crate::math::binomial_half_cdf;
+use crate::math::binomial_cdf;
 use crate::math::student_quantile;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +113,14 @@ impl Sample {
     }
 
     pub fn median_interval(&self, level: f64) -> Option<(f64, f64)> {
+        self.quantile_interval(50.0, level)
+    }
+
+    pub fn quantile_interval(&self, percent: f64, level: f64) -> Option<(f64, f64)> {
+        assert!(
+            percent.is_finite() && percent > 0.0 && percent < 100.0,
+            "a quantile samples the interior of the unit interval"
+        );
         assert!(
             level.is_finite() && level > 0.0 && level < 1.0,
             "a confidence level lies inside the unit interval"
@@ -121,17 +129,13 @@ impl Sample {
         if n < 2 {
             return None;
         }
+        let probability = percent / 100.0;
         let tail = 0.5 * (1.0 - level);
-        let mut order = None;
-        for candidate in 1..=n / 2 {
-            if binomial_half_cdf(candidate - 1, n) <= tail {
-                order = Some(candidate);
-            } else {
-                break;
-            }
-        }
-        let order = order?;
-        Some((self.values[order - 1], self.values[n - order]))
+        let lower = (1..=n)
+            .take_while(|order| binomial_cdf(order - 1, n, probability) <= tail)
+            .last()?;
+        let upper = (1..=n).find(|order| binomial_cdf(order - 1, n, probability) >= 1.0 - tail)?;
+        Some((self.values[lower - 1], self.values[upper - 1]))
     }
 
     pub fn values(&self) -> &[f64] {

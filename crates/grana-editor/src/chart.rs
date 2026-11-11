@@ -1,9 +1,12 @@
-use grana_chart::{Category, Chart, Comparison, DistributionStyle, Gates, Heading, Note, Page};
+use grana_chart::{
+    Axis, Category, Chart, Comparison, Curve, CurvePoint, DistributionStyle, Gates, Heading, Note,
+    Page, SeriesChart, SeriesPage,
+};
 use grana_i18n::Language;
 use grana_measure::{Plot, Table};
 use grana_session::{BatchComparison, BatchSignificance, SessionView};
 
-use crate::state::{ComparisonMetric, Workspace};
+use crate::state::{ComparisonAxis, ComparisonMetric, Workspace};
 use crate::view::column_label;
 
 pub fn page(
@@ -15,8 +18,6 @@ pub fn page(
 }
 
 pub fn comparison_page(view: &SessionView<'_>, workspace: &Workspace) -> Option<Page> {
-    let language = workspace.language;
-    let metric = workspace.comparison_metric;
     let rows = view
         .batch
         .as_ref()
@@ -25,34 +26,46 @@ pub fn comparison_page(view: &SessionView<'_>, workspace: &Workspace) -> Option<
         .batch
         .as_ref()
         .map_or(&[][..], |batch| batch.significance);
-    let mut built = comparison_chart(
+    comparison_chart(ComparisonRequest {
         rows,
         tests,
-        metric,
-        workspace.comparison_group.as_deref(),
-        workspace.comparison_key.as_deref(),
-        workspace.distribution_style,
-        language,
-    )?;
-    built.chart.heading.title =
-        grana_i18n::measure::comparison_title(language, metric_name(language, metric));
-    Some(Page::Comparison(Box::new(built.chart)))
+        metric: workspace.comparison_metric,
+        axis: workspace.comparison_axis,
+        group: workspace.comparison_group.as_deref(),
+        key: workspace.comparison_key.as_deref(),
+        style: workspace.distribution_style,
+        language: workspace.language,
+    })
+    .map(|built| built.page)
 }
 
 pub struct ComparisonChart {
-    pub chart: Comparison,
+    pub page: Page,
     pub slots: Vec<(String, String)>,
 }
 
-pub(crate) fn comparison_chart(
-    rows: &[BatchComparison],
-    tests: &[BatchSignificance],
-    metric: ComparisonMetric,
-    group: Option<&str>,
-    key: Option<&str>,
-    style: DistributionStyle,
-    language: Language,
-) -> Option<ComparisonChart> {
+pub(crate) struct ComparisonRequest<'a> {
+    pub rows: &'a [BatchComparison],
+    pub tests: &'a [BatchSignificance],
+    pub metric: ComparisonMetric,
+    pub axis: ComparisonAxis,
+    pub group: Option<&'a str>,
+    pub key: Option<&'a str>,
+    pub style: DistributionStyle,
+    pub language: Language,
+}
+
+pub(crate) fn comparison_chart(request: ComparisonRequest<'_>) -> Option<ComparisonChart> {
+    let ComparisonRequest {
+        rows,
+        tests,
+        metric,
+        axis,
+        group,
+        key,
+        style,
+        language,
+    } = request;
     let groups = group_names(rows);
     let group = group.filter(|name| groups.iter().any(|candidate| candidate == name));
     let sets = set_names(rows, group);
@@ -65,43 +78,113 @@ pub(crate) fn comparison_chart(
     if visible.is_empty() {
         return None;
     }
-    let categories = visible
-        .iter()
-        .map(|row| Category {
-            label: category_label(row, groups.len(), sets.len()),
-            values: row
-                .samples
-                .iter()
-                .filter_map(|sample| metric.sample(sample))
-                .map(|value| value as f32)
-                .collect(),
-        })
-        .collect::<Vec<_>>();
     let slots = visible
         .iter()
         .map(|row| (row.group.clone(), row.key.clone()))
         .collect::<Vec<_>>();
-    let notes = comparison_notes(&slots, tests, metric);
-    let heading = Heading::new(
-        "",
-        format!("Y: {}", metric_axis(language, metric)),
-        grana_i18n::measure::x_conditions(language),
-    )
-    .with_summary(grana_i18n::measure::comparison_summary(
-        language,
-        visible.len(),
-    ))
-    .with_empty(grana_i18n::measure::no_groups_compare(language))
-    .with_language(language);
-    Some(ComparisonChart {
-        chart: Comparison {
-            heading,
-            categories,
-            notes,
-            style,
-        },
-        slots,
-    })
+    let title = grana_i18n::measure::comparison_title(language, metric_name(language, metric));
+    let y = format!("Y: {}", metric_axis(language, metric));
+    let heading = |x: String, summary: String| {
+        Heading::new(title.clone(), y.clone(), x)
+            .with_summary(summary)
+            .with_empty(grana_i18n::measure::no_groups_compare(language))
+            .with_language(language)
+    };
+    match axis {
+        ComparisonAxis::Conditions => {
+            let categories = visible
+                .iter()
+                .map(|row| Category {
+                    label: category_label(row, groups.len(), sets.len()),
+                    values: row
+                        .samples
+                        .iter()
+                        .filter_map(|sample| metric.sample(sample))
+                        .map(|value| value as f32)
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+            let notes = comparison_notes(&slots, tests, metric);
+            Some(ComparisonChart {
+                page: Page::Comparison(Box::new(Comparison {
+                    heading: heading(
+                        grana_i18n::measure::x_conditions(language).to_string(),
+                        grana_i18n::measure::comparison_summary(language, visible.len()),
+                    ),
+                    categories,
+                    notes,
+                    style,
+                })),
+                slots,
+            })
+        }
+        ComparisonAxis::Frames => {
+            let curves = visible
+                .iter()
+                .map(|row| Curve {
+                    label: category_label(row, groups.len(), sets.len()),
+                    points: row
+                        .frames
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(time, frames)| {
+                            let frame = frames[metric.index()]?;
+                            Some(CurvePoint {
+                                x: time as f32 + 1.0,
+                                value: frame.mean as f32,
+                                lower: frame.lower as f32,
+                                upper: frame.upper as f32,
+                            })
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+            let mut low = f32::INFINITY;
+            let mut high = f32::NEG_INFINITY;
+            let mut frames = 2u32;
+            for curve in &curves {
+                frames = frames.max(
+                    curve
+                        .points
+                        .iter()
+                        .map(|point| point.x as u32)
+                        .max()
+                        .unwrap_or(0),
+                );
+                for point in &curve.points {
+                    low = low.min(point.lower);
+                    high = high.max(point.upper);
+                }
+            }
+            if !(low.is_finite() && high.is_finite()) {
+                low = 0.0;
+                high = 1.0;
+            } else if high <= low {
+                let padding = (0.5 * low.abs()).max(0.5);
+                low -= padding;
+                high += padding;
+            }
+            Some(ComparisonChart {
+                page: Page::Series(Box::new(SeriesPage {
+                    heading: heading(
+                        grana_i18n::measure::x_frames(language).to_string(),
+                        grana_i18n::measure::comparison_frames_summary(
+                            language,
+                            curves.len(),
+                            frames,
+                        ),
+                    ),
+                    chart: SeriesChart {
+                        x: Axis::frames(1.0, frames as f32, 5),
+                        y: Axis::new(low, high, 4),
+                        curves,
+                    },
+                    style,
+                })),
+                slots: Vec::new(),
+            })
+        }
+    }
 }
 
 fn plot_page(
@@ -153,6 +236,11 @@ fn plot_page(
             format!("Y: {}", column_label(language, &columns[trend.column()])),
             grana_i18n::measure::x_frame(language).to_string(),
         ),
+        Plot::Ripley(_) => (
+            grana_i18n::measure::ripley_title(language).to_string(),
+            grana_i18n::measure::y_ripley(language).to_string(),
+            grana_i18n::measure::x_radius(language).to_string(),
+        ),
     };
     let gate = match &plot {
         Plot::Histogram(histogram) => Gates {
@@ -171,6 +259,7 @@ fn plot_page(
             x: None,
             y: range(measure.filters(), trend.column()),
         },
+        Plot::Ripley(_) => Gates::default(),
     };
     Some(Chart {
         heading: Heading::new(title, y, x)
@@ -190,6 +279,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
             grana_i18n::measure::no_objects(language)
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
+        Plot::Ripley(_) => grana_i18n::measure::no_spatial(language),
     }
 }
 
@@ -257,6 +347,9 @@ fn caption(plot: &Plot, table: &Table, language: Language) -> String {
             } else {
                 grana_i18n::measure::values_over_frames(language, trend.total(), trend.frames())
             }
+        }
+        Plot::Ripley(ripley) => {
+            grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects())
         }
     }
 }

@@ -20,6 +20,8 @@ labels! {
     pause => "Pause" / "暂停";
     run_batch => "Run Batch" / "运行批处理";
     comparison => "Comparison" / "比较";
+    conditions => "Conditions" / "条件";
+    frames => "Frames" / "帧";
     group => "Group" / "组";
     set => "Set" / "对象集";
     all_groups => "All groups" / "所有组";

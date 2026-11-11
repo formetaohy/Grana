@@ -147,6 +147,24 @@ pub enum RelationMetric {
 
 pub use grana_session::BatchMetric as ComparisonMetric;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ComparisonAxis {
+    #[default]
+    Conditions,
+    Frames,
+}
+
+impl ComparisonAxis {
+    pub const ALL: [Self; 2] = [Self::Conditions, Self::Frames];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Conditions => 0,
+            Self::Frames => 1,
+        }
+    }
+}
+
 impl RelationMetric {
     pub const ALL: [Self; 4] = [Self::Contact, Self::Distance, Self::Overlap, Self::Center];
 
@@ -240,6 +258,7 @@ pub struct Workspace {
     pub relation_filter: f32,
     pub distribution_style: DistributionStyle,
     pub comparison_metric: ComparisonMetric,
+    pub comparison_axis: ComparisonAxis,
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
@@ -283,6 +302,7 @@ impl Default for Workspace {
             relation_filter: 0.0,
             distribution_style: DistributionStyle::Box,
             comparison_metric: ComparisonMetric::default(),
+            comparison_axis: ComparisonAxis::default(),
             comparison_group: None,
             comparison_key: None,
             comparison_open: None,

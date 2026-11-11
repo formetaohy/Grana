@@ -4,7 +4,8 @@ use grana_chart::{
 };
 use grana_i18n::Language;
 use grana_measure::{
-    Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Scatter, Table, Trend,
+    Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Ripley, Scatter, Table,
+    Trend,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
 use grana_session::Command;
@@ -34,6 +35,10 @@ enum Readout {
     Group(usize),
     Frame {
         time: u32,
+        point: Option<usize>,
+    },
+    Radius {
+        radius: f32,
         point: Option<usize>,
     },
 }
@@ -83,6 +88,7 @@ impl PlotView<'_> {
                 x: None,
                 y: range(self.filters, trend.column()),
             },
+            Plot::Ripley(_) => Gates::default(),
         }
     }
 
@@ -109,6 +115,7 @@ impl PlotView<'_> {
                     self.table.value(row, trend.column()),
                 )))
             }
+            Plot::Ripley(_) => None,
         }
     }
 
@@ -156,9 +163,12 @@ pub fn view<'a>(
             distribution_readout(distribution, frame, pointer)
         }
         Plot::Trend(trend) if hovering => trend_readout(trend, frame, pointer),
-        Plot::Histogram(_) | Plot::Scatter(_) | Plot::Distribution(_) | Plot::Trend(_) => {
-            Readout::None
-        }
+        Plot::Ripley(ripley) if hovering => ripley_readout(ripley, frame, pointer),
+        Plot::Histogram(_)
+        | Plot::Scatter(_)
+        | Plot::Distribution(_)
+        | Plot::Trend(_)
+        | Plot::Ripley(_) => Readout::None,
     };
     let (title_y, title_x) = titles(plot, table, language);
     let heading = Heading::new("", title_y, title_x)
@@ -233,6 +243,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
             grana_i18n::measure::no_objects(language)
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
+        Plot::Ripley(_) => grana_i18n::measure::no_spatial(language),
     }
 }
 
@@ -269,6 +280,10 @@ fn titles(plot: &Plot, table: &Table, language: Language) -> (String, String) {
                 crate::view::column_label(language, &columns[trend.column()])
             ),
             grana_i18n::measure::x_frame(language).to_string(),
+        ),
+        Plot::Ripley(_) => (
+            grana_i18n::measure::y_ripley(language).to_string(),
+            grana_i18n::measure::x_radius(language).to_string(),
         ),
     }
 }
@@ -387,7 +402,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
             let unit = column.unit().suffix();
             match point.and_then(|index| trend.points().get(index)) {
                 Some(point) => {
-                    let mean = format!("{:.places$}", point.mean());
+                    let mean = format!("{:.places$}", point.value());
                     let low = format!("{:.places$}", point.lower());
                     let high = format!("{:.places$}", point.upper());
                     format!(
@@ -403,6 +418,27 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                     grana_i18n::measure::no_samples(language)
                 ),
             }
+        }
+        (Plot::Ripley(ripley), Readout::Radius { radius, point }) => {
+            match point.and_then(|index| ripley.points().get(index)) {
+                Some(point) => {
+                    let value = format!("{:.3}", point.value());
+                    let low = format!("{:.3}", point.lower());
+                    let high = format!("{:.3}", point.upper());
+                    grana_i18n::measure::radial_readout(
+                        language,
+                        &format!("{radius:.2}"),
+                        &value,
+                        &low,
+                        &high,
+                        point.frames(),
+                    )
+                }
+                None => grana_i18n::measure::no_spatial(language).to_string(),
+            }
+        }
+        (Plot::Ripley(ripley), _) => {
+            grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects())
         }
         (Plot::Trend(trend), _) => {
             if trend.points().is_empty() {
@@ -560,6 +596,27 @@ fn trend_readout(trend: &Trend, frame: Rect, pointer: Vec2) -> Readout {
     Readout::Frame { time, point }
 }
 
+fn ripley_axis(ripley: &Ripley) -> Axis {
+    Axis::new(0.0, ripley.radius(), 5)
+}
+
+fn ripley_readout(ripley: &Ripley, frame: Rect, pointer: Vec2) -> Readout {
+    let radius = ripley_axis(ripley)
+        .value_at_x(frame, pointer.x)
+        .clamp(0.0, ripley.radius());
+    let point = ripley
+        .points()
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            (left.radius() - radius)
+                .abs()
+                .total_cmp(&(right.radius() - radius).abs())
+        })
+        .map(|(index, _)| index);
+    Readout::Radius { radius, point }
+}
+
 fn group_index(distribution: &Distribution, observation: Observation) -> Option<usize> {
     let groups = distribution.groups();
     if groups.len() == 1 {
@@ -624,6 +681,11 @@ pub fn apply(
             distribution_apply(event, measure, table, distribution, workspace, commands)
         }
         Plot::Trend(trend) => trend_apply(event, measure, table, trend, workspace, commands),
+        Plot::Ripley(_) => {
+            if workspace.drag.view.is_some() {
+                workspace.drag = PlotDrag::default();
+            }
+        }
     }
 }
 
@@ -1067,6 +1129,7 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
         MeasureView::Scatter => column == axes[0] || column == axes[1],
         MeasureView::Distribution => column == axes[0],
         MeasureView::Trend => column == axes[0],
+        MeasureView::Ripley => false,
     };
     let mut indices = measure
         .filters()

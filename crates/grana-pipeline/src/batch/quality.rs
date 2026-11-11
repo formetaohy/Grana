@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use grana_measure::{Level, Measurement, Statistic, Table, channel_keys};
+use grana_measure::{Level, Mask, Measurement, Sample, Statistic, Table, channel_keys};
 use grana_scene::{ObjectSetId, Scene};
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,20 @@ impl Summary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameValue {
+    pub count: u64,
+    pub mean: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualityFrame {
+    pub time: u32,
+    pub values: [Option<FrameValue>; Metric::COUNT],
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Quality {
@@ -81,6 +95,8 @@ pub struct Quality {
     pub size: Option<Summary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intensity: Option<Summary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<QualityFrame>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -229,6 +245,20 @@ pub(super) fn of(
         statistic: Statistic::Mean,
     }
     .key(keys);
+    let columns = [
+        None,
+        table.column("volume_um3"),
+        table.column("area_um2"),
+        table
+            .column("diameter_um")
+            .or_else(|| table.column("length_um")),
+        table.column(&intensity),
+    ];
+    let mut admitted = vec![false; table.rows()];
+    for row in rows {
+        admitted[*row] = true;
+    }
+    let gated = Mask::of(table.rows(), |row| admitted[row]);
     Quality {
         dataset: dataset.to_string(),
         group: group.to_string(),
@@ -236,21 +266,82 @@ pub(super) fn of(
         name: object.name().to_string(),
         kind: object.kind().name().to_string(),
         objects: rows.len(),
-        volume: summary(table, rows, Some("volume_um3")),
-        area: summary(table, rows, Some("area_um2")),
-        size: summary(table, rows, Some("diameter_um"))
-            .or_else(|| summary(table, rows, Some("length_um"))),
-        intensity: summary(table, rows, Some(intensity.as_str())),
+        volume: summary(table, rows, columns[Metric::Volume.index()]),
+        area: summary(table, rows, columns[Metric::Area.index()]),
+        size: summary(table, rows, columns[Metric::Size.index()]),
+        intensity: summary(table, rows, columns[Metric::Intensity.index()]),
+        frames: frame_series(table, &gated, &columns),
     }
 }
 
-fn summary(table: &Table, rows: &[usize], key: Option<&str>) -> Option<Summary> {
-    let column = table.column(key?)?;
+fn summary(table: &Table, rows: &[usize], column: Option<usize>) -> Option<Summary> {
+    let column = column?;
     let values = rows
         .iter()
         .map(|row| f64::from(table.value(*row, column)))
         .collect::<Vec<_>>();
     Summary::of(&values)
+}
+
+fn frame_series(
+    table: &Table,
+    gated: &Mask,
+    columns: &[Option<usize>; Metric::COUNT],
+) -> Vec<QualityFrame> {
+    let trends = columns.map(|column| column.map(|column| table.trend(column, gated)));
+    let counts = frame_counts(table, gated);
+    let mut times = counts.keys().copied().collect::<Vec<_>>();
+    for trend in trends.iter().flatten() {
+        times.extend(trend.points().iter().map(|point| point.time()));
+    }
+    times.sort_unstable();
+    times.dedup();
+    times
+        .into_iter()
+        .map(|time| QualityFrame {
+            time,
+            values: std::array::from_fn(|index| {
+                if index == Metric::Objects.index() {
+                    return counts.get(&time).map(|count| FrameValue {
+                        count: *count,
+                        mean: *count as f64,
+                    });
+                }
+                trends[index]
+                    .as_ref()
+                    .and_then(|trend| trend.points().iter().find(|point| point.time() == time))
+                    .map(|point| FrameValue {
+                        count: point.count(),
+                        mean: f64::from(point.value()),
+                    })
+            }),
+        })
+        .collect()
+}
+
+fn frame_counts(table: &Table, gated: &Mask) -> BTreeMap<u32, u64> {
+    let first = table.column("first_frame");
+    let last = table.column("last_frame");
+    let mut counts = BTreeMap::<u32, u64>::new();
+    for row in gated.iter() {
+        let observation = table.observation(row);
+        if let Some(time) = observation.time() {
+            *counts.entry(time).or_default() += 1;
+            continue;
+        }
+        let (Some(first), Some(last)) = (first, last) else {
+            continue;
+        };
+        let start = table.value(row, first);
+        let end = table.value(row, last);
+        if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
+            continue;
+        }
+        for time in (start as u32 - 1)..=(end as u32 - 1) {
+            *counts.entry(time).or_default() += 1;
+        }
+    }
+    counts
 }
 
 pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
@@ -298,6 +389,15 @@ pub struct ComparisonSample {
     pub dataset: String,
     pub objects: usize,
     pub values: [Option<Summary>; Metric::COUNT],
+    pub frames: BTreeMap<u32, [Option<FrameValue>; Metric::COUNT]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ComparisonFrame {
+    pub mean: f64,
+    pub lower: f64,
+    pub upper: f64,
+    pub images: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -311,6 +411,7 @@ pub struct Comparison {
     pub means: [Option<f64>; Metric::COUNT],
     pub deviations: [Option<f64>; Metric::COUNT],
     pub samples: Vec<ComparisonSample>,
+    pub frames: Vec<[Option<ComparisonFrame>; Metric::COUNT]>,
 }
 
 #[derive(Clone, Debug)]
@@ -353,6 +454,7 @@ pub(super) fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) ->
             means[index] = mean;
             deviations[index] = deviation;
         }
+        let frames = bucket.frames();
         compared.push(Comparison {
             group,
             key,
@@ -362,10 +464,46 @@ pub(super) fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) ->
             objects: bucket.objects,
             means,
             deviations,
+            frames,
             samples: bucket.samples,
         });
     }
     compared
+}
+
+pub(super) fn comparison_frames(comparison: &[Comparison]) -> String {
+    let mut fields = vec![
+        "group", "set_key", "set", "kind", "metric", "frame", "images",
+    ];
+    fields.extend(["value", "lower", "upper"]);
+    let mut lines = vec![grana_measure::csv::line(&fields)];
+    for row in comparison {
+        for metric in Metric::ALL {
+            for (time, frame) in row.frames.iter().enumerate() {
+                let Some(frame) = frame[metric.index()] else {
+                    continue;
+                };
+                let values = [
+                    format!("{:.decimals$}", frame.mean, decimals = metric.decimals()),
+                    format!("{:.decimals$}", frame.lower, decimals = metric.decimals()),
+                    format!("{:.decimals$}", frame.upper, decimals = metric.decimals()),
+                ];
+                lines.push(grana_measure::csv::line(&[
+                    row.group.as_str(),
+                    row.key.as_str(),
+                    row.name.as_str(),
+                    row.kind.as_str(),
+                    metric.key(),
+                    &time.to_string(),
+                    &frame.images.to_string(),
+                    values[0].as_str(),
+                    values[1].as_str(),
+                    values[2].as_str(),
+                ]));
+            }
+        }
+    }
+    lines.concat()
 }
 
 pub(super) fn samples(comparison: &[Comparison]) -> String {
@@ -438,15 +576,57 @@ impl Bucket {
                 bucket.push(*summary);
             }
         }
+        let frames = quality
+            .frames
+            .iter()
+            .map(|frame| (frame.time, frame.values))
+            .collect::<BTreeMap<_, _>>();
         self.samples.push(ComparisonSample {
             dataset: quality.dataset.clone(),
             objects: quality.objects,
             values,
+            frames,
         });
     }
 
     fn pooled(&self, metric: Metric) -> (Option<f64>, Option<f64>) {
         pooled(&self.summaries[metric.index()])
+    }
+
+    fn frames(&self) -> Vec<[Option<ComparisonFrame>; Metric::COUNT]> {
+        let span = self
+            .samples
+            .iter()
+            .flat_map(|sample| sample.frames.keys())
+            .max()
+            .map_or(0, |time| time + 1) as usize;
+        let mut frames = vec![[None; Metric::COUNT]; span];
+        for metric in Metric::ALL {
+            let mut pooled = BTreeMap::<u32, Vec<f64>>::new();
+            for sample in &self.samples {
+                for (time, values) in &sample.frames {
+                    if let Some(value) = values[metric.index()] {
+                        pooled.entry(*time).or_default().push(value.mean);
+                    }
+                }
+            }
+            for (time, means) in pooled {
+                let Some(slot) = frames.get_mut(time as usize) else {
+                    continue;
+                };
+                let mean = means.iter().sum::<f64>() / means.len() as f64;
+                let (lower, upper) = Sample::of(&means)
+                    .and_then(|sample| sample.mean_interval(0.95))
+                    .unwrap_or((mean, mean));
+                slot[metric.index()] = Some(ComparisonFrame {
+                    mean,
+                    lower,
+                    upper,
+                    images: means.len(),
+                });
+            }
+        }
+        frames
     }
 }
 

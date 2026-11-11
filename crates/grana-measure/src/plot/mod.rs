@@ -6,6 +6,7 @@ mod summary;
 mod trend;
 
 use crate::mask::Mask;
+use crate::spatial::{Ripley, Window};
 use crate::table::Table;
 
 pub use distribution::{DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries};
@@ -21,15 +22,17 @@ pub enum MeasureView {
     Scatter,
     Distribution,
     Trend,
+    Ripley,
 }
 
 impl MeasureView {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Table,
         Self::Histogram,
         Self::Scatter,
         Self::Distribution,
         Self::Trend,
+        Self::Ripley,
     ];
 
     pub fn index(self) -> u8 {
@@ -39,6 +42,7 @@ impl MeasureView {
             Self::Scatter => 2,
             Self::Distribution => 3,
             Self::Trend => 4,
+            Self::Ripley => 5,
         }
     }
 
@@ -53,6 +57,7 @@ impl MeasureView {
             Self::Scatter => "scatter",
             Self::Distribution => "distribution",
             Self::Trend => "trend",
+            Self::Ripley => "ripley",
         }
     }
 
@@ -63,8 +68,14 @@ impl MeasureView {
     pub fn plot(self) -> Option<Self> {
         match self {
             Self::Table => None,
-            Self::Histogram | Self::Scatter | Self::Distribution | Self::Trend => Some(self),
+            Self::Histogram | Self::Scatter | Self::Distribution | Self::Trend | Self::Ripley => {
+                Some(self)
+            }
         }
+    }
+
+    pub fn columned(self) -> bool {
+        self != Self::Ripley
     }
 }
 
@@ -98,6 +109,7 @@ pub enum Plot {
     Scatter(Scatter),
     Distribution(Distribution),
     Trend(Trend),
+    Ripley(Ripley),
 }
 
 impl Plot {
@@ -107,12 +119,19 @@ impl Plot {
             Self::Scatter(_) => MeasureView::Scatter,
             Self::Distribution(_) => MeasureView::Distribution,
             Self::Trend(_) => MeasureView::Trend,
+            Self::Ripley(_) => MeasureView::Ripley,
         }
     }
 }
 
 impl Table {
-    pub fn plot(&self, view: MeasureView, axes: [usize; 2], gated: &Mask) -> Option<Plot> {
+    pub fn plot(
+        &self,
+        view: MeasureView,
+        axes: [usize; 2],
+        gated: &Mask,
+        window: Window,
+    ) -> Option<Plot> {
         let columns = self.columns().len();
         assert!(
             axes.iter().all(|axis| *axis < columns),
@@ -131,6 +150,10 @@ impl Table {
                 Some(Plot::Distribution(self.distribution(axes[0], gated)))
             }
             MeasureView::Trend => Some(Plot::Trend(self.trend(axes[0], gated))),
+            MeasureView::Ripley => Some(Plot::Ripley(crate::spatial::ripley(
+                &self.gated_points(gated),
+                window,
+            )?)),
         }
     }
 }

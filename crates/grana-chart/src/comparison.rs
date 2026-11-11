@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_measure::DistributionSeries;
-use grana_ui::{Align, Corners, Mark, Painter, Rect, TextStyle, Ui};
+use grana_ui::{Align, Corners, Mark, Painter, Rect, TextStyle, Theme};
 
 use crate::axis::Axis;
 use crate::chart::{HEIGHT, Heading, WIDTH};
@@ -78,13 +78,14 @@ impl Comparison {
         [WIDTH, HEIGHT]
     }
 
-    pub(crate) fn marks<A: Clone>(&self, ui: &mut Ui<A>) -> Vec<Mark> {
-        let theme = *ui.theme();
+    pub(crate) fn marks(&self) -> Vec<Mark> {
+        let mut recorder = grana_ui::Recorder::new(Theme::dark());
+        let theme = *recorder.theme();
         let size = self.size();
         let points = Vec2::new(size[0] as f32, size[1] as f32);
         let page = Rect::from_min_size(Vec2::ZERO, points);
         let style = Style::page(&theme, self.style);
-        ui.figure_marks(points, 1.0, |painter| {
+        recorder.marks(points, |painter| {
             painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
             self.paint(painter, page, &style, &Decor::default());
         })
@@ -98,31 +99,7 @@ impl Comparison {
         let metrics = style.metrics;
         let palette = style.palette;
         let style = &style;
-        if !self.heading.title.is_empty() {
-            painter.text_in(
-                metrics.title_band(rect),
-                &self.heading.title,
-                TextStyle::new(metrics.title, palette.text_primary),
-                Align::Center,
-            );
-        }
-        let label = TextStyle::new(metrics.label, palette.text_tertiary);
-        let band = metrics.label_band(rect);
-        painter.text_in(band, &self.heading.y, label, Align::Center);
-        painter.text_in(
-            band,
-            &self.heading.x,
-            label.aligned(Align::End),
-            Align::Center,
-        );
-        if !self.heading.summary.is_empty() {
-            painter.text_in(
-                metrics.summary_band(rect),
-                &self.heading.summary,
-                TextStyle::new(metrics.summary, palette.text_tertiary).truncating(),
-                Align::Center,
-            );
-        }
+        crate::chart::heading(painter, rect, &self.heading, style);
         let frame = metrics.frame(rect);
         if self.categories.is_empty() {
             if let Some(empty) = &self.heading.empty {

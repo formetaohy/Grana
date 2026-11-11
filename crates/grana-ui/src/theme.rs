@@ -137,6 +137,17 @@ impl Palette {
             ..self
         }
     }
+
+    pub fn series(self) -> [Color; 6] {
+        [
+            self.accent,
+            Color::bytes(48, 209, 88),
+            Color::bytes(255, 159, 10),
+            Color::bytes(255, 69, 58),
+            Color::bytes(191, 90, 242),
+            Color::bytes(90, 200, 250),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

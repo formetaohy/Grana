@@ -76,15 +76,19 @@ pub fn normal_two_sided(z: f64) -> f64 {
     regularized_gamma_q(0.5, 0.5 * z * z).clamp(0.0, 1.0)
 }
 
-pub(crate) fn binomial_half_cdf(k: usize, n: usize) -> f64 {
+pub(crate) fn binomial_cdf(k: usize, n: usize, probability: f64) -> f64 {
     assert!(
         n > 0,
         "a binomial count samples a positive number of trials"
     );
+    assert!(
+        probability.is_finite() && probability > 0.0 && probability < 1.0,
+        "a binomial trial samples an interior probability"
+    );
     if k >= n {
         return 1.0;
     }
-    regularized_beta((n - k) as f64, (k + 1) as f64, 0.5)
+    regularized_beta((n - k) as f64, (k + 1) as f64, 1.0 - probability)
 }
 
 fn student_cdf(t: f64, df: f64) -> f64 {

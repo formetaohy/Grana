@@ -56,6 +56,11 @@ impl Mask {
         self.count
     }
 
+    pub fn contains(&self, row: usize) -> bool {
+        assert!(row < self.rows, "a mask answers for its own rows");
+        self.words[row / WORD] & (1u64 << (row % WORD)) != 0
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.words
             .iter()

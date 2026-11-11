@@ -5,6 +5,7 @@ mod export;
 mod figure;
 mod lineage;
 mod offline;
+mod page;
 mod plan;
 mod sink;
 mod task;

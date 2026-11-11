@@ -308,6 +308,12 @@ impl<'a> Painter<'a> {
         if rect.is_empty() || !self.clip.rect.intersects(rect) {
             return;
         }
+        let clip = self.clip.rect;
+        self.mark(Mark::Bitmap {
+            rect,
+            bitmap: bitmap.clone(),
+            clip,
+        });
         let Some(uv) = self.images.slot(bitmap) else {
             return;
         };
@@ -316,12 +322,6 @@ impl<'a> Painter<'a> {
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.uv = uv;
         self.push(instance);
-        let clip = self.clip.rect;
-        self.mark(Mark::Bitmap {
-            rect,
-            bitmap: bitmap.clone(),
-            clip,
-        });
     }
 
     pub fn contour(&mut self, points: &[Vec2], color: Color) {

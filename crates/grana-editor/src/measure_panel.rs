@@ -44,7 +44,7 @@ pub fn view<'a>(
     top += TOOLBAR_HEIGHT;
     let measured = state.measure.table().is_some();
     let mode = state.measure.view();
-    if measured && mode != MeasureView::Table {
+    if measured && mode != MeasureView::Table && mode.columned() {
         let bar = Rect::from_min_size(
             Vec2::new(rect.min.x, top + 4.0),
             Vec2::new(rect.width(), 28.0),
@@ -360,6 +360,7 @@ fn plot_bar<'a>(
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
     let gated = match view {
+        MeasureView::Ripley => false,
         MeasureView::Trend => state
             .measure
             .filters()
@@ -391,71 +392,79 @@ fn plot_bar<'a>(
         .unwrap_or(0);
     let options_x = options.clone();
     let mut items = Vec::new();
-    if view == MeasureView::Distribution || view == MeasureView::Trend {
-        items.push(field_label(ctx, grana_i18n::measure::value(language)));
-        items.push(combo(
-            ctx,
-            "measure.plot.x",
-            180.0,
-            selected_x,
-            &labels,
-            move |index| match options_x.get(index) {
-                Some((column, _)) if *column != axes[0] => Message::Command(Command::SetPlotAxis {
-                    axis: PlotAxis::X,
-                    column: *column,
-                }),
-                _ => Message::Noop,
-            },
-        ));
-        if view == MeasureView::Distribution {
-            let styles = DistributionStyle::ALL
-                .iter()
-                .copied()
-                .map(|style| distribution_style_label(language, style))
-                .collect::<Vec<_>>();
-            items.push(field_label(ctx, grana_i18n::measure::style(language)));
-            items.push(view::segmented(
-                ctx,
-                "measure.distribution",
-                &styles,
-                state.workspace.distribution_style.index(),
-                Message::SetDistributionStyle,
-            ));
-        }
-    } else {
-        items.push(field_label(ctx, grana_i18n::measure::x_axis(language)));
-        items.push(combo(
-            ctx,
-            "measure.plot.x",
-            180.0,
-            selected_x,
-            &labels,
-            move |index| match options_x.get(index) {
-                Some((column, _)) if *column != axes[0] => Message::Command(Command::SetPlotAxis {
-                    axis: PlotAxis::X,
-                    column: *column,
-                }),
-                _ => Message::Noop,
-            },
-        ));
-        if view == MeasureView::Scatter {
-            items.push(field_label(ctx, grana_i18n::measure::y_axis(language)));
+    match view {
+        MeasureView::Ripley => {}
+        MeasureView::Distribution | MeasureView::Trend => {
+            items.push(field_label(ctx, grana_i18n::measure::value(language)));
             items.push(combo(
                 ctx,
-                "measure.plot.y",
+                "measure.plot.x",
                 180.0,
-                selected_y,
+                selected_x,
                 &labels,
-                move |index| match options.get(index) {
-                    Some((column, _)) if *column != axes[1] => {
+                move |index| match options_x.get(index) {
+                    Some((column, _)) if *column != axes[0] => {
                         Message::Command(Command::SetPlotAxis {
-                            axis: PlotAxis::Y,
+                            axis: PlotAxis::X,
                             column: *column,
                         })
                     }
                     _ => Message::Noop,
                 },
             ));
+            if view == MeasureView::Distribution {
+                let styles = DistributionStyle::ALL
+                    .iter()
+                    .copied()
+                    .map(|style| distribution_style_label(language, style))
+                    .collect::<Vec<_>>();
+                items.push(field_label(ctx, grana_i18n::measure::style(language)));
+                items.push(view::segmented(
+                    ctx,
+                    "measure.distribution",
+                    &styles,
+                    state.workspace.distribution_style.index(),
+                    Message::SetDistributionStyle,
+                ));
+            }
+        }
+        MeasureView::Table | MeasureView::Histogram | MeasureView::Scatter => {
+            items.push(field_label(ctx, grana_i18n::measure::x_axis(language)));
+            items.push(combo(
+                ctx,
+                "measure.plot.x",
+                180.0,
+                selected_x,
+                &labels,
+                move |index| match options_x.get(index) {
+                    Some((column, _)) if *column != axes[0] => {
+                        Message::Command(Command::SetPlotAxis {
+                            axis: PlotAxis::X,
+                            column: *column,
+                        })
+                    }
+                    _ => Message::Noop,
+                },
+            ));
+            if view == MeasureView::Scatter {
+                items.push(field_label(ctx, grana_i18n::measure::y_axis(language)));
+                items.push(combo(
+                    ctx,
+                    "measure.plot.y",
+                    180.0,
+                    selected_y,
+                    &labels,
+                    move |index| match options.get(index) {
+                        Some((column, _)) if *column != axes[1] => {
+                            Message::Command(Command::SetPlotAxis {
+                                axis: PlotAxis::Y,
+                                column: *column,
+                            })
+                        }
+                        _ => Message::Noop,
+                    },
+                ));
+            }
         }
     }
     if gated {
@@ -976,6 +985,7 @@ fn view_label(language: Language, view: MeasureView) -> &'static str {
         MeasureView::Scatter => grana_i18n::measure::scatter(language),
         MeasureView::Distribution => grana_i18n::measure::distribution(language),
         MeasureView::Trend => grana_i18n::measure::trend(language),
+        MeasureView::Ripley => grana_i18n::measure::ripley(language),
     }
 }
 

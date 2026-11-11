@@ -1,14 +1,14 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::mask::Mask;
 use crate::sample::Sample;
-use crate::table::Table;
+use crate::table::{Group, Table};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrendPoint {
     time: u32,
     count: u64,
-    mean: f32,
+    value: f32,
     lower: f32,
     upper: f32,
 }
@@ -22,8 +22,8 @@ impl TrendPoint {
         self.count
     }
 
-    pub fn mean(&self) -> f32 {
-        self.mean
+    pub fn value(&self) -> f32 {
+        self.value
     }
 
     pub fn lower(&self) -> f32 {
@@ -77,45 +77,30 @@ impl Trend {
 }
 
 impl Table {
-    pub(crate) fn trend(&self, column: usize, gated: &Mask) -> Trend {
-        let mut total = 0u64;
-        for row in 0..self.rows() {
-            if self.observation(row).time().is_some() && self.value(row, column).is_finite() {
-                total += 1;
-            }
-        }
-        let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
-        for row in gated.iter() {
-            let Some(time) = self.observation(row).time() else {
-                continue;
-            };
-            let value = self.value(row, column);
-            if value.is_finite() {
-                buckets.entry(time).or_default().push(f64::from(value));
-            }
-        }
+    pub fn trend(&self, column: usize, gated: &Mask) -> Trend {
+        let aggregate = self.aggregate();
+        let (buckets, total, frames) = self.trend_buckets(column, gated);
         let mut points = Vec::with_capacity(buckets.len());
         let mut low = f32::INFINITY;
         let mut high = f32::NEG_INFINITY;
         let mut gated_count = 0u64;
         for (time, values) in buckets {
-            let sample = Sample::new(values).expect("a trend bucket holds a finite value");
-            let (lower, upper) = sample
-                .mean_interval(0.95)
-                .unwrap_or((sample.mean(), sample.mean()));
-            let mean = sample.mean() as f32;
+            let Some(sample) = Sample::new(values) else {
+                continue;
+            };
+            let (value, interval) = aggregate.of_sample(&sample);
+            let (lower, upper) = interval.unwrap_or((value, value));
             low = low.min(lower as f32);
             high = high.max(upper as f32);
             gated_count += sample.len() as u64;
             points.push(TrendPoint {
                 time,
                 count: sample.len() as u64,
-                mean,
+                value: value as f32,
                 lower: lower as f32,
                 upper: upper as f32,
             });
         }
-        let frames = points.last().map_or(0, |point| point.time + 1);
         if !(low.is_finite() && high.is_finite()) {
             low = 0.0;
             high = 1.0;
@@ -133,5 +118,122 @@ impl Table {
             gated: gated_count,
             frames,
         }
+    }
+
+    fn trend_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
+        if let Some(basis) = self.basis() {
+            if let Some(source) = self.source(column) {
+                return self.raw_buckets(basis, source, gated);
+            }
+            if self.group() == Group::Track
+                && let Some(buckets) = self.lifetime_buckets(column, gated)
+            {
+                return buckets;
+            }
+        }
+        self.row_buckets(column, gated)
+    }
+
+    fn raw_buckets(
+        &self,
+        basis: &Table,
+        source: usize,
+        gated: &Mask,
+    ) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
+        let frames = match self.group() {
+            Group::Object | Group::Track => BTreeSet::new(),
+            Group::Timepoint => gated
+                .iter()
+                .filter_map(|row| self.observation(row).time())
+                .collect::<BTreeSet<_>>(),
+        };
+        let tracks = match self.group() {
+            Group::Object | Group::Timepoint => BTreeSet::new(),
+            Group::Track => gated
+                .iter()
+                .filter_map(|row| self.observation(row).track())
+                .collect::<BTreeSet<_>>(),
+        };
+        let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
+        let mut total = 0u64;
+        let mut span = 0u32;
+        for row in 0..basis.rows() {
+            let Some(time) = basis.observation(row).time() else {
+                continue;
+            };
+            span = span.max(time + 1);
+            let value = basis.value(row, source);
+            if !value.is_finite() {
+                continue;
+            }
+            total += 1;
+            let admitted = match self.group() {
+                Group::Object => true,
+                Group::Timepoint => frames.contains(&time),
+                Group::Track => basis
+                    .observation(row)
+                    .track()
+                    .is_some_and(|track| tracks.contains(&track)),
+            };
+            if admitted {
+                buckets.entry(time).or_default().push(f64::from(value));
+            }
+        }
+        (buckets, total, span)
+    }
+
+    fn lifetime_buckets(
+        &self,
+        column: usize,
+        gated: &Mask,
+    ) -> Option<(BTreeMap<u32, Vec<f64>>, u64, u32)> {
+        let first = self.column("first_frame")?;
+        let last = self.column("last_frame")?;
+        let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
+        let mut total = 0u64;
+        let mut span = 0u32;
+        for row in 0..self.rows() {
+            let value = self.value(row, column);
+            if !value.is_finite() {
+                continue;
+            }
+            let start = self.value(row, first);
+            let end = self.value(row, last);
+            if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
+                continue;
+            }
+            let start = start as u32 - 1;
+            let end = end as u32 - 1;
+            span = span.max(end + 1);
+            total += u64::from(end - start + 1);
+            if !gated.contains(row) {
+                continue;
+            }
+            for time in start..=end {
+                buckets.entry(time).or_default().push(f64::from(value));
+            }
+        }
+        Some((buckets, total, span))
+    }
+
+    fn row_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
+        let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
+        let mut total = 0u64;
+        let mut span = 0u32;
+        for row in 0..self.rows() {
+            let Some(time) = self.observation(row).time() else {
+                continue;
+            };
+            span = span.max(time + 1);
+            let value = self.value(row, column);
+            if !value.is_finite() {
+                continue;
+            }
+            total += 1;
+            if gated.contains(row) {
+                buckets.entry(time).or_default().push(f64::from(value));
+            }
+        }
+        (buckets, total, span)
     }
 }

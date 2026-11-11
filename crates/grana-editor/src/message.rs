@@ -85,6 +85,7 @@ pub enum Message {
     SetRelationFilter(f32),
     SetDistributionStyle(usize),
     SetComparisonMetric(usize),
+    SetComparisonAxis(usize),
     SetComparisonGroup(Option<String>),
     SetComparisonKey(Option<String>),
     ToggleComparisonDetail {

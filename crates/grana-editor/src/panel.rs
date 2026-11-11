@@ -617,6 +617,12 @@ pub fn apply(
                     workspace.comparison_metric = metric;
                 }
             }
+            Message::SetComparisonAxis(index) => {
+                if let Some(axis) = crate::state::ComparisonAxis::ALL.get(index).copied() {
+                    workspace.comparison_axis = axis;
+                    workspace.comparison_open = None;
+                }
+            }
             Message::SetComparisonGroup(group) => {
                 workspace.comparison_group = group;
                 workspace.comparison_key = None;

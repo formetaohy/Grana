@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Plot, PlotAxis, Scope, Table,
+    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Plot, PlotAxis, Scope, Table, Window,
 };
 
 use glam::Vec3;
@@ -221,8 +221,11 @@ impl Measure {
         self.plot.as_ref()
     }
 
-    pub fn plot_request(&mut self) -> Option<PlotRequest> {
+    pub fn plot_request(&mut self, window: Option<Window>) -> Option<PlotRequest> {
         if !self.plot_wanted || self.plot_pending.is_some() || self.view.plot().is_none() {
+            return None;
+        }
+        if self.view == MeasureView::Ripley && window.is_none() {
             return None;
         }
         let table = Arc::clone(self.table.as_ref()?);
@@ -236,6 +239,7 @@ impl Measure {
             mask: Arc::clone(&self.mask),
             view: self.view,
             axes: self.axes,
+            window,
         })
     }
 
@@ -973,6 +977,7 @@ pub struct PlotRequest {
     mask: Arc<Mask>,
     view: MeasureView,
     axes: [usize; 2],
+    window: Option<Window>,
 }
 
 impl PlotRequest {
@@ -981,7 +986,8 @@ impl PlotRequest {
     }
 
     pub fn build(&self) -> Option<Plot> {
-        self.table.plot(self.view, self.axes, &self.mask)
+        let window = self.window?;
+        self.table.plot(self.view, self.axes, &self.mask, window)
     }
 }
 
@@ -1103,6 +1109,7 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.starts_with("pearson_")
                     || key.starts_with("overlap_")
                     || key.ends_with("_distance_um")
+                    || key.starts_with(grana_measure::NEIGHBOUR_KEY)
                     || key.ends_with("_inside")
                     || key.ends_with("_count")
                     || key == grana_measure::SCORE_KEY

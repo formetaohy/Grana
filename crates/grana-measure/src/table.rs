@@ -1,3 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use grana_object::{FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
 
 use crate::child::Child;
@@ -9,6 +12,10 @@ use crate::mask::Mask;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
 use crate::sample::Sample;
+use crate::spatial;
+
+pub const NEIGHBOUR_KEY: &str = "nearest_distance_um";
+pub const NEIGHBOUR_LABEL: &str = "nearest neighbour";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -214,6 +221,26 @@ impl Aggregate {
             }
         }
     }
+
+    pub(crate) fn of_sample(self, sample: &Sample) -> (f64, Option<(f64, f64)>) {
+        match self.kind {
+            Kind::Mean => (sample.mean(), sample.mean_interval(0.95)),
+            Kind::Sum => (
+                sample.mean() * sample.len() as f64,
+                sample.mean_interval(0.95).map(|(lower, upper)| {
+                    (lower * sample.len() as f64, upper * sample.len() as f64)
+                }),
+            ),
+            Kind::Quantile => (
+                sample.quantile(self.percent as f64),
+                sample.quantile_interval(self.percent as f64, 0.95),
+            ),
+            Kind::Minimum => (sample.minimum(), None),
+            Kind::Maximum => (sample.maximum(), None),
+            Kind::Deviation => (sample.deviation().unwrap_or(0.0), None),
+            Kind::Mad => (sample.mad(), None),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,6 +413,10 @@ pub struct Table {
     identity: usize,
     observations: Vec<Observation>,
     values: Vec<f32>,
+    group: Group,
+    aggregate: Aggregate,
+    basis: Option<Arc<Table>>,
+    sources: Vec<Option<usize>>,
 }
 
 impl Table {
@@ -431,10 +462,20 @@ impl Table {
             );
         }
         let keys = channel_keys(channels);
+        let mut objects = object_table(frames, tracks, channels, &keys, frame_interval);
+        objects.attach_neighbours();
         match group {
-            Group::Object => object_table(frames, tracks, channels, &keys, frame_interval),
-            Group::Track => track_table(frames, tracks, channels, &keys, aggregate),
-            Group::Timepoint => timepoint_table(frames, channels, &keys, frame_interval, aggregate),
+            Group::Object => objects,
+            Group::Track => {
+                let mut table = track_table(frames, tracks, channels, &keys, aggregate);
+                table.attach(Arc::new(objects));
+                table
+            }
+            Group::Timepoint => {
+                let mut table = timepoint_table(frames, channels, &keys, frame_interval, aggregate);
+                table.attach(Arc::new(objects));
+                table
+            }
         }
     }
 
@@ -443,6 +484,8 @@ impl Table {
         identity: usize,
         observations: Vec<Observation>,
         values: Vec<f32>,
+        group: Group,
+        aggregate: Aggregate,
     ) -> Self {
         assert_eq!(
             values.len(),
@@ -451,15 +494,25 @@ impl Table {
         );
         assert!(!columns.is_empty(), "a table has at least one column");
         assert!(identity < columns.len(), "a table keeps an identity column");
+        let sources = vec![None; columns.len()];
         Self {
             columns,
             identity,
             observations,
             values,
+            group,
+            aggregate,
+            basis: None,
+            sources,
         }
     }
 
     pub fn with_column(mut self, column: Column, values: Vec<f32>) -> Self {
+        self.append(column, values, None);
+        self
+    }
+
+    fn append(&mut self, column: Column, values: Vec<f32>, source: Option<usize>) {
         let rows = self.observations.len();
         assert_eq!(
             values.len(),
@@ -479,8 +532,105 @@ impl Table {
             appended.push(value);
         }
         self.columns.push(column);
+        self.sources.push(source);
         self.values = appended;
-        self
+    }
+
+    fn attach_neighbours(&mut self) {
+        let (Some(x), Some(y), Some(z)) = (
+            self.column("x_um"),
+            self.column("y_um"),
+            self.column("z_um"),
+        ) else {
+            return;
+        };
+        let mut values = vec![f32::NAN; self.rows()];
+        let mut frames = BTreeMap::<u32, Vec<(usize, [f32; 3])>>::new();
+        for row in 0..self.rows() {
+            let point = [self.value(row, x), self.value(row, y), self.value(row, z)];
+            if point.iter().any(|value| !value.is_finite()) {
+                continue;
+            }
+            let Some(time) = self.observation(row).time() else {
+                continue;
+            };
+            frames.entry(time).or_default().push((row, point));
+        }
+        for members in frames.into_values() {
+            let points = members.iter().map(|(_, point)| *point).collect::<Vec<_>>();
+            let distances = spatial::neighbour_distances(&points);
+            for ((row, _), distance) in members.iter().zip(distances) {
+                values[*row] = distance;
+            }
+        }
+        self.append(
+            Column::new(NEIGHBOUR_LABEL, NEIGHBOUR_KEY, Unit::Micrometer, 3),
+            values,
+            None,
+        );
+    }
+
+    fn attach(&mut self, basis: Arc<Table>) {
+        self.sources = self
+            .columns
+            .iter()
+            .map(|column| aggregated_source(&basis, column, self.aggregate))
+            .collect();
+        if let Some(source) = basis.column(NEIGHBOUR_KEY) {
+            let base = &basis.columns()[source];
+            let column = aggregate_column(base, self.aggregate);
+            let values = self.aggregate_basis(&basis, source);
+            self.append(column, values, Some(source));
+        }
+        self.basis = Some(basis);
+    }
+
+    fn aggregate_basis(&self, basis: &Table, column: usize) -> Vec<f32> {
+        if self.group == Group::Object {
+            return Vec::new();
+        }
+        let key = |row: usize| match self.group {
+            Group::Object => None,
+            Group::Track => basis.observation(row).track(),
+            Group::Timepoint => basis.observation(row).time().map(|time| time as usize),
+        };
+        let mut buckets = BTreeMap::<usize, Vec<f32>>::new();
+        for row in 0..basis.rows() {
+            let value = basis.value(row, column);
+            if !value.is_finite() {
+                continue;
+            }
+            if let Some(key) = key(row) {
+                buckets.entry(key).or_default().push(value);
+            }
+        }
+        (0..self.rows())
+            .map(|row| {
+                let key = match self.group {
+                    Group::Object => None,
+                    Group::Track => self.observation(row).track(),
+                    Group::Timepoint => self.observation(row).time().map(|time| time as usize),
+                };
+                key.and_then(|key| buckets.get(&key))
+                    .map_or(f32::NAN, |values| self.aggregate.apply(values))
+            })
+            .collect()
+    }
+
+    pub(crate) fn group(&self) -> Group {
+        self.group
+    }
+
+    pub(crate) fn aggregate(&self) -> Aggregate {
+        self.aggregate
+    }
+
+    pub(crate) fn basis(&self) -> Option<&Table> {
+        self.basis.as_deref()
+    }
+
+    pub(crate) fn source(&self, column: usize) -> Option<usize> {
+        self.sources.get(column).copied().flatten()
     }
 
     pub fn columns(&self) -> &[Column] {
@@ -514,6 +664,66 @@ impl Table {
     pub fn position(&self, row: usize) -> Option<[f32; 3]> {
         let axis = |key: &str| self.column(key).map(|column| self.value(row, column));
         Some([axis("x_um")?, axis("y_um")?, axis("z_um")?])
+    }
+
+    pub(crate) fn gated_points(&self, gated: &Mask) -> Vec<Vec<[f32; 3]>> {
+        let basis = self.basis().unwrap_or(self);
+        let (Some(x), Some(y), Some(z)) = (
+            basis.column("x_um"),
+            basis.column("y_um"),
+            basis.column("z_um"),
+        ) else {
+            return Vec::new();
+        };
+        let explicit = self.basis().is_none();
+        let frames = match self.group() {
+            Group::Timepoint if !explicit => gated
+                .iter()
+                .filter_map(|row| self.observation(row).time())
+                .collect::<BTreeSet<_>>(),
+            _ => BTreeSet::new(),
+        };
+        let tracks = match self.group() {
+            Group::Track if !explicit => gated
+                .iter()
+                .filter_map(|row| self.observation(row).track())
+                .collect::<BTreeSet<_>>(),
+            _ => BTreeSet::new(),
+        };
+        let mut slots = BTreeMap::<u32, Vec<[f32; 3]>>::new();
+        for row in 0..basis.rows() {
+            let admitted = if explicit {
+                gated.contains(row)
+            } else {
+                match self.group() {
+                    Group::Object => gated.contains(row),
+                    Group::Timepoint => basis
+                        .observation(row)
+                        .time()
+                        .is_some_and(|time| frames.contains(&time)),
+                    Group::Track => basis
+                        .observation(row)
+                        .track()
+                        .is_some_and(|track| tracks.contains(&track)),
+                }
+            };
+            if !admitted {
+                continue;
+            }
+            let point = [
+                basis.value(row, x),
+                basis.value(row, y),
+                basis.value(row, z),
+            ];
+            if point.iter().any(|value| !value.is_finite()) {
+                continue;
+            }
+            let Some(time) = basis.observation(row).time() else {
+                continue;
+            };
+            slots.entry(time).or_default().push(point);
+        }
+        slots.into_values().collect()
     }
 
     pub fn matching(
@@ -712,7 +922,14 @@ fn object_table(
             }
         }
     }
-    Table::new(columns, 4, observations, values)
+    Table::new(
+        columns,
+        4,
+        observations,
+        values,
+        Group::Object,
+        Aggregate::MEAN,
+    )
 }
 
 fn track_table(
@@ -737,7 +954,14 @@ fn track_table(
         aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
     }));
     let Some(set) = tracks else {
-        return Table::new(columns, TrackMeasurement::ALL.len(), Vec::new(), Vec::new());
+        return Table::new(
+            columns,
+            TrackMeasurement::ALL.len(),
+            Vec::new(),
+            Vec::new(),
+            Group::Track,
+            aggregate,
+        );
     };
     let rows = set.len();
     let slots = measurements.len() + relations.len();
@@ -771,7 +995,14 @@ fn track_table(
             values.push(aggregate.apply(&collected[track * slots + cell]));
         }
     }
-    Table::new(columns, TrackMeasurement::ALL.len(), observations, values)
+    Table::new(
+        columns,
+        TrackMeasurement::ALL.len(),
+        observations,
+        values,
+        Group::Track,
+        aggregate,
+    )
 }
 
 fn timepoint_table(
@@ -821,7 +1052,14 @@ fn timepoint_table(
             values.push(aggregate.apply(&collected));
         }
     }
-    Table::new(columns, TimeField::ALL.len(), observations, values)
+    Table::new(
+        columns,
+        TimeField::ALL.len(),
+        observations,
+        values,
+        Group::Timepoint,
+        aggregate,
+    )
 }
 
 fn measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
@@ -861,6 +1099,21 @@ fn aggregate_relation_column(
         base.unit(),
         base.decimals(),
     )
+}
+
+fn aggregate_column(base: &Column, aggregate: Aggregate) -> Column {
+    Column::new(
+        base.label().to_string(),
+        format!("{}_{}", base.key(), aggregate.key()),
+        base.unit(),
+        base.decimals(),
+    )
+}
+
+fn aggregated_source(basis: &Table, column: &Column, aggregate: Aggregate) -> Option<usize> {
+    let suffix = format!("_{}", aggregate.key());
+    let base = column.key().strip_suffix(&suffix)?;
+    basis.column(base)
 }
 
 fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {

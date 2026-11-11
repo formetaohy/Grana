@@ -20,6 +20,7 @@ mod overlay;
 mod paint;
 pub mod popover;
 mod record;
+mod recorder;
 mod render;
 mod scene;
 mod scroll;
@@ -49,6 +50,7 @@ pub use input::{Button, ButtonState, Cursor, Event, Input, Key as InputKey, KeyE
 pub use motion::Motion;
 pub use paint::{Clip, Instance, Painter};
 pub use record::Mark;
+pub use recorder::Recorder;
 pub use render::Figure;
 pub use style::{Border, Fill, Shadow, State, Surface};
 pub use text::{Align, Text, TextLayout, TextStyle};

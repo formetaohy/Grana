@@ -100,7 +100,7 @@ struct Entry {
 
 pub struct Text {
     fonts: Fonts,
-    atlas: Atlas,
+    atlas: Option<Atlas>,
     entries: HashMap<String, Vec<Entry>>,
     frame: u64,
     pixels_per_point: f32,
@@ -110,7 +110,17 @@ impl Text {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             fonts: Fonts::system(),
-            atlas: Atlas::new(device),
+            atlas: Some(Atlas::new(device)),
+            entries: HashMap::new(),
+            frame: 0,
+            pixels_per_point: 1.0,
+        }
+    }
+
+    pub(crate) fn detached() -> Self {
+        Self {
+            fonts: Fonts::system(),
+            atlas: None,
             entries: HashMap::new(),
             frame: 0,
             pixels_per_point: 1.0,
@@ -118,7 +128,9 @@ impl Text {
     }
 
     pub fn atlas(&self) -> &Atlas {
-        &self.atlas
+        self.atlas
+            .as_ref()
+            .expect("a text atlas is bound to a device")
     }
 
     pub fn begin(&mut self, pixels_per_point: f32) {
@@ -130,7 +142,9 @@ impl Text {
     }
 
     pub fn flush(&mut self, queue: &wgpu::Queue) {
-        self.atlas.flush(queue);
+        if let Some(atlas) = self.atlas.as_mut() {
+            atlas.flush(queue);
+        }
     }
 
     fn evict(&mut self) {
@@ -323,12 +337,15 @@ impl Text {
         if layout.glyphs.is_empty() {
             return;
         }
+        let Some(atlas) = self.atlas.as_mut() else {
+            return;
+        };
         let pixels_per_point = self.pixels_per_point;
         let hint = false;
         for glyph in &layout.glyphs {
             let pen_x = (origin.x + glyph.x) * pixels_per_point;
             let baseline = (origin.y + glyph.baseline) * pixels_per_point;
-            let Some(slot) = self.atlas.slot(
+            let Some(slot) = atlas.slot(
                 &mut self.fonts,
                 crate::atlas::GlyphRequest {
                     face: glyph.face as usize,

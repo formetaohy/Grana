@@ -1,10 +1,14 @@
 use grana_measure::{
-    Aggregate, DENSITY_POINTS, Frame, Group, Mask, MeasureView, Objects, Plot, Table,
+    Aggregate, DENSITY_POINTS, Frame, Group, Mask, MeasureView, Objects, Plot, Table, Window,
 };
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_scene::{Curation, TrackAnchor, TrackEdit};
 
 const CHANNEL: &str = "EGFP 488";
+
+fn window() -> Window {
+    Window::new([-10.0; 3], [10.0; 3]).expect("the test window spans the volume")
+}
 
 #[test]
 fn summarises_spots_and_exports_a_csv() {
@@ -31,6 +35,7 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(value(&table, 0, "track"), 1.0);
     assert_eq!(value(&table, 0, "egfp_488_intensity_mean"), 10.0);
     assert_eq!(value(&table, 0, "egfp_488_intensity_sum"), 100.0);
+    assert!((value(&table, 0, "nearest_distance_um") - 27.0f32.sqrt()).abs() < 1.0e-5);
     assert_eq!(value(&table, 2, "frame"), 2.0);
     assert_eq!(value(&table, 2, "time_s"), 2.0);
     assert_eq!(table.observation(3).object(), Some(1));
@@ -69,6 +74,102 @@ fn summarises_spots_and_exports_a_csv() {
 }
 
 #[test]
+fn trends_raw_frames_of_every_grouping() {
+    let first = spots();
+    let second = spots();
+    let tracks = tracks();
+    let channels = [CHANNEL.to_string()];
+    let frames = [
+        Frame::new(0, Objects::Spots(&first), &[], &[]),
+        Frame::new(1, Objects::Spots(&second), &[], &[]),
+    ];
+    let per_frame = Table::build(
+        &frames,
+        Some(&tracks),
+        &channels,
+        2.0,
+        Group::Timepoint,
+        Aggregate::MEAN,
+    );
+    let column = per_frame
+        .column("egfp_488_intensity_mean_mean")
+        .expect("the timepoints aggregate the raw intensity");
+    let trend = per_frame.trend(column, &Mask::all(per_frame.rows()));
+    assert_eq!(trend.frames(), 2);
+    assert_eq!(trend.total(), 4);
+    assert_eq!(trend.points().len(), 2);
+    assert_eq!(trend.points()[0].value(), 15.0);
+    assert_eq!(trend.points()[0].count(), 2);
+    assert!(trend.points()[0].lower() < 15.0 && trend.points()[0].upper() > 15.0);
+
+    let per_track = Table::build(
+        &frames,
+        Some(&tracks),
+        &channels,
+        2.0,
+        Group::Track,
+        Aggregate::MEAN,
+    );
+    let column = per_track
+        .column("egfp_488_intensity_mean_mean")
+        .expect("the tracks aggregate the raw intensity");
+    let trend = per_track.trend(column, &Mask::all(per_track.rows()));
+    assert_eq!(trend.frames(), 2);
+    assert_eq!(trend.total(), 4);
+    assert_eq!(trend.points().len(), 2);
+    assert_eq!(trend.points()[1].value(), 15.0);
+
+    let summary = per_track
+        .column("nodes")
+        .expect("the tracks summarise their nodes");
+    let trend = per_track.trend(summary, &Mask::all(per_track.rows()));
+    assert_eq!(trend.points().len(), 2);
+    assert_eq!(trend.points()[0].value(), 2.0);
+    assert_eq!(trend.points()[0].count(), 2);
+}
+
+#[test]
+fn estimates_spatial_point_patterns() {
+    let first = spots();
+    let second = spots();
+    let channels = [CHANNEL.to_string()];
+    let frames = [
+        Frame::new(0, Objects::Spots(&first), &[], &[]),
+        Frame::new(1, Objects::Spots(&second), &[], &[]),
+    ];
+    let table = Table::build(
+        &frames,
+        None,
+        &channels,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+    );
+    let rows = Mask::all(table.rows());
+    let plot = table
+        .plot(MeasureView::Ripley, [0, 0], &rows, window())
+        .expect("the points spread across a sampling window");
+    let Plot::Ripley(ripley) = plot else {
+        panic!("the spatial view plots a radial distribution");
+    };
+    assert_eq!(ripley.frames(), 2);
+    assert_eq!(ripley.objects(), 4);
+    assert_eq!(ripley.points().len(), 24);
+    assert!(ripley.radius() > 0.0);
+    assert!(ripley.low() <= 0.0 && ripley.high() >= 0.0);
+
+    let plane = (0..64)
+        .map(|index| [(index % 8) as f32 * 3.0, (index / 8) as f32 * 3.0, 0.0])
+        .collect::<Vec<_>>();
+    let distances = grana_measure::neighbour_distances(&plane);
+    assert!(
+        distances
+            .iter()
+            .all(|distance| distance.is_finite() && *distance >= 3.0 - 1.0e-4)
+    );
+}
+
+#[test]
 fn groups_measurements_by_frame_for_distributions() {
     let first = spots();
     let second = spots();
@@ -90,7 +191,7 @@ fn groups_measurements_by_frame_for_distributions() {
         .expect("the spots carry their mean intensity");
     let rows = Mask::all(table.rows());
     let plot = table
-        .plot(MeasureView::Distribution, [column, 0], &rows)
+        .plot(MeasureView::Distribution, [column, 0], &rows, window())
         .expect("a distribution plots its column");
     let Plot::Distribution(distribution) = plot else {
         panic!("the distribution view plots a distribution");
@@ -114,7 +215,12 @@ fn groups_measurements_by_frame_for_distributions() {
 
     let first_frame = Mask::of(table.rows(), |row| row < 2);
     let plot = table
-        .plot(MeasureView::Distribution, [column, 0], &first_frame)
+        .plot(
+            MeasureView::Distribution,
+            [column, 0],
+            &first_frame,
+            window(),
+        )
         .expect("a gated distribution plots its column");
     let Plot::Distribution(gated) = plot else {
         panic!("the distribution view plots a distribution");

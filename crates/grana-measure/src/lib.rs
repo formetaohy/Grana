@@ -16,6 +16,7 @@ mod relation;
 mod sample;
 mod scope;
 mod significance;
+mod spatial;
 mod table;
 
 pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
@@ -45,4 +46,8 @@ pub use scope::Scope;
 pub use significance::{
     Level, MannWhitney, WelchTest, benjamini_hochberg, hedges_g, hedges_g_pooled, stars,
 };
-pub use table::{Aggregate, Frame, Group, Objects, Observation, Table, channel_keys};
+pub use spatial::{Ripley, RipleyPoint, Window, neighbour_distances};
+pub use table::{
+    Aggregate, Frame, Group, NEIGHBOUR_KEY, NEIGHBOUR_LABEL, Objects, Observation, Table,
+    channel_keys,
+};
