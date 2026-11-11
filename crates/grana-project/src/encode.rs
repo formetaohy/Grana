@@ -1199,8 +1199,7 @@ impl Encode for ColocSeries {
 impl Encode for ColocSeriesInfo {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
-        writer.count(self.permutation_level());
-        writer.u32(self.permutation_stride());
+        writer.u32(self.stride());
         writer.f32(self.coverage());
         self.mask().encode(writer);
     }
@@ -1210,15 +1209,12 @@ impl Encode for ColocSignificance {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f64(self.p());
         writer.u32(self.randomizations());
-        writer.f64(self.permutation_pearson());
     }
 }
 
 impl Encode for ColocCost {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.u64(self.scan_voxels());
-        writer.u64(self.permutation_voxels());
-        writer.u32(self.permutation_frames());
+        writer.u64(self.voxels());
         writer.u32(self.randomizations());
         writer.u64(self.blocks());
     }

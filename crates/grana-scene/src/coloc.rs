@@ -82,12 +82,8 @@ impl ColocResult {
         self.series.level()
     }
 
-    pub fn permutation_level(&self) -> usize {
-        self.series.permutation_level()
-    }
-
-    pub fn permutation_stride(&self) -> u32 {
-        self.series.permutation_stride()
+    pub fn stride(&self) -> u32 {
+        self.series.stride()
     }
 
     pub fn coverage(&self) -> f32 {

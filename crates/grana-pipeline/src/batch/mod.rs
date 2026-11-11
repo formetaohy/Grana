@@ -13,9 +13,9 @@ mod significance;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Mutex, MutexGuard};
 
+use grana_exec::{Executor, Pipe, Poll, Sender};
 use grana_protocol::Protocol;
 use thiserror::Error;
 
@@ -36,6 +36,8 @@ pub use significance::{Significance, table as significance_table};
 const RESULT: &str = "result.json";
 
 const PARTIAL: &str = "partial";
+
+const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
@@ -100,7 +102,7 @@ pub enum DiscoverError {
 }
 
 pub struct Batch {
-    events: Receiver<Event>,
+    events: Pipe<Event>,
     cancel: Arc<AtomicBool>,
     gate: Arc<Gate>,
 }
@@ -132,14 +134,14 @@ impl Control {
 
 impl Batch {
     pub fn start(plan: Plan) -> Self {
-        let (events, receiver) = mpsc::channel();
+        let (events, pipe) = Pipe::new(CAPACITY);
         let cancel = Arc::new(AtomicBool::new(false));
         let gate = Gate::new();
         let token = Arc::clone(&cancel);
         let pause = Arc::clone(&gate);
-        std::thread::spawn(move || execute(plan, events, token, pause));
+        let _ = Executor::shared().submit(move |_| execute(plan, events, token, pause));
         Self {
-            events: receiver,
+            events: pipe,
             cancel,
             gate,
         }
@@ -153,15 +155,15 @@ impl Batch {
     }
 
     pub fn poll(&self) -> BatchPoll {
-        match self.events.try_recv() {
-            Ok(event) => BatchPoll::Event(event),
-            Err(TryRecvError::Empty) => BatchPoll::Empty,
-            Err(TryRecvError::Disconnected) => BatchPoll::Closed,
+        match self.events.poll() {
+            Poll::Event(event) => BatchPoll::Event(event),
+            Poll::Empty => BatchPoll::Empty,
+            Poll::Closed => BatchPoll::Closed,
         }
     }
 
     pub fn wait(&self) -> Option<Event> {
-        self.events.recv().ok()
+        self.events.receive()
     }
 }
 

@@ -1890,7 +1890,7 @@ impl Decode for ColocSeries {
             .iter()
             .map(|frame| frame.moments().voxels())
             .sum::<u64>();
-        if joint.iter().sum::<u64>() != voxels || cost.scan_voxels() != voxels {
+        if joint.iter().sum::<u64>() != voxels || cost.voxels() != voxels {
             return Err(FAULT_SHAPE);
         }
         if let Some(significance) = significance
@@ -1913,23 +1913,13 @@ impl Decode for ColocSeries {
 impl Decode for ColocSeriesInfo {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
-        let permutation_level = reader.count(1)?;
-        let permutation_stride = reader.u32()?;
+        let stride = reader.u32()?;
         let coverage = reader.f32()?;
         let mask = Option::<u64>::decode(reader)?;
-        if permutation_level < level
-            || permutation_stride == 0
-            || !(coverage.is_finite() && (0.0..=1.0).contains(&coverage))
-        {
+        if stride == 0 || !(coverage.is_finite() && (0.0..=1.0).contains(&coverage)) {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(
-            level,
-            permutation_level,
-            permutation_stride,
-            mask,
-            coverage,
-        ))
+        Ok(Self::new(level, stride, mask, coverage))
     }
 }
 
@@ -1937,41 +1927,25 @@ impl Decode for ColocSignificance {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let p = reader.f64()?;
         let randomizations = reader.u32()?;
-        let permutation_pearson = reader.f64()?;
         if !p.is_finite()
             || !(0.0..=1.0).contains(&p)
             || !(1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations)
-            || !permutation_pearson.is_finite()
-            || !(-1.0..=1.0).contains(&permutation_pearson)
         {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(p, randomizations, permutation_pearson))
+        Ok(Self::new(p, randomizations))
     }
 }
 
 impl Decode for ColocCost {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let scan_voxels = reader.u64()?;
-        let permutation_voxels = reader.u64()?;
-        let permutation_frames = reader.u32()?;
+        let voxels = reader.u64()?;
         let randomizations = reader.u32()?;
         let blocks = reader.u64()?;
-        if scan_voxels == 0
-            || permutation_voxels == 0
-            || permutation_frames == 0
-            || blocks == 0
-            || !(1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations)
-        {
+        if voxels == 0 || blocks == 0 || !(1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations) {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(
-            scan_voxels,
-            permutation_voxels,
-            permutation_frames,
-            randomizations,
-            blocks,
-        ))
+        Ok(Self::new(voxels, randomizations, blocks))
     }
 }
 

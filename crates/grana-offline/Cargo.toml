@@ -12,6 +12,7 @@ glam = { workspace = true }
 grana-animation = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
+grana-exec = { workspace = true }
 grana-figure = { workspace = true }
 grana-file = { workspace = true }
 grana-gpu = { workspace = true }

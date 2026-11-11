@@ -36,7 +36,7 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             if running.is_some() {
                 "Streaming both channels over every frame of the current region and analysis mask."
             } else {
-                "Choose a channel pair, then compute Pearson overlap, Manders coefficients and Costes p-value."
+                "Choose a channel pair, then compute Pearson overlap, Manders coefficients and a block permutation p-value."
             },
         )
     } else {
@@ -452,8 +452,8 @@ fn method<'a>(
     let settings = state.scene.coloc.settings();
     let cost = result.cost();
     let level = result.level();
-    let permutation_level = result.permutation_level();
-    let stride = result.permutation_stride();
+    let stride = result.stride();
+    let frames = result.series().frames().len();
     let mask = result
         .mask()
         .and_then(ObjectSetId::from_raw)
@@ -465,11 +465,10 @@ fn method<'a>(
     let max_block = COLOC_BLOCK_MAX as f32;
     let theme = *ctx.theme();
     let sample = format!(
-        "{:.1}% · {} vx · {}×{}f ({} blocks, s{stride})",
+        "{:.1}% · {} vx · {}f · {} blocks (s{stride})",
         100.0 * result.coverage(),
-        cost.scan_voxels(),
-        cost.permutation_voxels(),
-        cost.permutation_frames(),
+        cost.voxels(),
+        frames,
         cost.blocks()
     );
     let precision = settings.precision();
@@ -517,7 +516,7 @@ fn method<'a>(
         field_label(ctx, "PSF"),
         block_value,
     ]);
-    let detail = format!("L{level} · perm L{permutation_level} · {mask}");
+    let detail = format!("L{level} · s{stride} · {mask}");
     let title = view::card_title(ctx, Icon::Sparkles, "Method", Some(&detail));
     let sampling = view::labelled(ctx, "Sampling", &sample);
     let shuffles = view::form_row(ctx, "Shuffles", shuffles);

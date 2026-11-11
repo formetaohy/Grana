@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Sender};
 
 use crate::offline::{Offline, Outcome};
 use crate::task::Task;
 
+const CAPACITY: usize = 64;
+
 pub struct Handle {
     id: u64,
-    cancel: Arc<AtomicBool>,
+    cancel: Cancel,
 }
 
 impl Handle {
@@ -16,7 +16,7 @@ impl Handle {
     }
 
     pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.trigger();
     }
 }
 
@@ -25,26 +25,20 @@ pub enum Event {
     Finished { id: u64, outcome: Outcome },
 }
 
-struct Request {
-    id: u64,
-    task: Task,
-    cancel: Arc<AtomicBool>,
-}
-
 pub struct Worker {
-    requests: Sender<Request>,
-    events: Receiver<Event>,
+    events: Pipe<Event>,
+    sender: Sender<Event>,
+    executor: Executor,
     next: u64,
 }
 
 impl Worker {
     pub fn spawn() -> Self {
-        let (requests, queue) = mpsc::channel::<Request>();
-        let (events, receiver) = mpsc::channel::<Event>();
-        std::thread::spawn(move || serve(queue, events));
+        let (sender, events) = Pipe::new(CAPACITY);
         Self {
-            requests,
-            events: receiver,
+            events,
+            sender,
+            executor: Executor::new(1),
             next: 1,
         }
     }
@@ -52,55 +46,41 @@ impl Worker {
     pub fn submit(&mut self, task: Task) -> Handle {
         let id = self.next;
         self.next += 1;
-        let cancel = Arc::new(AtomicBool::new(false));
-        let _ = self.requests.send(Request {
+        let sender = self.sender.clone();
+        let job = self
+            .executor
+            .submit(move |cancel| run(id, task, cancel, &sender));
+        Handle {
             id,
-            task,
-            cancel: Arc::clone(&cancel),
-        });
-        Handle { id, cancel }
+            cancel: job.token(),
+        }
     }
 
     pub fn drain(&mut self) -> (Vec<Event>, bool) {
         let mut events = Vec::new();
         loop {
-            match self.events.try_recv() {
-                Ok(event) => events.push(event),
-                Err(TryRecvError::Empty) => return (events, true),
-                Err(TryRecvError::Disconnected) => return (events, false),
+            match self.events.poll() {
+                Poll::Event(event) => events.push(event),
+                Poll::Empty => return (events, true),
+                Poll::Closed => return (events, false),
             }
         }
     }
 }
 
-fn serve(requests: Receiver<Request>, events: Sender<Event>) {
-    let mut offline: Option<Offline> = None;
-    while let Ok(Request { id, task, cancel }) = requests.recv() {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = events.send(Event::Finished {
-                id,
-                outcome: Outcome::Cancelled,
-            });
-            continue;
-        }
-        if offline.is_none() {
-            match Offline::headless() {
-                Ok(context) => offline = Some(context),
-                Err(detail) => {
-                    let _ = events.send(Event::Finished {
-                        id,
-                        outcome: Outcome::Failed { detail },
-                    });
-                    continue;
-                }
-            }
-        }
-        let context = offline.as_mut().expect("the offline context is ready");
-        let mut progress = |frame, total| {
-            let _ = events.send(Event::Progress { id, frame, total });
-        };
-        let outcome = context.run(task, &cancel, &mut progress);
-        offline = None;
-        let _ = events.send(Event::Finished { id, outcome });
+fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
+    let finish = |outcome: Outcome| {
+        let _ = sender.send(Event::Finished { id, outcome });
+    };
+    if cancel.cancelled() {
+        return finish(Outcome::Cancelled);
     }
+    let mut context = match Offline::headless() {
+        Ok(context) => context,
+        Err(detail) => return finish(Outcome::Failed { detail }),
+    };
+    let outcome = context.run(task, cancel.flag(), &mut |frame, total| {
+        let _ = sender.send(Event::Progress { id, frame, total });
+    });
+    finish(outcome);
 }

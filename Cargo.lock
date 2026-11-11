@@ -3515,6 +3515,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-exec"
+version = "0.1.1"
+
+[[package]]
 name = "grana-figure"
 version = "0.1.1"
 dependencies = [
@@ -3637,6 +3641,7 @@ dependencies = [
  "grana-animation",
  "grana-display",
  "grana-engine",
+ "grana-exec",
  "grana-figure",
  "grana-file",
  "grana-gpu",
@@ -3668,6 +3673,7 @@ dependencies = [
  "grana-animation",
  "grana-calibration",
  "grana-display",
+ "grana-exec",
  "grana-file",
  "grana-geometry",
  "grana-image",
@@ -3835,6 +3841,7 @@ dependencies = [
  "grana-calibration",
  "grana-dir",
  "grana-display",
+ "grana-exec",
  "grana-file",
  "grana-geometry",
  "grana-image",

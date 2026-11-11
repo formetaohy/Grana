@@ -1,46 +1,35 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::atomic::AtomicBool;
+
+use grana_exec::{Executor, Job, Pipe};
+
+pub use grana_exec::Poll;
+
+const CAPACITY: usize = 32;
 
 pub struct Task<T> {
-    events: Receiver<T>,
-    cancel: Arc<AtomicBool>,
+    events: Pipe<T>,
+    job: Job,
 }
 
 impl<T: Send + 'static> Task<T> {
     pub fn spawn(work: impl FnOnce(&AtomicBool, &mut dyn FnMut(T)) + Send + 'static) -> Self {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let token = Arc::clone(&cancel);
-        let (events, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
+        let (sender, events) = Pipe::new(CAPACITY);
+        let job = Executor::shared().submit(move |cancel| {
             let mut sink = |event: T| {
-                let _ = events.send(event);
+                let _ = sender.send(event);
             };
-            work(&token, &mut sink);
+            work(cancel.flag(), &mut sink);
         });
-        Self {
-            events: receiver,
-            cancel,
-        }
+        Self { events, job }
     }
 
     pub fn poll(&self) -> Poll<T> {
-        match self.events.try_recv() {
-            Ok(event) => Poll::Event(event),
-            Err(TryRecvError::Empty) => Poll::Empty,
-            Err(TryRecvError::Disconnected) => Poll::Closed,
-        }
+        self.events.poll()
     }
 }
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.job.cancel();
     }
-}
-
-pub enum Poll<T> {
-    Event(T),
-    Empty,
-    Closed,
 }

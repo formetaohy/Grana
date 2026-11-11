@@ -13,6 +13,7 @@ grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-calibration = { workspace = true }
 grana-display = { workspace = true }
+grana-exec = { workspace = true }
 grana-geometry = { workspace = true }
 grana-image = { workspace = true }
 grana-interop = { workspace = true }

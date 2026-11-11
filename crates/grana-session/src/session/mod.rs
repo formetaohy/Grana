@@ -59,6 +59,7 @@ use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
+use mask::PendingChannel;
 use recover::Restore;
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -150,6 +151,7 @@ pub struct Session {
     montage: Option<montage::Montage>,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
+    channels_pending: Vec<PendingChannel>,
     transfer: Transfer,
     recent: Recent,
     import: Vec<ImportNote>,
@@ -228,6 +230,7 @@ impl Session {
             montage: None,
             fingerprint: None,
             mask_stamp: None,
+            channels_pending: Vec::new(),
             transfer: Transfer::default(),
             recent: Recent::default(),
             import: Vec::new(),
@@ -504,6 +507,7 @@ impl Session {
         repaint |= self.poll_plate();
         repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
+        repaint |= self.poll_channels();
         repaint |= self.poll_recovery();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
             self.baseline = self.document_hash();

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan,
-    SurfaceBuilder, TrackBuilder, coloc_levels, drift_shift,
+    ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan, SurfaceBuilder,
+    TrackBuilder, coloc_sampling, drift_shift,
 };
 use grana_geometry::GeometryStore;
 use grana_image::Source;
@@ -626,30 +626,29 @@ fn chooses_the_colocalization_precision() {
         VoxelFormat::U16,
     );
     let pyramid = Pyramid::new(levels, 1, vec![channel], 1, 1.0);
-    let full = coloc_levels(
+    let full = coloc_sampling(
         &pyramid,
         Region::none(),
-        1,
         grana_measure::ColocPrecision::Full,
+        3,
     );
-    let balanced = coloc_levels(
+    let balanced = coloc_sampling(
         &pyramid,
         Region::none(),
-        1,
         grana_measure::ColocPrecision::Balanced,
+        3,
     );
-    let fast = coloc_levels(
+    let fast = coloc_sampling(
         &pyramid,
         Region::none(),
-        1,
         grana_measure::ColocPrecision::Fast,
+        3,
     );
-    assert_eq!(full.scan(), 0);
-    assert_eq!(balanced.scan(), 1);
-    assert_eq!(fast.scan(), 2);
-    assert!(full.permutation() >= full.scan());
-    assert!(balanced.permutation() >= balanced.scan());
-    assert!(fast.permutation() >= fast.scan());
+    assert_eq!(full.level(), 0);
+    assert_eq!(balanced.level(), 1);
+    assert_eq!(fast.level(), 2);
+    assert!(full.stride() >= balanced.stride());
+    assert!(balanced.stride() >= fast.stride());
 }
 
 fn ramp(extent: Extent) -> VoxelData {
@@ -680,29 +679,21 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
         })
         .collect();
     let pyramid = Pyramid::new(vec![level], 1, channels, 1, 1.0);
-    let levels = coloc_levels(
+    let settings = ColocSettings::new(64, 3);
+    let sampling = coloc_sampling(
         &pyramid,
         Region::none(),
-        1,
-        grana_measure::ColocPrecision::Full,
+        settings.precision(),
+        settings.block(),
     );
-    let info = pyramid.level(levels.scan());
+    let info = pyramid.level(sampling.level());
     let pair = ColocPair::new(0, 1);
     let intensities = [intensity, intensity];
-    let settings = ColocSettings::new(64, 3);
     let mut scan = ColocScan::new(
         info,
-        &levels,
-        ColocScanConfig::new(pair, 2, intensities, None, 1),
+        sampling,
+        ColocScanConfig::new(pair, 2, intensities, None),
         Region::none(),
-    );
-    let mut permutation = ColocPermutation::new(
-        &pyramid,
-        Region::none(),
-        pair,
-        &levels,
-        settings,
-        intensities,
     );
     let cancel = AtomicBool::new(false);
     let mut quiet = |_: usize, _: usize| {};
@@ -725,23 +716,8 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
         )
         .expect("the scan completes");
     assert!(scanned, "the scan is not cancelled");
-    let loaded = permutation
-        .load(
-            levels.frames(),
-            2,
-            &cancel,
-            &|_time, channel, ranges| Ok(read(ranges, channel)),
-            &|_time| Ok(None),
-            &mut quiet,
-        )
-        .expect("the permutation samples its grid");
-    assert!(loaded, "the permutation load is not cancelled");
-    let voxels = permutation.sampled_voxels();
-    let frames = permutation.sampled_frames();
-    let blocks = permutation.blocks();
-    let randomizations = permutation.randomizations();
-    let significance = permutation.test(2, &cancel, &mut quiet);
-    scan.finish(significance, voxels, frames, randomizations, blocks)
+    let significance = scan.test(settings.permutations(), 2, &cancel, &mut quiet);
+    scan.finish(significance, settings.permutations())
 }
 
 #[test]

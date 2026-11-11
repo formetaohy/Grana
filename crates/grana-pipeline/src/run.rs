@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::channels::Channels;
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun,
-    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, TrackBuilder, coloc_levels, filament_level,
-    relate_frames, spot_level, surface_level,
+    ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun, SeedPolicy, Sources,
+    SpotScanner, SurfaceBuilder, TrackBuilder, coloc_sampling, filament_level, relate_frames,
+    spot_level, surface_level,
 };
 use grana_geometry::GeometryStore;
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
@@ -282,26 +282,19 @@ pub fn coloc(
         return Err("the region does not overlap the dataset".to_string());
     }
     let frames = pyramid.frame_count();
-    let levels = coloc_levels(pyramid, region, frames, settings.precision());
-    let scan_level = levels.scan();
-    let permutation_level = levels.permutation();
+    let sampling = coloc_sampling(pyramid, region, settings.precision(), settings.block());
+    let scan_level = sampling.level();
     let scan_info = pyramid.level(scan_level);
-    let permutation_info = pyramid.level(permutation_level);
-    let permutation_frames = levels.frames().to_vec();
     let mut scan = ColocScan::new(
         scan_info,
-        &levels,
-        ColocScanConfig::new(pair, channels, intensities, mask_id, frames),
+        sampling,
+        ColocScanConfig::new(pair, channels, intensities, mask_id),
         region,
     );
-    let mut permutation =
-        ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
     let scan_units = scan.tile_count() * frames as usize;
-    let permutation_units = permutation.tile_count() * permutation_frames.len();
     let randomization_units = settings.permutations() as usize;
-    let total = scan_units + permutation_units + randomization_units;
+    let total = scan_units + randomization_units;
     let scan_domain = Domain::new(region, scan_info);
-    let permutation_domain = Domain::new(region, permutation_info);
     let scanned = scan.scan(
         workers,
         cancel,
@@ -325,48 +318,17 @@ pub fn coloc(
     if scan.voxels() == 0 {
         return Err("the analysis mask covers no voxels of the colocalization region".to_string());
     }
-    let loaded = permutation.load(
-        &permutation_frames,
-        workers,
-        cancel,
-        &|time, channel, ranges| {
-            reader
-                .read_region(time, permutation_level, channel, ranges, drift.offset(time))
-                .map_err(String::from)
-        },
-        &|time| permutation_domain.mask(roi.as_ref(), time),
-        &mut |done, _| {
-            sink(Event::Progress {
-                time: 0,
-                done: scan_units + done,
-                total,
-            });
-        },
-    )?;
-    if !loaded {
-        return Ok(());
-    }
-    let permutation_voxels = permutation.sampled_voxels();
-    let permutation_frame_count = permutation.sampled_frames();
-    let blocks = permutation.blocks();
-    let randomizations = permutation.randomizations();
-    let significance = permutation.test(workers, cancel, &mut |done, _| {
+    let significance = scan.test(settings.permutations(), workers, cancel, &mut |done, _| {
         sink(Event::Progress {
             time: 0,
-            done: scan_units + permutation_units + done,
+            done: scan_units + done,
             total,
         });
     });
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let series = scan.finish(
-        significance,
-        permutation_voxels,
-        permutation_frame_count,
-        randomizations,
-        blocks,
-    );
+    let series = scan.finish(significance, settings.permutations());
     sink(Event::Coloc {
         series: Box::new(series),
         region,

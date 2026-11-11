@@ -98,6 +98,18 @@ fn derives_operator_channels_through_a_project() {
         numerator: 0,
         denominator: 1,
     });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while session
+        .scene()
+        .is_none_or(|scene| scene.derived().len() < 3)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the ratio channel never calibrates"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
     {
         let scene = session.scene().expect("the series opens");
         assert_eq!(scene.dataset.channels().len(), 4);

@@ -2,9 +2,9 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
+use grana_exec::{Pipe, Poll, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drift;
@@ -13,6 +13,7 @@ use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid,
 const ATTEMPTS: u8 = 3;
 const WORKER_LIMIT: usize = 8;
 const RETRY_PRIORITY: u64 = 0;
+const CAPACITY: usize = 16;
 
 pub struct Opened {
     pub name: String,
@@ -43,7 +44,7 @@ pub enum Event {
 }
 
 pub struct Loader {
-    events: Receiver<Event>,
+    events: Pipe<Event>,
     queue: Arc<Queue>,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
@@ -218,7 +219,7 @@ impl Loader {
             imports: grana_readout::Imported::default(),
         };
         let channels = Channels::stored(Arc::new(image));
-        let (sender, events) = mpsc::channel();
+        let (sender, events) = Pipe::new(CAPACITY);
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
@@ -255,7 +256,7 @@ impl Loader {
 
     fn open(source: Source) -> Self {
         let remote = source.is_remote();
-        let (sender, events) = mpsc::channel();
+        let (sender, events) = Pipe::new(CAPACITY);
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
@@ -340,7 +341,7 @@ impl Loader {
             *opening_channels
                 .write()
                 .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&channels));
-            if opening_sender.send(opened).is_err() {
+            if !opening_sender.send(opened) {
                 return;
             }
             spawn(
@@ -362,7 +363,10 @@ impl Loader {
     }
 
     pub fn poll(&self) -> Option<Event> {
-        self.events.try_recv().ok()
+        match self.events.poll() {
+            Poll::Event(event) => Some(event),
+            Poll::Empty | Poll::Closed => None,
+        }
     }
 
     pub fn request(&self, requests: &[BrickRequest]) -> bool {
@@ -451,7 +455,7 @@ fn serve(
         };
         match channels.read_brick(request.time, request.level, request.coord, shift) {
             Ok(data) => {
-                if events.send(Event::Brick { request, data }).is_err() {
+                if !events.send(Event::Brick { request, data }) {
                     return;
                 }
             }
@@ -459,13 +463,10 @@ fn serve(
                 if queue.retry(request, attempts) {
                     continue;
                 }
-                if events
-                    .send(Event::ReadFailed {
-                        request,
-                        detail: detail.to_string(),
-                    })
-                    .is_err()
-                {
+                if !events.send(Event::ReadFailed {
+                    request,
+                    detail: detail.to_string(),
+                }) {
                     return;
                 }
             }

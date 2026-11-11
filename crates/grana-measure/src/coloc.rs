@@ -181,27 +181,16 @@ impl Default for ColocSettings {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColocSeriesInfo {
     level: usize,
-    permutation_level: usize,
-    permutation_stride: u32,
+    stride: u32,
     mask: Option<u64>,
     coverage: f32,
 }
 
 impl ColocSeriesInfo {
-    pub fn new(
-        level: usize,
-        permutation_level: usize,
-        permutation_stride: u32,
-        mask: Option<u64>,
-        coverage: f32,
-    ) -> Self {
+    pub fn new(level: usize, stride: u32, mask: Option<u64>, coverage: f32) -> Self {
         assert!(
-            permutation_level >= level,
-            "a colocalization significance test samples a coarser level than its scan"
-        );
-        assert!(
-            permutation_stride > 0,
-            "a colocalization significance test samples a positive stride"
+            stride > 0,
+            "a colocalization sample visits a positive stride"
         );
         assert!(
             coverage.is_finite() && (0.0..=1.0).contains(&coverage),
@@ -209,8 +198,7 @@ impl ColocSeriesInfo {
         );
         Self {
             level,
-            permutation_level,
-            permutation_stride,
+            stride,
             mask,
             coverage,
         }
@@ -220,12 +208,8 @@ impl ColocSeriesInfo {
         self.level
     }
 
-    pub fn permutation_level(self) -> usize {
-        self.permutation_level
-    }
-
-    pub fn permutation_stride(self) -> u32 {
-        self.permutation_stride
+    pub fn stride(self) -> u32 {
+        self.stride
     }
 
     pub fn mask(self) -> Option<u64> {
@@ -241,11 +225,10 @@ impl ColocSeriesInfo {
 pub struct ColocSignificance {
     p: f64,
     randomizations: u32,
-    permutation_pearson: f64,
 }
 
 impl ColocSignificance {
-    pub fn new(p: f64, randomizations: u32, permutation_pearson: f64) -> Self {
+    pub fn new(p: f64, randomizations: u32) -> Self {
         assert!(
             p.is_finite() && (0.0..=1.0).contains(&p),
             "a permutation p value is a probability"
@@ -254,15 +237,7 @@ impl ColocSignificance {
             randomizations > 0,
             "a permutation test runs at least one randomization"
         );
-        assert!(
-            permutation_pearson.is_finite() && (-1.0..=1.0).contains(&permutation_pearson),
-            "a permutation test compares Pearson coefficients"
-        );
-        Self {
-            p,
-            randomizations,
-            permutation_pearson,
-        }
+        Self { p, randomizations }
     }
 
     pub fn p(self) -> f64 {
@@ -272,60 +247,38 @@ impl ColocSignificance {
     pub fn randomizations(self) -> u32 {
         self.randomizations
     }
-
-    pub fn permutation_pearson(self) -> f64 {
-        self.permutation_pearson
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColocCost {
-    scan_voxels: u64,
-    permutation_voxels: u64,
-    permutation_frames: u32,
+    voxels: u64,
     randomizations: u32,
     blocks: u64,
 }
 
 impl ColocCost {
-    pub fn new(
-        scan_voxels: u64,
-        permutation_voxels: u64,
-        permutation_frames: u32,
-        randomizations: u32,
-        blocks: u64,
-    ) -> Self {
+    pub fn new(voxels: u64, randomizations: u32, blocks: u64) -> Self {
         assert!(
-            scan_voxels > 0,
+            voxels > 0,
             "a colocalization scan visits at least one voxel"
         );
         assert!(
-            permutation_voxels > 0 && permutation_frames > 0 && blocks > 0,
-            "a colocalization significance test samples blocks of voxels"
+            blocks > 0,
+            "a colocalization randomization shuffles blocks of voxels"
         );
         assert!(
             (1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations),
             "a colocalization significance test runs a supported number of permutations"
         );
         Self {
-            scan_voxels,
-            permutation_voxels,
-            permutation_frames,
+            voxels,
             randomizations,
             blocks,
         }
     }
 
-    pub fn scan_voxels(self) -> u64 {
-        self.scan_voxels
-    }
-
-    pub fn permutation_voxels(self) -> u64 {
-        self.permutation_voxels
-    }
-
-    pub fn permutation_frames(self) -> u32 {
-        self.permutation_frames
+    pub fn voxels(self) -> u64 {
+        self.voxels
     }
 
     pub fn randomizations(self) -> u32 {
@@ -549,7 +502,7 @@ impl ColocSeries {
             "a colocalization series scatters every scanned voxel"
         );
         assert!(
-            cost.scan_voxels() == voxels,
+            cost.voxels() == voxels,
             "a colocalization cost counts the voxels of its series"
         );
         if let Some(significance) = significance {
@@ -584,12 +537,8 @@ impl ColocSeries {
         self.info.level()
     }
 
-    pub fn permutation_level(&self) -> usize {
-        self.info.permutation_level()
-    }
-
-    pub fn permutation_stride(&self) -> u32 {
-        self.info.permutation_stride()
+    pub fn stride(&self) -> u32 {
+        self.info.stride()
     }
 
     pub fn coverage(&self) -> f32 {

@@ -14,9 +14,7 @@ mod surface;
 mod table;
 mod track;
 
-pub use coloc::{
-    ColocLevels, ColocPermutation, ColocRead, ColocScan, ColocScanConfig, coloc_levels,
-};
+pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};
 pub use drift::{
     shift as drift_shift, spans as drift_spans, window as drift_window,
     working_level as drift_level,
