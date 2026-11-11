@@ -134,6 +134,30 @@ pub struct MaskBrush {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DistributionStyle {
+    Box,
+    Violin,
+}
+
+impl DistributionStyle {
+    pub const ALL: [Self; 2] = [Self::Box, Self::Violin];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Box => "Box",
+            Self::Violin => "Violin",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Box => 0,
+            Self::Violin => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelationMetric {
     Contact,
     Distance,
@@ -230,6 +254,7 @@ pub struct Workspace {
     pub relation: Option<(ObjectSetId, ObjectSetId, i32)>,
     pub relation_metric: RelationMetric,
     pub relation_filter: f32,
+    pub distribution_style: DistributionStyle,
     pub comparison_metric: ComparisonMetric,
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
@@ -272,6 +297,7 @@ impl Default for Workspace {
             relation: None,
             relation_metric: RelationMetric::Contact,
             relation_filter: 0.0,
+            distribution_style: DistributionStyle::Box,
             comparison_metric: ComparisonMetric::default(),
             comparison_group: None,
             comparison_key: None,

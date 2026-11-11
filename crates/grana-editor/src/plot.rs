@@ -1,6 +1,7 @@
 use glam::Vec2;
 use grana_measure::{
-    Filter, Histogram, Lasso, MeasureView, Observation, Plot, SCATTER_BINS, Scatter, Table,
+    Distribution, DistributionSeries, Filter, Histogram, Lasso, MeasureView, Observation, Plot,
+    SCATTER_BINS, Scatter, Table,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
 use grana_session::Command;
@@ -10,7 +11,7 @@ use grana_ui::{
 };
 
 use crate::message::{Message, PlotEvent};
-use crate::state::{PlotDrag, PlotGate, View, Workspace};
+use crate::state::{DistributionStyle, PlotDrag, PlotGate, View, Workspace};
 
 const LEFT: f32 = 44.0;
 const RIGHT: f32 = 14.0;
@@ -21,8 +22,10 @@ const POINT_LIMIT: u64 = 4096;
 const BRUSH_SLOP: f32 = 0.005;
 const LASSO_STEP: f32 = 0.002;
 const HOVER_REACH: f32 = 11.0;
+const GROUP_LABEL: f32 = 58.0;
 const SCATTER_HINT: &str = "Drag: Lasso · Shift-Drag: Box · Click: Locate";
 const HISTOGRAM_HINT: &str = "Drag: Gate · Click: Locate";
+const DISTRIBUTION_HINT: &str = "Drag: Gate · Click: Locate";
 
 enum Readout {
     None,
@@ -37,6 +40,7 @@ enum Readout {
         y: f32,
         observation: Option<Observation>,
     },
+    Group(usize),
 }
 
 struct Chart<'a> {
@@ -53,6 +57,7 @@ struct Chart<'a> {
     vertices: &'a [Vec2],
     gate: Option<PlotGate>,
     moved: bool,
+    style: DistributionStyle,
 }
 
 pub fn view<'a>(
@@ -77,7 +82,10 @@ pub fn view<'a>(
         Plot::Scatter(scatter) if hovering => {
             scatter_readout(scatter, table, measure, pointer, inner)
         }
-        Plot::Histogram(_) | Plot::Scatter(_) => Readout::None,
+        Plot::Distribution(distribution) if hovering => {
+            distribution_readout(distribution, pointer, inner)
+        }
+        Plot::Histogram(_) | Plot::Scatter(_) | Plot::Distribution(_) => Readout::None,
     };
     let summary = summary_text(plot, table, readout);
     let (title_y, title_x) = titles(plot, table);
@@ -96,6 +104,7 @@ pub fn view<'a>(
         vertices: &drag.vertices,
         gate: drag.gate,
         moved: drag.moved,
+        style: state.workspace.distribution_style,
     };
     let node_key = Key::new("plot.surface");
     let canvas = grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
@@ -114,6 +123,9 @@ pub fn view<'a>(
         match chart.plot {
             Plot::Histogram(histogram) => histogram_paint(painter, &chart, histogram, inner),
             Plot::Scatter(scatter) => scatter_paint(painter, &chart, scatter, inner),
+            Plot::Distribution(distribution) => {
+                distribution_paint(painter, &chart, distribution, inner)
+            }
         }
     })
     .at(rect)
@@ -159,6 +171,13 @@ fn titles(plot: &Plot, table: &Table) -> (String, String) {
         Plot::Scatter(scatter) => (
             format!("Y: {}", crate::view::column_label(&columns[scatter.y()])),
             format!("X: {}", crate::view::column_label(&columns[scatter.x()])),
+        ),
+        Plot::Distribution(distribution) => (
+            format!(
+                "Y: {}",
+                crate::view::column_label(&columns[distribution.column()])
+            ),
+            "X: Groups".to_string(),
         ),
     }
 }
@@ -233,6 +252,59 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout) -> String {
                 text.push_str(&located(observation));
             }
             text
+        }
+        (Plot::Distribution(distribution), Readout::Group(index)) => {
+            let Some(group) = distribution.groups().get(index) else {
+                return DISTRIBUTION_HINT.to_string();
+            };
+            let column = &table.columns()[distribution.column()];
+            let places = column.decimals() as usize;
+            let unit = column.unit().suffix();
+            let gating = distribution.gated() < distribution.total();
+            let series = if gating {
+                group.gated()
+            } else {
+                Some(group.total())
+            };
+            let Some(series) = series else {
+                return format!("{} · no gated samples · {DISTRIBUTION_HINT}", group.label());
+            };
+            let mut text = format!(
+                "{} · n={} · Median {:.places$} {unit} · IQR {:.places$}–{:.places$} · Mean {:.places$} · σ {:.places$}",
+                group.label(),
+                series.count(),
+                series.median(),
+                series.lower_quartile(),
+                series.upper_quartile(),
+                series.mean(),
+                series.deviation()
+            );
+            if series.count() < group.total().count() {
+                text.push_str(&format!(
+                    " · {} of {} gated",
+                    series.count(),
+                    group.total().count()
+                ));
+            }
+            text.push_str(&format!(" · {DISTRIBUTION_HINT}"));
+            text
+        }
+        (Plot::Distribution(distribution), _) => {
+            let groups = distribution.groups().len();
+            if distribution.total() == 0 {
+                "No objects to plot".to_string()
+            } else if distribution.gated() < distribution.total() {
+                format!(
+                    "{} of {} gated · {groups} groups · {DISTRIBUTION_HINT}",
+                    distribution.gated(),
+                    distribution.total()
+                )
+            } else {
+                format!(
+                    "{} objects · {groups} groups · {DISTRIBUTION_HINT}",
+                    distribution.total()
+                )
+            }
         }
         (Plot::Histogram(histogram), _) => {
             let statistics = histogram.summary();
@@ -334,6 +406,13 @@ fn scatter_readout(
         })
         .map(|row| table.observation(row));
     Readout::Cell { x, y, observation }
+}
+
+fn distribution_readout(distribution: &Distribution, pointer: Vec2, inner: Rect) -> Readout {
+    match group_at(distribution, pointer, inner) {
+        Some(index) => Readout::Group(index),
+        None => Readout::None,
+    }
 }
 
 fn histogram_paint(
@@ -676,6 +755,367 @@ fn scatter_paint(
     }
 }
 
+fn distribution_paint(
+    painter: &mut grana_ui::Painter<'_>,
+    chart: &Chart<'_>,
+    distribution: &Distribution,
+    inner: Rect,
+) {
+    let theme = &chart.theme;
+    let palette = theme.palette;
+    let accent = palette.accent;
+    let groups = distribution.groups();
+    if groups.is_empty() {
+        let empty = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary)
+            .aligned(Align::Center);
+        painter.text_in(inner, "No objects to plot", empty, Align::Center);
+        return;
+    }
+    let (low, high) = (distribution.low(), distribution.high());
+    y_axis(
+        painter,
+        inner,
+        (low, high),
+        theme.font(Level::Monospace),
+        palette.text_tertiary,
+    );
+    let slot = inner.width() / groups.len() as f32;
+    let width = (0.46 * slot).clamp(6.0, 34.0);
+    let gating = distribution.gated() < distribution.total();
+    let hovered = group_at(distribution, chart.pointer, inner);
+    let step =
+        ((groups.len() as f32 * GROUP_LABEL / inner.width().max(1.0)).ceil() as usize).max(1);
+    let label_style =
+        TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating();
+    let label_hot = TextStyle::new(theme.font(Level::Caption), palette.text_primary).truncating();
+    for index in 1..groups.len() {
+        let x = inner.min.x + slot * index as f32;
+        painter.segment(
+            Vec2::new(x, inner.min.y),
+            Vec2::new(x, inner.max.y),
+            0.5,
+            Color::white_alpha(0.035),
+        );
+    }
+    for (index, group) in groups.iter().enumerate() {
+        let center = inner.min.x + slot * (index as f32 + 0.5);
+        let frame = DistributionFrame {
+            center,
+            width,
+            inner,
+            low,
+            high,
+            accent,
+        };
+        if hovered == Some(index) {
+            painter.rect(
+                Rect::from_min_max(
+                    Vec2::new(center - 0.5 * slot, inner.min.y),
+                    Vec2::new(center + 0.5 * slot, inner.max.y),
+                ),
+                Corners::ZERO,
+                Color::white_alpha(0.035),
+            );
+        }
+        if gating {
+            distribution_shape(painter, chart.style, group.total(), frame, false);
+            if let Some(series) = group.gated() {
+                distribution_shape(painter, chart.style, series, frame, true);
+            }
+        } else {
+            distribution_shape(painter, chart.style, group.total(), frame, true);
+        }
+        if index % step == 0 || hovered == Some(index) {
+            let style = if hovered == Some(index) {
+                label_hot
+            } else {
+                label_style
+            };
+            let reach = (slot * step as f32).max(28.0);
+            painter.text_in(
+                Rect::from_center_size(
+                    Vec2::new(center, inner.max.y + 0.5 * TICK + 2.0),
+                    Vec2::new(reach, TICK),
+                ),
+                group.label(),
+                style,
+                Align::Center,
+            );
+        }
+    }
+    if let Some(filter) = chart
+        .filters
+        .iter()
+        .find(|filter| filter.column() == distribution.column())
+    {
+        let one = pixel_y(inner, low, high, filter.minimum());
+        let two = pixel_y(inner, low, high, filter.maximum());
+        painter.rect(
+            Rect::from_min_max(
+                Vec2::new(inner.min.x, one.min(two)),
+                Vec2::new(inner.max.x, one.max(two)),
+            ),
+            Corners::ZERO,
+            accent.with_alpha(0.05),
+        );
+        for y in [one, two] {
+            painter.segment(
+                Vec2::new(inner.min.x, y),
+                Vec2::new(inner.max.x, y),
+                0.8,
+                accent.with_alpha(0.32),
+            );
+        }
+    }
+    if let Some(origin) = chart.origin
+        && chart.moved
+    {
+        let from = inner.max.y - origin.y.clamp(0.0, 1.0) * inner.height();
+        let to = chart.pointer.y.clamp(inner.min.y, inner.max.y);
+        painter.outlined(
+            Rect::from_min_max(
+                Vec2::new(inner.min.x, from.min(to)),
+                Vec2::new(inner.max.x, from.max(to)),
+            ),
+            Corners::ZERO,
+            Fill::Solid(accent.with_alpha(0.08)),
+            Border {
+                width: 0.75,
+                color: accent.with_alpha(0.52),
+            },
+            Shadow::NONE,
+        );
+    }
+    if let Some(row) = chart.selection {
+        let observation = chart.table.observation(row);
+        let value = chart.table.value(row, distribution.column());
+        if let Some(index) = group_index(distribution, observation) {
+            let centre = Vec2::new(
+                inner.min.x + slot * (index as f32 + 0.5),
+                pixel_y(inner, low, high, value),
+            );
+            painter.outlined(
+                Rect::from_center_size(centre, Vec2::splat(9.0)),
+                Corners::capsule(),
+                Fill::Solid(Color::white_alpha(0.10)),
+                Border {
+                    width: 1.3,
+                    color: accent,
+                },
+                Shadow::NONE,
+            );
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DistributionFrame {
+    center: f32,
+    width: f32,
+    inner: Rect,
+    low: f32,
+    high: f32,
+    accent: Color,
+}
+
+impl DistributionFrame {
+    fn y(self, value: f32) -> f32 {
+        pixel_y(self.inner, self.low, self.high, value)
+    }
+}
+
+fn distribution_shape(
+    painter: &mut grana_ui::Painter<'_>,
+    style: DistributionStyle,
+    series: &DistributionSeries,
+    frame: DistributionFrame,
+    filled: bool,
+) {
+    match style {
+        DistributionStyle::Box => box_shape(painter, series, frame, filled),
+        DistributionStyle::Violin => violin_shape(painter, series, frame, filled),
+    }
+}
+
+fn box_shape(
+    painter: &mut grana_ui::Painter<'_>,
+    series: &DistributionSeries,
+    frame: DistributionFrame,
+    filled: bool,
+) {
+    let DistributionFrame {
+        center,
+        width,
+        accent,
+        ..
+    } = frame;
+    let alpha = if filled { 1.0 } else { 0.45 };
+    let border = accent.with_alpha(0.72 * alpha);
+    let whisker_high = frame.y(series.whisker_high() as f32);
+    let whisker_low = frame.y(series.whisker_low() as f32);
+    painter.segment(
+        Vec2::new(center, whisker_high),
+        Vec2::new(center, whisker_low),
+        1.0,
+        border,
+    );
+    let cap = 0.32 * width;
+    for y in [whisker_high, whisker_low] {
+        painter.segment(
+            Vec2::new(center - cap, y),
+            Vec2::new(center + cap, y),
+            1.0,
+            border,
+        );
+    }
+    let upper = frame.y(series.upper_quartile() as f32);
+    let lower = frame.y(series.lower_quartile() as f32);
+    let top = upper.min(lower);
+    let bottom = upper.max(lower).max(top + 1.5);
+    let box_rect = Rect::from_min_max(
+        Vec2::new(center - 0.5 * width, top),
+        Vec2::new(center + 0.5 * width, bottom),
+    );
+    painter.outlined(
+        box_rect,
+        Corners::all(2.0),
+        if filled {
+            Fill::Solid(accent.with_alpha(0.20))
+        } else {
+            Fill::None
+        },
+        Border {
+            width: 1.0,
+            color: border,
+        },
+        Shadow::NONE,
+    );
+    let median = frame.y(series.median() as f32);
+    painter.segment(
+        Vec2::new(center - 0.5 * width, median),
+        Vec2::new(center + 0.5 * width, median),
+        if filled { 1.8 } else { 1.0 },
+        accent.with_alpha(if filled { 0.95 } else { 0.45 }),
+    );
+    let mean = frame.y(series.mean() as f32);
+    painter.rect(
+        Rect::from_center_size(Vec2::new(center, mean), Vec2::splat(3.2)),
+        Corners::capsule(),
+        Color::white_alpha(if filled { 0.78 } else { 0.32 }),
+    );
+    for (index, value) in series.outliers().iter().enumerate() {
+        let y = frame.y(*value);
+        let spread = ((index as f32 * 37.0) % 23.0) / 22.0 - 0.5;
+        let dot = Rect::from_center_size(
+            Vec2::new(center + spread * 0.5 * width, y),
+            Vec2::splat(2.0),
+        );
+        painter.rect(
+            dot,
+            Corners::capsule(),
+            accent.with_alpha(if filled { 0.5 } else { 0.22 }),
+        );
+    }
+}
+
+fn violin_shape(
+    painter: &mut grana_ui::Painter<'_>,
+    series: &DistributionSeries,
+    frame: DistributionFrame,
+    filled: bool,
+) {
+    let DistributionFrame {
+        center,
+        width,
+        inner,
+        accent,
+        ..
+    } = frame;
+    let density = series.density();
+    if density.is_empty() {
+        return;
+    }
+    let points = density.len();
+    let reach = 0.5 * width;
+    let fill = accent.with_alpha(if filled { 0.26 } else { 0.10 });
+    let edge = accent.with_alpha(if filled { 0.62 } else { 0.32 });
+    let rows = inner.height().ceil().max(1.0) as usize;
+    let sample = |position: f32| {
+        let index = position.clamp(0.0, 1.0) * (points - 1) as f32;
+        let low = index.floor() as usize;
+        let high = (low + 1).min(points - 1);
+        let weight = index - low as f32;
+        density[low] * (1.0 - weight) + density[high] * weight
+    };
+    if filled {
+        for row in 0..rows {
+            let t = (row as f32 + 0.5) / rows as f32;
+            let half = sample(1.0 - t).clamp(0.0, 1.0) * reach;
+            if half <= 0.15 {
+                continue;
+            }
+            let y = inner.min.y + row as f32;
+            painter.rect(
+                Rect::from_min_max(
+                    Vec2::new(center - half, y),
+                    Vec2::new(center + half, y + 1.0),
+                ),
+                Corners::ZERO,
+                fill,
+            );
+        }
+    }
+    let mut previous: Option<(f32, f32, f32)> = None;
+    for (index, density) in density.iter().enumerate() {
+        let y = inner.max.y - (index as f32 + 0.5) / points as f32 * inner.height();
+        let half = density.clamp(0.0, 1.0) * reach;
+        let left = center - half;
+        let right = center + half;
+        if let Some((last_y, last_left, last_right)) = previous {
+            painter.segment(Vec2::new(last_left, last_y), Vec2::new(left, y), 1.0, edge);
+            painter.segment(
+                Vec2::new(last_right, last_y),
+                Vec2::new(right, y),
+                1.0,
+                edge,
+            );
+        }
+        previous = Some((y, left, right));
+    }
+    painter.segment(
+        Vec2::new(center, inner.min.y),
+        Vec2::new(center, inner.max.y),
+        0.5,
+        edge.with_alpha(0.5),
+    );
+    let median = frame.y(series.median() as f32);
+    painter.segment(
+        Vec2::new(center - 0.5 * width, median),
+        Vec2::new(center + 0.5 * width, median),
+        1.4,
+        accent.with_alpha(if filled { 0.85 } else { 0.42 }),
+    );
+}
+
+fn group_at(distribution: &Distribution, pointer: Vec2, inner: Rect) -> Option<usize> {
+    if !inner.contains(pointer) {
+        return None;
+    }
+    group_from_position(
+        distribution,
+        (pointer.x - inner.min.x) / inner.width().max(1.0),
+    )
+}
+
+fn group_index(distribution: &Distribution, observation: Observation) -> Option<usize> {
+    let groups = distribution.groups();
+    if groups.len() == 1 {
+        return Some(0);
+    }
+    let time = observation.time()?;
+    groups.iter().position(|group| group.time() == Some(time))
+}
+
 fn push_vertex(vertices: &mut Vec<Vec2>, vertex: Vec2) {
     if vertices
         .last()
@@ -797,6 +1237,17 @@ fn axis_grid(
             Align::Center,
         );
     }
+    y_axis(painter, inner, y, font, color);
+}
+
+fn y_axis(
+    painter: &mut grana_ui::Painter<'_>,
+    inner: Rect,
+    y: (f32, f32),
+    font: TypeStyle,
+    color: Color,
+) {
+    let style = TextStyle::new(font, color);
     let y_step = nice_step(y.1 - y.0, 4);
     let y_first = (y.0 / y_step - 1.0e-5).ceil();
     for offset in 0..12 {
@@ -920,6 +1371,9 @@ pub fn apply(
         }
         Plot::Scatter(scatter) => {
             scatter_apply(event, scene, measure, table, scatter, workspace, commands)
+        }
+        Plot::Distribution(distribution) => {
+            distribution_apply(event, measure, table, distribution, workspace, commands)
         }
     }
 }
@@ -1088,6 +1542,120 @@ fn scatter_apply(
     }
 }
 
+fn distribution_apply(
+    event: PlotEvent,
+    measure: &Measure,
+    table: &Table,
+    distribution: &Distribution,
+    workspace: &mut Workspace,
+    commands: &mut Vec<Command>,
+) {
+    if workspace
+        .drag
+        .view
+        .is_some_and(|view| view != MeasureView::Distribution)
+    {
+        workspace.drag = PlotDrag::default();
+    }
+    let raw = event.position;
+    let position = raw.clamp(Vec2::ZERO, Vec2::ONE);
+    match event.phase {
+        Phase::Down => {
+            workspace.drag.view = Some(MeasureView::Distribution);
+            workspace.drag.gate = Some(PlotGate::Rectangle);
+            workspace.drag.origin = Some(position);
+            workspace.drag.moved = false;
+            workspace.drag.vertices.clear();
+        }
+        Phase::Move => {
+            if let Some(origin) = workspace.drag.origin
+                && origin.distance(position) > BRUSH_SLOP
+            {
+                workspace.drag.moved = true;
+            }
+        }
+        Phase::Up => {
+            let Some(origin) = workspace.drag.origin else {
+                return;
+            };
+            let moved = workspace.drag.moved || origin.distance(position) > BRUSH_SLOP;
+            if moved {
+                if (position.y - origin.y).abs() >= BRUSH_SLOP {
+                    let from = distribution_value(distribution, origin.y);
+                    let to = distribution_value(distribution, position.y);
+                    commands.push(Command::SetGate {
+                        column: distribution.column(),
+                        minimum: from.min(to),
+                        maximum: from.max(to),
+                    });
+                }
+            } else if inside(raw)
+                && let Some(set) = measure.set()
+                && let Some(group) = group_from_position(distribution, position.x)
+                && let Some(row) = nearest_group_row(
+                    table,
+                    measure.rows(),
+                    distribution,
+                    group,
+                    distribution_value(distribution, position.y),
+                )
+            {
+                locate_observation(set, table.observation(row), commands);
+            }
+            workspace.drag.origin = None;
+            workspace.drag.moved = false;
+            workspace.drag.vertices.clear();
+        }
+    }
+}
+
+fn distribution_value(distribution: &Distribution, position: f32) -> f32 {
+    let low = distribution.low();
+    low + position.clamp(0.0, 1.0) * (distribution.high() - low)
+}
+
+fn group_from_position(distribution: &Distribution, position: f32) -> Option<usize> {
+    let count = distribution.groups().len();
+    if count == 0 {
+        return None;
+    }
+    Some(
+        (position.clamp(0.0, 1.0) * count as f32)
+            .floor()
+            .min(count as f32 - 1.0) as usize,
+    )
+}
+
+fn nearest_group_row(
+    table: &Table,
+    rows: &[usize],
+    distribution: &Distribution,
+    group: usize,
+    value: f32,
+) -> Option<usize> {
+    let groups = distribution.groups();
+    let target = groups.get(group)?.time();
+    let split = groups.len() > 1;
+    let column = distribution.column();
+    let mut best = None;
+    let mut closest = f32::INFINITY;
+    for row in rows {
+        if split && table.observation(*row).time() != target {
+            continue;
+        }
+        let current = table.value(*row, column);
+        if !current.is_finite() {
+            continue;
+        }
+        let distance = (current - value).abs();
+        if distance < closest {
+            closest = distance;
+            best = Some(*row);
+        }
+    }
+    best
+}
+
 fn inside(position: Vec2) -> bool {
     (0.0..=1.0).contains(&position.x) && (0.0..=1.0).contains(&position.y)
 }
@@ -1143,12 +1711,18 @@ fn locate_observation(set: ObjectSetId, observation: Observation, commands: &mut
 
 pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
     let axes = measure.axes();
-    let scatter = measure.view() == MeasureView::Scatter;
+    let view = measure.view();
+    let gated = |column: usize| match view {
+        MeasureView::Table => false,
+        MeasureView::Histogram => column == axes[0],
+        MeasureView::Scatter => column == axes[0] || column == axes[1],
+        MeasureView::Distribution => column == axes[0],
+    };
     let mut indices = measure
         .filters()
         .iter()
         .enumerate()
-        .filter(|(_, filter)| filter.column() == axes[0] || (scatter && filter.column() == axes[1]))
+        .filter(|(_, filter)| gated(filter.column()))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     indices.sort_unstable_by(|left, right| right.cmp(left));

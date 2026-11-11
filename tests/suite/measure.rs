@@ -1,4 +1,4 @@
-use grana_measure::{Aggregate, Frame, Group, Objects, Table};
+use grana_measure::{Aggregate, DENSITY_POINTS, Frame, Group, MeasureView, Objects, Plot, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_scene::{Curation, TrackAnchor, TrackEdit};
 
@@ -64,6 +64,68 @@ fn summarises_spots_and_exports_a_csv() {
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3);
     assert!(lines[0].starts_with("frame,time_s,objects"));
+}
+
+#[test]
+fn groups_measurements_by_frame_for_distributions() {
+    let first = spots();
+    let second = spots();
+    let channels = [CHANNEL.to_string()];
+    let frames = [
+        Frame::new(0, Objects::Spots(&first), &[], &[]),
+        Frame::new(1, Objects::Spots(&second), &[], &[]),
+    ];
+    let table = Table::build(
+        &frames,
+        None,
+        &channels,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+    );
+    let column = table
+        .column("egfp_488_intensity_mean")
+        .expect("the spots carry their mean intensity");
+    let rows = (0..table.rows()).collect::<Vec<_>>();
+    let plot = table
+        .plot(MeasureView::Distribution, [column, 0], &rows)
+        .expect("a distribution plots its column");
+    let Plot::Distribution(distribution) = plot else {
+        panic!("the distribution view plots a distribution");
+    };
+    assert_eq!(distribution.column(), column);
+    assert_eq!(distribution.total(), 4);
+    assert_eq!(distribution.gated(), 4);
+    assert_eq!(distribution.groups().len(), 2);
+    assert_eq!(distribution.groups()[0].label(), "Frame 1");
+    assert_eq!(distribution.groups()[1].label(), "Frame 2");
+    let series = distribution.groups()[0].total();
+    assert_eq!(series.count(), 2);
+    assert_eq!(series.median(), 15.0);
+    assert_eq!(series.lower_quartile(), 12.5);
+    assert_eq!(series.upper_quartile(), 17.5);
+    assert_eq!(series.whisker_low(), 10.0);
+    assert_eq!(series.whisker_high(), 20.0);
+    assert!(series.outliers().is_empty());
+    assert_eq!(series.density().len(), DENSITY_POINTS);
+    assert!(series.density().iter().copied().fold(0.0f32, f32::max) >= 0.999);
+
+    let plot = table
+        .plot(MeasureView::Distribution, [column, 0], &[0, 1])
+        .expect("a gated distribution plots its column");
+    let Plot::Distribution(gated) = plot else {
+        panic!("the distribution view plots a distribution");
+    };
+    assert_eq!(gated.total(), 4);
+    assert_eq!(gated.gated(), 2);
+    assert_eq!(
+        gated.groups()[0]
+            .gated()
+            .expect("the first frame is gated in")
+            .count(),
+        2
+    );
+    assert!(gated.groups()[1].gated().is_none());
 }
 
 #[test]

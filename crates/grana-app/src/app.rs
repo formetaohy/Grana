@@ -91,6 +91,7 @@ pub struct App {
     system_dark: bool,
     themed: Option<(Appearance, bool)>,
     interacting: bool,
+    animating: bool,
 }
 
 impl App {
@@ -142,6 +143,7 @@ impl App {
             system_dark: true,
             themed: None,
             interacting: false,
+            animating: false,
         }
     }
 
@@ -166,7 +168,7 @@ impl App {
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
         match self.startup.take() {
             None => {
-                if self.capture.is_some() || self.session.recovery().is_none() {
+                if self.capture.is_some() {
                     self.session.open_sample();
                 }
             }
@@ -260,6 +262,7 @@ impl App {
         self.poll_pick();
         self.session.sync_measure();
         let (commands, animating) = self.run_ui();
+        self.animating = animating;
         self.sync_preference();
         self.sync_ime();
         self.interact_viewport();
@@ -416,6 +419,7 @@ impl App {
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
             && self.elapsed_frames > 30
+            && (!self.animating || self.start.elapsed() > CAPTURE_BUDGET)
             && (settled || (!occupied && !loaded) || self.start.elapsed() > CAPTURE_BUDGET)
         {
             self.capture = None;

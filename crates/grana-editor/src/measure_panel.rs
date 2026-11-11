@@ -8,7 +8,7 @@ use grana_ui::{
 };
 
 use crate::message::Message;
-use crate::state::View;
+use crate::state::{DistributionStyle, View};
 use crate::view;
 
 const ROW_HEIGHT: f32 = 26.0;
@@ -189,7 +189,12 @@ fn toolbar<'a>(
             Vec2::new(row.width(), TOOLBAR_HEIGHT),
         ))
         .children(items);
-    let labels = ["Table", "Histogram", "Scatter"];
+    let labels = MeasureView::ALL
+        .iter()
+        .copied()
+        .map(view_label)
+        .map(String::from)
+        .collect::<Vec<_>>();
     let mode = state.measure.view();
     let total = state.measure.total();
     let shown = state.measure.rows().len();
@@ -203,28 +208,33 @@ fn toolbar<'a>(
         ctx.theme().palette.text_tertiary,
     );
     let caption_width = ctx.measure(&caption, caption_style).x;
-    let segmented_width = if state.measure.table().is_some() {
-        segmented_width(ctx, &labels)
+    let measured = state.measure.table().is_some();
+    let view_label_style =
+        TextStyle::new(ctx.theme().label_font(), ctx.theme().palette.text_tertiary);
+    let view_width = if measured { 132.0 } else { 0.0 };
+    let view_label_width = if measured {
+        ctx.measure("View", view_label_style).x + 8.0
     } else {
         0.0
     };
-    let right_width = segmented_width + caption_width + 3.0 * 28.0 + 4.0 * 8.0 + 4.0;
+    let right_width = view_label_width + view_width + caption_width + 3.0 * 28.0 + 4.0 * 8.0 + 4.0;
     let right = Rect::from_min_size(
         Vec2::new((row.max.x - right_width).max(row.min.x), row.min.y),
         Vec2::new(right_width.min(row.width()), TOOLBAR_HEIGHT),
     );
     let mut right_items = Vec::new();
-    if state.measure.table().is_some() {
-        let index = match mode {
-            MeasureView::Table => 0,
-            MeasureView::Histogram => 1,
-            MeasureView::Scatter => 2,
-        };
-        right_items.push(view::segmented(
+    if measured {
+        let index = MeasureView::ALL
+            .iter()
+            .position(|view| *view == mode)
+            .unwrap_or(0);
+        right_items.push(field_label(ctx, "View"));
+        right_items.push(combo(
             ctx,
             "measure.view",
-            &labels,
+            132.0,
             index,
+            &labels,
             move |index| match MeasureView::ALL.get(index) {
                 Some(value) if *value != mode => Message::Command(Command::SetMeasureView(*value)),
                 _ => Message::Noop,
@@ -319,11 +329,23 @@ fn plot_bar<'a>(
         .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
-    let gated = lasso
-        || state.measure.filters().iter().any(|filter| {
-            filter.column() == axes[0]
-                || (view == MeasureView::Scatter && filter.column() == axes[1])
-        });
+    let gated = match view {
+        MeasureView::Distribution => {
+            lasso
+                || state
+                    .measure
+                    .filters()
+                    .iter()
+                    .any(|filter| filter.column() == axes[0])
+        }
+        _ => {
+            lasso
+                || state.measure.filters().iter().any(|filter| {
+                    filter.column() == axes[0]
+                        || (view == MeasureView::Scatter && filter.column() == axes[1])
+                })
+        }
+    };
     let selected_x = options
         .iter()
         .position(|(index, _)| *index == axes[0])
@@ -333,9 +355,10 @@ fn plot_bar<'a>(
         .position(|(index, _)| *index == axes[1])
         .unwrap_or(0);
     let options_x = options.clone();
-    let mut items = vec![
-        field_label(ctx, "X Axis"),
-        combo(
+    let mut items = Vec::new();
+    if view == MeasureView::Distribution {
+        items.push(field_label(ctx, "Value"));
+        items.push(combo(
             ctx,
             "measure.plot.x",
             180.0,
@@ -348,24 +371,55 @@ fn plot_bar<'a>(
                 }),
                 _ => Message::Noop,
             },
-        ),
-    ];
-    if view == MeasureView::Scatter {
-        items.push(field_label(ctx, "Y Axis"));
+        ));
+        let styles = DistributionStyle::ALL
+            .iter()
+            .copied()
+            .map(DistributionStyle::name)
+            .collect::<Vec<_>>();
+        items.push(field_label(ctx, "Style"));
+        items.push(view::segmented(
+            ctx,
+            "measure.distribution",
+            &styles,
+            state.workspace.distribution_style.index(),
+            Message::SetDistributionStyle,
+        ));
+    } else {
+        items.push(field_label(ctx, "X Axis"));
         items.push(combo(
             ctx,
-            "measure.plot.y",
+            "measure.plot.x",
             180.0,
-            selected_y,
+            selected_x,
             &labels,
-            move |index| match options.get(index) {
-                Some((column, _)) if *column != axes[1] => Message::Command(Command::SetPlotAxis {
-                    axis: PlotAxis::Y,
+            move |index| match options_x.get(index) {
+                Some((column, _)) if *column != axes[0] => Message::Command(Command::SetPlotAxis {
+                    axis: PlotAxis::X,
                     column: *column,
                 }),
                 _ => Message::Noop,
             },
         ));
+        if view == MeasureView::Scatter {
+            items.push(field_label(ctx, "Y Axis"));
+            items.push(combo(
+                ctx,
+                "measure.plot.y",
+                180.0,
+                selected_y,
+                &labels,
+                move |index| match options.get(index) {
+                    Some((column, _)) if *column != axes[1] => {
+                        Message::Command(Command::SetPlotAxis {
+                            axis: PlotAxis::Y,
+                            column: *column,
+                        })
+                    }
+                    _ => Message::Noop,
+                },
+            ));
+        }
     }
     if gated {
         items.push(view::button(ctx, "Clear Gate", Role::Quiet).press(Message::ClearGates));
@@ -855,14 +909,13 @@ fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'
     )
 }
 
-fn segmented_width(ctx: &mut BuildContext<'_, Message>, labels: &[&str]) -> f32 {
-    let theme = *ctx.theme();
-    let style = TextStyle::new(theme.font(Level::Callout).medium(), Color::WHITE);
-    labels
-        .iter()
-        .map(|label| ctx.measure(label, style).x + 24.0)
-        .sum::<f32>()
-        + 6.0
+fn view_label(view: MeasureView) -> &'static str {
+    match view {
+        MeasureView::Table => "Table",
+        MeasureView::Histogram => "Histogram",
+        MeasureView::Scatter => "Scatter",
+        MeasureView::Distribution => "Distribution",
+    }
 }
 
 fn combo<'a>(

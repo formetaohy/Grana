@@ -33,7 +33,7 @@ impl Session {
     }
 
     pub fn autosave(&mut self, view: ViewState) -> bool {
-        if self.recovery.busy()
+        if self.tasks.autosaving()
             || self.loading.is_some()
             || self.tasks.transferring()
             || !self.dirty()
@@ -74,7 +74,11 @@ impl Session {
             fingerprint,
         );
         let entry = RecoveryEntry::new(&name, &target, self.project.as_deref());
-        self.recovery.start(project, entry)
+        let Some(task) = self.recovery.start(project, entry) else {
+            return false;
+        };
+        self.tasks.start_autosave(task);
+        true
     }
 
     pub fn recover(&mut self) {
@@ -100,17 +104,15 @@ impl Session {
 
     pub fn discard_recovery(&mut self) {
         self.restore = None;
+        self.tasks.cancel_autosave();
         self.recovery.discard();
     }
 
-    pub(super) fn poll_recovery(&mut self) -> bool {
-        let Some(outcome) = self.recovery.poll() else {
-            return false;
-        };
-        if let Err(detail) = outcome {
-            self.message = Some(Message::error(detail));
+    pub(super) fn finish_autosave(&mut self, outcome: Result<RecoveryEntry, String>) {
+        match outcome {
+            Ok(entry) => self.recovery.accept(entry),
+            Err(detail) => self.message = Some(Message::error(detail)),
         }
-        true
     }
 
     pub(super) fn accept_open(&mut self) {
@@ -122,9 +124,11 @@ impl Session {
             self.baseline = self.document_hash();
         }
         self.recovery.discard();
+        self.tasks.cancel_autosave();
     }
 
     pub(super) fn clear_recovery(&mut self) {
         self.recovery.discard();
+        self.tasks.cancel_autosave();
     }
 }

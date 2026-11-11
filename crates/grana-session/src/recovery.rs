@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use grana_project::Project;
 
-use crate::task::{Poll, Progress};
+use crate::task::Progress;
 
 const FILE: &str = "recovery.json";
 
@@ -65,7 +65,6 @@ impl Entry {
 pub struct Recovery {
     root: Option<PathBuf>,
     entry: Option<Entry>,
-    task: Option<Progress<Result<Entry, String>>>,
     refused: bool,
 }
 
@@ -103,7 +102,6 @@ impl Recovery {
         Self {
             root: None,
             entry: None,
-            task: None,
             refused: false,
         }
     }
@@ -119,10 +117,6 @@ impl Recovery {
         (entry.age() <= STALE.as_secs() && path.is_file()).then_some(path)
     }
 
-    pub fn busy(&self) -> bool {
-        self.task.is_some()
-    }
-
     pub fn refused(&self) -> bool {
         self.refused
     }
@@ -131,16 +125,11 @@ impl Recovery {
         self.refused = true;
     }
 
-    pub fn start(&mut self, project: Project, entry: Entry) -> bool {
-        let Some(root) = self.root.clone() else {
-            return false;
-        };
-        if self.task.is_some() {
-            return false;
-        }
+    pub fn start(&self, project: Project, entry: Entry) -> Option<Progress<Result<Entry, String>>> {
+        let root = self.root.clone()?;
         let target = root.join(SNAPSHOT);
-        let label = entry.clone();
-        self.task = Some(Progress::spawn(
+        let label = entry;
+        Some(Progress::spawn(
             grana_exec::Role::Write,
             move |cancel, _| {
                 std::fs::create_dir_all(&root)
@@ -160,34 +149,15 @@ impl Recovery {
                     .map(|()| label)
                     .map_err(|error| format!("autosave failed: {error}"))
             },
-        ));
-        true
+        ))
     }
 
-    pub fn poll(&mut self) -> Option<Result<Entry, String>> {
-        let task = self.task.as_mut()?;
-        match task.poll() {
-            Poll::Event(outcome) => {
-                self.task = None;
-                match outcome {
-                    Ok(entry) => {
-                        self.refused = false;
-                        self.entry = Some(entry.clone());
-                        Some(Ok(entry))
-                    }
-                    Err(detail) => Some(Err(detail)),
-                }
-            }
-            Poll::Empty => None,
-            Poll::Closed => {
-                self.task = None;
-                Some(Err("the autosave worker stopped".to_string()))
-            }
-        }
+    pub fn accept(&mut self, entry: Entry) {
+        self.refused = false;
+        self.entry = Some(entry);
     }
 
     pub fn discard(&mut self) {
-        self.task = None;
         self.entry = None;
         if let Some(root) = self.root.as_ref() {
             discard(root);

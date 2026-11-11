@@ -34,7 +34,8 @@ pub use math::student_two_sided;
 pub use metric::{Measurement, Statistic, TrackMeasurement};
 pub use pair::PairExport;
 pub use plot::{
-    HISTOGRAM_BINS, Histogram, MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
+    DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries, HISTOGRAM_BINS, Histogram,
+    MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;

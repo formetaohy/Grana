@@ -1,0 +1,553 @@
+use super::*;
+
+const DEFAULT_APERTURE: f32 = 1.4;
+
+const DEFAULT_WAVELENGTH: f32 = 0.52;
+
+const DEFAULT_IMMERSION: f32 = 1.515;
+
+const DEFAULT_SAMPLE: f32 = 1.33;
+
+const DEFAULT_ITERATIONS: u32 = 10;
+
+pub(super) fn restore_fields<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    channel: usize,
+    spec: &grana_scene::RestoreSpec,
+    depth_limit: f32,
+) -> Vec<crate::view::View<'a>> {
+    let iterations = spec.iterations();
+    let psf = spec.psf().clone();
+    let set = move |psf: Psf, iterations: u32| Command::SetRestore {
+        channel,
+        psf,
+        iterations,
+    };
+    let mut rows = Vec::new();
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.iterations",
+        Some("Iterations"),
+        iterations as f32,
+        1.0..=50.0,
+        false,
+        &format!("{iterations}"),
+        move |value| set(psf.clone(), value.round().max(1.0) as u32),
+    ));
+    match spec.psf() {
+        Psf::Theoretical(params) => {
+            let params = *params;
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.aperture",
+                Some("Aperture"),
+                params.numerical_aperture(),
+                0.3..=1.45,
+                false,
+                &format!("{:.2} NA", params.numerical_aperture()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            value,
+                            params.wavelength(),
+                            params.immersion(),
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.wavelength",
+                Some("Emission"),
+                params.wavelength(),
+                0.35..=0.8,
+                false,
+                &format!("{:.3} µm", params.wavelength()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            value,
+                            params.immersion(),
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.immersion",
+                Some("Immersion"),
+                params.immersion(),
+                1.3..=1.6,
+                false,
+                &format!("{:.3}", params.immersion()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            value,
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.sample",
+                Some("Specimen"),
+                params.sample(),
+                1.0..=1.6,
+                false,
+                &format!("{:.3}", params.sample()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            params.immersion(),
+                            value,
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.depth",
+                Some("Depth"),
+                params.depth(),
+                0.0..=depth_limit,
+                false,
+                &format!("{:.1} µm", params.depth()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            params.immersion(),
+                            params.sample(),
+                            value,
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+        }
+        Psf::Measured(psf) => {
+            let dims = psf.dims();
+            rows.push(view::caption(
+                ctx,
+                &format!(
+                    "Measured from beads · {} depth bands · {}×{}×{}",
+                    psf.layers(),
+                    dims[0],
+                    dims[1],
+                    dims[2]
+                ),
+            ));
+            rows.push(
+                grana_ui::row()
+                    .justify(Align::End)
+                    .width(Length::Fill)
+                    .children([view::button_with(
+                        ctx,
+                        "Theoretical Model",
+                        Role::Quiet,
+                        Length::Fixed(panel_width()),
+                    )
+                    .press(Message::Command(Command::SetRestore {
+                        channel,
+                        psf: Psf::theoretical(PsfParams::new(
+                            DEFAULT_APERTURE,
+                            DEFAULT_WAVELENGTH,
+                            DEFAULT_IMMERSION,
+                            DEFAULT_SAMPLE,
+                            depth_limit * 0.5,
+                        )),
+                        iterations,
+                    }))]),
+            );
+        }
+    }
+    rows
+}
+
+pub(super) fn display<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let scene = state.scene;
+    let index = scene.selected;
+    let channel_name = scene.channel(index).name().to_string();
+    let tint = scene.channel(index).tint();
+    let data = scene.channel(index).intensity();
+    let current = scene.channels[index].window;
+    let start = current.min();
+    let end = current.max();
+    let available = data.min()..=data.max();
+    let opacity = scene.channels[index].opacity;
+    let transfer = scene.channels[index].transfer().clone();
+    let gradient = transfer_colors(&transfer);
+    let width = card_width();
+    let mut children = Vec::new();
+    children.push(view::card_title(
+        ctx,
+        Icon::Sliders,
+        "Display",
+        Some(&channel_name),
+    ));
+    children.push(
+        grana_ui::widget::range_slider(start, end, available, &gradient)
+            .key(Key::new("display.window"))
+            .on_range(move |low, high| {
+                Message::Command(Command::SetWindow {
+                    channel: index,
+                    window: Intensity::new(low.min(high), low.max(high)),
+                })
+            }),
+    );
+    let mono = theme.font(Level::Monospace);
+    let minimum = format!("Min {start:.0}");
+    let maximum = format!("Max {end:.0}");
+    children.push(grana_ui::canvas(
+        Length::Fill,
+        14.0,
+        move |painter, info| {
+            let rect = info.rect;
+            let style = TextStyle::new(mono, palette.text_tertiary);
+            painter.text_in(
+                Rect::from_min_size(rect.min, Vec2::new(rect.width() * 0.5, rect.height())),
+                &minimum,
+                style,
+                Align::Center,
+            );
+            painter.text_in(
+                rect,
+                &maximum,
+                TextStyle::new(mono, palette.text_tertiary).aligned(Align::End),
+                Align::Center,
+            );
+        },
+    ));
+    let opacity_readout = format!("{:.0}%", opacity * 100.0);
+    children.push(view::slider_readout(
+        ctx,
+        "display.opacity",
+        Some("Opacity"),
+        opacity,
+        0.0..=1.0,
+        false,
+        &opacity_readout,
+        move |value| Command::SetChannelOpacity {
+            channel: index,
+            opacity: value.clamp(0.0, 1.0),
+        },
+    ));
+    let volume = scene.channels[index].volume();
+    let modes = VolumeMode::ALL.map(VolumeMode::label);
+    children.push(view::segmented_fill(
+        ctx,
+        "display.volume",
+        &modes,
+        volume.mode().index(),
+        move |selected| {
+            Message::Command(Command::SetVolumeMode {
+                channel: index,
+                mode: VolumeMode::from_index(selected).expect("the segment names a volume mode"),
+            })
+        },
+    ));
+    if volume.mode() == VolumeMode::Isosurface {
+        let isovalue = volume.isovalue();
+        let value = format!("{:.0}", current.value(isovalue));
+        children.push(view::slider_readout(
+            ctx,
+            "display.isovalue",
+            Some("Iso Value"),
+            isovalue,
+            0.0..=1.0,
+            false,
+            &value,
+            move |value| Command::SetIsovalue {
+                channel: index,
+                isovalue: value.clamp(0.0, 1.0),
+            },
+        ));
+    }
+    let preset = (width - 12.0) / 3.0;
+    let auto = view::button_with(ctx, "Auto", Role::Control, Length::Fixed(preset))
+        .press(Message::Command(Command::ResetWindow(index)));
+    let tinted = view::button_with(ctx, "Tinted", Role::Control, Length::Fixed(preset)).press(
+        Message::Command(Command::SetTransfer {
+            channel: index,
+            transfer: TransferFunction::tinted(tint),
+        }),
+    );
+    let gray = view::button_with(ctx, "Gray", Role::Control, Length::Fixed(preset)).press(
+        Message::Command(Command::SetTransfer {
+            channel: index,
+            transfer: TransferFunction::grayscale(),
+        }),
+    );
+    children.push(
+        grana_ui::row()
+            .gap(6.0)
+            .align(Align::Center)
+            .children([auto, tinted, gray]),
+    );
+    let derived = (index >= scene.base_channels())
+        .then(|| scene.derived().get(index - scene.base_channels()))
+        .flatten()
+        .map(|entry| entry.spec().clone());
+    if let Some(operation) = derived.as_ref().map(|spec| spec.operation().clone()) {
+        children.push(view::divider(ctx));
+        match &operation {
+            grana_scene::Operation::Restore(restore) => children.extend(restore_fields(
+                ctx,
+                index,
+                restore,
+                scene.dataset.world_size().z.max(1.0),
+            )),
+            grana_scene::Operation::Smooth(smooth) => children.push(view::slider_event(
+                ctx,
+                "operator.sigma",
+                Some("Sigma"),
+                smooth.sigma(),
+                0.05..=8.0,
+                &format!("{:.2} µm", smooth.sigma()),
+                move |value| {
+                    Message::Command(Command::SetSmoothChannel {
+                        channel: index,
+                        sigma: value.clamp(0.05, 8.0),
+                    })
+                },
+            )),
+            grana_scene::Operation::Background(background) => {
+                children.push(view::slider_event(
+                    ctx,
+                    "operator.radius",
+                    Some("Radius"),
+                    background.radius(),
+                    0.2..=40.0,
+                    &format!("{:.2} µm", background.radius()),
+                    move |value| {
+                        Message::Command(Command::SetBackgroundChannel {
+                            channel: index,
+                            radius: value.clamp(0.2, 40.0),
+                        })
+                    },
+                ));
+            }
+            grana_scene::Operation::Ratio(ratio) => {
+                let denominator = scene.channel(ratio.denominator()).name().to_string();
+                children.push(view::weak(
+                    ctx,
+                    &format!(
+                        "Divides {} by {denominator}",
+                        scene
+                            .channel(derived.as_ref().expect("a ratio channel exists").source())
+                            .name()
+                    ),
+                ));
+            }
+            grana_scene::Operation::Mask { .. } => {}
+        }
+    }
+    children.push(view::divider(ctx));
+    let voxel = scene.dataset.voxel_size().min_element();
+    let sigma = voxel.max(0.05);
+    let radius = (10.0 * voxel).max(1.0);
+    let third = (width - 12.0) / 3.0;
+    children.push(view::caption(ctx, "Channel operators"));
+    children.push(
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            view::button_with(ctx, "Smooth", Role::Quiet, Length::Fixed(third))
+                .named("operator.smooth")
+                .press(Message::Command(Command::AddSmoothChannel {
+                    source: index,
+                    sigma,
+                })),
+            view::button_with(ctx, "Background", Role::Quiet, Length::Fixed(third))
+                .named("operator.background")
+                .press(Message::Command(Command::AddBackgroundChannel {
+                    source: index,
+                    radius,
+                })),
+            view::button_with(ctx, "Ratio", Role::Quiet, Length::Fixed(third))
+                .named("display.ratio")
+                .press(Message::Noop),
+        ]),
+    );
+    let ratio_edit = matches!(
+        derived.as_ref().map(|spec| spec.operation()),
+        Some(grana_scene::Operation::Ratio(_))
+    );
+    let mut ratio_rows = Vec::new();
+    for (candidate, info) in scene.dataset.channels().iter().enumerate() {
+        if candidate == index {
+            continue;
+        }
+        let command = if ratio_edit {
+            Command::SetRatioChannel {
+                channel: index,
+                denominator: candidate,
+            }
+        } else {
+            Command::AddRatioChannel {
+                numerator: index,
+                denominator: candidate,
+            }
+        };
+        ratio_rows.push(view::menu_row(
+            ctx,
+            &format!("display.ratio.{candidate}"),
+            info.name(),
+            false,
+            Some(Message::Command(command)),
+        ));
+    }
+    children.push(view::menu(
+        ctx,
+        Key::new("display.ratio"),
+        220.0,
+        ratio_rows,
+    ));
+    children.push(view::divider(ctx));
+    children.push(
+        grana_ui::row()
+            .justify(Align::End)
+            .width(Length::Fill)
+            .children([view::button_with(
+                ctx,
+                "Export Dataset",
+                Role::Quiet,
+                Length::Fixed(width),
+            )
+            .named("display.export")
+            .press(Message::Command(Command::ExportDataset))]),
+    );
+    if derived.is_some() {
+        children.push(
+            grana_ui::row()
+                .justify(Align::End)
+                .width(Length::Fill)
+                .children([view::button_with(
+                    ctx,
+                    "Remove Channel",
+                    Role::Quiet,
+                    Length::Fixed(width),
+                )
+                .named("display.derived.remove")
+                .press(Message::Command(Command::RemoveDerivedChannel {
+                    channel: index,
+                }))]),
+        );
+    } else {
+        let depth = scene.dataset.world_size().z * 0.5;
+        let button = (width - 6.0) * 0.5;
+        let psf_key = Key::new("display.psf");
+        let psf_open = state.workspace.disclosures.is_open(psf_key);
+        let mut calibration = Vec::new();
+        if psf_open {
+            calibration.push(view::slider_event(
+                ctx,
+                "restore.bead_threshold",
+                Some("Bead Threshold"),
+                state.workspace.psf_threshold,
+                2.0..=20.0,
+                &format!("{:.1} σ", state.workspace.psf_threshold),
+                Message::SetPsfThreshold,
+            ));
+            calibration.push(view::slider_event(
+                ctx,
+                "restore.bead_separation",
+                Some("Bead Spacing"),
+                state.workspace.psf_separation,
+                0.3..=5.0,
+                &format!("{:.1} µm", state.workspace.psf_separation),
+                Message::SetPsfSeparation,
+            ));
+        }
+        children.push(disclosure(
+            ctx,
+            "display.psf",
+            "Bead Calibration",
+            psf_open,
+            calibration,
+        ));
+        children.push(
+            grana_ui::row()
+                .gap(6.0)
+                .justify(Align::End)
+                .width(Length::Fill)
+                .children([
+                    view::button_with(ctx, "Deconvolve", Role::Quiet, Length::Fixed(button))
+                        .named("display.restore.add")
+                        .press(Message::Command(Command::AddRestoreChannel {
+                            source: index,
+                            psf: Psf::theoretical(PsfParams::new(
+                                DEFAULT_APERTURE,
+                                DEFAULT_WAVELENGTH,
+                                DEFAULT_IMMERSION,
+                                DEFAULT_SAMPLE,
+                                depth,
+                            )),
+                            iterations: DEFAULT_ITERATIONS,
+                        })),
+                    view::button_with(ctx, "From Beads", Role::Quiet, Length::Fixed(button))
+                        .named("display.restore.beads")
+                        .press(Message::Command(Command::CalibratePsf {
+                            source: index,
+                            threshold: state.workspace.psf_threshold,
+                            separation: state.workspace.psf_separation,
+                        })),
+                ]),
+        );
+    }
+    children.push(view::divider(ctx));
+    let key = Key::new("display.transfer");
+    let open = state.workspace.disclosures.is_open(key);
+    let mut curve = Vec::new();
+    if open {
+        curve.extend(crate::transfer::edit(
+            ctx,
+            "display.transfer",
+            index,
+            &transfer,
+            tint,
+            current,
+            width,
+        ));
+    }
+    children.push(disclosure(
+        ctx,
+        "display.transfer",
+        "Transfer Curve",
+        open,
+        curve,
+    ));
+    view::card(ctx, 7.0, children)
+}
+
+pub(super) fn transfer_colors(transfer: &TransferFunction) -> Vec<Color> {
+    transfer
+        .stops()
+        .iter()
+        .map(|stop| {
+            let [red, green, blue] = stop.color();
+            Color::rgba(red, green, blue, 1.0)
+        })
+        .collect()
+}

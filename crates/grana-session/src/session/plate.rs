@@ -4,7 +4,7 @@ use super::*;
 
 impl Session {
     pub(super) fn start_previews(&mut self) {
-        if self.previews.is_some() {
+        if self.tasks.previews().is_some() {
             return;
         }
         let (Some(plate), Some(source)) = (
@@ -13,16 +13,13 @@ impl Session {
         ) else {
             return;
         };
-        self.previews = Some(preview::Previews::start(plate, &source));
+        self.tasks
+            .start_previews(preview::Previews::start(plate, &source));
     }
 
     pub(super) fn clear_plate(&mut self) {
-        self.previews = None;
+        self.tasks.clear_previews();
         self.tasks.montage = None;
-    }
-
-    pub(super) fn poll_plate(&mut self) -> bool {
-        self.previews.as_mut().is_some_and(preview::Previews::poll)
     }
 
     pub(super) fn finish_montage(&mut self, outcome: Result<PathBuf, String>) {

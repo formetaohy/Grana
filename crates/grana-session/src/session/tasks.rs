@@ -3,16 +3,20 @@ use std::path::PathBuf;
 use grana_measure::Table;
 use grana_pipeline::export::Summary;
 use grana_scene::{MeasureKey, ObjectSetId, TableRequest};
+use grana_volume::Intensity;
 use grana_zarr::Written;
 
 use super::Session;
 use super::dataset::DatasetExport;
+use super::derived::PendingChannel;
 use super::export::Csv;
 use super::label::Labels;
 use super::montage::Montage;
+use super::preview::Previews;
 use super::provenance::Export as Provenance;
 use crate::document::Document;
 use crate::document::Outcome as DocumentOutcome;
+use crate::recovery::Entry as RecoveryEntry;
 use crate::task::{Poll, Progress};
 
 pub(super) enum Completion {
@@ -33,6 +37,8 @@ pub(super) enum Completion {
     Provenance(Result<PathBuf, String>),
     Dataset(Result<Summary, String>),
     Montage(Result<PathBuf, String>),
+    Autosave(Result<RecoveryEntry, String>),
+    Channel(PendingChannel, Result<Intensity, String>),
 }
 
 pub(super) struct Measure {
@@ -69,6 +75,9 @@ pub(super) struct Tasks {
     pub provenance: Option<Provenance>,
     pub dataset: Option<DatasetExport>,
     pub montage: Option<Montage>,
+    previews: Option<Previews>,
+    autosave: Option<Progress<Result<RecoveryEntry, String>>>,
+    channels: Vec<PendingChannel>,
     pending_csv: Option<PathBuf>,
 }
 
@@ -201,7 +210,49 @@ impl Tasks {
                 }
             }
         }
+        if let Some(previews) = self.previews.as_mut() {
+            stepped |= previews.poll();
+        }
+        let mut autosaved = None;
+        if let Some(slot) = self.autosave.as_mut() {
+            match slot.poll() {
+                Poll::Event(outcome) => autosaved = Some(outcome),
+                Poll::Empty => {}
+                Poll::Closed => {
+                    autosaved = Some(Err("the autosave worker stopped".to_string()));
+                }
+            }
+        }
+        if let Some(outcome) = autosaved {
+            self.autosave = None;
+            completions.push(Completion::Autosave(outcome));
+            stepped = true;
+        }
+        stepped |= self.poll_channels(&mut completions);
         (completions, stepped)
+    }
+
+    fn poll_channels(&mut self, completions: &mut Vec<Completion>) -> bool {
+        let mut repaint = false;
+        let mut index = 0;
+        while index < self.channels.len() {
+            let outcome = match self.channels[index].task().poll() {
+                Poll::Event(outcome) => Some(outcome),
+                Poll::Empty => None,
+                Poll::Closed => Some(Err(
+                    "a derived channel stopped before it was calibrated".to_string()
+                )),
+            };
+            match outcome {
+                Some(outcome) => {
+                    let pending = self.channels.remove(index);
+                    completions.push(Completion::Channel(pending, outcome));
+                    repaint = true;
+                }
+                None => index += 1,
+            }
+        }
+        repaint
     }
 
     pub(super) fn writing(&self) -> bool {
@@ -218,6 +269,42 @@ impl Tasks {
 
     pub(super) fn measuring(&self) -> bool {
         self.measure.is_some()
+    }
+
+    pub(super) fn start_previews(&mut self, previews: Previews) {
+        if self.previews.is_none() {
+            self.previews = Some(previews);
+        }
+    }
+
+    pub(super) fn previews(&self) -> Option<&Previews> {
+        self.previews.as_ref()
+    }
+
+    pub(super) fn previewing(&self) -> bool {
+        self.previews
+            .as_ref()
+            .is_some_and(|previews| !previews.closed())
+    }
+
+    pub(super) fn clear_previews(&mut self) {
+        self.previews = None;
+    }
+
+    pub(super) fn start_autosave(&mut self, task: Progress<Result<RecoveryEntry, String>>) {
+        self.autosave = Some(task);
+    }
+
+    pub(super) fn autosaving(&self) -> bool {
+        self.autosave.is_some()
+    }
+
+    pub(super) fn cancel_autosave(&mut self) {
+        self.autosave = None;
+    }
+
+    pub(super) fn start_channel(&mut self, channel: PendingChannel) {
+        self.channels.push(channel);
     }
 
     pub(super) fn progress(&self) -> Option<(&str, usize, usize)> {
@@ -273,6 +360,8 @@ impl Tasks {
         self.provenance = None;
         self.dataset = None;
         self.montage = None;
+        self.autosave = None;
+        self.channels.clear();
         self.pending_csv = None;
     }
 }
@@ -293,6 +382,8 @@ impl Session {
             Completion::Provenance(outcome) => self.finish_provenance(outcome),
             Completion::Dataset(outcome) => self.finish_dataset(outcome),
             Completion::Montage(outcome) => self.finish_montage(outcome),
+            Completion::Autosave(outcome) => self.finish_autosave(outcome),
+            Completion::Channel(pending, outcome) => self.finish_channel(pending, outcome),
         }
     }
 }

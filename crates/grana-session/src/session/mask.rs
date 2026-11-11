@@ -2,7 +2,7 @@ use grana_pipeline::Channels;
 use grana_scene::{DerivedSpec, ObjectSetId};
 use grana_volume::Intensity;
 
-use crate::task::{Poll, Task};
+use super::derived::{PendingChannel, calibrate};
 
 use super::*;
 
@@ -94,7 +94,7 @@ impl Session {
         self.message = Some(Message::info(format!(
             "calibrating restored channel {name}"
         )));
-        self.channels_pending.push(PendingChannel::AddRestore {
+        self.tasks.start_channel(PendingChannel::AddRestore {
             channels,
             source,
             name,
@@ -224,7 +224,7 @@ impl Session {
                 .map_err(|error| error.to_string())
         });
         self.message = Some(Message::info(format!("calibrating ratio channel {name}")));
-        self.channels_pending.push(PendingChannel::AddRatio {
+        self.tasks.start_channel(PendingChannel::AddRatio {
             channels,
             numerator,
             denominator,
@@ -297,7 +297,7 @@ impl Session {
                 .ratio_range(numerator, denominator)
                 .map_err(|error| error.to_string())
         });
-        self.channels_pending.push(PendingChannel::SetRatio {
+        self.tasks.start_channel(PendingChannel::SetRatio {
             channels,
             channel,
             numerator,
@@ -387,42 +387,27 @@ impl Session {
         changed
     }
 
-    pub(super) fn poll_channels(&mut self) -> bool {
-        if self.channels_pending.is_empty() {
-            return false;
-        }
-        let mut repaint = false;
-        let mut index = 0;
-        while index < self.channels_pending.len() {
-            match self.channels_pending[index].task().poll() {
-                Poll::Event(Ok(intensity)) => {
-                    let pending = self.channels_pending.remove(index);
-                    if self
-                        .source
-                        .as_ref()
-                        .and_then(Loader::channels)
-                        .is_some_and(|current| Arc::ptr_eq(&current, pending.channels()))
-                    {
-                        repaint |= self.install_channel(pending, intensity);
-                    }
+    pub(super) fn finish_channel(
+        &mut self,
+        pending: PendingChannel,
+        outcome: Result<Intensity, String>,
+    ) {
+        match outcome {
+            Ok(intensity) => {
+                if self
+                    .source
+                    .as_ref()
+                    .and_then(Loader::channels)
+                    .is_some_and(|current| Arc::ptr_eq(&current, pending.channels()))
+                {
+                    self.install_channel(pending, intensity);
                 }
-                Poll::Event(Err(detail)) => {
-                    self.channels_pending.remove(index);
-                    self.message = Some(Message::error(detail));
-                }
-                Poll::Closed => {
-                    self.channels_pending.remove(index);
-                    self.message = Some(Message::error(
-                        "a derived channel stopped before it was calibrated",
-                    ));
-                }
-                Poll::Empty => index += 1,
             }
+            Err(detail) => self.message = Some(Message::error(detail)),
         }
-        repaint
     }
 
-    fn install_channel(&mut self, pending: PendingChannel, intensity: Intensity) -> bool {
+    fn install_channel(&mut self, pending: PendingChannel, intensity: Intensity) {
         match pending {
             PendingChannel::AddRestore {
                 source,
@@ -433,7 +418,7 @@ impl Session {
                 ..
             } => {
                 let Some(scene) = self.scene.as_mut() else {
-                    return false;
+                    return;
                 };
                 let fundus = scene
                     .dataset
@@ -454,11 +439,9 @@ impl Session {
                         self.message = Some(Message::info(format!(
                             "restored channel {name} deconvolves {fundus}"
                         )));
-                        true
                     }
                     Err(detail) => {
                         self.message = Some(Message::error(detail));
-                        false
                     }
                 }
             }
@@ -470,7 +453,7 @@ impl Session {
                 ..
             } => {
                 let Some(scene) = self.scene.as_mut() else {
-                    return false;
+                    return;
                 };
                 let names = (
                     scene
@@ -486,7 +469,7 @@ impl Session {
                 );
                 let (Some(up), Some(down)) = names else {
                     self.message = Some(Message::error("the ratio channels are missing"));
-                    return false;
+                    return;
                 };
                 match scene.add_derived(DerivedSpec::ratio(
                     numerator,
@@ -501,11 +484,9 @@ impl Session {
                         self.message = Some(Message::info(format!(
                             "ratio channel {name} divides {up} by {down}"
                         )));
-                        true
                     }
                     Err(detail) => {
                         self.message = Some(Message::error(detail));
-                        false
                     }
                 }
             }
@@ -525,82 +506,19 @@ impl Session {
                     self.message = Some(Message::error(
                         "the ratio channel changed while it was calibrating",
                     ));
-                    return false;
+                    return;
                 }
                 let outcome = self
                     .scene
                     .as_mut()
                     .map(|scene| scene.set_ratio(channel, denominator, intensity));
                 match outcome {
-                    Some(Ok(true)) => {
-                        self.refresh_derived_layout();
-                        true
-                    }
-                    Some(Ok(false)) => false,
-                    Some(Err(detail)) => {
-                        self.message = Some(Message::error(detail));
-                        false
-                    }
-                    None => false,
+                    Some(Ok(true)) => self.refresh_derived_layout(),
+                    Some(Ok(false)) => {}
+                    Some(Err(detail)) => self.message = Some(Message::error(detail)),
+                    None => {}
                 }
             }
         }
     }
-}
-
-pub(super) enum PendingChannel {
-    AddRestore {
-        channels: Arc<Channels>,
-        source: usize,
-        name: String,
-        tint: [f32; 3],
-        psf: Psf,
-        iterations: u32,
-        task: Task<Result<Intensity, String>>,
-    },
-    AddRatio {
-        channels: Arc<Channels>,
-        numerator: usize,
-        denominator: usize,
-        name: String,
-        tint: [f32; 3],
-        task: Task<Result<Intensity, String>>,
-    },
-    SetRatio {
-        channels: Arc<Channels>,
-        channel: usize,
-        numerator: usize,
-        denominator: usize,
-        task: Task<Result<Intensity, String>>,
-    },
-}
-
-impl PendingChannel {
-    fn task(&self) -> &Task<Result<Intensity, String>> {
-        match self {
-            Self::AddRestore { task, .. } => task,
-            Self::AddRatio { task, .. } => task,
-            Self::SetRatio { task, .. } => task,
-        }
-    }
-
-    fn channels(&self) -> &Arc<Channels> {
-        match self {
-            Self::AddRestore { channels, .. } => channels,
-            Self::AddRatio { channels, .. } => channels,
-            Self::SetRatio { channels, .. } => channels,
-        }
-    }
-}
-
-fn calibrate(
-    channels: Arc<Channels>,
-    work: impl FnOnce(&Channels) -> Result<Intensity, String> + Send + 'static,
-) -> Task<Result<Intensity, String>> {
-    Task::spawn(grana_exec::Role::Compute, move |cancel, sink| {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return;
-        }
-        sink(work(&channels));
-    })
 }

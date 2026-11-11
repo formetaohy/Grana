@@ -663,6 +663,11 @@ pub fn apply(
             Message::SetRelationFilter(value) => {
                 workspace.relation_filter = value.clamp(0.0, 1.0);
             }
+            Message::SetDistributionStyle(index) => {
+                if let Some(style) = crate::state::DistributionStyle::ALL.get(index) {
+                    workspace.distribution_style = *style;
+                }
+            }
             Message::SetComparisonMetric(index) => {
                 if let Some(metric) = crate::state::ComparisonMetric::ALL.get(index).copied() {
                     workspace.comparison_metric = metric;

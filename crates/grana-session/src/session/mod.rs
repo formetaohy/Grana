@@ -1,6 +1,7 @@
 mod analysis;
 mod batch;
 mod dataset;
+mod derived;
 mod edit;
 mod execute;
 mod export;
@@ -61,7 +62,6 @@ use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
-use mask::PendingChannel;
 use recover::Restore;
 use tasks::Tasks;
 
@@ -148,10 +148,8 @@ pub struct Session {
     plate: Option<Plate>,
     field: usize,
     fields: Fields,
-    previews: Option<preview::Previews>,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
-    channels_pending: Vec<PendingChannel>,
     transfer: Transfer,
     recent: Recent,
     import: Vec<ImportNote>,
@@ -224,10 +222,8 @@ impl Session {
             plate: None,
             field: 0,
             fields: Fields::default(),
-            previews: None,
             fingerprint: None,
             mask_stamp: None,
-            channels_pending: Vec::new(),
             transfer: Transfer::default(),
             recent: Recent::default(),
             import: Vec::new(),
@@ -363,8 +359,8 @@ impl Session {
         Some(PlateView {
             plate: self.plate.as_ref()?,
             selected: self.field,
-            thumbs: self.previews.as_ref().map(preview::Previews::thumbs),
-            previews: self.previews.as_ref().map_or(0, preview::Previews::done),
+            thumbs: self.tasks.previews().map(preview::Previews::thumbs),
+            previews: self.tasks.previews().map_or(0, preview::Previews::done),
         })
     }
     pub fn label_images(&self) -> &[String] {
@@ -524,10 +520,7 @@ impl Session {
         repaint |= stepped;
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
-        repaint |= self.poll_plate();
         repaint |= self.refresh_masks();
-        repaint |= self.poll_channels();
-        repaint |= self.poll_recovery();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
             self.baseline = self.document_hash();
             self.deferred = false;
@@ -539,9 +532,7 @@ impl Session {
     }
 
     pub fn previewing(&self) -> bool {
-        self.previews
-            .as_ref()
-            .is_some_and(|previews| !previews.closed())
+        self.tasks.previewing()
     }
 
     pub fn writing(&self) -> bool {
