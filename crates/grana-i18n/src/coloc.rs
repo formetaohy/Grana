@@ -32,5 +32,5 @@ messages! {
     raw(a: f32, b: f32) => "Raw {a:.0} · {b:.0}" / "原始 {a:.0} · {b:.0}";
     frame_row(time: u32) => "Frame {time}" / "第 {time} 帧";
     sampling_detail(coverage: f32, voxels: u64, frames: usize, blocks: u64, stride: u32) => "{coverage:.1}% · {voxels} vx · {frames}f · {blocks} blocks (s{stride})" / "{coverage:.1}% · {voxels} 体素 · {frames} 帧 · {blocks} 块 (s{stride})";
-    all_frames_bins(bins: usize) => "All frames · {bins} bins" / "所有帧 · {bins} 组";
+    frame_bins(time: u32, bins: usize) => "Frame {time} · {bins} bins" / "第 {time} 帧 · {bins} 组";
 }

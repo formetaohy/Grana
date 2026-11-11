@@ -5,30 +5,220 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use grana_text::{Contour, Curve};
 
-use crate::document::{Cap, Document, Image, Paint, Rect, Rgba};
+use crate::document::{Cap, Document, Image, Page, Paint, Rect, Rgba};
 use crate::number::text;
 
 const BAND: usize = 64;
 
+struct Content<'a> {
+    stream: String,
+    alphas: Vec<f32>,
+    gradients: Vec<(Rgba, Rgba, Rect)>,
+    background: Option<&'a Image>,
+    mask: Option<Vec<u8>>,
+}
+
+struct Layout {
+    page: u32,
+    stream: u32,
+    image: Option<u32>,
+    mask: Option<u32>,
+    states: u32,
+    patterns: u32,
+    shadings: u32,
+}
+
 pub fn write(document: &Document) -> Vec<u8> {
-    let width = document.width();
-    let height = document.height();
-    let mut content = String::new();
+    assert!(
+        !document.pages().is_empty(),
+        "a vector document holds at least one page"
+    );
+    let contents = document.pages().iter().map(content).collect::<Vec<_>>();
+    let mut next = 3u32;
+    let mut layouts = Vec::with_capacity(contents.len());
+    for content in &contents {
+        let page = next;
+        next += 1;
+        let stream = next;
+        next += 1;
+        let image = content.background.map(|_| {
+            let object = next;
+            next += 1;
+            object
+        });
+        let mask = content.mask.as_ref().map(|_| {
+            let object = next;
+            next += 1;
+            object
+        });
+        let states = next;
+        next += content.alphas.len() as u32;
+        let patterns = next;
+        next += content.gradients.len() as u32;
+        let shadings = next;
+        next += content.gradients.len() as u32;
+        layouts.push(Layout {
+            page,
+            stream,
+            image,
+            mask,
+            states,
+            patterns,
+            shadings,
+        });
+    }
+    let count = next;
+    let mut bodies: Vec<Vec<u8>> = vec![Vec::new(); count as usize];
+    bodies[1] = b"<< /Type /Catalog /Pages 2 0 R >>".to_vec();
+    let kids = layouts
+        .iter()
+        .map(|layout| format!("{} 0 R", layout.page))
+        .collect::<Vec<_>>()
+        .join(" ");
+    bodies[2] = format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", layouts.len()).into_bytes();
+    for ((page, content), layout) in document.pages().iter().zip(&contents).zip(&layouts) {
+        let mut resources = String::from("/ProcSet [/PDF /ImageC /ImageB]");
+        if let Some(object) = layout.image {
+            let _ = write!(resources, " /XObject << /Im0 {object} 0 R >>");
+        }
+        if !content.alphas.is_empty() {
+            let _ = write!(resources, " /ExtGState <<");
+            for index in 0..content.alphas.len() {
+                let _ = write!(
+                    resources,
+                    " /GS{index} {} 0 R",
+                    layout.states + index as u32
+                );
+            }
+            resources.push_str(" >>");
+        }
+        if !content.gradients.is_empty() {
+            let _ = write!(resources, " /Pattern <<");
+            for index in 0..content.gradients.len() {
+                let _ = write!(
+                    resources,
+                    " /P{index} {} 0 R",
+                    layout.patterns + index as u32
+                );
+            }
+            resources.push_str(" >>");
+        }
+        bodies[layout.page as usize] = format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << {resources} >> /Contents {} 0 R >>",
+            text(page.width()),
+            text(page.height()),
+            layout.stream
+        )
+        .into_bytes();
+        let stream = content.stream.as_bytes();
+        let mut body = format!("<< /Length {} >>\nstream\n", stream.len()).into_bytes();
+        body.extend_from_slice(stream);
+        body.extend_from_slice(b"endstream");
+        bodies[layout.stream as usize] = body;
+        if let (Some(object), Some(image)) = (layout.image, content.background) {
+            let [image_width, image_height] = image.size();
+            let rgb = flate(&color_bytes(image));
+            let mut body = format!(
+                "<< /Type /XObject /Subtype /Image /Width {image_width} /Height {image_height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode"
+            );
+            if let Some(object) = layout.mask {
+                let _ = write!(body, " /SMask {object} 0 R");
+            }
+            let _ = write!(body, " /Length {} >>\nstream\n", rgb.len());
+            let mut bytes = body.into_bytes();
+            bytes.extend_from_slice(&rgb);
+            bytes.extend_from_slice(b"\nendstream");
+            bodies[object as usize] = bytes;
+        }
+        if let (Some(object), Some(mask)) = (layout.mask, content.mask.as_ref()) {
+            let gray = flate(mask);
+            let [image_width, image_height] = content
+                .background
+                .expect("the mask follows the backdrop")
+                .size();
+            let mut bytes = format!(
+                "<< /Type /XObject /Subtype /Image /Width {image_width} /Height {image_height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+                gray.len()
+            )
+            .into_bytes();
+            bytes.extend_from_slice(&gray);
+            bytes.extend_from_slice(b"\nendstream");
+            bodies[object as usize] = bytes;
+        }
+        for (index, alpha) in content.alphas.iter().enumerate() {
+            bodies[(layout.states + index as u32) as usize] = format!(
+                "<< /Type /ExtGState /ca {} /CA {} >>",
+                text(*alpha),
+                text(*alpha)
+            )
+            .into_bytes();
+        }
+        let height = page.height();
+        for (index, (top, bottom, bounds)) in content.gradients.iter().enumerate() {
+            let x = 0.5 * (bounds.min[0] + bounds.max[0]);
+            let shading = format!(
+                "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [{} {} {} {}] /Function << /FunctionType 2 /Domain [0 1] /C0 [{} {} {}] /C1 [{} {} {}] /N 1 >> /Extend [true true] >>",
+                text(x),
+                text(height - bounds.min[1]),
+                text(x),
+                text(height - bounds.max[1]),
+                text(top.red),
+                text(top.green),
+                text(top.blue),
+                text(bottom.red),
+                text(bottom.green),
+                text(bottom.blue)
+            );
+            bodies[(layout.shadings + index as u32) as usize] = shading.into_bytes();
+            bodies[(layout.patterns + index as u32) as usize] = format!(
+                "<< /Type /Pattern /PatternType 2 /Shading {} 0 R /Matrix [1 0 0 1 0 0] >>",
+                layout.shadings + index as u32
+            )
+            .into_bytes();
+        }
+    }
+
+    let mut file = Vec::new();
+    file.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+    let mut offsets = vec![0usize; count as usize];
+    for (index, body) in bodies.iter().enumerate().skip(1) {
+        offsets[index] = file.len();
+        let _ = writeln!(file, "{index} 0 obj");
+        file.extend_from_slice(body);
+        file.extend_from_slice(b"\nendobj\n");
+    }
+    let start = file.len();
+    let _ = writeln!(file, "xref\n0 {count}");
+    file.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets.iter().skip(1) {
+        let _ = writeln!(file, "{offset:010} 00000 n ");
+    }
+    let _ = write!(
+        file,
+        "trailer\n<< /Size {count} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n"
+    );
+    file
+}
+
+fn content(page: &Page) -> Content<'_> {
+    let width = page.width();
+    let height = page.height();
+    let mut stream = String::new();
     let mut alphas: Vec<f32> = Vec::new();
     let mut gradients: Vec<(Rgba, Rgba, Rect)> = Vec::new();
-    if document.background().is_some() {
+    if page.background().is_some() {
         let _ = writeln!(
-            content,
+            stream,
             "q {} 0 0 {} 0 0 cm /Im0 Do Q",
             text(width),
             text(height)
         );
     }
-    for shape in document.shapes() {
-        content.push_str("q\n");
+    for shape in page.shapes() {
+        stream.push_str("q\n");
         if let Some(clip) = shape.clip {
             let _ = writeln!(
-                content,
+                stream,
                 "{} {} {} {} re W n",
                 text(clip.min[0]),
                 text(height - clip.max[1]),
@@ -38,28 +228,28 @@ pub fn write(document: &Document) -> Vec<u8> {
         }
         match shape.paint {
             Paint::Fill(color) => {
-                write_alpha(&mut content, &mut alphas, color.alpha);
+                write_alpha(&mut stream, &mut alphas, color.alpha);
                 let _ = writeln!(
-                    content,
+                    stream,
                     "{} {} {} rg",
                     text(color.red),
                     text(color.green),
                     text(color.blue)
                 );
-                path(&mut content, &shape.contours, height);
-                content.push_str("f\n");
+                path(&mut stream, &shape.contours, height);
+                stream.push_str("f\n");
             }
             Paint::Stroke { width, color, cap } => {
-                write_alpha(&mut content, &mut alphas, color.alpha);
+                write_alpha(&mut stream, &mut alphas, color.alpha);
                 let _ = writeln!(
-                    content,
+                    stream,
                     "{} {} {} RG",
                     text(color.red),
                     text(color.green),
                     text(color.blue)
                 );
                 let _ = writeln!(
-                    content,
+                    stream,
                     "{} w {} J 1 j",
                     text(width),
                     match cap {
@@ -67,28 +257,35 @@ pub fn write(document: &Document) -> Vec<u8> {
                         Cap::Round => 1,
                     }
                 );
-                path(&mut content, &shape.contours, height);
-                content.push_str("S\n");
+                path(&mut stream, &shape.contours, height);
+                stream.push_str("S\n");
             }
             Paint::Gradient(top, bottom) => {
                 let bounds = bounds(&shape.contours).expect("a gradient shape spans an area");
                 if (top.alpha - bottom.alpha).abs() < 1e-4 {
-                    write_alpha(&mut content, &mut alphas, top.alpha);
+                    write_alpha(&mut stream, &mut alphas, top.alpha);
                     let index = gradients.len();
                     gradients.push((top, bottom, bounds));
-                    let _ = writeln!(content, "/Pattern cs /P{index} scn");
-                    path(&mut content, &shape.contours, height);
-                    content.push_str("f\n");
+                    let _ = writeln!(stream, "/Pattern cs /P{index} scn");
+                    path(&mut stream, &shape.contours, height);
+                    stream.push_str("f\n");
                 } else {
-                    path(&mut content, &shape.contours, height);
-                    content.push_str("W n\n");
-                    bands(&mut content, &mut alphas, top, bottom, bounds, height);
+                    path(&mut stream, &shape.contours, height);
+                    stream.push_str("W n\n");
+                    bands(&mut stream, &mut alphas, top, bottom, bounds, height);
                 }
             }
         }
-        content.push_str("Q\n");
+        stream.push_str("Q\n");
     }
-    serialize(document, &content, &alphas, &gradients)
+    let background = page.background();
+    Content {
+        stream,
+        alphas,
+        gradients,
+        background,
+        mask: background.and_then(alpha_mask),
+    }
 }
 
 fn write_alpha(content: &mut String, alphas: &mut Vec<f32>, alpha: f32) {
@@ -228,151 +425,6 @@ fn path(content: &mut String, contours: &[Contour], height: f32) {
             content.push_str("h\n");
         }
     }
-}
-
-fn serialize(
-    document: &Document,
-    content: &str,
-    alphas: &[f32],
-    gradients: &[(Rgba, Rgba, Rect)],
-) -> Vec<u8> {
-    let width = document.width();
-    let height = document.height();
-    let image = document.background();
-    let mask = image.and_then(alpha_mask);
-    let mut next = 5u32;
-    let image_object = image.map(|_| {
-        let object = next;
-        next += 1;
-        object
-    });
-    let mask_object = mask.as_ref().map(|_| {
-        let object = next;
-        next += 1;
-        object
-    });
-    let state_base = next;
-    next += alphas.len() as u32;
-    let pattern_base = next;
-    next += gradients.len() as u32;
-    let shading_base = next;
-    next += gradients.len() as u32;
-    let count = next;
-
-    let mut resources = String::from("/ProcSet [/PDF /ImageC /ImageB]");
-    if let Some(object) = image_object {
-        let _ = write!(resources, " /XObject << /Im0 {object} 0 R >>");
-    }
-    if !alphas.is_empty() {
-        let _ = write!(resources, " /ExtGState <<");
-        for index in 0..alphas.len() {
-            let _ = write!(resources, " /GS{index} {} 0 R", state_base + index as u32);
-        }
-        resources.push_str(" >>");
-    }
-    if !gradients.is_empty() {
-        let _ = write!(resources, " /Pattern <<");
-        for index in 0..gradients.len() {
-            let _ = write!(resources, " /P{index} {} 0 R", pattern_base + index as u32);
-        }
-        resources.push_str(" >>");
-    }
-
-    let mut bodies: Vec<Vec<u8>> = vec![Vec::new(); count as usize];
-    bodies[1] = b"<< /Type /Catalog /Pages 2 0 R >>".to_vec();
-    bodies[2] = b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec();
-    bodies[3] = format!(
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << {resources} >> /Contents 4 0 R >>",
-        text(width),
-        text(height)
-    )
-    .into_bytes();
-    let stream = content.as_bytes();
-    let mut contents = format!("<< /Length {} >>\nstream\n", stream.len()).into_bytes();
-    contents.extend_from_slice(stream);
-    contents.extend_from_slice(b"endstream");
-    bodies[4] = contents;
-    if let (Some(object), Some(image)) = (image_object, image) {
-        let [image_width, image_height] = image.size();
-        let rgb = flate(&color_bytes(image));
-        let mut body = format!(
-            "<< /Type /XObject /Subtype /Image /Width {image_width} /Height {image_height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode"
-        );
-        if let Some(mask) = mask_object {
-            let _ = write!(body, " /SMask {mask} 0 R");
-        }
-        let _ = write!(body, " /Length {} >>\nstream\n", rgb.len());
-        let mut bytes = body.into_bytes();
-        bytes.extend_from_slice(&rgb);
-        bytes.extend_from_slice(b"\nendstream");
-        bodies[object as usize] = bytes;
-    }
-    if let (Some(object), Some(mask)) = (mask_object, mask.as_ref()) {
-        let gray = flate(mask);
-        let [image_width, image_height] = document
-            .background()
-            .expect("the mask follows the backdrop")
-            .size();
-        let mut bytes = format!(
-            "<< /Type /XObject /Subtype /Image /Width {image_width} /Height {image_height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-            gray.len()
-        )
-        .into_bytes();
-        bytes.extend_from_slice(&gray);
-        bytes.extend_from_slice(b"\nendstream");
-        bodies[object as usize] = bytes;
-    }
-    for (index, alpha) in alphas.iter().enumerate() {
-        bodies[(state_base + index as u32) as usize] = format!(
-            "<< /Type /ExtGState /ca {} /CA {} >>",
-            text(*alpha),
-            text(*alpha)
-        )
-        .into_bytes();
-    }
-    for (index, (top, bottom, bounds)) in gradients.iter().enumerate() {
-        let x = 0.5 * (bounds.min[0] + bounds.max[0]);
-        let shading = format!(
-            "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [{} {} {} {}] /Function << /FunctionType 2 /Domain [0 1] /C0 [{} {} {}] /C1 [{} {} {}] /N 1 >> /Extend [true true] >>",
-            text(x),
-            text(height - bounds.min[1]),
-            text(x),
-            text(height - bounds.max[1]),
-            text(top.red),
-            text(top.green),
-            text(top.blue),
-            text(bottom.red),
-            text(bottom.green),
-            text(bottom.blue)
-        );
-        bodies[(shading_base + index as u32) as usize] = shading.into_bytes();
-        bodies[(pattern_base + index as u32) as usize] = format!(
-            "<< /Type /Pattern /PatternType 2 /Shading {} 0 R /Matrix [1 0 0 1 0 0] >>",
-            shading_base + index as u32
-        )
-        .into_bytes();
-    }
-
-    let mut file = Vec::new();
-    file.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
-    let mut offsets = vec![0usize; count as usize];
-    for (index, body) in bodies.iter().enumerate().skip(1) {
-        offsets[index] = file.len();
-        let _ = writeln!(file, "{index} 0 obj");
-        file.extend_from_slice(body);
-        file.extend_from_slice(b"\nendobj\n");
-    }
-    let start = file.len();
-    let _ = writeln!(file, "xref\n0 {count}");
-    file.extend_from_slice(b"0000000000 65535 f \n");
-    for offset in offsets.iter().skip(1) {
-        let _ = writeln!(file, "{offset:010} 00000 n ");
-    }
-    let _ = write!(
-        file,
-        "trailer\n<< /Size {count} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n"
-    );
-    file
 }
 
 fn color_bytes(image: &Image) -> Vec<u8> {

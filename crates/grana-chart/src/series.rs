@@ -97,6 +97,7 @@ pub struct SeriesChart {
     pub curves: Vec<Curve>,
     pub bands: Vec<Band>,
     pub notes: Vec<Note>,
+    pub outside: Vec<(f32, f32)>,
 }
 
 impl SeriesChart {
@@ -120,6 +121,7 @@ impl SeriesChart {
             )],
             bands: Vec::new(),
             notes: Vec::new(),
+            outside: Vec::new(),
         }
     }
 
@@ -158,12 +160,19 @@ impl SeriesChart {
             })
             .into_iter()
             .collect();
+        let outside = ripley
+            .points()
+            .iter()
+            .filter(|point| point.beyond())
+            .map(|point| (point.radius(), point.value()))
+            .collect();
         Self {
             x: Axis::new(0.0, ripley.radius(), 5),
             y: Axis::new(ripley.low(), ripley.high(), 4),
             curves: vec![curve],
             bands,
             notes: Vec::new(),
+            outside,
         }
     }
 
@@ -215,6 +224,7 @@ impl SeriesChart {
             curves,
             bands: Vec::new(),
             notes: Vec::new(),
+            outside: Vec::new(),
         }
     }
 
@@ -494,6 +504,19 @@ pub fn paint(
                 );
             }
         }
+    }
+    for (x, y) in &chart.outside {
+        let centre = Vec2::new(chart.x.x(frame, *x), chart.y.y(frame, *y));
+        painter.outlined(
+            Rect::from_center_size(centre, Vec2::splat(7.5)),
+            Corners::capsule(),
+            Fill::Solid(palette.scene_backdrop.with_alpha(0.45)),
+            Border {
+                width: 1.3,
+                color: accent,
+            },
+            Shadow::NONE,
+        );
     }
     paint_notes(painter, frame, chart, style);
     legend(painter, frame, style, chart);

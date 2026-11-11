@@ -1,10 +1,11 @@
-﻿use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use grana_measure::{
     ClusterSample, ClusteredWelch, Level, MannWhitney, benjamini_hochberg, hedges_g_pooled, stars,
 };
 
-use crate::comparison::Comparison;
+use crate::comparison::{Comparison, pairs};
+use crate::format::{formatted, scientific};
 use crate::quality::Metric;
 
 #[derive(Clone, Debug)]
@@ -276,26 +277,6 @@ pub fn table(tests: &[Significance]) -> String {
     text
 }
 
-fn pairs(groups: &[Comparison]) -> Vec<(&Comparison, &Comparison)> {
-    let mut buckets = BTreeMap::<(&str, &str), Vec<&Comparison>>::new();
-    for row in groups {
-        buckets
-            .entry((row.key.as_str(), row.kind.as_str()))
-            .or_default()
-            .push(row);
-    }
-    let mut pairs = Vec::new();
-    for mut bucket in buckets.into_values() {
-        bucket.sort_by(|left, right| left.group.cmp(&right.group));
-        for (index, first) in bucket.iter().enumerate() {
-            for second in &bucket[index + 1..] {
-                pairs.push((*first, *second));
-            }
-        }
-    }
-    pairs
-}
-
 fn build(
     first: &Comparison,
     second: &Comparison,
@@ -392,22 +373,4 @@ fn order(left: &Significance, right: &Significance) -> std::cmp::Ordering {
         )
         .then(left.group_a.cmp(&right.group_a))
         .then(left.group_b.cmp(&right.group_b))
-}
-
-fn formatted(value: Option<f64>, decimals: usize) -> String {
-    match value {
-        Some(value) => format!("{value:.decimals$}"),
-        None => String::new(),
-    }
-}
-
-fn scientific(value: f64) -> String {
-    let text = format!("{value:.3e}");
-    let Some((mantissa, exponent)) = text.split_once('e') else {
-        return text;
-    };
-    let exponent = exponent
-        .parse::<i32>()
-        .expect("a formatted exponent is an integer");
-    format!("{mantissa}e{exponent:+03}")
 }

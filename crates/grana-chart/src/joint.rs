@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_measure::ColocSeries;
+use grana_measure::{ColocCell, ColocSeries};
 use grana_ui::{Corners, Mark, Painter, Rect, Theme};
 
 use crate::axis::Axis;
@@ -21,7 +21,7 @@ const MARKER: f32 = 0.8;
 pub struct Joint {
     pub heading: Heading,
     bins: usize,
-    counts: Vec<u64>,
+    cells: Vec<ColocCell>,
     tints: [[f32; 3]; 2],
     thresholds: [f32; 2],
     costes: Option<[[f32; 2]; 2]>,
@@ -31,34 +31,54 @@ impl Joint {
     pub fn of(
         heading: Heading,
         series: &ColocSeries,
+        time: u32,
+        tints: [[f32; 3]; 2],
+        thresholds: [f32; 2],
+    ) -> Self {
+        let cells = series
+            .joint()
+            .frame(time)
+            .expect("a colocalization frame covers the scene timeline")
+            .to_vec();
+        Self::new(
+            heading,
+            series.bins(),
+            cells,
+            tints,
+            thresholds,
+            costes(series),
+        )
+    }
+
+    pub fn total(
+        heading: Heading,
+        series: &ColocSeries,
         tints: [[f32; 3]; 2],
         thresholds: [f32; 2],
     ) -> Self {
         Self::new(
             heading,
             series.bins(),
-            series.joint().to_vec(),
+            series.joint().cells(),
             tints,
             thresholds,
-            series.costes().map(|range| {
-                let low = range.low();
-                let high = range.high();
-                [[low.a(), low.b()], [high.a(), high.b()]]
-            }),
+            costes(series),
         )
     }
 
     pub fn new(
         heading: Heading,
         bins: usize,
-        counts: Vec<u64>,
+        cells: Vec<ColocCell>,
         tints: [[f32; 3]; 2],
         thresholds: [f32; 2],
         costes: Option<[[f32; 2]; 2]>,
     ) -> Self {
         assert!(bins > 0, "a joint histogram bins its intensities");
         assert!(
-            counts.len() == bins * bins,
+            cells
+                .iter()
+                .all(|cell| (cell.cell() as usize) < bins * bins),
             "a joint histogram scatters every intensity bin pair"
         );
         assert!(
@@ -83,7 +103,7 @@ impl Joint {
         Self {
             heading,
             bins,
-            counts,
+            cells,
             tints,
             thresholds,
             costes,
@@ -91,7 +111,7 @@ impl Joint {
     }
 
     pub fn crossings(&self) -> usize {
-        self.counts.iter().filter(|count| **count > 0).count()
+        self.cells.len()
     }
 
     pub fn size(&self) -> [u32; 2] {
@@ -124,7 +144,7 @@ impl Joint {
         let x = Axis::new(0.0, 1.0, 4);
         let y = Axis::new(0.0, 1.0, 4);
         grid::grid(painter, rect, &style, x, y);
-        self.cells(painter, frame);
+        self.paint_cells(painter, frame);
         let marker = palette.text_primary.with_alpha(0.55);
         let column = x.x(frame, self.thresholds[0]);
         painter.segment(
@@ -166,25 +186,24 @@ impl Joint {
         }
     }
 
-    fn cells(&self, painter: &mut Painter, frame: Rect) {
+    fn paint_cells(&self, painter: &mut Painter, frame: Rect) {
         let cells = self.bins.clamp(1, CELLS);
         let block = self.bins.div_ceil(cells);
-        let maximum = self.counts.iter().copied().max().unwrap_or(1).max(1);
+        let mut grid = vec![0u64; cells * cells];
+        for cell in &self.cells {
+            let index = cell.cell() as usize;
+            let column = (index % self.bins) / block;
+            let row = (index / self.bins) / block;
+            let slot = column + cells * row;
+            grid[slot] = grid[slot].max(cell.count());
+        }
+        let maximum = grid.iter().copied().max().unwrap_or(1).max(1);
         let ceiling = (maximum as f32 + 1.0).ln();
         let width = frame.width() / cells as f32;
         let height = frame.height() / cells as f32;
         for row in 0..cells {
             for column in 0..cells {
-                let mut count = 0u64;
-                for inner_row in 0..block {
-                    for inner_column in 0..block {
-                        let a = column * block + inner_column;
-                        let b = row * block + inner_row;
-                        if a < self.bins && b < self.bins {
-                            count = count.max(self.counts[a + self.bins * b]);
-                        }
-                    }
-                }
+                let count = grid[column + cells * row];
                 if count == 0 {
                     continue;
                 }
@@ -208,4 +227,12 @@ impl Joint {
             }
         }
     }
+}
+
+fn costes(series: &ColocSeries) -> Option<[[f32; 2]; 2]> {
+    series.costes().map(|range| {
+        let low = range.low();
+        let high = range.high();
+        [[low.a(), low.b()], [high.a(), high.b()]]
+    })
 }

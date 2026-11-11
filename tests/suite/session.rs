@@ -1516,6 +1516,7 @@ fn reads_a_batch_run_record() {
     ]
     .into_iter()
     .map(|(title, group, objects, volume, intensity)| {
+        let drift = if group == "control" { 0.2 } else { -1.0 };
         serde_json::json!({
             "path": format!("E:\\data\\plate\\well-{title}.tif"),
             "group": group,
@@ -1544,7 +1545,17 @@ fn reads_a_batch_run_record() {
                     "volume": {"objects": objects, "mean": volume, "deviation": 0.5},
                     "area": {"objects": objects, "mean": 1.0},
                     "size": {"objects": objects, "mean": 2.0, "deviation": 0.1},
-                    "intensity": {"objects": objects, "mean": intensity, "deviation": 4.0}
+                    "intensity": {"objects": objects, "mean": intensity, "deviation": 4.0},
+                    "frames": [
+                        {
+                            "time": 0,
+                            "values": [null, {"count": objects, "mean": volume, "deviation": 0.5}, null, null, null]
+                        },
+                        {
+                            "time": 1,
+                            "values": [null, {"count": objects, "mean": volume + drift, "deviation": 0.5}, null, null, null]
+                        }
+                    ]
                 }
             ]
         })
@@ -1582,7 +1593,7 @@ fn reads_a_batch_run_record() {
         grana_pipeline::Metric::Objects.sample(&report.groups[0].samples[1]),
         Some(14.0)
     );
-    assert_eq!(report.tests.len(), 5);
+    assert_eq!(report.tests.len(), 7);
     assert!(
         report
             .tests
@@ -1626,6 +1637,19 @@ fn reads_a_batch_run_record() {
             .next()
             .is_some_and(|header| header.contains("clusters_a") && header.contains("rank_p"))
     );
+    let interaction = report
+        .interactions
+        .first()
+        .expect("the per-frame values test their slopes");
+    assert_eq!(interaction.metric, grana_pipeline::Metric::Volume);
+    assert_eq!(interaction.samples(), (2, 2));
+    assert!((interaction.slope_a() - 0.2).abs() < 1.0e-1);
+    assert!((interaction.slope_b() + 1.0).abs() < 1.0e-1);
+    assert!(interaction.q() <= interaction.p());
+    assert!(interaction.significant());
+    let table = grana_pipeline::interaction_table(&report.interactions);
+    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,level,"));
+    assert!(table.contains("slope_a") && table.contains("rank_q"));
 }
 
 #[test]

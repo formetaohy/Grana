@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use grana_measure::Sample;
 
+use crate::format::formatted;
+use crate::interaction::{self, Interaction};
 use crate::quality::{FrameValue, Metric, Quality, Summary};
 use crate::significance::{self, Significance};
 
@@ -39,16 +41,25 @@ pub struct Comparison {
 pub struct ComparisonReport {
     pub groups: Vec<Comparison>,
     pub tests: Vec<Significance>,
+    pub interactions: Vec<Interaction>,
 }
 
 pub fn comparison<'a>(qualities: impl Iterator<Item = &'a Quality>) -> (ComparisonReport, String) {
     let groups = comparison_of(qualities);
     let tests = significance::all(&groups);
+    let interactions = interaction::all(&groups);
     let mut lines = vec![header()];
     for comparison in &groups {
         lines.push(line(comparison));
     }
-    (ComparisonReport { groups, tests }, lines.concat())
+    (
+        ComparisonReport {
+            groups,
+            tests,
+            interactions,
+        },
+        lines.concat(),
+    )
 }
 
 pub fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) -> Vec<Comparison> {
@@ -282,9 +293,22 @@ fn pooled(summaries: &[Summary]) -> (Option<f64>, Option<f64>) {
     (Some(mean), deviation)
 }
 
-fn formatted(value: Option<f64>, decimals: usize) -> String {
-    match value {
-        Some(value) => format!("{value:.decimals$}"),
-        None => String::new(),
+pub(crate) fn pairs(groups: &[Comparison]) -> Vec<(&Comparison, &Comparison)> {
+    let mut buckets = BTreeMap::<(&str, &str), Vec<&Comparison>>::new();
+    for row in groups {
+        buckets
+            .entry((row.key.as_str(), row.kind.as_str()))
+            .or_default()
+            .push(row);
     }
+    let mut pairs = Vec::new();
+    for mut bucket in buckets.into_values() {
+        bucket.sort_by(|left, right| left.group.cmp(&right.group));
+        for (index, first) in bucket.iter().enumerate() {
+            for second in &bucket[index + 1..] {
+                pairs.push((*first, *second));
+            }
+        }
+    }
+    pairs
 }

@@ -56,11 +56,14 @@ pub type BatchMetric = grana_pipeline::Metric;
 
 pub type BatchSignificance = grana_pipeline::Significance;
 
+pub type BatchInteraction = grana_pipeline::Interaction;
+
 pub struct BatchView<'a> {
     pub protocol: Option<&'a str>,
     pub datasets: &'a [BatchDataset],
     pub comparison: &'a [BatchComparison],
     pub significance: &'a [BatchSignificance],
+    pub interactions: &'a [BatchInteraction],
     pub output: Option<String>,
     pub jobs: usize,
     pub project: bool,

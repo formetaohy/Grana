@@ -15,7 +15,7 @@ const SAMPLE: u64 = 1 << 20;
 
 const LISTING_LIMIT: usize = 100_000;
 
-const ROOT_PARTS: [(&str, &str); 12] = [
+const ROOT_PARTS: [(&str, &str); 14] = [
     ("protocol.json", "application/json"),
     ("run.json", "application/json"),
     ("summary.csv", "text/csv"),
@@ -23,9 +23,11 @@ const ROOT_PARTS: [(&str, &str); 12] = [
     ("comparison.csv", "text/csv"),
     ("comparison_frames.csv", "text/csv"),
     ("comparison_significance.csv", "text/csv"),
+    ("comparison_trend.csv", "text/csv"),
     ("samples.csv", "text/csv"),
     ("sheet.csv", "text/csv"),
     ("comparison.svg", "image/svg+xml"),
+    ("report.pdf", "application/pdf"),
     ("sheet.png", "image/png"),
     ("significance.png", "image/png"),
 ];

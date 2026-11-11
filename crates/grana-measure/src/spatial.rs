@@ -164,6 +164,27 @@ fn outside_squared(
     clearance * clearance
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RipleyTest {
+    p: f64,
+    simulations: u32,
+    beyond: u32,
+}
+
+impl RipleyTest {
+    pub fn p(self) -> f64 {
+        self.p
+    }
+
+    pub fn simulations(self) -> u32 {
+        self.simulations
+    }
+
+    pub fn beyond(self) -> u32 {
+        self.beyond
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RipleyPoint {
     radius: f32,
@@ -173,6 +194,7 @@ pub struct RipleyPoint {
     upper: f32,
     envelope_low: Option<f32>,
     envelope_high: Option<f32>,
+    beyond: bool,
 }
 
 impl RipleyPoint {
@@ -199,6 +221,10 @@ impl RipleyPoint {
     pub fn envelope(&self) -> Option<(f32, f32)> {
         self.envelope_low.zip(self.envelope_high)
     }
+
+    pub fn beyond(&self) -> bool {
+        self.beyond
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -209,7 +235,7 @@ pub struct Ripley {
     radius: f32,
     frames: u32,
     objects: u64,
-    simulations: u32,
+    test: Option<RipleyTest>,
 }
 
 impl Ripley {
@@ -237,8 +263,12 @@ impl Ripley {
         self.objects
     }
 
+    pub fn test(&self) -> Option<RipleyTest> {
+        self.test
+    }
+
     pub fn simulations(&self) -> u32 {
-        self.simulations
+        self.test.map_or(0, RipleyTest::simulations)
     }
 }
 
@@ -285,6 +315,7 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
     let simulations = simulations(sampled.iter().map(|points| points.len() as u64).sum());
     let envelope = envelope(&sampled, window, radius, volume, step, &radii, simulations);
     let mut points = Vec::with_capacity(RADII);
+    let mut observed = Vec::with_capacity(RADII);
     let mut low = 0.0f32;
     let mut high = 0.0f32;
     for (order, radius) in radii.iter().enumerate() {
@@ -295,15 +326,15 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
             .mean_interval(0.95)
             .unwrap_or((sample.mean(), sample.mean()));
         let value = sample.mean() as f32;
-        let (envelope_low, envelope_high) = envelope[order]
-            .map(|(low, high)| (low as f32, high as f32))
-            .unzip();
+        let (envelope_low, envelope_high) = envelope.band(order);
+        let beyond = envelope.beyond(order, f64::from(value));
         low = low
             .min((lower as f32).min(value))
             .min(envelope_low.unwrap_or(f32::INFINITY));
         high = high
             .max((upper as f32).max(value))
             .max(envelope_high.unwrap_or(f32::NEG_INFINITY));
+        observed.push(f64::from(value));
         points.push(RipleyPoint {
             radius: *radius,
             frames: sample.len() as u64,
@@ -312,6 +343,7 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
             upper: upper as f32,
             envelope_low,
             envelope_high,
+            beyond,
         });
     }
     if points.is_empty() {
@@ -326,11 +358,11 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         high += padding;
     }
     let radius = points.last().map_or(radius, |point| point.radius);
-    let simulations = if points.iter().any(|point| point.envelope().is_some()) {
-        simulations
-    } else {
-        0
-    };
+    let test = envelope.test(&observed).map(|(p, simulations)| RipleyTest {
+        p,
+        simulations,
+        beyond: points.iter().filter(|point| point.beyond).count() as u32,
+    });
     Some(Ripley {
         points,
         low,
@@ -338,7 +370,7 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         radius,
         frames: estimated,
         objects,
-        simulations,
+        test,
     })
 }
 
@@ -346,6 +378,60 @@ fn simulations(points: u64) -> u32 {
     let visits = VISIT_NEIGHBOURS.saturating_mul(points.max(1));
     let allowed = (SIMULATION_VISITS / visits).max(1) as u32;
     allowed.clamp(SIMULATION_MINIMUM, SIMULATIONS)
+}
+
+struct Envelope {
+    centre: Vec<Option<f64>>,
+    low: Vec<Option<f64>>,
+    high: Vec<Option<f64>>,
+    statistics: Vec<f64>,
+}
+
+impl Envelope {
+    fn band(&self, order: usize) -> (Option<f32>, Option<f32>) {
+        (
+            self.low[order].map(|value| value as f32),
+            self.high[order].map(|value| value as f32),
+        )
+    }
+
+    fn beyond(&self, order: usize, value: f64) -> bool {
+        match (self.low[order], self.high[order]) {
+            (Some(low), Some(high)) => value < low || value > high,
+            _ => false,
+        }
+    }
+
+    fn test(&self, observed: &[f64]) -> Option<(f64, u32)> {
+        if self.statistics.len() < SIMULATION_MINIMUM as usize {
+            return None;
+        }
+        let mut statistic = 0.0f64;
+        let mut seen = false;
+        for (order, value) in observed.iter().enumerate() {
+            let Some(centre) = self.centre.get(order).copied().flatten() else {
+                continue;
+            };
+            if !value.is_finite() {
+                continue;
+            }
+            seen = true;
+            statistic = statistic.max((value - centre).abs());
+        }
+        if !seen {
+            return None;
+        }
+        let count = self.statistics.len() as u32;
+        let exceedances = self
+            .statistics
+            .iter()
+            .filter(|value| **value >= statistic)
+            .count() as u32;
+        Some((
+            (1.0 + f64::from(exceedances)) / (1.0 + f64::from(count)),
+            count,
+        ))
+    }
 }
 
 fn envelope(
@@ -356,8 +442,8 @@ fn envelope(
     step: f32,
     radii: &[f32],
     simulations: u32,
-) -> Vec<Option<(f64, f64)>> {
-    let mut curves = vec![Vec::<f64>::new(); radii.len()];
+) -> Envelope {
+    let mut curves = Vec::with_capacity(simulations as usize);
     let mut rng = Generator::new(SIMULATION_SEED);
     for _ in 0..simulations {
         let mut sums = vec![0.0f64; radii.len()];
@@ -379,25 +465,55 @@ fn envelope(
                 }
             }
         }
-        for (order, sum) in sums.iter().enumerate() {
-            if counts[order] > 0 {
-                curves[order].push(sum / f64::from(counts[order]));
-            }
+        curves.push(
+            (0..radii.len())
+                .map(|order| (counts[order] > 0).then(|| sums[order] / f64::from(counts[order])))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let centre = (0..radii.len())
+        .map(|order| {
+            let values = curves
+                .iter()
+                .filter_map(|curve| curve[order])
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+        })
+        .collect::<Vec<_>>();
+    let mut statistics = Vec::with_capacity(curves.len());
+    for curve in &curves {
+        let mut peak = 0.0f64;
+        let mut seen = false;
+        for (order, value) in curve.iter().enumerate() {
+            let (Some(value), Some(centre)) = (*value, centre[order]) else {
+                continue;
+            };
+            seen = true;
+            peak = peak.max((value - centre).abs());
+        }
+        if seen {
+            statistics.push(peak);
         }
     }
-    curves
-        .into_iter()
-        .map(|curve| {
-            (curve.len() as u32 >= SIMULATION_MINIMUM).then(|| {
-                curve
-                    .iter()
-                    .copied()
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| {
-                        (low.min(value), high.max(value))
-                    })
-            })
-        })
-        .collect()
+    let reach = if statistics.len() as u32 >= SIMULATION_MINIMUM {
+        Sample::of(&statistics).map(|sample| sample.quantile(95.0))
+    } else {
+        None
+    };
+    let low = centre
+        .iter()
+        .map(|value| reach.zip(*value).map(|(reach, value)| value - reach))
+        .collect();
+    let high = centre
+        .iter()
+        .map(|value| reach.zip(*value).map(|(reach, value)| value + reach))
+        .collect();
+    Envelope {
+        centre,
+        low,
+        high,
+        statistics,
+    }
 }
 
 fn frame_l(

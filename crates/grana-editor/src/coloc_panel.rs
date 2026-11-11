@@ -586,7 +586,8 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let channels = state.scene.dataset.channels();
     let tints = [channels[pair.a()].tint(), channels[pair.b()].tint()];
     let names = [channels[pair.a()].name(), channels[pair.b()].name()];
-    let subtitle = grana_i18n::coloc::all_frames_bins(language, series.bins());
+    let time = state.scene.time();
+    let subtitle = grana_i18n::coloc::frame_bins(language, time + 1, series.bins());
     let heading = grana_chart::Heading::new(
         String::new(),
         format!("Y: {}", names[1]),
@@ -596,6 +597,7 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let page = grana_chart::Page::Joint(Box::new(grana_chart::Joint::of(
         heading,
         series,
+        time,
         tints,
         [thresholds.a(), thresholds.b()],
     )));

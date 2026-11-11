@@ -373,6 +373,17 @@ fn captures_a_protocol_film_without_a_window() {
         svg.starts_with("<?xml") && svg.contains("<svg") && svg.contains("<path"),
         "the comparison page plots its panels"
     );
+    let report = find(&output, "report.pdf").expect("the batch writes the multi-page report");
+    let pdf = std::fs::read(&report).expect("the report reads");
+    assert!(
+        pdf.starts_with(b"%PDF-1.7") && pdf.ends_with(b"%%EOF\n"),
+        "the report is a PDF"
+    );
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("/Type /Pages") && text.contains("/Kids [3 0 R"),
+        "the report keeps a page tree"
+    );
 }
 
 #[test]

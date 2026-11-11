@@ -1,10 +1,11 @@
 use grana_chart::{
     Axis as Scale, Category, Comparison as ComparisonChart, ComparisonNote, Curve, CurvePoint,
-    DistributionStyle, Heading, Page, SeriesChart, SeriesPage, Sheet,
+    DistributionStyle, Heading, Page, SeriesChart, SeriesPage,
 };
 use grana_i18n::Language;
 
 use crate::comparison::{Comparison, ComparisonReport};
+use crate::interaction::Interaction;
 use crate::quality::Metric;
 use crate::significance::Significance;
 
@@ -33,6 +34,7 @@ impl Axis {
 pub struct Request<'a> {
     pub rows: &'a [Comparison],
     pub tests: &'a [Significance],
+    pub interactions: &'a [Interaction],
     pub metric: Metric,
     pub axis: Axis,
     pub group: Option<&'a str>,
@@ -50,6 +52,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
     let Request {
         rows,
         tests,
+        interactions,
         metric,
         axis,
         group,
@@ -160,22 +163,20 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
                 high += padding;
             }
             let notes = frame_notes(&visible, tests, metric);
+            let summary = interaction_note(&visible, interactions, metric, language)
+                .unwrap_or_else(|| {
+                    grana_i18n::measure::comparison_frames_summary(language, curves.len(), frames)
+                });
             Some(Charted {
                 page: Page::Series(Box::new(SeriesPage {
-                    heading: heading(
-                        grana_i18n::measure::x_frames(language).to_string(),
-                        grana_i18n::measure::comparison_frames_summary(
-                            language,
-                            curves.len(),
-                            frames,
-                        ),
-                    ),
+                    heading: heading(grana_i18n::measure::x_frames(language).to_string(), summary),
                     chart: SeriesChart {
                         x: Scale::frames(1.0, frames as f32, 5),
                         y: Scale::new(low, high, 4),
                         curves,
                         bands: Vec::new(),
                         notes,
+                        outside: Vec::new(),
                     },
                     style,
                 })),
@@ -185,11 +186,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
     }
 }
 
-pub fn sheet(
-    report: &ComparisonReport,
-    style: DistributionStyle,
-    language: Language,
-) -> Option<Page> {
+pub fn pages(report: &ComparisonReport, style: DistributionStyle, language: Language) -> Vec<Page> {
     let mut pages = Vec::new();
     for (key, kind) in sets_of(&report.groups) {
         let rows = report
@@ -209,6 +206,7 @@ pub fn sheet(
             if let Some(charted) = chart(Request {
                 rows: &rows,
                 tests: &report.tests,
+                interactions: &report.interactions,
                 metric,
                 axis: Axis::Conditions,
                 group: None,
@@ -227,6 +225,7 @@ pub fn sheet(
                 && let Some(charted) = chart(Request {
                     rows: &rows,
                     tests: &report.tests,
+                    interactions: &report.interactions,
                     metric,
                     axis: Axis::Frames,
                     group: None,
@@ -239,7 +238,7 @@ pub fn sheet(
             }
         }
     }
-    (!pages.is_empty()).then(|| Page::Sheet(Box::new(Sheet::new(pages, 2))))
+    pages
 }
 
 pub fn group_names(rows: &[Comparison]) -> Vec<String> {
@@ -426,6 +425,37 @@ fn frame_notes(
         }
     }
     notes
+}
+
+fn interaction_note(
+    rows: &[&Comparison],
+    interactions: &[Interaction],
+    metric: Metric,
+    language: Language,
+) -> Option<String> {
+    let best = interactions
+        .iter()
+        .filter(|test| {
+            test.metric == metric
+                && rows.iter().any(|row| {
+                    row.key == test.key && row.kind == test.kind && row.group == test.group_a
+                })
+                && rows.iter().any(|row| {
+                    row.key == test.key && row.kind == test.kind && row.group == test.group_b
+                })
+        })
+        .min_by(|left, right| left.q().total_cmp(&right.q()))?;
+    let q = best.q_text();
+    Some(if best.significant() {
+        let (faster, slower) = if best.slope_a() >= best.slope_b() {
+            (best.group_a.as_str(), best.group_b.as_str())
+        } else {
+            (best.group_b.as_str(), best.group_a.as_str())
+        };
+        grana_i18n::measure::trend_interaction(language, faster, slower, &q)
+    } else {
+        grana_i18n::measure::trend_interaction_none(language, &q)
+    })
 }
 
 fn frame_peak(

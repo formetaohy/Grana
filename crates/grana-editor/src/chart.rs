@@ -27,9 +27,14 @@ pub fn comparison_page(view: &SessionView<'_>, workspace: &Workspace) -> Option<
         .batch
         .as_ref()
         .map_or(&[][..], |batch| batch.significance);
+    let interactions = view
+        .batch
+        .as_ref()
+        .map_or(&[][..], |batch| batch.interactions);
     comparison_chart(ComparisonRequest {
         rows,
         tests,
+        interactions,
         metric: workspace.comparison_metric,
         axis: workspace.comparison_axis,
         group: workspace.comparison_group.as_deref(),
@@ -201,8 +206,6 @@ fn caption(plot: &Plot, table: &Table, language: Language) -> String {
                 grana_i18n::measure::values_over_frames(language, trend.total(), trend.frames())
             }
         }
-        Plot::Ripley(ripley) => {
-            grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects())
-        }
+        Plot::Ripley(ripley) => crate::plot::ripley_caption(language, ripley),
     }
 }

@@ -425,21 +425,27 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                     let value = format!("{:.3}", point.value());
                     let low = format!("{:.3}", point.lower());
                     let high = format!("{:.3}", point.upper());
-                    grana_i18n::measure::radial_readout(
+                    let readout = grana_i18n::measure::radial_readout(
                         language,
                         &format!("{radius:.2}"),
                         &value,
                         &low,
                         &high,
                         point.frames(),
-                    )
+                    );
+                    if point.beyond() {
+                        format!(
+                            "{readout} · {}",
+                            grana_i18n::measure::ripley_outside(language)
+                        )
+                    } else {
+                        readout
+                    }
                 }
                 None => grana_i18n::measure::no_spatial(language).to_string(),
             }
         }
-        (Plot::Ripley(ripley), _) => {
-            grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects())
-        }
+        (Plot::Ripley(ripley), _) => ripley_caption(language, ripley),
         (Plot::Trend(trend), _) => {
             if trend.points().is_empty() {
                 grana_i18n::measure::no_frames_trend(language).to_string()
@@ -1144,5 +1150,20 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
     }
     if measure.lasso().is_some() {
         commands.push(Command::SetLasso(None));
+    }
+}
+
+pub(crate) fn ripley_caption(language: Language, ripley: &Ripley) -> String {
+    let summary = grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects());
+    match ripley.test() {
+        Some(test) => format!(
+            "{summary} · {}",
+            grana_i18n::measure::ripley_test(
+                language,
+                &format!("= {:.3}", test.p()),
+                test.beyond()
+            )
+        ),
+        None => summary,
     }
 }

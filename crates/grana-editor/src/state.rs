@@ -367,6 +367,10 @@ impl<'a> View<'a> {
         self.batch.map_or(&[], |batch| batch.significance)
     }
 
+    pub fn batch_interactions(&self) -> &[grana_session::BatchInteraction] {
+        self.batch.map_or(&[], |batch| batch.interactions)
+    }
+
     pub fn batch_output(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.output.as_deref())
     }

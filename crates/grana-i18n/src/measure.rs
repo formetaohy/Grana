@@ -77,6 +77,7 @@ labels! {
     ripley => "Ripley" / "Ripley";
     ripley_title => "Ripley L" / "Ripley L";
     ripley_curve => "L(r) − r" / "L(r) − r";
+    ripley_outside => "outside the envelope" / "超出包络";
     no_spatial => "No spatial frames" / "无可分析的空间帧";
     box_plot => "Box" / "箱线图";
     violin_plot => "Violin" / "小提琴图";
@@ -168,9 +169,12 @@ messages! {
     distribution_title(column: &str) => "Distribution of {column}" / "{column} 分布";
     trend_title(column: &str) => "Trend of {column}" / "{column} 趋势";
     ripley_summary(frames: u32, objects: u64) => "{frames} frames · {objects} objects · L − r against the radius" / "{frames} 帧 · {objects} 个对象 · L − r 随半径变化";
-    ripley_envelope(simulations: u32) => "CSR envelope · {simulations} simulations" / "CSR 包络 · {simulations} 次模拟";
+    ripley_envelope(simulations: u32) => "CSR 95% envelope · {simulations} simulations" / "CSR 95% 包络 · {simulations} 次模拟";
+    ripley_test(p: &str, beyond: u32) => "CSR p {p} · {beyond} radii outside" / "CSR p {p} · {beyond} 个半径越界";
     radial_readout(radius: &str, value: &str, low: &str, high: &str, frames: u64) => "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} frames" / "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} 帧";
     comparison_title(metric: &str) => "Comparison of {metric}" / "{metric}比较";
     comparison_summary(count: usize) => "{count} categories · images are the samples" / "{count} 个类别 · 图像为样本";
-    comparison_frames_summary(count: usize, frames: u32) => "{count} series over {frames} frames · band is the 95% CI across images" / "{count} 条曲线，跨越 {frames} 帧 · 波带为跨图像的 95% CI";
+    comparison_frames_summary(count: usize, frames: u32) => "{count} series · {frames} frames · 95% CI band" / "{count} 条曲线 · {frames} 帧 · 95% CI 波带";
+    trend_interaction(faster: &str, slower: &str, q: &str) => "slopes differ: {faster} > {slower} · q {q}" / "斜率差异：{faster} > {slower} · q {q}";
+    trend_interaction_none(q: &str) => "no slope difference · min q {q}" / "斜率无差异 · 最小 q {q}";
 }

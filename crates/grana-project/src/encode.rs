@@ -5,8 +5,9 @@ use grana_measure::{
     ChildField, ChildMetric, ClassifierState, Filter, Measurement, TrackMeasurement,
 };
 use grana_measure::{
-    ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
-    ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
+    ColocCell, ColocCost, ColocFrame, ColocJoint, ColocMoments, ColocPair, ColocSeries,
+    ColocSeriesInfo, ColocSettings, ColocSignificance, ColocThresholds, ObjectColoc,
+    ObjectColocValue,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
@@ -1207,6 +1208,19 @@ impl Encode for ColocFrame {
         self.moments().encode(writer);
         self.a_by_b().encode(writer);
         self.b_by_a().encode(writer);
+    }
+}
+
+impl Encode for ColocJoint {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.frames().encode(writer);
+    }
+}
+
+impl Encode for ColocCell {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.cell());
+        writer.u64(self.count());
     }
 }
 

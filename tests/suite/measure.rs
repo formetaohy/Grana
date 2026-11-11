@@ -158,6 +158,19 @@ fn estimates_spatial_point_patterns() {
     assert!(ripley.radius() > 0.0);
     assert!(ripley.low() <= 0.0 && ripley.high() >= 0.0);
     assert!(ripley.simulations() >= 9);
+    let test = ripley
+        .test()
+        .expect("the CSR envelope tests the point pattern");
+    assert!((0.0..=1.0).contains(&test.p()));
+    assert_eq!(test.simulations(), ripley.simulations());
+    assert_eq!(
+        test.beyond(),
+        ripley
+            .points()
+            .iter()
+            .filter(|point| point.beyond())
+            .count() as u32
+    );
     assert!(
         ripley
             .points()

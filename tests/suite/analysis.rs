@@ -596,7 +596,14 @@ fn measures_correlated_channels() {
             .overlap()
             .is_some_and(|value| (value - 1.0).abs() < 1.0e-6)
     );
-    assert_eq!(series.joint().iter().sum::<u64>(), extent.voxel_count());
+    let joint = series.joint();
+    assert_eq!(joint.total().iter().sum::<u64>(), extent.voxel_count());
+    assert_eq!(
+        joint
+            .frame(0)
+            .map(|cells| cells.iter().map(|cell| cell.count()).sum::<u64>()),
+        Some(extent.voxel_count())
+    );
     assert_eq!(series.level(), 0);
     assert_eq!(series.coverage(), 1.0);
     let significance = series

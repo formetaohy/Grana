@@ -363,6 +363,102 @@ impl ColocStatistics {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColocCell {
+    cell: u32,
+    count: u64,
+}
+
+impl ColocCell {
+    pub fn new(cell: u32, count: u64) -> Self {
+        assert!(count > 0, "a joint histogram cell counts a voxel");
+        Self { cell, count }
+    }
+
+    pub fn cell(self) -> u32 {
+        self.cell
+    }
+
+    pub fn count(self) -> u64 {
+        self.count
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColocJoint {
+    bins: usize,
+    frames: Vec<Vec<ColocCell>>,
+    total: Vec<u64>,
+}
+
+impl ColocJoint {
+    pub fn new(bins: usize, frames: Vec<Vec<ColocCell>>) -> Self {
+        Self::checked(bins, frames).expect("a joint histogram scatters every sampled voxel")
+    }
+
+    pub fn checked(bins: usize, frames: Vec<Vec<ColocCell>>) -> Option<Self> {
+        if !(COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&bins) || frames.is_empty() {
+            return None;
+        }
+        let cells = bins * bins;
+        let mut total = vec![0u64; cells];
+        for frame in &frames {
+            let mut previous = None;
+            for cell in frame {
+                let index = cell.cell() as usize;
+                if index >= cells || previous.is_some_and(|previous| index <= previous) {
+                    return None;
+                }
+                previous = Some(index);
+                total[index] += cell.count();
+            }
+        }
+        Some(Self {
+            bins,
+            frames,
+            total,
+        })
+    }
+
+    pub fn bins(&self) -> usize {
+        self.bins
+    }
+
+    pub fn frames(&self) -> &[Vec<ColocCell>] {
+        &self.frames
+    }
+
+    pub fn frame(&self, time: u32) -> Option<&[ColocCell]> {
+        self.frames.get(time as usize).map(Vec::as_slice)
+    }
+
+    pub fn total(&self) -> &[u64] {
+        &self.total
+    }
+
+    pub fn cells(&self) -> Vec<ColocCell> {
+        self.total
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count > 0)
+            .map(|(cell, count)| {
+                ColocCell::new(
+                    u32::try_from(cell).expect("a joint histogram grid fits the u32 range"),
+                    *count,
+                )
+            })
+            .collect()
+    }
+
+    pub fn count(&self, a: usize, b: usize) -> u64 {
+        assert!(
+            a < self.bins && b < self.bins,
+            "the scatter cell lies on the grid"
+        );
+        self.total[a + self.bins * b]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColocFrame {
     moments: ColocMoments,
@@ -458,7 +554,7 @@ pub struct ColocSeries {
     info: ColocSeriesInfo,
     bins: usize,
     frames: Vec<ColocFrame>,
-    joint: Vec<u64>,
+    joint: ColocJoint,
     total: ColocFrame,
     significance: Option<ColocSignificance>,
     costes: Option<ColocThresholdRange>,
@@ -471,7 +567,7 @@ impl ColocSeries {
         info: ColocSeriesInfo,
         bins: usize,
         frames: Vec<ColocFrame>,
-        joint: Vec<u64>,
+        joint: ColocJoint,
         significance: Option<ColocSignificance>,
         cost: ColocCost,
     ) -> Self {
@@ -481,13 +577,24 @@ impl ColocSeries {
             "a colocalization series bins intensities within the supported range"
         );
         assert!(
-            joint.len() == bins * bins,
-            "a colocalization series maps the square scatter grid"
+            joint.bins() == bins,
+            "a colocalization series scatters the square scatter grid"
+        );
+        assert!(
+            joint.frames().len() == frames.len(),
+            "a colocalization series scatters every frame"
         );
         assert!(
             frames.iter().all(|frame| frame.bins() == bins),
             "a colocalization series bins every frame at one resolution"
         );
+        for (frame, cells) in frames.iter().zip(joint.frames()) {
+            assert_eq!(
+                cells.iter().map(|cell| cell.count()).sum::<u64>(),
+                frame.moments().voxels(),
+                "a joint frame scatters every sampled voxel of its frame"
+            );
+        }
         let mut total = ColocFrame::new(bins);
         for frame in &frames {
             total.merge(frame);
@@ -496,10 +603,6 @@ impl ColocSeries {
         assert!(
             voxels > 0,
             "a colocalization series covers at least one voxel"
-        );
-        assert!(
-            joint.iter().sum::<u64>() == voxels,
-            "a colocalization series scatters every scanned voxel"
         );
         assert!(
             cost.voxels() == voxels,
@@ -511,7 +614,7 @@ impl ColocSeries {
                 "a colocalization cost counts the randomizations of its significance test"
             );
         }
-        let costes = threshold::costes(bins, &joint, total.moments());
+        let costes = threshold::costes(bins, joint.total(), total.moments());
         Self {
             pair,
             info,
@@ -561,16 +664,12 @@ impl ColocSeries {
         self.frames.get(time as usize)
     }
 
-    pub fn joint(&self) -> &[u64] {
+    pub fn joint(&self) -> &ColocJoint {
         &self.joint
     }
 
     pub fn joint_at(&self, a: usize, b: usize) -> u64 {
-        assert!(
-            a < self.bins && b < self.bins,
-            "the scatter cell lies on the grid"
-        );
-        self.joint[a + self.bins * b]
+        self.joint.count(a, b)
     }
 
     pub fn total(&self) -> &ColocFrame {
@@ -663,11 +762,12 @@ impl ColocSeries {
     }
 
     fn marginals(&self) -> (Vec<u64>, Vec<u64>) {
+        let joint = self.joint.total();
         let mut counts_a = vec![0; self.bins];
         let mut counts_b = vec![0; self.bins];
         for (b, count_b) in counts_b.iter_mut().enumerate() {
             for (a, count_a) in counts_a.iter_mut().enumerate() {
-                let count = self.joint[a + self.bins * b];
+                let count = joint[a + self.bins * b];
                 *count_a += count;
                 *count_b += count;
             }

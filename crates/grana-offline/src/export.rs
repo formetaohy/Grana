@@ -331,13 +331,13 @@ impl Export {
             let Sink::Figure { path } = sink else {
                 unreachable!("a vector figure writes a figure sink")
             };
-            let mut document = grana_vector::Document::new(size[0] as f32, size[1] as f32);
-            document.set_background(grana_vector::Image::new(
+            let mut page = grana_vector::Page::new(size[0] as f32, size[1] as f32);
+            page.set_background(grana_vector::Image::new(
                 size,
                 sink::rgba8(size, image.pixels(), self.transparent),
             ));
-            grana_page::push(&mut document, &marks)?;
-            grana_page::write_document(&path, format, &document)?;
+            grana_page::push(&mut page, &marks)?;
+            grana_page::write_document(&path, format, &grana_vector::Document::of(page))?;
             self.frame += 1;
             self.attempts = 0;
             self.converged = false;

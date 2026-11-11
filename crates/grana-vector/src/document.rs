@@ -132,14 +132,14 @@ impl Image {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Document {
+pub struct Page {
     width: f32,
     height: f32,
     background: Option<Image>,
     shapes: Vec<Shape>,
 }
 
-impl Document {
+impl Page {
     pub fn new(width: f32, height: f32) -> Self {
         assert!(
             width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0,
@@ -178,5 +178,28 @@ impl Document {
             return;
         }
         self.shapes.push(shape);
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Document {
+    pages: Vec<Page>,
+}
+
+impl Document {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn of(page: Page) -> Self {
+        Self { pages: vec![page] }
+    }
+
+    pub fn pages(&self) -> &[Page] {
+        &self.pages
+    }
+
+    pub fn push(&mut self, page: Page) {
+        self.pages.push(page);
     }
 }

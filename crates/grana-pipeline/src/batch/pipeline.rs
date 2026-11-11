@@ -1435,7 +1435,7 @@ fn colocalization(
     )
     .with_summary(caption)
     .with_language(language);
-    grana_chart::Page::Joint(Box::new(grana_chart::Joint::of(
+    grana_chart::Page::Joint(Box::new(grana_chart::Joint::total(
         heading,
         series,
         tints,

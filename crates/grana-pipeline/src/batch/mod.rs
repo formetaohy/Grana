@@ -25,8 +25,8 @@ use resume::{Evidence, build, completed, evidence};
 
 pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
 pub use grana_report::{
-    Comparison, ComparisonReport, ComparisonSample, Metric, Quality, Significance,
-    significance_table,
+    Comparison, ComparisonReport, ComparisonSample, Interaction, Metric, Quality, Significance,
+    interaction_table, significance_table,
 };
 pub use manifest::{
     Run, RunDataset, clear as clear_correction, read as read_run, record as record_correction,
@@ -43,13 +43,17 @@ const RESULT: &str = "result.json";
 
 const COMPARISON: &str = "comparison.svg";
 
+const REPORT: &str = "report.pdf";
+
+const TREND: &str = "comparison_trend.csv";
+
 const PARTIAL: &str = "partial";
 
 const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 14;
+const ANALYSIS_REVISION: u32 = 15;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -340,6 +344,14 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         )));
     }
     if let Err(error) = std::fs::write(
+        plan.output.join(TREND),
+        grana_report::interaction_table(&report.interactions),
+    ) {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch time interaction: {error}"
+        )));
+    }
+    if let Err(error) = std::fs::write(
         plan.output.join("comparison_frames.csv"),
         grana_report::comparison_frames(&report.groups),
     ) {
@@ -355,13 +367,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch comparison samples: {error}"
         )));
     }
-    if let Some(page) = grana_report::sheet(
+    let pages = grana_report::pages(
         &report,
         grana_chart::DistributionStyle::Box,
         pipeline::language(),
-    ) && let Err(detail) = grana_page::write_page(&page, &plan.output.join(COMPARISON))
-    {
-        let _ = events.send(Event::Failed(detail));
+    );
+    if !pages.is_empty() {
+        if let Err(detail) = grana_page::write_pages(&pages, &plan.output.join(REPORT)) {
+            let _ = events.send(Event::Failed(detail));
+        }
+        let sheet = grana_chart::Page::Sheet(Box::new(grana_chart::Sheet::new(pages, 2)));
+        if let Err(detail) = grana_page::write_page(&sheet, &plan.output.join(COMPARISON)) {
+            let _ = events.send(Event::Failed(detail));
+        }
     }
     if let Err(detail) = manifest::write(&plan, &evidence, &rows, &corrections) {
         let _ = events.send(Event::Failed(detail));

@@ -562,6 +562,7 @@ fn comparison<'a>(
     let Some(built) = comparison_chart(ComparisonRequest {
         rows,
         tests: state.batch_significance(),
+        interactions: state.batch_interactions(),
         metric,
         axis,
         group: group.as_deref(),

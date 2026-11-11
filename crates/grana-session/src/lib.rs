@@ -26,7 +26,7 @@ pub use recent::{Entry as RecentEntry, Kind as RecentKind, Recent};
 pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{
-    BatchComparison, BatchDataset, BatchMetric, BatchSample, BatchSignificance, BatchView,
-    HistoryView, ImportNote, IoView, Kind, Message, PlateView, RecoveryView, SeriesView,
+    BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSample, BatchSignificance,
+    BatchView, HistoryView, ImportNote, IoView, Kind, Message, PlateView, RecoveryView, SeriesView,
     SessionView, StoreView,
 };

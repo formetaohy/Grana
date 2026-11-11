@@ -10,9 +10,9 @@ pub mod run;
 
 pub use batch::{
     Batch, BatchPoll, Comparison, ComparisonReport, ComparisonSample, Control, DatasetEntry,
-    DiscoverError, Event as BatchEvent, MAX_JOBS, Metric, Outcome, Plan, Quality, Run, RunDataset,
-    Significance, clear_correction, dataset_name, default_jobs, discover, read_run,
-    record_correction, significance_table,
+    DiscoverError, Event as BatchEvent, Interaction, MAX_JOBS, Metric, Outcome, Plan, Quality, Run,
+    RunDataset, Significance, clear_correction, dataset_name, default_jobs, discover,
+    interaction_table, read_run, record_correction, significance_table,
 };
 pub use capture::{Capture, CaptureFactory, CaptureRequest, Kind as CaptureKind};
 pub use channels::{Channels, ChannelsError};

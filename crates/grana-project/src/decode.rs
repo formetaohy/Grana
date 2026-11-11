@@ -11,9 +11,9 @@ use grana_measure::{
     Measurement, RelationField, Scope, Statistic, TrackMeasurement,
 };
 use grana_measure::{
-    COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
-    ColocMetric, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
-    ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
+    COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCell, ColocCost,
+    ColocFrame, ColocJoint, ColocMetric, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo,
+    ColocSettings, ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, MaskEdit, MaskMode,
@@ -1864,20 +1864,28 @@ impl Decode for ColocSeries {
             return Err(FAULT_VALUE);
         }
         let frames = Vec::<ColocFrame>::decode(reader)?;
-        let joint = Vec::<u64>::decode(reader)?;
+        let cells = Vec::<Vec<ColocCell>>::decode(reader)?;
         let significance = Option::<ColocSignificance>::decode(reader)?;
         let cost = ColocCost::decode(reader)?;
-        if frames.is_empty() || joint.len() != bins * bins {
+        if frames.is_empty() || cells.len() != frames.len() {
             return Err(FAULT_SHAPE);
         }
         if frames.iter().any(|frame| frame.bins() != bins) {
+            return Err(FAULT_SHAPE);
+        }
+        let Some(joint) = ColocJoint::checked(bins, cells) else {
+            return Err(FAULT_SHAPE);
+        };
+        if frames.iter().zip(joint.frames()).any(|(frame, cells)| {
+            cells.iter().map(|cell| cell.count()).sum::<u64>() != frame.moments().voxels()
+        }) {
             return Err(FAULT_SHAPE);
         }
         let voxels = frames
             .iter()
             .map(|frame| frame.moments().voxels())
             .sum::<u64>();
-        if joint.iter().sum::<u64>() != voxels || cost.voxels() != voxels {
+        if voxels == 0 || cost.voxels() != voxels {
             return Err(FAULT_SHAPE);
         }
         if let Some(significance) = significance
@@ -1952,6 +1960,17 @@ impl Decode for ColocFrame {
             return Err(FAULT_VALUE);
         }
         Ok(Self::from_parts(moments, a_by_b, b_by_a))
+    }
+}
+
+impl Decode for ColocCell {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let cell = reader.u32()?;
+        let count = reader.u64()?;
+        if count == 0 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(cell, count))
     }
 }
 

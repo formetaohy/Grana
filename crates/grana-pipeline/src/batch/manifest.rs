@@ -83,7 +83,12 @@ impl Run {
                 .flat_map(|dataset| dataset.quality.iter()),
         );
         let tests = grana_report::tests(&groups);
-        ComparisonReport { groups, tests }
+        let interactions = grana_report::interactions(&groups);
+        ComparisonReport {
+            groups,
+            tests,
+            interactions,
+        }
     }
 }
 

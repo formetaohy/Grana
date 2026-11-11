@@ -5,8 +5,8 @@ use grana_volume::{
 
 #[test]
 fn writes_deterministic_vector_pages() {
-    let mut document = grana_vector::Document::new(320.0, 200.0);
-    document.push(grana_vector::Shape::new(
+    let mut page = grana_vector::Page::new(320.0, 200.0);
+    page.push(grana_vector::Shape::new(
         grana_vector::rounded_rect(
             grana_vector::Rect::new([8.0, 8.0], [312.0, 192.0]),
             [12.0, 12.0, 12.0, 12.0],
@@ -17,7 +17,7 @@ fn writes_deterministic_vector_pages() {
             cap: grana_vector::Cap::Round,
         },
     ));
-    document.push(grana_vector::Shape::new(
+    page.push(grana_vector::Shape::new(
         grana_vector::segment([20.0, 120.0], [300.0, 120.0]),
         grana_vector::Paint::Gradient(
             grana_vector::Rgba::new(0.1, 0.4, 0.9, 1.0),
@@ -28,11 +28,11 @@ fn writes_deterministic_vector_pages() {
     contour.push(Curve::Line([80.0, 40.0]));
     contour.push(Curve::Quad([90.0, 60.0], [80.0, 80.0]));
     contour.push(Curve::Cubic([60.0, 90.0], [50.0, 50.0], [40.0, 40.0]));
-    document.push(grana_vector::Shape::new(
+    page.push(grana_vector::Shape::new(
         vec![contour],
         grana_vector::Paint::Fill(grana_vector::Rgba::new(0.2, 0.8, 0.3, 1.0)),
     ));
-    document.push(grana_vector::Shape::new(
+    page.push(grana_vector::Shape::new(
         grana_vector::arc([160.0, 120.0], 40.0, 0.0, 1.5),
         grana_vector::Paint::Stroke {
             width: 2.0,
@@ -40,8 +40,8 @@ fn writes_deterministic_vector_pages() {
             cap: grana_vector::Cap::Butt,
         },
     ));
-    let svg = grana_vector::write_svg(&document);
-    assert_eq!(svg, grana_vector::write_svg(&document));
+    let svg = grana_vector::write_svg(&page);
+    assert_eq!(svg, grana_vector::write_svg(&page));
     assert!(svg.contains("<path d=\"M 40 40 L 80 40 Q 90 60 80 80 C 60 90 50 50 40 40 Z\""));
     assert!(svg.contains("stroke-linecap=\"round\""));
     assert!(svg.contains("stroke-linecap=\"butt\""));
@@ -51,13 +51,19 @@ fn writes_deterministic_vector_pages() {
         !arc.contains('Z'),
         "an open arc is stroked without a closing chord"
     );
+    let mut document = grana_vector::Document::of(page);
     let pdf = grana_vector::write_pdf(&document);
     assert_eq!(pdf, grana_vector::write_pdf(&document));
     assert!(pdf.starts_with(b"%PDF-1.7"));
     assert!(pdf.ends_with(b"%%EOF\n"));
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.contains("/ShadingType 2"));
+    assert!(text.contains("/Count 1"));
     assert!(text.contains("startxref"));
+    document.push(grana_vector::Page::new(320.0, 200.0));
+    let text = String::from_utf8_lossy(&grana_vector::write_pdf(&document)).into_owned();
+    assert!(text.contains("/Count 2"));
+    assert_eq!(text.matches("/Type /Page ").count(), 2);
 }
 
 #[test]

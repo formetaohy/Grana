@@ -3,20 +3,20 @@ use std::fmt::Write as _;
 use grana_text::{Contour, Curve};
 
 use crate::base64;
-use crate::document::{Cap, Document, Paint, Rect, Rgba};
+use crate::document::{Cap, Page, Paint, Rect, Rgba};
 use crate::number::{byte, text};
 
-pub fn write(document: &Document) -> String {
-    let width = text(document.width());
-    let height = text(document.height());
+pub fn write(page: &Page) -> String {
+    let width = text(page.width());
+    let height = text(page.height());
     let mut svg = String::new();
     svg.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     let _ = writeln!(
         svg,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{width}pt\" height=\"{height}pt\" viewBox=\"0 0 {width} {height}\">"
     );
-    let clips = clips(document);
-    let gradients = gradients(document);
+    let clips = clips(page);
+    let gradients = gradients(page);
     if !clips.is_empty() || !gradients.is_empty() {
         svg.push_str("<defs>\n");
         for (index, clip) in clips.iter().enumerate() {
@@ -41,7 +41,7 @@ pub fn write(document: &Document) -> String {
         }
         svg.push_str("</defs>\n");
     }
-    if let Some(image) = document.background() {
+    if let Some(image) = page.background() {
         let [image_width, image_height] = image.size();
         let raster = grana_raster::Raster::new(image_width, image_height, image.pixels().to_vec());
         let png = grana_raster::encode(&raster).expect("the vector backdrop encodes as a PNG");
@@ -51,7 +51,7 @@ pub fn write(document: &Document) -> String {
             base64::encode(&png)
         );
     }
-    for shape in document.shapes() {
+    for shape in page.shapes() {
         let clip = shape.clip.map(|clip| {
             clips
                 .iter()
@@ -100,9 +100,9 @@ pub fn write(document: &Document) -> String {
     svg
 }
 
-fn clips(document: &Document) -> Vec<Rect> {
+fn clips(page: &Page) -> Vec<Rect> {
     let mut clips = Vec::new();
-    for shape in document.shapes() {
+    for shape in page.shapes() {
         if let Some(clip) = shape.clip
             && !clips.contains(&clip)
         {
@@ -112,9 +112,9 @@ fn clips(document: &Document) -> Vec<Rect> {
     clips
 }
 
-fn gradients(document: &Document) -> Vec<(Rgba, Rgba)> {
+fn gradients(page: &Page) -> Vec<(Rgba, Rgba)> {
     let mut gradients = Vec::new();
-    for shape in document.shapes() {
+    for shape in page.shapes() {
         if let Paint::Gradient(top, bottom) = shape.paint
             && !gradients.contains(&(top, bottom))
         {

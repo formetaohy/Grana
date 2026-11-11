@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 
 use grana_measure::{
-    COLOC_BINS_MAX, COLOC_BINS_MIN, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo,
-    ColocSignificance,
+    COLOC_BINS_MAX, COLOC_BINS_MIN, ColocCell, ColocCost, ColocFrame, ColocJoint, ColocPair,
+    ColocSeries, ColocSeriesInfo, ColocSignificance,
 };
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
@@ -57,7 +58,7 @@ pub struct ColocScan {
     region_voxels: u64,
     scales: [[f32; 2]; 2],
     frames: Vec<ColocFrame>,
-    joint: Vec<u64>,
+    joints: Vec<BTreeMap<u32, u64>>,
     sample: Vec<FrameSample>,
 }
 
@@ -89,7 +90,7 @@ impl ColocScan {
             region_voxels,
             scales: intensities.map(scale),
             frames: (0..frames).map(|_| ColocFrame::new(WORKING_BINS)).collect(),
-            joint: vec![0; WORKING_BINS * WORKING_BINS],
+            joints: (0..frames).map(|_| BTreeMap::new()).collect(),
             sample: (0..frames)
                 .map(|_| FrameSample {
                     a: vec![0.0; voxels],
@@ -137,7 +138,7 @@ impl ColocScan {
         let pair = self.pair;
         let scales = self.scales;
         let frames = &mut self.frames;
-        let joint = &mut self.joint;
+        let joints = &mut self.joints;
         let sample = &mut self.sample;
         let completed = schedule::ordered(
             schedule::Run {
@@ -181,6 +182,10 @@ impl ColocScan {
                 );
                 let slot = tile.time as usize;
                 frames[slot].merge(&tile.frame);
+                let cells = &mut joints[slot];
+                for cell in tile.joint {
+                    *cells.entry(cell.cell()).or_default() += cell.count();
+                }
                 let sample = &mut sample[slot];
                 for (position, compact) in tile.indices.iter().enumerate() {
                     let compact = *compact as usize;
@@ -190,11 +195,7 @@ impl ColocScan {
                 sample.included.extend_from_slice(&tile.included);
                 Ok(())
             },
-            |worker| {
-                for (slot, count) in worker.joint.into_iter().enumerate() {
-                    joint[slot] += count;
-                }
-            },
+            |_| {},
         )?;
         Ok(completed)
     }
@@ -230,7 +231,13 @@ impl ColocScan {
         for frame in &self.frames {
             working.merge(frame);
         }
-        let (counts_a, counts_b) = marginals(&self.joint);
+        let mut joint = vec![0u64; WORKING_BINS * WORKING_BINS];
+        for cells in &self.joints {
+            for (cell, count) in cells {
+                joint[*cell as usize] += count;
+            }
+        }
+        let (counts_a, counts_b) = marginals(&joint);
         let [sum_a, sum_b, sum_aa, sum_bb, ..] = working.moments().sums();
         let voxels = working.moments().voxels();
         let bins = bins_for(&counts_a, sum_a, sum_aa, voxels)
@@ -240,7 +247,12 @@ impl ColocScan {
             .iter()
             .map(|frame| aggregate(frame, bins))
             .collect::<Vec<_>>();
-        let joint = aggregate_joint(&self.joint, bins);
+        let cells = self
+            .joints
+            .iter()
+            .map(|cells| aggregate_cells(cells, bins))
+            .collect::<Vec<_>>();
+        let joint = ColocJoint::new(bins, cells);
         let cost = ColocCost::new(voxels, randomizations, self.sampling.blocks());
         let coverage = (voxels as f64 / self.region_voxels as f64).clamp(0.0, 1.0) as f32;
         let info = ColocSeriesInfo::new(
@@ -262,7 +274,8 @@ fn seed(pair: ColocPair, level: usize, stride: u32) -> u64 {
 }
 
 struct ColocWorker {
-    joint: Vec<u64>,
+    counts: Vec<u64>,
+    touched: Vec<u32>,
     mask: Option<(u32, Option<Mask>)>,
     indices: Vec<u32>,
     included: Vec<u32>,
@@ -273,6 +286,7 @@ struct ColocWorker {
 struct ColocTile {
     time: u32,
     frame: ColocFrame,
+    joint: Vec<ColocCell>,
     indices: Vec<u32>,
     included: Vec<u32>,
     a: Vec<f32>,
@@ -290,7 +304,8 @@ struct TileRead<'a> {
 impl ColocWorker {
     fn new() -> Self {
         Self {
-            joint: vec![0; WORKING_BINS * WORKING_BINS],
+            counts: vec![0; WORKING_BINS * WORKING_BINS],
+            touched: Vec::new(),
             mask: None,
             indices: Vec::new(),
             included: Vec::new(),
@@ -361,7 +376,10 @@ impl ColocWorker {
                     if mask.is_none_or(|mask| mask.contains_cell(global)) {
                         frame.push(first, second);
                         let bin = working_bin(first) + WORKING_BINS * working_bin(second);
-                        self.joint[bin] += 1;
+                        if self.counts[bin] == 0 {
+                            self.touched.push(bin as u32);
+                        }
+                        self.counts[bin] += 1;
                         self.included.push(compact);
                     }
                     x += stride;
@@ -373,9 +391,19 @@ impl ColocWorker {
             z += stride;
             compact_z += 1;
         }
+        self.touched.sort_unstable();
+        let joint = self
+            .touched
+            .drain(..)
+            .map(|cell| {
+                let count = std::mem::replace(&mut self.counts[cell as usize], 0);
+                ColocCell::new(cell, count)
+            })
+            .collect();
         ColocTile {
             time,
             frame,
+            joint,
             indices: std::mem::take(&mut self.indices),
             included: std::mem::take(&mut self.included),
             a: std::mem::take(&mut self.a),
@@ -413,18 +441,18 @@ fn aggregate(frame: &ColocFrame, bins: usize) -> ColocFrame {
     ColocFrame::from_parts(frame.moments(), a_by_b, b_by_a)
 }
 
-fn aggregate_joint(joint: &[u64], bins: usize) -> Vec<u64> {
-    let mut aggregated = vec![0; bins * bins];
-    for b in 0..WORKING_BINS {
-        for a in 0..WORKING_BINS {
-            let count = joint[a + WORKING_BINS * b];
-            if count == 0 {
-                continue;
-            }
-            aggregated[a * bins / WORKING_BINS + bins * (b * bins / WORKING_BINS)] += count;
-        }
+fn aggregate_cells(cells: &BTreeMap<u32, u64>, bins: usize) -> Vec<ColocCell> {
+    let mut aggregated = BTreeMap::<u32, u64>::new();
+    for (cell, count) in cells {
+        let a = *cell as usize % WORKING_BINS;
+        let b = *cell as usize / WORKING_BINS;
+        let index = (a * bins / WORKING_BINS + bins * (b * bins / WORKING_BINS)) as u32;
+        *aggregated.entry(index).or_default() += count;
     }
     aggregated
+        .into_iter()
+        .map(|(cell, count)| ColocCell::new(cell, count))
+        .collect()
 }
 
 fn bins_for(counts: &[u64], sum: f64, squares: f64, voxels: u64) -> usize {

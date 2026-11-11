@@ -96,6 +96,7 @@ impl Session {
         let report = run.comparison();
         self.batch_comparison = report.groups;
         self.batch_significance = report.tests;
+        self.batch_interactions = report.interactions;
         self.batch_jobs = run.jobs().clamp(1, grana_pipeline::MAX_JOBS);
         self.batch_project = run.project();
         self.batch_channels = run.channels();
@@ -231,6 +232,7 @@ impl Session {
         self.reset_batch_rows();
         self.batch_comparison.clear();
         self.batch_significance.clear();
+        self.batch_interactions.clear();
         self.batch_running = true;
         self.batch_paused = false;
         self.batch_message = None;
@@ -328,6 +330,7 @@ impl Session {
                 BatchEvent::Comparison(report) => {
                     self.batch_comparison = report.groups;
                     self.batch_significance = report.tests;
+                    self.batch_interactions = report.interactions;
                 }
                 BatchEvent::Failed(detail) => {
                     fatal = true;

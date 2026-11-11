@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use grana_chart::Page as Chart;
 use grana_text::{Contour, Curve};
 use grana_ui::{Color, Corners, Mark, Rect};
 use grana_vector::{Document, Paint, Rgba, Shape};
@@ -12,17 +13,26 @@ pub fn write(
     size: [u32; 2],
     marks: &[Mark],
 ) -> Result<PathBuf, String> {
-    if size[0] == 0 || size[1] == 0 {
-        return Err("a vector page covers at least one point".to_string());
-    }
-    let mut document = Document::new(size[0] as f32, size[1] as f32);
-    push(&mut document, marks)?;
-    write_document(path, format, &document)
+    let page = canvas(size, marks)?;
+    write_document(path, format, &Document::of(page))
 }
 
 pub fn write_document(path: &Path, format: Format, document: &Document) -> Result<PathBuf, String> {
+    assert!(
+        !document.pages().is_empty(),
+        "a vector document holds at least one page"
+    );
     let bytes = match format {
-        Format::Svg => grana_vector::write_svg(document).into_bytes(),
+        Format::Svg => match document.pages() {
+            [page] => grana_vector::write_svg(page).into_bytes(),
+            pages => {
+                return Err(format!(
+                    "{} is written as SVG one page at a time, not {} pages",
+                    path.display(),
+                    pages.len()
+                ));
+            }
+        },
         Format::Pdf => grana_vector::write_pdf(document),
     };
     grana_file::write(path, &bytes)
@@ -30,7 +40,31 @@ pub fn write_document(path: &Path, format: Format, document: &Document) -> Resul
     Ok(path.to_path_buf())
 }
 
-pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
+pub fn compose(pages: &[Chart]) -> Result<Document, String> {
+    assert!(
+        !pages.is_empty(),
+        "a vector document holds at least one page"
+    );
+    let mut document = Document::new();
+    for page in pages {
+        let size = page.size();
+        let mut canvas = grana_vector::Page::new(size[0] as f32, size[1] as f32);
+        push(&mut canvas, &page.marks())?;
+        document.push(canvas);
+    }
+    Ok(document)
+}
+
+pub fn canvas(size: [u32; 2], marks: &[Mark]) -> Result<grana_vector::Page, String> {
+    if size[0] == 0 || size[1] == 0 {
+        return Err("a vector page covers at least one point".to_string());
+    }
+    let mut page = grana_vector::Page::new(size[0] as f32, size[1] as f32);
+    push(&mut page, marks)?;
+    Ok(page)
+}
+
+pub fn push(page: &mut grana_vector::Page, marks: &[Mark]) -> Result<(), String> {
     for mark in marks {
         match *mark {
             Mark::Rect {
@@ -44,7 +78,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
                     Paint::Fill(to_rgba(color)),
                 )
                 .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Gradient {
                 rect,
@@ -58,7 +92,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
                     Paint::Gradient(to_rgba(top), to_rgba(bottom)),
                 )
                 .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Border {
                 rect,
@@ -82,7 +116,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
                     },
                 )
                 .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Triangle {
                 corners,
@@ -91,7 +125,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
             } => {
                 let shape = Shape::new(vec![triangle(&corners)], Paint::Fill(to_rgba(color)))
                     .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Segment {
                 from,
@@ -115,7 +149,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
                         },
                     )
                     .clipped(to_clip(clip));
-                    document.push(shape);
+                    page.push(shape);
                 }
             }
             Mark::Arc {
@@ -136,7 +170,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
                     },
                 )
                 .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Outline {
                 ref contours,
@@ -145,7 +179,7 @@ pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
             } => {
                 let shape = Shape::new(contours.clone(), Paint::Fill(to_rgba(color)))
                     .clipped(to_clip(clip));
-                document.push(shape);
+                page.push(shape);
             }
             Mark::Bitmap { .. } => {
                 return Err(
