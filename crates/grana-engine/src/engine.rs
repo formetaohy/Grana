@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use grana_display::{Camera, CameraState};
 use grana_render::{FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Scene, Selection};
@@ -11,6 +13,13 @@ use crate::view::{self, RenderedScene};
 const TEXTURE_BUDGET: u64 = 512 << 20;
 pub const SAMPLE_LIMIT: u32 = 32;
 
+const DRAFT_BUDGET: Duration = Duration::from_millis(10);
+const DRAFT_HOLD: Duration = Duration::from_millis(150);
+const DRAFT_DEFAULT: f32 = 0.5;
+const DRAFT_MINIMUM: f32 = 0.25;
+const SAMPLE_FLOOR: Duration = Duration::from_millis(20);
+const SAMPLE_BLEND: f64 = 0.5;
+
 pub struct ViewportFrame<'a> {
     pub scene: &'a Scene,
     pub camera: &'a Camera,
@@ -18,6 +27,7 @@ pub struct ViewportFrame<'a> {
     pub revision: u64,
     pub prefetch: bool,
     pub level_cap: usize,
+    pub interacting: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -28,6 +38,13 @@ struct Request {
     level_cap: usize,
     prefetch: bool,
     uploads: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Draft,
+    Refine,
+    Ready,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +72,12 @@ pub struct Engine {
     prepared: Option<Prepared>,
     image: Option<ViewportImage>,
     request: Option<Request>,
+    display: [u32; 2],
+    phase: Phase,
+    draft: f32,
+    sample: Option<Duration>,
+    drawn_at: Option<Instant>,
+    changed_at: Option<Instant>,
     uploads: u64,
     image_revision: u64,
     info: FrameInfo,
@@ -68,6 +91,12 @@ impl Engine {
             prepared: None,
             image: None,
             request: None,
+            display: [0, 0],
+            phase: Phase::Ready,
+            draft: DRAFT_DEFAULT,
+            sample: None,
+            drawn_at: None,
+            changed_at: None,
             uploads: 0,
             image_revision: 0,
             info: FrameInfo::default(),
@@ -80,6 +109,9 @@ impl Engine {
         self.pending_pick = None;
         self.prepared = None;
         self.request = None;
+        self.phase = Phase::Ready;
+        self.drawn_at = None;
+        self.changed_at = None;
         self.info = FrameInfo::default();
     }
 
@@ -111,18 +143,7 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        if self
-            .image
-            .as_ref()
-            .is_none_or(|image| image.size != frame.size)
-        {
-            self.image = Some(ViewportImage::new(
-                device,
-                frame.size,
-                self.renderer.format(),
-            ));
-            self.request = None;
-        }
+        let now = Instant::now();
         let request = Request {
             revision: frame.revision,
             camera: frame.camera.state(),
@@ -131,8 +152,43 @@ impl Engine {
             prefetch: frame.prefetch,
             uploads: self.uploads,
         };
-        if self.request == Some(request) && self.finished() {
-            return Ok(());
+        if self.request != Some(request) {
+            self.request = None;
+            self.phase = if frame.interacting {
+                Phase::Draft
+            } else {
+                Phase::Refine
+            };
+            self.changed_at = Some(now);
+            self.drawn_at = None;
+        } else {
+            match self.phase {
+                Phase::Ready => return Ok(()),
+                Phase::Draft => {
+                    let held = self
+                        .changed_at
+                        .is_some_and(|at| now.saturating_duration_since(at) >= DRAFT_HOLD);
+                    if frame.interacting || !held {
+                        self.drawn_at = None;
+                        return Ok(());
+                    }
+                    self.phase = Phase::Refine;
+                    self.drawn_at = None;
+                }
+                Phase::Refine => {
+                    if frame.interacting {
+                        self.drawn_at = None;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let size = match self.phase {
+            Phase::Draft => draft_size(frame.size, self.draft),
+            _ => frame.size,
+        };
+        if self.image.as_ref().is_none_or(|image| image.size != size) {
+            self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
         let detail = view::detail(
             frame.scene,
@@ -169,8 +225,8 @@ impl Engine {
                     target: &image.view,
                     scene: frame.scene,
                     camera: frame.camera,
-                    viewport: [0, 0, frame.size[0], frame.size[1]],
-                    size: frame.size,
+                    viewport: [0, 0, size[0], size[1]],
+                    size,
                     samples: SAMPLE_LIMIT,
                     prefetch: frame.prefetch,
                     level_cap: frame.level_cap,
@@ -180,7 +236,18 @@ impl Engine {
         };
         self.info = info;
         self.request = Some(request);
+        self.display = frame.size;
         self.image_revision = self.image_revision.wrapping_add(1);
+        if self.phase == Phase::Refine {
+            if let Some(last) = self.drawn_at {
+                self.observe(now.saturating_duration_since(last));
+            }
+            self.drawn_at = Some(now);
+            if self.complete() {
+                self.phase = Phase::Ready;
+                self.drawn_at = None;
+            }
+        }
         Ok(())
     }
 
@@ -196,7 +263,19 @@ impl Engine {
         self.info
     }
 
-    fn finished(&self) -> bool {
+    fn observe(&mut self, interval: Duration) {
+        if interval <= SAMPLE_FLOOR {
+            self.draft = 1.0;
+            return;
+        }
+        let blended = self.sample.map_or(interval, |sample| {
+            sample.mul_f64(1.0 - SAMPLE_BLEND) + interval.mul_f64(SAMPLE_BLEND)
+        });
+        self.sample = Some(blended);
+        self.draft = draft_scale(blended);
+    }
+
+    fn complete(&self) -> bool {
         let info = self.info;
         info.samples >= SAMPLE_LIMIT && !info.fading && info.view.resident >= info.view.demand
     }
@@ -205,6 +284,14 @@ impl Engine {
         if self.pending_pick.is_some() {
             return false;
         }
+        let Some(image) = self.image.as_ref() else {
+            return false;
+        };
+        let display = self.display;
+        let point = [
+            (u64::from(point[0]) * u64::from(image.size[0]) / u64::from(display[0].max(1))) as u32,
+            (u64::from(point[1]) * u64::from(image.size[1]) / u64::from(display[1].max(1))) as u32,
+        ];
         let Self {
             renderer,
             pending_pick,
@@ -246,4 +333,18 @@ impl Engine {
     pub fn pick_pending(&self) -> bool {
         self.pending_pick.is_some()
     }
+}
+
+fn draft_size(size: [u32; 2], scale: f32) -> [u32; 2] {
+    let scale = scale.clamp(DRAFT_MINIMUM, 1.0);
+    [
+        ((size[0] as f32 * scale).round() as u32).max(1),
+        ((size[1] as f32 * scale).round() as u32).max(1),
+    ]
+}
+
+fn draft_scale(interval: Duration) -> f32 {
+    (DRAFT_BUDGET.as_secs_f64() / interval.as_secs_f64())
+        .sqrt()
+        .clamp(f64::from(DRAFT_MINIMUM), 1.0) as f32
 }

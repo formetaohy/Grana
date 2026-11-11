@@ -89,6 +89,7 @@ pub struct App {
     contrast: bool,
     system_dark: bool,
     themed: Option<(Appearance, bool)>,
+    interacting: bool,
 }
 
 impl App {
@@ -137,6 +138,7 @@ impl App {
             contrast: preference.contrast,
             system_dark: true,
             themed: None,
+            interacting: false,
         }
     }
 
@@ -262,8 +264,10 @@ impl App {
         self.autosave();
         self.advance_playback();
         self.advance_animation();
+        let interacting = animating || self.interacting || self.workspace.playback.previewing;
+        self.interacting = false;
         self.fit_view();
-        let mut delay = self.render().unwrap_or(Duration::MAX);
+        let mut delay = self.render(interacting).unwrap_or(Duration::MAX);
         if animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
@@ -1014,7 +1018,7 @@ impl App {
         self.ime_area = Some(area);
     }
 
-    fn render(&mut self) -> Option<Duration> {
+    fn render(&mut self, interacting: bool) -> Option<Duration> {
         let viewport = self.viewport();
         let playing = self.workspace.playback.playing;
         let cap = self.level_cap();
@@ -1040,6 +1044,7 @@ impl App {
                     revision: session.revision().raw(),
                     prefetch: playing,
                     level_cap: cap,
+                    interacting,
                 },
             )
         {
@@ -2008,6 +2013,7 @@ impl App {
             }
             _ => {}
         }
+        self.interacting = true;
         self.request_redraw();
     }
 }
