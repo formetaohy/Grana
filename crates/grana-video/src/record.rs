@@ -1,10 +1,13 @@
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+
+use grana_exec::{Pipe, Sender};
 
 use crate::encoder::Encoder;
 use crate::error::Error;
 use crate::movie::{Codec, Movie};
+
+const CAPACITY: usize = 8;
 
 enum Message {
     Frame(Vec<u8>),
@@ -68,10 +71,10 @@ impl Recorder {
             movie: Movie::create(path, size, fps, alpha)?,
             compressor,
         };
-        let (sender, receiver) = mpsc::channel();
+        let (sender, frames) = Pipe::new(CAPACITY);
         let worker = thread::Builder::new()
             .name("grana.movie".to_string())
-            .spawn(move || encode(clip, receiver))
+            .spawn(move || encode(clip, &frames))
             .map_err(|error| Error::Encode(error.to_string()))?;
         Ok(Self {
             size,
@@ -80,7 +83,7 @@ impl Recorder {
         })
     }
 
-    pub fn push(&mut self, rgba: &[u8]) -> Result<(), Error> {
+    pub fn push(&mut self, rgba: Vec<u8>) -> Result<(), Error> {
         assert_eq!(
             rgba.len(),
             (self.size[0] * self.size[1] * 4) as usize,
@@ -90,16 +93,24 @@ impl Recorder {
             return Err(Error::Stopped);
         };
         sender
-            .send(Message::Frame(rgba.to_vec()))
-            .map_err(|_| Error::Stopped)
+            .send(Message::Frame(rgba))
+            .then_some(())
+            .ok_or(Error::Stopped)
     }
 
     pub fn finish(mut self) -> Result<(), Error> {
-        let Some(sender) = self.sender.take() else {
-            return Err(Error::Stopped);
-        };
-        sender.send(Message::Finish).map_err(|_| Error::Stopped)?;
+        self.stop()?;
         self.join()
+    }
+
+    fn stop(&mut self) -> Result<(), Error> {
+        let Some(sender) = self.sender.take() else {
+            return Ok(());
+        };
+        sender
+            .send(Message::Finish)
+            .then_some(())
+            .ok_or(Error::Stopped)
     }
 
     fn join(&mut self) -> Result<(), Error> {
@@ -112,31 +123,31 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        self.sender.take();
+        let _ = self.stop();
         let _ = self.join();
     }
 }
 
-fn encode(mut clip: Clip, receiver: Receiver<Message>) -> Result<(), Error> {
+fn encode(mut clip: Clip, frames: &Pipe<Message>) -> Result<(), Error> {
     let mut failure = None;
-    loop {
-        match receiver.recv() {
-            Ok(Message::Frame(rgba)) => {
+    while let Some(message) = frames.receive() {
+        match message {
+            Message::Frame(rgba) => {
                 if failure.is_none()
                     && let Err(error) = clip.push(&rgba)
                 {
                     failure = Some(error);
                 }
             }
-            Ok(Message::Finish) => {
-                if let Some(error) = failure {
-                    return Err(error);
-                }
-                return clip.finish();
+            Message::Finish => {
+                return match failure {
+                    Some(error) => Err(error),
+                    None => clip.finish(),
+                };
             }
-            Err(_) => return Ok(()),
         }
     }
+    Ok(())
 }
 
 fn png_frame(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>, Error> {

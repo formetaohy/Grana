@@ -3,9 +3,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use grana_display::{Coloring, Extent, Material, Shading, TransferFunction, VolumeMode};
 use grana_geometry::ray_hit;
-use grana_measure::{
-    Aggregate, Classifier, ColocMetric, Frame, Group, Measurement, ObjectColoc, RelationRow, Table,
-};
+use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_optics::Psf;
@@ -30,96 +28,7 @@ use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, mix};
-
-fn aggregate_scores(
-    set: &ObjectSet,
-    classifier: &Classifier,
-    aggregate: Aggregate,
-    group: Group,
-) -> Vec<f32> {
-    match group {
-        Group::Object => Vec::new(),
-        Group::Track => {
-            let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
-                return Vec::new();
-            };
-            let mut collected = vec![Vec::<f32>::new(); tracks.len()];
-            for (time, frame) in set.frames() {
-                let objects = frame.objects();
-                for index in 0..frame.object_count() {
-                    let Some(track) = tracks.track_at(time, index) else {
-                        continue;
-                    };
-                    collected[track].push(classifier.score(objects, index));
-                }
-            }
-            collected
-                .iter()
-                .map(|values| aggregate.apply(values))
-                .collect()
-        }
-        Group::Timepoint => set
-            .frames()
-            .map(|(_, frame)| {
-                let objects = frame.objects();
-                let mut collected = Vec::with_capacity(frame.object_count());
-                for index in 0..frame.object_count() {
-                    collected.push(classifier.score(objects, index));
-                }
-                aggregate.apply(&collected)
-            })
-            .collect(),
-    }
-}
-
-fn aggregate_coloc(
-    set: &ObjectSet,
-    coloc: &ObjectColoc,
-    metric: ColocMetric,
-    aggregate: Aggregate,
-    group: Group,
-) -> Vec<f32> {
-    match group {
-        Group::Object => Vec::new(),
-        Group::Track => {
-            let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
-                return Vec::new();
-            };
-            let mut collected = vec![Vec::<f32>::new(); tracks.len()];
-            for (time, frame) in set.frames() {
-                let Some(values) = coloc.objects(time) else {
-                    continue;
-                };
-                for (index, value) in values.iter().enumerate().take(frame.object_count()) {
-                    let Some(value) = value.metric(metric) else {
-                        continue;
-                    };
-                    let Some(track) = tracks.track_at(time, index) else {
-                        continue;
-                    };
-                    collected[track].push(value as f32);
-                }
-            }
-            collected
-                .iter()
-                .map(|values| aggregate.apply(values))
-                .collect()
-        }
-        Group::Timepoint => set
-            .frames()
-            .map(|(time, frame)| {
-                let mut collected = Vec::with_capacity(frame.object_count());
-                let values = coloc.objects(time).unwrap_or_default();
-                for value in values.iter().take(frame.object_count()) {
-                    if let Some(value) = value.metric(metric) {
-                        collected.push(value as f32);
-                    }
-                }
-                aggregate.apply(&collected)
-            })
-            .collect(),
-    }
-}
+use crate::table_request::TableRequest;
 
 fn shape_at(frames: &[Option<Arc<ObjectFrame>>], time: u32) -> Result<Option<Shape>, String> {
     let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
@@ -1370,100 +1279,7 @@ impl Scene {
     }
 
     pub fn table(&self, id: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Table> {
-        let object = self.objects.get(id)?;
-        let relations = (0..object.frame_count())
-            .map(|time| self.relation_rows(id, time))
-            .collect::<Vec<_>>();
-        let children = match group {
-            Group::Object => self.objects.child_sets(id),
-            Group::Track | Group::Timepoint => Vec::new(),
-        };
-        let mut per_time = Vec::with_capacity(object.frame_count() as usize);
-        for time in 0..object.frame_count() {
-            per_time.push(
-                children
-                    .iter()
-                    .filter_map(|child| self.objects.child(id, *child, time))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        let frames = object
-            .frames()
-            .map(|(time, frame)| {
-                Frame::new(
-                    time,
-                    frame.objects(),
-                    &relations[time as usize],
-                    &per_time[time as usize],
-                )
-            })
-            .collect::<Vec<_>>();
-        if frames.is_empty() {
-            return None;
-        }
-        assert!(
-            object.measured_channels() <= self.dataset.channels().len(),
-            "an object set measures the channels of the dataset"
-        );
-        let channels = self.dataset.channels()[..object.measured_channels()]
-            .iter()
-            .map(|channel| channel.name().to_string())
-            .collect::<Vec<_>>();
-        let keys = grana_measure::channel_keys(&channels);
-        let tracks = object.tracks().map(|layer| layer.set());
-        let mut table = Table::build(
-            &frames,
-            tracks,
-            &channels,
-            self.dataset.frame_interval(),
-            group,
-            aggregate,
-        );
-        if let Some(classifier) = object.classifier() {
-            let column = match group {
-                Group::Object => {
-                    let scores = classifier.scores(&table, &keys);
-                    table = table.with_column(classifier.column(), scores);
-                    None
-                }
-                Group::Track => Some((
-                    classifier.aggregate_column(aggregate),
-                    aggregate_scores(object, classifier, aggregate, Group::Track),
-                )),
-                Group::Timepoint => Some((
-                    classifier.aggregate_column(aggregate),
-                    aggregate_scores(object, classifier, aggregate, Group::Timepoint),
-                )),
-            };
-            if let Some((column, values)) = column {
-                table = table.with_column(column, values);
-            }
-        }
-        if let Some(coloc) = object.object_coloc() {
-            for metric in ColocMetric::ALL {
-                let column = metric.column(coloc.pair(), &channels, &keys);
-                let values = match group {
-                    Group::Object => (0..table.rows())
-                        .map(|row| {
-                            let observation = table.observation(row);
-                            let (Some(time), Some(object)) =
-                                (observation.time(), observation.object())
-                            else {
-                                return f32::NAN;
-                            };
-                            coloc
-                                .metric(time, object, metric)
-                                .map_or(f32::NAN, |value| value as f32)
-                        })
-                        .collect(),
-                    Group::Track | Group::Timepoint => {
-                        aggregate_coloc(object, coloc, metric, aggregate, group)
-                    }
-                };
-                table = table.with_column(column, values);
-            }
-        }
-        Some(table)
+        TableRequest::new(self, id, group, aggregate)?.build()
     }
 
     pub fn train_classifier(

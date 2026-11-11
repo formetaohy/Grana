@@ -96,6 +96,7 @@ pub struct Material {
     pub light_tone: Tone,
     pub dark_tone: Tone,
     pub adaptive: bool,
+    pub lens: f32,
     pub tint: Option<Color>,
     pub dim: f32,
 }
@@ -135,6 +136,7 @@ impl Material {
                 darken: 0.25,
             },
             adaptive: true,
+            lens: 0.0,
             tint: None,
             dim: 0.0,
         }
@@ -168,6 +170,7 @@ impl Material {
             light_tone: tone,
             dark_tone: tone,
             adaptive: false,
+            lens: 0.0,
             tint: None,
             dim: 0.0,
         }
@@ -220,6 +223,7 @@ impl Material {
             light_tone: Tone::NONE,
             dark_tone: Tone::NONE,
             adaptive: false,
+            lens: 0.0,
             tint: None,
             dim: 0.0,
         }
@@ -278,6 +282,7 @@ impl Material {
             light_tone: tone(self.light_tone, to.light_tone),
             dark_tone: tone(self.dark_tone, to.dark_tone),
             adaptive: if t < 0.5 { self.adaptive } else { to.adaptive },
+            lens: f(self.lens, to.lens),
             tint,
             dim: f(self.dim, to.dim),
         }

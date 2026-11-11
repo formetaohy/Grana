@@ -420,6 +420,7 @@ impl Session {
 
     pub(super) fn reset(&mut self) {
         self.measure.reset();
+        self.measure_job = None;
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();

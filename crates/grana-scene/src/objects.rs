@@ -1245,7 +1245,7 @@ impl Objects {
     }
 }
 
-fn members_of(relation: &RelationFrame) -> Vec<u32> {
+pub(crate) fn members_of(relation: &RelationFrame) -> Vec<u32> {
     (0..relation.objects())
         .map(|object| {
             if relation.inside(object) > 0.0 && relation.partner(object) > 0 {

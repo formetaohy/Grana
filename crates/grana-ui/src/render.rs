@@ -273,10 +273,7 @@ pub struct Renderer {
     ui_add: RenderPipeline,
     ui_multiply: RenderPipeline,
     figure: RenderPipeline,
-    lower: GlassRenderer,
-    overlay: GlassRenderer,
-    menu_glass: GlassRenderer,
-    hud_glass: GlassRenderer,
+    glass: GlassRenderer,
     ui_layout: BindGroupLayout,
     blit_layout: BindGroupLayout,
     sampler: Sampler,
@@ -424,10 +421,7 @@ impl Renderer {
             ui_add,
             ui_multiply,
             figure,
-            lower: GlassRenderer::new(device, encoded),
-            overlay: GlassRenderer::new(device, encoded),
-            menu_glass: GlassRenderer::new(device, encoded),
-            hud_glass: GlassRenderer::new(device, encoded),
+            glass: GlassRenderer::new(device, encoded),
             ui_layout,
             blit_layout,
             sampler,
@@ -607,7 +601,7 @@ impl Renderer {
             content.len(),
         );
 
-        self.lower.render_layers(
+        self.glass.render_layers(
             &self.device,
             &self.queue,
             encoder,
@@ -639,7 +633,7 @@ impl Renderer {
         if glass.has_layers(OVERLAY..MENU) {
             let content = slot_view(current, &front_encoded, &back_encoded);
             let target = slot_view(current.other(), &front_encoded, &back_encoded);
-            self.overlay.render_layers(
+            self.glass.render_layers(
                 &self.device,
                 &self.queue,
                 encoder,
@@ -687,7 +681,7 @@ impl Renderer {
             let target_slot = current.other();
             let content = slot_view(current, &front_encoded, &back_encoded);
             let target = slot_view(target_slot, &front_encoded, &back_encoded);
-            self.menu_glass.render_layers(
+            self.glass.render_layers(
                 &self.device,
                 &self.queue,
                 encoder,
@@ -736,7 +730,7 @@ impl Renderer {
             let target_slot = current.other();
             let content = slot_view(current, &front_encoded, &back_encoded);
             let target = slot_view(target_slot, &front_encoded, &back_encoded);
-            self.hud_glass.render_layers(
+            self.glass.render_layers(
                 &self.device,
                 &self.queue,
                 encoder,

@@ -18,7 +18,7 @@ impl Protocol {
         measure.set_group(spec.group(), scene);
         measure.set_aggregate(spec.aggregate(), scene);
         measure.set_roi(scene.region_scope());
-        measure.sync(scene, false);
+        measure.rebuild(scene);
         let Some(table) = measure.table() else {
             return;
         };

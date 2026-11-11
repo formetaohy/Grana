@@ -151,6 +151,7 @@ impl GlassStyle {
         material.rim_shade = 0.1;
         material.edge = 0.28;
         material.hairline = 0.16;
+        material.lens = 0.65;
         material.shadow = Shadow {
             offset_y: 3.0,
             blur: 7.0,
@@ -198,6 +199,7 @@ fn clear_lens() -> Material {
     material.rim_shade = 0.06;
     material.edge = 0.32;
     material.hairline = 0.14;
+    material.lens = 1.0;
     material.shadow = Shadow {
         offset_y: 2.0,
         blur: 6.0,

@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use crate::cancel::Cancel;
@@ -26,12 +27,40 @@ impl Job {
 }
 
 struct Task {
+    order: Order,
     cancel: Cancel,
     work: Work,
 }
 
+impl PartialEq for Task {
+    fn eq(&self, other: &Self) -> bool {
+        self.order == other.order
+    }
+}
+
+impl Eq for Task {}
+
+impl Ord for Task {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.order.cmp(&other.order)
+    }
+}
+
+impl PartialOrd for Task {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Order {
+    priority: u64,
+    arrival: Reverse<u64>,
+}
+
 struct State {
-    tasks: VecDeque<Task>,
+    tasks: BinaryHeap<Task>,
+    arrival: u64,
     closed: bool,
 }
 
@@ -49,7 +78,8 @@ impl Executor {
         assert!(threads > 0, "an executor runs at least one worker");
         let inner = Arc::new(Inner {
             state: Mutex::new(State {
-                tasks: VecDeque::new(),
+                tasks: BinaryHeap::new(),
+                arrival: 0,
                 closed: false,
             }),
             ready: Condvar::new(),
@@ -70,6 +100,14 @@ impl Executor {
     }
 
     pub fn submit(&self, work: impl FnOnce(&Cancel) + Send + 'static) -> Job {
+        self.submit_ordered(0, work)
+    }
+
+    pub fn submit_ordered(
+        &self,
+        priority: u64,
+        work: impl FnOnce(&Cancel) + Send + 'static,
+    ) -> Job {
         let cancel = Cancel::new();
         let mut state = self
             .inner
@@ -80,7 +118,13 @@ impl Executor {
             !state.closed,
             "an executor accepts work until its caller releases it"
         );
-        state.tasks.push_back(Task {
+        let arrival = state.arrival;
+        state.arrival += 1;
+        state.tasks.push(Task {
+            order: Order {
+                priority,
+                arrival: Reverse(arrival),
+            },
             cancel: cancel.clone(),
             work: Box::new(work),
         });
@@ -119,7 +163,7 @@ fn take(inner: &Inner) -> Option<Task> {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     loop {
-        if let Some(task) = state.tasks.pop_front() {
+        if let Some(task) = state.tasks.pop() {
             return Some(task);
         }
         if state.closed {

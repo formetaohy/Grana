@@ -652,7 +652,7 @@ impl Renderer {
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     meshes.draw_oit(&mut pass, shadow_group, oit.write_group(), ao_group);
-                    markers.draw_oit(&mut pass, group, oit.write_group(), ao_group);
+                    markers.draw_oit(&mut pass, group, shadow_group, oit.write_group(), ao_group);
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -687,6 +687,7 @@ impl Renderer {
                     markers.draw_color(
                         &mut pass,
                         group,
+                        shadow_group,
                         oit.write_group(),
                         oit.coverage_group(),
                         ao_group,
@@ -745,6 +746,7 @@ impl Renderer {
                     markers.draw_tail(
                         &mut pass,
                         group,
+                        shadow_group,
                         oit.write_group(),
                         oit.coverage_group(),
                         ao_group,
@@ -756,12 +758,9 @@ impl Renderer {
             }
             if volume_visible && !slice {
                 if let (Some(bake), Some(occupancy)) = (bake.as_ref(), occupancy.as_mut()) {
-                    let key = digest(&[
+                    let material = digest(&[
                         content,
                         channel_style(scene.channels),
-                        ladder.base as u64,
-                        ladder.count as u64,
-                        u64::from(time),
                         space.digest(),
                         u64::from(scene.shading.ambient.to_bits()),
                         u64::from(scene.shading.diffuse.to_bits()),
@@ -769,7 +768,7 @@ impl Renderer {
                         object_key.unwrap_or(u64::MAX),
                     ]);
                     let levels = ladder.levels().collect::<Vec<usize>>();
-                    let entries = baked.collect(key, atlas, &levels, time, occupancy, queue);
+                    let entries = baked.collect(material, atlas, &levels, time, occupancy, queue);
                     if !entries.is_empty() {
                         bake.stage(queue, entries);
                         bake.encode(

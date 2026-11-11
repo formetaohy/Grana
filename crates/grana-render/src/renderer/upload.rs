@@ -36,7 +36,6 @@ impl Renderer {
             prefetched,
             staging,
             occupancy,
-            baked,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(arena)) =
@@ -143,7 +142,6 @@ impl Renderer {
             if let Some(occupancy) = occupancy.as_mut() {
                 occupancy.clear_slot(queue, slot);
             }
-            baked.touch();
             if let Some(table) = tables[level].as_mut() {
                 table.set_record(
                     queue,

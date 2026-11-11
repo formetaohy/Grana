@@ -9,6 +9,7 @@ use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
+use crate::table_request::{MeasureKey, TableRequest};
 
 #[derive(Debug, PartialEq)]
 pub struct MeasureState {
@@ -43,6 +44,7 @@ pub struct Measure {
     axes: [usize; 2],
     plot: Option<Plot>,
     revision: Option<(ObjectSetId, u64)>,
+    pending: Option<MeasureKey>,
     time: u32,
     dirty: bool,
 }
@@ -73,6 +75,7 @@ impl Measure {
             axes: [0; 2],
             plot: None,
             revision: None,
+            pending: None,
             time: 0,
             dirty: false,
         }
@@ -398,17 +401,17 @@ impl Measure {
         self.axes = [0; 2];
         self.plot = None;
         self.revision = None;
+        self.pending = None;
         self.time = 0;
         self.dirty = true;
     }
 
-    pub fn sync(&mut self, scene: &Scene, busy: bool) {
-        let Some(id) = self.set else {
-            return;
-        };
+    pub fn request(&mut self, scene: &Scene, busy: bool) -> Option<TableRequest> {
+        let id = self.set?;
         if scene.objects.get(id).is_none() {
             self.set = None;
             self.revision = None;
+            self.pending = None;
             self.table = None;
             self.plot = None;
             self.rows.clear();
@@ -417,16 +420,29 @@ impl Measure {
             self.lasso = None;
             self.axes = [0; 2];
             self.dirty = true;
-            return;
+            return None;
         }
         let time = scene.time();
         let moved = self.time != time;
         self.time = time;
         if !busy && self.revision != scene.table_revision(id).map(|revision| (id, revision)) {
-            self.rebuild(scene);
-        } else if moved && self.scope == Scope::Current {
+            let request = TableRequest::new(scene, id, self.group, self.aggregate)?;
+            self.pending = Some(request.key());
+            return Some(request);
+        }
+        if moved && self.scope == Scope::Current {
             self.refresh();
         }
+        None
+    }
+
+    pub fn install(&mut self, key: MeasureKey, table: Option<Table>) {
+        if self.pending != Some(key) {
+            return;
+        }
+        self.pending = None;
+        self.revision = key.revision().map(|revision| (key.set(), revision));
+        self.adopt(table);
     }
 
     pub fn apply(&mut self, scene: &mut Scene) {
@@ -621,8 +637,9 @@ impl Measure {
         mix(hash, self.axes[1] as u64)
     }
 
-    fn rebuild(&mut self, scene: &Scene) {
+    pub fn rebuild(&mut self, scene: &Scene) {
         self.dirty = true;
+        self.pending = None;
         self.table = None;
         self.plot = None;
         self.rows.clear();
@@ -643,8 +660,23 @@ impl Measure {
             self.axes = [0; 2];
             return;
         }
-        self.revision = scene.table_revision(id).map(|revision| (id, revision));
-        let Some(table) = scene.table(id, self.group, self.aggregate) else {
+        let Some(request) = TableRequest::new(scene, id, self.group, self.aggregate) else {
+            self.revision = None;
+            return;
+        };
+        let key = request.key();
+        self.revision = key.revision().map(|revision| (key.set(), revision));
+        self.adopt(request.build());
+    }
+
+    fn adopt(&mut self, table: Option<Table>) {
+        self.dirty = true;
+        self.table = None;
+        self.plot = None;
+        self.rows.clear();
+        self.total = 0;
+        self.visible.clear();
+        let Some(table) = table else {
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];

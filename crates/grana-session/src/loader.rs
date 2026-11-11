@@ -1,19 +1,17 @@
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, RwLock};
 
-use grana_exec::{Pipe, Poll, Sender};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drift;
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid, VolumeSeries};
 
-const ATTEMPTS: u8 = 3;
-const WORKER_LIMIT: usize = 8;
-const RETRY_PRIORITY: u64 = 0;
+const ATTEMPTS: u32 = 3;
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 const CAPACITY: usize = 16;
+const READ_PRIORITY: u64 = 1;
 
 pub struct Opened {
     pub name: String,
@@ -45,157 +43,13 @@ pub enum Event {
 
 pub struct Loader {
     events: Pipe<Event>,
-    queue: Arc<Queue>,
+    sender: Sender<Event>,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
     channels: Arc<RwLock<Option<Arc<Channels>>>>,
+    closed: Arc<AtomicBool>,
+    order: AtomicU64,
     source: Source,
-}
-
-struct Queue {
-    state: Mutex<State>,
-    ready: Condvar,
-}
-
-struct State {
-    tasks: BinaryHeap<Task>,
-    pending: HashMap<BrickRequest, Reservation>,
-    priority: u64,
-    closed: bool,
-}
-
-#[derive(Clone, Copy)]
-struct Reservation {
-    priority: u64,
-    attempts: u8,
-}
-
-struct Task {
-    priority: u64,
-    request: BrickRequest,
-}
-
-impl PartialEq for Task {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority
-    }
-}
-
-impl Eq for Task {}
-
-impl Ord for Task {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.priority.cmp(&other.priority)
-    }
-}
-
-impl PartialOrd for Task {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Queue {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(State {
-                tasks: BinaryHeap::new(),
-                pending: HashMap::new(),
-                priority: 0,
-                closed: false,
-            }),
-            ready: Condvar::new(),
-        }
-    }
-
-    fn submit(&self, requests: &[BrickRequest]) -> bool {
-        let mut state = self.state.lock().expect("the loader queue is not poisoned");
-        if state.closed {
-            return false;
-        }
-        for request in requests.iter().rev() {
-            state.priority += 1;
-            let priority = state.priority;
-            state.pending.insert(
-                *request,
-                Reservation {
-                    priority,
-                    attempts: 0,
-                },
-            );
-            state.tasks.push(Task {
-                priority,
-                request: *request,
-            });
-        }
-        drop(state);
-        self.ready.notify_all();
-        true
-    }
-
-    fn take(&self, time: u32) -> Option<(BrickRequest, u8)> {
-        let mut state = self.state.lock().expect("the loader queue is not poisoned");
-        loop {
-            if state.closed {
-                return None;
-            }
-            let Some(task) = state.tasks.pop() else {
-                state = self
-                    .ready
-                    .wait(state)
-                    .expect("the loader queue is not poisoned");
-                continue;
-            };
-            let matches = state
-                .pending
-                .get(&task.request)
-                .is_some_and(|reservation| reservation.priority == task.priority);
-            if !matches {
-                continue;
-            }
-            let reservation = state
-                .pending
-                .remove(&task.request)
-                .expect("the reservation is ready");
-            if task.request.time < time {
-                continue;
-            }
-            return Some((task.request, reservation.attempts));
-        }
-    }
-
-    fn retry(&self, request: BrickRequest, attempts: u8) -> bool {
-        let mut state = self.state.lock().expect("the loader queue is not poisoned");
-        if state.closed || attempts + 1 >= ATTEMPTS {
-            return false;
-        }
-        state.pending.insert(
-            request,
-            Reservation {
-                priority: RETRY_PRIORITY,
-                attempts: attempts + 1,
-            },
-        );
-        state.tasks.push(Task {
-            priority: RETRY_PRIORITY,
-            request,
-        });
-        drop(state);
-        self.ready.notify_all();
-        true
-    }
-
-    fn prune(&self, time: u32) {
-        let mut state = self.state.lock().expect("the loader queue is not poisoned");
-        state.pending.retain(|request, _| request.time >= time);
-    }
-
-    fn close(&self) {
-        let mut state = self.state.lock().expect("the loader queue is not poisoned");
-        state.closed = true;
-        drop(state);
-        self.ready.notify_all();
-    }
 }
 
 impl Loader {
@@ -218,20 +72,17 @@ impl Loader {
             field: 0,
             imports: grana_readout::Imported::default(),
         };
-        let channels = Channels::stored(Arc::new(image));
+        let channels = Arc::new(Channels::stored(Arc::new(image)));
         let (sender, events) = Pipe::new(CAPACITY);
-        let queue = Arc::new(Queue::new());
-        let time = Arc::new(AtomicU32::new(0));
-        let drift = Arc::new(RwLock::new(Drift::default()));
-        let resident = Arc::new(RwLock::new(Some(Arc::new(channels))));
-        spawn(Arc::clone(&resident), &queue, &time, &drift, &sender);
         (
             Self {
                 events,
-                queue,
-                time,
-                drift,
-                channels: resident,
+                sender,
+                time: Arc::new(AtomicU32::new(0)),
+                drift: Arc::new(RwLock::new(Drift::default())),
+                channels: Arc::new(RwLock::new(Some(channels))),
+                closed: Arc::new(AtomicBool::new(false)),
+                order: AtomicU64::new(READ_PRIORITY),
                 source,
             },
             opened,
@@ -257,107 +108,32 @@ impl Loader {
     fn open(source: Source) -> Self {
         let remote = source.is_remote();
         let (sender, events) = Pipe::new(CAPACITY);
-        let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
-        let resident = Arc::new(RwLock::new(None));
-        let opened = source.clone();
+        let channels = Arc::new(RwLock::new(None));
+        let closed = Arc::new(AtomicBool::new(false));
+        let opening = source.clone();
         let opening_sender = sender.clone();
-        let opening_queue = Arc::clone(&queue);
-        let opening_time = Arc::clone(&time);
-        let opening_drift = Arc::clone(&drift);
-        let opening_channels = Arc::clone(&resident);
-        std::thread::spawn(move || {
-            let plate = grana_image::plate(&opened).ok().flatten();
-            let opened = match grana_image::resolve_series(&opened) {
-                Ok(source) => source,
-                Err(detail) => {
-                    let _ = opening_sender.send(Event::Failed(detail.to_string()));
-                    opening_queue.close();
-                    return;
-                }
-            };
-            let field = plate.as_ref().map_or(0, |plate| {
-                opened
-                    .group()
-                    .and_then(|group| {
-                        plate
-                            .fields()
-                            .iter()
-                            .position(|field| field.path() == group)
-                    })
-                    .unwrap_or(0)
-            });
-            let reader = match Image::open(&opened) {
-                Ok(reader) => reader,
-                Err(detail) => {
-                    let _ = opening_sender.send(Event::Failed(detail.to_string()));
-                    opening_queue.close();
-                    return;
-                }
-            };
-            let channels = reader.pyramid().channel_count();
-            if channels > CHANNEL_LIMIT {
-                let _ = opening_sender.send(Event::Failed(format!(
-                    "the dataset has {channels} channels, grana displays at most {CHANNEL_LIMIT}"
-                )));
-                opening_queue.close();
-                return;
-            }
-            let format = reader.format().expect("a file image declares its format");
-            let fingerprint = match reader.fingerprint() {
-                Ok(fingerprint) => fingerprint,
-                Err(detail) => {
-                    let _ = opening_sender.send(Event::Failed(format!(
-                        "the dataset cannot be fingerprinted: {detail}"
-                    )));
-                    opening_queue.close();
-                    return;
-                }
-            };
-            let (labels, labels_error) = match reader.labels() {
-                Ok(labels) => (labels.names().map(str::to_string).collect(), None),
-                Err(detail) => (Vec::new(), Some(detail.to_string())),
-            };
-            let imports = match (format, opened.path()) {
-                (Format::Imaris, Some(path)) => grana_readout::imported(path).unwrap_or_default(),
-                _ => grana_readout::Imported::default(),
-            };
-            let opened = Event::Opened(Box::new(Opened {
-                name: reader.name().to_string(),
-                pyramid: reader.pyramid().clone(),
-                format: Some(format),
-                series: reader.series().to_vec(),
-                selected: reader.selected(),
-                fingerprint,
+        let opening_channels = Arc::clone(&channels);
+        let opening_closed = Arc::clone(&closed);
+        Executor::shared().submit_ordered(READ_PRIORITY, move |cancel| {
+            open(
+                opening,
                 remote,
-                labels,
-                labels_error,
-                plate,
-                field,
-                imports,
-            }));
-            let channels = Arc::new(Channels::stored(Arc::new(reader)));
-            *opening_channels
-                .write()
-                .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&channels));
-            if !opening_sender.send(opened) {
-                return;
-            }
-            spawn(
-                opening_channels,
-                &opening_queue,
-                &opening_time,
-                &opening_drift,
+                &opening_channels,
+                &opening_closed,
+                cancel,
                 &opening_sender,
             );
         });
         Self {
             events,
-            queue,
+            sender,
             time,
             drift,
-            channels: resident,
+            channels,
+            closed,
+            order: AtomicU64::new(READ_PRIORITY),
             source,
         }
     }
@@ -370,12 +146,27 @@ impl Loader {
     }
 
     pub fn request(&self, requests: &[BrickRequest]) -> bool {
-        self.queue.submit(requests)
+        if self.closed.load(AtomicOrdering::Relaxed) {
+            return false;
+        }
+        let executor = Executor::shared();
+        for request in requests.iter().rev() {
+            let request = *request;
+            let priority = self.order.fetch_add(1, AtomicOrdering::Relaxed);
+            let channels = Arc::clone(&self.channels);
+            let time = Arc::clone(&self.time);
+            let drift = Arc::clone(&self.drift);
+            let closed = Arc::clone(&self.closed);
+            let events = self.sender.clone();
+            executor.submit_ordered(priority, move |cancel| {
+                read(request, &channels, &time, &drift, &closed, cancel, &events);
+            });
+        }
+        true
     }
 
     pub fn set_time(&self, time: u32) {
         self.time.store(time, AtomicOrdering::Relaxed);
-        self.queue.prune(time);
     }
 
     pub fn set_drift(&self, drift: Drift) {
@@ -413,68 +204,124 @@ impl Loader {
 
 impl Drop for Loader {
     fn drop(&mut self) {
-        self.queue.close();
+        self.closed.store(true, AtomicOrdering::Relaxed);
     }
 }
 
-fn spawn(
-    channels: Arc<RwLock<Option<Arc<Channels>>>>,
-    queue: &Arc<Queue>,
-    time: &Arc<AtomicU32>,
-    drift: &Arc<RwLock<Drift>>,
+fn open(
+    source: Source,
+    remote: bool,
+    channels: &RwLock<Option<Arc<Channels>>>,
+    closed: &AtomicBool,
+    cancel: &Cancel,
+    sender: &Sender<Event>,
+) {
+    let fail = |detail: String| {
+        let _ = sender.send(Event::Failed(detail));
+    };
+    let plate = grana_image::plate(&source).ok().flatten();
+    let source = match grana_image::resolve_series(&source) {
+        Ok(source) => source,
+        Err(detail) => return fail(detail.to_string()),
+    };
+    let field = plate.as_ref().map_or(0, |plate| {
+        source
+            .group()
+            .and_then(|group| {
+                plate
+                    .fields()
+                    .iter()
+                    .position(|field| field.path() == group)
+            })
+            .unwrap_or(0)
+    });
+    let reader = match Image::open(&source) {
+        Ok(reader) => reader,
+        Err(detail) => return fail(detail.to_string()),
+    };
+    let count = reader.pyramid().channel_count();
+    if count > CHANNEL_LIMIT {
+        return fail(format!(
+            "the dataset has {count} channels, grana displays at most {CHANNEL_LIMIT}"
+        ));
+    }
+    let format = reader.format().expect("a file image declares its format");
+    let fingerprint = match reader.fingerprint() {
+        Ok(fingerprint) => fingerprint,
+        Err(detail) => return fail(format!("the dataset cannot be fingerprinted: {detail}")),
+    };
+    let (labels, labels_error) = match reader.labels() {
+        Ok(labels) => (labels.names().map(str::to_string).collect(), None),
+        Err(detail) => (Vec::new(), Some(detail.to_string())),
+    };
+    let imports = match (format, source.path()) {
+        (Format::Imaris, Some(path)) => grana_readout::imported(path).unwrap_or_default(),
+        _ => grana_readout::Imported::default(),
+    };
+    let opened = Event::Opened(Box::new(Opened {
+        name: reader.name().to_string(),
+        pyramid: reader.pyramid().clone(),
+        format: Some(format),
+        series: reader.series().to_vec(),
+        selected: reader.selected(),
+        fingerprint,
+        remote,
+        labels,
+        labels_error,
+        plate,
+        field,
+        imports,
+    }));
+    if cancel.cancelled() || closed.load(AtomicOrdering::Relaxed) {
+        return;
+    }
+    let reader = Arc::new(Channels::stored(Arc::new(reader)));
+    *channels.write().unwrap_or_else(|error| error.into_inner()) = Some(reader);
+    let _ = sender.send(opened);
+}
+
+fn read(
+    request: BrickRequest,
+    channels: &RwLock<Option<Arc<Channels>>>,
+    time: &AtomicU32,
+    drift: &RwLock<Drift>,
+    closed: &AtomicBool,
+    cancel: &Cancel,
     events: &Sender<Event>,
 ) {
-    for _ in 0..workers() {
-        let channels = Arc::clone(&channels);
-        let queue = Arc::clone(queue);
-        let time = Arc::clone(time);
-        let drift = Arc::clone(drift);
-        let events = events.clone();
-        std::thread::spawn(move || serve(channels, queue, time, drift, events));
+    if closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() {
+        return;
     }
-}
-
-fn serve(
-    channels: Arc<RwLock<Option<Arc<Channels>>>>,
-    queue: Arc<Queue>,
-    time: Arc<AtomicU32>,
-    drift: Arc<RwLock<Drift>>,
-    events: Sender<Event>,
-) {
-    while let Some((request, attempts)) = queue.take(time.load(AtomicOrdering::Relaxed)) {
-        let shift = drift
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .offset(request.time);
-        let Some(channels) = channels
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-        else {
+    if request.time < time.load(AtomicOrdering::Relaxed) {
+        return;
+    }
+    let shift = drift
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .offset(request.time);
+    let Some(channels) = channels
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+    else {
+        return;
+    };
+    for attempt in 1..=ATTEMPTS {
+        if closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() {
             return;
-        };
+        }
         match channels.read_brick(request.time, request.level, request.coord, shift) {
             Ok(data) => {
-                if !events.send(Event::Brick { request, data }) {
-                    return;
-                }
+                let _ = events.send(Event::Brick { request, data });
+                return;
             }
-            Err(detail) => {
-                if queue.retry(request, attempts) {
-                    continue;
-                }
-                if !events.send(Event::ReadFailed {
+            Err(detail) if attempt == ATTEMPTS => {
+                let _ = events.send(Event::ReadFailed {
                     request,
                     detail: detail.to_string(),
-                }) {
-                    return;
-                }
+                });
             }
+            Err(_) => std::thread::sleep(RETRY_DELAY),
         }
     }
-}
-
-fn workers() -> usize {
-    let available = std::thread::available_parallelism().map_or(1, |count| count.get());
-    (available - 1).clamp(1, WORKER_LIMIT)
 }

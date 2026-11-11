@@ -52,6 +52,7 @@ struct MaterialGpu {
     dark_a: [f32; 4],
     dark_b: [f32; 4],
     tint: [f32; 4],
+    lens: [f32; 4],
 }
 
 type Bounds = [f32; 4];
@@ -321,6 +322,7 @@ fn material_gpu(
         dark_a: tone_a(m.dark_tone),
         dark_b: tone_b(m.dark_tone),
         tint,
+        lens: [m.lens * p, 0.0, 0.0, 0.0],
     }
 }
 
@@ -355,7 +357,6 @@ struct Pipelines {
 
 struct Pyramid {
     size: (u32, u32),
-    levels: u32,
     full: wgpu::TextureView,
     mips: Vec<wgpu::TextureView>,
     chain: Vec<wgpu::BindGroup>,
@@ -365,9 +366,13 @@ const PYRAMID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_LEVELS: u32 = 7;
 
 impl Pyramid {
-    fn new(device: &wgpu::Device, pipelines: &Pipelines, size: (u32, u32)) -> Self {
+    fn levels(size: (u32, u32)) -> u32 {
         let min_side = size.0.min(size.1).max(2);
-        let levels = (min_side.ilog2().saturating_sub(3)).clamp(1, MAX_LEVELS);
+        (min_side.ilog2().saturating_sub(3)).clamp(1, MAX_LEVELS)
+    }
+
+    fn new(device: &wgpu::Device, pipelines: &Pipelines, size: (u32, u32)) -> Self {
+        let levels = Self::levels(size);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("grana-glass pyramid"),
             size: wgpu::Extent3d {
@@ -397,7 +402,6 @@ impl Pyramid {
             .collect();
         Self {
             size,
-            levels,
             full: texture.create_view(&wgpu::TextureViewDescriptor::default()),
             mips,
             chain,
@@ -524,7 +528,7 @@ struct BindCache<K> {
 }
 
 impl<K: PartialEq> BindCache<K> {
-    const CAPACITY: usize = 4;
+    const CAPACITY: usize = 8;
 
     const fn new() -> Self {
         Self {
@@ -555,17 +559,25 @@ struct Binds {
     glass: BindCache<(wgpu::TextureView, bool)>,
 }
 
+struct Backdrop {
+    source: wgpu::TextureView,
+    pyramid: Pyramid,
+    bounds: Bounds,
+}
+
+const BACKDROPS: usize = 4;
+
 pub struct Renderer {
     format: wgpu::TextureFormat,
+    size: (u32, u32),
     pipelines: Pipelines,
     globals: wgpu::Buffer,
     shapes: wgpu::Buffer,
     materials: wgpu::Buffer,
     groups: wgpu::Buffer,
-    pyramid: Option<Pyramid>,
+    backdrops: Vec<Backdrop>,
     layered: Option<Pyramid>,
     layer_textures: Vec<wgpu::TextureView>,
-    cached: Option<Bounds>,
     packed: Packed,
     uploaded: Uploaded,
     binds: Binds,
@@ -678,6 +690,7 @@ impl Renderer {
         };
         Self {
             format,
+            size: (0, 0),
             globals: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("grana-glass globals"),
                 size: size_of::<Globals>() as u64,
@@ -700,10 +713,9 @@ impl Renderer {
                 size_of::<GroupGpu>() as u64 * 16,
             ),
             pipelines,
-            pyramid: None,
+            backdrops: Vec::new(),
             layered: None,
             layer_textures: Vec::new(),
-            cached: None,
             packed: Packed::default(),
             uploaded: Uploaded::default(),
             binds: Binds {
@@ -751,23 +763,24 @@ impl Renderer {
             Vec2::new(size.0 as f32, size.1 as f32),
             &mut self.packed,
         );
-        if self.pyramid.as_ref().is_none_or(|p| p.size != size) {
-            self.pyramid = Some(Pyramid::new(device, &self.pipelines, size));
+        if self.size != size {
+            self.size = size;
+            self.backdrops.clear();
             self.layered = None;
             self.layer_textures.clear();
-            self.cached = None;
-
             self.binds.blit.clear();
             self.binds.down_first.clear();
             self.binds.glass.clear();
         }
         self.upload(device, queue, frame, scene);
-        let pipelines = &self.pipelines;
-        let copy = self.binds.blit.get(frame.content.clone(), |src| {
-            blit_bind_group(device, pipelines, src)
-        });
-        if frame.copy {
-            blit(pipelines, encoder, &copy, frame.target, None, size);
+        {
+            let pipelines = &self.pipelines;
+            let copy = self.binds.blit.get(frame.content.clone(), |src| {
+                blit_bind_group(device, pipelines, src)
+            });
+            if frame.copy {
+                blit(pipelines, encoder, &copy, frame.target, None, size);
+            }
         }
         if self.packed.layers.is_empty() {
             return;
@@ -775,7 +788,23 @@ impl Renderer {
 
         let screen = [0.0, 0.0, size.0 as f32, size.1 as f32];
         let reach = self.packed.reach;
-        let layers = &self.packed.layers;
+        let index = self.backdrop(device, frame.content);
+        let mut backdrop = self.backdrops.remove(index);
+        let Renderer {
+            pipelines,
+            binds,
+            layered,
+            layer_textures,
+            rebuild,
+            globals,
+            shapes,
+            materials,
+            groups,
+            format,
+            packed,
+            ..
+        } = self;
+        let layers = &packed.layers;
         let tail = |i: usize| {
             clamp_bounds(
                 expand(
@@ -787,7 +816,6 @@ impl Renderer {
                 screen,
             )
         };
-        let rebuild = &mut self.rebuild;
         rebuild.clear();
         rebuild.resize(layers.len(), false);
         let mut below = layers[0].bounds;
@@ -795,32 +823,27 @@ impl Renderer {
             rebuild[i] = intersects(expand(layer.bounds, reach), below);
             below = union(below, layer.bounds);
         }
-        if rebuild.contains(&true) && self.layer_textures.is_empty() {
-            self.layer_textures = (0..2)
-                .map(|_| layer_texture(device, self.format, size))
+        if rebuild.contains(&true) && layer_textures.is_empty() {
+            *layer_textures = (0..2)
+                .map(|_| layer_texture(device, *format, size))
                 .collect();
-            self.layered = Some(Pyramid::new(device, &self.pipelines, size));
+            *layered = Some(Pyramid::new(device, pipelines, size));
         }
 
-        let Some(pyramid) = &self.pyramid else { return };
-        let pipelines = &self.pipelines;
-        let binds = &mut self.binds;
+        let pyramid = &backdrop.pyramid;
         let region = tail(0);
-        if frame.content_changed || !self.cached.is_some_and(|c| contains(c, region)) {
-            let region = if frame.content_changed {
-                region
-            } else {
-                screen
+        if frame.content_changed || !contains(backdrop.bounds, region) {
+            let region = match frame.content_changed {
+                true => region,
+                false => screen,
             };
             let first = binds.down_first.get(frame.content.clone(), |src| {
                 down_bind_group(device, &pipelines.down_first, &pipelines.sampler, src)
             });
             pyramid.build(pipelines, encoder, &first, region);
-            self.cached = Some(region);
+            backdrop.bounds = region;
         }
 
-        let (globals, shapes, materials, groups) =
-            (&self.globals, &self.shapes, &self.materials, &self.groups);
         let mut glass_group = |src: &wgpu::TextureView, blur: &Pyramid, layered: bool| {
             binds.glass.get((src.clone(), layered), |(src, _)| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -863,10 +886,10 @@ impl Renderer {
         let mut group = glass_group(frame.content, pyramid, false);
         let (mut src, mut baked, mut slot) = (frame.content, 0, 0);
         for (i, layer) in layers.iter().enumerate() {
-            if let (true, Some(layered)) = (rebuild[i], &self.layered) {
+            if let (true, Some(blurred)) = (rebuild[i], layered.as_ref()) {
                 let region = tail(i);
 
-                let dst = &self.layer_textures[slot];
+                let dst = &layer_textures[slot];
                 slot ^= 1;
                 let copy = binds
                     .blit
@@ -880,12 +903,29 @@ impl Renderer {
                 let first = binds.down_first.get(dst.clone(), |src| {
                     down_bind_group(device, &pipelines.down_first, &pipelines.sampler, src)
                 });
-                layered.build(pipelines, encoder, &first, region);
-                group = glass_group(dst, layered, true);
+                blurred.build(pipelines, encoder, &first, region);
+                group = glass_group(dst, blurred, true);
                 (src, baked) = (dst, i);
             }
             draw_layer(pipelines, encoder, &group, layer, frame.target, None, size);
         }
+        self.backdrops
+            .insert(index.min(self.backdrops.len()), backdrop);
+    }
+
+    fn backdrop(&mut self, device: &wgpu::Device, source: &wgpu::TextureView) -> usize {
+        if let Some(index) = self.backdrops.iter().position(|b| b.source == *source) {
+            return index;
+        }
+        if self.backdrops.len() >= BACKDROPS {
+            self.backdrops.remove(0);
+        }
+        self.backdrops.push(Backdrop {
+            source: source.clone(),
+            pyramid: Pyramid::new(device, &self.pipelines, self.size),
+            bounds: [0.0; 4],
+        });
+        self.backdrops.len() - 1
     }
 
     fn upload(
@@ -901,7 +941,7 @@ impl Renderer {
             viewport: [w, h, 1.0 / w, 1.0 / h],
             misc: [
                 frame.scale,
-                self.pyramid.as_ref().map_or(1, |p| p.levels) as f32,
+                Pyramid::levels(frame.size) as f32,
                 if scene.appearance.dark { 0.0 } else { 1.0 },
                 0.0,
             ],

@@ -521,6 +521,7 @@ impl Renderer {
             meshes,
             markers,
             sections,
+            shadow,
             pick_target,
             pick_readback,
             pick_pending,
@@ -530,6 +531,10 @@ impl Renderer {
         let Some(scene) = scene.as_ref() else {
             return false;
         };
+        let shadow_group = shadow
+            .as_ref()
+            .map(Shadow::group)
+            .expect("the shadow is ready");
         let target = PickTarget::ensure(device, pick_target);
         let readback = pick_readback
             .get_or_insert_with(|| Readback::new(device, "grana.pick.readback", PICK_ROW, 1));
@@ -598,7 +603,7 @@ impl Renderer {
                     1.0,
                 );
                 pass.set_scissor_rect(0, 0, 1, 1);
-                markers.draw_pick_volume(&mut pass, group);
+                markers.draw_pick_volume(&mut pass, group, shadow_group);
             }
         } else {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -632,7 +637,7 @@ impl Renderer {
             );
             pass.set_scissor_rect(0, 0, 1, 1);
             meshes.draw_pick(&mut pass);
-            markers.draw_pick_volume(&mut pass, group);
+            markers.draw_pick_volume(&mut pass, group, shadow_group);
         }
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);

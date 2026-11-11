@@ -27,7 +27,7 @@ use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
 use grana_image::Plate;
-use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
+use grana_measure::{ColocPair, ColocThresholds, Group, Scope, Table};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_optics::Psf;
@@ -46,7 +46,7 @@ use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::recovery::Recovery;
 use crate::sample;
-use crate::task::Poll;
+use crate::task::{Poll, Task};
 use crate::transfer::Transfer;
 use crate::view::{
     BatchComparison, BatchDataset, BatchSignificance, BatchView, HistoryView, ImportNote, IoView,
@@ -71,6 +71,11 @@ struct Pending {
     project: Project,
 }
 
+struct MeasureJob {
+    key: grana_scene::MeasureKey,
+    task: Task<Option<Table>>,
+}
+
 #[derive(Default)]
 pub struct Effects {
     pub open_dataset: bool,
@@ -91,6 +96,7 @@ pub struct Session {
     scene: Option<Scene>,
     store: Arc<GeometryStore>,
     measure: Measure,
+    measure_job: Option<MeasureJob>,
     timeline: Timeline,
     source: Option<Loader>,
     channels: Option<Arc<grana_pipeline::Channels>>,
@@ -170,6 +176,7 @@ impl Session {
             store: GeometryStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
+            measure_job: None,
             timeline: Timeline::new(30, 1.0),
             source: None,
             channels: None,
@@ -485,9 +492,35 @@ impl Session {
                     .iter()
                     .any(|analysis| analysis.job().streams(set))
             });
-        if let Some(scene) = self.scene.as_ref() {
-            self.measure.set_roi(scene.region_scope());
-            self.measure.sync(scene, busy);
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        self.measure.set_roi(scene.region_scope());
+        if self.measure_job.is_some() {
+            return;
+        }
+        let Some(request) = self.measure.request(scene, busy) else {
+            return;
+        };
+        let key = request.key();
+        let task = Task::spawn(move |_, sink| sink(request.build()));
+        self.measure_job = Some(MeasureJob { key, task });
+    }
+    pub fn settle_measure(&mut self) -> bool {
+        let Some(job) = self.measure_job.as_ref() else {
+            return false;
+        };
+        match job.task.poll() {
+            Poll::Event(table) => {
+                let job = self.measure_job.take().expect("the measure job is held");
+                self.measure.install(job.key, table);
+                true
+            }
+            Poll::Empty => false,
+            Poll::Closed => {
+                self.measure_job = None;
+                false
+            }
         }
     }
     pub fn apply_measure(&mut self) {
@@ -499,7 +532,8 @@ impl Session {
         }
     }
     pub fn poll(&mut self) -> bool {
-        let mut repaint = self.poll_source();
+        let mut repaint = self.settle_measure();
+        repaint |= self.poll_source();
         repaint |= self.poll_document();
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
@@ -530,6 +564,9 @@ impl Session {
     }
     pub fn analysing(&self) -> bool {
         !self.analysis.is_empty() || self.writing()
+    }
+    pub fn measuring(&self) -> bool {
+        self.measure_job.is_some()
     }
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {

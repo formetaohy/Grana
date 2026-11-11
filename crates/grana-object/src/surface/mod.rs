@@ -251,12 +251,13 @@ impl SurfaceSet {
         if start {
             let details = Arc::clone(&self.details);
             let base = self.geometry.clone();
-            let spawned = std::thread::Builder::new()
-                .name("grana-surface-detail".to_string())
-                .spawn(move || detail::build(details, base));
-            if spawned.is_err() {
-                self.details.cancel();
-            }
+            grana_exec::Executor::shared().submit(move |cancel| {
+                if cancel.cancelled() {
+                    details.cancel();
+                    return;
+                }
+                detail::build(details, base);
+            });
         }
         Ok((mesh, available))
     }

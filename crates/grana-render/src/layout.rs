@@ -42,6 +42,7 @@ pub(crate) struct Layouts {
     pub marker_oit: PipelineLayout,
     pub marker_tail: PipelineLayout,
     pub marker_pick: PipelineLayout,
+    pub marker_shadow: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub ao_pipeline: PipelineLayout,
@@ -369,18 +370,23 @@ impl Layouts {
             "grana.mesh.cull.layout",
             &[&scene, &objects, &styles, &commands],
         );
-        let marker_volume = pipeline_layout(
-            device,
-            "grana.marker.layout",
-            &[&scene, &marker_render, &ao_read],
-        );
+        let marker_volume = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&marker_render),
+                Some(&ao_read),
+                Some(&shadow),
+            ],
+            immediate_size: 0,
+        });
         let marker_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.marker.oit.layout"),
             bind_group_layouts: &[
                 Some(&scene),
                 Some(&marker_render),
                 Some(&ao_read),
-                None,
+                Some(&shadow),
                 Some(&oit_write),
             ],
             immediate_size: 0,
@@ -391,16 +397,21 @@ impl Layouts {
                 Some(&scene),
                 Some(&marker_render),
                 Some(&ao_read),
-                None,
+                Some(&shadow),
                 Some(&oit_write),
                 None,
                 Some(&oit_coverage),
             ],
             immediate_size: 0,
         });
-        let marker_pick = pipeline_layout(
+        let marker_pick = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.pick.layout"),
+            bind_group_layouts: &[Some(&scene), Some(&marker_render), None, Some(&shadow)],
+            immediate_size: 0,
+        });
+        let marker_shadow = pipeline_layout(
             device,
-            "grana.marker.pick.layout",
+            "grana.marker.shadow.layout",
             &[&scene, &marker_render],
         );
         let marker_cull_pipeline = pipeline_layout(
@@ -461,6 +472,7 @@ impl Layouts {
             marker_oit,
             marker_tail,
             marker_pick,
+            marker_shadow,
             marker_cull_pipeline,
             shadow_pipeline,
             ao_pipeline,

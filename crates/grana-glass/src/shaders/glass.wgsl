@@ -28,6 +28,7 @@ struct Material {
     dark_a: vec4f,
     dark_b: vec4f,
     tint: vec4f,
+    lens: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -40,6 +41,8 @@ struct Material {
 
 const ETA: f32 = 1.5;
 const KIT_OFFSET: f32 = 40.0;
+const SPECULAR_OFFSET: f32 = 1.55;
+const SPECULAR_WIDTH: f32 = 0.5;
 
 const PYRAMID_SIGMA0: f32 = 1.9;
 
@@ -119,7 +122,7 @@ struct Field {
 fn mix_material(a: Material, b: Material, t: f32) -> Material {
     return Material(mix(a.optics, b.optics, t), mix(a.lighting, b.lighting, t), mix(a.edge, b.edge, t), mix(a.shadow, b.shadow, t),
         mix(a.light_a, b.light_a, t), mix(a.light_b, b.light_b, t), mix(a.dark_a, b.dark_a, t), mix(a.dark_b, b.dark_b, t),
-        mix(a.tint, b.tint, t));
+        mix(a.tint, b.tint, t), mix(a.lens, b.lens, t));
 }
 
 fn field_group(p: vec2f, grp: Group) -> Field {
@@ -153,6 +156,15 @@ fn phi(x: f32, sigma: f32) -> f32 {
 
 fn coverage(d: f32) -> f32 {
     return clamp(0.5 - d, 0.0, 1.0);
+}
+
+fn edge_ring(d: f32, offset: f32, width: f32) -> f32 {
+    let t = (d + offset) / max(width, 1.0e-3);
+    return exp(-t * t);
+}
+
+fn sharp(q: vec2f) -> vec3f {
+    return textureSampleLevel(src, samp, q * globals.viewport.zw, 0.0).rgb;
 }
 
 fn encode(c: vec3f) -> vec3f {
@@ -323,19 +335,22 @@ fn fs_glass(v: Varyings) -> @location(0) vec4f {
 
     let t = clamp(-d / depth, 0.0, 1.0);
     let sigma = mat.optics.w;
+    let lens = clamp(mat.lens.x, 0.0, 1.0);
     var col: vec3f;
     if t < 1.0 && mat.optics.x > 0.0 {
         let slope = bevel_slope(t);
         let reach = mat.optics.x * depth;
+        let gain = 1.0 + 2.6 * lens * t;
         let disp = mat.optics.z * 0.25;
-        let off_g = reach * refract_offset(slope, ETA);
+        let offset = reach * refract_offset(slope, ETA) * gain;
         if disp > 0.0 {
-            let off_r = reach * refract_offset(slope, ETA - disp);
-            let off_b = reach * refract_offset(slope, ETA + disp);
-            col = vec3f(frost(p - n * off_r, sigma).r, frost(p - n * off_g, sigma).g, frost(p - n * off_b, sigma).b);
+            let off_r = reach * refract_offset(slope, ETA - disp) * gain;
+            let off_b = reach * refract_offset(slope, ETA + disp) * gain;
+            col = vec3f(frost(p - n * off_r, sigma).r, frost(p - n * offset, sigma).g, frost(p - n * off_b, sigma).b);
         } else {
-            col = frost(p - n * off_g, sigma);
+            col = frost(p - n * offset, sigma);
         }
+        col = mix(col, sharp(p - n * offset), lens * (1.0 - 0.35 * t));
     } else {
         col = frost(p, sigma);
     }
@@ -363,26 +378,27 @@ fn fs_glass(v: Varyings) -> @location(0) vec4f {
     let lit = splay + (1.0 - splay) * pow(max(facing, 0.0), 2.0);
     let back = splay + (0.4 - splay) * pow(max(-facing, 0.0), 2.0);
     let dir = select(back, lit, facing > 0.0);
-    let line = exp(d / (0.25 * pt * (1.0 + splay)));
+    let band_width = SPECULAR_WIDTH * pt * (1.0 + 0.6 * splay);
+    let band = edge_ring(d, SPECULAR_OFFSET * pt * (1.0 + 0.5 * splay), band_width);
     let vivid = vec3f(blend_lum(g)) + (g - vec3f(blend_lum(g))) * 2.2;
     let highlight = vivid * 1.45 + vec3f(0.05);
-    g = mix(g, highlight, clamp(line * dir * mat.lighting.y * 2.5, 0.0, 1.0));
+    g = mix(g, highlight, clamp(band * dir * mat.lighting.y * 2.6, 0.0, 1.0));
 
     let rim_sigma = 5.0 * pt;
     if -d < 45.0 * pt {
         let o = KIT_OFFSET * pt;
         let away = -to_light * o;
         if mat.lighting.z > 0.0 {
-            let rims = inner_shadow(p, grp, away, o, rim_sigma) + inner_shadow(p, grp, -away, o, rim_sigma);
-            g += vec3f(mat.lighting.z * rims);
+            let rings = inner_shadow(p, grp, away, o, rim_sigma) + inner_shadow(p, grp, -away, o, rim_sigma);
+            g += vec3f(mat.lighting.z * rings);
         }
         if mat.lighting.w > 0.0 {
             g -= vec3f(mat.lighting.w * inner_shadow(p, grp, away, o, 15.0 * pt));
         }
         if mat.edge.x > 0.0 {
-            let h = -to_light * 1.25 * pt;
-            let lines = inner_shadow(p, grp, h, 0.0, 0.125 * pt) + inner_shadow(p, grp, -h, 0.0, 0.125 * pt);
-            g += vec3f(mat.edge.x * lines);
+            let concentric = edge_ring(d, 1.35 * pt, 0.35 * pt);
+            let side = clamp(0.5 + 0.5 * facing, 0.0, 1.0);
+            g += vec3f(mat.edge.x * concentric * side);
         }
     }
 

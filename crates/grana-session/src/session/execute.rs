@@ -13,6 +13,7 @@ pub(super) struct Recording {
 
 impl Session {
     pub fn execute(&mut self, command: Command) -> Effects {
+        self.settle_measure();
         match command {
             Command::Undo => return self.undo(),
             Command::Redo => return self.redo(),

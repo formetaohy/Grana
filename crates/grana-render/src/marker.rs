@@ -24,8 +24,11 @@ const CULL_SHADER: &str = concat!(
 );
 const VOLUME_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
-    "
-",
+    "\n",
+    include_str!("shader/tau_codec.wgsl"),
+    "\n",
+    include_str!("shader/shadow_sample.wgsl"),
+    "\n",
     include_str!("shader/brdf.wgsl"),
     "\n",
     include_str!("shader/oit.wgsl"),
@@ -310,7 +313,7 @@ impl MarkerPasses {
         });
         let shadow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.shadow"),
-            layout: Some(&layouts.marker_pick),
+            layout: Some(&layouts.marker_shadow),
             vertex: VertexState {
                 module: &shadow_module,
                 entry_point: Some("vs_shadow"),
@@ -480,7 +483,6 @@ impl MarkerPasses {
     ) {
         self.draw_markers(encoder, targets, region, scene, lighting, false);
     }
-
     pub fn draw_slice(
         &self,
         encoder: &mut CommandEncoder,
@@ -540,6 +542,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
         pass.set_bind_group(2, lighting.ao, &[]);
+        pass.set_bind_group(3, lighting.shadow, &[]);
         pass.draw_indirect(self.args.opaque.buffer(), 0);
         if layered {
             pass.set_bind_group(1, &self.layer_group, &[]);
@@ -551,6 +554,7 @@ impl MarkerPasses {
         &'a self,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
+        shadow: &'a BindGroup,
         oit: &'a BindGroup,
         ao: &'a BindGroup,
     ) {
@@ -561,6 +565,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(2, ao, &[]);
+        pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.draw_indirect(self.args.layer.buffer(), 0);
     }
@@ -569,6 +574,7 @@ impl MarkerPasses {
         &'a self,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
+        shadow: &'a BindGroup,
         oit: &'a BindGroup,
         coverage: &'a BindGroup,
         ao: &'a BindGroup,
@@ -580,6 +586,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(2, ao, &[]);
+        pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.args.layer.buffer(), 0);
@@ -589,6 +596,7 @@ impl MarkerPasses {
         &'a self,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
+        shadow: &'a BindGroup,
         oit: &'a BindGroup,
         coverage: &'a BindGroup,
         ao: &'a BindGroup,
@@ -600,6 +608,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(2, ao, &[]);
+        pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.args.layer.buffer(), 0);
@@ -633,13 +642,19 @@ impl MarkerPasses {
         pass.draw_indirect(self.args.opaque.buffer(), 0);
     }
 
-    pub fn draw_pick_volume<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+    pub fn draw_pick_volume<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        shadow: &'a BindGroup,
+    ) {
         if self.count == 0 {
             return;
         }
         pass.set_pipeline(&self.volume_pick_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
         pass.draw_indirect(self.args.opaque.buffer(), 0);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.draw_indirect(self.args.layer.buffer(), 0);

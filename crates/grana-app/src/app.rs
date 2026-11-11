@@ -1413,6 +1413,7 @@ impl App {
             || self.session.writing()
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
+            || self.session.measuring()
             || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
             || (self.session.scene().is_some() && info.view.resident < info.view.demand)
     }

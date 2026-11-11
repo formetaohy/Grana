@@ -6,6 +6,22 @@ struct MarkerInstance {
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
 @group(2) @binding(0) var ao_map: texture_2d<f32>;
+@group(3) @binding(0) var shadow_tau: texture_3d<f32>;
+@group(3) @binding(1) var shadow_sampler: sampler;
+@group(3) @binding(3) var shadow_objects: texture_depth_2d;
+@group(3) @binding(4) var shadow_compare: sampler_comparison;
+
+fn marker_visibility(surface: vec3<f32>, normal: vec3<f32>, strength: f32) -> f32 {
+    if (strength <= 0.0) {
+        return 1.0;
+    }
+    let lit = select(normal, -normal, dot(normal, frame.light.xyz) < 0.0);
+    let sun = sun_transmittance(
+        shadow_coordinate(frame.light_view, surface + lit * frame.light_reach.z),
+        shadow_bias(frame.light_reach, lit, frame.light.xyz),
+    );
+    return mix(1.0, sun, clamp(strength, 0.0, 1.0));
+}
 
 fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
     let size = vec2<i32>(frame.viewport.zw);
@@ -135,7 +151,7 @@ fn shade(input: MarkerOutput, occlusion: f32) -> Shaded {
         normal,
         view,
         frame.light.xyz,
-        1.0,
+        marker_visibility(surface, normal, frame.march.y),
         frame.shading.x,
         frame.shading.y,
         occlusion,

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::{
@@ -134,71 +134,71 @@ impl Bake {
 }
 
 pub(crate) struct BakeQueue {
-    key: Option<u64>,
-    slots: HashSet<(usize, usize, u32)>,
+    baked: HashMap<u32, u64>,
     entries: Vec<BakeEntry>,
-    pending: bool,
+    reset: bool,
 }
 
 impl BakeQueue {
     pub fn new() -> Self {
         Self {
-            key: None,
-            slots: HashSet::new(),
+            baked: HashMap::new(),
             entries: Vec::new(),
-            pending: false,
+            reset: false,
         }
     }
 
     pub fn forget(&mut self) {
-        self.key = None;
-        self.slots.clear();
-        self.pending = true;
-    }
-
-    pub fn touch(&mut self) {
-        self.pending = true;
+        self.baked.clear();
+        self.reset = true;
     }
 
     pub fn collect(
         &mut self,
-        key: u64,
+        material: u64,
         atlas: &Atlas,
         levels: &[usize],
         time: u32,
         occupancy: &mut Occupancy,
         queue: &Queue,
     ) -> &[BakeEntry] {
-        if self.key != Some(key) {
-            self.key = Some(key);
-            self.slots.clear();
-            self.pending = true;
+        let reset = std::mem::take(&mut self.reset);
+        if reset {
             occupancy.clear(queue);
         }
-        if !self.pending {
-            return &[];
-        }
-        self.pending = false;
         self.entries.clear();
-        let mut residents = HashSet::new();
         for (band, level) in levels.iter().enumerate() {
             for resident in atlas.residents(time, *level) {
                 let Some(slot) = resident.slot else {
                     continue;
                 };
-                let key = (*level, resident.index, slot);
-                residents.insert(key);
-                if !self.slots.contains(&key) {
-                    self.entries.push(BakeEntry {
-                        band: band as u32,
-                        slot,
-                        brick: resident.index as u32,
-                        reserved: 0,
-                    });
+                let key = mix(
+                    mix(mix(material, u64::from(time)), *level as u64),
+                    resident.index as u64,
+                );
+                if self.baked.get(&slot) == Some(&key) {
+                    continue;
                 }
+                self.baked.insert(slot, key);
+                if !reset {
+                    occupancy.clear_slot(queue, slot);
+                }
+                self.entries.push(BakeEntry {
+                    band: band as u32,
+                    slot,
+                    brick: resident.index as u32,
+                    reserved: 0,
+                });
             }
         }
-        self.slots = residents;
         &self.entries
     }
+}
+
+fn mix(a: u64, b: u64) -> u64 {
+    let mut hash = a ^ b.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    hash ^= hash >> 33;
+    hash
 }

@@ -41,10 +41,9 @@ impl Sink {
             Self::Figure { .. } => {
                 unreachable!("a vector figure is written from the resolved frame")
             }
-            Self::Movie { recorder, .. } => {
-                let rgba = dithered(size, pixels, transparent);
-                recorder.push(&rgba).map_err(|error| error.to_string())
-            }
+            Self::Movie { recorder, .. } => recorder
+                .push(dithered(size, pixels, transparent))
+                .map_err(|error| error.to_string()),
             Self::Sequence { sequence } => {
                 let png = png16(size, pixels, transparent)?;
                 sequence.push(time, &png).map_err(|error| error.to_string())

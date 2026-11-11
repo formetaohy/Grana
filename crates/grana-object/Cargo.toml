@@ -10,6 +10,7 @@ repository.workspace = true
 bytemuck = { workspace = true }
 glam = { workspace = true }
 grana-codec = { workspace = true }
+grana-exec = { workspace = true }
 grana-geometry = { workspace = true }
 grana-volume = { workspace = true }
 
