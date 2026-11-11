@@ -27,7 +27,6 @@ impl Renderer {
         let Self {
             bricks: tables,
             atlas,
-            summary,
             arena,
             pyramid,
             channels,
@@ -36,14 +35,13 @@ impl Renderer {
             pin,
             prefetched,
             staging,
+            occupancy,
+            baked,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas), Some(summary), Some(arena)) = (
-            pyramid.as_ref(),
-            atlas.as_mut(),
-            summary.as_mut(),
-            arena.as_ref(),
-        ) else {
+        let (Some(pyramid), Some(atlas), Some(arena)) =
+            (pyramid.as_ref(), atlas.as_mut(), arena.as_ref())
+        else {
             return 0;
         };
         let UploadScratch { units, cells } = staging;
@@ -131,7 +129,6 @@ impl Renderer {
                 atlas.write(queue, pack, slot, &units[base..base + span]);
                 base += span;
             }
-            summary.write(queue, slot, &cells[..*channels * CELL_COUNT]);
             atlas.assign(
                 slot,
                 ResidentBrick {
@@ -143,6 +140,10 @@ impl Renderer {
                 *pin,
                 demand,
             );
+            if let Some(occupancy) = occupancy.as_mut() {
+                occupancy.clear_slot(queue, slot);
+            }
+            baked.touch();
             if let Some(table) = tables[level].as_mut() {
                 table.set_record(
                     queue,

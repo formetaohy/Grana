@@ -89,6 +89,10 @@ impl Renderer {
             oit_readback,
             sections,
             sliced,
+            occupancy,
+            occupancy_group,
+            bake,
+            baked,
             ..
         } = self;
         let (
@@ -435,6 +439,11 @@ impl Renderer {
                 .channels
                 .iter()
                 .any(|row| row.visible && row.opacity > 0.0);
+            let projected = scene.channels.iter().any(|row| {
+                row.visible
+                    && row.opacity > 0.0
+                    && row.volume.mode() == grana_display::VolumeMode::Maximum
+            });
             if surfaces || volume_visible {
                 if target
                     .ao
@@ -533,15 +542,14 @@ impl Renderer {
                             target: target.scene.color(),
                             normal,
                             region: viewport,
-                            clear: false,
                             scene: group,
                             level: level_group,
                             atlas: atlas.group(),
                             depth_group: target.scene.depth_group(),
-                            shadow: shadow_group,
                             oit: oit_group,
-                            ao: ao_group,
+                            occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
                         },
+                        crate::volume::VolumePath::Composite,
                     );
                 }
                 {
@@ -747,6 +755,32 @@ impl Renderer {
                 }
             }
             if volume_visible && !slice {
+                if let (Some(bake), Some(occupancy)) = (bake.as_ref(), occupancy.as_mut()) {
+                    let key = digest(&[
+                        content,
+                        channel_style(scene.channels),
+                        ladder.base as u64,
+                        ladder.count as u64,
+                        u64::from(time),
+                        space.digest(),
+                        u64::from(scene.shading.ambient.to_bits()),
+                        u64::from(scene.shading.diffuse.to_bits()),
+                        object_key.unwrap_or(u64::MAX),
+                    ]);
+                    let levels = ladder.levels().collect::<Vec<usize>>();
+                    let entries = baked.collect(key, atlas, &levels, time, occupancy, queue);
+                    if !entries.is_empty() {
+                        bake.stage(queue, entries);
+                        bake.encode(
+                            &mut encoder,
+                            entries.len() as u32,
+                            group,
+                            level_group,
+                            atlas.source(),
+                            shadow_group,
+                        );
+                    }
+                }
                 let normal = target
                     .ao
                     .as_ref()
@@ -756,16 +790,19 @@ impl Renderer {
                     target: target.scene.color(),
                     normal,
                     region: viewport,
-                    clear: false,
                     scene: group,
                     level: level_group,
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
-                    shadow: shadow_group,
                     oit: oit_group,
-                    ao: ao_group,
+                    occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
                 };
-                volume.draw(&mut encoder, volume_frame);
+                let path = if projected {
+                    crate::volume::VolumePath::Projection
+                } else {
+                    crate::volume::VolumePath::Composite
+                };
+                volume.draw(&mut encoder, volume_frame, path);
             }
             if *exporting && target.samples > 1 {
                 convergence.encode(

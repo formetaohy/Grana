@@ -1,16 +1,11 @@
 @group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
-@group(1) @binding(1) var<storage, read> summaries: array<vec2<u32>>;
 @group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 4>;
 @group(2) @binding(1) var atlas_sampler: sampler;
 
-const GRADIENT_EPSILON: f32 = 1.0e-8;
 const ISO_EXTINCTION: f32 = 8.0;
 const ISO_SOFTNESS: f32 = 0.04;
 const CELL_SIDE: f32 = 8.0;
 const CELL_AXIS: f32 = 4.0;
-const CELLS: u32 = 64u;
-const PLANES: u32 = 4u;
-const UNIT: f32 = 65535.0;
 
 struct LevelFrame {
     dims: vec3<f32>,
@@ -28,16 +23,6 @@ fn level_frame(band: u32) -> LevelFrame {
 
 fn level_record(band: u32, index: u32) -> BrickRecord {
     return bricks[frame.bases[band] + index];
-}
-
-fn level_maxima(band: u32, slot: u32, cell: u32, plane: u32) -> vec4<f32> {
-    let word = summaries[slot * (CELLS * PLANES) + cell * PLANES + plane];
-    return vec4<f32>(
-        f32(word.x & 0xffffu) / UNIT,
-        f32(word.x >> 16u) / UNIT,
-        f32(word.y & 0xffffu) / UNIT,
-        f32(word.y >> 16u) / UNIT,
-    );
 }
 
 fn band_uvw(band: u32, uvw: vec3<f32>) -> vec3<f32> {
@@ -93,10 +78,6 @@ fn cell_delta(
     return max(delta, minimum);
 }
 
-fn sample_atlas(pack: u32, texel: vec3<f32>) -> vec4<f32> {
-    return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
-}
-
 fn sample_pack(band: u32, pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let g = level_frame(band);
     let cell = brick_cell(g.grid, g.dims, uvw);
@@ -109,39 +90,9 @@ fn sample_pack(band: u32, pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }
 
-fn sample_volume(band: u32, channel: u32, uvw: vec3<f32>) -> f32 {
-    let values = sample_pack(band, channel / PACK, uvw);
-    return values[channel % PACK];
-}
-
 fn level_voxels_per_world(band: u32, direction: vec3<f32>) -> f32 {
     let g = level_frame(band);
     return length(level_rate(band, direction) * g.dims);
-}
-
-fn channel_alpha(band: u32, uvw: vec3<f32>) -> f32 {
-    let position = band_uvw(band, uvw);
-    let count = u32(frame.march.z);
-    let packs = (count + PACK - 1u) / PACK;
-    var per_voxel = 0.0;
-    for (var pack = 0u; pack < packs; pack += 1u) {
-        if (!pack_active(pack, count)) {
-            continue;
-        }
-        let values = sample_pack(band, pack, position);
-        for (var component = 0u; component < PACK; component += 1u) {
-            let channel = pack * PACK + component;
-            if (channel >= count) {
-                break;
-            }
-            if (channel_opacity(channel) <= 0.0) {
-                continue;
-            }
-            let alpha = clamp(channel_sample(channel, values[component]).a, 0.0, 0.999);
-            per_voxel = 1.0 - (1.0 - per_voxel) * (1.0 - alpha);
-        }
-    }
-    return per_voxel;
 }
 
 fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
@@ -204,31 +155,3 @@ fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32)
     return max(delta, minimum);
 }
 
-fn texel_gradient(
-    pack: u32,
-    texel: vec3<f32>,
-    values: vec4<f32>,
-    extent: vec3<f32>,
-) -> array<vec3<f32>, 4> {
-    let dx = sample_atlas(pack, texel + vec3<f32>(1.0, 0.0, 0.0) / extent) - values;
-    let dy = sample_atlas(pack, texel + vec3<f32>(0.0, 1.0, 0.0) / extent) - values;
-    let dz = sample_atlas(pack, texel + vec3<f32>(0.0, 0.0, 1.0) / extent) - values;
-    return array<vec3<f32>, 4>(
-        vec3<f32>(dx.x, dy.x, dz.x),
-        vec3<f32>(dx.y, dy.y, dz.y),
-        vec3<f32>(dx.z, dy.z, dz.z),
-        vec3<f32>(dx.w, dy.w, dz.w),
-    );
-}
-
-fn shaded_normal(gradient: vec3<f32>, band: u32) -> vec3<f32> {
-    var normal = -level_gradient(band, gradient);
-    if (length(normal) < GRADIENT_EPSILON) {
-        return vec3<f32>(0.0);
-    }
-    normal = normalize(normal);
-    if (dot(normal, frame.light.xyz) < 0.0) {
-        normal = -normal;
-    }
-    return normal;
-}

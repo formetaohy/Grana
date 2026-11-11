@@ -14,6 +14,10 @@ use grana_volume::CHANNEL_LIMIT;
 pub(crate) const PACK: usize = 4;
 pub(crate) const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
 
+pub(crate) const BAKED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+pub(crate) const BAKED_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 8;
+
 const _: () = assert!(
     PACK_LIMIT == 4,
     "the volume shaders bind four channel packs"
@@ -75,9 +79,18 @@ impl Slot {
     };
 }
 
+pub(crate) struct AtlasBinding<'a> {
+    pub layout: &'a BindGroupLayout,
+    pub source: &'a BindGroupLayout,
+    pub dummy: &'a TextureView,
+    pub sampler: &'a Sampler,
+}
+
 pub(crate) struct Atlas {
     textures: Vec<Texture>,
     components: Vec<usize>,
+    baked_storage: TextureView,
+    source: BindGroup,
     group: BindGroup,
     slot_grid: [u32; 3],
     free: Vec<u32>,
@@ -90,13 +103,17 @@ pub(crate) struct Atlas {
 impl Atlas {
     pub fn new(
         device: &Device,
-        layout: &BindGroupLayout,
-        dummy: &TextureView,
-        sampler: &Sampler,
+        binding: AtlasBinding<'_>,
         channel_count: usize,
         requested: u64,
         max_dimension: u32,
     ) -> Self {
+        let AtlasBinding {
+            layout,
+            source: source_layout,
+            dummy,
+            sampler,
+        } = binding;
         let slot_side = PADDED_SIDE;
         assert!(
             (1..=CHANNEL_LIMIT).contains(&channel_count),
@@ -148,6 +165,44 @@ impl Atlas {
             .collect::<Vec<_>>();
         let mut bindings = views.iter().collect::<Vec<&TextureView>>();
         bindings.resize(PACK_LIMIT, dummy);
+        let baked = device.create_texture(&TextureDescriptor {
+            label: Some("grana.atlas.baked"),
+            size: wgpu::Extent3d {
+                width: dims[0],
+                height: dims[1],
+                depth_or_array_layers: dims[2],
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D3,
+            format: BAKED_FORMAT,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let baked_view = baked.create_view(&TextureViewDescriptor {
+            label: Some("grana.atlas.baked.view"),
+            dimension: Some(TextureViewDimension::D3),
+            ..Default::default()
+        });
+        let baked_storage = baked.create_view(&TextureViewDescriptor {
+            label: Some("grana.atlas.baked.storage"),
+            dimension: Some(TextureViewDimension::D3),
+            ..Default::default()
+        });
+        let source = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.atlas.source.group"),
+            layout: source_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureViewArray(&bindings),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(sampler),
+                },
+            ],
+        });
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.atlas.group"),
             layout,
@@ -160,11 +215,17 @@ impl Atlas {
                     binding: 1,
                     resource: BindingResource::Sampler(sampler),
                 },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&baked_view),
+                },
             ],
         });
         Self {
             textures,
             components,
+            baked_storage,
+            source,
             group,
             slot_grid,
             free: (0..capacity as u32).rev().collect(),
@@ -177,6 +238,14 @@ impl Atlas {
 
     pub fn group(&self) -> &BindGroup {
         &self.group
+    }
+
+    pub fn source(&self) -> &BindGroup {
+        &self.source
+    }
+
+    pub fn baked(&self) -> &TextureView {
+        &self.baked_storage
     }
 
     pub fn slot_grid(&self) -> [u32; 3] {

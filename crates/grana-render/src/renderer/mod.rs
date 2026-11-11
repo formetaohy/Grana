@@ -24,12 +24,14 @@ use wgpu::{
 };
 
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
+use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
 use crate::converge::Convergence;
 use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
+use crate::occupancy::Occupancy;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
@@ -41,7 +43,6 @@ use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
-use crate::summary::Summary;
 use crate::target::{self, SceneTarget};
 use crate::temporal::{FrameView, Temporal, TemporalPass};
 use crate::volume::VolumePass;
@@ -131,7 +132,10 @@ pub struct Renderer {
     target: Option<FrameTarget>,
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
-    summary: Option<Summary>,
+    occupancy: Option<Occupancy>,
+    occupancy_group: Option<BindGroup>,
+    bake: Option<Bake>,
+    baked: BakeQueue,
     staging: upload::UploadScratch,
     arena: Option<BrickArena>,
     level_group: Option<BindGroup>,
@@ -211,7 +215,10 @@ impl Renderer {
             target: None,
             scene: None,
             atlas: None,
-            summary: None,
+            occupancy: None,
+            occupancy_group: None,
+            bake: None,
+            baked: BakeQueue::new(),
             staging: upload::UploadScratch::new(),
             arena: None,
             level_group: None,
@@ -365,35 +372,42 @@ impl Renderer {
         let texels = (0..channels.div_ceil(PACK))
             .map(|pack| pack_texels(pack_components(channels, pack)))
             .sum::<usize>();
-        let slot_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
+        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
+        let slot_bytes = source_bytes + crate::atlas::BAKED_BYTES;
         let requested = (self.budget / slot_bytes).max(1).min(finest);
         let atlas = Atlas::new(
             device,
-            &self.layouts.atlas,
-            &self.dummy,
-            &self.atlas_sampler,
+            crate::atlas::AtlasBinding {
+                layout: &self.layouts.atlas,
+                source: &self.layouts.source,
+                dummy: &self.dummy,
+                sampler: &self.atlas_sampler,
+            },
             channels,
             requested,
             device.limits().max_texture_dimension_3d,
         );
         let slots = atlas.slots();
-        let summary = Summary::new(device, slots);
+        let occupancy = Occupancy::new(device, slots);
+        let bake = Bake::new(device, &self.layouts, occupancy.buffer(), atlas.baked());
         let limit = (self.budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
         let arena = BrickArena::new(device, pyramid, limit)
             .expect("the record budget holds the coarsest level");
         let level_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.level.group"),
             layout: &self.layouts.level,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: arena.buffer().as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: summary.buffer().as_entire_binding(),
-                },
-            ],
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: arena.buffer().as_entire_binding(),
+            }],
+        });
+        let occupancy_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.occupancy.group"),
+            layout: &self.layouts.occupancy,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: occupancy.buffer().as_entire_binding(),
+            }],
         });
         self.view_words = planner::plan_words(slots);
         self.view_bytes = (self.view_words * size_of::<u32>()) as u64;
@@ -424,7 +438,10 @@ impl Renderer {
             channels,
         ));
         self.atlas = Some(atlas);
-        self.summary = Some(summary);
+        self.occupancy = Some(occupancy);
+        self.occupancy_group = Some(occupancy_group);
+        self.bake = Some(bake);
+        self.baked.forget();
         self.arena = Some(arena);
         self.level_group = Some(level_group);
         self.pyramid = Some(pyramid.clone());

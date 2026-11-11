@@ -30,6 +30,10 @@ pub(crate) struct Layouts {
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
     pub ao_compute: BindGroupLayout,
+    pub source: BindGroupLayout,
+    pub occupancy: BindGroupLayout,
+    pub bake: BindGroupLayout,
+    pub bake_pipeline: PipelineLayout,
     pub volume: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
@@ -68,10 +72,31 @@ impl Layouts {
         });
         let level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.level.layout"),
+            entries: &[storage(
+                0,
+                ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
+                true,
+            )],
+        });
+        let source = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.source.layout"),
             entries: &[
-                storage(0, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
-                storage(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: NonZeroU32::new(PACK_LIMIT as u32),
+                },
+                sampler(1, ShaderStages::COMPUTE),
             ],
+        });
+        let occupancy = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.occupancy.layout"),
+            entries: &[storage(0, ShaderStages::FRAGMENT, true)],
         });
         let level_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.level.write.layout"),
@@ -105,14 +130,9 @@ impl Layouts {
                     count: NonZeroU32::new(PACK_LIMIT as u32),
                 },
                 sampler(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
-            ],
-        });
-        let shadow = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.shadow.layout"),
-            entries: &[
                 BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::FRAGMENT,
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
                         view_dimension: TextureViewDimension::D3,
@@ -120,10 +140,25 @@ impl Layouts {
                     },
                     count: None,
                 },
-                sampler(1, ShaderStages::FRAGMENT),
+            ],
+        });
+        let shadow = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.shadow.layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                sampler(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: ShaderStages::FRAGMENT,
+                    visibility: ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Depth,
                         view_dimension: TextureViewDimension::D2,
@@ -133,7 +168,7 @@ impl Layouts {
                 },
                 BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: ShaderStages::FRAGMENT,
+                    visibility: ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
                     ty: BindingType::Sampler(SamplerBindingType::Comparison),
                     count: None,
                 },
@@ -292,8 +327,37 @@ impl Layouts {
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &ao_read],
+            &[&scene, &level, &atlas, &depth, &oit_read, &occupancy],
         );
+        let bake = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.bake.layout"),
+            entries: &[
+                storage(0, ShaderStages::COMPUTE, true),
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba16Float,
+                        view_dimension: TextureViewDimension::D3,
+                    },
+                    count: None,
+                },
+                storage(2, ShaderStages::COMPUTE, false),
+            ],
+        });
+        let bake_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.bake.pipeline.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&level),
+                Some(&source),
+                None,
+                Some(&shadow),
+                Some(&bake),
+            ],
+            immediate_size: 0,
+        });
         let cull = pipeline_layout(
             device,
             "grana.cull.layout",
@@ -385,6 +449,10 @@ impl Layouts {
             oit_read,
             ao_read,
             ao_compute,
+            source,
+            occupancy,
+            bake,
+            bake_pipeline,
             volume,
             cull,
             plan_pipeline,

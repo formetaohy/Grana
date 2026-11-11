@@ -99,6 +99,10 @@ fn pixel_world(distance: f32) -> f32 {
     return select(distance, 1.0, orthographic()) / max(frame.sampling.x, 1.0e-6);
 }
 
+fn local_step(t: f32) -> f32 {
+    return max(frame.march.x, 0.5 * frame.jitter.w * pixel_world(t));
+}
+
 fn level_origin(band: u32) -> vec3<f32> {
     return frame.origins[band].xyz;
 }
@@ -196,6 +200,8 @@ fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
 }
 
 const PACK: u32 = 4u;
+
+const CHANNEL_LIMIT: u32 = 16u;
 
 fn pack_active(pack: u32, count: u32) -> bool {
     var occupied = false;
