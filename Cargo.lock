@@ -3510,7 +3510,6 @@ dependencies = [
  "grana-object",
  "grana-render",
  "grana-scene",
- "grana-ui",
  "grana-volume",
  "wgpu",
 ]

@@ -4,7 +4,6 @@ mod device;
 pub mod layout;
 mod readback;
 mod table;
-mod target;
 
 pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
     .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
@@ -15,4 +14,3 @@ pub use command::{IndexedCommands, InstanceCommands};
 pub use device::{Gpu, HEADLESS_FORMAT, Headless};
 pub use readback::Readback;
 pub use table::Table;
-pub use target::Target;

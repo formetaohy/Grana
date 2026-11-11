@@ -1,5 +1,6 @@
 mod engine;
 mod frame;
+mod image;
 mod view;
 mod viewport;
 

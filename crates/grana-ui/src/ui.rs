@@ -231,10 +231,6 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    pub fn scene_view(&self) -> &wgpu::TextureView {
-        self.renderer.scene_view()
-    }
-
     pub fn set_scene_revision(&mut self, revision: u64) {
         if self.scene_revision == Some(revision) {
             return;
@@ -350,7 +346,12 @@ impl<A: Clone> Ui<A> {
         self.animating || animating_glass || !self.popup_retire.is_empty()
     }
 
-    pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+    pub fn render(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scene: Option<&wgpu::TextureView>,
+    ) {
         let base_changed = self.change.base || self.change.reset;
         let interface_changed = self.change.interface || base_changed;
         {
@@ -359,7 +360,7 @@ impl<A: Clone> Ui<A> {
                 text,
                 images,
                 layers,
-                scene,
+                scene: glass,
                 theme,
                 ..
             } = self;
@@ -367,6 +368,7 @@ impl<A: Clone> Ui<A> {
                 encoder,
                 PaintFrame {
                     target,
+                    scene,
                     atlases: crate::render::Atlases {
                         glyphs: text.atlas(),
                         images,
@@ -376,7 +378,7 @@ impl<A: Clone> Ui<A> {
                     labels: &layers[Layer::Labels.index()],
                     popup: &layers[Layer::Popup.index()],
                     hud: &layers[Layer::Hud.index()],
-                    glass: scene,
+                    glass,
                     base_changed,
                     interface_changed,
                     ink: if theme.dark { Ink::Light } else { Ink::Dark },

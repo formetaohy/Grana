@@ -17,7 +17,6 @@ use crate::atlas::Atlas;
 use crate::glass::{HUD, MENU, OVERLAY};
 use crate::image::ImageAtlas;
 use crate::paint::{Instance, LayerInstances};
-use grana_gpu::Target;
 use grana_gpu::layout;
 
 const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
@@ -150,6 +149,7 @@ pub(crate) struct Atlases<'a> {
 
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
+    pub scene: Option<&'a TextureView>,
     pub atlases: Atlases<'a>,
     pub content: &'a [Instance],
     pub chrome: &'a LayerInstances,
@@ -263,10 +263,10 @@ pub struct Renderer {
     encoded: TextureFormat,
     size: [u32; 2],
     scale: f32,
-    scene: Option<Target>,
     base: Option<Surface>,
     front: Option<Surface>,
     back: Option<Surface>,
+    dummy: TextureView,
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
     ui: RenderPipeline,
@@ -414,10 +414,10 @@ impl Renderer {
             encoded,
             size: [0, 0],
             scale: 1.0,
-            scene: None,
             base: None,
             front: None,
             back: None,
+            dummy: dummy(device),
             present_encoded,
             present_linear,
             ui,
@@ -456,16 +456,11 @@ impl Renderer {
         }
         self.size = size;
         let device = self.device.clone();
-        self.scene = Some(Target::new(&device, "grana.ui.scene", size, self.format));
         self.base = Some(Surface::new(&device, "grana.ui.base", size, self.encoded));
         self.front = Some(Surface::new(&device, "grana.ui.front", size, self.encoded));
         self.back = Some(Surface::new(&device, "grana.ui.back", size, self.encoded));
         self.presented = None;
         true
-    }
-
-    pub fn scene_view(&self) -> &TextureView {
-        &self.scene.as_ref().expect("the renderer is sized").view
     }
 
     pub fn read_color(&mut self) -> (Vec<u8>, [u32; 2], TextureFormat) {
@@ -546,6 +541,7 @@ impl Renderer {
     pub(crate) fn paint(&mut self, encoder: &mut CommandEncoder, frame: PaintFrame<'_>) {
         let PaintFrame {
             target: target_view,
+            scene,
             atlases,
             content,
             chrome,
@@ -561,12 +557,7 @@ impl Renderer {
             self.size[0] > 0 && self.size[1] > 0,
             "the UI renderer needs a sized target"
         );
-        let scene = self
-            .scene
-            .as_ref()
-            .expect("the renderer is sized")
-            .view
-            .clone();
+        let scene = scene.unwrap_or(&self.dummy);
         let base = self.base.as_ref().expect("the renderer is sized");
         let front = self.front.as_ref().expect("the renderer is sized");
         let back = self.back.as_ref().expect("the renderer is sized");
@@ -609,7 +600,7 @@ impl Renderer {
             atlases,
             &PaintTarget {
                 target: &base_view,
-                scene: &scene,
+                scene,
                 load: LoadOp::Load,
             },
             &self.buffers.content.buffer,
@@ -636,7 +627,7 @@ impl Renderer {
             atlases,
             &PaintTarget {
                 target: &front_linear,
-                scene: &scene,
+                scene,
                 load: LoadOp::Load,
             },
             &self.buffers.chrome,
@@ -669,7 +660,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.labels,
@@ -683,7 +674,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: &front_linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.labels,
@@ -717,7 +708,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.popup,
@@ -732,7 +723,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.popup,
@@ -766,7 +757,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.hud,
@@ -781,7 +772,7 @@ impl Renderer {
                 atlases,
                 &PaintTarget {
                     target: linear,
-                    scene: &scene,
+                    scene,
                     load: LoadOp::Load,
                 },
                 &self.buffers.hud,
@@ -908,9 +899,6 @@ impl Renderer {
                 self.figure_capacity,
             );
         }
-        let Some(scene) = self.scene.as_ref() else {
-            return;
-        };
         self.queue
             .write_buffer(&self.figure_instances, 0, bytemuck::cast_slice(instances));
         let uniforms = Uniforms {
@@ -920,12 +908,13 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.figure_uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let scene = &self.dummy;
         let group = self.ui_group(
             Atlases {
                 glyphs: atlas,
                 images,
             },
-            &scene.view,
+            scene,
             &self.figure_instances,
             &self.figure_uniforms,
         );
@@ -1049,6 +1038,25 @@ fn sampler_entry(binding: u32) -> BindGroupLayoutEntry {
 
 fn instance_buffer(device: &Device, label: &str, capacity: usize) -> Buffer {
     grana_gpu::storage_buffer::<Instance>(device, label, capacity)
+}
+
+fn dummy(device: &Device) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some("grana.ui.dummy"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
 }
 
 fn clear(encoder: &mut CommandEncoder, target: &TextureView) {

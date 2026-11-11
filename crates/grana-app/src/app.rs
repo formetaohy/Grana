@@ -65,7 +65,6 @@ pub struct App {
     camera: Camera,
     stage: Stage,
     workspace: Workspace,
-    info: FrameInfo,
     replaced: Revision,
     content: Revision,
     needs_fit: bool,
@@ -77,7 +76,6 @@ pub struct App {
     output: Option<String>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
-    uploads: u64,
     stream: Stream,
     pick_toggle: bool,
     mask_path: Vec<[f32; 3]>,
@@ -115,7 +113,6 @@ impl App {
             camera: Camera::new(35.0),
             stage: Stage::new(),
             workspace,
-            info: FrameInfo::default(),
             replaced: Revision::ZERO,
             content: Revision::ZERO,
             needs_fit: true,
@@ -127,7 +124,6 @@ impl App {
             output: None,
             ime: false,
             ime_area: None,
-            uploads: 0,
             stream: Stream::new(),
             pick_toggle: false,
             mask_path: Vec::new(),
@@ -272,9 +268,7 @@ impl App {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.session.scene().is_some()
-            && (self.info.samples < SAMPLE_LIMIT || self.info.fading)
-        {
+        } else if self.session.scene().is_some() && self.converging() {
             delay = Duration::ZERO;
         }
         if self.streaming() {
@@ -323,19 +317,17 @@ impl App {
             surface,
             engine,
             session,
-            info,
-            uploads,
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
             return;
         };
-        if let Some(requests) = engine.poll_requests(&surface.gpu.device) {
+        let time = session.scene().map_or(0, |scene| scene.time());
+        if let Some(requests) = engine.poll_requests(&surface.gpu.device, time) {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
             if current {
-                info.view = requests.view;
                 let mut bricks =
                     Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
                 bricks.extend_from_slice(&requests.volume);
@@ -345,7 +337,7 @@ impl App {
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {
-            *uploads += engine.upload(&surface.gpu.queue, &bricks) as u64;
+            engine.upload(&surface.gpu.queue, &bricks);
         }
         let replaced = session.replaced() != self.replaced;
         let reloaded = session.content() != self.content;
@@ -355,7 +347,6 @@ impl App {
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
-            *info = FrameInfo::default();
         }
         if replaced {
             self.needs_fit = true;
@@ -403,12 +394,13 @@ impl App {
 
     fn schedule(&mut self, delay: Duration) {
         self.elapsed_frames += 1;
+        let info = self.frame_info();
         let loaded = self.session.scene().is_some();
-        let streamed = self.info.view.resident >= self.info.view.demand;
+        let streamed = info.view.resident >= info.view.demand;
         let settled = loaded
             && streamed
-            && self.info.samples >= SAMPLE_LIMIT
-            && !self.info.fading
+            && info.samples >= SAMPLE_LIMIT
+            && !info.fading
             && !self.session.previewing();
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
@@ -1037,30 +1029,22 @@ impl App {
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
             return None;
         };
-        if let Some(scene) = session.scene() {
-            let info = match engine.draw_viewport(
+        if let Some(scene) = session.scene()
+            && let Err(detail) = engine.draw(
                 &surface.gpu.device,
                 &surface.gpu.queue,
                 grana_engine::ViewportFrame {
-                    target: surface.ui.scene_view(),
                     scene,
                     camera,
-                    size: viewport.size,
-                    viewport: viewport.region,
+                    size: [viewport.region[2], viewport.region[3]],
                     revision: session.revision().raw(),
                     prefetch: playing,
                     level_cap: cap,
                 },
-            ) {
-                Ok(info) => info,
-                Err(detail) => {
-                    *output = Some(detail);
-                    return Some(Duration::ZERO);
-                }
-            };
-            self.info = info;
-        } else {
-            self.info = FrameInfo::default();
+            )
+        {
+            *output = Some(detail);
+            return Some(Duration::ZERO);
         }
         self.present_ui();
         Some(Duration::MAX)
@@ -1075,12 +1059,13 @@ impl App {
         }) else {
             return 0;
         };
+        let info = self.frame_info();
         let view = StreamView {
             remote: self.session.remote(),
             levels,
             rate: self.session.throughput(),
-            bricks: self.info.view.demand,
-            rendered: self.info.view.level,
+            bricks: info.view.demand,
+            rendered: info.view.level,
             brick_bytes,
             now: Instant::now(),
         };
@@ -1365,8 +1350,10 @@ impl App {
     }
 
     fn present_ui(&mut self) {
-        let revision = self.frame_revision();
-        let Some(surface) = self.surface.as_mut() else {
+        let App {
+            surface, engine, ..
+        } = self;
+        let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_ref()) else {
             return;
         };
         let Some(frame) = surface.gpu.acquire() else {
@@ -1382,50 +1369,26 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
-        surface.ui.set_scene_revision(revision);
-        surface.ui.render(&mut encoder, &view);
+        surface.ui.set_scene_revision(engine.image_revision());
+        surface.ui.render(&mut encoder, &view, engine.view());
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
     }
 
-    fn frame_revision(&self) -> u64 {
-        let mut stamp = Stamp::new();
-        stamp.u64(self.session.revision().raw());
-        stamp.u64(self.uploads);
-        let camera = self.camera.state();
-        for value in camera.pivot.into_iter().chain([
-            camera.yaw,
-            camera.pitch,
-            camera.distance,
-            camera.fov_y,
-            camera.aperture,
-            camera.focus,
-        ]) {
-            stamp.f32(value);
-        }
-        stamp.u64(camera.projection.index() as u64);
-        for value in self.stage.region() {
-            stamp.u64(u64::from(value));
-        }
-        let info = self.info;
-        stamp.u64(u64::from(info.samples));
-        stamp.u64(u64::from(u8::from(info.settled)) << 1 | u64::from(u8::from(info.fading)));
-        for value in [
-            info.view.level,
-            info.view.visible,
-            info.view.demand,
-            info.view.resident,
-        ] {
-            stamp.u64(value as u64);
-        }
-        if let Some(scene) = self.session.scene() {
-            stamp.u64(scene.time() as u64);
-        }
-        stamp.0
+    fn frame_info(&self) -> FrameInfo {
+        self.engine
+            .as_ref()
+            .map_or_else(FrameInfo::default, grana_engine::Engine::info)
+    }
+
+    fn converging(&self) -> bool {
+        let info = self.frame_info();
+        info.samples < SAMPLE_LIMIT || info.fading
     }
 
     fn streaming(&self) -> bool {
         let engine = self.engine.as_ref();
+        let info = self.frame_info();
         self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
             || self.session.loading().is_some()
@@ -1435,7 +1398,7 @@ impl App {
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
             || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
-            || (self.session.scene().is_some() && self.info.view.resident < self.info.view.demand)
+            || (self.session.scene().is_some() && info.view.resident < info.view.demand)
     }
 
     fn view_state(&self) -> ViewState {
@@ -1943,22 +1906,6 @@ fn annotation_hit(
     let view_projection = camera.view_projection(aspect, 0.5 * world.length());
     let placed = grana_figure::volume_annotations(&items, view_projection, rect);
     grana_figure::pick_annotation(&placed, pointer)
-}
-
-struct Stamp(u64);
-
-impl Stamp {
-    fn new() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn u64(&mut self, value: u64) {
-        self.0 = (self.0 ^ value).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-
-    fn f32(&mut self, value: f32) {
-        self.u64(u64::from(value.to_bits()));
-    }
 }
 
 fn interface_key(key: &Key) -> Option<grana_ui::InputKey> {
