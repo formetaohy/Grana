@@ -63,6 +63,17 @@ impl GlassStyle {
         Self::regular(Shape::Rounded(28.0), CHROME)
     }
 
+    pub fn surface() -> Self {
+        let mut style = Self::sheet();
+        style.material.dark_tone.lift = 0.16;
+        style.material.dark_tone.darken = 0.0;
+        style.material.dark_tone.lighten = 0.06;
+        style.material.light_tone.lift = 0.08;
+        style.material.light_tone.darken = 0.0;
+        style.material.light_tone.lighten = 0.16;
+        style
+    }
+
     pub fn transport() -> Self {
         Self {
             material: Material::clear_bar(),

@@ -5,21 +5,14 @@ use grana_image::{Plate, Source};
 use grana_raster::{Cell, Group, Raster, Sheet};
 use grana_text::Fonts;
 
-use crate::task::{Poll, Task};
+use crate::task::{Poll, Progress};
 
 const TILE: [u32; 2] = [192, 144];
 const SAMPLE: u32 = 256;
 const BACKGROUND: [u8; 4] = [10, 12, 16, 255];
 
-pub(super) enum Event {
-    Progress(usize, usize),
-    Done(Result<PathBuf, String>),
-}
-
 pub(super) struct Montage {
-    task: Task<Event>,
-    progress: (usize, usize),
-    closed: bool,
+    task: Progress<Result<PathBuf, String>>,
 }
 
 impl Montage {
@@ -27,38 +20,26 @@ impl Montage {
         let plate = plate.clone();
         let base = base.clone();
         let target = path;
-        let task = Task::spawn(move |cancel, sink| {
-            let outcome = compose(&plate, &base, &target, cancel, |done, total| {
-                sink(Event::Progress(done, total))
-            });
-            sink(Event::Done(outcome));
+        let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+            compose(&plate, &base, &target, cancel, progress)
         });
-        Self {
-            task,
-            progress: (0, 0),
-            closed: false,
-        }
+        Self { task }
+    }
+
+    pub(super) fn label(&self) -> &str {
+        "Plate montage"
     }
 
     pub(super) fn progress(&self) -> (usize, usize) {
-        self.progress
+        self.task.progress()
     }
 
-    pub(super) fn poll(&mut self) -> Poll<Event> {
-        if self.closed {
-            return Poll::Closed;
-        }
-        loop {
-            match self.task.poll() {
-                Poll::Event(Event::Progress(done, total)) => self.progress = (done, total),
-                other => {
-                    if matches!(other, Poll::Closed) {
-                        self.closed = true;
-                    }
-                    return other;
-                }
-            }
-        }
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
+        self.task.poll()
     }
 }
 

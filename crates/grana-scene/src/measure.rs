@@ -35,7 +35,8 @@ pub struct Measure {
     lasso: Option<Lasso>,
     roi: Option<Region>,
     sort: Option<(usize, bool)>,
-    table: Option<Table>,
+    table: Option<Arc<Table>>,
+    retained: Option<(Vec<String>, Vec<bool>)>,
     rows: Vec<usize>,
     total: usize,
     visible: Vec<bool>,
@@ -67,6 +68,7 @@ impl Measure {
             roi: None,
             sort: None,
             table: None,
+            retained: None,
             rows: Vec::new(),
             total: 0,
             visible: Vec::new(),
@@ -101,7 +103,7 @@ impl Measure {
         self.filters.clear();
         self.lasso = None;
         self.sort = None;
-        self.rebuild(scene);
+        self.invalidate();
     }
 
     pub fn group(&self) -> Group {
@@ -124,7 +126,7 @@ impl Measure {
         self.filters.clear();
         self.lasso = None;
         self.sort = None;
-        self.rebuild(scene);
+        self.invalidate();
     }
 
     pub fn aggregate(&self) -> Aggregate {
@@ -259,7 +261,7 @@ impl Measure {
         self.time = scene.time();
         self.filters.clear();
         self.lasso = None;
-        self.rebuild(scene);
+        self.invalidate();
     }
 
     pub fn filters(&self) -> &[Filter] {
@@ -360,7 +362,7 @@ impl Measure {
     }
 
     pub fn table(&self) -> Option<&Table> {
-        self.table.as_ref()
+        self.table.as_deref()
     }
 
     pub fn rows(&self) -> &[usize] {
@@ -389,6 +391,7 @@ impl Measure {
     pub fn reset(&mut self) {
         self.set = None;
         self.table = None;
+        self.retained = None;
         self.rows.clear();
         self.total = 0;
         self.visible.clear();
@@ -413,6 +416,7 @@ impl Measure {
             self.origin = None;
             self.pending = None;
             self.table = None;
+            self.retained = None;
             self.plot = None;
             self.rows.clear();
             self.total = 0;
@@ -454,18 +458,20 @@ impl Measure {
         })
     }
 
-    pub fn synchronize(&mut self, scene: &Scene) {
-        if self.settled(scene) {
-            return;
-        }
-        self.rebuild(scene);
-    }
-
     pub fn current(&self, scene: &Scene) -> Option<&Table> {
         if !self.settled(scene) {
             return None;
         }
-        self.table.as_ref()
+        self.table.as_deref()
+    }
+
+    pub fn export(&self, scene: &Scene) -> Option<(Arc<Table>, Vec<usize>)> {
+        if !self.settled(scene) {
+            return None;
+        }
+        self.table
+            .as_ref()
+            .map(|table| (Arc::clone(table), self.rows.clone()))
     }
 
     pub fn apply(&mut self, scene: &mut Scene) {
@@ -529,10 +535,6 @@ impl Measure {
         })
     }
 
-    pub fn csv(&self, scene: &Scene) -> Option<String> {
-        Some(self.current(scene)?.csv(&self.rows))
-    }
-
     pub fn state(&self) -> MeasureState {
         MeasureState {
             set: self.set.map(ObjectSetId::raw),
@@ -594,11 +596,11 @@ impl Measure {
             return;
         };
         self.set = Some(ObjectSetId::new(set));
+        self.retained = None;
         self.rebuild(scene);
         let count = self.table.as_ref().map_or(0, |table| table.columns().len());
-        assert_eq!(
-            columns.len(),
-            count,
+        assert!(
+            columns.is_empty() || columns.len() == count,
             "a measure state covers every column of its table"
         );
         assert!(
@@ -616,7 +618,10 @@ impl Measure {
                 .is_none_or(|lasso| lasso.x() < count && lasso.y() < count),
             "a measure state names lasso axes inside its table"
         );
-        self.visible = columns;
+        self.visible = match self.table.as_ref() {
+            Some(table) if columns.is_empty() => default_visibility(table),
+            _ => columns,
+        };
         self.filters = filters;
         self.lasso = lasso;
         self.sort = sort;
@@ -691,16 +696,31 @@ impl Measure {
         self.adopt(request.build());
     }
 
+    fn invalidate(&mut self) {
+        self.dirty = true;
+        self.pending = None;
+        self.origin = None;
+        self.plot = None;
+        if let Some(table) = self.table.take() {
+            let keys = column_keys(&table);
+            self.retained = Some((keys, std::mem::take(&mut self.visible)));
+        }
+        self.rows.clear();
+        self.total = 0;
+        self.lasso = None;
+        self.axes = [0; 2];
+    }
+
     fn adopt(&mut self, table: Option<Table>) {
         self.dirty = true;
         self.plot = None;
         self.rows.clear();
         self.total = 0;
-        let previous = self.table.take().map(|table| {
-            let keys = column_keys(&table);
-            let visible = std::mem::take(&mut self.visible);
-            (keys, visible)
-        });
+        let previous = self
+            .table
+            .take()
+            .map(|table| (column_keys(&table), std::mem::take(&mut self.visible)))
+            .or_else(|| self.retained.take());
         let Some(table) = table else {
             self.table = None;
             self.visible.clear();
@@ -752,7 +772,7 @@ impl Measure {
         if self.sort.is_some_and(|(column, _)| column >= columns) {
             self.sort = None;
         }
-        self.table = Some(table);
+        self.table = Some(Arc::new(table));
         self.refresh();
     }
 

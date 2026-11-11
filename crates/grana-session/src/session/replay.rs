@@ -188,7 +188,7 @@ impl Session {
                     self.start_object_coloc(set);
                 }
                 Step::Labels { set } => {
-                    if self.labels.is_some() {
+                    if self.tasks.labels.is_some() {
                         return;
                     }
                     if let Err(detail) = self.begin_labels(set) {

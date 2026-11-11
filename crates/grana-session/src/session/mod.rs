@@ -19,6 +19,7 @@ mod recover;
 mod replay;
 mod scene_import;
 mod seed;
+mod tasks;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
 use grana_image::Plate;
-use grana_measure::{ColocPair, ColocThresholds, Group, Scope, Table};
+use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_optics::Psf;
@@ -47,7 +48,7 @@ use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::recovery::Recovery;
 use crate::sample;
-use crate::task::{Poll, Task};
+use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{
     BatchComparison, BatchDataset, BatchSignificance, BatchView, HistoryView, ImportNote, IoView,
@@ -62,6 +63,7 @@ use grana_pipeline::{
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
 use mask::PendingChannel;
 use recover::Restore;
+use tasks::Tasks;
 
 const MAX_IN_FLIGHT: usize = 8192;
 
@@ -70,11 +72,6 @@ const UPLOAD_BATCH: usize = 64;
 struct Pending {
     path: PathBuf,
     project: Project,
-}
-
-struct MeasureJob {
-    key: grana_scene::MeasureKey,
-    task: Task<Option<Table>>,
 }
 
 #[derive(Default)]
@@ -97,7 +94,7 @@ pub struct Session {
     scene: Option<Scene>,
     store: Arc<GeometryStore>,
     measure: Measure,
-    measure_job: Option<MeasureJob>,
+    tasks: Tasks,
     timeline: Timeline,
     source: Option<Loader>,
     channels: Option<Arc<grana_pipeline::Channels>>,
@@ -108,7 +105,6 @@ pub struct Session {
     bricks: Vec<(BrickRequest, BrickData)>,
     pending: Option<Pending>,
     loading: Option<String>,
-    document: Option<Document>,
     message: Option<Message>,
     project: Option<PathBuf>,
     baseline: Option<u64>,
@@ -142,10 +138,7 @@ pub struct Session {
     view: Option<ViewState>,
     history: History,
     export: Export,
-    labels: Option<label::Labels>,
-    provenance: Option<provenance::Export>,
     labels_queue: Vec<ObjectSetId>,
-    dataset_export: Option<dataset::DatasetExport>,
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
@@ -156,7 +149,6 @@ pub struct Session {
     field: usize,
     fields: Fields,
     previews: Option<preview::Previews>,
-    montage: Option<montage::Montage>,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
     channels_pending: Vec<PendingChannel>,
@@ -178,7 +170,7 @@ impl Session {
             store: GeometryStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
-            measure_job: None,
+            tasks: Tasks::default(),
             timeline: Timeline::new(30, 1.0),
             source: None,
             channels: None,
@@ -189,7 +181,6 @@ impl Session {
             bricks: Vec::new(),
             pending: None,
             loading: None,
-            document: None,
             message: None,
             project: None,
             baseline: None,
@@ -223,10 +214,7 @@ impl Session {
             view: None,
             history: History::default(),
             export: Export::NATIVE,
-            labels: None,
-            provenance: None,
             labels_queue: Vec::new(),
-            dataset_export: None,
             label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
@@ -237,7 +225,6 @@ impl Session {
             field: 0,
             fields: Fields::default(),
             previews: None,
-            montage: None,
             fingerprint: None,
             mask_stamp: None,
             channels_pending: Vec::new(),
@@ -394,13 +381,7 @@ impl Session {
             .as_ref()
             .map_or(0.0, |scene| scene.dataset.frame_interval());
         let stats = self.store.stats();
-        let document = self.document.as_ref().map(|document| {
-            (
-                document.label(),
-                document.progress().0,
-                document.progress().1,
-            )
-        });
+        let document = self.tasks.document();
         IoView {
             loading: self.loading.as_deref(),
             document,
@@ -499,30 +480,30 @@ impl Session {
             return;
         };
         self.measure.set_roi(scene.region_scope());
-        if self.measure_job.is_some() {
+        if self.tasks.measuring() {
             return;
         }
         let Some(request) = self.measure.request(scene, busy) else {
             return;
         };
-        let key = request.key();
-        let task = Task::spawn(move |_, sink| sink(request.build()));
-        self.measure_job = Some(MeasureJob { key, task });
+        self.tasks.start_measure(request);
     }
     pub fn settle_measure(&mut self) -> bool {
-        let Some(job) = self.measure_job.as_ref() else {
+        let Some(slot) = self.tasks.measure.as_mut() else {
             return false;
         };
-        match job.task.poll() {
+        let key = slot.key();
+        match slot.poll() {
             Poll::Event(table) => {
-                let job = self.measure_job.take().expect("the measure job is held");
-                self.measure.install(job.key, table);
+                self.tasks.measure = None;
+                self.finish_measure(key, table);
                 true
             }
             Poll::Empty => false,
             Poll::Closed => {
-                self.measure_job = None;
-                false
+                self.tasks.measure = None;
+                self.finish_measure(key, None);
+                true
             }
         }
     }
@@ -535,15 +516,15 @@ impl Session {
         }
     }
     pub fn poll(&mut self) -> bool {
-        let mut repaint = self.settle_measure();
-        repaint |= self.poll_source();
-        repaint |= self.poll_document();
+        let mut repaint = self.poll_source();
+        let (completions, stepped) = self.tasks.poll();
+        for completion in completions {
+            self.finish(completion);
+        }
+        repaint |= stepped;
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
-        repaint |= self.poll_provenance();
-        repaint |= self.poll_labels();
         repaint |= self.poll_plate();
-        repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
         repaint |= self.poll_channels();
         repaint |= self.poll_recovery();
@@ -564,34 +545,16 @@ impl Session {
     }
 
     pub fn writing(&self) -> bool {
-        self.labels.is_some()
-            || self.provenance.is_some()
-            || self.dataset_export.is_some()
-            || self.montage.is_some()
+        self.tasks.writing()
     }
     pub fn analysing(&self) -> bool {
         !self.analysis.is_empty() || self.writing()
     }
     pub fn measuring(&self) -> bool {
-        self.measure_job.is_some()
+        self.tasks.measuring()
     }
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
-        if let Some(labels) = self.labels.as_ref() {
-            return Some((labels.label(), labels.progress().0, labels.progress().1));
-        }
-        if let Some(provenance) = self.provenance.as_ref() {
-            return Some((
-                "Exporting the provenance crate",
-                provenance.progress().0,
-                provenance.progress().1,
-            ));
-        }
-        if let Some(montage) = self.montage.as_ref() {
-            return Some(("Plate montage", montage.progress().0, montage.progress().1));
-        }
-        self.dataset_export
-            .as_ref()
-            .map(|export| (export.label(), export.progress().0, export.progress().1))
+        self.tasks.progress()
     }
     pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {
         if self.loading.is_some() {

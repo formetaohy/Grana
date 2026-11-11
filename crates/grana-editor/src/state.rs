@@ -313,6 +313,7 @@ impl Workspace {
 pub struct View<'a> {
     pub scene: &'a Scene,
     pub measure: &'a Measure,
+    pub measuring: bool,
     pub timeline: &'a Timeline,
     pub jobs: &'a [Progress],
     pub io: &'a IoView<'a>,

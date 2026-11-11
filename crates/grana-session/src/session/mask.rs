@@ -597,7 +597,7 @@ fn calibrate(
     channels: Arc<Channels>,
     work: impl FnOnce(&Channels) -> Result<Intensity, String> + Send + 'static,
 ) -> Task<Result<Intensity, String>> {
-    Task::spawn(move |cancel, sink| {
+    Task::spawn(grana_exec::Role::Compute, move |cancel, sink| {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }

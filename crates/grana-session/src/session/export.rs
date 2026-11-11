@@ -1,12 +1,51 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use grana_measure::{Aggregate, Group, Table};
+use grana_mesh::Format as MeshFormat;
+use grana_scene::{MeasureKey, TableRequest, Trace};
+
 use super::*;
 
-use grana_measure::{Aggregate, Group};
-use grana_mesh::Format as MeshFormat;
-use grana_scene::{TableRequest, Trace};
+use crate::task::Progress;
+
+pub(super) struct Csv {
+    task: Progress<Result<PathBuf, String>>,
+    label: String,
+}
+
+impl Csv {
+    fn start(table: Arc<Table>, rows: Vec<usize>, path: PathBuf, name: &str) -> Self {
+        let label = format!("Exporting {name} statistics");
+        let task = Progress::spawn(grana_exec::Role::Write, move |_, _| {
+            std::fs::write(&path, table.csv(&rows)).map_err(|error| {
+                format!("failed to export statistics to {}: {error}", path.display())
+            })?;
+            Ok(path)
+        });
+        Self { task, label }
+    }
+
+    pub(super) fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub(super) fn progress(&self) -> (usize, usize) {
+        self.task.progress()
+    }
+
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
+        self.task.poll()
+    }
+}
 
 impl Session {
     pub(super) fn export_provenance(&mut self) {
-        if self.writing() {
+        if self.tasks.writing() {
             self.message = Some(Message::error("an export is already running"));
             return;
         }
@@ -54,7 +93,7 @@ impl Session {
             source.path().map(Path::to_path_buf)
         });
         self.message = None;
-        self.provenance = Some(provenance::Export::start(provenance::Request {
+        self.tasks.provenance = Some(provenance::Export::start(provenance::Request {
             root,
             name,
             fingerprint: self.fingerprint,
@@ -64,41 +103,11 @@ impl Session {
         }));
     }
 
-    pub(super) fn poll_provenance(&mut self) -> bool {
-        let Some(mut export) = self.provenance.take() else {
-            return false;
-        };
-        let mut repaint = false;
-        let mut keep = true;
-        loop {
-            match export.poll() {
-                Poll::Event(provenance::Event::Progress(..)) => repaint = true,
-                Poll::Event(provenance::Event::Done(outcome)) => {
-                    keep = false;
-                    repaint = true;
-                    self.message = Some(match outcome {
-                        Ok(path) => {
-                            Message::info(format!("the provenance crate is at {}", path.display()))
-                        }
-                        Err(detail) => Message::error(detail),
-                    });
-                    break;
-                }
-                Poll::Empty => break,
-                Poll::Closed => {
-                    keep = false;
-                    repaint = true;
-                    self.message = Some(Message::error(
-                        "the provenance worker stopped before the crate was written",
-                    ));
-                    break;
-                }
-            }
-        }
-        if keep {
-            self.provenance = Some(export);
-        }
-        repaint
+    pub(super) fn finish_provenance(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!("the provenance crate is at {}", path.display())),
+            Err(detail) => Message::error(detail),
+        });
     }
 
     pub(super) fn export_coloc(&mut self) {
@@ -139,8 +148,6 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        self.measure_job = None;
-        self.measure.synchronize(scene);
         let Some(set) = self.measure.set() else {
             self.message = Some(Message::info(
                 "choose an object set before exporting statistics",
@@ -148,12 +155,6 @@ impl Session {
             return;
         };
         let Some(object) = scene.objects.get(set) else {
-            return;
-        };
-        let Some(csv) = self.measure.csv(scene) else {
-            self.message = Some(Message::error(
-                "the statistics of the chosen object set hold no table to export",
-            ));
             return;
         };
         let channel = scene.dataset.channels()[object.channel()].name();
@@ -169,6 +170,12 @@ impl Session {
             crate::slug(channel),
             crate::slug(name)
         );
+        if self.tasks.pending_csv() {
+            self.message = Some(Message::info(
+                "the statistics are being measured before they are exported",
+            ));
+            return;
+        }
         let title = format!("Export {name} statistics");
         let Some(path) = rfd::FileDialog::new()
             .set_title(title)
@@ -178,15 +185,62 @@ impl Session {
         else {
             return;
         };
-        match std::fs::write(&path, csv) {
-            Ok(()) => self.message = None,
-            Err(error) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export statistics to {}: {error}",
-                    path.display()
-                )));
-            }
+        self.message = None;
+        if self.measure.export(scene).is_some() {
+            self.start_csv_export(path);
+            return;
         }
+        if TableRequest::new(scene, set, self.measure.group(), self.measure.aggregate()).is_none() {
+            self.message = Some(Message::error(
+                "the statistics of the chosen object set hold no table to export",
+            ));
+            return;
+        }
+        self.tasks.defer_csv(path);
+    }
+
+    pub(super) fn finish_measure(&mut self, key: MeasureKey, table: Option<Table>) {
+        self.measure.install(key, table);
+        let Some(path) = self.tasks.take_csv() else {
+            return;
+        };
+        self.start_csv_export(path);
+    }
+
+    pub(super) fn finish_csv(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!(
+                "wrote {} statistics to {}",
+                self.csv_name(),
+                path.display()
+            )),
+            Err(detail) => Message::error(detail),
+        });
+    }
+
+    fn csv_name(&self) -> String {
+        self.scene
+            .as_ref()
+            .and_then(|scene| self.measure.set().and_then(|set| scene.objects.get(set)))
+            .map_or_else(
+                || "the object set".to_string(),
+                |object| object.name().to_string(),
+            )
+    }
+
+    fn start_csv_export(&mut self, path: PathBuf) {
+        let name = self.csv_name();
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some((table, rows)) = self.measure.export(scene) else {
+            self.message = Some(Message::error(
+                "the statistics of the chosen object set hold no table to export",
+            ));
+            return;
+        };
+        self.message = None;
+        self.tasks.csv = Some(Csv::start(table, rows, path, &name));
     }
 
     pub(super) fn export_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {

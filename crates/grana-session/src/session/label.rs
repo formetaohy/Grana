@@ -8,19 +8,13 @@ use grana_scene::ObjectSetId;
 use grana_volume::Level;
 use grana_zarr::Written;
 
-use crate::task::{Poll, Task};
+use crate::task::{Poll, Progress};
 
 const LABEL_LIMIT: usize = u16::MAX as usize;
-
-pub(super) enum Event {
-    Progress(usize, usize),
-    Done(Result<Written, String>),
-}
+const LABEL: &str = "Exporting labels";
 
 pub(super) struct Labels {
-    task: Task<Event>,
-    label: String,
-    progress: (usize, usize),
+    task: Progress<Result<Written, String>>,
     set: ObjectSetId,
 }
 
@@ -53,7 +47,7 @@ impl Labels {
             levels,
             title,
         } = request;
-        let task = Task::spawn(move |cancel, sink| {
+        let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
             let mut labeling = Labeling::new(shapes, visible, labels, levels, title);
             let properties = labeling.properties();
             let mut fill =
@@ -63,8 +57,7 @@ impl Labels {
                     }
                     labeling.fill(level, time, origin, extent, data)
                 };
-            let mut progress = |done: usize, total: usize| sink(Event::Progress(done, total));
-            let outcome = grana_zarr::write_group_labels(
+            grana_zarr::write_group_labels(
                 &path,
                 &group,
                 grana_zarr::LabelSpec {
@@ -75,35 +68,32 @@ impl Labels {
                     opacity,
                     properties: &properties,
                     fill: &mut fill,
-                    progress: &mut progress,
+                    progress,
                 },
             )
-            .map_err(|error| error.to_string());
-            sink(Event::Done(outcome));
+            .map_err(|error| error.to_string())
         });
-        Self {
-            task,
-            label: "Exporting labels".to_string(),
-            progress: (0, 0),
-            set,
-        }
+        Self { task, set }
     }
 
     pub(super) fn label(&self) -> &str {
-        &self.label
+        LABEL
     }
 
     pub(super) fn progress(&self) -> (usize, usize) {
-        self.progress
+        self.task.progress()
     }
 
-    pub(super) fn poll(&mut self) -> Poll<Event> {
-        loop {
-            match self.task.poll() {
-                Poll::Event(Event::Progress(done, total)) => self.progress = (done, total),
-                other => return other,
-            }
-        }
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub(super) fn set(&self) -> ObjectSetId {
+        self.set
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Result<Written, String>> {
+        self.task.poll()
     }
 }
 
@@ -119,7 +109,7 @@ impl super::Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        if self.labels.is_some() || !self.labels_queue.is_empty() {
+        if self.labels_busy() {
             self.message = Some(crate::Message::error("a label export is already running"));
             return;
         }
@@ -150,7 +140,7 @@ impl super::Session {
     }
 
     pub(super) fn start_next_label(&mut self) {
-        while self.labels.is_none() {
+        while self.tasks.labels.is_none() {
             let Some(set) = self.labels_queue.first().copied() else {
                 return;
             };
@@ -164,7 +154,7 @@ impl super::Session {
     }
 
     pub(super) fn begin_labels(&mut self, set: ObjectSetId) -> Result<(), String> {
-        if self.labels.is_some() {
+        if self.tasks.labels.is_some() {
             return Err("a label export is already running".to_string());
         }
         if self
@@ -245,45 +235,14 @@ impl super::Session {
             title: object.name().to_string(),
         };
         self.message = None;
-        self.labels = Some(Labels::start(request, set));
+        self.tasks.labels = Some(Labels::start(request, set));
         Ok(())
     }
 
-    pub(super) fn poll_labels(&mut self) -> bool {
-        let Some(mut labels) = self.labels.take() else {
-            return false;
-        };
-        let set = labels.set;
-        let mut repaint = false;
-        let mut keep = true;
-        let mut outcome = None;
-        loop {
-            match labels.poll() {
-                Poll::Event(Event::Progress(_, _)) => repaint = true,
-                Poll::Event(Event::Done(result)) => {
-                    keep = false;
-                    repaint = true;
-                    outcome = Some(result);
-                    break;
-                }
-                Poll::Empty => break,
-                Poll::Closed => {
-                    keep = false;
-                    repaint = true;
-                    outcome = Some(Err(
-                        "the label export stopped before the image was written".to_string()
-                    ));
-                    break;
-                }
-            }
-        }
-        if keep {
-            self.labels = Some(labels);
-            return repaint;
-        }
+    pub(super) fn finish_labels(&mut self, set: ObjectSetId, outcome: Result<Written, String>) {
         let mut success = false;
         self.message = Some(match outcome {
-            Some(Ok(written)) => {
+            Ok(written) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_label_export(
                         set,
@@ -302,8 +261,7 @@ impl super::Session {
                     written.path().display()
                 ))
             }
-            Some(Err(detail)) => crate::Message::error(detail),
-            None => crate::Message::error("the label export finished without a result"),
+            Err(detail) => crate::Message::error(detail),
         });
         let recipe = self
             .recipe
@@ -319,6 +277,9 @@ impl super::Session {
         } else {
             self.start_next_label();
         }
-        repaint
+    }
+
+    fn labels_busy(&self) -> bool {
+        self.tasks.labels.is_some() || !self.labels_queue.is_empty()
     }
 }

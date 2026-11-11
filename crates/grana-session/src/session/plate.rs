@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use super::*;
 
-use crate::task::Poll;
-
 impl Session {
     pub(super) fn start_previews(&mut self) {
         if self.previews.is_some() {
@@ -20,39 +18,18 @@ impl Session {
 
     pub(super) fn clear_plate(&mut self) {
         self.previews = None;
-        self.montage = None;
+        self.tasks.montage = None;
     }
 
     pub(super) fn poll_plate(&mut self) -> bool {
-        let mut repaint = self.previews.as_mut().is_some_and(preview::Previews::poll);
-        let Some(mut montage) = self.montage.take() else {
-            return repaint;
-        };
-        loop {
-            match montage.poll() {
-                Poll::Event(montage::Event::Progress(_, _)) => repaint = true,
-                Poll::Event(montage::Event::Done(outcome)) => {
-                    self.message = Some(match outcome {
-                        Ok(path) => {
-                            Message::info(format!("wrote the plate montage to {}", path.display()))
-                        }
-                        Err(detail) => Message::error(detail),
-                    });
-                    repaint = true;
-                    return repaint;
-                }
-                Poll::Empty => {
-                    self.montage = Some(montage);
-                    return repaint;
-                }
-                Poll::Closed => {
-                    self.message = Some(Message::error(
-                        "the plate montage stopped before the image was written",
-                    ));
-                    return true;
-                }
-            }
-        }
+        self.previews.as_mut().is_some_and(preview::Previews::poll)
+    }
+
+    pub(super) fn finish_montage(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!("wrote the plate montage to {}", path.display())),
+            Err(detail) => Message::error(detail),
+        });
     }
 
     pub(super) fn export_plate(&mut self) {
@@ -77,7 +54,7 @@ impl Session {
             self.message = Some(Message::error("no plate is open"));
             return false;
         };
-        if self.montage.is_some() {
+        if self.tasks.montage.is_some() {
             self.message = Some(Message::error("a plate montage is already running"));
             return false;
         }
@@ -86,7 +63,7 @@ impl Session {
             return false;
         };
         self.message = None;
-        self.montage = Some(montage::Montage::start(plate, &source, path));
+        self.tasks.montage = Some(montage::Montage::start(plate, &source, path));
         true
     }
 }

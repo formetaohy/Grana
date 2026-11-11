@@ -6,14 +6,10 @@ use grana_scene::{TableRequest, Trace};
 
 use super::*;
 
-pub(super) struct Export {
-    task: Task<Event>,
-    progress: (usize, usize),
-}
+use crate::task::Progress;
 
-pub(super) enum Event {
-    Progress(usize, usize),
-    Done(Result<PathBuf, String>),
+pub(super) struct Export {
+    task: Progress<Result<PathBuf, String>>,
 }
 
 pub(super) struct Request {
@@ -34,30 +30,26 @@ pub(super) struct Set {
 
 impl Export {
     pub fn start(request: Request) -> Self {
-        let total = request.sets.len();
-        let task = Task::spawn(move |cancel, sink| {
-            let outcome = write(request, cancel, &mut |done: usize, total: usize| {
-                sink(Event::Progress(done, total));
-            });
-            sink(Event::Done(outcome));
+        let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+            write(request, cancel, progress)
         });
-        Self {
-            task,
-            progress: (0, total),
-        }
+        Self { task }
+    }
+
+    pub fn label(&self) -> &str {
+        "Exporting the provenance crate"
     }
 
     pub fn progress(&self) -> (usize, usize) {
-        self.progress
+        self.task.progress()
     }
 
-    pub fn poll(&mut self) -> Poll<Event> {
-        loop {
-            match self.task.poll() {
-                Poll::Event(Event::Progress(done, total)) => self.progress = (done, total),
-                other => return other,
-            }
-        }
+    pub fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
+        self.task.poll()
     }
 }
 

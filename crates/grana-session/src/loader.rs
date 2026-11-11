@@ -1,8 +1,8 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
 
-use grana_exec::{Cancel, Executor, Pipe, Poll, Sender};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drift;
@@ -11,8 +11,7 @@ use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid,
 const ATTEMPTS: u32 = 3;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 const CAPACITY: usize = 16;
-const READ_PRIORITY: u64 = 1;
-const READ_WORKERS: usize = 4;
+const OPENING: u64 = u64::MAX;
 
 pub struct Opened {
     pub name: String,
@@ -45,12 +44,11 @@ pub enum Event {
 pub struct Loader {
     events: Pipe<Event>,
     sender: Sender<Event>,
-    reader: Executor,
+    reader: &'static Executor,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
     channels: Arc<RwLock<Option<Arc<Channels>>>>,
     closed: Arc<AtomicBool>,
-    order: AtomicU64,
     source: Source,
 }
 
@@ -80,12 +78,11 @@ impl Loader {
             Self {
                 events,
                 sender,
-                reader: Executor::new(READ_WORKERS),
+                reader: Executor::lane(Role::Read),
                 time: Arc::new(AtomicU32::new(0)),
                 drift: Arc::new(RwLock::new(Drift::default())),
                 channels: Arc::new(RwLock::new(Some(channels))),
                 closed: Arc::new(AtomicBool::new(false)),
-                order: AtomicU64::new(READ_PRIORITY),
                 source,
             },
             opened,
@@ -115,12 +112,12 @@ impl Loader {
         let drift = Arc::new(RwLock::new(Drift::default()));
         let channels = Arc::new(RwLock::new(None));
         let closed = Arc::new(AtomicBool::new(false));
-        let reader = Executor::new(READ_WORKERS);
+        let reader = Executor::lane(Role::Read);
         let opening = source.clone();
         let opening_sender = sender.clone();
         let opening_channels = Arc::clone(&channels);
         let opening_closed = Arc::clone(&closed);
-        reader.submit_ordered(READ_PRIORITY, move |cancel| {
+        reader.submit_ordered(OPENING, move |cancel| {
             open(
                 opening,
                 remote,
@@ -138,7 +135,6 @@ impl Loader {
             drift,
             channels,
             closed,
-            order: AtomicU64::new(READ_PRIORITY),
             source,
         }
     }
@@ -156,7 +152,7 @@ impl Loader {
         }
         for request in requests.iter().rev() {
             let request = *request;
-            let priority = self.order.fetch_add(1, AtomicOrdering::Relaxed);
+            let priority = self.reader.stamp();
             let channels = Arc::clone(&self.channels);
             let time = Arc::clone(&self.time);
             let drift = Arc::clone(&self.drift);

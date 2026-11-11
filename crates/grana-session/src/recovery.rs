@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use grana_project::Project;
 
-use crate::task::{Poll, Task};
+use crate::task::{Poll, Progress};
 
 const FILE: &str = "recovery.json";
 
@@ -62,14 +62,10 @@ impl Entry {
     }
 }
 
-enum Event {
-    Done(Box<Result<Entry, String>>),
-}
-
 pub struct Recovery {
     root: Option<PathBuf>,
     entry: Option<Entry>,
-    task: Option<Task<Event>>,
+    task: Option<Progress<Result<Entry, String>>>,
     refused: bool,
 }
 
@@ -144,35 +140,36 @@ impl Recovery {
         }
         let target = root.join(SNAPSHOT);
         let label = entry.clone();
-        self.task = Some(Task::spawn(move |cancel, sink| {
-            let written = std::fs::create_dir_all(&root)
-                .map_err(|error| format!("failed to create {}: {error}", root.display()))
-                .and_then(|()| {
-                    project
-                        .write(&target, cancel, &mut |_, _| {})
-                        .map_err(|error| error.to_string())
-                })
-                .and_then(|()| {
-                    let text = serde_json::to_string_pretty(&label)
-                        .map_err(|error| format!("the recovery does not serialize: {error}"))?;
-                    grana_file::write(&root.join(FILE), text.as_bytes())
-                        .map_err(|error| format!("failed to write the recovery record: {error}"))
-                });
-            sink(Event::Done(Box::new(
-                written
+        self.task = Some(Progress::spawn(
+            grana_exec::Role::Write,
+            move |cancel, _| {
+                std::fs::create_dir_all(&root)
+                    .map_err(|error| format!("failed to create {}: {error}", root.display()))
+                    .and_then(|()| {
+                        project
+                            .write(&target, cancel, &mut |_, _| {})
+                            .map_err(|error| error.to_string())
+                    })
+                    .and_then(|()| {
+                        let text = serde_json::to_string_pretty(&label)
+                            .map_err(|error| format!("the recovery does not serialize: {error}"))?;
+                        grana_file::write(&root.join(FILE), text.as_bytes()).map_err(|error| {
+                            format!("failed to write the recovery record: {error}")
+                        })
+                    })
                     .map(|()| label)
-                    .map_err(|error| format!("autosave failed: {error}")),
-            )));
-        }));
+                    .map_err(|error| format!("autosave failed: {error}"))
+            },
+        ));
         true
     }
 
     pub fn poll(&mut self) -> Option<Result<Entry, String>> {
-        let task = self.task.as_ref()?;
+        let task = self.task.as_mut()?;
         match task.poll() {
-            Poll::Event(Event::Done(outcome)) => {
+            Poll::Event(outcome) => {
                 self.task = None;
-                match *outcome {
+                match outcome {
                     Ok(entry) => {
                         self.refused = false;
                         self.entry = Some(entry.clone());

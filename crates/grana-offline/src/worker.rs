@@ -1,4 +1,4 @@
-use grana_exec::{Cancel, Executor, Pipe, Poll, Sender};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
 
 use crate::offline::{Offline, Outcome};
 use crate::task::Task;
@@ -38,7 +38,7 @@ impl Worker {
         Self {
             events,
             sender,
-            executor: Executor::new(1),
+            executor: Executor::new(Role::Compute, 1),
             next: 1,
         }
     }

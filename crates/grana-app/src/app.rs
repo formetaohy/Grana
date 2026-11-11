@@ -979,6 +979,7 @@ impl App {
         let view = SessionView {
             scene: session.scene(),
             measure: session.measure(),
+            measuring: session.measuring(),
             timeline: session.timeline(),
             jobs: session.progress(),
             io: session.io(exporting, export_message),
@@ -1833,6 +1834,7 @@ impl App {
             let view = SessionView {
                 scene: session.scene(),
                 measure: session.measure(),
+                measuring: session.measuring(),
                 timeline: session.timeline(),
                 jobs: session.progress(),
                 io: session.io(export.progress(), output.clone()),

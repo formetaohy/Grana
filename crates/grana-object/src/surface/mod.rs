@@ -251,7 +251,7 @@ impl SurfaceSet {
         if start {
             let details = Arc::clone(&self.details);
             let base = self.geometry.clone();
-            grana_exec::Executor::shared().submit(move |cancel| {
+            grana_exec::Executor::lane(grana_exec::Role::Compute).submit(move |cancel| {
                 if cancel.cancelled() {
                     details.cancel();
                     return;

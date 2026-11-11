@@ -131,6 +131,7 @@ pub struct RecoveryView<'a> {
 pub struct SessionView<'a> {
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
+    pub measuring: bool,
     pub timeline: &'a Timeline,
     pub jobs: &'a [Progress],
     pub io: IoView<'a>,

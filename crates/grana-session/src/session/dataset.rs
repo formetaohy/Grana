@@ -6,17 +6,10 @@ use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, Summary};
 use grana_volume::Level;
 
 use crate::loader::Loader;
-use crate::task::{Poll, Task};
-
-pub(super) enum Event {
-    Progress(usize, usize),
-    Done(Result<Summary, String>),
-}
+use crate::task::{Poll, Progress};
 
 pub(super) struct DatasetExport {
-    task: Task<Event>,
-    label: String,
-    progress: (usize, usize),
+    task: Progress<Result<Summary, String>>,
 }
 
 struct Request {
@@ -46,9 +39,8 @@ impl DatasetExport {
             interval,
             drift,
         } = request;
-        let task = Task::spawn(move |cancel, sink| {
-            let mut progress = |done: usize, total: usize| sink(Event::Progress(done, total));
-            let outcome = grana_pipeline::write_dataset(
+        let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+            grana_pipeline::write_dataset(
                 DatasetSpec {
                     path,
                     name,
@@ -62,38 +54,32 @@ impl DatasetExport {
                 },
                 &channels,
                 cancel,
-                &mut progress,
-            );
-            sink(Event::Done(outcome));
+                progress,
+            )
         });
-        Self {
-            task,
-            label: "Exporting the dataset".to_string(),
-            progress: (0, 0),
-        }
+        Self { task }
     }
 
     pub(super) fn label(&self) -> &str {
-        &self.label
+        "Exporting the dataset"
     }
 
     pub(super) fn progress(&self) -> (usize, usize) {
-        self.progress
+        self.task.progress()
     }
 
-    pub(super) fn poll(&mut self) -> Poll<Event> {
-        loop {
-            match self.task.poll() {
-                Poll::Event(Event::Progress(done, total)) => self.progress = (done, total),
-                other => return other,
-            }
-        }
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Result<Summary, String>> {
+        self.task.poll()
     }
 }
 
 impl super::Session {
     pub(super) fn export_dataset(&mut self) {
-        if self.dataset_export.is_some() || self.labels.is_some() {
+        if self.tasks.writing() {
             self.message = Some(crate::Message::error("an export is already running"));
             return;
         }
@@ -163,7 +149,7 @@ impl super::Session {
             return;
         };
         self.message = None;
-        self.dataset_export = Some(DatasetExport::start(Request {
+        self.tasks.dataset = Some(DatasetExport::start(Request {
             path,
             name,
             channels,
@@ -177,44 +163,16 @@ impl super::Session {
         }));
     }
 
-    pub(super) fn poll_dataset(&mut self) -> bool {
-        let Some(mut export) = self.dataset_export.take() else {
-            return false;
-        };
-        let mut repaint = false;
-        let mut keep = true;
-        loop {
-            match export.poll() {
-                Poll::Event(Event::Progress(_, _)) => repaint = true,
-                Poll::Event(Event::Done(outcome)) => {
-                    keep = false;
-                    repaint = true;
-                    self.message = Some(match outcome {
-                        Ok(written) => crate::Message::info(format!(
-                            "wrote {} channels and {} labels over {} frames to {}",
-                            written.channels(),
-                            written.labels(),
-                            written.frames(),
-                            written.path().display()
-                        )),
-                        Err(detail) => crate::Message::error(detail),
-                    });
-                    break;
-                }
-                Poll::Empty => break,
-                Poll::Closed => {
-                    keep = false;
-                    repaint = true;
-                    self.message = Some(crate::Message::error(
-                        "the dataset export stopped before the image was written",
-                    ));
-                    break;
-                }
-            }
-        }
-        if keep {
-            self.dataset_export = Some(export);
-        }
-        repaint
+    pub(super) fn finish_dataset(&mut self, outcome: Result<Summary, String>) {
+        self.message = Some(match outcome {
+            Ok(written) => crate::Message::info(format!(
+                "wrote {} channels and {} labels over {} frames to {}",
+                written.channels(),
+                written.labels(),
+                written.frames(),
+                written.path().display()
+            )),
+            Err(detail) => crate::Message::error(detail),
+        });
     }
 }

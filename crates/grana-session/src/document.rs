@@ -1,15 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use grana_exec::Role;
 use grana_geometry::GeometryStore;
 use grana_project::{Error, Project};
 
-use crate::task::{Poll, Task};
-
-enum Event {
-    Progress(usize, usize),
-    Done(Outcome),
-}
+use crate::task::{Poll, Progress};
 
 pub enum Outcome {
     Saved,
@@ -25,49 +21,38 @@ enum Transfer {
 }
 
 pub struct Document {
-    task: Task<Event>,
+    task: Progress<Outcome>,
     path: PathBuf,
     hash: Option<u64>,
     label: String,
-    progress: (usize, usize),
 }
 
 impl Document {
     pub fn save(project: Project, path: PathBuf, hash: Option<u64>) -> Self {
         let headline = label(Transfer::Save, &path);
         let target = path.clone();
-        let task = Task::spawn(move |cancel, sink| {
-            let outcome = {
-                let mut progress = |done: usize, total: usize| sink(Event::Progress(done, total));
-                project.write(&target, cancel, &mut progress)
-            };
-            sink(saved(outcome));
+        let task = Progress::spawn(Role::Write, move |cancel, progress| {
+            saved(project.write(&target, cancel, progress))
         });
         Self {
             task,
             path,
             hash,
             label: headline,
-            progress: (0, 0),
         }
     }
 
     pub fn open(path: PathBuf, store: Arc<GeometryStore>) -> Self {
         let headline = label(Transfer::Open, &path);
         let target = path.clone();
-        let task = Task::spawn(move |cancel, sink| {
-            let outcome = {
-                let mut progress = |done: usize, total: usize| sink(Event::Progress(done, total));
-                Project::read(&target, store, cancel, &mut progress)
-            };
-            sink(opened(outcome));
+        let task = Progress::spawn(Role::Read, move |cancel, progress| {
+            opened(Project::read(&target, store, cancel, progress))
         });
         Self {
             task,
             path,
             hash: None,
             label: headline,
-            progress: (0, 0),
         }
     }
 
@@ -84,18 +69,15 @@ impl Document {
     }
 
     pub fn progress(&self) -> (usize, usize) {
-        self.progress
+        self.task.progress()
+    }
+
+    pub fn stepped(&mut self) -> bool {
+        self.task.stepped()
     }
 
     pub fn poll(&mut self) -> Poll<Outcome> {
-        loop {
-            match self.task.poll() {
-                Poll::Event(Event::Progress(done, total)) => self.progress = (done, total),
-                Poll::Event(Event::Done(outcome)) => return Poll::Event(outcome),
-                Poll::Empty => return Poll::Empty,
-                Poll::Closed => return Poll::Closed,
-            }
-        }
+        self.task.poll()
     }
 }
 
@@ -110,18 +92,18 @@ fn label(transfer: Transfer, path: &Path) -> String {
     }
 }
 
-fn saved(outcome: Result<(), Error>) -> Event {
-    Event::Done(match outcome {
+fn saved(outcome: Result<(), Error>) -> Outcome {
+    match outcome {
         Ok(()) => Outcome::Saved,
         Err(Error::Cancelled) => Outcome::Cancelled,
         Err(error) => Outcome::Failed(error.to_string()),
-    })
+    }
 }
 
-fn opened(outcome: Result<Project, Error>) -> Event {
-    Event::Done(match outcome {
+fn opened(outcome: Result<Project, Error>) -> Outcome {
+    match outcome {
         Ok(project) => Outcome::Opened(Box::new(project)),
         Err(Error::Cancelled) => Outcome::Cancelled,
         Err(error) => Outcome::Failed(error.to_string()),
-    })
+    }
 }

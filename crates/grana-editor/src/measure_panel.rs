@@ -543,12 +543,21 @@ fn table<'a>(
     };
     let Some(table) = state.measure.table() else {
         return vec![
-            view::empty_state(
-                ctx,
-                Icon::Table,
-                "No Detection Yet",
-                "Detect this object set to build its measurement table.",
-            )
+            if state.measuring {
+                view::empty_state(
+                    ctx,
+                    Icon::Table,
+                    "Measuring",
+                    "The measurements are computed in the background and appear here when they settle.",
+                )
+            } else {
+                view::empty_state(
+                    ctx,
+                    Icon::Table,
+                    "No Detection Yet",
+                    "Detect this object set to build its measurement table.",
+                )
+            }
             .at(rect),
         ];
     };

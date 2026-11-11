@@ -211,7 +211,7 @@ impl Session {
         self.field = 0;
         self.fields.clear();
         self.clear_plate();
-        self.document = Some(Document::open(path, Arc::clone(&self.store)));
+        self.tasks.document = Some(Document::open(path, Arc::clone(&self.store)));
         self.message = None;
     }
 
@@ -240,7 +240,7 @@ impl Session {
             fingerprint,
         );
         let hash = self.document_hash();
-        self.document = Some(Document::save(project, path, hash));
+        self.tasks.document = Some(Document::save(project, path, hash));
         self.message = None;
     }
 
@@ -257,14 +257,14 @@ impl Session {
     }
 
     pub fn transferring(&self) -> bool {
-        self.loading.is_some() || self.document.is_some()
+        self.loading.is_some() || self.tasks.transferring()
     }
 
     pub(super) fn reject_transfer(&mut self) -> bool {
         if self.loading.is_some() {
             return true;
         }
-        if self.document.is_some() {
+        if self.tasks.transferring() {
             self.message = Some(Message::error("a project transfer is already running"));
             return true;
         }
@@ -326,66 +326,31 @@ impl Session {
         }
     }
 
-    pub(super) fn poll_document(&mut self) -> bool {
-        let (events, closed, path, hash) = {
-            let Some(document) = self.document.as_mut() else {
-                return false;
-            };
-            let mut events = Vec::new();
-            let mut closed = false;
-            loop {
-                match document.poll() {
-                    Poll::Event(event) => events.push(event),
-                    Poll::Empty => break,
-                    Poll::Closed => {
-                        closed = true;
-                        break;
-                    }
-                }
+    pub(super) fn finish_document(
+        &mut self,
+        path: PathBuf,
+        hash: Option<u64>,
+        outcome: document::Outcome,
+    ) {
+        match outcome {
+            document::Outcome::Saved => {
+                self.project = Some(path.clone());
+                self.baseline = hash;
+                self.clear_recovery();
+                self.record_recent(RecentEntry::project(&path));
             }
-            (
-                events,
-                closed,
-                document.path().to_path_buf(),
-                document.hash(),
-            )
-        };
-        if events.is_empty() && !closed {
-            return false;
-        }
-        let mut settled = false;
-        for event in events {
-            settled = true;
-            match event {
-                document::Outcome::Saved => {
-                    self.project = Some(path.clone());
-                    self.baseline = hash;
-                    self.clear_recovery();
-                    self.record_recent(RecentEntry::project(&path));
-                }
-                document::Outcome::Opened(project) => {
-                    self.open_project(&path, *project);
-                    self.record_recent(RecentEntry::project(&path));
-                }
-                document::Outcome::Failed(detail) => {
-                    self.restore = None;
-                    self.message = Some(Message::error(detail));
-                }
-                document::Outcome::Cancelled => {
-                    self.restore = None;
-                }
+            document::Outcome::Opened(project) => {
+                self.open_project(&path, *project);
+                self.record_recent(RecentEntry::project(&path));
+            }
+            document::Outcome::Failed(detail) => {
+                self.restore = None;
+                self.message = Some(Message::error(detail));
+            }
+            document::Outcome::Cancelled => {
+                self.restore = None;
             }
         }
-        let finished = settled || closed;
-        if finished {
-            if closed && !settled {
-                self.message = Some(Message::error(
-                    "the project worker stopped before it finished",
-                ));
-            }
-            self.document = None;
-        }
-        true
     }
 
     pub(super) fn source_ref(&self) -> Option<ProjectSource> {
@@ -420,7 +385,8 @@ impl Session {
 
     pub(super) fn reset(&mut self) {
         self.measure.reset();
-        self.measure_job = None;
+        self.tasks.clear();
+        self.labels_queue.clear();
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();

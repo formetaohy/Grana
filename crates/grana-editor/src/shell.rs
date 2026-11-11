@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
-    Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
-    TextStyle, TypeStyle,
+    Align, BuildContext, Corners, Edges, Element, GlassStyle, Icon, Key, Layer, Length, Level,
+    Rect, Role, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -128,34 +128,11 @@ pub(crate) fn view<'a>(
         .gap(CARD_GAP)
         .children(children)
         .at(rect)
+        .glass(GlassStyle::surface())
         .named("shell.card");
-    elements.push(surface(ctx, rect));
     elements.push(card);
     elements.extend(crate::panel::remote(ctx, full, workspace.remote_open));
     elements
-}
-
-fn surface<'a>(ctx: &mut BuildContext<'_, Message>, rect: Rect) -> Element<'a, Message> {
-    let palette = ctx.theme().palette;
-    let corners = Corners::all(ctx.theme().metrics.card_radius);
-    let top = palette.card;
-    let bottom = palette.card.amplify(0.7);
-    let border = palette.material_border;
-    grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
-        painter.outlined(
-            info.rect,
-            corners,
-            grana_ui::Fill::Gradient(top, bottom),
-            grana_ui::Border {
-                width: 1.0,
-                color: border,
-            },
-            grana_ui::Shadow::NONE,
-        );
-    })
-    .named("shell.surface")
-    .at(rect)
-    .layer(Layer::Content)
 }
 
 fn status(view: &SessionView<'_>) -> Status {

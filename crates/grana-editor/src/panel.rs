@@ -109,6 +109,7 @@ pub fn build(
     let state = View {
         scene,
         measure: view.measure,
+        measuring: view.measuring,
         timeline: view.timeline,
         jobs: view.jobs,
         io: &view.io,

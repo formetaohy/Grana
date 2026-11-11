@@ -35,7 +35,7 @@ impl Session {
     pub fn autosave(&mut self, view: ViewState) -> bool {
         if self.recovery.busy()
             || self.loading.is_some()
-            || self.document.is_some()
+            || self.tasks.transferring()
             || !self.dirty()
         {
             return false;

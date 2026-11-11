@@ -29,7 +29,7 @@ impl Previews {
                 )
             })
             .collect::<Vec<_>>();
-        let task = Task::spawn(move |cancel, sink| {
+        let task = Task::spawn(grana_exec::Role::Read, move |cancel, sink| {
             for (series, source) in sources {
                 if cancel.load(Ordering::Relaxed) {
                     return;

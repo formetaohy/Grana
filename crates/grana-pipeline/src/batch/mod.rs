@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use grana_exec::{Executor, Pipe, Poll, Sender};
+use grana_exec::{Pipe, Poll, Sender};
 use grana_protocol::Protocol;
 use thiserror::Error;
 
@@ -139,7 +139,10 @@ impl Batch {
         let gate = Gate::new();
         let token = Arc::clone(&cancel);
         let pause = Arc::clone(&gate);
-        let _ = Executor::shared().submit(move |_| execute(plan, events, token, pause));
+        std::thread::Builder::new()
+            .name("grana-batch".to_string())
+            .spawn(move || execute(plan, events, token, pause))
+            .expect("the batch coordinator starts");
         Self {
             events: pipe,
             cancel,

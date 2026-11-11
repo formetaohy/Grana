@@ -174,7 +174,7 @@ fn analyse(
     job: Job,
     work: impl FnOnce(&AtomicBool, &mut dyn FnMut(Event)) -> Result<(), String> + Send + 'static,
 ) -> Analysis {
-    let task = Task::spawn(move |cancel, sink| {
+    let task = Task::spawn(grana_exec::Role::Compute, move |cancel, sink| {
         if let Err(detail) = work(cancel, sink) {
             sink(Event::Failed(detail));
         }

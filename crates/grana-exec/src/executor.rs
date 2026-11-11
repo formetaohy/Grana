@@ -1,12 +1,51 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use crate::cancel::Cancel;
 
-const WORKER_CEILING: usize = 8;
+const READ_THREADS: usize = 4;
+const WRITE_THREADS: usize = 2;
+const COMPUTE_CEILING: usize = 8;
 
 type Work = Box<dyn FnOnce(&Cancel) + Send + 'static>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Read,
+    Compute,
+    Write,
+}
+
+impl Role {
+    const ALL: [Role; 3] = [Role::Read, Role::Compute, Role::Write];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Read => 0,
+            Self::Compute => 1,
+            Self::Write => 2,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Compute => "compute",
+            Self::Write => "write",
+        }
+    }
+
+    fn threads(self) -> usize {
+        match self {
+            Self::Read => READ_THREADS,
+            Self::Write => WRITE_THREADS,
+            Self::Compute => std::thread::available_parallelism()
+                .map_or(2, |count| count.get().clamp(2, COMPUTE_CEILING)),
+        }
+    }
+}
 
 pub struct Job {
     cancel: Cancel,
@@ -60,13 +99,13 @@ struct Order {
 
 struct State {
     tasks: BinaryHeap<Task>,
-    arrival: u64,
     closed: bool,
 }
 
 struct Inner {
     state: Mutex<State>,
     ready: Condvar,
+    sequence: AtomicU64,
 }
 
 pub struct Executor {
@@ -74,29 +113,39 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn new(threads: usize) -> Self {
+    pub fn new(role: Role, threads: usize) -> Self {
         assert!(threads > 0, "an executor runs at least one worker");
         let inner = Arc::new(Inner {
             state: Mutex::new(State {
                 tasks: BinaryHeap::new(),
-                arrival: 0,
                 closed: false,
             }),
             ready: Condvar::new(),
+            sequence: AtomicU64::new(0),
         });
         for index in 0..threads {
             let inner = Arc::clone(&inner);
             std::thread::Builder::new()
-                .name(format!("grana-exec-{index}"))
+                .name(format!("grana-{}-{index}", role.name()))
                 .spawn(move || serve(&inner))
                 .expect("an executor worker starts");
         }
         Self { inner }
     }
 
-    pub fn shared() -> &'static Executor {
-        static SHARED: OnceLock<Executor> = OnceLock::new();
-        SHARED.get_or_init(|| Executor::new(workers()))
+    pub fn lane(role: Role) -> &'static Executor {
+        static LANES: OnceLock<[Executor; 3]> = OnceLock::new();
+        let lanes = LANES.get_or_init(|| {
+            std::array::from_fn(|index| {
+                let role = Role::ALL[index];
+                Executor::new(role, role.threads())
+            })
+        });
+        &lanes[role.index()]
+    }
+
+    pub fn stamp(&self) -> u64 {
+        self.inner.sequence.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn submit(&self, work: impl FnOnce(&Cancel) + Send + 'static) -> Job {
@@ -118,8 +167,7 @@ impl Executor {
             !state.closed,
             "an executor accepts work until its caller releases it"
         );
-        let arrival = state.arrival;
-        state.arrival += 1;
+        let arrival = self.inner.sequence.fetch_add(1, Ordering::Relaxed);
         state.tasks.push(Task {
             order: Order {
                 priority,
@@ -174,8 +222,4 @@ fn take(inner: &Inner) -> Option<Task> {
             .wait(state)
             .unwrap_or_else(|error| error.into_inner());
     }
-}
-
-fn workers() -> usize {
-    std::thread::available_parallelism().map_or(2, |count| count.get().clamp(2, WORKER_CEILING))
 }
