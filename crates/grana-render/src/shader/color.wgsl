@@ -25,11 +25,6 @@ fn aces(radiance: vec3<f32>) -> vec3<f32> {
     );
 }
 
-fn background(ndc: vec2<f32>) -> vec3<f32> {
-    let height = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(vec3<f32>(0.012, 0.014, 0.020), vec3<f32>(0.040, 0.048, 0.066), height);
-}
-
 fn dither(position: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(position, vec2<f32>(0.06711056, 0.00583715))));
 }

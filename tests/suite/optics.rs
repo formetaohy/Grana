@@ -148,7 +148,7 @@ fn spread(pixels: &[[u8; 4]]) -> (usize, usize) {
             .iter()
             .filter(|pixel| {
                 (0..3).all(|other| other == channel || pixel[other] < pixel[channel])
-                    && pixel[channel] > 90
+                    && pixel[channel] > 32
             })
             .count()
     };

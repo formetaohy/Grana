@@ -16,7 +16,6 @@ struct Accumulated {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) ndc: vec2<f32>,
 }
 
 @vertex
@@ -28,7 +27,6 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     );
     var output: VertexOutput;
     output.clip_position = vec4<f32>(corners[index], 0.0, 1.0);
-    output.ndc = corners[index];
     return output;
 }
 
@@ -54,7 +52,7 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     let stale = earlier(pixel);
     let accumulated = mix(stale, fresh, weight);
     let coverage = clamp(accumulated.a, 0.0, 1.0);
-    let noise = (dither(pixel) - 0.5) / 255.0;
+    let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
     if screen.flags.z > 0.5 {
         let straight_new = srgb_encode(aces(fresh.rgb * screen.flags.y / max(fresh.a, 1.0e-4)));
         let straight_old = srgb_encode(aces(stale.rgb * screen.flags.y / max(stale.a, 1.0e-4)));
@@ -63,8 +61,7 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), coverage);
     }
     let straight = accumulated.rgb / max(accumulated.a, 1.0e-4);
-    let mapped =
-        aces(straight * screen.flags.y) * coverage + aces(background(input.ndc)) * (1.0 - coverage);
+    let mapped = aces(straight * screen.flags.y) * coverage;
     let encoded = clamp(srgb_encode(mapped) + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), 1.0);
 }

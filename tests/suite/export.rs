@@ -313,13 +313,14 @@ fn exports_a_sixteen_bit_ome_tiff() {
     assert_eq!(pyramid.level(0).extent(), Extent::new(size[0], size[1], 1));
     assert_eq!(pyramid.channels()[0].name(), "Red");
     let values = read_plane(&image, 0, size);
+    let lit = values.iter().filter(|value| **value > 512).count();
+    assert!(lit > 1000, "the wide export writes the rendered scene");
+    let beyond = values
+        .iter()
+        .filter(|value| **value > 512 && **value % 257 != 0)
+        .count();
     assert!(
-        values.iter().filter(|value| **value > 512).count() > 1000,
-        "the wide export writes the rendered scene"
-    );
-    let beyond = values.iter().filter(|value| **value % 257 != 0).count();
-    assert!(
-        beyond > values.len() / 16,
+        beyond > lit / 16,
         "the wide export keeps more than eight bits of precision"
     );
 }
