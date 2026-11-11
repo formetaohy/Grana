@@ -589,6 +589,7 @@ impl Renderer {
         let size = (self.size[0], self.size[1]);
 
         clear(encoder, &base_view);
+        self.glass.start_frame();
         self.paint_material(
             encoder,
             atlases,

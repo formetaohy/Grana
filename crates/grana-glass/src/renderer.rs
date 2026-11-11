@@ -556,7 +556,14 @@ impl<K: PartialEq> BindCache<K> {
 struct Binds {
     blit: BindCache<wgpu::TextureView>,
     down_first: BindCache<wgpu::TextureView>,
-    glass: BindCache<(wgpu::TextureView, bool)>,
+    glass: Vec<BindCache<(wgpu::TextureView, bool)>>,
+}
+
+struct Storage {
+    shapes: wgpu::Buffer,
+    materials: wgpu::Buffer,
+    groups: wgpu::Buffer,
+    uploaded: Uploaded,
 }
 
 struct Backdrop {
@@ -566,27 +573,26 @@ struct Backdrop {
 }
 
 const BACKDROPS: usize = 4;
+const PASSES: usize = 4;
 
 pub struct Renderer {
     format: wgpu::TextureFormat,
     size: (u32, u32),
     pipelines: Pipelines,
     globals: wgpu::Buffer,
-    shapes: wgpu::Buffer,
-    materials: wgpu::Buffer,
-    groups: wgpu::Buffer,
+    storage: Vec<Storage>,
+    pass: usize,
     backdrops: Vec<Backdrop>,
     layered: Option<Pyramid>,
     layer_textures: Vec<wgpu::TextureView>,
     packed: Packed,
-    uploaded: Uploaded,
+    uploaded_globals: Option<Globals>,
     binds: Binds,
     rebuild: Vec<bool>,
 }
 
 #[derive(Default)]
 struct Uploaded {
-    globals: Option<Globals>,
     shapes: Vec<ShapeGpu>,
     materials: Vec<MaterialGpu>,
     groups: Vec<GroupGpu>,
@@ -599,6 +605,29 @@ fn storage(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+impl Storage {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            shapes: storage(
+                device,
+                "grana-glass shapes",
+                size_of::<ShapeGpu>() as u64 * 16,
+            ),
+            materials: storage(
+                device,
+                "grana-glass materials",
+                size_of::<MaterialGpu>() as u64 * 16,
+            ),
+            groups: storage(
+                device,
+                "grana-glass groups",
+                size_of::<GroupGpu>() as u64 * 16,
+            ),
+            uploaded: Uploaded::default(),
+        }
+    }
 }
 
 fn pipeline(
@@ -697,49 +726,29 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            shapes: storage(
-                device,
-                "grana-glass shapes",
-                size_of::<ShapeGpu>() as u64 * 16,
-            ),
-            materials: storage(
-                device,
-                "grana-glass materials",
-                size_of::<MaterialGpu>() as u64 * 16,
-            ),
-            groups: storage(
-                device,
-                "grana-glass groups",
-                size_of::<GroupGpu>() as u64 * 16,
-            ),
+            storage: (0..PASSES).map(|_| Storage::new(device)).collect(),
+            pass: 0,
             pipelines,
             backdrops: Vec::new(),
             layered: None,
             layer_textures: Vec::new(),
             packed: Packed::default(),
-            uploaded: Uploaded::default(),
+            uploaded_globals: None,
             binds: Binds {
                 blit: BindCache::new(),
                 down_first: BindCache::new(),
-                glass: BindCache::new(),
+                glass: (0..PASSES).map(|_| BindCache::new()).collect(),
             },
             rebuild: Vec::new(),
         }
     }
 
-    pub fn format(&self) -> wgpu::TextureFormat {
-        self.format
+    pub fn start_frame(&mut self) {
+        self.pass = 0;
     }
 
-    pub fn render(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        frame: &Frame<'_>,
-        scene: &Scene,
-    ) {
-        self.render_layers(device, queue, encoder, frame, scene, ..);
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 
     pub fn render_layers(
@@ -755,6 +764,12 @@ impl Renderer {
         if size.0 == 0 || size.1 == 0 {
             return;
         }
+        let pass = self.pass;
+        self.pass += 1;
+        assert!(
+            pass < PASSES,
+            "the glass renderer draws at most {PASSES} passes per frame"
+        );
         let layers = (layers.start_bound().cloned(), layers.end_bound().cloned());
         pack(
             scene,
@@ -770,9 +785,11 @@ impl Renderer {
             self.layer_textures.clear();
             self.binds.blit.clear();
             self.binds.down_first.clear();
-            self.binds.glass.clear();
+            for bind in &mut self.binds.glass {
+                bind.clear();
+            }
         }
-        self.upload(device, queue, frame, scene);
+        self.upload(device, queue, frame, scene, pass);
         {
             let pipelines = &self.pipelines;
             let copy = self.binds.blit.get(frame.content.clone(), |src| {
@@ -797,13 +814,12 @@ impl Renderer {
             layer_textures,
             rebuild,
             globals,
-            shapes,
-            materials,
-            groups,
+            storage,
             format,
             packed,
             ..
         } = self;
+        let buffers = &storage[pass];
         let layers = &packed.layers;
         let tail = |i: usize| {
             clamp_bounds(
@@ -845,7 +861,7 @@ impl Renderer {
         }
 
         let mut glass_group = |src: &wgpu::TextureView, blur: &Pyramid, layered: bool| {
-            binds.glass.get((src.clone(), layered), |(src, _)| {
+            binds.glass[pass].get((src.clone(), layered), |(src, _)| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("grana-glass glass"),
                     layout: &pipelines.glass.get_bind_group_layout(0),
@@ -856,11 +872,11 @@ impl Renderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: shapes.as_entire_binding(),
+                            resource: buffers.shapes.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: groups.as_entire_binding(),
+                            resource: buffers.groups.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
@@ -876,7 +892,7 @@ impl Renderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 6,
-                            resource: materials.as_entire_binding(),
+                            resource: buffers.materials.as_entire_binding(),
                         },
                     ],
                 })
@@ -934,6 +950,7 @@ impl Renderer {
         queue: &wgpu::Queue,
         frame: &Frame<'_>,
         scene: &Scene,
+        pass: usize,
     ) {
         let (w, h) = (frame.size.0 as f32, frame.size.1 as f32);
         let touch = &scene.touch;
@@ -954,34 +971,36 @@ impl Renderer {
             ],
         };
 
-        if self.uploaded.globals != Some(globals) {
+        if self.uploaded_globals != Some(globals) {
             queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-            self.uploaded.globals = Some(globals);
+            self.uploaded_globals = Some(globals);
         }
+        let storage = &mut self.storage[pass];
+        let packed = &self.packed;
         let grown = write_storage(
             device,
             queue,
-            &mut self.shapes,
+            &mut storage.shapes,
             "grana-glass shapes",
-            &self.packed.shapes,
-            &mut self.uploaded.shapes,
+            &packed.shapes,
+            &mut storage.uploaded.shapes,
         ) | write_storage(
             device,
             queue,
-            &mut self.materials,
+            &mut storage.materials,
             "grana-glass materials",
-            &self.packed.materials,
-            &mut self.uploaded.materials,
+            &packed.materials,
+            &mut storage.uploaded.materials,
         ) | write_storage(
             device,
             queue,
-            &mut self.groups,
+            &mut storage.groups,
             "grana-glass groups",
-            &self.packed.groups,
-            &mut self.uploaded.groups,
+            &packed.groups,
+            &mut storage.uploaded.groups,
         );
         if grown {
-            self.binds.glass.clear();
+            self.binds.glass[pass].clear();
         }
     }
 }
