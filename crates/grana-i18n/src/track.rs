@@ -42,6 +42,9 @@ labels! {
     max_gap => "Max gap" / "最大间隔";
     allow_division => "Allow Division" / "允许分裂";
     division_range => "Div. range" / "分裂范围";
+    allow_merge => "Allow Merge" / "允许融合";
+    merge_range => "Merge range" / "融合范围";
+    merge_overlap => "Overlap" / "重叠";
     show_tubes => "Show Tubes" / "显示管道";
     tube_width => "Tube width" / "管道宽度";
     tube_coloring => "Tube Coloring" / "管道着色";

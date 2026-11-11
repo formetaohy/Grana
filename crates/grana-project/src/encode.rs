@@ -736,6 +736,9 @@ impl Encode for TrackStyle {
         writer.u32(params.max_gap());
         writer.bool(params.division());
         writer.f32(params.division_range());
+        writer.bool(params.merge());
+        writer.f32(params.merge_range());
+        writer.f32(params.merge_overlap());
         writer.f32(self.thickness());
     }
 }

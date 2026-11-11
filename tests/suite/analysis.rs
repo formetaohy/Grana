@@ -11,7 +11,7 @@ use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
     FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, Track,
-    TrackNode, TrackParams, TrackSet,
+    TrackDetection, TrackEvents, TrackNode, TrackParams, TrackSet,
 };
 use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
@@ -730,10 +730,10 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
 
 #[test]
 fn links_motion_and_splits_lineages() {
-    let mut builder = TrackBuilder::new(TrackParams::new(1.0, 1, false, 2.0));
-    builder.push(0, &[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]]);
-    builder.push(1, &[[0.5, 0.0, 0.0]]);
-    builder.push(2, &[[1.0, 0.0, 0.0], [5.2, 0.0, 0.0]]);
+    let mut builder = TrackBuilder::new(TrackParams::new(1.0, 1, events(false, 2.0, 2.0, 0.0)));
+    builder.push(0, &detections(&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]], 1.0));
+    builder.push(1, &detections(&[[0.5, 0.0, 0.0]], 1.0));
+    builder.push(2, &detections(&[[1.0, 0.0, 0.0], [5.2, 0.0, 0.0]], 1.0));
     let set = builder.finish(1.0);
     assert_eq!(set.len(), 3);
     let moving = set.track_at(2, 0).expect("the moving object is tracked");
@@ -751,11 +751,11 @@ fn links_motion_and_splits_lineages() {
         1
     );
 
-    let mut builder = TrackBuilder::new(TrackParams::new(0.8, 0, true, 2.0));
-    builder.push(0, &[[0.0, 0.0, 0.0]]);
-    builder.push(1, &[[-0.6, 0.0, 0.0], [0.6, 0.0, 0.0]]);
-    builder.push(2, &[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
-    builder.push(3, &[[-1.4, 0.0, 0.0], [1.4, 0.0, 0.0]]);
+    let mut builder = TrackBuilder::new(TrackParams::new(0.8, 0, events(true, 2.0, 2.0, 0.0)));
+    builder.push(0, &detections(&[[0.0, 0.0, 0.0]], 1.0));
+    builder.push(1, &detections(&[[-0.6, 0.0, 0.0], [0.6, 0.0, 0.0]], 1.0));
+    builder.push(2, &detections(&[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], 1.0));
+    builder.push(3, &detections(&[[-1.4, 0.0, 0.0], [1.4, 0.0, 0.0]], 1.0));
     let set = builder.finish(2.0);
     assert_eq!(set.len(), 3);
     assert_eq!(set.divisions(), 1);
@@ -764,10 +764,10 @@ fn links_motion_and_splits_lineages() {
 
 #[test]
 fn merges_two_lineages_that_share_a_detection() {
-    let mut builder = TrackBuilder::new(TrackParams::new(2.0, 0, false, 2.0));
-    builder.push(0, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
-    builder.push(1, &[[1.0, 0.0, 0.0]]);
-    builder.push(2, &[[1.2, 0.0, 0.0]]);
+    let mut builder = TrackBuilder::new(TrackParams::new(2.0, 0, events(false, 2.0, 2.0, 0.0)));
+    builder.push(0, &detections(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], 1.5));
+    builder.push(1, &detections(&[[1.0, 0.0, 0.0]], 1.5));
+    builder.push(2, &detections(&[[1.2, 0.0, 0.0]], 1.5));
     let set = builder.finish(1.0);
     assert_eq!(set.merges(), 1);
     let merged = set.track_at(2, 0).expect("the merged object is tracked");
@@ -780,6 +780,27 @@ fn merges_two_lineages_that_share_a_detection() {
             .len(),
         2
     );
+
+    let mut apart = TrackBuilder::new(TrackParams::new(2.0, 0, events(false, 2.0, 2.0, 0.35)));
+    apart.push(0, &detections(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], 1.5));
+    apart.push(1, &detections(&[[1.0, 0.0, 0.0]], 1.5));
+    assert_eq!(apart.finish(1.0).merges(), 0);
+
+    let mut gated = TrackBuilder::new(TrackParams::new(2.0, 0, events(false, 2.0, 2.0, 0.0)));
+    gated.push(0, &detections(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], 1.5));
+    gated.push(1, &detections(&[[3.9, 0.0, 0.0]], 1.5));
+    assert_eq!(gated.finish(1.0).merges(), 0);
+}
+
+fn events(division: bool, division_range: f32, merge_range: f32, overlap: f32) -> TrackEvents {
+    TrackEvents::new(division, division_range, true, merge_range, overlap)
+}
+
+fn detections(centroids: &[[f32; 3]], radius: f32) -> Vec<TrackDetection> {
+    centroids
+        .iter()
+        .map(|centroid| TrackDetection::new(*centroid, radius))
+        .collect()
 }
 
 #[test]

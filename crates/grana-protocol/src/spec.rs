@@ -1379,6 +1379,10 @@ pub struct TrackSpec {
     pub max_gap: u32,
     pub division: bool,
     pub division_range: f32,
+    pub merge: bool,
+    pub merge_range: f32,
+    #[serde(default, skip_serializing_if = "is_f32_zero")]
+    pub merge_overlap: f32,
     pub thickness: f32,
     #[serde(default = "truth", skip_serializing_if = "is_true")]
     pub visible: bool,
@@ -2435,8 +2439,13 @@ impl SetSpec {
             TrackParams::new(
                 track.max_step,
                 track.max_gap,
-                track.division,
-                track.division_range,
+                grana_object::TrackEvents::new(
+                    track.division,
+                    track.division_range,
+                    track.merge,
+                    track.merge_range,
+                    track.merge_overlap,
+                ),
             )
         })
     }
@@ -3095,6 +3104,12 @@ impl TrackSpec {
         }
         if self.division && self.division_range < self.max_step {
             return invalid("needs a division range that covers the step".to_string());
+        }
+        if !(self.merge_range.is_finite() && self.merge_range > 0.0) {
+            return invalid("needs a positive merge range".to_string());
+        }
+        if !(0.0..=1.0).contains(&self.merge_overlap) {
+            return invalid("needs a merge overlap within [0, 1]".to_string());
         }
         if !(self.thickness.is_finite() && self.thickness > 0.0) {
             return invalid("needs a positive tube thickness".to_string());

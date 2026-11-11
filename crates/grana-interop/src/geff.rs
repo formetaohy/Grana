@@ -91,6 +91,10 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
                 },
             ],
             "sphere": "radius",
+            "track_node_props": {
+                "tracklet": "tracklet_id",
+                "lineage": "lineage_id",
+            },
             "node_props_metadata": {
                 "t": property("t", "uint32", Some("frame")),
                 "z": property("z", "float32", Some("micrometer")),
@@ -98,14 +102,17 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
                 "x": property("x", "float32", Some("micrometer")),
                 "radius": property("radius", "float32", Some("micrometer")),
                 "quality": property("quality", "float32", None),
+                "tracklet_id": property("tracklet_id", "uint64", None),
+                "lineage_id": property("lineage_id", "uint64", None),
             },
             "edge_props_metadata": {
-                "kind": property("kind", "uint8", None),
+                "grana_kind": property("grana_kind", "uint8", None),
             },
             "extra": {
                 "grana": {
                     "frame_interval": axes.interval,
                     "voxel": axes.spacing,
+                    "edge_kind": "grana_kind",
                 },
             },
         },
@@ -117,12 +124,21 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
     )?;
     group(&store, "/nodes", Map::new())?;
     group(&store, "/nodes/props", Map::new())?;
-    for name in ["t", "x", "y", "z", "radius", "quality"] {
+    for name in [
+        "t",
+        "x",
+        "y",
+        "z",
+        "radius",
+        "quality",
+        "tracklet_id",
+        "lineage_id",
+    ] {
         group(&store, &format!("/nodes/props/{name}"), Map::new())?;
     }
     group(&store, "/edges", Map::new())?;
     group(&store, "/edges/props", Map::new())?;
-    group(&store, "/edges/props/kind", Map::new())?;
+    group(&store, "/edges/props/grana_kind", Map::new())?;
     let count = lineage.len();
     let ids = lineage
         .detections()
@@ -193,6 +209,24 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
         0.0f32,
         &qualities,
     )?;
+    let tracklets = lineage.tracklets();
+    array(
+        &store,
+        "/nodes/props/tracklet_id/values",
+        vec![count as u64],
+        data_type::uint64(),
+        0u64,
+        &tracklets,
+    )?;
+    let lineages = lineage.lineages();
+    array(
+        &store,
+        "/nodes/props/lineage_id/values",
+        vec![count as u64],
+        data_type::uint64(),
+        0u64,
+        &lineages,
+    )?;
     let edges = lineage
         .edges()
         .iter()
@@ -210,7 +244,7 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
     )?;
     array(
         &store,
-        "/edges/props/kind/values",
+        "/edges/props/grana_kind/values",
         vec![rows],
         data_type::uint8(),
         0u8,
@@ -249,9 +283,9 @@ pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
             detail: "the graph holds no node".to_string(),
         });
     }
-    let mut slots = HashMap::with_capacity(ids.len());
+    let mut seen = HashMap::with_capacity(ids.len());
     for (slot, id) in ids.iter().enumerate() {
-        if slots.insert(*id, slot).is_some() {
+        if seen.insert(*id, slot).is_some() {
             return Err(Error::Format {
                 detail: format!("the node {id} appears twice"),
             });
@@ -352,13 +386,51 @@ pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
         .iter()
         .map(|pair| Edge::new(pair[0], pair[1]))
         .collect::<Vec<_>>();
-    Lineage::new(detections, edges)
+    let recorded = read_kinds(&store, &graph, metadata, &edges)?;
+    let tracklets = read_identity(&store, &graph, names.tracklets.as_deref(), ids.len())?;
+    let lineages = read_identity(&store, &graph, names.lineages.as_deref(), ids.len())?;
+    let keys = edges
+        .iter()
+        .map(|edge| (edge.source(), edge.target()))
+        .collect::<Vec<_>>();
+    let slots = slots(&ids);
+    let lineage = Lineage::new(detections, edges)?;
+    if let Some(recorded) = recorded {
+        validate_kinds(&lineage, &keys, &recorded)?;
+    }
+    validate_identity(&lineage, &slots, tracklets.as_deref(), Kind::Tracklet)?;
+    validate_identity(&lineage, &slots, lineages.as_deref(), Kind::Lineage)?;
+    Ok(lineage)
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Tracklet,
+    Lineage,
+}
+
+impl Kind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tracklet => "tracklet",
+            Self::Lineage => "lineage",
+        }
+    }
+
+    fn values(self, lineage: &Lineage) -> Vec<u64> {
+        match self {
+            Self::Tracklet => lineage.tracklets(),
+            Self::Lineage => lineage.lineages(),
+        }
+    }
 }
 
 struct Names {
     time: String,
     space: [Option<String>; 3],
     sphere: String,
+    tracklets: Option<String>,
+    lineages: Option<String>,
 }
 
 fn names(metadata: &Map<String, Value>) -> Result<Names, Error> {
@@ -367,6 +439,41 @@ fn names(metadata: &Map<String, Value>) -> Result<Names, Error> {
         .and_then(Value::as_str)
         .unwrap_or("radius")
         .to_string();
+    let mut tracklets = None;
+    let mut lineages = None;
+    if let Some(value) = metadata.get("track_node_props") {
+        let props = value.as_object().ok_or_else(|| Error::Format {
+            detail: "the track node properties are not an object".to_string(),
+        })?;
+        for (key, value) in props {
+            let name = value.as_str().ok_or_else(|| Error::Format {
+                detail: format!("the {key} ids are not a property name"),
+            })?;
+            if name.is_empty() {
+                return Err(Error::Format {
+                    detail: format!("the {key} ids name no property"),
+                });
+            }
+            match key.as_str() {
+                "tracklet" => tracklets = Some(name.to_string()),
+                "lineage" => lineages = Some(name.to_string()),
+                other => {
+                    return Err(Error::Format {
+                        detail: format!("the track node properties name the unknown {other}"),
+                    });
+                }
+            }
+        }
+        for (key, name) in [("tracklet", &tracklets), ("lineage", &lineages)] {
+            if let Some(name) = name
+                && !declared(metadata, name)
+            {
+                return Err(Error::Format {
+                    detail: format!("the {key} ids name the undeclared property {name}"),
+                });
+            }
+        }
+    }
     let Some(list) = metadata.get("axes").and_then(Value::as_array) else {
         return Ok(Names {
             time: "t".to_string(),
@@ -376,6 +483,8 @@ fn names(metadata: &Map<String, Value>) -> Result<Names, Error> {
                 Some("z".to_string()),
             ],
             sphere,
+            tracklets,
+            lineages,
         });
     };
     let mut time = None;
@@ -451,6 +560,8 @@ fn names(metadata: &Map<String, Value>) -> Result<Names, Error> {
             picked[2].as_ref().map(|(name, _)| name.clone()),
         ],
         sphere,
+        tracklets,
+        lineages,
     })
 }
 
@@ -486,6 +597,137 @@ fn declared(metadata: &Map<String, Value>, name: &str) -> bool {
         .get("node_props_metadata")
         .and_then(Value::as_object)
         .is_some_and(|props| props.contains_key(name))
+}
+
+fn declared_edge(metadata: &Map<String, Value>, name: &str) -> bool {
+    metadata
+        .get("edge_props_metadata")
+        .and_then(Value::as_object)
+        .is_some_and(|props| props.contains_key(name))
+}
+
+fn slots(ids: &[u64]) -> HashMap<u64, usize> {
+    ids.iter()
+        .enumerate()
+        .map(|(slot, id)| (*id, slot))
+        .collect()
+}
+
+fn read_kinds(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    metadata: &Map<String, Value>,
+    edges: &[Edge],
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(name) = edge_kind(metadata) else {
+        return Ok(None);
+    };
+    if !declared_edge(metadata, &name) {
+        return Err(Error::Format {
+            detail: format!("the edge kinds name the undeclared property {name}"),
+        });
+    }
+    if edges.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let values = read_u8(store, graph, &format!("edges/props/{name}/values"))?;
+    if values.len() != edges.len() {
+        return Err(Error::Format {
+            detail: "the edge kinds do not cover every edge".to_string(),
+        });
+    }
+    if let Some(value) = values.iter().find(|value| **value > MERGE) {
+        return Err(Error::Format {
+            detail: format!("the edge kind {value} is unknown"),
+        });
+    }
+    Ok(Some(values))
+}
+
+fn edge_kind(metadata: &Map<String, Value>) -> Option<String> {
+    metadata
+        .get("extra")
+        .and_then(|extra| extra.get("grana"))
+        .and_then(|grana| grana.get("edge_kind"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn read_identity(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    name: Option<&str>,
+    count: usize,
+) -> Result<Option<Vec<u64>>, Error> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let values = read_ids(store, graph, &format!("nodes/props/{name}/values"))?;
+    if values.len() != count {
+        return Err(Error::Format {
+            detail: format!("the {name} property does not cover every node"),
+        });
+    }
+    Ok(Some(values))
+}
+
+fn validate_kinds(lineage: &Lineage, keys: &[(u64, u64)], values: &[u8]) -> Result<(), Error> {
+    let recorded = keys
+        .iter()
+        .copied()
+        .zip(values.iter().copied())
+        .collect::<HashMap<_, _>>();
+    for (edge, expected) in lineage.edges().iter().zip(kinds(lineage)) {
+        let key = (edge.source(), edge.target());
+        let Some(value) = recorded.get(&key) else {
+            return Err(Error::Format {
+                detail: format!(
+                    "the edge kinds skip the edge {} to {}",
+                    edge.source(),
+                    edge.target()
+                ),
+            });
+        };
+        if *value != expected {
+            return Err(Error::Format {
+                detail: format!(
+                    "the edge {} to {} carries the kind {value} where the graph holds {expected}",
+                    edge.source(),
+                    edge.target()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_identity(
+    lineage: &Lineage,
+    slots: &HashMap<u64, usize>,
+    values: Option<&[u64]>,
+    kind: Kind,
+) -> Result<(), Error> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+    let expected = kind.values(lineage);
+    let mut by_expected = HashMap::<u64, u64>::new();
+    let mut by_value = HashMap::<u64, u64>::new();
+    for (index, detection) in lineage.detections().iter().enumerate() {
+        let value = values[slots[&detection.id()]];
+        if by_expected
+            .insert(expected[index], value)
+            .is_some_and(|previous| previous != value)
+            || by_value
+                .insert(value, expected[index])
+                .is_some_and(|previous| previous != expected[index])
+        {
+            return Err(Error::Format {
+                detail: format!("the {} ids do not follow the graph", kind.name()),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn read_axis(

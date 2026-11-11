@@ -23,7 +23,7 @@ pub use layout::TrackLayout;
 pub use mask::{Mask, Roi};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
-    FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackParams,
+    FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackEvents, TrackParams,
 };
 pub use relation::{RelationFrame, RelationPair};
 pub use shape::Shape;
@@ -32,4 +32,4 @@ pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
     SurfaceTopology, TopologyInfo,
 };
-pub use track::{Link, Track, TrackLink, TrackNode, TrackSet, TrackStatistics};
+pub use track::{Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics};

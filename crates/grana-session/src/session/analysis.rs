@@ -975,7 +975,7 @@ impl Session {
         }
         let mut detections = vec![Vec::new(); scene.frame_count() as usize];
         for (time, frame) in object.frames() {
-            detections[time as usize] = frame.centroids();
+            detections[time as usize] = frame.detections();
         }
         let params = object
             .track_style()

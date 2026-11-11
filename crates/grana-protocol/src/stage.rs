@@ -772,8 +772,13 @@ impl Builder<'_> {
         let params = grana_object::TrackParams::new(
             track.max_step,
             track.max_gap,
-            track.division,
-            track.division_range,
+            grana_object::TrackEvents::new(
+                track.division,
+                track.division_range,
+                track.merge,
+                track.merge_range,
+                track.merge_overlap,
+            ),
         );
         self.scene.set_track_style(id, params, track.thickness);
         if let Some(set) = self.scene.objects.get_mut(id) {

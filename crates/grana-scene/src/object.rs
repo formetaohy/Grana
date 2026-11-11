@@ -4,7 +4,7 @@ use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{Measurement, Objects};
 use grana_object::{
     FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, Shape, Spot, SpotParams, SpotSet,
-    SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
+    SurfaceFilter, SurfaceParams, SurfaceSet, TrackDetection, TrackEvents, TrackParams,
 };
 
 const SPOT_STEP: f32 = 8.0;
@@ -237,10 +237,18 @@ impl ObjectKind {
         };
         let step = step * voxel;
         Some(TrackStyle::new(
-            TrackParams::new(step, MAX_GAP, true, DIVISION_SCALE * step),
+            TrackParams::new(
+                step,
+                MAX_GAP,
+                TrackEvents::new(true, DIVISION_SCALE * step, true, step, 0.0),
+            ),
             thickness * voxel,
         ))
     }
+}
+
+fn equivalent_radius(volume: f64) -> f32 {
+    (3.0 * volume / (4.0 * std::f64::consts::PI)).cbrt() as f32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -438,6 +446,30 @@ impl ObjectFrame {
                 .objects()
                 .iter()
                 .map(|object| object.centroid())
+                .collect(),
+        }
+    }
+
+    pub fn detections(&self) -> Vec<TrackDetection> {
+        match self {
+            Self::Spots(set) => set
+                .spots()
+                .iter()
+                .map(|spot| TrackDetection::new(spot.center(), spot.radius()))
+                .collect(),
+            Self::Surfaces(set) => set
+                .objects()
+                .iter()
+                .map(|object| {
+                    TrackDetection::new(object.centroid(), equivalent_radius(object.volume()))
+                })
+                .collect(),
+            Self::Filaments(set) => set
+                .objects()
+                .iter()
+                .map(|object| {
+                    TrackDetection::new(object.centroid(), (0.5 * object.diameter()) as f32)
+                })
                 .collect(),
         }
     }

@@ -101,7 +101,7 @@ pub fn recut(
 
 pub fn track(
     job: Job,
-    frames: Vec<Vec<[f32; 3]>>,
+    frames: Vec<Vec<grana_object::TrackDetection>>,
     params: TrackParams,
     frame_interval: f32,
 ) -> Analysis {

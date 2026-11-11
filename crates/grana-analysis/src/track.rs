@@ -1,11 +1,11 @@
 use glam::Vec3;
-use grana_object::{Link, Track, TrackLink, TrackNode, TrackSet};
+use grana_object::{Link, Track, TrackDetection, TrackLink, TrackNode, TrackParams, TrackSet};
 
 use crate::assignment::{self, rejected};
-use grana_object::TrackParams;
 
 struct Segment {
     nodes: Vec<TrackNode>,
+    radius: f32,
     closed: bool,
 }
 
@@ -55,7 +55,7 @@ impl TrackBuilder {
         }
     }
 
-    pub fn push(&mut self, time: u32, centroids: &[[f32; 3]]) {
+    pub fn push(&mut self, time: u32, detections: &[TrackDetection]) {
         if let Some(previous) = self.time {
             assert!(
                 time > previous,
@@ -65,38 +65,38 @@ impl TrackBuilder {
         self.time = Some(time);
         self.close_expired(time);
         let active = self.active(time);
-        if active.is_empty() && centroids.is_empty() {
+        if active.is_empty() && detections.is_empty() {
             return;
         }
-        let mut matches = self.matches(&active, time, centroids);
-        let mut used = vec![false; centroids.len()];
+        let mut matches = self.matches(&active, time, detections);
+        let mut used = vec![false; detections.len()];
         for detection in matches.iter().flatten() {
             used[*detection] = true;
         }
-        let (divisions, consumed) = self.divisions(&active, time, centroids, &matches, &used);
+        let (divisions, consumed) = self.divisions(&active, time, detections, &matches, &used);
         for division in &divisions {
             used[division.first] = true;
             used[division.second] = true;
         }
+        let (merges, merged) = self.merges(&active, time, detections, &matches, &consumed);
         for (consumed, detection) in consumed.iter().zip(matches.iter_mut()) {
             if *consumed {
                 *detection = None;
             }
         }
-        let (merges, merged) = self.merges(&active, time, centroids, &matches);
         for division in divisions {
             self.segments[division.parent].closed = true;
             self.push_segment(
                 Some((division.parent, Link::Division)),
                 time,
                 division.first,
-                centroids[division.first],
+                detections[division.first],
             );
             self.push_segment(
                 Some((division.parent, Link::Division)),
                 time,
                 division.second,
-                centroids[division.second],
+                detections[division.second],
             );
         }
         for merge in &merges {
@@ -109,35 +109,32 @@ impl TrackBuilder {
                 active[merge.other],
                 time,
                 merge.detection,
-                centroids[merge.detection],
+                detections[merge.detection],
             );
         }
         for (row, &index) in active.iter().enumerate() {
             if merged[row] {
                 continue;
             }
-            let Some(detection) = matches[row] else {
+            let Some(matched) = matches[row] else {
                 continue;
             };
+            let detection = detections[matched];
             if self.segments[index].last_time() + 1 == time {
+                self.segments[index].radius = detection.radius();
                 self.segments[index].nodes.push(TrackNode::new(
                     time,
-                    detection,
-                    centroids[detection],
+                    matched,
+                    detection.centroid(),
                 ));
             } else {
                 self.segments[index].closed = true;
-                self.push_segment(
-                    Some((index, Link::Gap)),
-                    time,
-                    detection,
-                    centroids[detection],
-                );
+                self.push_segment(Some((index, Link::Gap)), time, matched, detection);
             }
         }
         for (detection, used) in used.into_iter().enumerate() {
             if !used {
-                self.push_segment(None, time, detection, centroids[detection]);
+                self.push_segment(None, time, detection, detections[detection]);
             }
         }
     }
@@ -178,30 +175,35 @@ impl TrackBuilder {
             .collect()
     }
 
-    fn matches(&self, active: &[usize], time: u32, centroids: &[[f32; 3]]) -> Vec<Option<usize>> {
-        let detections = centroids.len();
+    fn matches(
+        &self,
+        active: &[usize],
+        time: u32,
+        detections: &[TrackDetection],
+    ) -> Vec<Option<usize>> {
+        let count = detections.len();
         let tracks = active.len();
-        if tracks == 0 || detections == 0 {
+        if tracks == 0 || count == 0 {
             return vec![None; tracks];
         }
-        let mut cost = vec![vec![rejected(); detections + tracks]; tracks];
+        let mut cost = vec![vec![rejected(); count + tracks]; tracks];
         for (row, &index) in active.iter().enumerate() {
             let segment = &self.segments[index];
             let gap = f64::from(time - segment.last_time());
             let allowed = f64::from(self.params.max_step()) * gap;
             let predicted = segment.predict(time);
-            cost[row][detections + row] = 0.0;
-            for (column, centroid) in centroids.iter().enumerate() {
-                let distance = predicted.distance(Vec3::from(*centroid)) as f64;
+            cost[row][count + row] = 0.0;
+            for (column, detection) in detections.iter().enumerate() {
+                let distance = predicted.distance(Vec3::from(detection.centroid())) as f64;
                 if distance <= allowed {
                     cost[row][column] = distance / allowed - 1.0;
                 }
             }
         }
-        let assignment = assignment::assign(&cost, detections + tracks);
+        let assignment = assignment::assign(&cost, count + tracks);
         let mut matches = vec![None; tracks];
         for (row, column) in assignment.into_iter().enumerate() {
-            if column < detections {
+            if column < count {
                 matches[row] = Some(column);
             }
         }
@@ -212,7 +214,7 @@ impl TrackBuilder {
         &self,
         active: &[usize],
         time: u32,
-        centroids: &[[f32; 3]],
+        detections: &[TrackDetection],
         matches: &[Option<usize>],
         used: &[bool],
     ) -> (Vec<Division>, Vec<bool>) {
@@ -221,9 +223,9 @@ impl TrackBuilder {
         if !self.params.division() {
             return (divisions, consumed);
         }
-        let positions = centroids
+        let positions = detections
             .iter()
-            .map(|centroid| Vec3::from(*centroid))
+            .map(|detection| Vec3::from(detection.centroid()))
             .collect::<Vec<_>>();
         let range = self.params.division_range();
         let mut taken = used.to_vec();
@@ -315,21 +317,22 @@ impl TrackBuilder {
         &self,
         active: &[usize],
         time: u32,
-        centroids: &[[f32; 3]],
+        detections: &[TrackDetection],
         matches: &[Option<usize>],
+        divided: &[bool],
     ) -> (Vec<Merge>, Vec<bool>) {
         let mut merges = Vec::new();
         let mut consumed = vec![false; active.len()];
-        let positions = centroids
-            .iter()
-            .map(|centroid| Vec3::from(*centroid))
-            .collect::<Vec<_>>();
-        let step = self.params.max_step();
+        let events = self.params.events();
+        if !events.merge() {
+            return (merges, consumed);
+        }
+        let range = events.merge_range();
         let cell = |position: Vec3| {
             (
-                (position.x / step).floor() as i64,
-                (position.y / step).floor() as i64,
-                (position.z / step).floor() as i64,
+                (position.x / range).floor() as i64,
+                (position.y / range).floor() as i64,
+                (position.z / range).floor() as i64,
             )
         };
         let mut grid = std::collections::HashMap::<(i64, i64, i64), Vec<(usize, usize)>>::new();
@@ -337,15 +340,15 @@ impl TrackBuilder {
             let Some(detection) = matches[other] else {
                 continue;
             };
-            if self.segments[index].last_time() + 1 != time {
+            if divided[other] || self.segments[index].last_time() + 1 != time {
                 continue;
             }
-            grid.entry(cell(positions[detection]))
+            grid.entry(cell(Vec3::from(detections[detection].centroid())))
                 .or_default()
                 .push((other, detection));
         }
         for (row, &parent) in active.iter().enumerate() {
-            if matches[row].is_some() || consumed[row] {
+            if matches[row].is_some() || divided[row] || consumed[row] {
                 continue;
             }
             let segment = &self.segments[parent];
@@ -353,9 +356,8 @@ impl TrackBuilder {
                 continue;
             }
             let predicted = segment.predict(time);
-            let allowed = f64::from(step) * f64::from(time - segment.last_time());
             let (x, y, z) = cell(predicted);
-            let mut best: Option<(f64, usize, usize)> = None;
+            let mut best: Option<(f32, usize, usize)> = None;
             for offset in 0..27 {
                 let dx = offset % 3 - 1;
                 let dy = offset / 3 % 3 - 1;
@@ -368,12 +370,22 @@ impl TrackBuilder {
                     if consumed[other] {
                         continue;
                     }
-                    let distance = predicted.distance(positions[detection]) as f64;
-                    if distance > allowed {
+                    let merged = Vec3::from(detections[detection].centroid());
+                    let other_segment = &self.segments[active[other]];
+                    let other_predicted = other_segment.predict(time);
+                    let first = predicted.distance(merged);
+                    let second = other_predicted.distance(merged);
+                    if first > range || second > range {
                         continue;
                     }
-                    if best.is_none_or(|(nearest, _, _)| distance < nearest) {
-                        best = Some((distance, other, detection));
+                    let reach = segment.radius + other_segment.radius;
+                    let overlap = (reach - predicted.distance(other_predicted)) / reach;
+                    if overlap < events.merge_overlap() {
+                        continue;
+                    }
+                    let cost = first + second;
+                    if best.is_none_or(|(nearest, _, _)| cost < nearest) {
+                        best = Some((cost, other, detection));
                     }
                 }
             }
@@ -395,14 +407,15 @@ impl TrackBuilder {
         parent: Option<(usize, Link)>,
         time: u32,
         object: usize,
-        centroid: [f32; 3],
+        detection: TrackDetection,
     ) {
         let index = self.segments.len();
         if let Some((parent, kind)) = parent {
             self.links.push((parent, index, kind));
         }
         self.segments.push(Segment {
-            nodes: vec![TrackNode::new(time, object, centroid)],
+            nodes: vec![TrackNode::new(time, object, detection.centroid())],
+            radius: detection.radius(),
             closed: false,
         });
     }
@@ -413,14 +426,15 @@ impl TrackBuilder {
         second: usize,
         time: u32,
         object: usize,
-        centroid: [f32; 3],
+        detection: TrackDetection,
     ) {
         assert!(first != second, "a merge joins two distinct tracks");
         let index = self.segments.len();
         self.links.push((first, index, Link::Merge));
         self.links.push((second, index, Link::Merge));
         self.segments.push(Segment {
-            nodes: vec![TrackNode::new(time, object, centroid)],
+            nodes: vec![TrackNode::new(time, object, detection.centroid())],
+            radius: detection.radius(),
             closed: false,
         });
     }

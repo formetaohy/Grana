@@ -116,7 +116,7 @@ pub fn detect(
 }
 
 pub fn tracks(
-    frames: Vec<Vec<[f32; 3]>>,
+    frames: Vec<Vec<grana_object::TrackDetection>>,
     params: grana_object::TrackParams,
     frame_interval: f32,
     cancel: &AtomicBool,
@@ -129,11 +129,11 @@ pub fn tracks(
         total,
     });
     let mut builder = TrackBuilder::new(params);
-    for (time, centroids) in frames.iter().enumerate() {
+    for (time, detections) in frames.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return;
         }
-        builder.push(time as u32, centroids);
+        builder.push(time as u32, detections);
         if time % 8 == 0 || time + 1 == total {
             sink(Event::Progress {
                 time: time as u32,

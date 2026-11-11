@@ -657,6 +657,20 @@ fn round_trips_a_typed_geff_lineage() {
             .count(),
         1
     );
+    assert_eq!(
+        read.tracklets()
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        5
+    );
+    assert_eq!(
+        read.lineages()
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        1
+    );
     let empty = Lineage::new(
         vec![Detection::new(1, 0, [0.0, 0.0, 0.0], 1.0, 0.0)],
         Vec::new(),
@@ -667,4 +681,18 @@ fn round_trips_a_typed_geff_lineage() {
     let read = geff::read(&path, 0.5).expect("an edgeless graph reads");
     assert_eq!(read.len(), 1);
     assert!(read.edges().is_empty());
+    let path = temp.path().join("mismatched.geff");
+    geff::write(&path, &lineage, &axes).expect("the graph writes");
+    let store = std::sync::Arc::new(
+        zarrs::filesystem::FilesystemStore::new(&path).expect("the graph opens as a store"),
+    );
+    let kinds = zarrs::array::Array::open(store, "/edges/props/grana_kind/values")
+        .expect("the edge kinds open");
+    kinds
+        .store_chunk(&[0], &[0u8; 7])
+        .expect("the edge kinds overwrite");
+    assert!(
+        geff::read(&path, 0.5).is_err(),
+        "the graph rejects edge kinds that contradict its topology"
+    );
 }

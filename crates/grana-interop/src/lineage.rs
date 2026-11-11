@@ -95,7 +95,14 @@ impl Lineage {
             }
         }
         edges.sort_by_key(|edge| (edge.source, edge.target));
-        edges.dedup();
+        if edges
+            .windows(2)
+            .any(|pair| pair[0].source == pair[1].source && pair[0].target == pair[1].target)
+        {
+            return Err(Error::Format {
+                detail: "an edge appears twice".to_string(),
+            });
+        }
         let mut parents: HashMap<u64, Vec<u64>> = HashMap::with_capacity(edges.len());
         for edge in &edges {
             let source = *slots.get(&edge.source).ok_or_else(|| Error::Format {
@@ -186,5 +193,63 @@ impl Lineage {
             .ok_or_else(|| Error::Format {
                 detail: "the lineage holds no spot to track".to_string(),
             })
+    }
+
+    pub fn tracklets(&self) -> Vec<u64> {
+        self.partition(true)
+    }
+
+    pub fn lineages(&self) -> Vec<u64> {
+        self.partition(false)
+    }
+
+    fn partition(&self, tracklet: bool) -> Vec<u64> {
+        let slots = self.slots();
+        let mut incoming = vec![0u32; self.detections.len()];
+        let mut outgoing = vec![0u32; self.detections.len()];
+        for edge in &self.edges {
+            outgoing[slots[&edge.source]] += 1;
+            incoming[slots[&edge.target]] += 1;
+        }
+        let mut adjacency = vec![Vec::new(); self.detections.len()];
+        for edge in &self.edges {
+            let source = slots[&edge.source];
+            let target = slots[&edge.target];
+            if tracklet && (outgoing[source] != 1 || incoming[target] != 1) {
+                continue;
+            }
+            adjacency[source].push(target);
+            if !tracklet {
+                adjacency[target].push(source);
+            }
+        }
+        let mut ids = vec![u64::MAX; self.detections.len()];
+        let mut stack = Vec::new();
+        let mut next = 0u64;
+        for start in 0..self.detections.len() {
+            if ids[start] != u64::MAX {
+                continue;
+            }
+            ids[start] = next;
+            stack.push(start);
+            while let Some(node) = stack.pop() {
+                for &neighbour in &adjacency[node] {
+                    if ids[neighbour] == u64::MAX {
+                        ids[neighbour] = next;
+                        stack.push(neighbour);
+                    }
+                }
+            }
+            next += 1;
+        }
+        ids
+    }
+
+    fn slots(&self) -> HashMap<u64, usize> {
+        self.detections
+            .iter()
+            .enumerate()
+            .map(|(slot, detection)| (detection.id, slot))
+            .collect()
     }
 }

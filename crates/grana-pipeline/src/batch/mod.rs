@@ -55,7 +55,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 15;
+const ANALYSIS_REVISION: u32 = 16;
 
 pub struct Plan {
     pub protocol: Protocol,

@@ -429,32 +429,126 @@ impl FilamentParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TrackParams {
-    max_step: f32,
-    max_gap: u32,
+pub struct TrackEvents {
     division: bool,
     division_range: f32,
+    merge: bool,
+    merge_range: f32,
+    merge_overlap: f32,
 }
 
-impl TrackParams {
-    pub fn new(max_step: f32, max_gap: u32, division: bool, division_range: f32) -> Self {
-        assert!(
-            max_step.is_finite() && max_step > 0.0,
-            "a tracking step must be a positive length"
-        );
+impl TrackEvents {
+    pub fn new(
+        division: bool,
+        division_range: f32,
+        merge: bool,
+        merge_range: f32,
+        merge_overlap: f32,
+    ) -> Self {
         assert!(
             division_range.is_finite() && division_range > 0.0,
             "a division range must be a positive length"
         );
         assert!(
-            !division || division_range >= max_step,
+            merge_range.is_finite() && merge_range > 0.0,
+            "a merge range must be a positive length"
+        );
+        assert!(
+            (0.0..=1.0).contains(&merge_overlap),
+            "a merge overlap is a fraction of the summed radii"
+        );
+        Self {
+            division,
+            division_range,
+            merge,
+            merge_range,
+            merge_overlap,
+        }
+    }
+
+    pub fn division(self) -> bool {
+        self.division
+    }
+
+    pub fn division_range(self) -> f32 {
+        self.division_range
+    }
+
+    pub fn merge(self) -> bool {
+        self.merge
+    }
+
+    pub fn merge_range(self) -> f32 {
+        self.merge_range
+    }
+
+    pub fn merge_overlap(self) -> f32 {
+        self.merge_overlap
+    }
+
+    pub fn with_division(self, division: bool) -> Self {
+        Self { division, ..self }
+    }
+
+    pub fn with_division_range(self, division_range: f32) -> Self {
+        assert!(
+            division_range.is_finite() && division_range > 0.0,
+            "a division range must be a positive length"
+        );
+        Self {
+            division_range,
+            ..self
+        }
+    }
+
+    pub fn with_merge(self, merge: bool) -> Self {
+        Self { merge, ..self }
+    }
+
+    pub fn with_merge_range(self, merge_range: f32) -> Self {
+        assert!(
+            merge_range.is_finite() && merge_range > 0.0,
+            "a merge range must be a positive length"
+        );
+        Self {
+            merge_range,
+            ..self
+        }
+    }
+
+    pub fn with_merge_overlap(self, merge_overlap: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&merge_overlap),
+            "a merge overlap is a fraction of the summed radii"
+        );
+        Self {
+            merge_overlap,
+            ..self
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackParams {
+    max_step: f32,
+    max_gap: u32,
+    events: TrackEvents,
+}
+
+impl TrackParams {
+    pub fn new(max_step: f32, max_gap: u32, events: TrackEvents) -> Self {
+        assert!(
+            max_step.is_finite() && max_step > 0.0,
+            "a tracking step must be a positive length"
+        );
+        assert!(
+            !events.division() || events.division_range() >= max_step,
             "the division range covers the tracking step"
         );
         Self {
             max_step,
             max_gap,
-            division,
-            division_range,
+            events,
         }
     }
 
@@ -466,11 +560,56 @@ impl TrackParams {
         self.max_gap
     }
 
+    pub fn events(self) -> TrackEvents {
+        self.events
+    }
+
     pub fn division(self) -> bool {
-        self.division
+        self.events.division()
     }
 
     pub fn division_range(self) -> f32 {
-        self.division_range
+        self.events.division_range()
+    }
+
+    pub fn merge(self) -> bool {
+        self.events.merge()
+    }
+
+    pub fn merge_range(self) -> f32 {
+        self.events.merge_range()
+    }
+
+    pub fn merge_overlap(self) -> f32 {
+        self.events.merge_overlap()
+    }
+
+    pub fn with_max_step(self, max_step: f32) -> Self {
+        assert!(
+            max_step.is_finite() && max_step > 0.0,
+            "a tracking step must be a positive length"
+        );
+        let events = if self.events.division_range() < max_step {
+            self.events.with_division_range(max_step)
+        } else {
+            self.events
+        };
+        Self {
+            max_step,
+            events,
+            ..self
+        }
+    }
+
+    pub fn with_max_gap(self, max_gap: u32) -> Self {
+        Self { max_gap, ..self }
+    }
+
+    pub fn with_events(self, events: TrackEvents) -> Self {
+        assert!(
+            !events.division() || events.division_range() >= self.max_step,
+            "the division range covers the tracking step"
+        );
+        Self { events, ..self }
     }
 }

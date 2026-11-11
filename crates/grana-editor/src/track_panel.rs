@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_measure::{Aggregate, TrackMeasurement};
-use grana_object::{Link, TrackParams, TrackSet};
+use grana_object::{Link, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
@@ -1070,6 +1070,9 @@ fn parameter_rows<'a>(
     let gap = params.max_gap() as f32;
     let division = params.division();
     let range = params.division_range();
+    let merge = params.merge();
+    let merge_range = params.merge_range();
+    let overlap = params.merge_overlap();
     let step_max = (0.25 * world).max(step * 4.0).max(16.0 * voxel);
     let minimum = step;
     let maximum = (4.0 * step).max(minimum);
@@ -1084,7 +1087,7 @@ fn parameter_rows<'a>(
             &format!("{step:.3} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
-                params: TrackParams::new(value, gap.round() as u32, division, range.max(value)),
+                params: params.with_max_step(value),
             },
         ),
         view::slider_readout(
@@ -1097,7 +1100,7 @@ fn parameter_rows<'a>(
             &format!("{gap:.0} f"),
             move |value| Command::SetTrackParams {
                 set: id,
-                params: TrackParams::new(step, value.round() as u32, division, range.max(step)),
+                params: params.with_max_gap(value.round() as u32),
             },
         ),
         view::toggle_row(
@@ -1107,7 +1110,7 @@ fn parameter_rows<'a>(
             division,
             move |value| Command::SetTrackParams {
                 set: id,
-                params: TrackParams::new(step, gap.round() as u32, value, range.max(step)),
+                params: params.with_events(params.events().with_division(value)),
             },
         ),
     ];
@@ -1123,7 +1126,49 @@ fn parameter_rows<'a>(
             &format!("{clamped:.2} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
-                params: TrackParams::new(step, gap.round() as u32, division, value.max(step)),
+                params: params.with_events(params.events().with_division_range(value.max(minimum))),
+            },
+        ));
+    }
+    children.push(view::toggle_row(
+        ctx,
+        &format!("{prefix}.merge"),
+        grana_i18n::track::allow_merge(language),
+        merge,
+        move |value| Command::SetTrackParams {
+            set: id,
+            params: params.with_events(params.events().with_merge(value)),
+        },
+    ));
+    if merge {
+        let merge_min = voxel.max(1.0e-4);
+        let merge_max = (4.0 * step).max(merge_min * 2.0);
+        let merge_range = merge_range.clamp(merge_min, merge_max);
+        children.push(view::slider_readout(
+            ctx,
+            &format!("{prefix}.merge.range"),
+            Some(grana_i18n::track::merge_range(language)),
+            merge_range,
+            merge_min..=merge_max,
+            false,
+            &format!("{merge_range:.2} µm"),
+            move |value| Command::SetTrackParams {
+                set: id,
+                params: params.with_events(params.events().with_merge_range(value)),
+            },
+        ));
+        let overlap = overlap.clamp(0.0, 1.0);
+        children.push(view::slider_readout(
+            ctx,
+            &format!("{prefix}.merge.overlap"),
+            Some(grana_i18n::track::merge_overlap(language)),
+            overlap,
+            0.0..=1.0,
+            false,
+            &format!("{:.0}%", overlap * 100.0),
+            move |value| Command::SetTrackParams {
+                set: id,
+                params: params.with_events(params.events().with_merge_overlap(value)),
             },
         ));
     }

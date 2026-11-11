@@ -1162,12 +1162,25 @@ impl Decode for TrackStyle {
         let max_gap = reader.u32()?;
         let division = reader.bool()?;
         let division_range = positive(reader.f32()?)?;
+        let merge = reader.bool()?;
+        let merge_range = positive(reader.f32()?)?;
+        let merge_overlap = reader.f32()?;
         let thickness = positive(reader.f32()?)?;
-        if division && division_range < max_step {
+        if (division && division_range < max_step) || !(0.0..=1.0).contains(&merge_overlap) {
             return Err(FAULT_VALUE);
         }
         Ok(Self::new(
-            grana_object::TrackParams::new(max_step, max_gap, division, division_range),
+            grana_object::TrackParams::new(
+                max_step,
+                max_gap,
+                grana_object::TrackEvents::new(
+                    division,
+                    division_range,
+                    merge,
+                    merge_range,
+                    merge_overlap,
+                ),
+            ),
             thickness,
         ))
     }

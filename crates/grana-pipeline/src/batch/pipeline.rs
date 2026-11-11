@@ -803,7 +803,7 @@ impl Run<'_, '_> {
             .params();
         let mut detections = vec![Vec::new(); self.scene.frame_count() as usize];
         for (time, frame) in object.frames() {
-            detections[time as usize] = frame.centroids();
+            detections[time as usize] = frame.detections();
         }
         let frame_interval = self.scene.dataset.frame_interval();
         let task = self.task;
