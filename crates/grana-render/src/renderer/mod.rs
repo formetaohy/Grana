@@ -376,7 +376,7 @@ impl Renderer {
             .map(|pack| pack_texels(pack_components(channels, pack)))
             .sum::<usize>();
         let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
-        let slot_bytes = source_bytes + crate::atlas::BAKED_BYTES;
+        let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
         let requested = (self.budget / slot_bytes).max(1).min(finest);
         let atlas = Atlas::new(
             device,
@@ -392,7 +392,7 @@ impl Renderer {
         );
         let slots = atlas.slots();
         let occupancy = Occupancy::new(device, slots);
-        let bake = Bake::new(device, &self.layouts, occupancy.buffer(), atlas.baked());
+        let bake = Bake::new(device, &self.layouts, atlas.structure(), slots);
         let limit = (self.budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
         let arena = BrickArena::new(device, pyramid, limit)
             .expect("the record budget holds the coarsest level");

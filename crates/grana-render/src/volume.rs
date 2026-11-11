@@ -15,11 +15,21 @@ const COMPOSITE: &str = concat!(
     "\n",
     include_str!("shader/color.wgsl"),
     "\n",
+    include_str!("shader/brdf.wgsl"),
+    "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
     include_str!("shader/band.wgsl"),
     "\n",
     include_str!("shader/volume_sample.wgsl"),
+    "\n",
+    include_str!("shader/tau_codec.wgsl"),
+    "\n",
+    include_str!("shader/shadow_sample.wgsl"),
+    "\n",
+    include_str!("shader/optical.wgsl"),
+    "\n",
+    include_str!("shader/shade.wgsl"),
     "\n",
     include_str!("shader/composite.wgsl"),
     "\n",
@@ -38,11 +48,21 @@ const PROJECTION: &str = concat!(
     "\n",
     include_str!("shader/color.wgsl"),
     "\n",
+    include_str!("shader/brdf.wgsl"),
+    "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
     include_str!("shader/band.wgsl"),
     "\n",
     include_str!("shader/volume_sample.wgsl"),
+    "\n",
+    include_str!("shader/tau_codec.wgsl"),
+    "\n",
+    include_str!("shader/shadow_sample.wgsl"),
+    "\n",
+    include_str!("shader/optical.wgsl"),
+    "\n",
+    include_str!("shader/shade.wgsl"),
     "\n",
     include_str!("shader/composite.wgsl"),
     "\n",
@@ -89,6 +109,7 @@ pub(crate) struct VolumeFrame<'a> {
     pub depth_group: &'a BindGroup,
     pub oit: &'a BindGroup,
     pub occupancy: &'a BindGroup,
+    pub shadow: &'a BindGroup,
 }
 
 impl VolumePass {
@@ -154,6 +175,7 @@ impl VolumePass {
         pass.set_bind_group(3, frame.depth_group, &[]);
         pass.set_bind_group(4, frame.oit, &[]);
         pass.set_bind_group(5, frame.occupancy, &[]);
+        pass.set_bind_group(6, frame.shadow, &[]);
         pass.draw(0..3, 0..1);
     }
 }

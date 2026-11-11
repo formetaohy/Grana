@@ -329,7 +329,9 @@ impl Layouts {
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &oit_read, &occupancy],
+            &[
+                &scene, &level, &atlas, &depth, &oit_read, &occupancy, &shadow,
+            ],
         );
         let bake = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.bake.layout"),
@@ -345,7 +347,6 @@ impl Layouts {
                     },
                     count: None,
                 },
-                storage(2, ShaderStages::COMPUTE, false),
             ],
         });
         let bake_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -355,7 +356,7 @@ impl Layouts {
                 Some(&level),
                 Some(&source),
                 None,
-                Some(&shadow),
+                None,
                 Some(&bake),
             ],
             immediate_size: 0,

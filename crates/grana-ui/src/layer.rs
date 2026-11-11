@@ -61,14 +61,12 @@ impl<A: Clone> Ui<A> {
         if dirty {
             self.change.touched[layer_index] = true;
             instances.clear();
-            let vibrancy = matches!(layer, Layer::Labels | Layer::Popup | Layer::Hud);
             let time = self.time;
             let mut painter = Painter::new(
                 &mut instances,
                 &mut self.text,
                 &mut self.images,
                 Clip::new(clip, clip_corners),
-                vibrancy,
                 None,
             );
             if let Some(surface) = background
@@ -151,9 +149,6 @@ impl<A: Clone> Ui<A> {
                 .material
                 .extend(instances.material.iter().copied());
         }
-        self.layers[layer_index]
-            .ink
-            .extend(instances.ink.iter().copied());
         self.tree.nodes[id].paint = instances;
         for index in 0..self.tree.nodes[id].children.len() {
             let child = self.tree.nodes[id].children[index];
@@ -194,7 +189,7 @@ fn foreground(instance: &Instance) -> bool {
 fn hash_layer(layer: &LayerInstances, mut hash: u64) -> u64 {
     hash ^= layer.material.len() as u64;
     hash = hash.wrapping_mul(0x100_0000_01b3);
-    for instance in layer.material.iter().chain(&layer.ink) {
+    for instance in &layer.material {
         for word in bytemuck::cast_slice::<Instance, u32>(std::slice::from_ref(instance)) {
             hash ^= u64::from(*word);
             hash = hash.wrapping_mul(0x100_0000_01b3);

@@ -56,6 +56,7 @@ pub(crate) struct SceneTable {
     extinction: Texture,
     transfers: Vec<Option<TransferFunction>>,
     thresholds: Vec<Option<f32>>,
+    floor: f32,
     group: BindGroup,
     channels_count: usize,
 }
@@ -130,6 +131,7 @@ impl SceneTable {
             extinction,
             transfers: vec![None; channels],
             thresholds: vec![None; channels],
+            floor: 0.0,
             group,
             channels_count: channels,
         }
@@ -162,7 +164,8 @@ impl SceneTable {
             }
         }
         let data = channel_data(rows, &self.thresholds, pyramid);
-        let _ = self.shadow_channels.write(device, queue, &data);
+        let _ = self.shadow_channels.write(device, queue, &data.rows);
+        self.floor = data.floor;
     }
 
     pub fn write_channels(
@@ -178,7 +181,12 @@ impl SceneTable {
             "the scene carries one row per channel"
         );
         let data = channel_data(rows, &self.thresholds, pyramid);
-        self.channels.write(device, queue, &data);
+        self.channels.write(device, queue, &data.rows);
+        self.floor = data.floor;
+    }
+
+    pub fn threshold_floor(&self) -> f32 {
+        self.floor
     }
 
     pub fn write_shadow_frame(&mut self, queue: &Queue, frame: FrameData) {
@@ -262,12 +270,19 @@ fn uniform_buffer(device: &Device, label: &'static str, size: usize) -> Buffer {
     })
 }
 
+struct ChannelTable {
+    rows: Vec<ChannelData>,
+    floor: f32,
+}
+
 fn channel_data(
     rows: &[ChannelRow],
     thresholds: &[Option<f32>],
     pyramid: &Pyramid,
-) -> Vec<ChannelData> {
-    rows.iter()
+) -> ChannelTable {
+    let mut floor = f32::INFINITY;
+    let rows = rows
+        .iter()
         .enumerate()
         .map(|(index, row)| {
             assert!(
@@ -286,8 +301,16 @@ fn channel_data(
                     None => f32::INFINITY,
                 },
             };
+            let opacity = if row.visible { row.opacity } else { 0.0 };
+            if opacity > 0.0 {
+                let reach = match mode {
+                    VolumeMode::Maximum => start,
+                    VolumeMode::Blend | VolumeMode::Isosurface => threshold,
+                };
+                floor = floor.min(reach);
+            }
             ChannelData {
-                opacity: if row.visible { row.opacity } else { 0.0 },
+                opacity,
                 start,
                 inverse,
                 lut_row: (index as f32 + 0.5) / rows.len() as f32,
@@ -296,7 +319,8 @@ fn channel_data(
                 pad: [0.0; 2],
             }
         })
-        .collect()
+        .collect();
+    ChannelTable { rows, floor }
 }
 
 fn transfer_texture(device: &Device, label: &str, channels: usize) -> Texture {

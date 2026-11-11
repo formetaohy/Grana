@@ -10,10 +10,8 @@ fn march_projected(
     var moment = 0.0;
     var mass = 0.0;
     var peak = array<f32, CHANNEL_LIMIT>();
-    var peak_distance = array<f32, CHANNEL_LIMIT>();
     for (var channel = 0u; channel < CHANNEL_LIMIT; channel += 1u) {
         peak[channel] = -1.0;
-        peak_distance[channel] = 0.0;
     }
     let count = u32(frame.march.z);
     let packs = (count + PACK - 1u) / PACK;
@@ -25,7 +23,7 @@ fn march_projected(
     var samples = 0u;
     var complete = false;
     while (t < finish && samples < SAMPLE_LIMIT && !complete) {
-        let found = baked_reachable(origin, band_for(t, dither), t, direction);
+        let found = volume_reachable(origin, band_for(t, dither), t, direction);
         if (!found.usable) {
             let skip = ray_uvw(origin, found.band, t, direction);
             let rate = level_rate(found.band, direction);
@@ -51,30 +49,38 @@ fn march_projected(
         var cursor = t;
         while (cursor < boundary && samples < SAMPLE_LIMIT && !complete) {
             let step = local_step(cursor);
-            let sample = baked_sample(texel);
+            var tau = 0.0;
+            var emission = vec3<f32>(0.0);
             for (var pack = 0u; pack < packs; pack += 1u) {
+                if (!pack_active(pack, count)) {
+                    continue;
+                }
                 let values = textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
                 for (var component = 0u; component < PACK; component += 1u) {
                     let channel = pack * PACK + component;
                     if (channel >= count) {
                         break;
                     }
-                    if (!channel_maximum(channel) || channel_opacity(channel) <= 0.0) {
+                    if (channel_opacity(channel) <= 0.0) {
                         continue;
                     }
-                    if (values[component] > peak[channel]) {
-                        peak[channel] = values[component];
-                        peak_distance[channel] = cursor;
+                    if (channel_maximum(channel)) {
+                        peak[channel] = max(peak[channel], values[component]);
+                        continue;
                     }
+                    let row = channel_optical(channel, values[component]);
+                    tau += row.a;
+                    emission += row.rgb;
                 }
             }
+            let albedo = emission / max(tau, OPTICAL_MINIMUM_TAU);
             let next = min(cursor + step, boundary);
             let segment = next - cursor;
-            let tau = sample.a * segment * voxels_per_world;
-            if (tau > 0.0) {
-                let alpha = 1.0 - exp(-tau);
+            let weight = tau * segment * voxels_per_world;
+            if (weight > 0.0) {
+                let alpha = 1.0 - exp(-weight);
                 let absorbed = transmittance * alpha;
-                radiance += absorbed * sample.rgb;
+                radiance += absorbed * volume_lighting(albedo, texel, origin + direction * cursor);
                 moment += absorbed * cursor;
                 mass += absorbed;
                 transmittance *= 1.0 - alpha;

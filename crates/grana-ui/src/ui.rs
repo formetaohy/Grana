@@ -473,14 +473,8 @@ impl<A: Clone> Ui<A> {
         );
         let mut instances = LayerInstances::default();
         {
-            let mut painter = Painter::new(
-                &mut instances,
-                &mut self.text,
-                &mut self.images,
-                clip,
-                false,
-                None,
-            );
+            let mut painter =
+                Painter::new(&mut instances, &mut self.text, &mut self.images, clip, None);
             content(&mut painter);
         }
         self.text.begin(self.scale);
@@ -506,7 +500,6 @@ impl<A: Clone> Ui<A> {
                 &mut self.text,
                 &mut self.images,
                 clip,
-                false,
                 Some(&mut marks),
             );
             content(&mut painter);

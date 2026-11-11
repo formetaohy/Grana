@@ -33,6 +33,7 @@ struct FrameData {
     sampling: vec4<f32>,
     slice: vec4<f32>,
     slice_view: vec4<f32>,
+    occupancy: vec4<f32>,
 }
 
 struct ChannelData {
@@ -197,6 +198,14 @@ fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
         vec2<f32>(channel_position(index, unit), channels[index].lut_row),
         0.0,
     );
+}
+
+fn occupancy_floor() -> f32 {
+    return frame.occupancy.x;
+}
+
+fn occupancy_reaches(bits: u32) -> bool {
+    return bitcast<f32>(bits) >= occupancy_floor();
 }
 
 const PACK: u32 = 4u;

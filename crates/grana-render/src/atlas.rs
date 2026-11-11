@@ -14,9 +14,9 @@ use grana_volume::CHANNEL_LIMIT;
 pub(crate) const PACK: usize = 4;
 pub(crate) const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
 
-pub(crate) const BAKED_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-pub(crate) const BAKED_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 8;
+pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 8;
 
 const _: () = assert!(
     PACK_LIMIT == 4,
@@ -89,7 +89,7 @@ pub(crate) struct AtlasBinding<'a> {
 pub(crate) struct Atlas {
     textures: Vec<Texture>,
     components: Vec<usize>,
-    baked_storage: TextureView,
+    structure_storage: TextureView,
     source: BindGroup,
     group: BindGroup,
     slot_grid: [u32; 3],
@@ -165,8 +165,8 @@ impl Atlas {
             .collect::<Vec<_>>();
         let mut bindings = views.iter().collect::<Vec<&TextureView>>();
         bindings.resize(PACK_LIMIT, dummy);
-        let baked = device.create_texture(&TextureDescriptor {
-            label: Some("grana.atlas.baked"),
+        let structure = device.create_texture(&TextureDescriptor {
+            label: Some("grana.atlas.structure"),
             size: wgpu::Extent3d {
                 width: dims[0],
                 height: dims[1],
@@ -175,17 +175,17 @@ impl Atlas {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D3,
-            format: BAKED_FORMAT,
+            format: STRUCTURE_FORMAT,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-        let baked_view = baked.create_view(&TextureViewDescriptor {
-            label: Some("grana.atlas.baked.view"),
+        let structure_view = structure.create_view(&TextureViewDescriptor {
+            label: Some("grana.atlas.structure.view"),
             dimension: Some(TextureViewDimension::D3),
             ..Default::default()
         });
-        let baked_storage = baked.create_view(&TextureViewDescriptor {
-            label: Some("grana.atlas.baked.storage"),
+        let structure_storage = structure.create_view(&TextureViewDescriptor {
+            label: Some("grana.atlas.structure.storage"),
             dimension: Some(TextureViewDimension::D3),
             ..Default::default()
         });
@@ -217,14 +217,14 @@ impl Atlas {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&baked_view),
+                    resource: BindingResource::TextureView(&structure_view),
                 },
             ],
         });
         Self {
             textures,
             components,
-            baked_storage,
+            structure_storage,
             source,
             group,
             slot_grid,
@@ -244,8 +244,8 @@ impl Atlas {
         &self.source
     }
 
-    pub fn baked(&self) -> &TextureView {
-        &self.baked_storage
+    pub fn structure(&self) -> &TextureView {
+        &self.structure_storage
     }
 
     pub fn slot_grid(&self) -> [u32; 3] {

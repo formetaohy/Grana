@@ -44,14 +44,8 @@ impl<A: Clone> Ui<A> {
         let mut tooltip_rect = None;
         {
             let clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
-            let mut painter = Painter::new(
-                &mut instances,
-                &mut self.text,
-                &mut self.images,
-                clip,
-                true,
-                None,
-            );
+            let mut painter =
+                Painter::new(&mut instances, &mut self.text, &mut self.images, clip, None);
             if focus_visible
                 && let Some(node) = focus
                 && self.tree.nodes[node].visible
@@ -130,7 +124,6 @@ impl<A: Clone> Ui<A> {
         }
         let hud = Layer::Hud.index();
         self.layers[hud].material.extend(instances.material);
-        self.layers[hud].ink.extend(instances.ink);
         match tooltip_rect {
             Some(rect) => self.place_tooltip_glass(rect),
             None => {

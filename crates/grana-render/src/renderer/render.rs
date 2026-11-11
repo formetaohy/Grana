@@ -1,4 +1,4 @@
-﻿use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
+use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
 use super::*;
 
 const AMBIENT_REACH: f32 = 40.0;
@@ -90,7 +90,6 @@ impl Renderer {
             oit_readback,
             sections,
             sliced,
-            occupancy,
             occupancy_group,
             bake,
             baked,
@@ -244,7 +243,7 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
-        let shadow_keys = ShadowKeys::of(content, channel_key, ladder, &space);
+        let shadow_keys = ShadowKeys::of(content, *uploads, time, channel_key, ladder, &space);
         let tables = ladder
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
@@ -272,6 +271,7 @@ impl Renderer {
             viewport[3] as f32,
         ];
         data.oit = [u32::from(translucent), 0, 0, 0];
+        data.occupancy[0] = scene_table.threshold_floor();
         let pixels = u64::from(width) * u64::from(height);
         if translucent
             && target
@@ -540,6 +540,7 @@ impl Renderer {
                             depth_group: target.scene.depth_group(),
                             oit: oit_group,
                             occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
+                            shadow: shadow_group,
                         },
                         crate::volume::VolumePath::Composite,
                     );
@@ -758,10 +759,9 @@ impl Renderer {
                 }
             }
             if volume_visible && !slice {
-                if let (Some(bake), Some(occupancy)) = (bake.as_ref(), occupancy.as_mut()) {
-                    let material = shadow_keys.baked(scene.shading);
+                if let Some(bake) = bake.as_ref() {
                     let levels = ladder.levels().collect::<Vec<usize>>();
-                    let entries = baked.collect(material, atlas, &levels, time, occupancy, queue);
+                    let entries = baked.collect(atlas, &levels, time, bake.capacity());
                     if !entries.is_empty() {
                         bake.stage(queue, entries);
                         bake.encode(
@@ -770,7 +770,6 @@ impl Renderer {
                             group,
                             level_group,
                             atlas.source(),
-                            shadow_group,
                         );
                     }
                 }
@@ -789,6 +788,7 @@ impl Renderer {
                     depth_group: target.scene.depth_group(),
                     oit: oit_group,
                     occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
+                    shadow: shadow_group,
                 };
                 let path = if projected {
                     crate::volume::VolumePath::Projection

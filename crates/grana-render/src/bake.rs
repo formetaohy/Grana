@@ -9,7 +9,6 @@ use wgpu::{
 
 use crate::atlas::Atlas;
 use crate::layout::Layouts;
-use crate::occupancy::Occupancy;
 
 const SHADER: &str = concat!(
     "enable wgpu_binding_array;\n",
@@ -17,22 +16,14 @@ const SHADER: &str = concat!(
     "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
-    include_str!("shader/band.wgsl"),
-    "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
-    include_str!("shader/tau_codec.wgsl"),
+    include_str!("shader/optical.wgsl"),
     "\n",
-    include_str!("shader/shadow_sample.wgsl"),
-    "\n",
-    include_str!("shader/brdf.wgsl"),
-    "\n",
-    include_str!("shader/bake.wgsl")
+    include_str!("shader/structure.wgsl")
 );
 
 pub(crate) const BAKE_TILES: u32 = 9;
-
-const CAPACITY: usize = 4096;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
@@ -46,6 +37,7 @@ pub(crate) struct BakeEntry {
 pub(crate) struct Bake {
     pipeline: ComputePipeline,
     entries: Buffer,
+    capacity: usize,
     group: BindGroup,
 }
 
@@ -53,9 +45,10 @@ impl Bake {
     pub fn new(
         device: &Device,
         layouts: &Layouts,
-        occupancy: &Buffer,
-        baked: &TextureView,
+        structure: &TextureView,
+        capacity: usize,
     ) -> Self {
+        assert!(capacity > 0, "a bake pass stages at least one slot");
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.bake"),
             source: ShaderSource::Wgsl(SHADER.into()),
@@ -70,7 +63,7 @@ impl Bake {
         });
         let entries = device.create_buffer(&BufferDescriptor {
             label: Some("grana.bake.entries"),
-            size: (CAPACITY * size_of::<BakeEntry>()) as u64,
+            size: (capacity * size_of::<BakeEntry>()) as u64,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -84,25 +77,27 @@ impl Bake {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(baked),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: occupancy.as_entire_binding(),
+                    resource: BindingResource::TextureView(structure),
                 },
             ],
         });
         Self {
             pipeline,
             entries,
+            capacity,
             group,
         }
     }
 
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     pub fn stage(&self, queue: &Queue, entries: &[BakeEntry]) {
         assert!(
-            entries.len() <= CAPACITY,
-            "a bake pass stages at most {CAPACITY} slots"
+            entries.len() <= self.capacity,
+            "a bake pass stages at most {} slots",
+            self.capacity
         );
         queue.write_buffer(&self.entries, 0, bytemuck::cast_slice(entries));
     }
@@ -114,7 +109,6 @@ impl Bake {
         scene: &BindGroup,
         level: &BindGroup,
         atlas: &BindGroup,
-        shadow: &BindGroup,
     ) {
         if count == 0 {
             return;
@@ -127,62 +121,50 @@ impl Bake {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, level, &[]);
         pass.set_bind_group(2, atlas, &[]);
-        pass.set_bind_group(4, shadow, &[]);
         pass.set_bind_group(5, &self.group, &[]);
         pass.dispatch_workgroups(BAKE_TILES, BAKE_TILES, BAKE_TILES * count);
     }
 }
 
 pub(crate) struct BakeQueue {
-    baked: HashMap<u32, u64>,
+    staged: HashMap<u32, u64>,
     entries: Vec<BakeEntry>,
-    reset: bool,
 }
 
 impl BakeQueue {
     pub fn new() -> Self {
         Self {
-            baked: HashMap::new(),
+            staged: HashMap::new(),
             entries: Vec::new(),
-            reset: false,
         }
     }
 
     pub fn forget(&mut self) {
-        self.baked.clear();
-        self.reset = true;
+        self.staged.clear();
     }
 
     pub fn collect(
         &mut self,
-        material: u64,
         atlas: &Atlas,
         levels: &[usize],
         time: u32,
-        occupancy: &mut Occupancy,
-        queue: &Queue,
+        capacity: usize,
     ) -> &[BakeEntry] {
-        let reset = std::mem::take(&mut self.reset);
-        if reset {
-            occupancy.clear(queue);
-        }
+        assert!(capacity > 0, "a bake pass stages at least one slot");
         self.entries.clear();
-        for (band, level) in levels.iter().enumerate() {
+        'bands: for (band, level) in levels.iter().enumerate() {
             for resident in atlas.residents(time, *level) {
                 let Some(slot) = resident.slot else {
                     continue;
                 };
-                let key = mix(
-                    mix(mix(material, u64::from(time)), *level as u64),
-                    resident.index as u64,
-                );
-                if self.baked.get(&slot) == Some(&key) {
+                let key = stamp(time, *level as u32, resident.index as u32);
+                if self.staged.get(&slot) == Some(&key) {
                     continue;
                 }
-                self.baked.insert(slot, key);
-                if !reset {
-                    occupancy.clear_slot(queue, slot);
+                if self.entries.len() == capacity {
+                    break 'bands;
                 }
+                self.staged.insert(slot, key);
                 self.entries.push(BakeEntry {
                     band: band as u32,
                     slot,
@@ -195,10 +177,10 @@ impl BakeQueue {
     }
 }
 
-fn mix(a: u64, b: u64) -> u64 {
-    let mut hash = a ^ b.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+fn stamp(time: u32, level: u32, brick: u32) -> u64 {
+    let mut hash = u64::from(time) ^ u64::from(level).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    hash ^= u64::from(brick).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
     hash ^= hash >> 33;
     hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    hash ^= hash >> 33;
-    hash
+    hash ^ (hash >> 33)
 }

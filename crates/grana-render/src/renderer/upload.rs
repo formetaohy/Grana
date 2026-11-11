@@ -5,12 +5,15 @@ use wgpu::Queue;
 
 use crate::atlas::{PACK, ResidentBrick, pack_components, pack_texels};
 use crate::brick::BrickRecord;
+use crate::occupancy::OCCUPANCY_WORDS;
 
 use super::{Renderer, ensure_brick};
 
 pub(super) struct UploadScratch {
     units: Vec<u16>,
     cells: Vec<f32>,
+    summary: Vec<f32>,
+    words: Vec<u32>,
 }
 
 impl UploadScratch {
@@ -18,6 +21,8 @@ impl UploadScratch {
         Self {
             units: Vec::new(),
             cells: vec![0.0; CHANNEL_LIMIT * CELL_COUNT],
+            summary: vec![0.0; CELL_COUNT],
+            words: vec![0; OCCUPANCY_WORDS],
         }
     }
 }
@@ -43,7 +48,12 @@ impl Renderer {
         else {
             return 0;
         };
-        let UploadScratch { units, cells } = staging;
+        let UploadScratch {
+            units,
+            cells,
+            summary,
+            words,
+        } = staging;
         let packs = (*channels).div_ceil(PACK);
         let total = (0..packs)
             .map(|pack| pack_texels(pack_components(*channels, pack)))
@@ -102,7 +112,8 @@ impl Renderer {
                 }
                 base += span;
             }
-            if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
+            let maximum = maxima.iter().flatten().copied().fold(0.0f32, f32::max);
+            if maximum <= 0.0 {
                 atlas.assign_hollow(time, level, index);
                 if let Some(table) = tables[level].as_mut() {
                     table.set_record(queue, arena, index, BrickRecord::hollow(time));
@@ -110,6 +121,13 @@ impl Renderer {
                 *uploads += 1;
                 accepted += 1;
                 continue;
+            }
+            summary.fill(0.0);
+            for channel in 0..*channels {
+                let cells = &cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
+                for (cell, value) in summary.iter_mut().zip(cells) {
+                    *cell = cell.max(*value);
+                }
             }
             let slot_grid = atlas.slot_grid();
             ensure_brick(tables, pyramid.level(level), level, slot_grid, arena);
@@ -140,7 +158,11 @@ impl Renderer {
                 demand,
             );
             if let Some(occupancy) = occupancy.as_mut() {
-                occupancy.clear_slot(queue, slot);
+                words[0] = maximum.to_bits();
+                for (word, cell) in words[1..].iter_mut().zip(summary.iter()) {
+                    *word = cell.to_bits();
+                }
+                occupancy.write(queue, slot, words);
             }
             if let Some(table) = tables[level].as_mut() {
                 table.set_record(

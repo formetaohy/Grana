@@ -44,6 +44,7 @@ pub(crate) struct FrameData {
     pub sampling: [f32; 4],
     pub slice: [f32; 4],
     pub slice_view: [f32; 4],
+    pub occupancy: [f32; 4],
 }
 
 #[repr(C)]
@@ -64,7 +65,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1344);
+    assert!(size_of::<FrameData>() == 1360);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -80,6 +81,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, sampling) == 1296);
     assert!(std::mem::offset_of!(FrameData, slice) == 1312);
     assert!(std::mem::offset_of!(FrameData, slice_view) == 1328);
+    assert!(std::mem::offset_of!(FrameData, occupancy) == 1344);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -214,6 +216,7 @@ impl FrameData {
             sampling: [sampling, 0.0, 0.0, 0.0],
             slice,
             slice_view,
+            occupancy: [1.0, 0.0, 0.0, 0.0],
         }
     }
 }

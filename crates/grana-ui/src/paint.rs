@@ -106,7 +106,6 @@ impl Clip {
 #[derive(Clone, Default)]
 pub(crate) struct LayerInstances {
     pub material: Vec<Instance>,
-    pub ink: Vec<Instance>,
 }
 
 #[derive(Clone, Copy)]
@@ -119,11 +118,10 @@ pub(crate) struct SubGlass {
 impl LayerInstances {
     pub fn clear(&mut self) {
         self.material.clear();
-        self.ink.clear();
     }
 
     pub fn is_empty(&self) -> bool {
-        self.material.is_empty() && self.ink.is_empty()
+        self.material.is_empty()
     }
 }
 
@@ -133,7 +131,6 @@ pub struct Painter<'a> {
     images: &'a mut ImageAtlas,
     clip: Clip,
     gamma: f32,
-    vibrancy: bool,
     marks: Option<&'a mut Vec<Mark>>,
 }
 
@@ -143,7 +140,6 @@ impl<'a> Painter<'a> {
         text: &'a mut Text,
         images: &'a mut ImageAtlas,
         clip: Clip,
-        vibrancy: bool,
         marks: Option<&'a mut Vec<Mark>>,
     ) -> Self {
         Self {
@@ -152,7 +148,6 @@ impl<'a> Painter<'a> {
             images,
             clip,
             gamma: 0.86,
-            vibrancy,
             marks,
         }
     }
@@ -181,13 +176,7 @@ impl<'a> Painter<'a> {
 
     fn push(&mut self, instance: Instance) {
         let clip = self.clip;
-        let ink = self.vibrancy && instance.meta[0] == KIND_GLYPH;
-        let target = if ink {
-            &mut self.instances.ink
-        } else {
-            &mut self.instances.material
-        };
-        target.push(clipped(instance, clip));
+        self.instances.material.push(clipped(instance, clip));
     }
 
     pub fn rect(&mut self, rect: Rect, corners: Corners, color: Color) {
@@ -425,24 +414,17 @@ impl<'a> Painter<'a> {
             text,
             clip,
             gamma,
-            vibrancy,
             ..
         } = self;
         let clip = *clip;
         let gamma = *gamma;
-        let vibrancy = *vibrancy;
         text.emit(layout, origin, color, |plot| {
             let mut instance = Instance::blank(KIND_GLYPH);
             instance.rect = [plot.left, plot.top, plot.width, plot.height];
             instance.color = plot.color.to_array();
             instance.uv = plot.slot.uv;
             instance.extra = [gamma, 0.0, 0.0, 0.0];
-            let target = if vibrancy {
-                &mut instances.ink
-            } else {
-                &mut instances.material
-            };
-            target.push(clipped(instance, clip));
+            instances.material.push(clipped(instance, clip));
         });
     }
 
@@ -500,13 +482,9 @@ impl<'a> Painter<'a> {
             rect.min.y + (rect.height() - layout.size.y) * factor,
         );
         let material_start = self.instances.material.len();
-        let ink_start = self.instances.ink.len();
         self.glyphs(&layout, origin, style.color);
-        let (instances, start) = if self.vibrancy {
-            (&mut self.instances.ink, ink_start)
-        } else {
-            (&mut self.instances.material, material_start)
-        };
+        let instances = &mut self.instances.material;
+        let start = material_start;
         if start >= instances.len() {
             self.record_text(&layout, origin, style.color);
             return;

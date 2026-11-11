@@ -1,5 +1,5 @@
 use super::*;
-use grana_display::{CameraState, Shading};
+use grana_display::CameraState;
 
 #[derive(Clone, Copy)]
 pub(super) struct Signature<'a> {
@@ -132,14 +132,22 @@ pub(super) struct ShadowKeys {
 }
 
 impl ShadowKeys {
-    pub(super) fn of(content: u64, style: u64, ladder: Ladder, space: &ShadowSpace) -> Self {
+    pub(super) fn of(
+        content: u64,
+        uploads: u64,
+        time: u32,
+        style: u64,
+        ladder: Ladder,
+        space: &ShadowSpace,
+    ) -> Self {
         let space = space.digest();
         Self {
             volume: digest(&[
-                content,
                 style,
                 ladder.base as u64,
                 ladder.count as u64,
+                u64::from(time),
+                uploads,
                 space,
             ]),
             objects: digest(&[content, space]),
@@ -152,16 +160,6 @@ impl ShadowKeys {
 
     pub(super) fn objects(self) -> u64 {
         self.objects
-    }
-
-    pub(super) fn baked(self, shading: Shading) -> u64 {
-        digest(&[
-            self.volume,
-            self.objects,
-            u64::from(shading.ambient.to_bits()),
-            u64::from(shading.diffuse.to_bits()),
-            u64::from(shading.shadows.to_bits()),
-        ])
     }
 }
 

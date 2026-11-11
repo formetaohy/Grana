@@ -23,7 +23,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     for (var index = 0u; index < layers.count; index += 1u) {
         let limit = min(object_distance(resolution.origin, layers.depth[index], ndc), resolution.exit);
         if (limit > cursor) {
-            let segment = march_baked(
+            let segment = march_volume(
                 resolution.origin,
                 cursor,
                 limit,
@@ -54,7 +54,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
         }
     }
     if (cursor < resolution.exit) {
-        let segment = march_baked(
+        let segment = march_volume(
             resolution.origin,
             cursor,
             resolution.exit,

@@ -36,19 +36,6 @@ const PREMULTIPLIED: BlendState = BlendState {
     },
 };
 
-const PLUS_LIGHTER: BlendState = BlendState {
-    color: BlendComponent {
-        src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::One,
-        operation: BlendOperation::Add,
-    },
-    alpha: BlendComponent {
-        src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::OneMinusSrcAlpha,
-        operation: BlendOperation::Add,
-    },
-};
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
@@ -175,14 +162,12 @@ impl InstanceBuffer {
 
 struct LayerBuffers {
     material: InstanceBuffer,
-    ink: InstanceBuffer,
 }
 
 impl LayerBuffers {
     fn new(device: &Device, label: &str) -> Self {
         Self {
             material: InstanceBuffer::new(device, &format!("{label}.material")),
-            ink: InstanceBuffer::new(device, &format!("{label}.ink")),
         }
     }
 
@@ -193,8 +178,6 @@ impl LayerBuffers {
             &format!("{label}.material"),
             &instances.material,
         );
-        self.ink
-            .upload(device, queue, &format!("{label}.ink"), &instances.ink);
     }
 }
 
@@ -250,7 +233,6 @@ pub struct Renderer {
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
     ui: RenderPipeline,
-    ui_add: RenderPipeline,
     figure: RenderPipeline,
     glass: GlassRenderer,
     ui_layout: BindGroupLayout,
@@ -344,14 +326,6 @@ impl Renderer {
             raw(encoded),
             PREMULTIPLIED,
         );
-        let ui_add = instance_pipeline(
-            device,
-            "grana.ui.instances.add",
-            &ui_pipeline_layout,
-            &ui_shader,
-            raw(encoded),
-            PLUS_LIGHTER,
-        );
         let figure = instance_pipeline(
             device,
             "grana.ui.figure",
@@ -389,7 +363,6 @@ impl Renderer {
             present_encoded,
             present_linear,
             ui,
-            ui_add,
             figure,
             glass: GlassRenderer::new(device, encoded),
             ui_layout,
@@ -819,12 +792,6 @@ impl Renderer {
             pass.set_pipeline(&self.ui);
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..6, 0..instances.material.len() as u32);
-        }
-        if !instances.ink.is_empty() {
-            let group = self.ui_group(atlases, target.scene, &buffers.ink.buffer, &self.uniforms);
-            pass.set_pipeline(&self.ui_add);
-            pass.set_bind_group(0, &group, &[]);
-            pass.draw(0..6, 0..instances.ink.len() as u32);
         }
     }
 

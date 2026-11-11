@@ -45,7 +45,6 @@ impl Recorder {
                 &mut self.text,
                 &mut self.images,
                 clip,
-                false,
                 Some(&mut self.marks),
             );
             content(&mut painter);
