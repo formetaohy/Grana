@@ -1,9 +1,0 @@
-Drosophila embryo
-
-Source: Luxar benchmark volumes, Zenodo 10.5281/zenodo.22820799, volume drosophila_gastrulation_t150
-Original recording: SiMView, Keller lab (HHMI Janelia); Royer et al. (2016) Nature Biotechnology 34:1267
-Downloaded from: https://zenodo.org/api/records/22820799/files/drosophila_gastrulation_t150.ome.tif/content
-License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
-License URL: https://creativecommons.org/licenses/by-sa/4.0/
-
-The deposited volume is normalized float32 in [0, 1] with the top 0.1 percent clipped. It was written as an OME-TIFF with the image name, channel name, physical spacing, and zlib compression. Pixel values are unchanged.

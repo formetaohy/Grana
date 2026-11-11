@@ -19,7 +19,7 @@ fn brick_hollow(record: BrickRecord) -> bool {
 }
 
 fn brick_slot(record: BrickRecord) -> u32 {
-    return select(0u, record.slot, brick_holds(record));
+    return record.slot;
 }
 
 fn brick_cell(grid: vec3<u32>, dims: vec3<f32>, uvw: vec3<f32>) -> vec3<u32> {

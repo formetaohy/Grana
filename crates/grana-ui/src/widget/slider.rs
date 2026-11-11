@@ -311,13 +311,12 @@ pub(super) fn paint_slider(
     let bar = Rect::from_center_size(hit.center(), Vec2::new(hit.width(), metrics.track));
     let knob = metrics.thumb + 4.0;
     let knob_height = 17.0;
-    let travel = (bar.width() - knob).max(0.0);
     let position = runtime.value.value.clamp(0.0, 1.0);
     let engaged = info.engaged;
     let size_w = knob + engaged * 2.0;
     let size_h = knob_height + engaged * 1.5;
-    let center = Vec2::new(bar.min.x + knob * 0.5 + travel * position, bar.center().y);
-    let lag = (runtime.value.target.clamp(0.0, 1.0) - position) * travel;
+    let center = Vec2::new(bar.min.x + bar.width() * position, bar.center().y);
+    let lag = (runtime.value.target.clamp(0.0, 1.0) - position) * bar.width();
     let reach = (lag.abs() * 0.48).min(knob * 0.45);
     let (left, right) = if lag >= 0.0 {
         (center.x - size_w * 0.5, center.x + size_w * 0.5 + reach)
@@ -328,7 +327,7 @@ pub(super) fn paint_slider(
         Vec2::new(left, center.y - size_h * 0.5),
         Vec2::new(right, center.y + size_h * 0.5),
     );
-    let fill_end = (knob_rect.min.x + position * knob_rect.width()).clamp(bar.min.x, bar.max.x);
+    let fill_end = center.x.clamp(bar.min.x, bar.max.x);
     let filled = Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y));
     if let Some(label) = &slider.label {
         painter.text_in(

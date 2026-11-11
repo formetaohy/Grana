@@ -1,7 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_volume::{BrickGrid, Level, Pyramid};
-use std::collections::HashSet;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 use crate::atlas::Atlas;
@@ -59,10 +58,6 @@ impl BrickRecord {
 
     pub fn time(&self) -> u32 {
         self.time
-    }
-
-    pub fn is_live(&self) -> bool {
-        self.time != u32::MAX
     }
 }
 
@@ -146,7 +141,6 @@ pub(crate) struct BrickTable {
     base: u32,
     time: Option<u32>,
     records: Vec<BrickRecord>,
-    live: HashSet<u32>,
 }
 
 impl BrickTable {
@@ -178,7 +172,6 @@ impl BrickTable {
             base,
             time: None,
             records: vec![BrickRecord::MISSING; grid.count()],
-            live: HashSet::new(),
         }
     }
 
@@ -195,9 +188,7 @@ impl BrickTable {
     }
 
     pub fn rebase(&mut self, queue: &Queue, time: u32, atlas: &Atlas, arena: &BrickArena) {
-        let residents = atlas.residents(time, self.level);
-        let mut settled = HashSet::with_capacity(residents.len());
-        for resident in &residents {
+        for resident in atlas.residents(time, self.level) {
             let record = match resident.slot {
                 Some(slot) => BrickRecord::new(slot + 1, time, resident.maxima),
                 None => BrickRecord::hollow(time),
@@ -205,17 +196,7 @@ impl BrickTable {
             if self.records[resident.index] != record {
                 self.set_record(queue, arena, resident.index, record);
             }
-            settled.insert(resident.index as u32);
         }
-        for index in std::mem::take(&mut self.live) {
-            if settled.contains(&index) {
-                continue;
-            }
-            if self.records[index as usize].is_live() {
-                self.set_record(queue, arena, index as usize, BrickRecord::MISSING);
-            }
-        }
-        self.live = settled;
         self.time = Some(time);
     }
 
@@ -231,11 +212,6 @@ impl BrickTable {
             "a brick record lies inside the arena"
         );
         self.records[index] = record;
-        if record.is_live() {
-            self.live.insert(index as u32);
-        } else {
-            self.live.remove(&(index as u32));
-        }
         queue.write_buffer(
             arena.buffer(),
             (self.base as u64 + index as u64) * RECORD_BYTES,

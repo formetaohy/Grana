@@ -94,7 +94,7 @@ fn emit(bucket: u32, index: u32) {
     }
     let offset = atomicAdd(&plan[FILL_BASE + bucket], 1u);
     var entry = index;
-    if (brick_slot(record) == 0u) {
+    if (brick_slot(record) == 0u || !brick_holds(record)) {
         entry = index | MISSING;
     }
     atomicStore(&plan[DEMAND_BASE + base + offset], entry);

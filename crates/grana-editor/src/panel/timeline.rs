@@ -119,14 +119,12 @@ fn scrub_track<'a>(
     } else {
         0.0
     };
-    let travel = (bar.width() - KNOB).max(0.0);
-    let knob_x = bar.min.x + KNOB * 0.5 + travel * position;
+    let knob_x = bar.min.x + bar.width() * position;
     let knob = Rect::from_center_size(
         Vec2::new(knob_x, bar.center().y),
         Vec2::new(KNOB * 0.72, KNOB * 0.82),
     );
-    let fill_end =
-        (knob.min.x + position.clamp(0.0, 1.0) * knob.width()).clamp(bar.min.x, bar.max.x);
+    let fill_end = knob_x.clamp(bar.min.x, bar.max.x);
     let ticks = frames > 1 && frames <= 40 && bar.width() / (frames - 1) as f32 >= 9.0;
     let track = grana_ui::canvas(
         Length::Fixed(rect.width()),

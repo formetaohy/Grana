@@ -1,0 +1,33 @@
+Zebrafish neuromast
+
+Specimen: zebrafish (Danio rerio) lateral-line neuromast, 3 dpf; iSIM, Richardson-Lucy
+deconvolved, motion aligned.
+Markers: she:GFP (nuclei, 488 nm), cldnb:lyn-mScarlet (membranes, 561 nm).
+Recording: Jacobo lab, Chan Zuckerberg Biohub San Francisco; Erzberger et al. (2020)
+Nature Physics 16:949.
+
+Source: ultrack data release, Chan Zuckerberg Biohub San Francisco
+https://public.czbiohub.org/royerlab/ultrack/zebrafish_neuromast.ome.zarr
+Dataset: zebrafish_neuromast.ome.zarr, 500 timepoints, 2 channels, five pyramid levels.
+Register: Bragantini et al. (2025) Nature Methods, ultrack.
+
+License: the deposit states no license; the recording is held by the Jacobo lab. Crops of the
+same recording, two single timepoints of its two channels, are redistributed under CC BY-SA 4.0
+by Zenodo 10.5281/zenodo.22820799 (Luxar benchmark volumes). Public redistribution of this
+volume should be confirmed with the recording lab first.
+
+Derived for Grana from pyramid level 2 of the OME-Zarr
+(500 x 2 x 19 x 256 x 256, 0.3 x 0.3 x 1.0 um):
+- timepoints 100 to 170 in steps of 2, 36 frames in original order
+- 192 x 192 lateral crop, origin x 47, y 18 in level 2 pixels: 57.6 x 57.6 x 19.0 um
+- channel order preserved: 0 nuclei (c488), 1 membranes (c561)
+- each channel divided by its 99.9th percentile over the kept crop (nuclei 0.6841,
+  membranes 0.5412), clipped to [0, 1] and rounded to 8 bit; no gamma, no background
+  subtraction, no denoising, no interpolation
+- classic TIFF, one strip per plane, deflate with horizontal predictor
+- no TimeIncrement, because the deposit documents no acquisition interval
+- channel names and the display colours (cyan #00E5FF, magenta #FF2D95) are metadata; the
+  source declares no channel markup
+
+To recover source intensities, multiply a stored value by its channel percentile and divide by
+255.
