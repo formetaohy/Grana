@@ -39,6 +39,12 @@ pub(crate) struct LayerChange {
     pub restructured: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accessibility {
+    pub reduce_transparency: bool,
+    pub increase_contrast: bool,
+}
+
 pub struct Ui<A = ()> {
     pub(crate) renderer: Renderer,
     pub(crate) text: Text,
@@ -86,6 +92,7 @@ pub struct Ui<A = ()> {
     pub(crate) theme_stamp: Skin,
     pub(crate) scene_revision: Option<u64>,
     pub(crate) preedit: Option<String>,
+    pub(crate) accessibility: Accessibility,
 }
 
 impl<A: Clone> Ui<A> {
@@ -137,6 +144,7 @@ impl<A: Clone> Ui<A> {
             theme_stamp: appearance(Theme::dark()),
             scene_revision: None,
             preedit: None,
+            accessibility: Accessibility::default(),
         }
     }
 
@@ -170,6 +178,10 @@ impl<A: Clone> Ui<A> {
 
     pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
         self.clipboard = clipboard;
+    }
+
+    pub fn set_accessibility(&mut self, accessibility: Accessibility) {
+        self.accessibility = accessibility;
     }
 
     pub fn copy(&mut self, text: &str) {
@@ -282,6 +294,8 @@ impl<A: Clone> Ui<A> {
         self.pointer = self.input.position();
         self.scene.appearance.dark = self.theme.dark;
         self.scene.appearance.transparency = 0.5;
+        self.scene.appearance.reduce_transparency = self.accessibility.reduce_transparency;
+        self.scene.appearance.increase_contrast = self.accessibility.increase_contrast;
         if resized || rescaled {
             self.tree.mark_dirty();
             self.change.reset = true;

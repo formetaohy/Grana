@@ -68,10 +68,13 @@ fn classified(texel: vec3<i32>) -> vec4<f32> {
 
 fn bake_light(color: vec3<f32>, normal: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let light = frame.light.xyz;
-    let visibility = sun_transmittance(
-        shadow_coordinate(frame.light_view, world),
+    let strength = clamp(frame.march.y, 0.0, 1.0);
+    let lifted = world + normal * frame.light_reach.z;
+    let sun = sun_transmittance(
+        shadow_coordinate(frame.light_view, lifted),
         shadow_bias(frame.light_reach, normal, light),
     );
+    let visibility = mix(1.0, sun, strength);
     let cosine = max(dot(normal, light), 0.0);
     return color * (frame.shading.x * scene_environment(normal) + frame.shading.y * cosine * visibility);
 }

@@ -87,6 +87,7 @@ pub struct App {
     revision: Revision,
     appearance: Appearance,
     contrast: bool,
+    reduce_transparency: bool,
     system_dark: bool,
     themed: Option<(Appearance, bool)>,
     interacting: bool,
@@ -102,6 +103,7 @@ impl App {
         let mut workspace = Workspace::default();
         workspace.appearance = preference.appearance;
         workspace.contrast = preference.contrast;
+        workspace.reduce_transparency = preference.reduce_transparency;
         Self {
             surface: None,
             session,
@@ -136,6 +138,7 @@ impl App {
             revision: Revision::ZERO,
             appearance: preference.appearance,
             contrast: preference.contrast,
+            reduce_transparency: preference.reduce_transparency,
             system_dark: true,
             themed: None,
             interacting: false,
@@ -215,15 +218,19 @@ impl App {
     }
 
     fn sync_preference(&mut self) {
-        if self.workspace.appearance == self.appearance && self.workspace.contrast == self.contrast
+        if self.workspace.appearance == self.appearance
+            && self.workspace.contrast == self.contrast
+            && self.workspace.reduce_transparency == self.reduce_transparency
         {
             return;
         }
         self.appearance = self.workspace.appearance;
         self.contrast = self.workspace.contrast;
+        self.reduce_transparency = self.workspace.reduce_transparency;
         let preference = Preference {
             appearance: self.appearance,
             contrast: self.contrast,
+            reduce_transparency: self.reduce_transparency,
         };
         if let Err(detail) = preference.save() {
             self.output = Some(detail);
@@ -960,6 +967,10 @@ impl App {
         let size = surface.gpu.size();
         let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
         surface.ui.resize(size);
+        surface.ui.set_accessibility(grana_ui::Accessibility {
+            reduce_transparency: workspace.reduce_transparency,
+            increase_contrast: workspace.contrast,
+        });
         let actions = surface
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());

@@ -45,6 +45,8 @@ pub enum Message {
     SetAppearance(grana_ui::Appearance),
     SetContrast(bool),
     ToggleContrast,
+    SetReduceTransparency(bool),
+    ToggleReduceTransparency,
     SetPreviewing(bool),
     SetPlaybackPosition(f32),
     SetPlaybackSelected(Option<usize>),

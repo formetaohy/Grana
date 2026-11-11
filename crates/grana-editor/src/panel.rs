@@ -23,7 +23,7 @@ pub const FORM_LABEL: f32 = 72.0;
 pub const TOOLBAR_HEIGHT: f32 = 36.0;
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 pub const SIDEBAR_PAD: f32 = 14.0;
-pub const SIDEBAR_FOOTER: f32 = 88.0;
+pub const SIDEBAR_FOOTER: f32 = 116.0;
 pub const TRANSPORT_HEIGHT: f32 = 44.0;
 pub const DOCK_HEADER: f32 = 36.0;
 pub const DOCK_DEFAULT: f32 = 340.0;
@@ -400,7 +400,19 @@ fn appearance<'a>(
             .named("appearance.contrast")
             .at(contrast_rect)
             .on_toggle(Message::SetContrast);
-    vec![separator, modes, contrast]
+    let transparency_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + SIDEBAR_PAD, contrast_rect.max.y + 2.0),
+        Vec2::new(width, 26.0),
+    );
+    let transparency = grana_ui::widget::toggle_row(
+        ctx.theme(),
+        "Reduce Transparency",
+        state.workspace.reduce_transparency,
+    )
+    .named("appearance.transparency")
+    .at(transparency_rect)
+    .on_toggle(Message::SetReduceTransparency);
+    vec![separator, modes, contrast, transparency]
 }
 
 fn dock<'a>(
@@ -597,6 +609,10 @@ pub fn apply(
             Message::SetAppearance(appearance) => workspace.appearance = appearance,
             Message::SetContrast(contrast) => workspace.contrast = contrast,
             Message::ToggleContrast => workspace.contrast = !workspace.contrast,
+            Message::SetReduceTransparency(reduce) => workspace.reduce_transparency = reduce,
+            Message::ToggleReduceTransparency => {
+                workspace.reduce_transparency = !workspace.reduce_transparency;
+            }
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {

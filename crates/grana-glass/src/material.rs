@@ -368,8 +368,12 @@ impl Material {
 
         let k = (appearance.transparency.clamp(0.0, 1.0) - 0.5) * 2.0;
         if appearance.reduce_transparency {
-            m.frost = (m.frost * 3.0).max(20.0) * 1.1f32.exp2();
-            tint_faces(&mut m, 1.0);
+            m.frost = (m.frost * 3.0).max(20.0);
+            m.dim = (m.dim + 0.18).min(0.6);
+            m.edge = (m.edge + 0.2).min(1.0);
+            m.hairline = (m.hairline + 0.08).min(1.0);
+            m.specular += 0.04;
+            m.shadow.opacity += 0.05;
         } else if k > 0.0 {
             m.frost *= (0.5 * k).exp2();
             tint_faces(&mut m, k);

@@ -765,6 +765,7 @@ impl Renderer {
                         space.digest(),
                         u64::from(scene.shading.ambient.to_bits()),
                         u64::from(scene.shading.diffuse.to_bits()),
+                        u64::from(scene.shading.shadows.to_bits()),
                         object_key.unwrap_or(u64::MAX),
                     ]);
                     let levels = ladder.levels().collect::<Vec<usize>>();

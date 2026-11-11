@@ -38,12 +38,15 @@ impl From<StoredAppearance> for Appearance {
 struct Stored {
     appearance: StoredAppearance,
     contrast: bool,
+    #[serde(default)]
+    reduce_transparency: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
     pub appearance: Appearance,
     pub contrast: bool,
+    pub reduce_transparency: bool,
 }
 
 impl Default for Preference {
@@ -51,6 +54,7 @@ impl Default for Preference {
         Self {
             appearance: Appearance::System,
             contrast: false,
+            reduce_transparency: false,
         }
     }
 }
@@ -70,6 +74,7 @@ impl Preference {
         Self {
             appearance: stored.appearance.into(),
             contrast: stored.contrast,
+            reduce_transparency: stored.reduce_transparency,
         }
     }
 
@@ -84,6 +89,7 @@ impl Preference {
         let stored = Stored {
             appearance: self.appearance.into(),
             contrast: self.contrast,
+            reduce_transparency: self.reduce_transparency,
         };
         let bytes = serde_json::to_vec_pretty(&stored)
             .map_err(|error| format!("failed to encode the preferences: {error}"))?;

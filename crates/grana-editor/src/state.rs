@@ -237,6 +237,7 @@ pub struct Workspace {
     pub palette: Option<Palette>,
     pub appearance: grana_ui::Appearance,
     pub contrast: bool,
+    pub reduce_transparency: bool,
     pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
@@ -278,6 +279,7 @@ impl Default for Workspace {
             palette: None,
             appearance: grana_ui::Appearance::System,
             contrast: false,
+            reduce_transparency: false,
             palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }
