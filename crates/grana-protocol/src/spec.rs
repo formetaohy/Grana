@@ -1043,6 +1043,11 @@ pub enum EditSpec {
         first: NodeSpec,
         second: NodeSpec,
     },
+    Merge {
+        first: NodeSpec,
+        second: NodeSpec,
+        child: NodeSpec,
+    },
     Reparent {
         child: NodeSpec,
         parent: NodeSpec,
@@ -1163,6 +1168,15 @@ impl EditSpec {
                 first: node(*first),
                 second: node(*second),
             },
+            grana_scene::TrackEdit::Merge {
+                first,
+                second,
+                child,
+            } => Self::Merge {
+                first: node(*first),
+                second: node(*second),
+                child: node(*child),
+            },
             grana_scene::TrackEdit::Reparent { child, parent } => Self::Reparent {
                 child: node(*child),
                 parent: node(*parent),
@@ -1190,6 +1204,15 @@ impl EditSpec {
                 parent: node(parent),
                 first: node(first),
                 second: node(second),
+            },
+            Self::Merge {
+                first,
+                second,
+                child,
+            } => grana_scene::TrackEdit::Merge {
+                first: node(first),
+                second: node(second),
+                child: node(child),
             },
             Self::Reparent { child, parent } => grana_scene::TrackEdit::Reparent {
                 child: node(child),
@@ -3129,6 +3152,19 @@ impl CurationSpec {
                         return invalid("divide a track into two daughter tracks".to_string());
                     }
                     vec![*parent, *first, *second]
+                }
+                EditSpec::Merge {
+                    first,
+                    second,
+                    child,
+                } => {
+                    if first.frame >= child.frame || second.frame >= child.frame {
+                        return invalid("merge two earlier tracks into a later track".to_string());
+                    }
+                    if first.frame == second.frame && first.object == second.object {
+                        return invalid("merge two parent tracks".to_string());
+                    }
+                    vec![*first, *second, *child]
                 }
                 EditSpec::Reparent { child, parent } => {
                     if child.frame <= parent.frame {

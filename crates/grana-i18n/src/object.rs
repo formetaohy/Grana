@@ -20,6 +20,7 @@ labels! {
     segments_unlicensed => "Segments · unlicensed" / "分割 · 未授权";
     import_labels => "Import Labels" / "导入标签";
     import_tracks => "Import Tracks" / "导入轨迹";
+    import_geff => "GEFF Graph" / "GEFF 图谱";
     clear_objects => "Clear Objects" / "清空对象";
     hide_set => "Hide object set" / "隐藏对象集";
     show_set => "Show object set" / "显示对象集";
@@ -36,7 +37,6 @@ labels! {
     export_mesh_stl => "Export Mesh STL…" / "导出网格 STL…";
     export_mesh_glb => "Export Mesh GLB…" / "导出网格 GLB…";
     export_labels => "Export Labels…" / "导出标签…";
-    export_tracks => "Export Tracks…" / "导出轨迹…";
     export_geff => "Export GEFF…" / "导出 GEFF…";
     merge_into => "Merge Into" / "合并到";
     move_up => "Move Up" / "上移";

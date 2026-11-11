@@ -77,22 +77,6 @@ impl Edge {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrackPath {
-    parent: Option<usize>,
-    nodes: Vec<u64>,
-}
-
-impl TrackPath {
-    pub fn parent(&self) -> Option<usize> {
-        self.parent
-    }
-
-    pub fn nodes(&self) -> &[u64] {
-        &self.nodes
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lineage {
     detections: Vec<Detection>,
@@ -202,27 +186,5 @@ impl Lineage {
             .ok_or_else(|| Error::Format {
                 detail: "the lineage holds no spot to track".to_string(),
             })
-    }
-    pub fn track_paths(&self, frame_interval: f32) -> Result<Vec<TrackPath>, Error> {
-        let set = self.tracks(frame_interval)?;
-        let mut ids = HashMap::with_capacity(self.detections.len());
-        let mut order: HashMap<u32, usize> = HashMap::new();
-        for detection in &self.detections {
-            let ordinal = order.entry(detection.time).or_insert(0);
-            ids.insert((detection.time, *ordinal), detection.id);
-            *ordinal += 1;
-        }
-        Ok((0..set.len())
-            .map(|index| TrackPath {
-                parent: set.parent(index),
-                nodes: set
-                    .track(index)
-                    .expect("the track exists")
-                    .nodes()
-                    .iter()
-                    .map(|node| ids[&(node.time(), node.object())])
-                    .collect(),
-            })
-            .collect())
     }
 }

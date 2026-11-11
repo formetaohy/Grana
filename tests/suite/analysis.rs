@@ -10,8 +10,8 @@ use grana_geometry::GeometryStore;
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
-    FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet,
-    TrackParams,
+    FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, Track,
+    TrackNode, TrackParams, TrackSet,
 };
 use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
@@ -760,6 +760,51 @@ fn links_motion_and_splits_lineages() {
     assert_eq!(set.len(), 3);
     assert_eq!(set.divisions(), 1);
     assert_eq!(set.children(0).count(), 2);
+}
+
+#[test]
+fn merges_two_lineages_that_share_a_detection() {
+    let mut builder = TrackBuilder::new(TrackParams::new(2.0, 0, false, 2.0));
+    builder.push(0, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
+    builder.push(1, &[[1.0, 0.0, 0.0]]);
+    builder.push(2, &[[1.2, 0.0, 0.0]]);
+    let set = builder.finish(1.0);
+    assert_eq!(set.merges(), 1);
+    let merged = set.track_at(2, 0).expect("the merged object is tracked");
+    assert_eq!(set.parents(merged).count(), 2);
+    assert!(set.parents(merged).all(|link| link.kind() == Link::Merge));
+    assert_eq!(
+        set.track(merged)
+            .expect("the merged track exists")
+            .nodes()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn joins_two_earlier_tracks_into_a_later_start() {
+    let set = TrackSet::new(
+        1.0,
+        vec![
+            Track::new(vec![TrackNode::new(0, 0, [0.0, 0.0, 0.0])]),
+            Track::new(vec![TrackNode::new(0, 1, [2.0, 0.0, 0.0])]),
+            Track::new(vec![
+                TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
+                TrackNode::new(2, 0, [1.1, 0.0, 0.0]),
+            ]),
+        ],
+    );
+    assert!(set.can_merge((0, 0), (0, 1), (1, 0)));
+    let merged = set
+        .merge((0, 0), (0, 1), (1, 0))
+        .expect("two earlier tracks merge into a later start");
+    assert_eq!(merged.merges(), 1);
+    assert_eq!(merged.links().len(), 2);
+    assert!(merged.links().iter().all(|link| link.kind() == Link::Merge));
+    assert_eq!(merged.parents(2).count(), 2);
+    assert!(!merged.can_merge((0, 0), (1, 0), (2, 0)));
+    assert!(merged.merge((0, 0), (0, 1), (1, 0)).is_none());
 }
 
 #[test]

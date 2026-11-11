@@ -1521,6 +1521,17 @@ impl ObjectSet {
                     thickness,
                     stamp,
                 ),
+                TrackEdit::Merge {
+                    first,
+                    second,
+                    child,
+                } => layer.merge(
+                    (first.time(), first.object()),
+                    (second.time(), second.object()),
+                    (child.time(), child.object()),
+                    thickness,
+                    stamp,
+                ),
                 TrackEdit::Reparent { child, parent } => layer.reparent(
                     (child.time(), child.object()),
                     (parent.time(), parent.object()),
@@ -1567,6 +1578,15 @@ impl ObjectSet {
                 first: resolve(first)?,
                 second: resolve(second)?,
             }),
+            TrackEdit::Merge {
+                first,
+                second,
+                child,
+            } => Some(TrackEdit::Merge {
+                first: resolve(first)?,
+                second: resolve(second)?,
+                child: resolve(child)?,
+            }),
             TrackEdit::Reparent { child, parent } => Some(TrackEdit::Reparent {
                 child: resolve(child)?,
                 parent: resolve(parent)?,
@@ -1600,6 +1620,17 @@ impl ObjectSet {
                 (parent.time(), parent.object()),
                 (first.time(), first.object()),
                 (second.time(), second.object()),
+                thickness,
+                stamp,
+            ),
+            TrackEdit::Merge {
+                first,
+                second,
+                child,
+            } => layer.merge(
+                (first.time(), first.object()),
+                (second.time(), second.object()),
+                (child.time(), child.object()),
                 thickness,
                 stamp,
             ),
@@ -2147,6 +2178,30 @@ impl ObjectSet {
                 parent: TrackAnchor::new(parent.0, parent.1, parent_position),
                 first: TrackAnchor::new(first.0, first.1, first_position),
                 second: TrackAnchor::new(second.0, second.1, second_position),
+            },
+            stamp,
+        )
+    }
+
+    pub(crate) fn merge_tracks(
+        &mut self,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+        stamp: Revision,
+    ) -> bool {
+        let (Some(first_position), Some(second_position), Some(child_position)) = (
+            self.anchor_at(first.0, first.1),
+            self.anchor_at(second.0, second.1),
+            self.anchor_at(child.0, child.1),
+        ) else {
+            return false;
+        };
+        self.edit_track(
+            TrackEdit::Merge {
+                first: TrackAnchor::new(first.0, first.1, first_position),
+                second: TrackAnchor::new(second.0, second.1, second_position),
+                child: TrackAnchor::new(child.0, child.1, child_position),
             },
             stamp,
         )

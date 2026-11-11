@@ -26,6 +26,7 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::CutTrack => ("track cut", "截断轨迹"),
         Action::JoinTracks => ("track join", "连接轨迹"),
         Action::DivideTracks => ("track division", "轨迹分裂"),
+        Action::MergeTracks => ("track merge", "轨迹融合"),
         Action::ReparentTrack => ("track parent", "轨迹父级"),
         Action::DetachTrack => ("track detach", "断开轨迹"),
         Action::ChannelEnabled => ("channel visibility", "通道可见性"),

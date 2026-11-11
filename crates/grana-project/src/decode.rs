@@ -780,6 +780,11 @@ impl Decode for TrackEdit {
             4 => Self::Detach {
                 child: node(reader)?,
             },
+            5 => Self::Merge {
+                first: node(reader)?,
+                second: node(reader)?,
+                child: node(reader)?,
+            },
             _ => return Err(FAULT_TAG),
         })
     }

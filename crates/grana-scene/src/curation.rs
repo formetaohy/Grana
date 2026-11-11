@@ -47,6 +47,11 @@ pub enum TrackEdit {
         first: TrackAnchor,
         second: TrackAnchor,
     },
+    Merge {
+        first: TrackAnchor,
+        second: TrackAnchor,
+        child: TrackAnchor,
+    },
     Reparent {
         child: TrackAnchor,
         parent: TrackAnchor,
@@ -66,6 +71,11 @@ impl TrackEdit {
                 first,
                 second,
             } => vec![parent, first, second],
+            Self::Merge {
+                first,
+                second,
+                child,
+            } => vec![first, second, child],
             Self::Reparent { child, parent } => vec![child, parent],
             Self::Detach { child } => vec![child],
         }
@@ -137,6 +147,18 @@ impl Curation {
                 TrackEdit::Reparent { child, parent } => {
                     if child.time <= parent.time {
                         return Err("a parent track ends before its daughter starts".to_string());
+                    }
+                }
+                TrackEdit::Merge {
+                    first,
+                    second,
+                    child,
+                } => {
+                    if first.time >= child.time || second.time >= child.time {
+                        return Err("a merge follows the time axis".to_string());
+                    }
+                    if first.time == second.time && first.object == second.object {
+                        return Err("a merge names two parent tracks".to_string());
                     }
                 }
             }

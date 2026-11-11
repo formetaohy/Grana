@@ -428,6 +428,39 @@ impl TrackSet {
         })
     }
 
+    pub fn can_merge(
+        &self,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+    ) -> bool {
+        let lineage = Lineage::of(self);
+        let (Some(first), Some(second), Some(child)) = (
+            lineage.node_at(first.0, first.1),
+            lineage.node_at(second.0, second.1),
+            lineage.node_at(child.0, child.1),
+        ) else {
+            return false;
+        };
+        lineage.can_merge(first, second, child)
+    }
+
+    pub fn merge(
+        &self,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+    ) -> Option<Self> {
+        self.edit(|lineage| {
+            let first = lineage.node_at(first.0, first.1)?;
+            let second = lineage.node_at(second.0, second.1)?;
+            let child = lineage.node_at(child.0, child.1)?;
+            lineage.can_merge(first, second, child).then_some(())?;
+            lineage.merge(first, second, child);
+            Some(())
+        })
+    }
+
     pub fn can_reparent(&self, child: (u32, usize), parent: (u32, usize)) -> bool {
         let lineage = Lineage::of(self);
         let (Some(child), Some(parent)) = (

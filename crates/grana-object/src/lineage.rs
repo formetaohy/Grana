@@ -243,6 +243,51 @@ impl Lineage {
         self.normalize();
     }
 
+    pub(crate) fn can_merge(&self, first: usize, second: usize, child: usize) -> bool {
+        let adjacency = self.adjacency();
+        first != second
+            && first != child
+            && second != child
+            && self.track_start(first) != self.track_start(second)
+            && adjacency.outgoing[first].is_empty()
+            && adjacency.outgoing[second].is_empty()
+            && adjacency.incoming[child].len() < 2
+            && adjacency.incoming[child]
+                .iter()
+                .all(|source| self.continues(*source) != Some(child))
+            && adjacency.incoming[child]
+                .iter()
+                .all(|source| adjacency.outgoing[*source].len() == 1)
+            && self.detections[child].time > self.detections[first].time
+            && self.detections[child].time > self.detections[second].time
+            && self
+                .edges
+                .iter()
+                .all(|edge| (edge.source, edge.target) != (first, child))
+            && self
+                .edges
+                .iter()
+                .all(|edge| (edge.source, edge.target) != (second, child))
+    }
+
+    pub(crate) fn merge(&mut self, first: usize, second: usize, child: usize) {
+        assert!(
+            self.can_merge(first, second, child),
+            "a merge joins two track ends to one lineage start"
+        );
+        self.edges.push(Edge {
+            source: first,
+            target: child,
+            kind: Kind::Merge,
+        });
+        self.edges.push(Edge {
+            source: second,
+            target: child,
+            kind: Kind::Merge,
+        });
+        self.normalize();
+    }
+
     pub(crate) fn can_reparent(&self, child: usize, parent: usize) -> bool {
         parent != child
             && self.begins(child)
@@ -397,6 +442,18 @@ impl Lineage {
             .iter()
             .find(|edge| edge.source == node && edge.kind == Kind::Continue)
             .map(|edge| edge.target)
+    }
+
+    fn track_start(&self, node: usize) -> usize {
+        let mut current = node;
+        while let Some(edge) = self
+            .edges
+            .iter()
+            .find(|edge| edge.target == current && edge.kind == Kind::Continue)
+        {
+            current = edge.source;
+        }
+        current
     }
 
     fn begins(&self, node: usize) -> bool {

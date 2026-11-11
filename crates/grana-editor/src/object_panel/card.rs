@@ -325,13 +325,6 @@ pub(super) fn object_menu<'a>(
     if set.kind().trackable() && set.tracks().is_some() {
         rows.push(action_row(
             ctx,
-            &format!("object.{}.menu.tracks", id.raw()),
-            Icon::Export,
-            grana_i18n::object::export_tracks(language),
-            Message::Command(Command::ExportTracks(id)),
-        ));
-        rows.push(action_row(
-            ctx,
             &format!("object.{}.menu.geff", id.raw()),
             Icon::Export,
             grana_i18n::object::export_geff(language),

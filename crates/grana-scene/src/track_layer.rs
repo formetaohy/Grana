@@ -83,6 +83,21 @@ impl TrackLayer {
         true
     }
 
+    pub fn merge(
+        &mut self,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+        thickness: f32,
+        revision: Revision,
+    ) -> bool {
+        let Some(set) = self.set.merge(first, second, child) else {
+            return false;
+        };
+        self.install(set, thickness, revision);
+        true
+    }
+
     pub fn reparent(
         &mut self,
         child: (u32, usize),

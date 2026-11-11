@@ -791,6 +791,18 @@ impl Objects {
             .is_some_and(|set| set.divide_tracks(parent, first, second, stamp))
     }
 
+    pub fn merge_tracks(
+        &mut self,
+        id: ObjectSetId,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+    ) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.merge_tracks(first, second, child, stamp))
+    }
+
     pub fn reparent_track(
         &mut self,
         id: ObjectSetId,

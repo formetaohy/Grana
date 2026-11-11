@@ -57,6 +57,11 @@ pub enum Message {
         set: ObjectSetId,
         daughter: (u32, usize),
     },
+    SetMerge(Option<(u32, usize)>),
+    PickMerge {
+        set: ObjectSetId,
+        parent: (u32, usize),
+    },
     SetReparent(Option<(u32, usize)>),
     PickReparent {
         set: ObjectSetId,

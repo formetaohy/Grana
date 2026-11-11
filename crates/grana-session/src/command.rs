@@ -135,7 +135,6 @@ pub enum Command {
         label: String,
     },
     ImportTracks,
-    ExportTracks(ObjectSetId),
     ExportGeff(ObjectSetId),
     RemoveObject(ObjectSetId),
     AddSeed {
@@ -302,6 +301,12 @@ pub enum Command {
         first: (u32, usize),
         second: (u32, usize),
     },
+    MergeTracks {
+        set: ObjectSetId,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+    },
     ReparentTrack {
         set: ObjectSetId,
         child: (u32, usize),
@@ -448,6 +453,7 @@ pub enum Action {
     CutTrack,
     JoinTracks,
     DivideTracks,
+    MergeTracks,
     ReparentTrack,
     DetachTrack,
     ChannelEnabled,
@@ -625,6 +631,7 @@ impl Command {
             Self::CutTrack { .. } => Edit::new(Action::CutTrack),
             Self::JoinTracks { .. } => Edit::new(Action::JoinTracks),
             Self::DivideTracks { .. } => Edit::new(Action::DivideTracks),
+            Self::MergeTracks { .. } => Edit::new(Action::MergeTracks),
             Self::ReparentTrack { .. } => Edit::new(Action::ReparentTrack),
             Self::DetachTrack { .. } => Edit::new(Action::DetachTrack),
             Self::SetChannelEnabled { channel, .. } => {

@@ -10,6 +10,8 @@ labels! {
     export => "Export" / "导出";
     recompute => "Recompute" / "重新计算";
     divide => "Divide" / "分裂";
+    merge => "Merge" / "融合";
+    cancel_merge => "Cancel Merge" / "取消融合";
     parent => "Parent" / "父轨迹";
     parent_action => "Parent" / "更改父级";
     detach => "Detach" / "断开";
@@ -27,6 +29,8 @@ labels! {
     click_track => "Click a track in the lineage to inspect metrics." / "点击谱系中的轨迹以查看指标。";
     select_join_target => "Select target track to join" / "选择要连接的目标轨迹";
     select_daughters => "Select two daughter tracks" / "选择两条子轨迹";
+    select_merge_parents => "Select two parent tracks" / "选择两条父轨迹";
+    select_merge_parent => "Select the second parent track" / "选择第二条父轨迹";
     select_parent => "Select the parent track" / "选择父轨迹";
     no_trackable_objects => "No Trackable Objects" / "无可追踪对象";
     no_trackable_objects_detail => "Add spots or surfaces, detect them, then follow their trajectories through time." / "添加斑点或表面并完成检测，即可追踪它们随时间的运动轨迹。";

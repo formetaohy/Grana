@@ -32,6 +32,12 @@ struct Division {
     second: usize,
 }
 
+struct Merge {
+    parent: usize,
+    other: usize,
+    detection: usize,
+}
+
 pub struct TrackBuilder {
     params: TrackParams,
     segments: Vec<Segment>,
@@ -77,6 +83,7 @@ impl TrackBuilder {
                 *detection = None;
             }
         }
+        let (merges, merged) = self.merges(&active, time, centroids, &matches);
         for division in divisions {
             self.segments[division.parent].closed = true;
             self.push_segment(
@@ -92,7 +99,23 @@ impl TrackBuilder {
                 centroids[division.second],
             );
         }
+        for merge in &merges {
+            self.segments[active[merge.parent]].closed = true;
+            self.segments[active[merge.other]].closed = true;
+        }
+        for merge in merges {
+            self.push_merged_segment(
+                active[merge.parent],
+                active[merge.other],
+                time,
+                merge.detection,
+                centroids[merge.detection],
+            );
+        }
         for (row, &index) in active.iter().enumerate() {
+            if merged[row] {
+                continue;
+            }
             let Some(detection) = matches[row] else {
                 continue;
             };
@@ -288,6 +311,85 @@ impl TrackBuilder {
         (divisions, consumed)
     }
 
+    fn merges(
+        &self,
+        active: &[usize],
+        time: u32,
+        centroids: &[[f32; 3]],
+        matches: &[Option<usize>],
+    ) -> (Vec<Merge>, Vec<bool>) {
+        let mut merges = Vec::new();
+        let mut consumed = vec![false; active.len()];
+        let positions = centroids
+            .iter()
+            .map(|centroid| Vec3::from(*centroid))
+            .collect::<Vec<_>>();
+        let step = self.params.max_step();
+        let cell = |position: Vec3| {
+            (
+                (position.x / step).floor() as i64,
+                (position.y / step).floor() as i64,
+                (position.z / step).floor() as i64,
+            )
+        };
+        let mut grid = std::collections::HashMap::<(i64, i64, i64), Vec<(usize, usize)>>::new();
+        for (other, &index) in active.iter().enumerate() {
+            let Some(detection) = matches[other] else {
+                continue;
+            };
+            if self.segments[index].last_time() + 1 != time {
+                continue;
+            }
+            grid.entry(cell(positions[detection]))
+                .or_default()
+                .push((other, detection));
+        }
+        for (row, &parent) in active.iter().enumerate() {
+            if matches[row].is_some() || consumed[row] {
+                continue;
+            }
+            let segment = &self.segments[parent];
+            if segment.last_time() + 1 != time {
+                continue;
+            }
+            let predicted = segment.predict(time);
+            let allowed = f64::from(step) * f64::from(time - segment.last_time());
+            let (x, y, z) = cell(predicted);
+            let mut best: Option<(f64, usize, usize)> = None;
+            for offset in 0..27 {
+                let dx = offset % 3 - 1;
+                let dy = offset / 3 % 3 - 1;
+                let dz = offset / 9 - 1;
+                let Some(candidates) = grid.get(&(x + dx as i64, y + dy as i64, z + dz as i64))
+                else {
+                    continue;
+                };
+                for &(other, detection) in candidates {
+                    if consumed[other] {
+                        continue;
+                    }
+                    let distance = predicted.distance(positions[detection]) as f64;
+                    if distance > allowed {
+                        continue;
+                    }
+                    if best.is_none_or(|(nearest, _, _)| distance < nearest) {
+                        best = Some((distance, other, detection));
+                    }
+                }
+            }
+            if let Some((_, other, detection)) = best {
+                consumed[row] = true;
+                consumed[other] = true;
+                merges.push(Merge {
+                    parent: row,
+                    other,
+                    detection,
+                });
+            }
+        }
+        (merges, consumed)
+    }
+
     fn push_segment(
         &mut self,
         parent: Option<(usize, Link)>,
@@ -299,6 +401,24 @@ impl TrackBuilder {
         if let Some((parent, kind)) = parent {
             self.links.push((parent, index, kind));
         }
+        self.segments.push(Segment {
+            nodes: vec![TrackNode::new(time, object, centroid)],
+            closed: false,
+        });
+    }
+
+    fn push_merged_segment(
+        &mut self,
+        first: usize,
+        second: usize,
+        time: u32,
+        object: usize,
+        centroid: [f32; 3],
+    ) {
+        assert!(first != second, "a merge joins two distinct tracks");
+        let index = self.segments.len();
+        self.links.push((first, index, Link::Merge));
+        self.links.push((second, index, Link::Merge));
         self.segments.push(Segment {
             nodes: vec![TrackNode::new(time, object, centroid)],
             closed: false,

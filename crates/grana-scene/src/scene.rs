@@ -1483,6 +1483,20 @@ impl Scene {
         true
     }
 
+    pub fn merge_tracks(
+        &mut self,
+        id: ObjectSetId,
+        first: (u32, usize),
+        second: (u32, usize),
+        child: (u32, usize),
+    ) -> bool {
+        if !self.objects.merge_tracks(id, first, second, child) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
     pub fn reparent_track(
         &mut self,
         id: ObjectSetId,

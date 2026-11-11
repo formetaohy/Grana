@@ -224,6 +224,8 @@ pub struct Workspace {
     pub join: Option<(u32, usize)>,
     pub divide: Option<(u32, usize)>,
     pub divide_daughters: Vec<(u32, usize)>,
+    pub merge: Option<(u32, usize)>,
+    pub merge_parents: Vec<(u32, usize)>,
     pub reparent: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
     pub mask: Option<MaskBrush>,
@@ -268,6 +270,8 @@ impl Default for Workspace {
             join: None,
             divide: None,
             divide_daughters: Vec::new(),
+            merge: None,
+            merge_parents: Vec::new(),
             reparent: None,
             seed: None,
             mask: None,
@@ -313,6 +317,8 @@ impl Workspace {
         self.join = None;
         self.divide = None;
         self.divide_daughters.clear();
+        self.merge = None;
+        self.merge_parents.clear();
         self.reparent = None;
     }
 

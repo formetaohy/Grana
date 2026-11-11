@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_measure::{Aggregate, TrackMeasurement};
-use grana_object::{TrackParams, TrackSet};
+use grana_object::{Link, TrackParams, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
@@ -392,6 +392,14 @@ fn header<'a>(
             ctx.theme().palette.accent,
         ));
     }
+    if state.workspace.merge.is_some() {
+        let prompt = if state.workspace.merge_parents.is_empty() {
+            grana_i18n::track::select_merge_parents(language)
+        } else {
+            grana_i18n::track::select_merge_parent(language)
+        };
+        left_items.push(grana_ui::widget::badge(prompt, ctx.theme().palette.accent));
+    }
     if state.workspace.reparent.is_some() {
         left_items.push(grana_ui::widget::badge(
             grana_i18n::track::select_parent(language),
@@ -486,6 +494,8 @@ fn lineage<'a>(
     let lane_y = move |lane: usize| inner.min.y + lane as f32 * ROW + ROW * 0.5 - offset;
     let source = state.workspace.join;
     let divide = state.workspace.divide;
+    let merge = state.workspace.merge;
+    let merge_parents = state.workspace.merge_parents.clone();
     let reparent = state.workspace.reparent;
     let colors = (0..set.len())
         .map(|index| object.track_color(index))
@@ -574,7 +584,7 @@ fn lineage<'a>(
             }
             if let (Some(lane), true) = (
                 hovered,
-                source.is_none() && divide.is_none() && reparent.is_none(),
+                source.is_none() && divide.is_none() && merge.is_none() && reparent.is_none(),
             ) {
                 painter.text_in(
                     Rect::from_min_size(
@@ -616,6 +626,18 @@ fn lineage<'a>(
                     });
                 (
                     daughter.map(|daughter| Message::PickDivide { set: id, daughter }),
+                    select(index),
+                )
+            } else if let Some(child) = merge {
+                let parent = set
+                    .track(index)
+                    .and_then(|track| track.nodes().last())
+                    .map(|node| (node.time(), node.object()))
+                    .filter(|parent| {
+                        parent.0 < child.0 && *parent != child && !merge_parents.contains(parent)
+                    });
+                (
+                    parent.map(|parent| Message::PickMerge { set: id, parent }),
                     select(index),
                 )
             } else if let Some(child) = reparent {
@@ -697,11 +719,12 @@ fn lineage<'a>(
                         + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
                             * info.rect.width();
                     let parent_y = info.rect.min.y + lane_of[parent] as f32 * ROW + ROW * 0.5;
-                    painter.segment(
+                    draw_link(
+                        painter,
                         Vec2::new(parent_end, parent_y),
                         Vec2::new(start, y),
-                        1.0,
-                        tint.with_alpha(0.35),
+                        link.kind(),
+                        tint,
                     );
                 }
                 painter.segment(
@@ -855,10 +878,15 @@ fn summary<'a>(
         return grana_ui::column();
     };
     let statistics = track.statistics(set.frame_interval());
-    let parent = set.parent(index).map_or_else(
-        || grana_i18n::track::root(language).to_string(),
-        |parent| format!("#{}", parent + 1),
-    );
+    let parents = set
+        .parents(index)
+        .map(|link| format!("#{}", link.parent() + 1))
+        .collect::<Vec<_>>();
+    let parent = if parents.is_empty() {
+        grana_i18n::track::root(language).to_string()
+    } else {
+        parents.join(" · ")
+    };
     let children = set.children(index).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
         grana_i18n::common::none(language).to_string()
@@ -895,7 +923,32 @@ fn summary<'a>(
     } else {
         grana_i18n::track::parent_action(language)
     };
+    let merge = if state.workspace.merge.is_some() {
+        grana_i18n::track::cancel_merge(language)
+    } else {
+        grana_i18n::track::merge(language)
+    };
     let mut actions = Vec::new();
+    if let Some(first) = first
+        && set.len() >= 3
+    {
+        actions.push(enabled_button(
+            ctx,
+            "tracks.summary.merge",
+            merge,
+            if state.workspace.merge.is_some() {
+                Role::Tinted
+            } else {
+                Role::Control
+            },
+            true,
+            Some(if state.workspace.merge.is_some() {
+                Message::CancelLineage
+            } else {
+                Message::SetMerge(Some(first))
+            }),
+        ));
+    }
     if let Some(last) = last {
         actions.push(enabled_button(
             ctx,
@@ -1422,4 +1475,30 @@ fn combo<'a>(
     grana_ui::column()
         .width(Length::Auto)
         .children([anchor, popup])
+}
+
+fn draw_link(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, kind: Link, tint: Color) {
+    match kind {
+        Link::Gap => dashed(painter, from, to, 1.0, tint.with_alpha(0.35)),
+        Link::Division => {
+            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
+        }
+        Link::Merge => {
+            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
+            painter.ring(from, 2.0, 1.0, 0.0, std::f32::consts::TAU, tint);
+        }
+    }
+}
+
+fn dashed(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, width: f32, color: Color) {
+    let length = from.distance(to);
+    if length <= 0.0 {
+        return;
+    }
+    let steps = (length / 5.0).ceil() as u32;
+    for step in 0..steps {
+        let start = step as f32 / steps as f32;
+        let end = (step as f32 + 0.55) / steps as f32;
+        painter.segment(from.lerp(to, start), from.lerp(to, end), width, color);
+    }
 }

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use grana_interop::geff;
-use grana_interop::trackmate::{self, Header};
 use grana_interop::{Detection, Edge, Lineage};
 use grana_scene::{ObjectSet, Scene};
 
@@ -22,29 +21,6 @@ impl Session {
         let set = scene.import_tracks(&file);
         self.start_import(set);
         true
-    }
-
-    pub fn export_tracks(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
-        let scene = self
-            .scene
-            .as_ref()
-            .ok_or_else(|| "no dataset is open".to_string())?;
-        let object = scene
-            .objects
-            .get(set)
-            .ok_or_else(|| "the object set left the scene".to_string())?;
-        let lineage = lineage(scene, object)?;
-        let extent = scene.dataset.extent();
-        let spacing = scene.dataset.spacing();
-        let header = Header::new(
-            scene.dataset.name(),
-            String::new(),
-            [extent.x(), extent.y(), extent.z()],
-            scene.frame_count(),
-            [spacing.x(), spacing.y(), spacing.z()],
-            scene.dataset.frame_interval(),
-        );
-        trackmate::write(path, &lineage, &header).map_err(|error| error.to_string())
     }
 
     pub fn export_geff(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
@@ -67,28 +43,12 @@ impl Session {
 
     pub(super) fn choose_import_tracks(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Open a TrackMate or MaMuT track file")
-            .add_filter("TrackMate XML", &["xml"])
-            .pick_file()
+            .set_title("Open a GEFF tracking graph")
+            .pick_folder()
         else {
             return;
         };
         self.import_tracks(&path);
-    }
-
-    pub(super) fn choose_export_tracks(&mut self, set: ObjectSetId) {
-        let Some(path) = self.track_path(set, "tracks.xml", "Export TrackMate tracks") else {
-            return;
-        };
-        match self.export_tracks(set, &path) {
-            Ok(()) => self.message = None,
-            Err(detail) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export tracks to {}: {detail}",
-                    path.display()
-                )));
-            }
-        }
     }
 
     pub(super) fn choose_export_geff(&mut self, set: ObjectSetId) {

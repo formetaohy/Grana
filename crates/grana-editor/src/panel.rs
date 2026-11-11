@@ -535,6 +535,7 @@ pub fn apply(
                         | Command::CutTrack { .. }
                         | Command::JoinTracks { .. }
                         | Command::DivideTracks { .. }
+                        | Command::MergeTracks { .. }
                         | Command::ReparentTrack { .. }
                         | Command::DetachTrack { .. }
                 ) {
@@ -709,6 +710,33 @@ pub fn apply(
                         parent,
                         first,
                         second,
+                    });
+                    workspace.cancel_lineage();
+                }
+            }
+            Message::SetMerge(child) => {
+                workspace.cancel_lineage();
+                workspace.merge = child;
+            }
+            Message::PickMerge { set, parent } => {
+                let Some(child) = workspace.merge else {
+                    continue;
+                };
+                if parent == child
+                    || parent.0 >= child.0
+                    || workspace.merge_parents.contains(&parent)
+                {
+                    continue;
+                }
+                workspace.merge_parents.push(parent);
+                if workspace.merge_parents.len() == 2 {
+                    let first = workspace.merge_parents[0];
+                    let second = workspace.merge_parents[1];
+                    commands.push(Command::MergeTracks {
+                        set,
+                        first,
+                        second,
+                        child,
                     });
                     workspace.cancel_lineage();
                 }

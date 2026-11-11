@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_interop::trackmate;
 use grana_object::{IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet};
 use grana_scene::{Drift, ObjectFrame};
 use grana_volume::{Level, VoxelData};
@@ -34,7 +33,10 @@ pub fn interop(
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
-    let lineage = trackmate::read(Path::new(&request.file)).map_err(|error| error.to_string())?;
+    let spacing = reader.pyramid().level(0).spacing();
+    let radius = spacing.x().min(spacing.y()).min(spacing.z());
+    let lineage = grana_interop::geff::read(Path::new(&request.file), radius)
+        .map_err(|error| error.to_string())?;
     let tracks = lineage
         .tracks(reader.pyramid().frame_interval())
         .map_err(|error| error.to_string())?;

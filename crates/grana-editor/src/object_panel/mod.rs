@@ -232,7 +232,7 @@ fn add_menu<'a>(
         ctx,
         "add.tracks",
         Icon::Target,
-        "TrackMate XML",
+        grana_i18n::object::import_geff(language),
         message,
     ));
     vec![view::menu(ctx, Key::new("objects.add"), 184.0, rows)]

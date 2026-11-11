@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use grana_image::{Format, Image, Source};
+use grana_interop::{Detection, Edge, Lineage, geff};
 use grana_volume::{Basis, Extent, Intensity, Level, Spacing, VoxelData};
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
@@ -610,4 +611,60 @@ fn orders_plate_fields_naturally() {
     assert_eq!(entries[2].well_row(), Some(0));
     assert_eq!(entries[2].well_column(), Some(0));
     assert_eq!(entries[2].well_field(), Some(2));
+}
+
+#[test]
+fn round_trips_a_typed_geff_lineage() {
+    let temp = Temp::new("suite-geff");
+    let path = temp.path().join("graph.geff");
+    let detections = vec![
+        Detection::new(1, 0, [0.0, 0.0, 0.0], 0.8, 0.9),
+        Detection::new(2, 0, [2.0, 0.0, 0.0], 0.8, 0.7),
+        Detection::new(3, 1, [1.0, 0.0, 0.0], 1.0, 0.6),
+        Detection::new(5, 2, [1.1, 0.0, 0.0], 1.0, 0.5),
+        Detection::new(6, 3, [0.7, 0.0, 0.0], 0.9, 0.4),
+        Detection::new(7, 3, [1.5, 0.0, 0.0], 0.9, 0.3),
+        Detection::new(8, 4, [0.75, 0.0, 0.0], 0.9, 0.2),
+        Detection::new(9, 6, [0.8, 0.0, 0.0], 0.9, 0.1),
+    ];
+    let edges = vec![
+        Edge::new(1, 3),
+        Edge::new(2, 3),
+        Edge::new(3, 5),
+        Edge::new(5, 6),
+        Edge::new(5, 7),
+        Edge::new(6, 8),
+        Edge::new(8, 9),
+    ];
+    let lineage = Lineage::new(detections, edges).expect("the lineage is consistent");
+    let axes = geff::Axes::new([0.25, 0.25, 0.5], 2.0);
+    geff::write(&path, &lineage, &axes).expect("the graph writes");
+    let read = geff::read(&path, 0.5).expect("the graph reads");
+    assert_eq!(read.len(), 8);
+    assert_eq!(read.edges().len(), 7);
+    assert_eq!(read.frames(), vec![0, 1, 2, 3, 4, 6]);
+    assert_eq!(read.detections()[2].id(), 3);
+    assert_eq!(read.detections()[2].position(), [1.0, 0.0, 0.0]);
+    assert!((read.detections()[2].radius() - 1.0).abs() < 1.0e-6);
+    assert!((read.detections()[2].quality() - 0.6).abs() < 1.0e-6);
+    let set = read.tracks(2.0).expect("the graph forms tracks");
+    assert_eq!(set.merges(), 1);
+    assert_eq!(set.divisions(), 1);
+    assert_eq!(
+        set.links()
+            .iter()
+            .filter(|link| link.kind() == grana_object::Link::Gap)
+            .count(),
+        1
+    );
+    let empty = Lineage::new(
+        vec![Detection::new(1, 0, [0.0, 0.0, 0.0], 1.0, 0.0)],
+        Vec::new(),
+    )
+    .expect("a single detection is a lineage");
+    let path = temp.path().join("empty.geff");
+    geff::write(&path, &empty, &axes).expect("an edgeless graph writes");
+    let read = geff::read(&path, 0.5).expect("an edgeless graph reads");
+    assert_eq!(read.len(), 1);
+    assert!(read.edges().is_empty());
 }

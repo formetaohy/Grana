@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_object::{TrackLayout, TrackSet};
+use grana_object::{Link, TrackLayout, TrackSet};
 use grana_ui::{
     Align, Color, Corners, Mark, Painter, Palette, Rect, TextStyle, TypeStyle, Ui, Vec2 as UiVec2,
 };
@@ -97,9 +97,10 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
             Vec2::new(size.x - 2.0 * MARGIN, 16.0),
         ),
         &format!(
-            "{} tracks · {} divisions · {frames} frames",
+            "{} tracks · {} divisions · {} merges · {frames} frames",
             layout.len(),
-            lineage.set.divisions()
+            lineage.set.divisions(),
+            lineage.set.merges()
         ),
         TextStyle::new(TypeStyle::new(10.0, 400.0, 13.0), palette.text_secondary).truncating(),
         Align::Start,
@@ -163,11 +164,12 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
             let parent = link.parent() as usize;
             let lane_of_parent = layout.lane(parent);
             if let Some(parent) = lineage.set.track(parent) {
-                painter.segment(
+                draw_link(
+                    painter,
                     UiVec2::new(x(parent.end()), y(lane_of_parent)),
                     UiVec2::new(start, y(lane)),
-                    1.0,
-                    color.with_alpha(0.35),
+                    link.kind(),
+                    color,
                 );
             }
         }
@@ -222,4 +224,30 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
         &format!("Grana · frame {} of {frames}", lineage.time.min(span) + 1),
         TextStyle::new(TypeStyle::new(9.0, 400.0, 12.0), palette.text_quaternary),
     );
+}
+
+fn draw_link(painter: &mut Painter, from: UiVec2, to: UiVec2, kind: Link, tint: Color) {
+    match kind {
+        Link::Gap => dashed(painter, from, to, 1.0, tint.with_alpha(0.35)),
+        Link::Division => {
+            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
+        }
+        Link::Merge => {
+            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
+            painter.ring(from, 2.2, 1.0, 0.0, std::f32::consts::TAU, tint);
+        }
+    }
+}
+
+fn dashed(painter: &mut Painter, from: UiVec2, to: UiVec2, width: f32, color: Color) {
+    let length = from.distance(to);
+    if length <= 0.0 {
+        return;
+    }
+    let steps = (length / 5.0).ceil() as u32;
+    for step in 0..steps {
+        let start = step as f32 / steps as f32;
+        let end = (step as f32 + 0.55) / steps as f32;
+        painter.segment(from.lerp(to, start), from.lerp(to, end), width, color);
+    }
 }

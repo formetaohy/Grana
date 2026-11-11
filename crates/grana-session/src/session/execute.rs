@@ -544,6 +544,20 @@ impl Session {
                     Message::error("a division links a track end to two later lineage starts")
                 });
             }
+            Command::MergeTracks {
+                set,
+                first,
+                second,
+                child,
+            } => {
+                let merged = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.merge_tracks(set, first, second, child));
+                self.message = (!merged).then(|| {
+                    Message::error("a merge joins two earlier track ends to a later lineage start")
+                });
+            }
             Command::ReparentTrack { set, child, parent } => {
                 let adopted = self
                     .scene
@@ -681,7 +695,6 @@ impl Session {
             Command::ExportAllLabels => self.export_all_labels(),
             Command::ExportDataset => self.export_dataset(),
             Command::ExportPlate => self.export_plate(),
-            Command::ExportTracks(set) => self.choose_export_tracks(set),
             Command::ExportGeff(set) => self.choose_export_geff(set),
             Command::CaptureProtocol => self.capture_protocol(),
             Command::ApplyProtocol => self.apply_protocol(),

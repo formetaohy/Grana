@@ -3616,7 +3616,6 @@ name = "grana-interop"
 version = "0.1.1"
 dependencies = [
  "grana-object",
- "quick-xml",
  "serde_json",
  "thiserror 2.0.21",
  "zarrs",
