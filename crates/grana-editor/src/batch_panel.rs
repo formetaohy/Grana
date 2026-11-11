@@ -439,9 +439,13 @@ fn comparison<'a>(
     let significant = state
         .batch_significance()
         .iter()
-        .filter(|test| test.significant())
+        .filter(|test| test.frame.is_none() && test.significant())
         .count();
-    let tests = state.batch_significance().len();
+    let tests = state
+        .batch_significance()
+        .iter()
+        .filter(|test| test.frame.is_none())
+        .count();
     let note = (!rows.is_empty()).then(|| {
         if tests == 0 {
             grana_i18n::batch::no_group_test(language).to_string()
@@ -474,7 +478,7 @@ fn comparison<'a>(
             ctx,
             "comparison.axis",
             &axes,
-            axis.index(),
+            usize::from(axis.index()),
             Message::SetComparisonAxis,
         ),
         view::segmented(
@@ -625,6 +629,7 @@ fn detail<'a>(
     let tests = state
         .batch_significance()
         .iter()
+        .filter(|test| test.frame.is_none())
         .filter(|test| test.key == row.key && test.metric == metric && test.involves(&row.group))
         .collect::<Vec<_>>();
     let best = tests.iter().map(|test| test.adjusted).fold(1.0, f64::min);

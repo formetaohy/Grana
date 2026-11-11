@@ -25,16 +25,13 @@ use grana_protocol::{Protocol, ProtocolError, SnapshotSpec, Step, ViewSpec};
 
 use super::channel;
 use super::profile;
-use super::quality::{self, Quality};
 use super::resume::{Record, build};
 use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, Task};
-
-const COLOC_PLOT: [u32; 2] = [720, 450];
 
 pub(super) struct Report {
     pub(super) objects: usize,
     pub(super) detail: String,
-    pub(super) quality: Vec<Quality>,
+    pub(super) quality: Vec<grana_report::Quality>,
     pub(super) labels: Vec<String>,
 }
 
@@ -214,7 +211,14 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let mut objects = 0usize;
     let mut detail = Vec::new();
     let mut quality = Vec::new();
-    let keys = quality::keys(&scene);
+    let keys = grana_report::keys(
+        &scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.name().to_string())
+            .collect::<Vec<_>>(),
+    );
     for (index, spec) in task.protocol.sets().iter().enumerate() {
         let table = scene
             .table(sets[index], spec.group(), spec.aggregate())
@@ -271,14 +275,22 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             line.push_str(&format!(" ({} manual edits dropped)", dropped));
         }
         detail.push(line);
-        quality.push(quality::of(
-            &scene,
-            sets[index],
-            &keys,
+        let object = scene
+            .objects
+            .get(sets[index])
+            .expect("the batch measures its detected set");
+        quality.push(grana_report::quality_of(
             &table,
             &rows,
-            &name,
-            dataset.group(),
+            &grana_report::QualityInput {
+                dataset: &name,
+                group: dataset.group(),
+                key: spec.key(),
+                name: spec.name.as_str(),
+                kind: object.kind().name(),
+                channel: object.channel(),
+            },
+            &keys,
         ));
     }
     for set in scene.objects.iter() {
@@ -314,7 +326,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             index: task.index,
             label: format!("exporting the intensity profiles of {}", reader.name()),
         });
-        profile::write(&scene, folder)?;
+        profile::write(&scene, folder, language())?;
     }
     if task.protocol.coloc().is_some() {
         let channels = scene
@@ -329,33 +341,25 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             .iter()
             .map(|channel| channel.tint())
             .collect::<Vec<_>>();
-        let mut fonts = grana_text::Fonts::system();
         for result in scene.coloc.results() {
             let pair = result.pair();
-            let file = format!(
-                "coloc-{}-{}.csv",
+            let stem = format!(
+                "coloc-{}-{}",
                 slug(&channels[pair.a()]),
                 slug(&channels[pair.b()])
             );
             write(
-                &folder.join(&file),
+                &folder.join(format!("{stem}.csv")),
                 &result.series().csv(result.thresholds()),
             )?;
-            let plot = format!(
-                "coloc-{}-{}.png",
-                slug(&channels[pair.a()]),
-                slug(&channels[pair.b()])
-            );
-            let raster = colocalization(
-                &mut fonts,
+            let page = colocalization(
                 result,
                 &channels[pair.a()],
                 &channels[pair.b()],
-                tints[pair.a()],
-                tints[pair.b()],
+                [tints[pair.a()], tints[pair.b()]],
+                language(),
             );
-            grana_raster::write(&folder.join(&plot), &raster)
-                .map_err(|error| format!("failed to write {plot}: {error}"))?;
+            grana_page::write_page(&page, &folder.join(format!("{stem}.svg")))?;
         }
     }
     if task
@@ -1228,14 +1232,14 @@ pub(super) fn artifacts(
         if annotation.profile().is_some() {
             let stem = format!("profile-{index:02}-{}", slug(annotation.name()));
             artifacts.push(format!("{stem}.csv"));
-            artifacts.push(format!("{stem}.png"));
+            artifacts.push(format!("{stem}.svg"));
         }
     }
     if let Some(coloc) = protocol.coloc() {
         for pair in &coloc.pairs {
             let stem = format!("coloc-{}-{}", slug(&pair.a), slug(&pair.b));
             artifacts.push(format!("{stem}.csv"));
-            artifacts.push(format!("{stem}.png"));
+            artifacts.push(format!("{stem}.svg"));
         }
     }
     if channels {
@@ -1398,23 +1402,21 @@ fn clear(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to clear {}: {error}", path.display()))
 }
 
+pub(super) fn language() -> grana_i18n::Language {
+    grana_i18n::Language::from_environment().unwrap_or_else(grana_i18n::Language::system)
+}
+
 fn colocalization(
-    fonts: &mut grana_text::Fonts,
     result: &grana_scene::ColocResult,
     x: &str,
     y: &str,
-    x_tint: [f32; 3],
-    y_tint: [f32; 3],
-) -> grana_raster::Raster {
+    tints: [[f32; 3]; 2],
+    language: grana_i18n::Language,
+) -> grana_chart::Page {
     let series = result.series();
     let thresholds = result.thresholds();
     let statistics = result.statistics();
     let manders = statistics.manders();
-    let costes = series.costes().map(|range| {
-        let low = range.low();
-        let high = range.high();
-        [[low.a(), low.b()], [high.a(), high.b()]]
-    });
     let caption = format!(
         "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
         number(statistics.pearson()),
@@ -1426,23 +1428,19 @@ fn colocalization(
             |significance| format!("{:.4}", significance.p())
         ),
     );
-    let subtitle = format!(
-        "all frames · {} bins · level {}",
-        series.bins(),
-        series.level()
-    );
-    let plot = grana_raster::Joint {
-        x: grana_raster::Axis::new(x, x_tint),
-        y: grana_raster::Axis::new(y, y_tint),
-        bins: series.bins(),
-        joint: series.joint(),
-        threshold: [thresholds.a(), thresholds.b()],
-        costes,
-        title: "Colocalization",
-        subtitle: &subtitle,
-        caption: &caption,
-    };
-    grana_raster::joint_plot(fonts, &plot, COLOC_PLOT)
+    let heading = grana_chart::Heading::new(
+        grana_i18n::coloc::joint_histogram(language),
+        format!("Y: {y}"),
+        format!("X: {x}"),
+    )
+    .with_summary(caption)
+    .with_language(language);
+    grana_chart::Page::Joint(Box::new(grana_chart::Joint::of(
+        heading,
+        series,
+        tints,
+        [thresholds.a(), thresholds.b()],
+    )))
 }
 
 fn number(value: Option<f64>) -> String {

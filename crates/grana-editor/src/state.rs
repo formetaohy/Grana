@@ -147,23 +147,7 @@ pub enum RelationMetric {
 
 pub use grana_session::BatchMetric as ComparisonMetric;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ComparisonAxis {
-    #[default]
-    Conditions,
-    Frames,
-}
-
-impl ComparisonAxis {
-    pub const ALL: [Self; 2] = [Self::Conditions, Self::Frames];
-
-    pub fn index(self) -> usize {
-        match self {
-            Self::Conditions => 0,
-            Self::Frames => 1,
-        }
-    }
-}
+pub use grana_report::Axis as ComparisonAxis;
 
 impl RelationMetric {
     pub const ALL: [Self; 4] = [Self::Contact, Self::Distance, Self::Overlap, Self::Center];

@@ -54,6 +54,8 @@ grana-glass = { version = "0.1.1", path = "crates/grana-glass" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
 grana-i18n = { version = "0.1.1", path = "crates/grana-i18n" }
 grana-offline = { version = "0.1.1", path = "crates/grana-offline" }
+grana-page = { version = "0.1.1", path = "crates/grana-page" }
+grana-report = { version = "0.1.1", path = "crates/grana-report" }
 grana-app = { version = "0.1.1", path = "crates/grana-app" }
 grana-codec = { version = "0.1.1", path = "crates/grana-codec" }
 grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }

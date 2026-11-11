@@ -1619,7 +1619,7 @@ fn reads_a_batch_run_record() {
         "a separated group tests significant"
     );
     let table = grana_pipeline::significance_table(&report.tests);
-    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,level,"));
+    assert!(table.starts_with("group_a,group_b,set_key,set,kind,metric,frame,level,"));
     assert!(
         table
             .lines()

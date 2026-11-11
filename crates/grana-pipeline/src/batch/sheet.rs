@@ -1,12 +1,8 @@
-use std::path::Path;
-
 use grana_raster::{Cell, Group, Raster, Row, Sheet, Table};
+use grana_report::{Comparison, ComparisonReport, Metric, Significance};
 use grana_text::Fonts;
 
-use super::quality::{Comparison, ComparisonReport, Metric};
-use super::significance::Significance;
 use super::{Plan, Row as ResultRow};
-
 pub(super) const SHEET: &str = "sheet.png";
 
 pub(super) const SIGNIFICANCE: &str = "significance.png";
@@ -26,8 +22,6 @@ struct Entry {
     detail: String,
     accent: [u8; 4],
     image: Raster,
-    plots: Vec<Raster>,
-    profiles: Vec<Raster>,
 }
 
 pub(super) fn write(
@@ -59,8 +53,6 @@ pub(super) fn write(
             detail: format!("{} · {}", dataset.scene_label(), row.status),
             accent: status_color(row.status),
             image,
-            plots: colocalizations(&folder),
-            profiles: profiles(&folder),
         });
     }
     if entries.is_empty() {
@@ -82,10 +74,6 @@ pub(super) fn write(
             cells[entry.dataset] = Some(ordinal);
             ordinal += 1;
         }
-        ordinal += entries[start..end]
-            .iter()
-            .map(|entry| entry.plots.len() + entry.profiles.len())
-            .sum::<usize>();
         start = end;
     }
     let tables = tables(&comparison.groups);
@@ -165,7 +153,11 @@ fn metric_label(metric: Metric) -> String {
 }
 
 pub(super) fn significance(plan: &Plan, tests: &[Significance]) -> Result<(), String> {
-    let mut tables = significance_tables(tests);
+    let tests = tests
+        .iter()
+        .filter(|test| test.frame.is_none())
+        .collect::<Vec<_>>();
+    let mut tables = significance_tables(&tests);
     if tables.is_empty() {
         return Ok(());
     }
@@ -189,7 +181,7 @@ pub(super) fn significance(plan: &Plan, tests: &[Significance]) -> Result<(), St
     grana_raster::write(&plan.output.join(SIGNIFICANCE), &sheet).map_err(String::from)
 }
 
-fn significance_tables(tests: &[Significance]) -> Vec<(String, Table)> {
+fn significance_tables(tests: &[&Significance]) -> Vec<(String, Table)> {
     let mut tables = Vec::<(String, Table)>::new();
     for test in tests {
         let name = if test.name == test.kind {
@@ -285,88 +277,9 @@ fn groups<'a>(entries: &'a [Entry], tables: &'a [(String, Table)]) -> Vec<Group<
             table,
             cells,
         });
-        if entries[start..end]
-            .iter()
-            .any(|entry| !entry.plots.is_empty())
-        {
-            let cells = entries[start..end]
-                .iter()
-                .flat_map(|entry| {
-                    entry.plots.iter().map(|plot| Cell {
-                        image: plot,
-                        title: &entry.title,
-                        detail: "colocalization",
-                        accent: Some(entry.accent),
-                    })
-                })
-                .collect();
-            groups.push(Group {
-                name: section(name, "colocalization"),
-                table: None,
-                cells,
-            });
-        }
-        if entries[start..end]
-            .iter()
-            .any(|entry| !entry.profiles.is_empty())
-        {
-            let cells = entries[start..end]
-                .iter()
-                .flat_map(|entry| {
-                    entry.profiles.iter().map(|profile| Cell {
-                        image: profile,
-                        title: &entry.title,
-                        detail: "intensity profile",
-                        accent: Some(entry.accent),
-                    })
-                })
-                .collect();
-            groups.push(Group {
-                name: section(name, "profiles"),
-                table: None,
-                cells,
-            });
-        }
         start = end;
     }
     groups
-}
-
-fn colocalizations(folder: &Path) -> Vec<Raster> {
-    rasters(folder, "coloc-")
-}
-
-fn profiles(folder: &Path) -> Vec<Raster> {
-    rasters(folder, "profile-")
-}
-
-fn rasters(folder: &Path, prefix: &str) -> Vec<Raster> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return Vec::new();
-    };
-    let mut paths = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name().is_some_and(|name| {
-                let name = name.to_string_lossy();
-                name.starts_with(prefix) && name.ends_with(".png")
-            })
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
-        .iter()
-        .filter_map(|path| grana_raster::read(path).ok())
-        .collect()
-}
-
-fn section(group: &str, kind: &str) -> String {
-    if group.is_empty() {
-        kind.to_string()
-    } else {
-        format!("{group} · {kind}")
-    }
 }
 
 fn status_color(status: &str) -> [u8; 4] {

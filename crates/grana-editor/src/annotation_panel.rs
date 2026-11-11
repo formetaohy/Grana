@@ -3,7 +3,7 @@ use grana_i18n::Language;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Rect, Role, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, Key, Length, Rect, Role, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -359,7 +359,6 @@ fn profile_card<'a>(
     );
     let mut children = vec![title];
     if let Some(profile) = profile {
-        let names = profile.names().to_vec();
         let tints = state
             .scene
             .dataset
@@ -367,79 +366,30 @@ fn profile_card<'a>(
             .iter()
             .map(|channel| channel.tint())
             .collect::<Vec<_>>();
-        let samples = profile
-            .samples()
-            .iter()
-            .map(|sample| (sample.offset(), sample.values().to_vec()))
-            .collect::<Vec<_>>();
-        let span = profile.length().max(1.0e-6);
-        let spacing = profile.spacing();
-        let legend = names.join(" · ");
+        let heading = grana_chart::Heading::new(
+            String::new(),
+            grana_i18n::annotation::profile_axis(language),
+            grana_i18n::annotation::profile_offset(language),
+        )
+        .with_summary(grana_i18n::annotation::profile_span(
+            language,
+            profile.length(),
+            profile.spacing(),
+        ))
+        .with_language(language);
+        let page = grana_chart::Page::Series(Box::new(grana_chart::SeriesPage::of_profile(
+            profile,
+            &tints,
+            heading,
+            grana_chart::DistributionStyle::Box,
+        )));
         let theme = *ctx.theme();
+        let style = grana_chart::Style::card(&theme, grana_chart::DistributionStyle::Box)
+            .with_language(language);
         let chart = grana_ui::canvas(Length::Fill, 148.0, move |painter, info| {
-            let palette = theme.palette;
-            let rect = info.rect.shrink2(Vec2::new(4.0, 4.0));
-            painter.rect(rect, Corners::all(8.0), palette.material_fill.amplify(0.4));
-            let plot = Rect::from_min_max(
-                Vec2::new(rect.left() + 10.0, rect.top() + 10.0),
-                Vec2::new(rect.right() - 10.0, rect.bottom() - 22.0),
-            );
-            painter.segment(
-                Vec2::new(plot.left(), plot.bottom()),
-                Vec2::new(plot.right(), plot.bottom()),
-                1.0,
-                palette.separator,
-            );
-            let stride = (samples.len() / 256).max(1);
-            for (channel, _) in names.iter().enumerate() {
-                let mut low = f32::INFINITY;
-                let mut high = f32::NEG_INFINITY;
-                for sample in samples.iter().step_by(stride) {
-                    if let Some(value) = sample.1.get(channel).copied()
-                        && value.is_finite()
-                    {
-                        low = low.min(value);
-                        high = high.max(value);
-                    }
-                }
-                if low > high {
-                    continue;
-                }
-                let range = (high - low).max(1.0e-6);
-                let tint = tints.get(channel).copied().unwrap_or([1.0, 1.0, 1.0]);
-                let color = Color::from_rgb_f32(tint);
-                let mut previous: Option<Vec2> = None;
-                for sample in samples.iter().step_by(stride) {
-                    let Some(value) = sample.1.get(channel).copied() else {
-                        previous = None;
-                        continue;
-                    };
-                    if !value.is_finite() {
-                        previous = None;
-                        continue;
-                    }
-                    let x = plot.left() + (sample.0 / span).clamp(0.0, 1.0) * plot.width();
-                    let y = plot.bottom() - ((value - low) / range) * plot.height();
-                    let point = Vec2::new(x, y);
-                    if let Some(previous) = previous {
-                        painter.segment(previous, point, 1.4, color);
-                    }
-                    previous = Some(point);
-                }
-            }
-            let caption = grana_i18n::annotation::profile_span(language, span, spacing);
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.left() + 10.0, plot.bottom() + 4.0),
-                    Vec2::new(rect.right() - 10.0, rect.bottom() - 2.0),
-                ),
-                &caption,
-                TextStyle::new(theme.font(grana_ui::Level::Caption), palette.text_tertiary),
-                Align::Center,
-            );
+            page.paint(painter, info.rect, &style, &grana_chart::Decor::default());
         });
         children.push(chart);
-        children.push(view::weak(ctx, &legend));
     } else {
         children.push(view::weak(
             ctx,

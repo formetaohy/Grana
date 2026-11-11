@@ -10,8 +10,8 @@ use crate::capture;
 use crate::compose::Composer;
 use crate::figure::{self, Figure};
 use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
-use crate::sink::Sink;
-use crate::vector::{self, Format};
+use crate::sink::{self, Sink};
+use grana_page::Format;
 
 const DEVIATION_TO_SIGMA: f32 = 1.2533;
 const DEVIATION_WINDOW: usize = 4;
@@ -92,12 +92,10 @@ impl Export {
             "a movie frame holds an even number of pixels"
         );
         let figure = match &destination {
-            Destination::Figure { path } => Some(vector::format(path).ok_or_else(|| {
-                format!(
-                    "a vector figure is saved as SVG or PDF, not `{}`",
-                    path.display()
-                )
-            })?),
+            Destination::Figure { path } => Some(
+                Format::of(path)
+                    .ok_or_else(|| grana_page::Format::error(path, "a vector figure"))?,
+            ),
             _ => None,
         };
         if figure.is_some() && poses.len() != 1 {
@@ -333,14 +331,13 @@ impl Export {
             let Sink::Figure { path } = sink else {
                 unreachable!("a vector figure writes a figure sink")
             };
-            vector::write(
-                &path,
-                format,
+            let mut document = grana_vector::Document::new(size[0] as f32, size[1] as f32);
+            document.set_background(grana_vector::Image::new(
                 size,
-                image.pixels(),
-                &marks,
-                self.transparent,
-            )?;
+                sink::rgba8(size, image.pixels(), self.transparent),
+            ));
+            grana_page::push(&mut document, &marks)?;
+            grana_page::write_document(&path, format, &document)?;
             self.frame += 1;
             self.attempts = 0;
             self.converged = false;

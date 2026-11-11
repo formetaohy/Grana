@@ -6,8 +6,8 @@ use grana_interop::Crate;
 use sha2::{Digest as _, Sha256};
 
 use super::Plan;
+use super::Row;
 use super::pipeline::artifacts;
-use super::quality::Row;
 
 const FULL: u64 = 8 << 20;
 
@@ -15,7 +15,7 @@ const SAMPLE: u64 = 1 << 20;
 
 const LISTING_LIMIT: usize = 100_000;
 
-const ROOT_PARTS: [(&str, &str); 11] = [
+const ROOT_PARTS: [(&str, &str); 12] = [
     ("protocol.json", "application/json"),
     ("run.json", "application/json"),
     ("summary.csv", "text/csv"),
@@ -25,6 +25,7 @@ const ROOT_PARTS: [(&str, &str); 11] = [
     ("comparison_significance.csv", "text/csv"),
     ("samples.csv", "text/csv"),
     ("sheet.csv", "text/csv"),
+    ("comparison.svg", "image/svg+xml"),
     ("sheet.png", "image/png"),
     ("significance.png", "image/png"),
 ];
@@ -235,6 +236,7 @@ fn media_of(file: &str) -> &'static str {
     match file.rsplit('.').next() {
         Some("json") => "application/json",
         Some("csv") => "text/csv",
+        Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("mp4") => "video/mp4",
         Some("ome") => "application/octet-stream",

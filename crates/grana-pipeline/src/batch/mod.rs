@@ -4,11 +4,9 @@ mod gate;
 mod manifest;
 mod pipeline;
 mod profile;
-mod quality;
 mod resume;
 mod ro_crate;
 mod sheet;
-mod significance;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,17 +21,27 @@ use crate::capture::Capture;
 use discover::dataset_workers;
 use gate::Gate;
 use pipeline::{analyse, artifacts};
-use quality::Row;
 use resume::{Evidence, build, completed, evidence};
 
 pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
+pub use grana_report::{
+    Comparison, ComparisonReport, ComparisonSample, Metric, Quality, Significance,
+    significance_table,
+};
 pub use manifest::{
     Run, RunDataset, clear as clear_correction, read as read_run, record as record_correction,
 };
-pub use quality::{Comparison, ComparisonReport, ComparisonSample, Metric, Quality, Summary};
-pub use significance::{Significance, table as significance_table};
+
+pub(super) struct Row {
+    pub(super) status: &'static str,
+    pub(super) objects: usize,
+    pub(super) detail: String,
+    pub(super) quality: Vec<Quality>,
+}
 
 const RESULT: &str = "result.json";
+
+const COMPARISON: &str = "comparison.svg";
 
 const PARTIAL: &str = "partial";
 
@@ -41,7 +49,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 13;
+const ANALYSIS_REVISION: u32 = 14;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -289,13 +297,35 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("quality.csv"),
-        quality::table(&plan, &rows),
+        grana_report::table(
+            &plan
+                .datasets
+                .iter()
+                .enumerate()
+                .map(|(index, dataset)| grana_report::QualityDataset {
+                    group: dataset.group().to_string(),
+                    name: dataset.title(),
+                    scene: dataset.scene_label(),
+                    status: rows
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .map_or("queued", |row| row.status),
+                    quality: rows
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .map_or(&[][..], |row| row.quality.as_slice()),
+                })
+                .collect::<Vec<_>>(),
+        ),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch quality report: {error}"
         )));
     }
-    let (report, csv) = quality::comparison(&rows);
+    let (report, csv) = grana_report::comparison(rows.iter().flatten().flat_map(|row| {
+        let settled = row.status == "ok" || row.status == "resumed";
+        row.quality.iter().filter(move |_| settled)
+    }));
     if let Err(error) = std::fs::write(plan.output.join("comparison.csv"), csv) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison: {error}"
@@ -303,7 +333,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("comparison_significance.csv"),
-        significance::table(&report.tests),
+        grana_report::significance_table(&report.tests),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch significance: {error}"
@@ -311,7 +341,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("comparison_frames.csv"),
-        quality::comparison_frames(&report.groups),
+        grana_report::comparison_frames(&report.groups),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison frames: {error}"
@@ -319,11 +349,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("samples.csv"),
-        quality::samples(&report.groups),
+        grana_report::samples(&report.groups),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison samples: {error}"
         )));
+    }
+    if let Some(page) = grana_report::sheet(
+        &report,
+        grana_chart::DistributionStyle::Box,
+        pipeline::language(),
+    ) && let Err(detail) = grana_page::write_page(&page, &plan.output.join(COMPARISON))
+    {
+        let _ = events.send(Event::Failed(detail));
     }
     if let Err(detail) = manifest::write(&plan, &evidence, &rows, &corrections) {
         let _ = events.send(Event::Failed(detail));

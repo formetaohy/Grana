@@ -1,21 +1,21 @@
 use glam::Vec2;
+use grana_chart::{Decor, DistributionStyle, Style};
 use grana_i18n::Language;
 use grana_measure::{
-    COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocPair, ColocPrecision, ColocSeries, ColocSettings,
+    COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocPair, ColocPrecision, ColocSettings,
     ColocStatistics, ColocThresholds,
 };
 use grana_scene::{Job, ObjectSetId, Progress};
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect, Role,
-    State, TextStyle, TypeStyle, icon,
+    Align, BuildContext, Corners, Cursor, Element, Icon, Key, Length, Level, Rect, Role, State,
+    TextStyle, icon,
 };
 
 use crate::message::Message;
 use crate::state::View;
 use crate::view;
 
-const PLOT_CELLS: usize = 160;
 const PLOT_SIDE: f32 = 186.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -586,96 +586,23 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let channels = state.scene.dataset.channels();
     let tints = [channels[pair.a()].tint(), channels[pair.b()].tint()];
     let names = [channels[pair.a()].name(), channels[pair.b()].name()];
-    let bins = series.bins();
+    let subtitle = grana_i18n::coloc::all_frames_bins(language, series.bins());
+    let heading = grana_chart::Heading::new(
+        String::new(),
+        format!("Y: {}", names[1]),
+        format!("X: {}", names[0]),
+    )
+    .with_language(language);
+    let page = grana_chart::Page::Joint(Box::new(grana_chart::Joint::of(
+        heading,
+        series,
+        tints,
+        [thresholds.a(), thresholds.b()],
+    )));
     let theme = *ctx.theme();
-    let subtitle = grana_i18n::coloc::all_frames_bins(language, bins);
-    let background = theme.surface(Role::Field, State::Rest);
-    let grid = Color::white_alpha(0.05);
-    let line = Color::rgba(0.95, 0.96, 1.0, 0.55);
-    let costes = series.costes();
-    let footer_font = TypeStyle::new(10.0, 500.0, 13.0);
-    let y_label = format!("Y: {}", names[1]);
-    let x_label = format!("X: {}", names[0]);
-    let y_tint = Color::from_rgb_f32(tints[1]);
-    let x_tint = Color::from_rgb_f32(tints[0]);
+    let style = Style::card(&theme, DistributionStyle::Box).with_language(language);
     let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0, move |painter, info| {
-        let full = info.rect;
-        let side = PLOT_SIDE.min(full.width() - 4.0).max(120.0);
-        let x = full.min.x + (full.width() - side) * 0.5;
-        let plot = Rect::from_min_size(Vec2::new(x, full.min.y), Vec2::splat(side));
-        painter.outlined(
-            plot,
-            Corners::all(8.0),
-            background.fill,
-            background.border,
-            grana_ui::Shadow::NONE,
-        );
-        for index in 1..4 {
-            let fraction = index as f32 / 4.0;
-            let x = plot.min.x + plot.width() * fraction;
-            let y = plot.min.y + plot.height() * fraction;
-            painter.segment(
-                Vec2::new(x, plot.min.y),
-                Vec2::new(x, plot.max.y),
-                0.5,
-                grid,
-            );
-            painter.segment(
-                Vec2::new(plot.min.x, y),
-                Vec2::new(plot.max.x, y),
-                0.5,
-                grid,
-            );
-        }
-        for (rect, color) in scatter_positions(series, tints, side) {
-            painter.rect(
-                rect.translate(plot.min),
-                Corners::ZERO,
-                Color::rgb(color[0], color[1], color[2]),
-            );
-        }
-        let vertical = plot.min.x + thresholds.a() * plot.width();
-        let horizontal = plot.max.y - thresholds.b() * plot.height();
-        painter.segment(
-            Vec2::new(vertical, plot.min.y),
-            Vec2::new(vertical, plot.max.y),
-            0.8,
-            line,
-        );
-        painter.segment(
-            Vec2::new(plot.min.x, horizontal),
-            Vec2::new(plot.max.x, horizontal),
-            0.8,
-            line,
-        );
-        if let Some(range) = costes {
-            let low = range.low();
-            let high = range.high();
-            let low_x = plot.min.x + low.a() * plot.width();
-            let high_x = plot.min.x + high.a() * plot.width();
-            painter.segment(
-                Vec2::new(low_x, plot.max.y - 6.0),
-                Vec2::new(high_x, plot.max.y - 6.0),
-                2.0,
-                Color::rgba(1.0, 0.85, 0.45, 0.85),
-            );
-        }
-        let footer = Rect::from_min_size(
-            Vec2::new(plot.min.x, plot.max.y + 4.0),
-            Vec2::new(plot.width(), 14.0),
-        );
-        painter.text_in(
-            footer,
-            &y_label,
-            TextStyle::new(footer_font, y_tint),
-            Align::Center,
-        );
-        painter.text_in(
-            footer,
-            &x_label,
-            TextStyle::new(footer_font, x_tint).aligned(Align::End),
-            Align::Center,
-        );
+        page.paint(painter, info.rect, &style, &Decor::default());
     });
     let title = view::card_title(
         ctx,
@@ -684,57 +611,6 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         Some(&subtitle),
     );
     view::card(ctx, 6.0, vec![title, canvas])
-}
-
-fn scatter_positions(
-    series: &ColocSeries,
-    tints: [[f32; 3]; 2],
-    side: f32,
-) -> Vec<(Rect, [f32; 3])> {
-    let bins = series.bins();
-    let cells = bins.min(PLOT_CELLS);
-    if cells == 0 {
-        return Vec::new();
-    }
-    let block = bins.div_ceil(cells);
-    let maximum = series.joint().iter().copied().max().unwrap_or(1).max(1);
-    let ceiling = (maximum as f32 + 1.0).ln();
-    let cell = side / cells as f32;
-    let mut positions = Vec::new();
-    for row in 0..cells {
-        for column in 0..cells {
-            let mut count = 0u64;
-            for inner_row in 0..block {
-                for inner_column in 0..block {
-                    let bucket_a = column * block + inner_column;
-                    let bucket_b = row * block + inner_row;
-                    if bucket_a < bins && bucket_b < bins {
-                        count = count.max(series.joint_at(bucket_a, bucket_b));
-                    }
-                }
-            }
-            if count == 0 {
-                continue;
-            }
-            let weight = ((count as f32 + 1.0).ln() / ceiling).clamp(0.0, 1.0);
-            let blend = (column + row) as f32 / (2.0 * (cells - 1).max(1) as f32);
-            let tint =
-                [0, 1, 2].map(|axis| tints[0][axis] + (tints[1][axis] - tints[0][axis]) * blend);
-            let brightness = 0.22 + 0.78 * weight;
-            positions.push((
-                Rect::from_min_size(
-                    Vec2::new(column as f32 * cell, (cells - row - 1) as f32 * cell),
-                    Vec2::splat(cell + 0.4),
-                ),
-                [
-                    tint[0] * brightness,
-                    tint[1] * brightness,
-                    tint[2] * brightness,
-                ],
-            ));
-        }
-    }
-    positions
 }
 
 fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'a, Message> {

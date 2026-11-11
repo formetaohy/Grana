@@ -76,6 +76,7 @@ labels! {
     trend => "Trend" / "趋势";
     ripley => "Ripley" / "Ripley";
     ripley_title => "Ripley L" / "Ripley L";
+    ripley_curve => "L(r) − r" / "L(r) − r";
     no_spatial => "No spatial frames" / "无可分析的空间帧";
     box_plot => "Box" / "箱线图";
     violin_plot => "Violin" / "小提琴图";
@@ -167,6 +168,7 @@ messages! {
     distribution_title(column: &str) => "Distribution of {column}" / "{column} 分布";
     trend_title(column: &str) => "Trend of {column}" / "{column} 趋势";
     ripley_summary(frames: u32, objects: u64) => "{frames} frames · {objects} objects · L − r against the radius" / "{frames} 帧 · {objects} 个对象 · L − r 随半径变化";
+    ripley_envelope(simulations: u32) => "CSR envelope · {simulations} simulations" / "CSR 包络 · {simulations} 次模拟";
     radial_readout(radius: &str, value: &str, low: &str, high: &str, frames: u64) => "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} frames" / "r {radius} µm · L − r {value} µm · 95% CI {low}–{high} · {frames} 帧";
     comparison_title(metric: &str) => "Comparison of {metric}" / "{metric}比较";
     comparison_summary(count: usize) => "{count} categories · images are the samples" / "{count} 个类别 · 图像为样本";

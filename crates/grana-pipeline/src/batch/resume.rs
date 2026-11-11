@@ -2,7 +2,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::quality::Quality;
+use grana_report::Quality;
+
 use super::{ANALYSIS_REVISION, RESULT};
 
 const CONTENT_SAMPLE: u64 = 1 << 16;

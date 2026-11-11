@@ -9,6 +9,7 @@ pub struct TrendPoint {
     time: u32,
     count: u64,
     value: f32,
+    deviation: Option<f32>,
     lower: f32,
     upper: f32,
 }
@@ -24,6 +25,10 @@ impl TrendPoint {
 
     pub fn value(&self) -> f32 {
         self.value
+    }
+
+    pub fn deviation(&self) -> Option<f32> {
+        self.deviation
     }
 
     pub fn lower(&self) -> f32 {
@@ -97,6 +102,7 @@ impl Table {
                 time,
                 count: sample.len() as u64,
                 value: value as f32,
+                deviation: sample.deviation().map(|deviation| deviation as f32),
                 lower: lower as f32,
                 upper: upper as f32,
             });

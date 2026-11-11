@@ -2,50 +2,16 @@ use std::path::{Path, PathBuf};
 
 use grana_text::{Contour, Curve};
 use grana_ui::{Color, Corners, Mark, Rect};
-use grana_vector::{Document, Image, Paint, Rgba, Shape};
+use grana_vector::{Document, Paint, Rgba, Shape};
 
-use crate::sink;
+use crate::Format;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Format {
-    Svg,
-    Pdf,
-}
-
-pub(crate) fn format(path: &Path) -> Option<Format> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("svg") => Some(Format::Svg),
-        Some("pdf") => Some(Format::Pdf),
-        _ => None,
-    }
-}
-
-pub(crate) fn write(
-    path: &Path,
-    format: Format,
-    size: [u32; 2],
-    pixels: &[u16],
-    marks: &[Mark],
-    transparent: bool,
-) -> Result<(), String> {
-    let mut document = Document::new(size[0] as f32, size[1] as f32);
-    let cleared = sink::rgba8(size, pixels, transparent);
-    document.set_background(Image::new(size, cleared));
-    push(&mut document, marks)?;
-    write_document(path, format, &document)
-}
-
-pub(crate) fn write_marks(
+pub fn write(
     path: &Path,
     format: Format,
     size: [u32; 2],
     marks: &[Mark],
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     if size[0] == 0 || size[1] == 0 {
         return Err("a vector page covers at least one point".to_string());
     }
@@ -54,16 +20,17 @@ pub(crate) fn write_marks(
     write_document(path, format, &document)
 }
 
-fn write_document(path: &Path, format: Format, document: &Document) -> Result<(), String> {
+pub fn write_document(path: &Path, format: Format, document: &Document) -> Result<PathBuf, String> {
     let bytes = match format {
         Format::Svg => grana_vector::write_svg(document).into_bytes(),
         Format::Pdf => grana_vector::write_pdf(document),
     };
     grana_file::write(path, &bytes)
-        .map_err(|error| format!("failed to write {}: {error}", PathBuf::from(path).display()))
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    Ok(path.to_path_buf())
 }
 
-fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
+pub fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
     for mark in marks {
         match *mark {
             Mark::Rect {
@@ -182,7 +149,7 @@ fn push(document: &mut Document, marks: &[Mark]) -> Result<(), String> {
             }
             Mark::Bitmap { .. } => {
                 return Err(
-                    "a vector figure holds outlines, lines and fields, not rasters".to_string(),
+                    "a vector page holds outlines, lines and fields, not rasters".to_string(),
                 );
             }
         }

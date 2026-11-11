@@ -1,5 +1,7 @@
 use glam::Vec2;
+use grana_i18n::Language;
 use grana_measure::{Ripley, Trend};
+use grana_profile::Profile;
 use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, Theme};
 
 use crate::axis::Axis;
@@ -13,6 +15,12 @@ const LEGEND_HEIGHT: f32 = 13.0;
 const LEGEND_GAP: f32 = 14.0;
 const LEGEND_INSET: f32 = 6.0;
 
+const DOTS: usize = 64;
+
+const NOTE_GAP: f32 = 11.0;
+
+const NOTE_REACH: f32 = 18.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CurvePoint {
     pub x: f32,
@@ -24,13 +32,71 @@ pub struct CurvePoint {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve {
     pub label: String,
+    pub tint: Option<[f32; 3]>,
     pub points: Vec<CurvePoint>,
+    pub members: Vec<Vec<CurvePoint>>,
+}
+
+impl Curve {
+    pub fn new(label: impl Into<String>, points: Vec<CurvePoint>) -> Self {
+        Self {
+            label: label.into(),
+            tint: None,
+            points,
+            members: Vec::new(),
+        }
+    }
+
+    pub fn with_tint(mut self, tint: [f32; 3]) -> Self {
+        assert!(
+            tint.iter().all(|value| (0.0..=1.0).contains(value)),
+            "a curve carries an srgb tint"
+        );
+        self.tint = Some(tint);
+        self
+    }
+
+    pub fn with_members(mut self, members: Vec<Vec<CurvePoint>>) -> Self {
+        self.members = members;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandPoint {
+    pub x: f32,
+    pub lower: f32,
+    pub upper: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Band {
+    pub label: String,
+    pub points: Vec<BandPoint>,
+}
+
+impl Band {
+    pub fn new(label: impl Into<String>, points: Vec<BandPoint>) -> Self {
+        Self {
+            label: label.into(),
+            points,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub x: f32,
+    pub y: f32,
+    pub mark: String,
 }
 
 pub struct SeriesChart {
     pub x: Axis,
     pub y: Axis,
     pub curves: Vec<Curve>,
+    pub bands: Vec<Band>,
+    pub notes: Vec<Note>,
 }
 
 impl SeriesChart {
@@ -39,9 +105,9 @@ impl SeriesChart {
         Self {
             x: Axis::frames(1.0, frames, 5),
             y: Axis::new(trend.low(), trend.high(), 4),
-            curves: vec![Curve {
-                label: String::new(),
-                points: trend
+            curves: vec![Curve::new(
+                String::new(),
+                trend
                     .points()
                     .iter()
                     .map(|point| CurvePoint {
@@ -51,27 +117,104 @@ impl SeriesChart {
                         upper: point.upper(),
                     })
                     .collect(),
-            }],
+            )],
+            bands: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
-    pub fn of_ripley(ripley: &Ripley) -> Self {
+    pub fn of_ripley(ripley: &Ripley, language: Language) -> Self {
+        let curve = Curve::new(
+            grana_i18n::measure::ripley_curve(language),
+            ripley
+                .points()
+                .iter()
+                .map(|point| CurvePoint {
+                    x: point.radius(),
+                    value: point.value(),
+                    lower: point.lower(),
+                    upper: point.upper(),
+                })
+                .collect(),
+        );
+        let points = ripley
+            .points()
+            .iter()
+            .filter_map(|point| {
+                let (lower, upper) = point.envelope()?;
+                Some(BandPoint {
+                    x: point.radius(),
+                    lower,
+                    upper,
+                })
+            })
+            .collect::<Vec<_>>();
+        let bands = (!points.is_empty())
+            .then(|| {
+                Band::new(
+                    grana_i18n::measure::ripley_envelope(language, ripley.simulations()),
+                    points,
+                )
+            })
+            .into_iter()
+            .collect();
         Self {
             x: Axis::new(0.0, ripley.radius(), 5),
             y: Axis::new(ripley.low(), ripley.high(), 4),
-            curves: vec![Curve {
-                label: String::new(),
-                points: ripley
-                    .points()
+            curves: vec![curve],
+            bands,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn of_profile(profile: &Profile, tints: &[[f32; 3]]) -> Self {
+        let mut low = f32::INFINITY;
+        let mut high = f32::NEG_INFINITY;
+        for sample in profile.samples() {
+            for value in sample.values() {
+                if value.is_finite() {
+                    low = low.min(*value);
+                    high = high.max(*value);
+                }
+            }
+        }
+        if !(low.is_finite() && high.is_finite()) {
+            low = 0.0;
+            high = 1.0;
+        } else if high <= low {
+            let padding = (0.5 * low.abs()).max(0.5);
+            low -= padding;
+            high += padding;
+        }
+        let length = profile.length().max(1.0e-6);
+        let curves = (0..profile.names().len())
+            .map(|channel| {
+                let points = profile
+                    .samples()
                     .iter()
-                    .map(|point| CurvePoint {
-                        x: point.radius(),
-                        value: point.value(),
-                        lower: point.lower(),
-                        upper: point.upper(),
+                    .filter_map(|sample| {
+                        let value = *sample.values().get(channel)?;
+                        value.is_finite().then_some(CurvePoint {
+                            x: sample.offset(),
+                            value,
+                            lower: value,
+                            upper: value,
+                        })
                     })
-                    .collect(),
-            }],
+                    .collect::<Vec<_>>();
+                let curve = Curve::new(profile.names()[channel].clone(), points);
+                match tints.get(channel).copied() {
+                    Some(tint) => curve.with_tint(tint),
+                    None => curve,
+                }
+            })
+            .collect();
+        Self {
+            x: Axis::new(0.0, length, 5),
+            y: Axis::new(low, high, 4),
+            curves,
+            bands: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
@@ -87,6 +230,19 @@ pub struct SeriesPage {
 }
 
 impl SeriesPage {
+    pub fn of_profile(
+        profile: &Profile,
+        tints: &[[f32; 3]],
+        heading: Heading,
+        style: DistributionStyle,
+    ) -> Self {
+        Self {
+            heading,
+            chart: SeriesChart::of_profile(profile, tints),
+            style,
+        }
+    }
+
     pub fn size(&self) -> [u32; 2] {
         [WIDTH, HEIGHT]
     }
@@ -194,6 +350,55 @@ pub fn paint(
             Shadow::NONE,
         );
     }
+    let neutral = palette.text_tertiary;
+    let projected_bands = chart
+        .bands
+        .iter()
+        .map(|band| {
+            band.points
+                .iter()
+                .map(|point| {
+                    (
+                        chart.x.x(frame, point.x),
+                        chart.y.y(frame, point.lower),
+                        chart.y.y(frame, point.upper),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for points in &projected_bands {
+        for pair in points.windows(2) {
+            let band = neutral.with_alpha(0.11);
+            painter.triangle(
+                Vec2::new(pair[0].0, pair[0].1),
+                Vec2::new(pair[1].0, pair[1].1),
+                Vec2::new(pair[1].0, pair[1].2),
+                band,
+            );
+            painter.triangle(
+                Vec2::new(pair[0].0, pair[0].1),
+                Vec2::new(pair[0].0, pair[0].2),
+                Vec2::new(pair[1].0, pair[1].2),
+                band,
+            );
+        }
+        let edge = neutral.with_alpha(0.34);
+        for pair in points.windows(2) {
+            painter.segment(
+                Vec2::new(pair[0].0, pair[0].1),
+                Vec2::new(pair[1].0, pair[1].1),
+                0.6,
+                edge,
+            );
+            painter.segment(
+                Vec2::new(pair[0].0, pair[0].2),
+                Vec2::new(pair[1].0, pair[1].2),
+                0.6,
+                edge,
+            );
+        }
+    }
     let single = chart.curves.len() == 1;
     let projected = chart
         .curves
@@ -201,7 +406,7 @@ pub fn paint(
         .enumerate()
         .map(|(index, curve)| {
             (
-                tint(style, index),
+                tint(style, index, curve),
                 curve
                     .points
                     .iter()
@@ -215,10 +420,20 @@ pub fn paint(
                         )
                     })
                     .collect::<Vec<_>>(),
+                curve
+                    .members
+                    .iter()
+                    .map(|member| {
+                        member
+                            .iter()
+                            .map(|point| (chart.x.x(frame, point.x), chart.y.y(frame, point.value)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
             )
         })
         .collect::<Vec<_>>();
-    for (color, points) in &projected {
+    for (color, points, _) in &projected {
         for pair in points.windows(2) {
             let band = color.with_alpha(0.13);
             painter.triangle(
@@ -235,8 +450,22 @@ pub fn paint(
             );
         }
     }
-    for (color, points) in &projected {
-        if single {
+    for (color, _, members) in &projected {
+        let faint = color.with_alpha(0.20);
+        for member in members {
+            for pair in member.windows(2) {
+                painter.segment(
+                    Vec2::new(pair[0].0, pair[0].1),
+                    Vec2::new(pair[1].0, pair[1].1),
+                    0.9,
+                    faint,
+                );
+            }
+        }
+    }
+    for (color, points, _) in &projected {
+        let dots = single && points.len() <= DOTS;
+        if dots {
             for point in points {
                 if point.4 > 0.5 {
                     painter.segment(
@@ -256,7 +485,7 @@ pub fn paint(
                 *color,
             );
         }
-        if single || points.len() < 2 {
+        if dots || points.len() < 2 {
             for point in points {
                 painter.rect(
                     Rect::from_center_size(Vec2::new(point.0, point.1), Vec2::splat(2.6)),
@@ -266,7 +495,8 @@ pub fn paint(
             }
         }
     }
-    legend(painter, frame, style, &chart.curves);
+    paint_notes(painter, frame, chart, style);
+    legend(painter, frame, style, chart);
     if let Some(Highlight::Point(point)) = decor.highlight {
         let centre = Vec2::new(chart.x.x(frame, point.x), chart.y.y(frame, point.y));
         painter.outlined(
@@ -290,7 +520,36 @@ pub fn paint(
     }
 }
 
-fn legend(painter: &mut Painter, frame: Rect, style: &Style, curves: &[Curve]) {
+fn paint_notes(painter: &mut Painter, frame: Rect, chart: &SeriesChart, style: &Style) {
+    if chart.notes.is_empty() {
+        return;
+    }
+    let text =
+        TextStyle::new(style.metrics.caption, style.palette.text_secondary).aligned(Align::Center);
+    let mut placed = Vec::<(f32, f32)>::new();
+    for note in &chart.notes {
+        let x = chart.x.x(frame, note.x);
+        let mut y = chart.y.y(frame, note.y);
+        while placed
+            .iter()
+            .any(|(other, height)| (other - x).abs() < NOTE_REACH && (height - y).abs() < NOTE_GAP)
+        {
+            y -= NOTE_GAP;
+        }
+        placed.push((x, y));
+        painter.text_in(
+            Rect::from_center_size(
+                Vec2::new(x, y - 0.5 * NOTE_GAP),
+                Vec2::new(NOTE_REACH * 2.0, NOTE_GAP),
+            ),
+            &note.mark,
+            text,
+            Align::Center,
+        );
+    }
+}
+
+fn legend(painter: &mut Painter, frame: Rect, style: &Style, chart: &SeriesChart) {
     let metrics = style.metrics;
     let text = TextStyle::new(metrics.caption, style.palette.text_tertiary);
     let mut entries = Vec::new();
@@ -298,24 +557,29 @@ fn legend(painter: &mut Painter, frame: Rect, style: &Style, curves: &[Curve]) {
     let mut row = LEGEND_INSET;
     let row_height = LEGEND_HEIGHT + 4.0;
     let mut width = 0.0f32;
-    for (index, curve) in curves.iter().enumerate() {
-        if curve.label.is_empty() {
-            continue;
+    let mut push = |painter: &mut Painter, label: &str, color: Color, band: bool| {
+        if label.is_empty() {
+            return;
         }
-        let measured = painter.measure(&curve.label, text).x;
+        let measured = painter.measure(label, text).x;
         if pen > LEGEND_INSET && pen + 16.0 + measured > frame.width() - 2.0 * LEGEND_INSET {
             pen = LEGEND_INSET;
             row += row_height;
         }
         if row + LEGEND_HEIGHT > frame.height() - LEGEND_INSET {
-            break;
+            return;
         }
-        entries.push((index, curve.label.as_str(), pen, row, measured));
+        entries.push((label.to_string(), color, band, pen, row, measured));
         pen += 16.0 + measured + LEGEND_GAP;
         width = width.max(pen - LEGEND_GAP + LEGEND_INSET);
+    };
+    for (index, curve) in chart.curves.iter().enumerate() {
+        let color = tint(style, index, curve);
+        push(painter, &curve.label, color, false);
     }
-    if entries.len() <= 1 && curves.len() <= 1 {
-        return;
+    let neutral = style.palette.text_tertiary;
+    for band in &chart.bands {
+        push(painter, &band.label, neutral, true);
     }
     if entries.is_empty() {
         return;
@@ -326,18 +590,35 @@ fn legend(painter: &mut Painter, frame: Rect, style: &Style, curves: &[Curve]) {
         Corners::all(6.0),
         style.palette.scene_backdrop.with_alpha(0.72),
     );
-    for (index, label, x, y, _) in entries {
-        let centre = frame.min + Vec2::new(x + 2.0 + 6.0, y + 2.0 + 0.5 * LEGEND_HEIGHT);
-        painter.rect(
-            Rect::from_center_size(centre, Vec2::new(12.0, 3.0)),
-            Corners::capsule(),
-            tint(style, index),
+    for (label, color, band, x, y, _) in entries {
+        let swatch = Rect::from_center_size(
+            frame.min + Vec2::new(x + 2.0 + 6.0, y + 2.0 + 0.5 * LEGEND_HEIGHT),
+            Vec2::new(12.0, if band { 7.0 } else { 3.0 }),
         );
-        painter.text_at(frame.min + Vec2::new(x + 2.0 + 16.0, y + 2.0), label, text);
+        if band {
+            painter.outlined(
+                swatch,
+                Corners::all(2.0),
+                Fill::Solid(color.with_alpha(0.16)),
+                Border {
+                    width: 0.6,
+                    color: color.with_alpha(0.45),
+                },
+                Shadow::NONE,
+            );
+        } else {
+            painter.rect(swatch, Corners::capsule(), color);
+        }
+        painter.text_at(frame.min + Vec2::new(x + 2.0 + 16.0, y + 2.0), &label, text);
     }
 }
 
-fn tint(style: &Style, index: usize) -> Color {
-    let tints = style.palette.series();
-    tints[index % tints.len()]
+fn tint(style: &Style, index: usize, curve: &Curve) -> Color {
+    match curve.tint {
+        Some(tint) => Color::from_rgb_f32(tint),
+        None => {
+            let tints = style.palette.series();
+            tints[index % tints.len()]
+        }
+    }
 }

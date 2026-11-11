@@ -157,6 +157,21 @@ fn estimates_spatial_point_patterns() {
     assert_eq!(ripley.points().len(), 24);
     assert!(ripley.radius() > 0.0);
     assert!(ripley.low() <= 0.0 && ripley.high() >= 0.0);
+    assert!(ripley.simulations() >= 9);
+    assert!(
+        ripley
+            .points()
+            .iter()
+            .all(|point| point.envelope().is_none_or(|(low, high)| low <= high))
+    );
+    assert!(
+        ripley
+            .points()
+            .iter()
+            .filter(|point| point.envelope().is_some())
+            .count()
+            >= 8
+    );
 
     let plane = (0..64)
         .map(|index| [(index % 8) as f32 * 3.0, (index / 8) as f32 * 3.0, 0.0])

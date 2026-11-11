@@ -79,17 +79,8 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
         if plan.transparent {
             return Err("a statistics chart paints its own backdrop".to_string());
         }
-        if !matches!(
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("svg" | "pdf")
-        ) {
-            return Err(format!(
-                "a statistics chart is saved as SVG or PDF, not `{}`",
-                path.display()
-            ));
+        if grana_page::Format::of(path).is_none() {
+            return Err(grana_page::Format::error(path, "a statistics chart"));
         }
     }
     let wide = match &plan.destination {

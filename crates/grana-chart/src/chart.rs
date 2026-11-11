@@ -7,6 +7,7 @@ use crate::comparison::Comparison;
 use crate::decor::{Decor, Gates, Highlight};
 use crate::distribution::paint as distribution_paint;
 use crate::histogram::paint as histogram_paint;
+use crate::joint::Joint;
 use crate::scatter::paint as scatter_paint;
 use crate::series::{self, SeriesPage};
 use crate::style::{DistributionStyle, Style};
@@ -112,7 +113,7 @@ impl View<'_> {
             Plot::Ripley(ripley) => series::paint(
                 painter,
                 rect,
-                &series::SeriesChart::of_ripley(ripley),
+                &series::SeriesChart::of_ripley(ripley, style.language),
                 &style,
                 &self.decor,
                 empty,
@@ -162,6 +163,8 @@ pub enum Page {
     Plot(Box<Chart>),
     Comparison(Box<Comparison>),
     Series(Box<SeriesPage>),
+    Joint(Box<Joint>),
+    Sheet(Box<crate::sheet::Sheet>),
 }
 
 impl Page {
@@ -170,6 +173,8 @@ impl Page {
             Self::Plot(chart) => chart.size(),
             Self::Comparison(comparison) => comparison.size(),
             Self::Series(series) => series.size(),
+            Self::Joint(joint) => joint.size(),
+            Self::Sheet(sheet) => sheet.size(),
         }
     }
 
@@ -178,6 +183,8 @@ impl Page {
             Self::Plot(chart) => chart.distribution,
             Self::Comparison(comparison) => comparison.style,
             Self::Series(series) => series.style,
+            Self::Joint(_) => DistributionStyle::Box,
+            Self::Sheet(sheet) => sheet.distribution(),
         }
     }
 
@@ -198,6 +205,8 @@ impl Page {
             }
             Self::Comparison(comparison) => comparison.paint(painter, rect, style, decor),
             Self::Series(series) => series.paint(painter, rect, style, decor),
+            Self::Joint(joint) => joint.paint(painter, rect, style, None),
+            Self::Sheet(sheet) => sheet.paint(painter, rect, style, decor),
         }
     }
 
@@ -206,6 +215,8 @@ impl Page {
             Self::Plot(chart) => chart.marks(),
             Self::Comparison(comparison) => comparison.marks(),
             Self::Series(series) => series.marks(),
+            Self::Joint(joint) => joint.marks(),
+            Self::Sheet(sheet) => sheet.marks(),
         }
     }
 }

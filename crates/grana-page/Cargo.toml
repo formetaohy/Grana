@@ -1,0 +1,17 @@
+[package]
+name = "grana-page"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-chart = { workspace = true }
+grana-file = { workspace = true }
+grana-text = { workspace = true }
+grana-ui = { workspace = true }
+grana-vector = { workspace = true }
+
+[lints]
+workspace = true

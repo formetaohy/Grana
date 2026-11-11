@@ -8,6 +8,16 @@ const REACH: f32 = 0.25;
 
 const SAMPLE_LIMIT: usize = 20_000;
 
+const SIMULATIONS: u32 = 39;
+
+const SIMULATION_MINIMUM: u32 = 9;
+
+const SIMULATION_VISITS: u64 = 200_000_000;
+
+const VISIT_NEIGHBOURS: u64 = 27;
+
+const SIMULATION_SEED: u64 = 0x5153_5441_5449_5354;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Window {
     low: [f32; 3],
@@ -161,6 +171,8 @@ pub struct RipleyPoint {
     value: f32,
     lower: f32,
     upper: f32,
+    envelope_low: Option<f32>,
+    envelope_high: Option<f32>,
 }
 
 impl RipleyPoint {
@@ -183,6 +195,10 @@ impl RipleyPoint {
     pub fn upper(&self) -> f32 {
         self.upper
     }
+
+    pub fn envelope(&self) -> Option<(f32, f32)> {
+        self.envelope_low.zip(self.envelope_high)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -193,6 +209,7 @@ pub struct Ripley {
     radius: f32,
     frames: u32,
     objects: u64,
+    simulations: u32,
 }
 
 impl Ripley {
@@ -219,6 +236,10 @@ impl Ripley {
     pub fn objects(&self) -> u64 {
         self.objects
     }
+
+    pub fn simulations(&self) -> u32 {
+        self.simulations
+    }
 }
 
 pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley> {
@@ -234,61 +255,35 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
     let mut samples = vec![Vec::<f64>::new(); RADII];
     let mut objects = 0u64;
     let mut estimated = 0u32;
+    let mut sampled = Vec::<Vec<[f32; 3]>>::new();
     for points in frames {
         if points.len() < 2 {
             continue;
         }
         objects += points.len() as u64;
         let stride = points.len().div_ceil(SAMPLE_LIMIT).max(1);
-        let sampled =
-            (stride > 1).then(|| points.iter().step_by(stride).copied().collect::<Vec<_>>());
-        let points = sampled.as_deref().unwrap_or(points);
-        if points.len() < 2 {
+        let held = if stride > 1 {
+            points.iter().step_by(stride).copied().collect::<Vec<_>>()
+        } else {
+            points.clone()
+        };
+        if held.len() < 2 {
             continue;
         }
-        let count = points.len() as f64;
-        let clearance = points
-            .iter()
-            .map(|point| window.clearance(*point))
-            .collect::<Vec<_>>();
-        let mut ordered = clearance.clone();
-        ordered.sort_by(f32::total_cmp);
-        let mut pairs = [0i64; RADII + 1];
-        for_each_pair(points, radius, |first, second, distance| {
-            for centre in [first, second] {
-                let reach = clearance[centre].min(radius);
-                if distance > reach {
-                    continue;
-                }
-                let start = ((distance / step).ceil() as i64 - 1).max(0);
-                let end = (reach / step).floor() as i64 - 1;
-                if end < start {
-                    continue;
-                }
-                let end = end.min(RADII as i64 - 1) as usize;
-                pairs[start as usize] += 1;
-                pairs[end + 1] -= 1;
-            }
-        });
         estimated += 1;
-        let mut counted = 0i64;
-        for (order, radius) in radii.iter().enumerate() {
-            counted += pairs[order];
-            let centres = ordered.len() - ordered.partition_point(|value| *value < *radius);
-            if centres == 0 {
-                break;
+        let values = frame_l(&held, window, radius, volume, step, &radii);
+        for (order, value) in values.iter().enumerate() {
+            if value.is_finite() {
+                samples[order].push(*value);
             }
-            let expected = volume * counted as f64 / (count * centres as f64);
-            let l = (3.0 * expected / (4.0 * std::f64::consts::PI))
-                .max(0.0)
-                .cbrt()
-                - f64::from(*radius);
-            samples[order].push(l);
         }
+        sampled.push(held);
     }
-    if objects == 0 {
+    if objects == 0 || estimated == 0 {
         return None;
     }
+    let simulations = simulations(sampled.iter().map(|points| points.len() as u64).sum());
+    let envelope = envelope(&sampled, window, radius, volume, step, &radii, simulations);
     let mut points = Vec::with_capacity(RADII);
     let mut low = 0.0f32;
     let mut high = 0.0f32;
@@ -300,14 +295,23 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
             .mean_interval(0.95)
             .unwrap_or((sample.mean(), sample.mean()));
         let value = sample.mean() as f32;
-        low = low.min((lower as f32).min(value));
-        high = high.max((upper as f32).max(value));
+        let (envelope_low, envelope_high) = envelope[order]
+            .map(|(low, high)| (low as f32, high as f32))
+            .unzip();
+        low = low
+            .min((lower as f32).min(value))
+            .min(envelope_low.unwrap_or(f32::INFINITY));
+        high = high
+            .max((upper as f32).max(value))
+            .max(envelope_high.unwrap_or(f32::NEG_INFINITY));
         points.push(RipleyPoint {
             radius: *radius,
             frames: sample.len() as u64,
             value,
             lower: lower as f32,
             upper: upper as f32,
+            envelope_low,
+            envelope_high,
         });
     }
     if points.is_empty() {
@@ -322,6 +326,11 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         high += padding;
     }
     let radius = points.last().map_or(radius, |point| point.radius);
+    let simulations = if points.iter().any(|point| point.envelope().is_some()) {
+        simulations
+    } else {
+        0
+    };
     Some(Ripley {
         points,
         low,
@@ -329,7 +338,137 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         radius,
         frames: estimated,
         objects,
+        simulations,
     })
+}
+
+fn simulations(points: u64) -> u32 {
+    let visits = VISIT_NEIGHBOURS.saturating_mul(points.max(1));
+    let allowed = (SIMULATION_VISITS / visits).max(1) as u32;
+    allowed.clamp(SIMULATION_MINIMUM, SIMULATIONS)
+}
+
+fn envelope(
+    frames: &[Vec<[f32; 3]>],
+    window: Window,
+    radius: f32,
+    volume: f64,
+    step: f32,
+    radii: &[f32],
+    simulations: u32,
+) -> Vec<Option<(f64, f64)>> {
+    let mut curves = vec![Vec::<f64>::new(); radii.len()];
+    let mut rng = Generator::new(SIMULATION_SEED);
+    for _ in 0..simulations {
+        let mut sums = vec![0.0f64; radii.len()];
+        let mut counts = vec![0u32; radii.len()];
+        for points in frames {
+            let mut simulated = Vec::with_capacity(points.len());
+            for _ in 0..points.len() {
+                simulated.push([
+                    window.low[0] + (window.high[0] - window.low[0]) * rng.unit(),
+                    window.low[1] + (window.high[1] - window.low[1]) * rng.unit(),
+                    window.low[2] + (window.high[2] - window.low[2]) * rng.unit(),
+                ]);
+            }
+            let values = frame_l(&simulated, window, radius, volume, step, radii);
+            for (order, value) in values.iter().enumerate() {
+                if value.is_finite() {
+                    sums[order] += *value;
+                    counts[order] += 1;
+                }
+            }
+        }
+        for (order, sum) in sums.iter().enumerate() {
+            if counts[order] > 0 {
+                curves[order].push(sum / f64::from(counts[order]));
+            }
+        }
+    }
+    curves
+        .into_iter()
+        .map(|curve| {
+            (curve.len() as u32 >= SIMULATION_MINIMUM).then(|| {
+                curve
+                    .iter()
+                    .copied()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| {
+                        (low.min(value), high.max(value))
+                    })
+            })
+        })
+        .collect()
+}
+
+fn frame_l(
+    points: &[[f32; 3]],
+    window: Window,
+    radius: f32,
+    volume: f64,
+    step: f32,
+    radii: &[f32],
+) -> Vec<f64> {
+    let mut result = vec![f64::NAN; radii.len()];
+    if points.len() < 2 {
+        return result;
+    }
+    let count = points.len() as f64;
+    let clearance = points
+        .iter()
+        .map(|point| window.clearance(*point))
+        .collect::<Vec<_>>();
+    let mut ordered = clearance.clone();
+    ordered.sort_by(f32::total_cmp);
+    let mut pairs = [0i64; RADII + 1];
+    for_each_pair(points, radius, |first, second, distance| {
+        for centre in [first, second] {
+            let reach = clearance[centre].min(radius);
+            if distance > reach {
+                continue;
+            }
+            let start = ((distance / step).ceil() as i64 - 1).max(0);
+            let end = (reach / step).floor() as i64 - 1;
+            if end < start {
+                continue;
+            }
+            let end = end.min(RADII as i64 - 1) as usize;
+            pairs[start as usize] += 1;
+            pairs[end + 1] -= 1;
+        }
+    });
+    let mut counted = 0i64;
+    for (order, radius) in radii.iter().enumerate() {
+        counted += pairs[order];
+        let centres = ordered.len() - ordered.partition_point(|value| *value < *radius);
+        if centres == 0 {
+            break;
+        }
+        let expected = volume * counted as f64 / (count * centres as f64);
+        result[order] = (3.0 * expected / (4.0 * std::f64::consts::PI))
+            .max(0.0)
+            .cbrt()
+            - f64::from(*radius);
+    }
+    result
+}
+
+struct Generator {
+    state: u64,
+}
+
+impl Generator {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn unit(&mut self) -> f32 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = self.state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value = value ^ (value >> 31);
+        (value >> 40) as f32 / 16_777_216.0
+    }
 }
 
 fn for_each_pair(points: &[[f32; 3]], radius: f32, mut visit: impl FnMut(usize, usize, f32)) {

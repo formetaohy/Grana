@@ -367,6 +367,12 @@ fn captures_a_protocol_film_without_a_window() {
         find(&output, "comparison_frames.csv").expect("the batch writes the per-frame comparison");
     let text = std::fs::read_to_string(comparison).expect("the comparison frames read");
     assert!(text.starts_with("group,set_key,set,kind,metric,frame,images,value,lower,upper"));
+    let chart = find(&output, "comparison.svg").expect("the batch writes the comparison page");
+    let svg = std::fs::read_to_string(chart).expect("the comparison page reads");
+    assert!(
+        svg.starts_with("<?xml") && svg.contains("<svg") && svg.contains("<path"),
+        "the comparison page plots its panels"
+    );
 }
 
 #[test]

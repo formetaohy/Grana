@@ -17,6 +17,7 @@ grana-exec = { workspace = true }
 grana-figure = { workspace = true }
 grana-file = { workspace = true }
 grana-gpu = { workspace = true }
+grana-page = { workspace = true }
 grana-raster = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }

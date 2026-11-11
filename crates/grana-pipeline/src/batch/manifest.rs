@@ -3,11 +3,10 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use grana_protocol::Protocol;
+use grana_report::{ComparisonReport, Quality, comparison_of};
 
 use super::discover::{DatasetEntry, WellKey};
-use super::quality::{ComparisonReport, Quality, comparison_of};
 use super::resume;
-use super::significance;
 use super::{Plan, Row};
 
 pub(super) const RUN: &str = "run.json";
@@ -83,7 +82,7 @@ impl Run {
                 .iter()
                 .flat_map(|dataset| dataset.quality.iter()),
         );
-        let tests = significance::tests(&groups);
+        let tests = grana_report::tests(&groups);
         ComparisonReport { groups, tests }
     }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "grana-report"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-chart = { workspace = true }
+grana-i18n = { workspace = true }
+grana-measure = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

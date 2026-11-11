@@ -1,25 +1,19 @@
 use std::path::Path;
 
-use grana_raster::{Axis, Line, Series, line_plot};
-use grana_scene::Scene;
-use grana_text::Fonts;
-
-const SIZE: [u32; 2] = [960, 540];
-
-const X_TINT: [f32; 3] = [0.62, 0.68, 0.78];
-
-const Y_TINT: [f32; 3] = [0.70, 0.76, 0.86];
+use grana_chart::{DistributionStyle, Heading, Page, SeriesPage};
+use grana_i18n::Language;
+use grana_profile::Profile;
+use grana_scene::{Annotation, Scene};
 
 const FALLBACK_TINT: [f32; 3] = [0.72, 0.78, 0.88];
 
-pub(super) fn write(scene: &Scene, folder: &Path) -> Result<(), String> {
+pub(super) fn write(scene: &Scene, folder: &Path, language: Language) -> Result<(), String> {
     let tints = scene
         .dataset
         .channels()
         .iter()
         .map(|channel| channel.tint())
         .collect::<Vec<_>>();
-    let mut fonts = Fonts::system();
     for (index, annotation) in scene.annotations.iter().enumerate() {
         let Some(profile) = annotation.profile() else {
             continue;
@@ -29,65 +23,56 @@ pub(super) fn write(scene: &Scene, folder: &Path) -> Result<(), String> {
             index,
             grana_scene::slug(annotation.name())
         );
-        let offsets = profile
-            .samples()
-            .iter()
-            .map(|sample| sample.offset())
-            .collect::<Vec<_>>();
-        let values = (0..profile.names().len())
-            .map(|channel| {
-                profile
-                    .samples()
-                    .iter()
-                    .map(|sample| sample.values()[channel])
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let mut header = vec!["offset".to_string()];
-        header.extend(profile.names().iter().cloned());
-        let mut lines = vec![grana_measure::csv::line(
-            &header.iter().map(String::as_str).collect::<Vec<_>>(),
-        )];
-        for (sample, offset) in profile.samples().iter().zip(&offsets) {
-            let mut row = vec![format!("{offset:.4}")];
-            row.extend(sample.values().iter().map(|value| format!("{value:.6}")));
-            lines.push(grana_measure::csv::line(
-                &row.iter().map(String::as_str).collect::<Vec<_>>(),
-            ));
-        }
         let csv = format!("{stem}.csv");
-        std::fs::write(folder.join(&csv), lines.concat())
+        std::fs::write(folder.join(&csv), table(profile))
             .map_err(|error| format!("failed to write {csv}: {error}"))?;
-        let series = (0..profile.names().len())
-            .map(|channel| Series {
-                name: profile.names()[channel].as_str(),
-                tint: tints.get(channel).copied().unwrap_or(FALLBACK_TINT),
-                values: &values[channel],
-            })
-            .collect::<Vec<_>>();
-        let subtitle = format!(
-            "{} samples · {} µm spacing",
-            profile.samples().len(),
-            profile.spacing()
-        );
-        let caption = format!(
-            "{} · {:.2} µm",
-            annotation.kind().tag().label(),
-            profile.length()
-        );
-        let plot = Line {
-            x: Axis::new("distance (µm)", X_TINT),
-            y: Axis::new("intensity", Y_TINT),
-            offsets: &offsets,
-            series: &series,
-            title: annotation.name(),
-            subtitle: &subtitle,
-            caption: &caption,
-        };
-        let png = format!("{stem}.png");
-        let raster = line_plot(&mut fonts, &plot, SIZE);
-        grana_raster::write(&folder.join(&png), &raster)
-            .map_err(|error| format!("failed to write {png}: {error}"))?;
+        let page = page(annotation, profile, &tints, language);
+        grana_page::write_page(&page, &folder.join(format!("{stem}.svg")))?;
     }
     Ok(())
+}
+
+fn table(profile: &Profile) -> String {
+    let mut header = vec!["offset".to_string()];
+    header.extend(profile.names().iter().cloned());
+    let mut lines = vec![grana_measure::csv::line(
+        &header.iter().map(String::as_str).collect::<Vec<_>>(),
+    )];
+    for sample in profile.samples() {
+        let mut row = vec![format!("{:.4}", sample.offset())];
+        row.extend(sample.values().iter().map(|value| format!("{value:.6}")));
+        lines.push(grana_measure::csv::line(
+            &row.iter().map(String::as_str).collect::<Vec<_>>(),
+        ));
+    }
+    lines.concat()
+}
+
+fn page(
+    annotation: &Annotation,
+    profile: &Profile,
+    tints: &[[f32; 3]],
+    language: Language,
+) -> Page {
+    let heading = Heading::new(
+        annotation.name(),
+        grana_i18n::annotation::profile_axis(language),
+        grana_i18n::annotation::profile_offset(language),
+    )
+    .with_summary(grana_i18n::annotation::profile_span(
+        language,
+        profile.length(),
+        profile.spacing(),
+    ))
+    .with_empty(grana_i18n::annotation::empty_profile(language))
+    .with_language(language);
+    let tints = (0..profile.names().len())
+        .map(|channel| tints.get(channel).copied().unwrap_or(FALLBACK_TINT))
+        .collect::<Vec<_>>();
+    Page::Series(Box::new(SeriesPage::of_profile(
+        profile,
+        &tints,
+        heading,
+        DistributionStyle::Box,
+    )))
 }

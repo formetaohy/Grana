@@ -4,8 +4,6 @@ use grana_scene::{ObjectSetId, Scene};
 use grana_ui::Ui;
 use wgpu::{Device, Queue, TextureFormat};
 
-use crate::vector;
-
 pub(crate) fn write(
     device: &Device,
     queue: &Queue,
@@ -44,12 +42,8 @@ pub(crate) fn write(
             size[1]
         ));
     }
-    let format = vector::format(path).ok_or_else(|| {
-        format!(
-            "a lineage page is saved as SVG or PDF, not `{}`",
-            path.display()
-        )
-    })?;
+    let format = grana_page::Format::of(path)
+        .ok_or_else(|| grana_page::Format::error(path, "a lineage page"))?;
     let colors = (0..tracks.len())
         .map(|track| object.track_color(track))
         .collect::<Vec<_>>();
@@ -66,6 +60,6 @@ pub(crate) fn write(
             time: scene.time(),
         },
     );
-    vector::write_marks(path, format, size, &marks)?;
+    grana_page::write(path, format, size, &marks)?;
     Ok(path.to_path_buf())
 }

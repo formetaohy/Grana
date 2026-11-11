@@ -1,5 +1,4 @@
 mod capture;
-mod chart;
 mod compose;
 mod export;
 mod figure;
@@ -9,7 +8,6 @@ mod page;
 mod plan;
 mod sink;
 mod task;
-mod vector;
 mod worker;
 
 pub use offline::{Offline, Outcome};

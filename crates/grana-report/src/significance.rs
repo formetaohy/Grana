@@ -1,13 +1,15 @@
-use std::collections::BTreeMap;
+﻿use std::collections::{BTreeMap, BTreeSet};
 
 use grana_measure::{
     ClusterSample, ClusteredWelch, Level, MannWhitney, benjamini_hochberg, hedges_g_pooled, stars,
 };
 
-use super::quality::{Comparison, Metric};
+use crate::comparison::Comparison;
+use crate::quality::Metric;
 
 #[derive(Clone, Debug)]
 pub struct Significance {
+    pub frame: Option<u32>,
     pub key: String,
     pub name: String,
     pub kind: String,
@@ -98,56 +100,38 @@ impl Significance {
     pub fn interval_text(&self) -> Option<String> {
         let (low, high) = self.interval?;
         let decimals = self.metric.decimals();
-        Some(format!("{low:.*} … {high:.*}", decimals, decimals))
+        Some(format!("{low:.*} 鈥?{high:.*}", decimals, decimals))
     }
 }
 
-pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
-    let mut buckets = BTreeMap::<(&str, &str), Vec<&Comparison>>::new();
-    for row in groups {
-        buckets
-            .entry((row.key.as_str(), row.kind.as_str()))
-            .or_default()
-            .push(row);
-    }
+pub fn all(groups: &[Comparison]) -> Vec<Significance> {
+    let mut tests = tests(groups);
+    tests.extend(frames(groups));
+    tests.sort_by(|left, right| {
+        left.key
+            .cmp(&right.key)
+            .then(left.kind.cmp(&right.kind))
+            .then(left.metric.cmp(&right.metric))
+            .then(left.frame.cmp(&right.frame))
+            .then(left.group_a.cmp(&right.group_a))
+            .then(left.group_b.cmp(&right.group_b))
+    });
+    tests
+}
+
+pub fn tests(groups: &[Comparison]) -> Vec<Significance> {
     let mut tested = Vec::new();
-    for mut bucket in buckets.into_values() {
-        bucket.sort_by(|left, right| left.group.cmp(&right.group));
-        for (index, first) in bucket.iter().enumerate() {
-            for second in &bucket[index + 1..] {
-                for metric in Metric::ALL {
-                    let a = clusters(first, metric);
-                    let b = clusters(second, metric);
-                    let Some(test) = ClusteredWelch::of(&a, &b) else {
-                        continue;
-                    };
-                    let Some(rank) = MannWhitney::of(&means(first, metric), &means(second, metric))
-                    else {
-                        continue;
-                    };
-                    tested.push(Significance {
-                        key: first.key.clone(),
-                        name: first.name.clone(),
-                        kind: first.kind.clone(),
-                        metric,
-                        group_a: first.group.clone(),
-                        group_b: second.group.clone(),
-                        effect: hedges_g_pooled(
-                            test.samples_a(),
-                            test.mean_a(),
-                            test.deviation_a(),
-                            test.samples_b(),
-                            test.mean_b(),
-                            test.deviation_b(),
-                        ),
-                        interval: test.interval(0.95),
-                        test,
-                        rank,
-                        adjusted: 1.0,
-                        rank_adjusted: 1.0,
-                    });
-                }
-            }
+    for (first, second) in pairs(groups) {
+        for metric in Metric::ALL {
+            let a = clusters(first, metric);
+            let b = clusters(second, metric);
+            let Some(test) = ClusteredWelch::of(&a, &b) else {
+                continue;
+            };
+            let Some(rank) = MannWhitney::of(&means(first, metric), &means(second, metric)) else {
+                continue;
+            };
+            tested.push(build(first, second, metric, None, test, rank));
         }
     }
     let corrected = benjamini_hochberg(&tested.iter().map(Significance::p).collect::<Vec<_>>());
@@ -156,14 +140,51 @@ pub(super) fn tests(groups: &[Comparison]) -> Vec<Significance> {
         test.adjusted = adjusted;
         test.rank_adjusted = ranked;
     }
-    tested.sort_by(|left, right| {
-        left.key
-            .cmp(&right.key)
-            .then(left.kind.cmp(&right.kind))
-            .then(left.metric.cmp(&right.metric))
-            .then(left.group_a.cmp(&right.group_a))
-            .then(left.group_b.cmp(&right.group_b))
-    });
+    tested.sort_by(order);
+    tested
+}
+
+pub fn frames(groups: &[Comparison]) -> Vec<Significance> {
+    let mut tested = Vec::new();
+    let mut families = Vec::new();
+    for (first, second) in pairs(groups) {
+        for metric in Metric::ALL {
+            let start = tested.len();
+            for time in times(first, second, metric) {
+                let a = frame_clusters(first, metric, time);
+                let b = frame_clusters(second, metric, time);
+                let Some(test) = ClusteredWelch::of(&a.0, &b.0) else {
+                    continue;
+                };
+                let Some(rank) = MannWhitney::of(&a.1, &b.1) else {
+                    continue;
+                };
+                tested.push(build(first, second, metric, Some(time), test, rank));
+            }
+            if tested.len() > start {
+                families.push(start..tested.len());
+            }
+        }
+    }
+    for range in families {
+        let corrected = benjamini_hochberg(
+            &tested[range.clone()]
+                .iter()
+                .map(Significance::p)
+                .collect::<Vec<_>>(),
+        );
+        let ranked = benjamini_hochberg(
+            &tested[range.clone()]
+                .iter()
+                .map(Significance::rank_p)
+                .collect::<Vec<_>>(),
+        );
+        for ((test, adjusted), ranked) in tested[range].iter_mut().zip(corrected).zip(ranked) {
+            test.adjusted = adjusted;
+            test.rank_adjusted = ranked;
+        }
+    }
+    tested.sort_by(order);
     tested
 }
 
@@ -175,6 +196,7 @@ pub fn table(tests: &[Significance]) -> String {
         "set",
         "kind",
         "metric",
+        "frame",
         "level",
         "samples_a",
         "samples_b",
@@ -207,6 +229,9 @@ pub fn table(tests: &[Significance]) -> String {
         let metric = test.metric;
         let decimals = metric.decimals();
         let interval = test.interval;
+        let frame = test
+            .frame
+            .map_or_else(String::new, |frame| frame.to_string());
         let line = grana_measure::csv::line(&[
             &test.group_a,
             &test.group_b,
@@ -214,6 +239,7 @@ pub fn table(tests: &[Significance]) -> String {
             &test.name,
             &test.kind,
             metric.name(),
+            &frame,
             test.level().key(),
             &test.test.samples_a().to_string(),
             &test.test.samples_b().to_string(),
@@ -250,6 +276,58 @@ pub fn table(tests: &[Significance]) -> String {
     text
 }
 
+fn pairs(groups: &[Comparison]) -> Vec<(&Comparison, &Comparison)> {
+    let mut buckets = BTreeMap::<(&str, &str), Vec<&Comparison>>::new();
+    for row in groups {
+        buckets
+            .entry((row.key.as_str(), row.kind.as_str()))
+            .or_default()
+            .push(row);
+    }
+    let mut pairs = Vec::new();
+    for mut bucket in buckets.into_values() {
+        bucket.sort_by(|left, right| left.group.cmp(&right.group));
+        for (index, first) in bucket.iter().enumerate() {
+            for second in &bucket[index + 1..] {
+                pairs.push((*first, *second));
+            }
+        }
+    }
+    pairs
+}
+
+fn build(
+    first: &Comparison,
+    second: &Comparison,
+    metric: Metric,
+    frame: Option<u32>,
+    test: ClusteredWelch,
+    rank: MannWhitney,
+) -> Significance {
+    Significance {
+        frame,
+        key: first.key.clone(),
+        name: first.name.clone(),
+        kind: first.kind.clone(),
+        metric,
+        group_a: first.group.clone(),
+        group_b: second.group.clone(),
+        effect: hedges_g_pooled(
+            test.samples_a(),
+            test.mean_a(),
+            test.deviation_a(),
+            test.samples_b(),
+            test.mean_b(),
+            test.deviation_b(),
+        ),
+        interval: test.interval(0.95),
+        test,
+        rank,
+        adjusted: 1.0,
+        rank_adjusted: 1.0,
+    }
+}
+
 fn clusters(row: &Comparison, metric: Metric) -> Vec<ClusterSample> {
     row.samples
         .iter()
@@ -265,6 +343,55 @@ fn means(row: &Comparison, metric: Metric) -> Vec<f64> {
         .iter()
         .filter_map(|sample| metric.sample(sample))
         .collect()
+}
+
+fn times(first: &Comparison, second: &Comparison, metric: Metric) -> Vec<u32> {
+    let mut times = BTreeSet::new();
+    for row in [first, second] {
+        for sample in &row.samples {
+            for (time, values) in &sample.frames {
+                if values[metric.index()].is_some() {
+                    times.insert(*time);
+                }
+            }
+        }
+    }
+    times.into_iter().collect()
+}
+
+fn frame_clusters(row: &Comparison, metric: Metric, time: u32) -> (Vec<ClusterSample>, Vec<f64>) {
+    let mut clusters = Vec::new();
+    let mut means = Vec::new();
+    for sample in &row.samples {
+        let Some(values) = sample.frames.get(&time) else {
+            continue;
+        };
+        let Some(value) = values[metric.index()] else {
+            continue;
+        };
+        let Some(cluster) =
+            ClusterSample::from_summary(value.count as usize, value.mean, value.deviation)
+        else {
+            continue;
+        };
+        clusters.push(cluster);
+        means.push(value.mean);
+    }
+    (clusters, means)
+}
+
+fn order(left: &Significance, right: &Significance) -> std::cmp::Ordering {
+    left.key
+        .cmp(&right.key)
+        .then(left.kind.cmp(&right.kind))
+        .then(left.metric.cmp(&right.metric))
+        .then(
+            left.frame
+                .unwrap_or_default()
+                .cmp(&right.frame.unwrap_or_default()),
+        )
+        .then(left.group_a.cmp(&right.group_a))
+        .then(left.group_b.cmp(&right.group_b))
 }
 
 fn formatted(value: Option<f64>, decimals: usize) -> String {

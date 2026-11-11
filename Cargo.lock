@@ -3474,6 +3474,7 @@ dependencies = [
  "glam",
  "grana-i18n",
  "grana-measure",
+ "grana-profile",
  "grana-ui",
 ]
 
@@ -3517,6 +3518,7 @@ dependencies = [
  "grana-measure",
  "grana-object",
  "grana-optics",
+ "grana-report",
  "grana-scene",
  "grana-session",
  "grana-ui",
@@ -3676,6 +3678,7 @@ dependencies = [
  "grana-figure",
  "grana-file",
  "grana-gpu",
+ "grana-page",
  "grana-raster",
  "grana-render",
  "grana-scene",
@@ -3696,6 +3699,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-page"
+version = "0.1.1"
+dependencies = [
+ "grana-chart",
+ "grana-file",
+ "grana-text",
+ "grana-ui",
+ "grana-vector",
+]
+
+[[package]]
 name = "grana-pipeline"
 version = "0.1.1"
 dependencies = [
@@ -3703,20 +3717,24 @@ dependencies = [
  "grana-analysis",
  "grana-animation",
  "grana-calibration",
+ "grana-chart",
  "grana-display",
  "grana-exec",
  "grana-file",
  "grana-geometry",
+ "grana-i18n",
  "grana-image",
  "grana-interop",
  "grana-measure",
  "grana-mesh",
  "grana-object",
  "grana-optics",
+ "grana-page",
  "grana-profile",
  "grana-project",
  "grana-protocol",
  "grana-raster",
+ "grana-report",
  "grana-restore",
  "grana-scene",
  "grana-segment",
@@ -3823,6 +3841,16 @@ dependencies = [
  "grana-volume",
  "half",
  "wgpu",
+]
+
+[[package]]
+name = "grana-report"
+version = "0.1.1"
+dependencies = [
+ "grana-chart",
+ "grana-i18n",
+ "grana-measure",
+ "serde",
 ]
 
 [[package]]

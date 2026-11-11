@@ -508,6 +508,7 @@ impl<'a> Painter<'a> {
             (&mut self.instances.material, material_start)
         };
         if start >= instances.len() {
+            self.record_text(&layout, origin, style.color);
             return;
         }
         let mut min = Vec2::splat(f32::INFINITY);

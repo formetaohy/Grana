@@ -8,6 +8,6 @@ pub(crate) fn write(plan: &Plan) -> Option<Result<PathBuf, String>> {
     };
     Some((|| {
         crate::plan::validate(plan)?;
-        crate::chart::write(page, path)
+        grana_page::write_page(page, path)
     })())
 }

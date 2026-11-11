@@ -17,6 +17,8 @@ labels! {
     shown_every_frame => "Shown on every frame." / "在所有帧上显示。";
     on_every_frame => "On every frame" / "在所有帧显示";
     intensity_profile => "Intensity Profile" / "强度剖面";
+    profile_axis => "intensity" / "强度";
+    profile_offset => "distance (µm)" / "距离 (µm)";
     empty_profile => "Sample the line to draw its intensity profile." / "采样该线段以绘制强度剖面。";
     resample => "Resample" / "重新采样";
     sample_profile => "Sample Profile" / "采样剖面";
