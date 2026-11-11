@@ -1,9 +1,0 @@
-OpenCell LMNB1
-
-Source: OpenCell (Cho et al. 2022, Science 375(6585):eabi6983, doi:10.1126/science.abi6983)
-Original file: s3://czb-opencell/microscopy/raw/LMNB1_ENSG00000113368/OC-FOV_LMNB1_ENSG00000113368_CID000892_FID00003884_stack.tif
-Downloaded from: https://czb-opencell.s3.us-west-2.amazonaws.com/microscopy/raw/LMNB1_ENSG00000113368/OC-FOV_LMNB1_ENSG00000113368_CID000892_FID00003884_stack.tif
-License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
-License URL: https://creativecommons.org/licenses/by-sa/4.0/
-
-The original ImageJ hyperstack (112 slices x 2 channels x 600 x 600, uint16, 0.2 um isotropic spacing) was cropped to the central 500 x 500 pixels and written as an OME-TIFF with channel names DNA and LMNB1, physical spacing, and zlib compression. Pixel values are unchanged.
