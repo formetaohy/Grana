@@ -13,6 +13,7 @@ mod render;
 mod restore;
 mod segment;
 mod session;
+mod stitch;
 mod stream;
 mod support;
 mod weights;

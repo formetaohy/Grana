@@ -28,6 +28,7 @@ grana-raster = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-session = { workspace = true }
+grana-stitch = { workspace = true }
 grana-ui = { workspace = true }
 grana-volume = { workspace = true }
 rfd = { workspace = true }

@@ -3381,6 +3381,7 @@ dependencies = [
  "grana-scene",
  "grana-segment",
  "grana-session",
+ "grana-stitch",
  "grana-text",
  "grana-tiff",
  "grana-ui",
@@ -3440,6 +3441,7 @@ dependencies = [
  "grana-render",
  "grana-scene",
  "grana-session",
+ "grana-stitch",
  "grana-ui",
  "grana-volume",
  "rfd",
@@ -3917,6 +3919,16 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "grana-stitch"
+version = "0.1.1"
+dependencies = [
+ "grana-image",
+ "grana-volume",
+ "grana-zarr",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

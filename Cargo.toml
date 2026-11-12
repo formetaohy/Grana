@@ -88,6 +88,7 @@ grana-optics = { version = "0.1.1", path = "crates/grana-optics" }
 grana-restore = { version = "0.1.1", path = "crates/grana-restore" }
 grana-segment = { version = "0.1.1", path = "crates/grana-segment" }
 grana-session = { version = "0.1.1", path = "crates/grana-session" }
+grana-stitch = { version = "0.1.1", path = "crates/grana-stitch" }
 grana-video = { version = "0.1.1", path = "crates/grana-video" }
 grana-weight = { version = "0.1.1", path = "crates/grana-weight" }
 
@@ -145,6 +146,7 @@ grana-restore = { workspace = true }
 grana-scene = { workspace = true }
 grana-segment = { workspace = true }
 grana-session = { workspace = true }
+grana-stitch = { workspace = true }
 grana-tiff = { workspace = true }
 grana-text = { workspace = true }
 grana-ui = { workspace = true }
