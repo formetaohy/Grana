@@ -190,12 +190,6 @@ pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3)
             high = high.max(object_high);
         }
     }
-    for marker in scene.markers.iter() {
-        let center = Vec3::from(marker.center());
-        let radius = Vec3::splat(marker.radius());
-        low = low.min(center - radius);
-        high = high.max(center + radius);
-    }
     (low, high)
 }
 

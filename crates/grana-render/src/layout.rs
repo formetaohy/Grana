@@ -23,8 +23,8 @@ pub(crate) struct Layouts {
     pub objects: BindGroupLayout,
     pub pick: BindGroupLayout,
     pub commands: BindGroupLayout,
-    pub marker_cull: BindGroupLayout,
-    pub marker_render: BindGroupLayout,
+    pub splat_cull: BindGroupLayout,
+    pub splat_rows: BindGroupLayout,
     pub oit_write: BindGroupLayout,
     pub oit_coverage: BindGroupLayout,
     pub oit_read: BindGroupLayout,
@@ -38,16 +38,14 @@ pub(crate) struct Layouts {
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
-    pub marker_volume: PipelineLayout,
-    pub marker_oit: PipelineLayout,
-    pub marker_tail: PipelineLayout,
-    pub marker_pick: PipelineLayout,
-    pub marker_shadow: PipelineLayout,
-    pub marker_cull_pipeline: PipelineLayout,
+    pub splat_slice: PipelineLayout,
+    pub splat_oit: PipelineLayout,
+    pub splat_tail: PipelineLayout,
+    pub splat_pick: PipelineLayout,
+    pub splat_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub ao_pipeline: PipelineLayout,
     pub ao_surface: PipelineLayout,
-    pub ao_marker: PipelineLayout,
     pub section: BindGroupLayout,
     pub section_pipeline: PipelineLayout,
     pub oit_resolve: PipelineLayout,
@@ -226,18 +224,16 @@ impl Layouts {
             label: Some("grana.pick.layout"),
             entries: &[storage(0, ShaderStages::FRAGMENT, true)],
         });
-        let marker_cull = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.marker.cull.layout"),
+        let splat_cull = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.splat.cull.layout"),
             entries: &[
                 storage(0, ShaderStages::COMPUTE, true),
                 storage(1, ShaderStages::COMPUTE, false),
-                storage(2, ShaderStages::COMPUTE, false),
                 storage(5, ShaderStages::COMPUTE, false),
-                storage(6, ShaderStages::COMPUTE, false),
             ],
         });
-        let marker_render = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.marker.render.layout"),
+        let splat_rows = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.splat.rows.layout"),
             entries: &[
                 storage(0, ShaderStages::VERTEX, true),
                 storage(1, ShaderStages::VERTEX, true),
@@ -372,54 +368,36 @@ impl Layouts {
             "grana.mesh.cull.layout",
             &[&scene, &objects, &styles, &commands],
         );
-        let marker_volume = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.marker.layout"),
+        let splat_slice = pipeline_layout(device, "grana.splat.layout", &[&scene, &splat_rows]);
+        let splat_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.splat.oit.layout"),
             bind_group_layouts: &[
                 Some(&scene),
-                Some(&marker_render),
-                Some(&ao_read),
-                Some(&shadow),
-            ],
-            immediate_size: 0,
-        });
-        let marker_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.marker.oit.layout"),
-            bind_group_layouts: &[
-                Some(&scene),
-                Some(&marker_render),
-                Some(&ao_read),
-                Some(&shadow),
+                Some(&splat_rows),
+                None,
+                None,
                 Some(&oit_write),
             ],
             immediate_size: 0,
         });
-        let marker_tail = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.marker.tail.layout"),
+        let splat_tail = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.splat.tail.layout"),
             bind_group_layouts: &[
                 Some(&scene),
-                Some(&marker_render),
-                Some(&ao_read),
-                Some(&shadow),
+                Some(&splat_rows),
+                None,
+                None,
                 Some(&oit_write),
                 None,
                 Some(&oit_coverage),
             ],
             immediate_size: 0,
         });
-        let marker_pick = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.marker.pick.layout"),
-            bind_group_layouts: &[Some(&scene), Some(&marker_render), None, Some(&shadow)],
-            immediate_size: 0,
-        });
-        let marker_shadow = pipeline_layout(
+        let splat_pick = pipeline_layout(device, "grana.splat.pick.layout", &[&scene, &splat_rows]);
+        let splat_cull_pipeline = pipeline_layout(
             device,
-            "grana.marker.shadow.layout",
-            &[&scene, &marker_render],
-        );
-        let marker_cull_pipeline = pipeline_layout(
-            device,
-            "grana.marker.cull.pipeline.layout",
-            &[&scene, &marker_cull],
+            "grana.splat.cull.pipeline.layout",
+            &[&scene, &splat_cull],
         );
         let shadow_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.shadow.pipeline.layout"),
@@ -433,8 +411,6 @@ impl Layouts {
         });
         let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao_compute]);
         let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
-        let ao_marker =
-            pipeline_layout(device, "grana.ao.marker.layout", &[&scene, &marker_render]);
         let section = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.section.layout"),
             entries: &[storage(0, ShaderStages::VERTEX, true)],
@@ -460,8 +436,8 @@ impl Layouts {
             objects,
             pick,
             commands,
-            marker_cull,
-            marker_render,
+            splat_cull,
+            splat_rows,
             oit_write,
             oit_coverage,
             oit_read,
@@ -475,16 +451,14 @@ impl Layouts {
             cull,
             plan_pipeline,
             mesh_cull,
-            marker_volume,
-            marker_oit,
-            marker_tail,
-            marker_pick,
-            marker_shadow,
-            marker_cull_pipeline,
+            splat_slice,
+            splat_oit,
+            splat_tail,
+            splat_pick,
+            splat_cull_pipeline,
             shadow_pipeline,
             ao_pipeline,
             ao_surface,
-            ao_marker,
             section,
             section_pipeline,
             oit_resolve,

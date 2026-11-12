@@ -4,6 +4,7 @@ use std::time::Instant;
 
 impl Session {
     pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
+        self.read_only = false;
         let (source, opened) = Loader::memory(series);
         self.series = opened.series;
         self.series_index = opened.selected;
@@ -53,6 +54,7 @@ impl Session {
         if self.reject_transfer() {
             return;
         }
+        self.read_only = false;
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file_series(path, series));
         self.pending = None;
@@ -79,6 +81,7 @@ impl Session {
             )));
             return;
         }
+        self.read_only = false;
         self.loading = Some(url.clone());
         self.source = Some(Loader::remote_series(url, series));
         self.pending = None;
@@ -109,6 +112,10 @@ impl Session {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        if let Some(project) = grana_project::package_project(&path) {
+            self.begin_project(project);
+            return;
+        }
         if grana_project::is_project(&path) {
             self.begin_project(path);
             return;
@@ -124,6 +131,17 @@ impl Session {
             "{} is neither a supported image nor a grana project",
             path.display()
         )));
+    }
+
+    pub fn begin_package(&mut self, path: PathBuf) {
+        let Some(project) = grana_project::package_project(&path) else {
+            self.message = Some(Message::error(format!(
+                "{} holds no recorded analysis",
+                path.display()
+            )));
+            return;
+        };
+        self.begin_project(project);
     }
 
     pub fn select_series(&mut self, index: usize) -> bool {
@@ -144,6 +162,7 @@ impl Session {
         if self.switching_wells() {
             return false;
         }
+        self.read_only = false;
         self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
@@ -183,6 +202,7 @@ impl Session {
         if self.switching_wells() {
             return false;
         }
+        self.read_only = false;
         self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
@@ -206,7 +226,7 @@ impl Session {
     }
 
     pub fn save_project(&mut self, path: PathBuf, view: ViewState) {
-        if self.access.viewer() {
+        if self.access().viewer() {
             self.message = Some(Message::info(
                 "this viewer shows a recorded analysis and cannot save it",
             ));
@@ -330,6 +350,7 @@ impl Session {
                 self.record_recent(RecentEntry::project(&path));
             }
             document::Outcome::Opened(project) => {
+                self.read_only = grana_project::in_package(&path);
                 self.open_project(&path, *project);
                 self.record_recent(RecentEntry::project(&path));
             }
@@ -585,12 +606,16 @@ fn frame_duration(scene: &Scene) -> f32 {
 }
 
 fn beside_project(project: &Path, data: &Path) -> PathBuf {
-    if data.exists() {
+    if data.is_absolute() && data.exists() {
         return data.to_path_buf();
     }
     let Some(folder) = project.parent() else {
         return data.to_path_buf();
     };
+    let relative = folder.join(data);
+    if relative.exists() {
+        return relative;
+    }
     let Some(name) = data.file_name() else {
         return data.to_path_buf();
     };

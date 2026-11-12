@@ -28,6 +28,7 @@ pub enum Command {
     RecoverAnalysis,
     DiscardAnalysis,
     OpenProject,
+    OpenPackage,
     SaveProject,
     SaveProjectAs,
     SaveSnapshot,
@@ -386,6 +387,7 @@ pub enum Command {
     ExportColoc,
     ExportMeasure,
     ExportProvenance,
+    ExportPackage,
     ExportRelation {
         source: ObjectSetId,
         target: ObjectSetId,
@@ -612,6 +614,7 @@ impl Command {
                 | Self::OpenRemote(_)
                 | Self::OpenRecent(_)
                 | Self::OpenProject
+                | Self::OpenPackage
                 | Self::RecoverAnalysis
         )
     }
@@ -684,6 +687,7 @@ impl Command {
                 | Self::ExportColoc
                 | Self::ExportMeasure
                 | Self::ExportProvenance
+                | Self::ExportPackage
                 | Self::ExportRelation { .. }
                 | Self::ExportMesh { .. }
                 | Self::ExportLabels(_)

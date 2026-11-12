@@ -31,7 +31,6 @@ use crate::brick::{BrickArena, BrickTable};
 use crate::converge::Convergence;
 use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
-use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::occupancy::Occupancy;
 use crate::oit::Oit;
@@ -46,6 +45,7 @@ use crate::sample;
 use crate::schema::{SceneFrame, Versions};
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
+use crate::splat::SplatPasses;
 use crate::target::{self, SceneTarget};
 use crate::temporal::{FrameView, Temporal, TemporalPass};
 use crate::volume::VolumePass;
@@ -170,7 +170,7 @@ pub struct Renderer {
     oit_resolve: OitResolve,
     gtao: crate::ao::AoPipeline,
     meshes: MeshPasses,
-    markers: MarkerPasses,
+    splats: SplatPasses,
     dummy: TextureView,
     dummy_oit: Oit,
     dummy_ao: BindGroup,
@@ -257,7 +257,7 @@ impl Renderer {
             oit_resolve: OitResolve::new(device, &layouts),
             gtao: crate::ao::AoPipeline::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
-            markers: MarkerPasses::new(device, &layouts),
+            splats: SplatPasses::new(device, &layouts),
             layouts,
             dummy,
             dummy_oit,
@@ -560,9 +560,8 @@ impl Renderer {
         let Self {
             scene,
             meshes,
-            markers,
+            splats,
             sections,
-            shadow,
             pick_target,
             pick_readback,
             pick_pending,
@@ -572,10 +571,6 @@ impl Renderer {
         let Some(scene) = scene.as_ref() else {
             return false;
         };
-        let shadow_group = shadow
-            .as_ref()
-            .map(Shadow::group)
-            .expect("the shadow is ready");
         let target = PickTarget::ensure(device, pick_target);
         let readback = pick_readback
             .get_or_insert_with(|| Readback::new(device, "grana.pick.readback", PICK_ROW, 1));
@@ -644,7 +639,7 @@ impl Renderer {
                     1.0,
                 );
                 pass.set_scissor_rect(0, 0, 1, 1);
-                markers.draw_pick_volume(&mut pass, group, shadow_group);
+                splats.draw_pick_slice(&mut pass, group);
             }
         } else {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -678,7 +673,7 @@ impl Renderer {
             );
             pass.set_scissor_rect(0, 0, 1, 1);
             meshes.draw_pick(&mut pass);
-            markers.draw_pick_volume(&mut pass, group, shadow_group);
+            splats.draw_pick(&mut pass, group);
         }
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);

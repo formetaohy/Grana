@@ -12,7 +12,7 @@ pub(crate) const PICK_ROW: u64 = 256;
 pub enum PickId {
     None,
     Style(u32),
-    Marker(u32),
+    Splat(u32),
 }
 
 pub(crate) struct PickTarget {
@@ -80,7 +80,7 @@ pub(crate) fn decode(bytes: &[u8]) -> PickId {
     let value = u32::from_ne_bytes(words[1]);
     match (kind, value) {
         (1, 1..) => PickId::Style(value - 1),
-        (2, 1..) => PickId::Marker(value - 1),
+        (2, 1..) => PickId::Splat(value - 1),
         _ => PickId::None,
     }
 }

@@ -1,7 +1,7 @@
 use glam::Vec3;
 use grana_display::{Camera, Shading};
 use grana_render::{
-    ChannelRow, Digest, Layer, LayerKey, Marker, MarkerChunk, Marks, SceneFrame, Style, Versions,
+    ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, Splats, Style, Versions,
 };
 use grana_scene::{Item, ObjectFrame, Scene, Selection};
 
@@ -25,9 +25,9 @@ pub struct RenderedScene {
     pub channels: Vec<ChannelRow>,
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
-    pub markers: Vec<MarkerChunk>,
+    pub splats: Vec<SplatChunk>,
     pub style_ids: Vec<Selection>,
-    pub marker_ids: Vec<Option<Selection>>,
+    pub splat_ids: Vec<Option<Selection>>,
     pub shading: Shading,
     pub step_scale: f32,
 }
@@ -41,7 +41,7 @@ impl RenderedScene {
             step_scale: self.step_scale,
             styles: &self.styles,
             layers: &self.layers,
-            markers: Marks::new(&self.markers),
+            splats: Splats::new(&self.splats),
         }
     }
 }
@@ -122,9 +122,9 @@ pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
 pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
-    let mut markers = Vec::new();
+    let mut splats = Vec::new();
     let mut style_ids = Vec::new();
-    let mut marker_ids = Vec::new();
+    let mut splat_ids = Vec::new();
     let mut data = Digest::new();
     let mut objects = Digest::new();
     let mut appearance = Digest::new();
@@ -158,12 +158,12 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
             objects.real(x);
             objects.real(y);
             objects.real(z);
-            seeded.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
-            marker_ids.push(None);
+            seeded.push(Splat::point(*seed, seed_radius, SEED_COLOR, 1.0));
+            splat_ids.push(None);
         }
         if !seeded.is_empty() {
-            markers.push(MarkerChunk::new(
-                marker_key(set.id().raw(), SEED_PART),
+            splats.push(SplatChunk::new(
+                splat_key(set.id().raw(), SEED_PART),
                 seeded,
             ));
         }
@@ -199,15 +199,15 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 appearance.real(green);
                 appearance.real(blue);
                 appearance.real(set.opacity());
-                detected.push(Marker::new(spot.center(), radius, tint, set.opacity()));
-                marker_ids.push(Some(Selection {
+                detected.push(Splat::point(spot.center(), radius, tint, set.opacity()));
+                splat_ids.push(Some(Selection {
                     set: set.id(),
                     item: Item::Object(index),
                 }));
             }
             if !detected.is_empty() {
-                markers.push(MarkerChunk::new(
-                    marker_key(set.id().raw(), DETECTION_PART),
+                splats.push(SplatChunk::new(
+                    splat_key(set.id().raw(), DETECTION_PART),
                     detected,
                 ));
             }
@@ -317,15 +317,15 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
         channels,
         styles,
         layers,
-        markers,
+        splats,
         style_ids,
-        marker_ids,
+        splat_ids,
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
 }
 
-fn marker_key(set: u64, part: u64) -> u64 {
+fn splat_key(set: u64, part: u64) -> u64 {
     let mut key = Digest::new();
     key.mix(set);
     key.mix(part);

@@ -48,6 +48,7 @@ labels! {
     plate_montage => "Plate montage" / "孔板拼图";
     exporting_dataset => "Exporting the dataset" / "正在导出数据集";
     exporting_provenance => "Exporting the provenance crate" / "正在导出溯源包";
+    exporting_package => "Exporting the share package" / "正在导出分享包";
 }
 
 pub fn task(language: Language, label: &str) -> String {
@@ -70,6 +71,7 @@ pub fn task(language: Language, label: &str) -> String {
         "Plate montage" => plate_montage(language).to_string(),
         "Exporting the dataset" => exporting_dataset(language).to_string(),
         "Exporting the provenance crate" => exporting_provenance(language).to_string(),
+        "Exporting the share package" => exporting_package(language).to_string(),
         _ => label.to_string(),
     }
 }

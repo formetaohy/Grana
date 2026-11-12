@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::marker::Marks;
+use crate::splat::Splats;
 use grana_display::{Material, Shading, TransferFunction, VolumeStyle};
 use grana_geometry::PackedMesh;
 use grana_volume::Intensity;
@@ -201,5 +201,5 @@ pub struct SceneFrame<'a> {
     pub step_scale: f32,
     pub styles: &'a [Style],
     pub layers: &'a [Layer],
-    pub markers: Marks<'a>,
+    pub splats: Splats<'a>,
 }

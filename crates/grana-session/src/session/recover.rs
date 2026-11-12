@@ -33,7 +33,7 @@ impl Session {
     }
 
     pub fn autosave(&mut self, view: ViewState) -> bool {
-        if self.access.viewer() {
+        if self.access().viewer() {
             return false;
         }
         if self.tasks.autosaving()

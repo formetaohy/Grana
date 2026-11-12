@@ -9,6 +9,7 @@ labels! {
     microscopy_image => "Microscopy image" / "显微图像";
     grana_project => "grana project" / "Grana 项目";
     open_grana_project => "Open a grana project" / "打开 Grana 项目";
+    open_grana_package => "Open a share package" / "打开分享包";
     save_grana_project => "Save a grana project" / "保存 Grana 项目";
     save_image => "Save an image" / "保存图像";
     png_8 => "PNG (8-bit)" / "PNG（8 位）";

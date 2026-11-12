@@ -325,6 +325,14 @@ fn primary_actions<'a>(
                 None,
                 Message::Command(Command::OpenProject),
             ),
+            crate::view::action_menu_message(
+                ctx,
+                "shell.menu.package",
+                Icon::Export,
+                grana_i18n::shell::package(language),
+                None,
+                Message::Command(Command::OpenPackage),
+            ),
         ];
         popups.push(crate::view::menu(ctx, menu_key, 240.0, rows));
     } else {

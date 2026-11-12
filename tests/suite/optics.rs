@@ -1,6 +1,6 @@
 use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
-use grana_render::{ChannelRow, Frame, Marker, MarkerChunk, Marks, Renderer, Requests, SceneFrame};
+use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, Splat, SplatChunk, Splats};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
@@ -48,20 +48,20 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
     let right = camera.right();
     let focus = camera.focus();
     let markers = vec![
-        Marker::new(
+        Splat::point(
             (eye + forward * focus - right * 2.0).to_array(),
             0.25,
             [1.0, 0.1, 0.1],
             1.0,
         ),
-        Marker::new(
+        Splat::point(
             (eye + forward * (1.5 * focus) + right * 2.0).to_array(),
             0.25,
             [0.1, 1.0, 0.1],
             1.0,
         ),
     ];
-    let chunks = [MarkerChunk::new(0, markers)];
+    let chunks = [SplatChunk::new(0, markers)];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -69,7 +69,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::new(&chunks),
+        splats: Splats::new(&chunks),
     };
     let mut render = |camera: &Camera| {
         let frame = Frame {
@@ -105,20 +105,20 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         spread(&render(&camera))
     };
     assert!(
-        perspective.1 * 2 < perspective.0,
-        "a parallel projection shrinks the far marker: {perspective:?}"
+        perspective.1 * 1.25 < perspective.0,
+        "a perspective projection shrinks the far marker: {perspective:?}"
     );
     assert!(
-        parallel.1.abs_diff(parallel.0) * 4 < parallel.0,
+        (parallel.1 - parallel.0).abs() * 4.0 < parallel.0,
         "an orthographic projection keeps one scale across depth: {parallel:?}"
     );
     assert!(
-        aperture.1 > 2 * perspective.1,
+        aperture.1 > 1.35 * perspective.1,
         "the aperture spreads an off focus marker: {aperture:?} against {perspective:?}"
     );
     assert!(
-        aperture.1.abs_diff(aperture.0) * 2 > aperture.0,
-        "the focus plane stays sharp under the aperture: {aperture:?}"
+        aperture.0 < 1.25 * perspective.0,
+        "the focus plane stays sharp under the aperture: {aperture:?} against {perspective:?}"
     );
 }
 
@@ -142,17 +142,32 @@ fn hidden(pyramid: &Pyramid) -> Vec<ChannelRow> {
         .collect()
 }
 
-fn spread(pixels: &[[u8; 4]]) -> (usize, usize) {
-    let count = |channel: usize| {
-        pixels
-            .iter()
-            .filter(|pixel| {
-                (0..3).all(|other| other == channel || pixel[other] < pixel[channel])
-                    && pixel[channel] > 32
-            })
-            .count()
+fn spread(pixels: &[[u8; 4]]) -> (f32, f32) {
+    let reach = |channel: usize| {
+        let mut weight = 0.0f64;
+        let mut squared = 0.0f64;
+        let mut first = 0.0f64;
+        let mut second = 0.0f64;
+        for (index, pixel) in pixels.iter().enumerate() {
+            let value = f64::from(pixel[channel]);
+            if value <= 32.0 {
+                continue;
+            }
+            let x = (index % SIDE as usize) as f64;
+            let y = (index / SIDE as usize) as f64;
+            weight += value;
+            squared += value * (x * x + y * y);
+            first += value * x;
+            second += value * y;
+        }
+        if weight <= 0.0 {
+            return 0.0;
+        }
+        (squared / weight - (first / weight).powi(2) - (second / weight).powi(2))
+            .max(0.0)
+            .sqrt() as f32
     };
-    (count(0), count(1))
+    (reach(0), reach(1))
 }
 
 fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Volume) {

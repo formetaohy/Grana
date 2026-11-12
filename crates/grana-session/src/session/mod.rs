@@ -13,6 +13,7 @@ mod label;
 mod mask;
 mod montage;
 mod open;
+mod package;
 mod plate;
 mod preview;
 mod provenance;
@@ -82,6 +83,7 @@ pub struct Effects {
     pub open_image: bool,
     pub open_tiles: bool,
     pub open_project: bool,
+    pub open_package: bool,
     pub save_project: Option<bool>,
     pub snapshot: bool,
     pub figure: bool,
@@ -97,6 +99,7 @@ pub struct Effects {
 
 pub struct Session {
     access: Access,
+    read_only: bool,
     scene: Option<Scene>,
     store: Arc<GeometryStore>,
     measure: Measure,
@@ -182,6 +185,7 @@ impl Session {
     fn with_access(access: Access) -> Self {
         Self {
             access,
+            read_only: false,
             scene: None,
             store: GeometryStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
@@ -267,7 +271,11 @@ impl Session {
         self.scene.as_ref()
     }
     pub fn access(&self) -> Access {
-        self.access
+        if self.read_only {
+            Access::Viewer
+        } else {
+            self.access
+        }
     }
     pub(super) fn analysis_channels(&self) -> Option<Arc<grana_pipeline::Channels>> {
         self.channels.clone()

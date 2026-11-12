@@ -47,7 +47,7 @@ pub enum Picked {
 #[derive(Clone, Default)]
 struct Identities {
     styles: Vec<Selection>,
-    markers: Vec<Option<Selection>>,
+    splats: Vec<Option<Selection>>,
 }
 
 struct Prepared {
@@ -298,7 +298,7 @@ impl Engine {
         }
         *pending_pick = Some(Identities {
             styles: prepared.scene.style_ids.clone(),
-            markers: prepared.scene.marker_ids.clone(),
+            splats: prepared.scene.splat_ids.clone(),
         });
         true
     }
@@ -313,7 +313,7 @@ impl Engine {
                 Some(selection) => Picked::Hit(selection),
                 None => Picked::Miss,
             },
-            PickId::Marker(index) => match identities.markers.get(index as usize) {
+            PickId::Splat(index) => match identities.splats.get(index as usize) {
                 Some(Some(selection)) => Picked::Hit(*selection),
                 Some(None) => Picked::Seed,
                 None => Picked::Miss,

@@ -12,6 +12,7 @@ use super::derived::PendingChannel;
 use super::export::Csv;
 use super::label::Labels;
 use super::montage::Montage;
+use super::package::Export as Package;
 use super::preview::Previews;
 use super::provenance::Export as Provenance;
 use crate::document::Document;
@@ -39,6 +40,7 @@ pub(super) enum Completion {
     },
     Csv(Result<PathBuf, String>),
     Provenance(Result<PathBuf, String>),
+    Package(Result<PathBuf, String>),
     Dataset(Result<Summary, String>),
     Montage(Result<PathBuf, String>),
     Autosave(Result<RecoveryEntry, String>),
@@ -103,6 +105,7 @@ pub(super) struct Tasks {
     pub labels: Option<Labels>,
     pub csv: Option<Csv>,
     pub provenance: Option<Provenance>,
+    pub package: Option<Package>,
     pub dataset: Option<DatasetExport>,
     pub montage: Option<Montage>,
     previews: Option<Previews>,
@@ -223,6 +226,22 @@ impl Tasks {
                 }
             }
         }
+        if let Some(slot) = self.package.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event(outcome) => {
+                    self.package = None;
+                    completions.push(Completion::Package(outcome));
+                }
+                Poll::Empty => {}
+                Poll::Closed => {
+                    self.package = None;
+                    completions.push(Completion::Package(Err(
+                        "the package worker stopped before the package was written".to_string(),
+                    )));
+                }
+            }
+        }
         if let Some(slot) = self.dataset.as_mut() {
             stepped |= slot.stepped();
             match slot.poll() {
@@ -304,6 +323,7 @@ impl Tasks {
         self.labels.is_some()
             || self.csv.is_some()
             || self.provenance.is_some()
+            || self.package.is_some()
             || self.dataset.is_some()
             || self.montage.is_some()
     }
@@ -365,6 +385,10 @@ impl Tasks {
             let (done, total) = provenance.progress();
             return Some((provenance.label(), done, total));
         }
+        if let Some(package) = self.package.as_ref() {
+            let (done, total) = package.progress();
+            return Some((package.label(), done, total));
+        }
         if let Some(montage) = self.montage.as_ref() {
             let (done, total) = montage.progress();
             return Some((montage.label(), done, total));
@@ -412,6 +436,7 @@ impl Tasks {
         self.labels = None;
         self.csv = None;
         self.provenance = None;
+        self.package = None;
         self.dataset = None;
         self.montage = None;
         self.autosave = None;
@@ -435,6 +460,7 @@ impl Session {
             Completion::Labels { set, outcome } => self.finish_labels(set, outcome),
             Completion::Csv(outcome) => self.finish_csv(outcome),
             Completion::Provenance(outcome) => self.finish_provenance(outcome),
+            Completion::Package(outcome) => self.finish_package(outcome),
             Completion::Dataset(outcome) => self.finish_dataset(outcome),
             Completion::Montage(outcome) => self.finish_montage(outcome),
             Completion::Autosave(outcome) => self.finish_autosave(outcome),

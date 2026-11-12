@@ -293,12 +293,7 @@ fn open(input: &Path) -> Result<Session, String> {
         return Err(format!("{} does not exist", input.display()));
     }
     let mut session = Session::new();
-    let project = grana_session::is_project(input);
-    if project {
-        session.begin_project(input.to_path_buf());
-    } else {
-        session.begin_load(input.to_path_buf());
-    }
+    session.open_path(input.to_path_buf());
     let start = Instant::now();
     loop {
         session.poll();

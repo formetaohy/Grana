@@ -34,14 +34,14 @@ impl Renderer {
         self.prefetch = display.prefetches();
         self.viewport = Some(viewport);
         let slice = camera.slice().is_some();
-        let slice_objects = slice && (!scene.layers.is_empty() || !scene.markers.is_empty());
+        let slice_objects = slice && (!scene.layers.is_empty() || !scene.splats.is_empty());
         let temporal = temporal.filter(|_| !slice_objects);
         let translucent = !slice
             && (scene
                 .styles
                 .iter()
                 .any(|style| style.visible() && style.transparent())
-                || scene.markers.translucent());
+                || !scene.splats.is_empty());
         let motion = view_motion(camera, viewport, bounds, time, exposure);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
@@ -62,7 +62,7 @@ impl Renderer {
             oit_resolve,
             gtao,
             meshes,
-            markers,
+            splats,
             pyramid,
             channels,
             volume_level,
@@ -416,11 +416,11 @@ impl Renderer {
             info.rebuilt = stale;
             if stale {
                 meshes.set(device, queue, layouts, scene);
-                markers.set(device, queue, layouts, scene.markers);
+                splats.set(device, queue, layouts, scene.splats);
                 *resident = Some(next);
             }
-            markers.rewind(queue);
-            markers.cull_volume(&mut encoder, scene_table.group());
+            splats.rewind(queue);
+            splats.cull_volume(&mut encoder, scene_table.group());
             if !slice {
                 meshes.cull_volume(&mut encoder, scene_table.group());
                 if scene.shading.shadows > 0.0 {
@@ -474,7 +474,7 @@ impl Renderer {
         if target.samples < samples && ready {
             target.samples += 1;
             info.samples = target.samples;
-            let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
+            let surfaces = !scene.layers.is_empty();
             let volume_visible = scene
                 .channels
                 .iter()
@@ -514,13 +514,6 @@ impl Renderer {
                         viewport,
                         scene_table.group(),
                     );
-                    markers.draw_gbuffer(
-                        &mut encoder,
-                        ao.normal(),
-                        ao.depth(),
-                        viewport,
-                        scene_table.group(),
-                    );
                     ao.evaluate(
                         queue,
                         &mut encoder,
@@ -543,7 +536,6 @@ impl Renderer {
                     if *object_key != Some(object) {
                         *object_key = Some(object);
                         meshes.draw_shadow(&mut encoder, shadow.objects());
-                        markers.draw_shadow(&mut encoder, shadow.objects(), scene_table.group());
                     }
                     shadow.encode_tau(&mut encoder, groups, shadow_keys.volume());
                 }
@@ -608,7 +600,7 @@ impl Renderer {
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     sections.draw(&mut pass, group);
                 }
-                markers.draw_slice(
+                splats.draw_slice(
                     &mut encoder,
                     VolumeTargets {
                         color: target.scene.color(),
@@ -616,10 +608,6 @@ impl Renderer {
                     },
                     viewport,
                     group,
-                    Lighting {
-                        shadow: shadow_group,
-                        ao: ao_group,
-                    },
                 );
             } else {
                 meshes.draw_volume(
@@ -629,19 +617,6 @@ impl Renderer {
                         depth: target.scene.depth(),
                     },
                     viewport,
-                    Lighting {
-                        shadow: shadow_group,
-                        ao: ao_group,
-                    },
-                );
-                markers.draw_volume(
-                    &mut encoder,
-                    VolumeTargets {
-                        color: target.scene.color(),
-                        depth: target.scene.depth(),
-                    },
-                    viewport,
-                    group,
                     Lighting {
                         shadow: shadow_group,
                         ao: ao_group,
@@ -682,7 +657,7 @@ impl Renderer {
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     meshes.draw_oit(&mut pass, shadow_group, oit.write_group(), ao_group);
-                    markers.draw_oit(&mut pass, group, shadow_group, oit.write_group(), ao_group);
+                    splats.draw_oit(&mut pass, group, oit.write_group());
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -714,14 +689,7 @@ impl Renderer {
                         oit.coverage_group(),
                         ao_group,
                     );
-                    markers.draw_color(
-                        &mut pass,
-                        group,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
+                    splats.draw_color(&mut pass, group, oit.write_group(), oit.coverage_group());
                 }
                 {
                     let tail = oit.tail_size(viewport);
@@ -773,14 +741,7 @@ impl Renderer {
                         oit.coverage_group(),
                         ao_group,
                     );
-                    markers.draw_tail(
-                        &mut pass,
-                        group,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
+                    splats.draw_tail(&mut pass, group, oit.write_group(), oit.coverage_group());
                 }
                 if let Some(slot) = oit_readback.reserve() {
                     oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);

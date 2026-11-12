@@ -2213,6 +2213,92 @@ fn a_project_finds_its_dataset_beside_itself() {
     }
 }
 
+#[test]
+fn exports_a_share_package_that_opens_read_only() {
+    let temp = Temp::new("suite-package");
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ome.tif");
+    let dataset = temp.path().join("sample.ome.tif");
+    std::fs::copy(&fixture, &dataset).expect("the fixture copies");
+    let mut session = Session::new();
+    session.begin_load(dataset);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the dataset never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    session.observe_view(view_state());
+    let shared = temp.path().join("shared");
+    std::fs::create_dir_all(&shared).expect("the shared folder is created");
+    assert!(
+        session.package_into(shared.clone()),
+        "the package starts: {:?}",
+        session.message().map(|message| message.text().to_string())
+    );
+    let find = || {
+        std::fs::read_dir(&shared)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| grana_project::is_package(path))
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut package = None;
+    while package.is_none() {
+        assert!(Instant::now() < deadline, "the package never appears");
+        session.poll();
+        package = find();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let package = package.expect("the package is written");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(Instant::now() < deadline, "the package never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let detail = session
+        .message()
+        .map(|message| message.text().to_string())
+        .unwrap_or_default();
+    assert!(
+        package.join("analysis.grana").is_file(),
+        "the package holds no analysis: {detail}"
+    );
+    assert!(
+        package.join("data/sample.ome.tif").is_file(),
+        "the package holds no dataset: {detail}"
+    );
+    assert!(
+        package.join("protocol.json").is_file(),
+        "the package holds no protocol: {detail}"
+    );
+    assert!(
+        package.join("ro-crate-metadata.json").is_file(),
+        "the package holds no report: {detail}"
+    );
+    let mut viewer = Session::new();
+    viewer.open_path(package);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while viewer.scene().is_none() {
+        assert!(Instant::now() < deadline, "the package never opens");
+        viewer.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        viewer.project().is_some(),
+        "the package opens its recorded analysis"
+    );
+    assert!(viewer.access().viewer(), "a share package opens read only");
+    viewer.execute(Command::AddObject(ObjectKind::Spots));
+    assert!(
+        viewer.message().is_some(),
+        "the packaged analysis refuses edits"
+    );
+}
+
 fn cells_series() -> VolumeSeries {
     let extent = Extent::new(64, 32, 32);
     let mut nuclei = vec![0u16; extent.voxel_count() as usize];

@@ -5,7 +5,7 @@ use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::{
-    Frame, Layer, LayerKey, Marker, MarkerChunk, Marks, PickId, Renderer, Requests, SceneFrame,
+    Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, Splat, SplatChunk, Splats,
     Style, Versions,
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
@@ -199,7 +199,7 @@ fn background(
         step_scale: view.scene.step_scale,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let blank = View {
         target: view.target,
@@ -244,7 +244,7 @@ fn measures_the_convergence_of_a_volume() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -331,7 +331,7 @@ fn streams_and_shades_two_channels() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -415,7 +415,7 @@ fn renders_a_rotated_placement() {
         step_scale: 1.0,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -499,7 +499,7 @@ fn composites_a_mesh_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -555,7 +555,7 @@ fn keeps_a_translucent_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -594,7 +594,7 @@ fn keeps_a_translucent_layer() {
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let view = View {
         target: &view_texture,
@@ -649,7 +649,7 @@ fn clips_an_oriented_region() {
         step_scale: 1.0,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -735,7 +735,7 @@ fn assured_pixels(
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(gpu, pyramid);
     let target = texture(gpu, SIDE);
@@ -884,7 +884,7 @@ fn render_volume(
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(gpu, &pyramid);
     let target = texture(gpu, SIDE);
@@ -1076,7 +1076,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = Renderer::new(
         gpu.device(),
@@ -1136,7 +1136,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let detail = grana_render::residency(&pyramid, &camera, SIDE, Region::none());
     assert_eq!(
@@ -1195,7 +1195,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1315,7 +1315,7 @@ fn reuses_the_history_of_a_still_camera() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1414,7 +1414,7 @@ fn reprojects_the_history_of_a_moving_camera() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1507,7 +1507,7 @@ fn drops_the_history_of_another_shot() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
     let second_channels = channels(&pyramid, &second_transfers);
@@ -1518,7 +1518,7 @@ fn drops_the_history_of_another_shot() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1683,7 +1683,7 @@ fn bare_scene<'a>(versions: Versions, channels: &'a [grana_render::ChannelRow]) 
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     }
 }
 
@@ -1762,7 +1762,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let target = texture(&gpu, SIDE);
     let view = target.create_view(&Default::default());
@@ -1885,7 +1885,7 @@ fn cuts_the_object_surfaces_of_a_slice() {
         step_scale: 0.5,
         styles: &styles,
         layers: &layers,
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1933,10 +1933,10 @@ fn picks_only_the_objects_of_the_slice_plane() {
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let channels = channels(&pyramid, &transfers);
     let markers = [
-        Marker::new([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
-        Marker::new([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
+        Splat::point([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
+        Splat::point([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
-    let chunks = [MarkerChunk::new(0, markers.to_vec())];
+    let chunks = [SplatChunk::new(0, markers.to_vec())];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -1944,7 +1944,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::new(&chunks),
+        splats: Splats::new(&chunks),
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1961,10 +1961,102 @@ fn picks_only_the_objects_of_the_slice_plane() {
     settle(&gpu, &mut renderer, &view, &volume);
     let on_plane = project(&camera, [0.0, 0.0, 0.1]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), on_plane));
-    assert_eq!(picked(&gpu, &mut renderer), PickId::Marker(0));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::Splat(0));
     let off_plane = project(&camera, [-1.0, 0.0, -1.0]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), off_plane));
     assert_eq!(picked(&gpu, &mut renderer), PickId::None);
+}
+
+#[test]
+fn composites_soft_splats_through_the_depth_layers() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers)
+        .into_iter()
+        .map(|row| grana_render::ChannelRow {
+            visible: false,
+            ..row
+        })
+        .collect::<Vec<_>>();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let forward = camera.forward();
+    let near = (-forward * 0.3).to_array();
+    let far = (forward * 0.3).to_array();
+    let splats = |alpha: f32| {
+        vec![
+            Splat::point(near, 0.4, [1.0, 0.1, 0.1], alpha),
+            Splat::point(far, 0.4, [0.1, 0.2, 1.0], alpha),
+        ]
+    };
+    let solid_chunks = [SplatChunk::new(0, splats(1.0))];
+    let faint_chunks = [SplatChunk::new(0, splats(0.25))];
+    let solid_scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        splats: Splats::new(&solid_chunks),
+    };
+    let faint_scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        splats: Splats::new(&faint_chunks),
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let solid_view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &solid_scene,
+        viewport: WHOLE,
+        display: grana_render::Display::Export,
+    };
+    let faint_view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &faint_scene,
+        viewport: WHOLE,
+        display: grana_render::Display::Export,
+    };
+    let solid = snapshot(&gpu, &mut renderer, &solid_view, &target, &volume);
+    let faint = snapshot(&gpu, &mut renderer, &faint_view, &target, &volume);
+    let centre = project(&camera, [0.0, 0.0, 0.0]);
+    let core = [centre[0] - 2, centre[1] - 2, centre[0] + 2, centre[1] + 2];
+    assert!(
+        solid.painted(WHOLE) > 100,
+        "the splats paint {} pixels",
+        solid.painted(WHOLE)
+    );
+    assert_eq!(
+        solid.hue(core, Hue::Blue),
+        0,
+        "the farther splat covers the nearer one"
+    );
+    assert_eq!(
+        solid.hue(core, Hue::Red),
+        solid.painted(core),
+        "the nearer splat owns the core"
+    );
+    assert!(
+        solid.contrast(core) > faint.contrast(core) * 1.5,
+        "the opacity scales the splat: {} against {}",
+        solid.contrast(core),
+        faint.contrast(core)
+    );
 }
 
 #[test]
@@ -1990,7 +2082,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
         step_scale: 0.5,
         styles: &[],
         layers: &[],
-        markers: Marks::empty(),
+        splats: Splats::empty(),
     };
     let target = texture(&gpu, SIDE);
     let camera = slice_camera(&pyramid, 16);

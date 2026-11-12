@@ -27,10 +27,40 @@ const STALE_AGE: Duration = Duration::from_secs(3600);
 
 pub const EXTENSION: &str = "grana";
 
+pub const PACKAGE_EXTENSION: &str = "granashare";
+
 pub fn is_project(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case(EXTENSION))
+}
+
+pub fn is_package(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(PACKAGE_EXTENSION))
+}
+
+pub fn package_project(folder: &Path) -> Option<PathBuf> {
+    if !folder.is_dir() {
+        return None;
+    }
+    let mut found = None;
+    for entry in std::fs::read_dir(folder).ok()?.flatten() {
+        let candidate = entry.path();
+        if !is_project(&candidate) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(candidate);
+    }
+    found
+}
+
+pub fn in_package(path: &Path) -> bool {
+    path.ancestors().any(is_package)
 }
 
 #[derive(Debug, PartialEq)]

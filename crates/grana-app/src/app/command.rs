@@ -50,6 +50,12 @@ impl App {
             self.session.begin_project(path);
             return true;
         }
+        if effects.open_package
+            && let Some(path) = self.pick_package()
+        {
+            self.session.begin_package(path);
+            return true;
+        }
         if let Some(choose) = effects.save_project {
             let view = self.view_state();
             if let Some(path) = self.project_path(choose) {
@@ -201,6 +207,12 @@ impl App {
                 &[grana_session::PROJECT_EXTENSION],
             )
             .pick_file()
+    }
+
+    pub(super) fn pick_package(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title(grana_i18n::app::open_grana_package(self.workspace.language))
+            .pick_folder()
     }
 
     pub(super) fn project_path(&self, choose: bool) -> Option<PathBuf> {

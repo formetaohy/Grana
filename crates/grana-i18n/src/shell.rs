@@ -4,6 +4,7 @@ labels! {
     ome_zarr_folder => "OME-Zarr Folder" / "OME-Zarr 文件夹";
     remote_ome_zarr => "Remote OME-Zarr" / "远程 OME-Zarr";
     project => "Project" / "项目";
+    package => "Share" / "分享包";
     open_image => "Open Image…" / "打开图像…";
     tiles => "Tiles" / "瓦片";
     stitch => "Stitch" / "拼接";

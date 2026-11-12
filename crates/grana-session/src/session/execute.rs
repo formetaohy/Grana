@@ -42,6 +42,7 @@ impl Session {
                 self.discard_recovery();
             }
             Command::OpenProject => effects.open_project = true,
+            Command::OpenPackage => effects.open_package = true,
             Command::SaveProject => effects.save_project = Some(false),
             Command::SaveProjectAs => effects.save_project = Some(true),
             Command::SaveSnapshot => effects.snapshot = true,
@@ -699,6 +700,7 @@ impl Session {
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
             Command::ExportProvenance => self.export_provenance(),
+            Command::ExportPackage => self.export_package(),
             Command::ExportRelation {
                 source,
                 target,

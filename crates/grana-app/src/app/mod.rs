@@ -175,14 +175,7 @@ impl App {
             if grana_session::is_remote(&target) {
                 self.session.begin_remote(target);
             } else {
-                let path = PathBuf::from(target);
-                if grana_session::is_project(&path) {
-                    self.session.begin_project(path);
-                } else if grana_session::is_image(&path) {
-                    self.session.begin_load(path);
-                } else {
-                    self.session.begin_stitch(path);
-                }
+                self.session.open_path(PathBuf::from(target));
             }
         }
         if let Some(scene) = self.session.scene() {
