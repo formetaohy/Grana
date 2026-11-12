@@ -36,7 +36,7 @@ fn volume_sight(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> S
     let uvw = ray_uvw(origin, band, t, direction);
     let cell = brick_cell(g.grid, g.dims, uvw);
     let record = level_record(band, brick_index(g.grid, cell));
-    let slot = brick_slot(record);
+    let slot = brick_display_slot(record);
     var usable = false;
     if (slot != 0u) {
         usable = occupied_brick(slot - 1u);
@@ -115,7 +115,7 @@ fn march_volume(
             finish,
         );
         let record = level_record(band, brick_index(g.grid, brick));
-        let slot = brick_slot(record) - 1u;
+        let slot = brick_display_slot(record) - 1u;
         let voxels_per_world = length(direction_uvw * g.dims);
         let texel_rate = direction_uvw * g.dims / extent;
         var texel = (slot_origin(frame.atlas.xyz, slot)

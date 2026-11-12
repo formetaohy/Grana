@@ -11,7 +11,7 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
         if (brick_hollow(record)) {
             return vec4<f32>(0.0);
         }
-        if (brick_slot(record) == 0u) {
+        if (brick_display_slot(record) == 0u) {
             continue;
         }
         var radiance = vec3<f32>(0.0);

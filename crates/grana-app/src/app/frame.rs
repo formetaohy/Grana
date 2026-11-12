@@ -48,6 +48,7 @@ impl App {
             self.workspace.playback.previewing = false;
             self.last_advance = None;
             self.last_animation = None;
+            self.presented_time = None;
         }
         let view = session.take_view();
         if let Some(view) = view {
@@ -110,6 +111,7 @@ impl App {
                     camera,
                     size: [viewport.region[2], viewport.region[3]],
                     prefetch: playing,
+                    await_residency: playing,
                     level_cap: cap,
                     interacting,
                 },

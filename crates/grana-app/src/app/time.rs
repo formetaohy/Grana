@@ -30,18 +30,35 @@ impl App {
             self.workspace.playback.playing = false;
             return;
         };
-        if scene.frame_count() <= 1 {
+        let frames = scene.frame_count();
+        if frames <= 1 {
             self.workspace.playback.playing = false;
             return;
         }
+        let current = scene.time();
         let now = Instant::now();
+        let samples = self.frame_info().samples;
+        if samples == 0 {
+            return;
+        }
+        if self.presented_time != Some(current) {
+            self.presented_time = Some(current);
+            if self
+                .last_advance
+                .is_none_or(|last| now.duration_since(last) >= PLAYBACK_INTERVAL)
+            {
+                self.last_advance = Some(now);
+            }
+            return;
+        }
         let due = self
             .last_advance
             .is_none_or(|last| now.duration_since(last) >= PLAYBACK_INTERVAL);
         if !due {
             return;
         }
-        let next = (scene.time() + 1) % scene.frame_count();
+        let next = (current + 1) % frames;
+        self.presented_time = None;
         self.session.set_time(next);
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);

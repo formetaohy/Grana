@@ -205,10 +205,7 @@ pub(super) fn prefetch_requests(
     if !enabled {
         return requests;
     }
-    let next = time + 1;
-    if next >= pyramid.frame_count() {
-        return requests;
-    }
+    let next = (time + 1) % pyramid.frame_count();
     let mut budget = total;
     for (band, demand) in demands.iter().enumerate() {
         if budget == 0 {

@@ -82,7 +82,7 @@ fn sample_pack(band: u32, pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let g = level_frame(band);
     let cell = brick_cell(g.grid, g.dims, uvw);
     let record = level_record(band, brick_index(g.grid, cell));
-    let slot = brick_slot(record);
+    let slot = brick_display_slot(record);
     if (slot == 0u) {
         return vec4<f32>(0.0);
     }

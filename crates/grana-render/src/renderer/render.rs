@@ -24,11 +24,20 @@ impl Renderer {
             samples,
             scene,
             prefetch,
+            await_residency,
             level_cap: _,
             assured,
             temporal,
         } = frame;
         assert!(inside(viewport, size), "the view lies on the surface");
+        if await_residency && (!self.awaiting || time != self.time) {
+            self.awaited = Some(time);
+        }
+        if !await_residency {
+            self.awaited = None;
+        }
+        self.awaiting = await_residency;
+        let holding = self.awaited == Some(time);
         self.time = time;
         self.prefetch = prefetch;
         self.viewport = Some(viewport);
@@ -77,6 +86,7 @@ impl Renderer {
             uploads,
             settled,
             planned,
+            awaited,
             shadow,
             transparent,
             exporting,
@@ -216,7 +226,15 @@ impl Renderer {
         let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
         info.settled = !replan;
         info.truncated = info.view.level == ladder.base && info.view.visible > info.view.demand;
-        let ready = !assured || (info.settled && !info.truncated);
+        let ready_at_time = info.settled && (!assured || !info.truncated);
+        let ready = if holding || assured {
+            ready_at_time
+        } else {
+            true
+        };
+        if ready_at_time {
+            *awaited = None;
+        }
         let slot_grid = atlas.slot_grid();
         let mut prepared = [usize::MAX; BAND + 2];
         let mut prepared_count = 0;
@@ -277,6 +295,7 @@ impl Renderer {
             viewport[3] as f32,
         ];
         data.oit = [u32::from(translucent), 0, 0, 0];
+        data.tag[1] = u32::from(!await_residency && !assured);
         data.occupancy[0] = scene_table.threshold_floor();
         let pixels = u64::from(width) * u64::from(height);
         if translucent

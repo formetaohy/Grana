@@ -7,7 +7,7 @@ use crate::atlas::{PACK, ResidentBrick, pack_components, pack_texels};
 use crate::brick::BrickRecord;
 use crate::occupancy::OCCUPANCY_WORDS;
 
-use super::{Renderer, ensure_brick};
+use super::Renderer;
 
 pub(super) struct UploadScratch {
     units: Vec<u16>,
@@ -113,9 +113,13 @@ impl Renderer {
                 base += span;
             }
             let maximum = maxima.iter().flatten().copied().fold(0.0f32, f32::max);
+            let publish = time == *now
+                && tables[level]
+                    .as_ref()
+                    .is_some_and(|table| table.time() == Some(time));
             if maximum <= 0.0 {
                 atlas.assign_hollow(time, level, index);
-                if let Some(table) = tables[level].as_mut() {
+                if publish && let Some(table) = tables[level].as_mut() {
                     table.set_record(queue, arena, index, BrickRecord::hollow(time));
                 }
                 *uploads += 1;
@@ -129,8 +133,6 @@ impl Renderer {
                     *cell = cell.max(*value);
                 }
             }
-            let slot_grid = atlas.slot_grid();
-            ensure_brick(tables, pyramid.level(level), level, slot_grid, arena);
             let demand = !prefetched.contains(request);
             let Some((slot, evicted)) = atlas.allocate(*pin, *now, time, demand) else {
                 continue;
@@ -164,7 +166,7 @@ impl Renderer {
                 }
                 occupancy.write(queue, slot, words);
             }
-            if let Some(table) = tables[level].as_mut() {
+            if publish && let Some(table) = tables[level].as_mut() {
                 table.set_record(
                     queue,
                     arena,

@@ -25,6 +25,7 @@ pub struct ViewportFrame<'a> {
     pub camera: &'a Camera,
     pub size: [u32; 2],
     pub prefetch: bool,
+    pub await_residency: bool,
     pub level_cap: usize,
     pub interacting: bool,
 }
@@ -36,6 +37,7 @@ struct Request {
     size: [u32; 2],
     level_cap: usize,
     prefetch: bool,
+    await_residency: bool,
     uploads: u64,
 }
 
@@ -150,6 +152,7 @@ impl Engine {
             size: frame.size,
             level_cap: frame.level_cap,
             prefetch: frame.prefetch,
+            await_residency: frame.await_residency,
             uploads: self.uploads,
         };
         if self.request != Some(request) {
@@ -229,6 +232,7 @@ impl Engine {
                     size,
                     samples: SAMPLE_LIMIT,
                     prefetch: frame.prefetch,
+                    await_residency: frame.await_residency,
                     level_cap: frame.level_cap,
                 },
                 &prepared.scene,

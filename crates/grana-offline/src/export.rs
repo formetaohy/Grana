@@ -225,6 +225,7 @@ impl Export {
                 samples: self.samples,
                 scene: &frame,
                 prefetch: false,
+                await_residency: false,
                 level_cap: usize::MAX,
                 assured: true,
                 temporal: self.temporal,

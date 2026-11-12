@@ -122,6 +122,7 @@ pub struct Frame<'a, 'b> {
     pub samples: u32,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
+    pub await_residency: bool,
     pub level_cap: usize,
     pub assured: bool,
     pub temporal: Option<Temporal>,
@@ -155,6 +156,8 @@ pub struct Renderer {
     pyramid: Option<Pyramid>,
     channels: usize,
     time: u32,
+    awaited: Option<u32>,
+    awaiting: bool,
     volume_level: Option<usize>,
     volume_measure: Vec<Option<usize>>,
     volume_rejection: Option<(u64, usize)>,
@@ -241,6 +244,8 @@ impl Renderer {
             pyramid: None,
             channels: 0,
             time: 0,
+            awaited: None,
+            awaiting: false,
             volume_level: None,
             volume_measure: Vec::new(),
             volume_rejection: None,
@@ -347,6 +352,8 @@ impl Renderer {
         self.volume_level = None;
         self.volume_rejection = None;
         self.planned = None;
+        self.awaited = None;
+        self.awaiting = false;
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
@@ -453,6 +460,8 @@ impl Renderer {
         self.channels = channels;
         self.slot_bytes = slot_bytes;
         self.time = 0;
+        self.awaited = None;
+        self.awaiting = false;
         self.volume_level = None;
         self.volume_measure = vec![None; pyramid.level_count()];
         self.volume_rejection = None;

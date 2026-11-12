@@ -15,6 +15,7 @@ pub(crate) struct View<'a> {
     pub size: [u32; 2],
     pub samples: u32,
     pub prefetch: bool,
+    pub await_residency: bool,
     pub level_cap: usize,
 }
 
@@ -42,6 +43,7 @@ pub(crate) fn draw(
             samples: frame.samples,
             scene: &scene,
             prefetch: frame.prefetch,
+            await_residency: frame.await_residency,
             level_cap: frame.level_cap,
             assured: false,
             temporal: Some(Temporal::new(HISTORY)),

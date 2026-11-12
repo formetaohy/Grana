@@ -40,7 +40,7 @@ fn march_projected(
             finish,
         );
         let record = level_record(band, brick_index(g.grid, brick));
-        let slot = brick_slot(record) - 1u;
+        let slot = brick_display_slot(record) - 1u;
         let voxels_per_world = length(direction_uvw * g.dims);
         let texel_rate = direction_uvw * g.dims / extent;
         var texel = (slot_origin(frame.atlas.xyz, slot)
