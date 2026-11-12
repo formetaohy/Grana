@@ -7,8 +7,8 @@ use grana_scene::{
 };
 use grana_session::{Command, MeshFormat};
 use grana_ui::{
-    Align, Border, BuildContext, Color, Corners, Edges, Element, Fill, Icon, Key, Length, Level,
-    Motion, Rect, Role, Shadow, TextStyle, TypeStyle, icon,
+    Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Motion, Rect, Role,
+    TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -29,18 +29,8 @@ use detail::{attached, curated, detect, importing, origin, params, seeds, summar
 use metrics::{child_metrics, children_section, coloc_metrics, label_metrics, measure};
 use relations::relations;
 
-const HEADER: f32 = 34.0;
-
-const PAD: f32 = 10.0;
-
-fn section_font() -> TypeStyle {
-    TypeStyle {
-        size: 10.0,
-        weight: 600.0,
-        tracking: 0.7,
-        leading: 14.0,
-    }
-}
+const HEADER: f32 = 36.0;
+const PAD: f32 = 12.0;
 
 fn width() -> f32 {
     crate::inspector::panel_width() - PAD * 2.0
@@ -54,8 +44,9 @@ pub fn view<'a>(
     let channel_name = state.scene.channel(channel).name().to_string();
     let count = state.scene.objects.len();
     let language = ctx.language();
+    let loading = state.io.loading.is_some();
     let mut elements = add_menu(ctx, state);
-    elements.insert(0, header(ctx, count));
+    elements.insert(0, header(ctx, count, loading));
     if !state.import.is_empty() {
         elements.insert(1, notes(ctx, state.import));
     }
@@ -75,9 +66,12 @@ pub fn view<'a>(
         .map(ObjectSet::id)
         .collect::<Vec<_>>();
     let sets = ids.len();
+    let mut cards = Vec::with_capacity(sets);
     for (position, id) in ids.into_iter().enumerate() {
-        elements.push(object(ctx, state, id, position, sets));
+        cards.push(object(ctx, state, id, position, sets));
     }
+    let group_gap = ctx.theme().metrics.group_gap;
+    elements.push(grana_ui::column().gap(group_gap).children(cards));
     elements
 }
 
@@ -107,44 +101,69 @@ fn notes<'a>(
     view::card(ctx, 6.0, children)
 }
 
-fn header<'a>(ctx: &mut BuildContext<'_, Message>, count: usize) -> Element<'a, Message> {
+fn header<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    count: usize,
+    loading: bool,
+) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let total = crate::inspector::panel_width();
-    let label_style = TextStyle::new(section_font(), palette.text_tertiary);
-    let detail_style =
-        TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).aligned(Align::End);
-    let detail = count.to_string();
     let language = ctx.language();
-    let canvas = grana_ui::canvas(Length::Fixed(total - 24.0), 26.0, move |painter, info| {
+    let total = crate::inspector::panel_width();
+    let spots_label = grana_i18n::object::spots(language);
+    let inset = (theme.metrics.control_height * 0.44).round() + 1.0;
+    let lead_w =
+        ctx.measure(
+            spots_label,
+            TextStyle::new(theme.button_font(), Color::WHITE),
+        )
+        .x + inset * 2.0
+            + 20.0;
+    let split_w = lead_w + theme.metrics.group_gap + theme.metrics.control_height;
+    let title_w = (total - split_w - 8.0).max(60.0);
+    let label_style = TextStyle::new(theme.font(Level::Overline), palette.on_surface_variant);
+    let badge_style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
+        .aligned(Align::Center);
+    let count_text = count.to_string();
+    let title = grana_ui::canvas(Length::Fixed(title_w), 30.0, move |painter, info| {
         let rect = info.rect;
         painter.text_in(
-            rect,
+            Rect::from_min_max(
+                Vec2::new(rect.min.x + 4.0, rect.min.y),
+                Vec2::new(rect.max.x - 32.0, rect.max.y),
+            ),
             grana_i18n::object::object_sets(language),
             label_style,
             Align::Center,
         );
-        painter.text_in(
-            Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 8.0, rect.max.y)),
-            &detail,
-            detail_style,
-            Align::Center,
-        );
+        if count > 0 {
+            let pill = Rect::from_min_size(
+                Vec2::new(rect.max.x - 28.0, rect.center().y - 9.5),
+                Vec2::new(24.0, 19.0),
+            );
+            painter.rect(pill, Corners::capsule(), palette.surface_container_high);
+            painter.text_in(pill, &count_text, badge_style, Align::Center);
+        }
     });
-    let add = view::icon_button(
+    let lead_msg = if loading {
+        Message::Noop
+    } else {
+        Message::Command(Command::AddObject(ObjectKind::Spots))
+    };
+    let split = view::split_button(
         ctx,
-        "objects.add",
-        Icon::Plus,
-        24.0,
-        Role::Quiet,
-        grana_i18n::object::add_object_set(language),
-        Message::Noop,
+        Some(Icon::Plus),
+        spots_label,
+        Role::Filled,
+        ("objects.add.spots", lead_msg),
+        (Key::new("objects.add"), Message::Noop),
     );
     grana_ui::row()
         .width(Length::Fill)
-        .height(Length::Fixed(26.0))
+        .height(Length::Fixed(30.0))
+        .gap(8.0)
         .align(Align::Center)
-        .children([canvas, add])
+        .children([title, split])
 }
 
 fn add_menu<'a>(
@@ -236,7 +255,7 @@ fn add_menu<'a>(
         grana_i18n::object::import_geff(language),
         message,
     ));
-    vec![view::menu(ctx, Key::new("objects.add"), 184.0, rows)]
+    vec![view::menu(ctx, Key::new("objects.add"), 192.0, rows)]
 }
 
 fn action_row<'a>(
@@ -298,8 +317,6 @@ fn object<'a>(
     let Some(set) = state.scene.objects.get(id) else {
         return crate::inspector::hidden();
     };
-    let theme = *ctx.theme();
-    let look = theme.surface(Role::Card, grana_ui::State::Rest);
     let width = width();
     let language = ctx.language();
     let kind = set.kind();
@@ -375,16 +392,12 @@ fn object<'a>(
                 view::button_with(
                     ctx,
                     grana_i18n::object::clear_objects(language),
-                    Role::Danger,
+                    Role::Error,
                     Length::Fill,
                 )
                 .press(Message::Command(Command::ClearObject(id))),
             );
         }
     }
-    grana_ui::column()
-        .padding(Edges::all(PAD))
-        .gap(7.0)
-        .background(look)
-        .children(children)
+    view::group_card(ctx, position, sets, expanded, 8.0, children)
 }

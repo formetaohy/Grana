@@ -184,8 +184,7 @@ pub(super) fn params<'a>(
                 &format!("object.{}.segment.{index}", id.raw()),
                 Some(&label),
                 value,
-                minimum..=maximum,
-                field.logarithmic,
+                (minimum..=maximum, field.logarithmic),
                 &readout,
                 move |value: f32| {
                     let mut next = segment.clone();
@@ -209,8 +208,7 @@ pub(super) fn params<'a>(
             &format!("object.{}.param.{index}", id.raw()),
             Some(&label),
             value,
-            minimum..=maximum,
-            field.logarithmic,
+            (minimum..=maximum, field.logarithmic),
             &readout,
             move |value: f32| {
                 let mut next = params;
@@ -274,7 +272,7 @@ pub(super) fn detect<'a>(
             } else {
                 0.0
             };
-            let spinner = view::spinner(ctx, 13.0);
+            let spinner = view::spinner(ctx, 14.0);
             let caption = view::caption(
                 ctx,
                 &view::progress_caption(language, kind, job, running, frames),
@@ -283,7 +281,7 @@ pub(super) fn detect<'a>(
             let cancel = view::button_with(
                 ctx,
                 grana_i18n::common::cancel(language),
-                Role::Control,
+                Role::SurfaceHigh,
                 Length::Fill,
             )
             .press(Message::Command(Command::CancelDetect(id)));
@@ -302,7 +300,7 @@ pub(super) fn detect<'a>(
             } else {
                 grana_i18n::object::detect_root(language, &root_name)
             };
-            view::button_with(ctx, &label, Role::Prominent, Length::Fill)
+            view::button_with(ctx, &label, Role::Filled, Length::Fill)
                 .press(Message::Command(Command::Detect(id)))
         }
     }
@@ -323,7 +321,7 @@ pub(super) fn importing<'a>(
     } else {
         0.0
     };
-    let spinner = view::spinner(ctx, 13.0);
+    let spinner = view::spinner(ctx, 14.0);
     let caption = view::caption(
         ctx,
         &view::progress_caption(
@@ -338,7 +336,7 @@ pub(super) fn importing<'a>(
     let cancel = view::button_with(
         ctx,
         grana_i18n::common::cancel(language),
-        Role::Control,
+        Role::SurfaceHigh,
         Length::Fill,
     )
     .press(Message::Command(Command::CancelDetect(id)));
@@ -447,7 +445,11 @@ pub(super) fn seeds<'a>(
         } else {
             grana_i18n::object::place_seeds(language)
         },
-        if armed { Role::Tinted } else { Role::Control },
+        if armed {
+            Role::Tonal
+        } else {
+            Role::SurfaceHigh
+        },
     )
     .press(Message::SetSeed((!armed).then_some(id)));
     let mut cell = vec![placed, place];
@@ -475,8 +477,8 @@ pub(super) fn clear_seeds<'a>(
         ctx,
         &format!("object.{}.seed.clear", id.raw()),
         Icon::Trash,
-        22.0,
-        Role::Quiet,
+        24.0,
+        Role::Standard,
         grana_i18n::object::clear_seeds(language),
         Message::Command(Command::ClearSeeds(id)),
     )

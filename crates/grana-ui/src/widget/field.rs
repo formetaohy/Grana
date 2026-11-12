@@ -11,7 +11,7 @@ use crate::theme::Role;
 
 use super::PaintInfo;
 
-const FIELD_PAD: f32 = 8.0;
+const FIELD_PAD: f32 = 10.0;
 
 pub fn text_field<'a, A>(
     value: &str,
@@ -22,7 +22,7 @@ pub fn text_field<'a, A>(
     Element::new(Layout {
         size: Size::new(
             Length::Fixed(width),
-            Length::Fixed(if multiline { 96.0 } else { 24.0 }),
+            Length::Fixed(if multiline { 96.0 } else { 30.0 }),
         ),
         ..Layout::row()
     })
@@ -30,7 +30,7 @@ pub fn text_field<'a, A>(
         value: value.to_string(),
         style,
         multiline,
-        radius: 6.0,
+        radius: 10.0,
         editing: false,
     }))
 }
@@ -40,7 +40,7 @@ pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec
         Length::Auto | Length::Fill => available.x,
         Length::Fixed(value) => value,
         Length::Minimum(minimum) => minimum.max(available.x),
-        Length::Maximum(maximum) => maximum.min(available.x),
+        Length::Maximum(maximum) => available.x.min(maximum),
     };
     let height = match layout.size.height {
         Length::Auto | Length::Fill => available.y,
@@ -56,7 +56,7 @@ pub(crate) fn caret_at(
     pointer: Vec2,
     text: &mut crate::text::Text,
 ) -> usize {
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 4.0));
     let style = field.style;
     let x = pointer.x - inner.min.x;
     if !field.multiline {
@@ -120,6 +120,8 @@ pub(super) fn paint_field(
     let radius = field.radius;
     let state = if !info.enabled {
         State::Disabled
+    } else if runtime.edit.is_some() {
+        State::Selected
     } else if info.press > 0.5 {
         State::Pressed
     } else if info.hover > 0.5 {
@@ -127,12 +129,9 @@ pub(super) fn paint_field(
     } else {
         State::Rest
     };
-    let mut look = info.theme.surface(Role::Field, state);
+    let look = info.theme.surface(Role::Field, state);
     let palette = info.theme.palette;
-    if runtime.edit.is_some() {
-        look.border.color = palette.accent.with_alpha(0.65);
-    }
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 4.0));
     painter.outlined(
         rect,
         Corners::all(radius),
@@ -188,7 +187,7 @@ pub(super) fn paint_field(
                                 Vec2::new(right - left, line_height),
                             ),
                             Corners::ZERO,
-                            palette.accent.with_alpha(0.28),
+                            palette.primary.with_alpha(0.28),
                         );
                     }
                 }
@@ -220,7 +219,7 @@ pub(super) fn paint_field(
                         Vec2::new(layout.size.x, 1.0),
                     ),
                     Corners::ZERO,
-                    palette.accent.with_alpha(0.8),
+                    palette.primary.with_alpha(0.8),
                 );
             }
             let caret_rect = Rect::from_min_size(
@@ -228,10 +227,10 @@ pub(super) fn paint_field(
                     inner.min.x + caret_x + preedit_width - offset,
                     inner.min.y + caret_line as f32 * line_height + 1.0,
                 ),
-                Vec2::new(1.4, (line_height - 2.0).max(1.0)),
+                Vec2::new(1.6, (line_height - 2.0).max(1.0)),
             );
             if edit.caret_visible(info.time) {
-                painter.rect(caret_rect, Corners::ZERO, palette.accent);
+                painter.rect(caret_rect, Corners::ZERO, palette.primary);
             }
             painter.pop_clip(clip);
             return Some(caret_rect);
@@ -246,7 +245,7 @@ pub(super) fn paint_field(
                     Vec2::new(right - left, inner.height() - 4.0),
                 ),
                 Corners::ZERO,
-                palette.accent.with_alpha(0.28),
+                palette.primary.with_alpha(0.28),
             );
         }
         let layout = painter.layout(text, style, 0.0);
@@ -268,7 +267,7 @@ pub(super) fn paint_field(
                     Vec2::new(composed.size.x, 1.0),
                 ),
                 Corners::ZERO,
-                palette.accent.with_alpha(0.8),
+                palette.primary.with_alpha(0.8),
             );
         }
         let caret_rect = Rect::from_min_size(
@@ -276,10 +275,10 @@ pub(super) fn paint_field(
                 inner.min.x + caret_x + preedit_width - offset,
                 inner.min.y + 2.0,
             ),
-            Vec2::new(1.4, inner.height() - 4.0),
+            Vec2::new(1.6, inner.height() - 4.0),
         );
         if edit.caret_visible(info.time) {
-            painter.rect(caret_rect, Corners::ZERO, palette.accent);
+            painter.rect(caret_rect, Corners::ZERO, palette.primary);
         }
         painter.pop_clip(clip);
         Some(caret_rect)

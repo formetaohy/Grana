@@ -1,3 +1,5 @@
+use std::f32::consts::TAU;
+
 use glam::Vec2;
 
 use crate::color::Color;
@@ -38,24 +40,24 @@ fn level<'a, A>(theme: &Theme, level: Level, text: &str) -> Element<'a, A> {
 
 pub fn badge<'a, A>(label: &str, tint: Color) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Auto, Length::Fixed(18.0)),
+        size: Size::new(Length::Auto, Length::Fixed(20.0)),
         ..Layout::row()
     })
     .with_content(Content::Badge(BadgeContent {
         label: label.to_string(),
         tint,
         font: TypeStyle {
-            size: 9.5,
+            size: 10.5,
             weight: 600.0,
-            tracking: 0.35,
-            leading: 12.0,
+            tracking: 0.25,
+            leading: 13.0,
         },
     }))
 }
 
 pub fn labelled<'a, A>(theme: &Theme, label: &str, value: &str) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(20.0)),
+        size: Size::new(Length::Fill, Length::Fixed(22.0)),
         ..Layout::row()
     })
     .with_content(Content::Labelled(LabelledContent {
@@ -87,24 +89,15 @@ pub(super) fn measure_badge(badge: &BadgeContent, text: &mut crate::text::Text) 
         .layout(&badge.label, badge.font, 0.0, false, false, Align::Start)
         .size
         .x;
-    Vec2::new(width + 12.0, 18.0)
+    Vec2::new(width + 14.0, 20.0)
 }
 
 pub(super) fn paint_badge(badge: &BadgeContent, painter: &mut Painter, info: &PaintInfo<'_>) {
-    painter.outlined(
-        info.rect,
-        Corners::all(4.0),
-        Fill::Solid(badge.tint.with_alpha(0.14)),
-        Border {
-            width: 1.0,
-            color: badge.tint.with_alpha(0.36),
-        },
-        Shadow::NONE,
-    );
+    painter.rect(info.rect, Corners::capsule(), badge.tint.with_alpha(0.18));
     painter.text_in(
         info.rect,
         &badge.label,
-        TextStyle::new(badge.font, badge.tint.with_alpha(0.95)),
+        TextStyle::new(badge.font, badge.tint.lerp(Color::WHITE, 0.25)),
         Align::Center,
     );
 }
@@ -116,14 +109,14 @@ pub(super) fn paint_labelled(
 ) {
     let palette = info.theme.palette;
     let width = info.rect.width();
-    let label_width = (width * 0.38).clamp(60.0, 124.0);
+    let label_width = (width * 0.38).clamp(60.0, 128.0);
     painter.text_in(
         crate::geometry::Rect::from_min_size(
             info.rect.min,
             Vec2::new(label_width, info.rect.height()),
         ),
         &labelled.label,
-        TextStyle::new(labelled.label_font, palette.text_tertiary).truncating(),
+        TextStyle::new(labelled.label_font, palette.on_surface_variant).truncating(),
         Align::Center,
     );
     painter.text_in(
@@ -132,7 +125,7 @@ pub(super) fn paint_labelled(
             Vec2::new(width - label_width, info.rect.height()),
         ),
         &labelled.value,
-        TextStyle::new(labelled.value_font, palette.text_secondary)
+        TextStyle::new(labelled.value_font, palette.on_surface)
             .aligned(Align::End)
             .truncating(),
         Align::Center,
@@ -142,16 +135,24 @@ pub(super) fn paint_labelled(
 pub(super) fn paint_spinner(spinner: &SpinnerContent, painter: &mut Painter, info: &PaintInfo<'_>) {
     let palette = info.theme.palette;
     let center = info.rect.center();
-    let radius = spinner.size * 0.38;
-    painter.ring(
-        center,
-        radius,
-        1.6,
-        0.0,
-        std::f32::consts::TAU,
-        palette.track.amplify(0.5),
-    );
-    painter.ring(center, radius, 1.6, info.time * 5.0, 1.7, palette.accent);
+    let base_r = spinner.size * 0.36;
+    let morph = 0.5 + 0.5 * (info.time * 3.2).sin();
+    let lobes = 7.0;
+    let amp = base_r * (0.14 + 0.12 * morph);
+    let rot = info.time * 2.4;
+    let steps = 28usize;
+    let point_at = |step: usize| {
+        let theta = (step as f32 / steps as f32) * TAU;
+        let r = base_r + amp * (lobes * theta + info.time * 4.5).cos();
+        let angle = theta + rot;
+        center + Vec2::new(angle.cos() * r, angle.sin() * r)
+    };
+    let mut prev = point_at(0);
+    for step in 1..=steps {
+        let next = point_at(step);
+        painter.segment(prev, next, (spinner.size * 0.13).max(1.6), palette.tertiary);
+        prev = next;
+    }
 }
 
 pub(super) fn paint_color_swatch(
@@ -159,18 +160,15 @@ pub(super) fn paint_color_swatch(
     painter: &mut Painter,
     info: &PaintInfo<'_>,
 ) {
-    painter.rect(
-        info.rect,
-        Corners::all(4.0),
-        Color::from_rgb_f32(swatch.color),
-    );
+    let corners = Corners::capsule();
+    painter.rect(info.rect, corners, Color::from_rgb_f32(swatch.color));
     painter.outlined(
         info.rect,
-        Corners::all(4.0),
+        corners,
         Fill::None,
         Border {
-            width: 1.0,
-            color: Color::white_alpha(0.24 + 0.36 * info.hover),
+            width: 1.5,
+            color: Color::white_alpha(0.28 + 0.42 * info.hover),
         },
         Shadow::NONE,
     );

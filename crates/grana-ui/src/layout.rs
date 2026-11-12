@@ -504,7 +504,7 @@ impl<'a> LayoutEngine<'a> {
         };
         let rect = Rect::from_min_size(Vec2::new(x, y), Vec2::new(width, height));
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
-        let corners = Corners::all(self.theme.metrics.panel_radius);
+        let corners = Corners::all(self.theme.metrics.corner_lg);
         let clip = Clip::new(screen, Corners::ZERO).intersect(rect, corners);
         {
             let node = &mut tree.nodes[id];

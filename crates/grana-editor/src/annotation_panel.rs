@@ -3,15 +3,15 @@ use grana_i18n::Language;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Length, Rect, Role, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle, icon,
 };
 
 use crate::message::Message;
 use crate::state::{AnnotationTool, View};
 use crate::view;
 
-const ROW_HEIGHT: f32 = 30.0;
-const ROW_PAD: f32 = 2.0;
+const ROW_HEIGHT: f32 = 34.0;
+const ROW_PAD: f32 = 4.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let mut children = vec![tools_card(ctx, state), list_card(ctx, state)];
@@ -42,11 +42,13 @@ fn tools_card<'a>(
         Some(&placed),
     );
     let mut row = Vec::new();
-    for tool in AnnotationTool::ALL {
-        row.push(tool_button(ctx, tool, active == Some(tool)));
+    let count = AnnotationTool::ALL.len();
+    for (index, tool) in AnnotationTool::ALL.into_iter().enumerate() {
+        row.push(tool_button(ctx, index, count, tool, active == Some(tool)));
     }
+    let group_gap = ctx.theme().metrics.group_gap;
     let buttons = grana_ui::row()
-        .gap(6.0)
+        .gap(group_gap)
         .align(Align::Center)
         .width(Length::Fill)
         .children(row);
@@ -62,53 +64,31 @@ fn tools_card<'a>(
 
 fn tool_button<'a>(
     ctx: &mut BuildContext<'_, Message>,
+    index: usize,
+    count: usize,
     tool: AnnotationTool,
     active: bool,
 ) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let font = theme.button_font();
-    let label = tool.name(ctx.language());
-    grana_ui::canvas(Length::Fixed(84.0), 30.0, move |painter, info| {
-        let rect = info.rect;
-        let engaged = info.hover.max(info.press);
-        if active {
-            painter.outlined(
-                rect,
-                Corners::all(6.0),
-                grana_ui::Fill::Solid(palette.accent.with_alpha(0.24)),
-                grana_ui::Border {
-                    width: 1.0,
-                    color: palette.accent.with_alpha(0.62),
-                },
-                grana_ui::Shadow::NONE,
-            );
-        } else {
-            painter.rect(
-                rect,
-                Corners::all(6.0),
-                palette.material_fill.amplify(0.55 + 0.45 * engaged),
-            );
-        }
-        let color = if active {
-            palette.text_primary
-        } else {
-            palette.text_secondary.lerp(palette.text_primary, engaged)
-        };
-        painter.text_in(
-            rect,
-            label,
-            TextStyle::new(font, color).aligned(Align::Center),
-            Align::Center,
-        );
-    })
+    let inner = ctx.theme().metrics.corner_sm;
+    let corners = Corners::group_horizontal(index, count, Corners::CAPSULE, inner, active);
+    let role = if active {
+        Role::Tonal
+    } else {
+        Role::SurfaceHigh
+    };
+    view::button_shaped(
+        ctx,
+        tool.name(ctx.language()),
+        role,
+        Length::Fixed(96.0),
+        corners,
+    )
     .key(Key::index("annotation.tool", tool.index()))
     .press(Message::SetAnnotationTool(if active {
         None
     } else {
         Some(tool)
     }))
-    .focus_ring(Corners::all(6.0))
 }
 
 fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -129,44 +109,52 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         ));
         return view::card(ctx, 8.0, children);
     }
-    for index in 0..scene.annotations.len() {
-        children.push(row(ctx, state, index));
+    let count = scene.annotations.len();
+    let mut rows = Vec::with_capacity(count);
+    for index in 0..count {
+        rows.push(row(ctx, state, index, count));
     }
+    let group_gap = ctx.theme().metrics.group_gap;
+    children.push(grana_ui::column().gap(group_gap).children(rows));
     children.push(view::divider(ctx));
     let selected = scene.annotations.selected();
-    let remove = view::button_with(
+    let inner = ctx.theme().metrics.corner_sm;
+    let remove = view::button_shaped(
         ctx,
         grana_i18n::common::remove(language),
-        Role::Quiet,
+        Role::SurfaceHigh,
         Length::Fixed(132.0),
+        Corners::split_leading(inner),
     )
     .named("annotation.remove.selected")
     .press(match selected {
         Some(index) => Message::Command(Command::RemoveAnnotation(index)),
         None => Message::Noop,
     });
-    let clear = view::button_with(
+    let clear = view::button_shaped(
         ctx,
         grana_i18n::annotation::remove_all(language),
-        Role::Quiet,
+        Role::Error,
         Length::Fixed(132.0),
+        Corners::split_trailing(inner),
     )
     .named("annotation.clear")
     .press(Message::Command(Command::ClearAnnotations));
     children.push(
         grana_ui::row()
-            .gap(6.0)
+            .gap(group_gap)
             .justify(Align::End)
             .width(Length::Fill)
             .children([remove, clear]),
     );
-    view::card(ctx, 6.0, children)
+    view::card(ctx, 8.0, children)
 }
 
 fn row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
     index: usize,
+    count: usize,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -194,31 +182,33 @@ fn row<'a>(
         ),
     };
     let font = if selected {
-        theme.font(grana_ui::Level::Body).medium()
+        theme.font(Level::Title)
     } else {
-        theme.font(grana_ui::Level::Body)
+        theme.font(Level::Body).medium()
     };
+    let corners = Corners::group_vertical(
+        index,
+        count,
+        theme.metrics.corner_md,
+        theme.metrics.corner_xs,
+        selected,
+    );
     let body = grana_ui::canvas(Length::Fill, ROW_HEIGHT, move |painter, info| {
         let rect = info.rect;
         let hovered = info.hover.max(info.press);
-        if selected {
-            painter.outlined(
-                rect,
-                Corners::all(6.0),
-                grana_ui::Fill::Solid(palette.accent.with_alpha(0.16)),
-                grana_ui::Border {
-                    width: 1.0,
-                    color: palette.accent.with_alpha(0.34),
-                },
-                grana_ui::Shadow::NONE,
-            );
-        } else if hovered > 0.01 {
-            painter.rect(
-                rect,
-                Corners::all(6.0),
-                palette.material_hover.amplify(0.5 * hovered),
-            );
-        }
+        let fill = if selected {
+            palette.secondary_container
+        } else {
+            palette
+                .surface_container_high
+                .lerp(palette.surface_container_highest, hovered)
+        };
+        painter.rect(rect, corners, fill);
+        let fg = if selected {
+            palette.on_secondary_container
+        } else {
+            palette.on_surface
+        };
         icon::paint(
             match kind.tag() {
                 AnnotationTag::Point => Icon::Target,
@@ -227,39 +217,50 @@ fn row<'a>(
             painter,
             Vec2::new(rect.min.x + 14.0, rect.center().y),
             14.0,
-            palette.text_secondary,
-            1.5,
+            if selected {
+                palette.on_secondary_container
+            } else {
+                palette.primary
+            },
+            1.6,
         );
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(rect.min.x + 28.0, rect.min.y),
-                Vec2::new(rect.max.x - 74.0, rect.max.y),
+                Vec2::new(rect.max.x - 84.0, rect.max.y),
             ),
             &name,
-            TextStyle::new(font, palette.text_primary).truncating(),
+            TextStyle::new(font, fg).truncating(),
             Align::Center,
         );
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(rect.max.x - 190.0, rect.min.y),
-                Vec2::new(rect.max.x - 4.0, rect.max.y),
+                Vec2::new(rect.max.x - 10.0, rect.max.y),
             ),
             &detail,
-            TextStyle::new(theme.font(grana_ui::Level::Caption), palette.text_tertiary)
-                .aligned(Align::End)
-                .truncating(),
+            TextStyle::new(
+                theme.font(Level::Caption),
+                if selected {
+                    palette.on_secondary_container.with_alpha(0.82)
+                } else {
+                    palette.on_surface_variant
+                },
+            )
+            .aligned(Align::End)
+            .truncating(),
             Align::Center,
         );
     })
     .key(Key::index("annotation.row", index))
     .press(Message::Command(Command::SelectAnnotation(Some(index))))
-    .focus_ring(Corners::all(7.0));
+    .focus_ring(corners);
     let eye = view::icon_button(
         ctx,
         "annotation.visible",
         if visible { Icon::Eye } else { Icon::EyeOff },
-        26.0,
-        Role::Quiet,
+        28.0,
+        if visible { Role::Tonal } else { Role::Standard },
         if visible {
             grana_i18n::annotation::hide(language)
         } else {
@@ -402,7 +403,7 @@ fn profile_card<'a>(
         grana_i18n::annotation::sample_profile(language)
     };
     children.push(
-        view::button_with(ctx, label, Role::Quiet, Length::Fill)
+        view::button_with(ctx, label, Role::SurfaceHigh, Length::Fill)
             .named("annotation.profile.sample")
             .press(Message::Command(Command::SampleProfile { index })),
     );
@@ -456,7 +457,7 @@ fn region_card<'a>(
         let clear = view::button_with(
             ctx,
             grana_i18n::common::clear(language),
-            Role::Quiet,
+            Role::SurfaceHigh,
             Length::Fixed(132.0),
         )
         .named("annotation.region.clear")

@@ -86,7 +86,7 @@ impl Comparison {
         let page = Rect::from_min_size(Vec2::ZERO, points);
         let style = Style::page(&theme, self.style);
         recorder.marks(points, |painter| {
-            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            painter.rect(page, Corners::ZERO, theme.palette.surface_dim);
             self.paint(painter, page, &style, &Decor::default());
         })
     }
@@ -123,10 +123,10 @@ impl Comparison {
             .pointer
             .and_then(|pointer| group_at(data, self.categories.len(), pointer));
         let width = (0.44 * slot_width(data, self.categories.len())).clamp(6.0, 34.0);
-        let cold = TextStyle::new(metrics.caption, palette.text_tertiary)
+        let cold = TextStyle::new(metrics.caption, palette.outline)
             .aligned(Align::Center)
             .truncating();
-        let hot = TextStyle::new(metrics.caption, palette.text_primary)
+        let hot = TextStyle::new(metrics.caption, palette.on_surface)
             .aligned(Align::Center)
             .truncating();
         let series = self.series();
@@ -140,7 +140,7 @@ impl Comparison {
                         Vec2::new(centre + half, data.max.y),
                     ),
                     Corners::ZERO,
-                    palette.text_primary.with_alpha(0.04),
+                    palette.on_surface.with_alpha(0.04),
                 );
             }
             if let Some(series) = &series[index] {
@@ -170,8 +170,9 @@ impl Comparison {
                 Align::Center,
             );
         }
-        let ink = palette.text_tertiary;
-        let marks = TextStyle::new(metrics.caption, palette.text_secondary).aligned(Align::Center);
+        let ink = palette.outline;
+        let marks =
+            TextStyle::new(metrics.caption, palette.on_surface_variant).aligned(Align::Center);
         for (row, note) in self.notes.iter().enumerate() {
             if note.from >= self.categories.len() || note.to >= self.categories.len() {
                 continue;

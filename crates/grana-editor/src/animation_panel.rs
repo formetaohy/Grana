@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_session::{Command, Export};
 use grana_ui::{
     Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
-    Role, State, TextStyle, TypeStyle, icon,
+    Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -52,27 +52,30 @@ fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         (Icon::Play, grana_i18n::animation::preview(language))
     };
     let mut controls = vec![
-        grana_ui::widget::action_button(&theme, symbol, label, Role::Prominent)
+        grana_ui::widget::action_button(&theme, symbol, label, Role::Filled)
             .named("animation.preview")
             .press(Message::SetPreviewing(!previewing)),
         grana_ui::widget::action_button(
             &theme,
             Icon::Plus,
             grana_i18n::animation::keyframe(language),
-            Role::Control,
+            Role::SurfaceHigh,
         )
         .named("animation.keyframe")
         .press(Message::Command(Command::SetKeyframe)),
     ];
     if !empty {
         controls.push(
-            view::button(ctx, grana_i18n::common::clear(language), Role::Quiet)
+            view::button(ctx, grana_i18n::common::clear(language), Role::Standard)
                 .press(Message::Command(Command::ClearKeyframes)),
         );
     }
     controls.push(grana_ui::text(
         format!("{position:.2} / {duration:.2} s · F{current_frame}"),
-        TextStyle::new(theme.font(Level::Monospace), theme.palette.text_tertiary),
+        TextStyle::new(
+            theme.font(Level::Monospace),
+            theme.palette.on_surface_variant,
+        ),
     ));
     let mut children = vec![
         view::card_title(
@@ -101,23 +104,17 @@ fn keyframe_track<'a>(
     selected: Option<usize>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let accent = theme.palette.accent;
-    let label_style = TextStyle::new(
-        TypeStyle::new(9.5, 400.0, 12.0),
-        theme.palette.text_quaternary,
-    );
-    let empty = TextStyle::new(
-        TypeStyle::new(10.5, 400.0, 13.0),
-        theme.palette.text_tertiary,
-    )
-    .aligned(Align::Center);
+    let palette = theme.palette;
+    let accent = palette.primary;
+    let label_style = TextStyle::new(theme.font(Level::Caption), palette.outline);
+    let empty = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
+        .aligned(Align::Center);
     let hint = grana_i18n::animation::add_keyframe(ctx.language());
-    let tick_color = Color::white_alpha(0.14);
     let track_key = Key::new("animation.track");
     let track_rect = ctx.rect_of(track_key).unwrap_or(Rect::ZERO);
     let bar = Rect::from_min_max(
-        Vec2::new(track_rect.min.x + 8.0, track_rect.center().y - 1.0),
-        Vec2::new(track_rect.max.x - 8.0, track_rect.center().y + 1.0),
+        Vec2::new(track_rect.min.x + 8.0, track_rect.center().y - 6.0),
+        Vec2::new(track_rect.max.x - 8.0, track_rect.center().y + 6.0),
     );
     let keys = keys.to_vec();
     let markers = keys
@@ -135,35 +132,37 @@ fn keyframe_track<'a>(
     grana_ui::canvas(Length::Fill, TRACK_HEIGHT, move |painter, info| {
         let rect = info.rect;
         let bar = Rect::from_min_max(
-            Vec2::new(rect.min.x + 8.0, rect.center().y - 1.0),
-            Vec2::new(rect.max.x - 8.0, rect.center().y + 1.0),
+            Vec2::new(rect.min.x + 8.0, rect.center().y - 6.0),
+            Vec2::new(rect.max.x - 8.0, rect.center().y + 6.0),
         );
         let playhead_x = bar.min.x + bar.width() * (position / duration.max(1.0e-6));
-        let rail = Rect::from_center_size(bar.center(), Vec2::new(bar.width(), 4.0));
-        painter.rect(rail, Corners::capsule(), Color::white_alpha(0.14));
-        painter.rect(
-            Rect::from_min_max(
-                rail.min,
-                Vec2::new(playhead_x.max(rail.min.x + 2.0), rail.max.y),
-            ),
-            Corners::capsule(),
-            accent.with_alpha(0.60),
-        );
+        let gap = 5.0;
+        let active_end = (playhead_x - gap).clamp(bar.min.x, bar.max.x);
+        if active_end > bar.min.x + 1.0 {
+            painter.rect(
+                Rect::from_min_max(bar.min, Vec2::new(active_end, bar.max.y)),
+                Corners::left(6.0, 2.0),
+                accent.with_alpha(0.75),
+            );
+        }
+        let inactive_start = (playhead_x + gap).clamp(bar.min.x, bar.max.x);
+        if bar.max.x > inactive_start + 1.0 {
+            painter.rect(
+                Rect::from_min_max(Vec2::new(inactive_start, bar.min.y), bar.max),
+                Corners::right(6.0, 2.0),
+                palette.surface_container_highest,
+            );
+        }
         let ticks = 6;
         for index in 0..=ticks {
             let x = bar.min.x + bar.width() * index as f32 / ticks as f32;
-            painter.rect(
-                Rect::from_center_size(Vec2::new(x, bar.center().y), Vec2::new(1.0, 8.0)),
-                Corners::capsule(),
-                tick_color,
-            );
             let label = format!("{:.1}s", duration * index as f32 / ticks as f32);
             let tick_rect = if index == 0 {
-                Rect::from_min_size(Vec2::new(x, bar.max.y + 6.0), Vec2::new(40.0, 14.0))
+                Rect::from_min_size(Vec2::new(x, bar.max.y + 4.0), Vec2::new(40.0, 14.0))
             } else if index == ticks {
-                Rect::from_min_size(Vec2::new(x - 40.0, bar.max.y + 6.0), Vec2::new(40.0, 14.0))
+                Rect::from_min_size(Vec2::new(x - 40.0, bar.max.y + 4.0), Vec2::new(40.0, 14.0))
             } else {
-                Rect::from_center_size(Vec2::new(x, bar.max.y + 13.0), Vec2::new(40.0, 14.0))
+                Rect::from_center_size(Vec2::new(x, bar.max.y + 11.0), Vec2::new(40.0, 14.0))
             };
             let align = if index == 0 {
                 Align::Start
@@ -174,30 +173,19 @@ fn keyframe_track<'a>(
             };
             painter.text_in(tick_rect, &label, label_style.aligned(align), Align::Center);
         }
-        painter.segment(
-            Vec2::new(playhead_x, rect.min.y + 8.0),
-            Vec2::new(playhead_x, rect.max.y - 16.0),
-            1.2,
+        painter.rect(
+            Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(4.0, 22.0)),
+            Corners::capsule(),
             accent,
-        );
-        painter.outlined(
-            Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(10.0, 16.0)),
-            Corners::all(3.0),
-            grana_ui::Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
-            grana_ui::Border {
-                width: 1.0,
-                color: Color::white_alpha(0.9),
-            },
-            grana_ui::Shadow::new(Color::black_alpha(0.45), 3.0, 1.0),
         );
         for (index, fraction) in &markers_paint {
             let x = bar.min.x + bar.width() * fraction;
             let center = Vec2::new(x, bar.center().y);
             let active =
                 key_selected == Some(*index) || (hover.x - x).abs() <= 10.0 && bar.contains(hover);
-            let size = if active { 6.2 } else { 5.2 };
+            let size = if active { 6.5 } else { 5.2 };
             let color = if key_selected == Some(*index) {
-                accent
+                palette.tertiary
             } else {
                 Color::WHITE
             };
@@ -218,7 +206,7 @@ fn keyframe_track<'a>(
             painter.text_in(
                 Rect::from_min_max(
                     Vec2::new(rect.min.x, rect.min.y),
-                    Vec2::new(rect.max.x, rect.max.y - 12.0),
+                    Vec2::new(rect.max.x, rect.max.y - 14.0),
                 ),
                 hint,
                 empty,
@@ -248,8 +236,7 @@ fn keyframe_list<'a>(
     selected: Option<usize>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let accent = theme.palette.accent;
-    let secondary = theme.palette.text_secondary;
+    let palette = theme.palette;
     let font = theme.font(Level::Monospace);
     let mut rows = Vec::new();
     for (index, key) in keys.iter().enumerate() {
@@ -261,20 +248,27 @@ fn keyframe_list<'a>(
             key.camera.yaw,
             key.camera.distance
         );
-        let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, move |painter, info| {
+        let body = grana_ui::canvas(Length::Fixed(420.0), 26.0, move |painter, info| {
             if active {
-                painter.rect(info.rect, Corners::all(6.0), accent.with_alpha(0.16));
+                painter.rect(info.rect, Corners::capsule(), palette.secondary_container);
             } else if info.hover > 0.01 {
                 painter.rect(
                     info.rect,
-                    Corners::all(6.0),
-                    Color::white_alpha(0.05 * info.hover),
+                    Corners::all(theme.metrics.corner_sm),
+                    palette.on_surface.with_alpha(0.06 * info.hover),
                 );
             }
             painter.text_in(
-                info.rect.shrink2(Vec2::new(8.0, 0.0)),
+                info.rect.shrink2(Vec2::new(10.0, 0.0)),
                 &text,
-                TextStyle::new(font, secondary),
+                TextStyle::new(
+                    font,
+                    if active {
+                        palette.on_secondary_container
+                    } else {
+                        palette.on_surface_variant
+                    },
+                ),
                 Align::Center,
             );
         })
@@ -287,8 +281,8 @@ fn keyframe_list<'a>(
             ctx,
             &format!("animation.key.delete.{index}"),
             Icon::Trash,
-            18.0,
-            Role::Quiet,
+            22.0,
+            Role::Standard,
             grana_i18n::animation::delete_keyframe(ctx.language()),
             Message::Command(Command::DeleteKeyframe(index)),
         );
@@ -389,7 +383,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
                         ctx,
                         &grana_i18n::animation::exporting(language, frame, total),
                     ),
-                    view::button(ctx, grana_i18n::common::cancel(language), Role::Quiet)
+                    view::button(ctx, grana_i18n::common::cancel(language), Role::SurfaceHigh)
                         .press(Message::Command(Command::CancelExport)),
                 ]),
             );
@@ -399,7 +393,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             let mp4 = grana_ui::widget::button_enabled(
                 &theme,
                 grana_i18n::animation::export_movie(language),
-                Role::Prominent,
+                Role::Filled,
                 Length::Fill,
                 !empty,
             )
@@ -407,7 +401,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             let mov = grana_ui::widget::button_enabled(
                 &theme,
                 grana_i18n::animation::export_transparent(language),
-                Role::Control,
+                Role::SurfaceHigh,
                 Length::Fill,
                 !empty,
             )
@@ -499,7 +493,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let save = grana_ui::widget::button_enabled(
         &theme,
         grana_i18n::animation::save_image(language),
-        Role::Prominent,
+        Role::Filled,
         Length::Fill,
         idle,
     )
@@ -513,7 +507,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let figure = grana_ui::widget::button_enabled(
         &theme,
         grana_i18n::animation::save_figure(language),
-        Role::Control,
+        Role::SurfaceHigh,
         Length::Fill,
         idle,
     )
@@ -527,7 +521,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let sequence = grana_ui::widget::button_enabled(
         &theme,
         grana_i18n::animation::export_sequence(language),
-        Role::Control,
+        Role::SurfaceHigh,
         Length::Fill,
         idle && frames > 0,
     )
@@ -566,11 +560,10 @@ fn combo<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label = labels.get(selected).cloned().unwrap_or_default();
-    let style =
-        TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
-    let rest = theme.surface(Role::Control, State::Rest);
-    let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
+    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
+    let rest = theme.surface(Role::Field, State::Rest);
+    let hover = theme.surface(Role::Field, State::Hover);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,
@@ -593,7 +586,7 @@ fn combo<'a>(
             Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
             5.0,
             std::f32::consts::FRAC_PI_2,
-            palette.text_tertiary,
+            palette.on_surface_variant,
             1.5,
         );
     })

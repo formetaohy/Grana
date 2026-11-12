@@ -112,7 +112,7 @@ fn header<'a>(
         combo(
             ctx,
             "coloc.a",
-            124.0,
+            128.0,
             selected_a,
             &options_a,
             move |index| match indices_a.get(index) {
@@ -126,7 +126,7 @@ fn header<'a>(
         combo(
             ctx,
             "coloc.b",
-            124.0,
+            128.0,
             selected_b,
             &options_b,
             move |index| match indices_b.get(index) {
@@ -140,7 +140,7 @@ fn header<'a>(
     let busy = running.is_some() || state.io.loading.is_some();
     match running {
         Some(running) => {
-            items.push(view::spinner(ctx, 13.0));
+            items.push(view::spinner(ctx, 14.0));
             items.push(view::caption(
                 ctx,
                 &grana_i18n::coloc::samples(language, running.done, running.total),
@@ -150,7 +150,7 @@ fn header<'a>(
                 "coloc.cancel",
                 Icon::Close,
                 28.0,
-                Role::Quiet,
+                Role::SurfaceHigh,
                 grana_i18n::common::cancel(language),
                 Message::Command(Command::CancelColoc),
             ));
@@ -161,7 +161,7 @@ fn header<'a>(
                 &theme,
                 Icon::Target,
                 grana_i18n::coloc::compute(language),
-                Role::Prominent,
+                Role::Filled,
             )
             .named("coloc.compute");
             items.push(if busy {
@@ -177,7 +177,7 @@ fn header<'a>(
             "coloc.export",
             Icon::Export,
             28.0,
-            Role::Quiet,
+            Role::SurfaceHigh,
             grana_i18n::coloc::export_csv(language),
             Message::Command(Command::ExportColoc),
         ));
@@ -187,9 +187,9 @@ fn header<'a>(
         let stored = result.pair();
         let label = format!("{} × {}", names[stored.a()], names[stored.b()]);
         let role = if stored == pair {
-            Role::Tinted
+            Role::Tonal
         } else {
-            Role::Quiet
+            Role::SurfaceHigh
         };
         items.push(
             view::button(ctx, &label, role)
@@ -203,7 +203,7 @@ fn header<'a>(
             "coloc.remove",
             Icon::Trash,
             28.0,
-            Role::Quiet,
+            Role::Standard,
             grana_i18n::coloc::remove_result(language),
             Message::Command(Command::RemoveColocResult(pair)),
         ));
@@ -237,7 +237,7 @@ fn thresholds<'a>(
         let label = if index == 0 { "M1" } else { "M2" };
         let current = if index == 0 { b } else { a };
         let theme = *ctx.theme();
-        let style = TextStyle::new(theme.font(Level::Monospace), theme.palette.text_primary)
+        let style = TextStyle::new(theme.font(Level::Monospace), theme.palette.on_surface)
             .aligned(Align::End);
         let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0, move |painter, info| {
             painter.text_in(info.rect, &format!("{value:.3}"), style, Align::Center);
@@ -263,15 +263,12 @@ fn thresholds<'a>(
             };
             Message::Command(Command::SetColocThresholds(thresholds))
         });
-        let dot = grana_ui::widget::color_swatch(*tint, 8.5);
+        let dot = grana_ui::widget::color_swatch(*tint, 10.0);
         rows.push(grana_ui::row().gap(6.0).align(Align::Center).children([
             dot,
             grana_ui::text(
                 label,
-                TextStyle::new(
-                    theme.font(Level::Caption).medium(),
-                    theme.palette.text_secondary,
-                ),
+                TextStyle::new(theme.font(Level::Label), theme.palette.on_surface_variant),
             ),
             slider,
             readout,
@@ -281,12 +278,12 @@ fn thresholds<'a>(
     let costes = series.costes();
     let channels = state.scene.dataset.channels();
     let mut buttons = vec![
-        view::button(ctx, "Otsu", Role::Control)
+        view::button(ctx, "Otsu", Role::SurfaceHigh)
             .press(Message::Command(Command::SetColocThresholds(otsu))),
     ];
     if let Some(range) = costes {
         buttons.push(
-            view::button(ctx, "Costes", Role::Control)
+            view::button(ctx, "Costes", Role::SurfaceHigh)
                 .press(Message::Command(Command::SetColocThresholds(range.high()))),
         );
     }
@@ -339,10 +336,10 @@ fn diagnostics<'a>(
         let palette = theme.palette;
         let caption_font = theme.font(Level::Caption);
         let mono_font = theme.font(Level::Monospace);
-        let micro_font = theme.font(Level::Micro);
-        let header_style = TextStyle::new(micro_font, palette.text_tertiary);
-        let caption_style = TextStyle::new(caption_font, palette.text_tertiary);
-        let value_style = TextStyle::new(mono_font, palette.text_secondary).aligned(Align::End);
+        let overline_font = theme.font(Level::Overline);
+        let header_style = TextStyle::new(overline_font, palette.outline);
+        let caption_style = TextStyle::new(caption_font, palette.on_surface_variant);
+        let value_style = TextStyle::new(mono_font, palette.on_surface).aligned(Align::End);
         let rows = 1 + usize::from(current.is_some());
         let height = 18.0 + 9.0 + rows as f32 * 20.0;
         let series_values = metrics_values(series);
@@ -378,7 +375,7 @@ fn diagnostics<'a>(
                     Vec2::new(info.rect.width(), 1.0),
                 ),
                 Corners::ZERO,
-                palette.separator,
+                palette.outline_variant.with_alpha(0.45),
             );
             let mut y = info.rect.min.y + 18.0 + 9.0;
             painter.text_in(
@@ -619,7 +616,7 @@ fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'
     let theme = *ctx.theme();
     grana_ui::text(
         text,
-        TextStyle::new(theme.label_font(), theme.palette.text_tertiary),
+        TextStyle::new(theme.label_font(), theme.palette.on_surface_variant),
     )
 }
 
@@ -634,11 +631,10 @@ fn combo<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label = labels.get(selected).cloned().unwrap_or_default();
-    let style =
-        TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
-    let rest = theme.surface(Role::Control, State::Rest);
-    let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
+    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
+    let rest = theme.surface(Role::Field, State::Rest);
+    let hover = theme.surface(Role::Field, State::Hover);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,
@@ -661,7 +657,7 @@ fn combo<'a>(
             Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
             5.0,
             std::f32::consts::FRAC_PI_2,
-            palette.text_tertiary,
+            palette.on_surface_variant,
             1.5,
         );
     })

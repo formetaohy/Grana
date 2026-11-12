@@ -27,7 +27,7 @@ pub fn paint(
 ) {
     let metrics = style.metrics;
     let palette = style.palette;
-    let accent = palette.accent;
+    let accent = palette.primary;
     let frame = metrics.frame(rect);
     let groups = distribution.groups();
     if groups.is_empty() {
@@ -47,10 +47,10 @@ pub fn paint(
         ((groups.len() as f32 * GROUP_LABEL / frame.width().max(1.0)).ceil() as usize).max(1);
     let width = (0.46 * slot_width(frame, groups.len())).clamp(6.0, 34.0);
     let gating = distribution.gated() < distribution.total();
-    let cold = TextStyle::new(metrics.caption, palette.text_tertiary)
+    let cold = TextStyle::new(metrics.caption, palette.outline)
         .aligned(Align::Center)
         .truncating();
-    let hot = TextStyle::new(metrics.caption, palette.text_primary)
+    let hot = TextStyle::new(metrics.caption, palette.on_surface)
         .aligned(Align::Center)
         .truncating();
     for (index, group) in groups.iter().enumerate() {
@@ -68,7 +68,7 @@ pub fn paint(
                     Vec2::new(centre + half, frame.max.y),
                 ),
                 Corners::ZERO,
-                palette.text_primary.with_alpha(0.035),
+                palette.on_surface.with_alpha(0.035),
             );
         }
         if gating {
@@ -140,7 +140,7 @@ pub fn paint(
         painter.outlined(
             Rect::from_center_size(centre, Vec2::splat(9.0)),
             Corners::capsule(),
-            Fill::Solid(palette.text_primary.with_alpha(0.10)),
+            Fill::Solid(palette.on_surface.with_alpha(0.10)),
             Border {
                 width: 1.3,
                 color: accent,
@@ -158,7 +158,7 @@ pub(crate) fn shape(
     slot: Slot,
     filled: bool,
 ) {
-    let accent = style.palette.accent;
+    let accent = style.palette.primary;
     match style.distribution {
         DistributionStyle::Box => box_shape(painter, style, series, y, slot, accent, filled),
         DistributionStyle::Violin => violin_shape(painter, series, y, slot, accent, filled),
@@ -232,7 +232,7 @@ fn box_shape(
         Corners::capsule(),
         style
             .palette
-            .text_primary
+            .on_surface
             .with_alpha(if filled { 0.78 } else { 0.32 }),
     );
     for (index, value) in series.outliers().iter().enumerate() {
@@ -348,5 +348,5 @@ fn violin_shape(
 }
 
 pub(crate) fn empty_style(style: &Style) -> TextStyle {
-    TextStyle::new(style.metrics.caption, style.palette.text_tertiary).aligned(Align::Center)
+    TextStyle::new(style.metrics.caption, style.palette.outline).aligned(Align::Center)
 }

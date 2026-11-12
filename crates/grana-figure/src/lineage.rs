@@ -80,7 +80,7 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
     let bottom = top + layout.len() as f32 * row;
     let left = MARGIN + LABEL;
     let right = size.x - MARGIN;
-    painter.rect(page, Corners::ZERO, palette.scene_backdrop);
+    painter.rect(page, Corners::ZERO, palette.surface_dim);
     let header = Rect::from_min_size(
         Vec2::new(MARGIN, 18.0),
         Vec2::new(size.x - 2.0 * MARGIN, 26.0),
@@ -88,7 +88,7 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
     painter.text_in(
         header,
         &format!("{} lineage", lineage.title),
-        TextStyle::new(TypeStyle::new(17.0, 600.0, 22.0), palette.text_primary).truncating(),
+        TextStyle::new(TypeStyle::new(17.0, 600.0, 22.0), palette.on_surface).truncating(),
         Align::Start,
     );
     painter.text_in(
@@ -102,7 +102,11 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
             lineage.set.divisions(),
             lineage.set.merges()
         ),
-        TextStyle::new(TypeStyle::new(10.0, 400.0, 13.0), palette.text_secondary).truncating(),
+        TextStyle::new(
+            TypeStyle::new(10.0, 400.0, 13.0),
+            palette.on_surface_variant,
+        )
+        .truncating(),
         Align::Start,
     );
     let x = |time: u32| {
@@ -120,14 +124,14 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
             ticks.push(time);
         }
     }
-    let label = TextStyle::new(TypeStyle::new(9.5, 500.0, 12.0), palette.text_tertiary);
+    let label = TextStyle::new(TypeStyle::new(9.5, 500.0, 12.0), palette.outline);
     for time in ticks {
         let column = x(time);
         painter.segment(
             Vec2::new(column, top - 8.0),
             Vec2::new(column, bottom),
             0.5,
-            palette.separator,
+            palette.outline_variant,
         );
         painter.text_in(
             Rect::from_min_size(Vec2::new(column - 32.0, top - AXIS), Vec2::new(64.0, AXIS)),
@@ -140,7 +144,7 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
         Vec2::new(left, bottom),
         Vec2::new(right, bottom),
         0.5,
-        palette.separator,
+        palette.outline_variant,
     );
     for (lane, index) in layout.order().iter().enumerate() {
         let Some(track) = lineage.set.track(*index) else {
@@ -217,12 +221,12 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
         UiVec2::new(current, top - 8.0),
         UiVec2::new(current, bottom),
         1.2,
-        palette.accent.with_alpha(0.85),
+        palette.primary.with_alpha(0.85),
     );
     painter.text_at(
         Vec2::new(MARGIN, size.y - FOOTER + 10.0),
         &format!("Grana · frame {} of {frames}", lineage.time.min(span) + 1),
-        TextStyle::new(TypeStyle::new(9.0, 400.0, 12.0), palette.text_quaternary),
+        TextStyle::new(TypeStyle::new(9.0, 400.0, 12.0), palette.outline),
     );
 }
 

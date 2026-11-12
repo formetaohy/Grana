@@ -33,8 +33,7 @@ pub(super) fn appearance_fields<'a>(
         &format!("object.{raw}.opacity"),
         Some(grana_i18n::object::opacity(language)),
         opacity,
-        0.0..=1.0,
-        false,
+        (0.0..=1.0, false),
         &readout,
         move |value| Command::SetObjectOpacity {
             set: id,
@@ -48,8 +47,7 @@ pub(super) fn appearance_fields<'a>(
         &format!("object.{raw}.roughness"),
         Some(grana_i18n::object::roughness(language)),
         material.roughness(),
-        0.0..=1.0,
-        false,
+        (0.0..=1.0, false),
         &roughness,
         move |value| Command::SetObjectMaterial {
             set: id,
@@ -62,8 +60,7 @@ pub(super) fn appearance_fields<'a>(
         &format!("object.{raw}.metallic"),
         Some(grana_i18n::object::metallic(language)),
         material.metallic(),
-        0.0..=1.0,
-        false,
+        (0.0..=1.0, false),
         &metallic,
         move |value| Command::SetObjectMaterial {
             set: id,
@@ -106,8 +103,12 @@ pub(super) fn appearance_fields<'a>(
                 view::caption(ctx, &grana_i18n::object::hidden_count(language, hidden)),
             ));
             row.push(
-                view::button(ctx, grana_i18n::object::show_all(language), Role::Quiet)
-                    .press(Message::Command(Command::ClearHidden(id))),
+                view::button(
+                    ctx,
+                    grana_i18n::object::show_all(language),
+                    Role::SurfaceHigh,
+                )
+                .press(Message::Command(Command::ClearHidden(id))),
             );
         }
         if let Some(object) = selected {
@@ -115,7 +116,7 @@ pub(super) fn appearance_fields<'a>(
                 view::button(
                     ctx,
                     grana_i18n::object::hide_selected(language),
-                    Role::Quiet,
+                    Role::SurfaceHigh,
                 )
                 .press(Message::Command(Command::SetObjectHidden {
                     set: id,

@@ -144,38 +144,67 @@ impl Motion {
         bounce: 0.0,
     };
 
-    pub fn response(seconds: f32, bounce: f32) -> Self {
-        Self {
-            duration: seconds.max(0.0),
-            bounce: bounce.clamp(-0.95, 0.95),
-        }
+    pub const fn response(seconds: f32, bounce: f32) -> Self {
+        let duration = if seconds > 0.0 { seconds } else { 0.0 };
+        let bounce = if bounce < -0.95 {
+            -0.95
+        } else if bounce > 0.95 {
+            0.95
+        } else {
+            bounce
+        };
+        Self { duration, bounce }
     }
 
-    pub fn snappy() -> Self {
-        Self::response(0.24, 0.04)
+    pub const fn spatial_fast() -> Self {
+        Self::response(0.20, 0.14)
     }
 
-    pub fn smooth() -> Self {
+    pub const fn spatial_default() -> Self {
+        Self::response(0.30, 0.12)
+    }
+
+    pub const fn spatial_slow() -> Self {
+        Self::response(0.42, 0.10)
+    }
+
+    pub const fn effect_fast() -> Self {
+        Self::response(0.12, 0.0)
+    }
+
+    pub const fn effect_default() -> Self {
+        Self::response(0.20, 0.0)
+    }
+
+    pub const fn effect_slow() -> Self {
         Self::response(0.32, 0.0)
     }
 
-    pub fn bouncy() -> Self {
-        Self::response(0.26, 0.12)
+    pub const fn snappy() -> Self {
+        Self::spatial_fast()
     }
 
-    pub fn quick() -> Self {
-        Self::response(0.14, 0.0)
+    pub const fn smooth() -> Self {
+        Self::spatial_default()
     }
 
-    pub fn reduced(self) -> Self {
+    pub const fn bouncy() -> Self {
+        Self::response(0.26, 0.18)
+    }
+
+    pub const fn quick() -> Self {
+        Self::effect_fast()
+    }
+
+    pub const fn reduced(self) -> Self {
         Self::response(self.duration, 0.0)
     }
 
-    pub fn spring(self) -> Spring {
+    pub const fn spring(self) -> Spring {
         Spring::new(self.duration, self.bounce)
     }
 
-    pub fn is_instant(self) -> bool {
+    pub const fn is_instant(self) -> bool {
         self.duration <= 0.0
     }
 }

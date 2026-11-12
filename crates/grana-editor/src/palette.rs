@@ -9,14 +9,14 @@ use crate::command::{Action, Group, Scope, Shortcut};
 use crate::message::Message;
 use crate::state::Workspace;
 
-const WIDTH: f32 = 540.0;
+const WIDTH: f32 = 560.0;
 const TOP: f32 = 84.0;
-const PADDING: f32 = 8.0;
-const FIELD: f32 = 36.0;
-const ROW: f32 = 28.0;
-const HEADER: f32 = 18.0;
-const FOOTER: f32 = 18.0;
-const DIVIDER: f32 = 7.0;
+const PADDING: f32 = 12.0;
+const FIELD: f32 = 40.0;
+const ROW: f32 = 32.0;
+const HEADER: f32 = 22.0;
+const FOOTER: f32 = 20.0;
+const DIVIDER: f32 = 8.0;
 pub(crate) const VISIBLE: usize = 9;
 
 pub struct Entry {
@@ -215,7 +215,8 @@ pub(crate) fn view<'a>(
     full: Rect,
     palette: &PaletteView,
 ) -> Vec<Element<'a, Message>> {
-    let palette_colors = ctx.theme().palette;
+    let theme = *ctx.theme();
+    let palette_colors = theme.palette;
     let width = WIDTH.min(full.width() - 48.0).max(320.0);
     let listed = palette.entries.len().min(VISIBLE);
     let window = &palette.entries[palette.start..palette.start + listed];
@@ -227,13 +228,17 @@ pub(crate) fn view<'a>(
             headers += 1;
         }
     }
-    let height =
-        2.0 * PADDING + FIELD + DIVIDER + ROW * listed as f32 + HEADER * headers as f32 + FOOTER;
+    let height = 2.0 * PADDING
+        + FIELD
+        + DIVIDER
+        + ROW * (listed.max(1)) as f32
+        + HEADER * headers as f32
+        + FOOTER;
     let rect = Rect::from_min_size(
         Vec2::new(full.center().x - 0.5 * width, full.min.y + TOP),
         Vec2::new(width, height),
     );
-    let backdrop = palette_colors.scene_backdrop.with_alpha(0.45);
+    let backdrop = palette_colors.scrim;
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
             painter.rect(info.rect, Corners::ZERO, backdrop);
@@ -243,21 +248,20 @@ pub(crate) fn view<'a>(
         .layer(Layer::Popup)
         .press(Message::ClosePalette),
     ];
-    let theme = *ctx.theme();
-    let field_style = TextStyle::new(theme.font(Level::Callout), theme.palette.text_primary);
-    let field = grana_ui::widget::text_field("", field_style, width - 2.0 * PADDING - 32.0, false)
+    let field_style = TextStyle::new(theme.font(Level::Body), theme.palette.on_surface);
+    let field = grana_ui::widget::text_field("", field_style, width - 2.0 * PADDING - 38.0, false)
         .key(Key::new("palette.field"))
         .editing(true)
         .on_commit(|_| Message::RunSelected)
         .on_cancel(|| Message::ClosePalette);
-    let search = grana_ui::canvas(Length::Fixed(22.0), 22.0, move |painter, info| {
+    let search = grana_ui::canvas(Length::Fixed(26.0), 26.0, move |painter, info| {
         grana_ui::icon::paint(
             Icon::Search,
             painter,
             info.rect.center(),
-            13.5,
-            theme.palette.text_tertiary,
-            1.5,
+            14.5,
+            theme.palette.primary,
+            1.6,
         );
     });
     let mut children = vec![
@@ -265,12 +269,7 @@ pub(crate) fn view<'a>(
             .gap(6.0)
             .align(Align::Center)
             .height(Length::Fixed(FIELD))
-            .padding(Edges {
-                left: 4.0,
-                right: 4.0,
-                top: 0.0,
-                bottom: 0.0,
-            })
+            .padding(Edges::symmetric(6.0, 0.0))
             .children([search, field]),
         divider(ctx),
     ];
@@ -293,7 +292,7 @@ pub(crate) fn view<'a>(
                 painter.text_in(
                     info.rect,
                     empty,
-                    TextStyle::new(theme.font(Level::Callout), theme.palette.text_tertiary),
+                    TextStyle::new(theme.font(Level::Body), theme.palette.outline),
                     Align::Center,
                 );
             })
@@ -301,7 +300,9 @@ pub(crate) fn view<'a>(
         );
     }
     children.push(footer(ctx));
-    let surface = theme.surface(Role::Popover, State::Rest);
+    let surface = theme
+        .surface(Role::Menu, State::Rest)
+        .with_corners(Corners::all(theme.metrics.corner_xxl));
     elements.push(
         grana_ui::column()
             .at(rect)
@@ -316,7 +317,7 @@ pub(crate) fn view<'a>(
 }
 
 fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let color = ctx.theme().palette.separator;
+    let color = ctx.theme().palette.outline_variant.with_alpha(0.5);
     grana_ui::canvas(Length::Fill, DIVIDER, move |painter, info| {
         painter.rect(
             Rect::from_min_size(
@@ -330,20 +331,18 @@ fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
 }
 
 fn group_header<'a>(ctx: &mut BuildContext<'_, Message>, group: Group) -> Element<'a, Message> {
-    let palette = ctx.theme().palette;
-    let font = grana_ui::TypeStyle {
-        tracking: 0.6,
-        ..grana_ui::TypeStyle::new(9.5, 600.0, 13.0)
-    };
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let font = theme.font(Level::Overline);
     let title = group.title(ctx.language()).to_uppercase();
     grana_ui::canvas(Length::Fill, HEADER, move |painter, info| {
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(info.rect.min.x + 8.0, info.rect.min.y),
+                Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),
                 info.rect.max,
             ),
             &title,
-            TextStyle::new(font, palette.text_quaternary),
+            TextStyle::new(font, palette.primary),
             Align::Center,
         );
     })
@@ -357,40 +356,48 @@ fn row<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let radius = theme.metrics.radius;
     let symbol = entry.symbol;
     let title = entry.title.clone();
     let shortcut = entry.shortcut.map(Shortcut::label);
-    let title_style = TextStyle::new(theme.font(Level::Callout), palette.text_primary);
-    let shortcut_style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
+    let title_style = TextStyle::new(
+        theme.font(Level::Label),
+        if selected {
+            palette.on_secondary_container
+        } else {
+            palette.on_surface
+        },
+    );
+    let shortcut_style = TextStyle::new(theme.font(Level::Monospace), palette.outline);
     grana_ui::canvas(Length::Fill, ROW, move |painter, info| {
         let rect = info.rect;
         let engaged = if selected { 1.0 } else { info.hover };
-        if engaged > 0.01 {
+        if selected {
+            painter.rect(rect, Corners::capsule(), palette.secondary_container);
+        } else if engaged > 0.01 {
             painter.rect(
                 rect,
-                Corners::all(radius),
-                if selected {
-                    palette.accent.with_alpha(0.22)
-                } else {
-                    palette.selected.amplify(0.8 * engaged)
-                },
+                Corners::all(theme.metrics.corner_sm),
+                palette.on_surface.with_alpha(0.08 * engaged),
             );
         }
         grana_ui::icon::paint(
             symbol,
             painter,
-            Vec2::new(rect.min.x + 14.0, rect.center().y),
-            12.5,
-            palette.text_secondary.lerp(palette.text_primary, engaged),
-            1.5,
+            Vec2::new(rect.min.x + 15.0, rect.center().y),
+            13.5,
+            if selected {
+                palette.on_secondary_container
+            } else {
+                palette.on_surface_variant.lerp(palette.on_surface, engaged)
+            },
+            1.6,
         );
         let shortcut_width = shortcut.as_ref().map_or(10.0, |label| {
-            16.0 + painter.measure(label, shortcut_style).x
+            24.0 + painter.measure(label, shortcut_style).x
         });
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.min.x + 28.0, rect.min.y),
+                Vec2::new(rect.min.x + 30.0, rect.min.y),
                 Vec2::new(rect.max.x - shortcut_width, rect.max.y),
             ),
             &title,
@@ -399,7 +406,7 @@ fn row<'a>(
         );
         if let Some(label) = &shortcut {
             painter.text_in(
-                rect.shrink2(Vec2::new(8.0, 0.0)),
+                rect.shrink2(Vec2::new(10.0, 0.0)),
                 label,
                 shortcut_style.aligned(Align::End),
                 Align::Center,
@@ -408,7 +415,7 @@ fn row<'a>(
     })
     .key(Key::index("palette.row", index))
     .press(Message::RunPaletteIndex(index))
-    .focus_ring(Corners::all(radius))
+    .focus_ring(Corners::capsule())
 }
 
 fn footer<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
@@ -418,11 +425,11 @@ fn footer<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     grana_ui::canvas(Length::Fill, FOOTER, move |painter, info| {
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(info.rect.min.x + 8.0, info.rect.min.y),
+                Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),
                 info.rect.max,
             ),
             hint,
-            TextStyle::new(font, palette.text_quaternary),
+            TextStyle::new(font, palette.outline),
             Align::Center,
         );
     })

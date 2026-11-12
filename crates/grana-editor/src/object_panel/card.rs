@@ -43,7 +43,7 @@ pub(super) fn header_row<'a>(
     let arrow = ctx.animate(
         Key::new(format!("object.{raw}.arrow")).id(),
         if expanded { 1.0 } else { 0.0 },
-        Motion::snappy(),
+        Motion::spatial_fast(),
     );
     let subtitle = match current {
         Some((count, _level)) => {
@@ -66,36 +66,25 @@ pub(super) fn header_row<'a>(
     } else {
         subtitle
     };
-    let name_style =
-        TextStyle::new(theme.font(Level::Body).medium(), palette.text_primary).truncating();
+    let name_style = TextStyle::new(theme.font(Level::Title), palette.on_surface).truncating();
     let subtitle_style =
-        TextStyle::new(TypeStyle::new(10.5, 400.0, 13.0), palette.text_tertiary).truncating();
+        TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).truncating();
     let toggle = move || Message::ExpandObject {
         set: id,
         open: !expanded,
     };
-    let body = grana_ui::canvas(Length::Fixed(40.0), HEADER, move |painter, info| {
+    let body = grana_ui::canvas(Length::Fixed(38.0), HEADER, move |painter, info| {
         let rect = info.rect;
         let tile = Rect::from_center_size(
-            Vec2::new(rect.min.x + 14.0, rect.center().y),
-            Vec2::splat(28.0),
+            Vec2::new(rect.min.x + 15.0, rect.center().y),
+            Vec2::splat(30.0),
         );
-        painter.rect(tile, Corners::all(6.0), tint.with_alpha(0.15));
-        painter.outlined(
-            tile,
-            Corners::all(6.0),
-            Fill::None,
-            Border {
-                width: 1.0,
-                color: tint.with_alpha(0.32),
-            },
-            Shadow::NONE,
-        );
-        icon::paint(kind_icon(kind), painter, tile.center(), 14.0, tint, 1.5);
+        painter.rect(tile, Corners::all(10.0), tint.with_alpha(0.20));
+        icon::paint(kind_icon(kind), painter, tile.center(), 15.0, tint, 1.6);
     })
     .key(Key::new(format!("object.{raw}.header.icon")))
     .press(toggle());
-    let text_width = width - 114.0;
+    let text_width = width - 122.0;
     let text = if editing {
         let current_name = name.clone();
         grana_ui::widget::text_field(&name, name_style, text_width, false)
@@ -140,8 +129,8 @@ pub(super) fn header_row<'a>(
         ctx,
         &format!("object.{raw}.visible"),
         if visible { Icon::Eye } else { Icon::EyeOff },
-        24.0,
-        Role::Quiet,
+        26.0,
+        if visible { Role::Tonal } else { Role::Standard },
         if visible {
             grana_i18n::object::hide_set(language)
         } else {
@@ -156,28 +145,41 @@ pub(super) fn header_row<'a>(
         ctx,
         &format!("object.{raw}.menu"),
         Icon::Ellipsis,
-        24.0,
-        Role::Quiet,
+        26.0,
+        Role::Standard,
         grana_i18n::object::object_commands(language),
         Message::Noop,
     );
-    let chevron = grana_ui::canvas(Length::Fixed(16.0), 24.0, move |painter, info| {
+    let chevron = grana_ui::canvas(Length::Fixed(22.0), 22.0, move |painter, info| {
+        painter.rect(
+            info.rect,
+            Corners::capsule(),
+            if expanded {
+                palette.secondary_container
+            } else {
+                palette.surface_container_high
+            },
+        );
         icon::chevron(
             painter,
             info.rect.center(),
             8.0,
             std::f32::consts::FRAC_PI_2 * arrow,
-            palette.text_tertiary,
-            1.5,
+            if expanded {
+                palette.on_secondary_container
+            } else {
+                palette.on_surface_variant
+            },
+            1.6,
         );
     })
     .key(Key::new(format!("object.{raw}.arrow.anchor")))
     .press(toggle())
-    .focus_ring(Corners::all(6.0))
+    .focus_ring(Corners::capsule())
     .cursor(grana_ui::Cursor::Pointing);
     let rows = object_menu(ctx, state, id, position, sets);
-    let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 188.0, rows);
-    let gap = grana_ui::canvas(Length::Fixed(6.0), 0.0, |_painter, _info| {});
+    let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 192.0, rows);
+    let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0, |_painter, _info| {});
     let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
     let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
     let row = grana_ui::row()

@@ -18,7 +18,7 @@ const CELL: f32 = 20.0;
 const MINIMUM_CELL: f32 = 12.0;
 const GUTTER: f32 = 38.0;
 const HEADER: f32 = 18.0;
-const ROW_HEIGHT: f32 = 22.0;
+const ROW_HEIGHT: f32 = 24.0;
 const ROW_LIMIT: usize = 48;
 const COLUMN_LIMIT: usize = 72;
 const PAIR_LIMIT: usize = 40;
@@ -144,9 +144,9 @@ fn header<'a>(
     let mut buttons = Vec::with_capacity(choices.len());
     for (index, choice) in choices.iter().copied().enumerate() {
         let role = if index == selected {
-            Role::Tinted
+            Role::Tonal
         } else {
-            Role::Control
+            Role::SurfaceHigh
         };
         let running = view::progress(
             state.jobs,
@@ -209,7 +209,7 @@ fn header<'a>(
     let export = view::button(
         ctx,
         grana_i18n::relation::export_pairs(language),
-        Role::Control,
+        Role::SurfaceHigh,
     )
     .press(Message::Command(Command::ExportRelation {
         source: choice.source,
@@ -436,8 +436,8 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
     let cell = matrix.cell;
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let style =
-        TextStyle::new(theme.font(Level::Micro), palette.text_tertiary).aligned(Align::Center);
+    let style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
+        .aligned(Align::Center);
     let step = ((24.0 / cell).ceil() as usize).max(1);
     let mut labels = Vec::with_capacity(matrix.columns.len());
     for (index, column) in matrix.columns.iter().copied().enumerate() {
@@ -458,7 +458,7 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
             .press(Message::Command(Command::Select(Some(selection)))),
         );
     }
-    let gutter_style = TextStyle::new(theme.font(Level::Micro), palette.text_quaternary);
+    let gutter_style = TextStyle::new(theme.font(Level::Caption), palette.outline);
     let source_target = grana_i18n::relation::source_target(ctx.language());
     let gutter = grana_ui::canvas(Length::Fixed(GUTTER), HEADER, move |painter, info| {
         painter.text_in(info.rect, source_target, gutter_style, Align::Center);
@@ -473,7 +473,7 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label_style =
-        TextStyle::new(theme.font(Level::Micro), palette.text_tertiary).aligned(Align::End);
+        TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).aligned(Align::End);
     let mut gutter = Vec::with_capacity(matrix.rows.len());
     for (index, row) in matrix.rows.iter().copied().enumerate() {
         let text = (row + 1).to_string();
@@ -499,7 +499,7 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
     let cells = matrix.cells.clone();
     let width = (columns as f32 * cell).max(1.0);
     let height = (rows as f32 * cell).max(1.0);
-    let grid = palette.separator;
+    let grid = palette.surface_container_highest;
     let canvas = grana_ui::canvas(Length::Fixed(width), height, move |painter, info| {
         for row in 0..rows {
             for column in 0..columns {
@@ -513,9 +513,9 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
                 .shrink(0.5);
                 let color = match cells.get(&(row, column)) {
                     Some(strength) => heat(*strength),
-                    None => grid.with_alpha(0.18),
+                    None => grid,
                 };
-                painter.rect(rect, Corners::all(2.0), color);
+                painter.rect(rect, Corners::all(3.0), color);
             }
         }
     });
@@ -536,7 +536,7 @@ fn legend<'a>(
     let language = ctx.language();
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let caption = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
+    let caption = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant);
     let low = metric.format(matrix.minimum);
     let high = metric.format(matrix.maximum);
     let label = if matrix.maximum <= matrix.minimum {
@@ -608,9 +608,9 @@ fn pairs_card<'a>(
         let text = format!("#{} → #{}", pair.source + 1, pair.target + 1);
         let value = metric.format(pair.value);
         let strength = pair.strength;
-        let body = TextStyle::new(theme.font(Level::Callout), palette.text_secondary);
+        let body = TextStyle::new(theme.font(Level::Label), palette.on_surface_variant);
         let number =
-            TextStyle::new(theme.font(Level::Monospace), palette.text_primary).aligned(Align::End);
+            TextStyle::new(theme.font(Level::Monospace), palette.on_surface).aligned(Align::End);
         let message = Message::SelectPair {
             source: matrix.source,
             target: matrix.target,
@@ -621,15 +621,15 @@ fn pairs_card<'a>(
                 if info.hover > 0.01 {
                     painter.rect(
                         info.rect,
-                        Corners::all(6.0),
-                        palette.material_hover.amplify(info.hover),
+                        Corners::all(theme.metrics.corner_sm),
+                        palette.on_surface.with_alpha(0.08 * info.hover),
                     );
                 }
                 let swatch = Rect::from_min_size(
-                    Vec2::new(info.rect.min.x + 4.0, info.rect.center().y - 4.0),
-                    Vec2::splat(8.0),
+                    Vec2::new(info.rect.min.x + 4.0, info.rect.center().y - 4.5),
+                    Vec2::splat(9.0),
                 );
-                painter.rect(swatch, Corners::all(2.0), heat(strength));
+                painter.rect(swatch, Corners::capsule(), heat(strength));
                 painter.text_in(
                     Rect::from_min_size(
                         Vec2::new(info.rect.min.x + 20.0, info.rect.min.y),

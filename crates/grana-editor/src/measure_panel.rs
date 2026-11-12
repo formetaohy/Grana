@@ -12,10 +12,10 @@ use crate::message::Message;
 use crate::state::{DistributionStyle, View};
 use crate::view;
 
-const ROW_HEIGHT: f32 = 26.0;
-const HEADER_HEIGHT: f32 = 30.0;
+const ROW_HEIGHT: f32 = 28.0;
+const HEADER_HEIGHT: f32 = 32.0;
 const MIN_COLUMN_WIDTH: f32 = 58.0;
-const TOOLBAR_HEIGHT: f32 = 30.0;
+const TOOLBAR_HEIGHT: f32 = 32.0;
 
 pub fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -46,14 +46,14 @@ pub fn view<'a>(
     let mode = state.measure.view();
     if measured && mode != MeasureView::Table && mode.columned() {
         let bar = Rect::from_min_size(
-            Vec2::new(rect.min.x, top + 4.0),
-            Vec2::new(rect.width(), 28.0),
+            Vec2::new(rect.min.x, top + 6.0),
+            Vec2::new(rect.width(), 30.0),
         );
         elements.extend(plot_bar(ctx, state, bar));
-        top += 32.0;
+        top += 36.0;
     }
     elements.extend(filters(ctx, state, rect, &mut top));
-    top += 6.0;
+    top += 8.0;
     let body = Rect::from_min_max(Vec2::new(rect.min.x, top), rect.max);
     if measured && mode != MeasureView::Table {
         elements.extend(crate::plot::view(ctx, state, body));
@@ -107,7 +107,7 @@ fn toolbar<'a>(
         combo(
             ctx,
             "measure.set",
-            140.0,
+            148.0,
             selected,
             &sets
                 .iter()
@@ -156,7 +156,7 @@ fn toolbar<'a>(
         items.push(combo(
             ctx,
             "measure.aggregate",
-            96.0,
+            98.0,
             aggregate_index,
             &labels,
             move |index| match Aggregate::ALL.get(index) {
@@ -213,13 +213,15 @@ fn toolbar<'a>(
     };
     let caption_style = TextStyle::new(
         ctx.theme().font(Level::Caption),
-        ctx.theme().palette.text_tertiary,
+        ctx.theme().palette.on_surface_variant,
     );
     let caption_width = ctx.measure(&caption, caption_style).x;
     let measured = state.measure.table().is_some();
-    let view_label_style =
-        TextStyle::new(ctx.theme().label_font(), ctx.theme().palette.text_tertiary);
-    let view_width = if measured { 132.0 } else { 0.0 };
+    let view_label_style = TextStyle::new(
+        ctx.theme().label_font(),
+        ctx.theme().palette.on_surface_variant,
+    );
+    let view_width = if measured { 136.0 } else { 0.0 };
     let view_label_width = if measured {
         ctx.measure(grana_i18n::measure::view(language), view_label_style)
             .x
@@ -228,9 +230,10 @@ fn toolbar<'a>(
         0.0
     };
     let chart = measured && mode != MeasureView::Table;
-    let icons = if chart { 4.0 } else { 3.0 };
-    let right_width =
-        view_label_width + view_width + caption_width + icons * 28.0 + (icons + 1.0) * 8.0 + 4.0;
+    let icon_count = if chart { 4usize } else { 3usize };
+    let group_gap = ctx.theme().metrics.group_gap;
+    let icons_width = icon_count as f32 * 30.0 + (icon_count.saturating_sub(1)) as f32 * group_gap;
+    let right_width = view_label_width + view_width + caption_width + icons_width + 24.0;
     let right = Rect::from_min_size(
         Vec2::new((row.max.x - right_width).max(row.min.x), row.min.y),
         Vec2::new(right_width.min(row.width()), TOOLBAR_HEIGHT),
@@ -245,7 +248,7 @@ fn toolbar<'a>(
         right_items.push(combo(
             ctx,
             "measure.view",
-            132.0,
+            136.0,
             index,
             &labels,
             move |index| match MeasureView::ALL.get(index) {
@@ -255,44 +258,88 @@ fn toolbar<'a>(
         ));
     }
     right_items.push(view::caption(ctx, &caption));
-    right_items.push(view::icon_button(
-        ctx,
-        "measure.filter",
-        Icon::Filter,
-        28.0,
-        Role::Quiet,
-        grana_i18n::measure::add_filter(language),
-        Message::Command(Command::AddFilter),
-    ));
-    right_items.push(view::icon_button(
-        ctx,
-        "measure.columns",
-        Icon::Columns,
-        28.0,
-        Role::Quiet,
-        grana_i18n::measure::choose_columns(language),
-        Message::Noop,
-    ));
-    right_items.push(view::icon_button(
-        ctx,
-        "measure.export",
-        Icon::Export,
-        28.0,
-        Role::Quiet,
-        grana_i18n::measure::export_csv(language),
-        Message::Command(Command::ExportMeasure),
-    ));
-    if chart {
-        right_items.push(view::icon_button(
+    let inner = ctx.theme().metrics.corner_xs;
+    let mut icon_group = Vec::with_capacity(icon_count);
+    icon_group.push(
+        view::icon_button(
             ctx,
-            "measure.chart",
-            Icon::Chart,
-            28.0,
-            Role::Quiet,
-            grana_i18n::measure::export_plot(language),
-            Message::Command(Command::SaveChart),
-        ));
+            "measure.filter",
+            Icon::Filter,
+            30.0,
+            Role::SurfaceHigh,
+            grana_i18n::measure::add_filter(language),
+            Message::Command(Command::AddFilter),
+        )
+        .shaped(Corners::group_horizontal(
+            0,
+            icon_count,
+            Corners::CAPSULE,
+            inner,
+            false,
+        )),
+    );
+    icon_group.push(
+        view::icon_button(
+            ctx,
+            "measure.columns",
+            Icon::Columns,
+            30.0,
+            Role::SurfaceHigh,
+            grana_i18n::measure::choose_columns(language),
+            Message::Noop,
+        )
+        .shaped(Corners::group_horizontal(
+            1,
+            icon_count,
+            Corners::CAPSULE,
+            inner,
+            false,
+        )),
+    );
+    icon_group.push(
+        view::icon_button(
+            ctx,
+            "measure.export",
+            Icon::Export,
+            30.0,
+            Role::SurfaceHigh,
+            grana_i18n::measure::export_csv(language),
+            Message::Command(Command::ExportMeasure),
+        )
+        .shaped(Corners::group_horizontal(
+            2,
+            icon_count,
+            Corners::CAPSULE,
+            inner,
+            false,
+        )),
+    );
+    if chart {
+        icon_group.push(
+            view::icon_button(
+                ctx,
+                "measure.chart",
+                Icon::Chart,
+                30.0,
+                Role::PrimaryContainer,
+                grana_i18n::measure::export_plot(language),
+                Message::Command(Command::SaveChart),
+            )
+            .shaped(Corners::group_horizontal(
+                3,
+                icon_count,
+                Corners::CAPSULE,
+                inner,
+                false,
+            )),
+        );
     }
+    right_items.push(
+        grana_ui::row()
+            .gap(group_gap)
+            .align(Align::Center)
+            .children(icon_group),
+    );
     let right_row = grana_ui::row()
         .gap(8.0)
         .align(Align::Center)
@@ -469,8 +516,12 @@ fn plot_bar<'a>(
     }
     if gated {
         items.push(
-            view::button(ctx, grana_i18n::measure::clear_gate(language), Role::Quiet)
-                .press(Message::ClearGates),
+            view::button(
+                ctx,
+                grana_i18n::measure::clear_gate(language),
+                Role::SurfaceHigh,
+            )
+            .press(Message::ClearGates),
         );
     }
     vec![
@@ -498,7 +549,7 @@ fn filters<'a>(
     if filtered || state.measure.lasso().is_some() {
         let row = Rect::from_min_size(
             Vec2::new(rect.min.x, *top + 4.0),
-            Vec2::new(rect.width(), 28.0),
+            Vec2::new(rect.width(), 30.0),
         );
         let theme = *ctx.theme();
         let visibility = state.measure.visibility();
@@ -513,13 +564,13 @@ fn filters<'a>(
             view::button(
                 ctx,
                 grana_i18n::measure::extract_filtered(language),
-                Role::Tinted,
+                Role::TertiaryContainer,
             )
             .press(Message::Command(Command::ExtractFiltered)),
             view::button(
                 ctx,
                 grana_i18n::measure::delete_excluded(language),
-                Role::Danger,
+                Role::Error,
             )
             .press(Message::Command(Command::DeleteFiltered)),
         ];
@@ -533,7 +584,7 @@ fn filters<'a>(
                 .at(row)
                 .children(items),
         );
-        *top += 32.0;
+        *top += 34.0;
     }
     let options = table
         .columns()
@@ -546,22 +597,29 @@ fn filters<'a>(
         .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let surface = ctx.theme().surface(Role::Card, State::Rest);
+    let count = filters.len();
     for (index, filter) in filters.iter().enumerate() {
         let card = Rect::from_min_size(
             Vec2::new(rect.min.x, *top + 4.0),
-            Vec2::new(rect.width(), 36.0),
+            Vec2::new(rect.width(), 38.0),
         );
         let remove = Rect::from_center_size(
             Vec2::new(card.max.x - 22.0, card.center().y),
-            Vec2::splat(22.0),
+            Vec2::splat(24.0),
         );
         let controls = Rect::from_min_max(
-            Vec2::new(card.min.x + 10.0, card.min.y + 4.0),
+            Vec2::new(card.min.x + 12.0, card.min.y + 4.0),
             Vec2::new(remove.min.x - 8.0, card.max.y - 4.0),
         );
         let theme = *ctx.theme();
         let mut surface = surface;
-        surface.corners = Corners::all(theme.metrics.card_radius);
+        surface.corners = Corners::group_vertical(
+            index,
+            count,
+            theme.metrics.corner_lg,
+            theme.metrics.corner_xs,
+            false,
+        );
         elements.push(grana_ui::column().at(card).background(surface));
         let selected = options
             .iter()
@@ -629,8 +687,8 @@ fn filters<'a>(
                 ctx,
                 &remove_key,
                 Icon::Close,
-                22.0,
-                Role::Quiet,
+                24.0,
+                Role::Standard,
                 grana_i18n::measure::remove_filter(language),
                 Message::Command(Command::RemoveFilter(index)),
             )
@@ -720,27 +778,17 @@ fn table<'a>(
     let theme = *ctx.theme();
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
-            painter.outlined(
-                info.rect,
-                surface.corners,
-                surface.fill,
-                surface.border,
-                surface.shadow,
-            );
+            painter.surface(info.rect, surface);
         })
         .at(rect),
     ];
     let band = Rect::from_min_size(rect.min, Vec2::new(total, HEADER_HEIGHT));
     elements.push(
         grana_ui::canvas(Length::Fill, HEADER_HEIGHT, move |painter, info| {
-            painter.rect(info.rect, Corners::top(16.0), Color::white_alpha(0.025));
             painter.rect(
-                Rect::from_min_size(
-                    Vec2::new(info.rect.min.x, info.rect.max.y - 1.0),
-                    Vec2::new(info.rect.width(), 1.0),
-                ),
-                Corners::ZERO,
-                palette.border,
+                info.rect,
+                Corners::top(theme.metrics.corner_lg),
+                palette.surface_container_high,
             );
         })
         .at(band),
@@ -756,16 +804,16 @@ fn table<'a>(
             .map(|(_, descending)| descending);
         let label = view::column_label(language, column);
         let style = TextStyle::new(
-            theme.label_font(),
+            theme.font(Level::Caption).semibold(),
             if sorted.is_some() {
-                palette.text_primary
+                palette.primary
             } else {
-                palette.text_tertiary
+                palette.on_surface_variant
             },
         )
         .aligned(Align::End)
         .truncating();
-        let icon_color = palette.text_secondary;
+        let icon_color = palette.primary;
         let arrow = match sorted {
             Some(true) => Some(Icon::ChevronDown),
             Some(false) => Some(Icon::ChevronUp),
@@ -775,16 +823,16 @@ fn table<'a>(
             grana_ui::canvas(Length::Fixed(width), HEADER_HEIGHT, move |painter, info| {
                 if info.hover > 0.01 {
                     painter.rect(
-                        info.rect,
-                        Corners::ZERO,
-                        palette.material_hover.with_alpha(0.55 * info.hover),
+                        info.rect.shrink(2.0),
+                        Corners::all(theme.metrics.corner_xs),
+                        palette.on_surface.with_alpha(0.08 * info.hover),
                     );
                 }
                 painter.text_in(
                     Rect::from_min_max(
                         info.rect.min + Vec2::new(8.0, 0.0),
                         Vec2::new(
-                            info.rect.max.x - arrow.map_or(8.0, |_| 16.0),
+                            info.rect.max.x - arrow.map_or(8.0, |_| 18.0),
                             info.rect.max.y,
                         ),
                     ),
@@ -796,10 +844,10 @@ fn table<'a>(
                     icon::paint(
                         arrow,
                         painter,
-                        Vec2::new(info.rect.max.x - 9.0, info.rect.center().y),
-                        9.0,
+                        Vec2::new(info.rect.max.x - 10.0, info.rect.center().y),
+                        9.5,
                         icon_color,
-                        1.4,
+                        1.5,
                     );
                 }
             })
@@ -843,12 +891,9 @@ fn table<'a>(
     let rows = state.measure.rows();
     let time = state.scene.time();
     let selection = state.scene.selection();
-    let accent = palette.accent;
     let font = theme.font(Level::Monospace);
-    let text_primary = palette.text_primary;
-    let text_secondary = palette.text_secondary;
-    let separator = palette.separator;
-    let hover = palette.material_hover;
+    let on_selected = palette.on_secondary_container;
+    let on_row = palette.on_surface;
     let mut children = vec![grana_ui::canvas(
         Length::Fill,
         content,
@@ -864,23 +909,18 @@ fn table<'a>(
                     Vec2::new(total, ROW_HEIGHT),
                 );
                 if selected {
-                    painter.rect(row_rect, Corners::ZERO, accent.with_alpha(0.16));
                     painter.rect(
-                        Rect::from_min_size(row_rect.min, Vec2::new(2.5, row_rect.height())),
-                        Corners::ZERO,
-                        accent,
+                        row_rect.shrink2(Vec2::new(4.0, 1.0)),
+                        Corners::all(8.0),
+                        palette.secondary_container,
                     );
                 } else if row % 2 == 1 {
-                    painter.rect(row_rect, Corners::ZERO, Color::white_alpha(0.015));
+                    painter.rect(
+                        row_rect.shrink2(Vec2::new(4.0, 1.0)),
+                        Corners::all(4.0),
+                        Color::white_alpha(0.02),
+                    );
                 }
-                painter.rect(
-                    Rect::from_min_size(
-                        Vec2::new(row_rect.min.x, row_rect.max.y - 1.0),
-                        Vec2::new(row_rect.width(), 1.0),
-                    ),
-                    Corners::ZERO,
-                    separator,
-                );
                 let mut left = row_rect.min.x;
                 for ((column_index, column), width) in columns.iter().zip(widths.iter()) {
                     let cell = Rect::from_min_size(
@@ -890,15 +930,8 @@ fn table<'a>(
                     painter.text_in(
                         cell.shrink2(Vec2::new(8.0, 0.0)),
                         &column.format(table.value(index, *column_index)),
-                        TextStyle::new(
-                            font,
-                            if selected {
-                                text_primary
-                            } else {
-                                text_secondary
-                            },
-                        )
-                        .aligned(Align::End),
+                        TextStyle::new(font, if selected { on_selected } else { on_row })
+                            .aligned(Align::End),
                         Align::Center,
                     );
                     left += *width;
@@ -915,9 +948,9 @@ fn table<'a>(
             grana_ui::canvas(Length::Fill, ROW_HEIGHT, move |painter, info| {
                 if info.hover > 0.01 {
                     painter.rect(
-                        info.rect,
-                        Corners::ZERO,
-                        hover.with_alpha(0.65 * info.hover),
+                        info.rect.shrink2(Vec2::new(4.0, 1.0)),
+                        Corners::all(8.0),
+                        palette.on_surface.with_alpha(0.07 * info.hover),
                     );
                 }
             })
@@ -974,7 +1007,7 @@ fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'
     let theme = *ctx.theme();
     grana_ui::text(
         text,
-        TextStyle::new(theme.label_font(), theme.palette.text_tertiary),
+        TextStyle::new(theme.label_font(), theme.palette.on_surface_variant),
     )
 }
 
@@ -1025,11 +1058,10 @@ fn combo<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label = labels.get(selected).cloned().unwrap_or_default();
-    let style =
-        TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
-    let rest = theme.surface(Role::Control, State::Rest);
-    let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
+    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
+    let rest = theme.surface(Role::Field, State::Rest);
+    let hover = theme.surface(Role::Field, State::Hover);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,
@@ -1052,7 +1084,7 @@ fn combo<'a>(
             Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
             5.0,
             std::f32::consts::FRAC_PI_2,
-            palette.text_tertiary,
+            palette.on_surface_variant,
             1.5,
         );
     })

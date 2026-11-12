@@ -65,7 +65,7 @@ pub fn range_slider<'a, A>(
     gradient: &[Color],
 ) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(26.0)),
+        size: Size::new(Length::Fill, Length::Fixed(28.0)),
         ..Layout::row()
     })
     .with_content(Content::RangeSlider(RangeSliderContent {
@@ -80,7 +80,7 @@ pub fn range_slider<'a, A>(
 pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(
-            Length::Fixed(64.0),
+            Length::Fixed(68.0),
             Length::Fixed(theme.metrics.control_height),
         ),
         ..Layout::row()
@@ -89,13 +89,13 @@ pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<
         value,
         decimals,
         font: theme.font(Level::Monospace),
-        width: 64.0,
+        width: 68.0,
     }))
 }
 
 pub fn progress<'a, A>(fraction: f32, width: f32) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fixed(width), Length::Fixed(4.0)),
+        size: Size::new(Length::Fixed(width), Length::Fixed(10.0)),
         ..Layout::row()
     })
     .with_content(Content::Progress(ProgressContent { fraction, width }))
@@ -109,7 +109,7 @@ pub fn gradient_bar<'a, A>(colors: &[Color], height: f32) -> Element<'a, A> {
     .with_content(Content::GradientBar(GradientBarContent {
         colors: colors.to_vec(),
         height,
-        radius: Corners::all(4.0),
+        radius: Corners::all(height * 0.5),
     }))
 }
 
@@ -130,7 +130,7 @@ pub(super) fn measure_range(range: &RangeSliderContent, available: Vec2) -> Vec2
         Length::Minimum(minimum) => minimum.max(available.x),
         Length::Maximum(maximum) => maximum.min(available.x),
     };
-    Vec2::new(width, 26.0)
+    Vec2::new(width, 28.0)
 }
 
 pub(super) fn measure_drag(drag: &DragValueContent, theme: &Theme) -> Vec2 {
@@ -144,14 +144,14 @@ pub(crate) fn track(
     theme: &Theme,
 ) -> Rect {
     let label_width = slider.label.as_ref().map_or(0.0, |label| {
-        let style = TextStyle::new(theme.label_font(), theme.palette.text_tertiary);
+        let style = TextStyle::new(theme.label_font(), theme.palette.on_surface_variant);
         text.layout(label, style.font, 0.0, false, false, Align::Start)
             .size
             .x
             .clamp(58.0, 92.0)
             + 8.0
     });
-    let readout_width = if slider.readout.is_some() { 56.0 } else { 0.0 };
+    let readout_width = if slider.readout.is_some() { 58.0 } else { 0.0 };
     Rect::from_min_max(
         Vec2::new(rect.min.x + label_width, rect.center().y - 12.0),
         Vec2::new(rect.max.x - readout_width, rect.center().y + 12.0),
@@ -258,9 +258,9 @@ pub(crate) fn value_slider<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, 
         return None;
     };
     let motion = if pressed {
-        Motion::response(0.12, 0.0)
+        Motion::response(0.10, 0.0)
     } else {
-        Motion::snappy()
+        Motion::spatial_fast()
     };
     let target = if pressed {
         node.runtime.drag_value
@@ -275,9 +275,9 @@ pub(crate) fn value_range<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, (
         return None;
     };
     let motion = if pressed {
-        Motion::response(0.12, 0.0)
+        Motion::response(0.10, 0.0)
     } else {
-        Motion::snappy()
+        Motion::spatial_fast()
     };
     let target = if pressed {
         (node.runtime.drag_value, node.runtime.drag_extent)
@@ -296,24 +296,27 @@ pub(super) fn paint_slider(
     let theme = info.theme;
     let palette = theme.palette;
     let metrics = theme.metrics;
-    let caption = TextStyle::new(theme.label_font(), palette.text_tertiary);
+    let caption = TextStyle::new(theme.label_font(), palette.on_surface_variant);
     let label_width = slider.label.as_ref().map_or(0.0, |label| {
         painter.measure(label, caption).x.clamp(58.0, 92.0) + 8.0
     });
-    let readout_width = if slider.readout.is_some() { 56.0 } else { 0.0 };
+    let readout_width = if slider.readout.is_some() { 58.0 } else { 0.0 };
     let rect = info.rect;
     let hit = Rect::from_min_max(
         Vec2::new(rect.min.x + label_width, rect.center().y - 12.0),
         Vec2::new(rect.max.x - readout_width, rect.center().y + 12.0),
     );
-    let bar = Rect::from_center_size(hit.center(), Vec2::new(hit.width(), metrics.track));
+    let track_h = metrics.slider_track;
+    let bar = Rect::from_center_size(hit.center(), Vec2::new(hit.width(), track_h));
     let position = runtime.value.value.clamp(0.0, 1.0);
     let engaged = info.engaged;
     let center = Vec2::new(bar.min.x + bar.width() * position, bar.center().y);
-    let knob_size = Vec2::new(11.0 + engaged * 1.5, 15.0 + engaged * 1.5);
-    let knob_rect = Rect::from_center_size(center, knob_size);
-    let fill_end = center.x.clamp(bar.min.x, bar.max.x);
-    let filled = Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y));
+    let handle_w = metrics.slider_handle_width + engaged * 1.2;
+    let handle_h = metrics.slider_handle_height + engaged * 2.5;
+    let handle_rect = Rect::from_center_size(center, Vec2::new(handle_w, handle_h));
+    let gap = metrics.slider_gap;
+    let outer_r = track_h * 0.5;
+    let inner_r = 2.0;
     if let Some(label) = &slider.label {
         painter.text_in(
             Rect::from_min_max(
@@ -325,20 +328,30 @@ pub(super) fn paint_slider(
             Align::Center,
         );
     }
-    painter.rect(
-        bar,
-        Corners::all(2.0),
-        palette
-            .track
-            .with_alpha(palette.track.alpha * (0.85 + 0.3 * engaged)),
-    );
-    if filled.width() > 0.0 {
-        painter.gradient(
-            filled,
-            Corners::all(2.0),
-            palette.accent_hover,
-            palette.accent,
+    let active_end = (center.x - gap).clamp(bar.min.x, bar.max.x);
+    if active_end > bar.min.x + 1.0 {
+        let active_rect = Rect::from_min_max(bar.min, Vec2::new(active_end, bar.max.y));
+        painter.rect(
+            active_rect,
+            Corners::left(outer_r, inner_r),
+            palette.primary,
         );
+    }
+    let inactive_start = (center.x + gap).clamp(bar.min.x, bar.max.x);
+    if bar.max.x > inactive_start + 1.0 {
+        let inactive_rect = Rect::from_min_max(Vec2::new(inactive_start, bar.min.y), bar.max);
+        painter.rect(
+            inactive_rect,
+            Corners::right(outer_r, inner_r),
+            palette.surface_container_highest,
+        );
+        if inactive_rect.width() > 8.0 {
+            let stop = Rect::from_center_size(
+                Vec2::new(bar.max.x - 5.0, bar.center().y),
+                Vec2::splat(4.0),
+            );
+            painter.rect(stop, Corners::capsule(), palette.primary);
+        }
     }
     if let Some(readout) = &slider.readout {
         painter.text_in(
@@ -347,24 +360,18 @@ pub(super) fn paint_slider(
                 rect.max,
             ),
             readout,
-            TextStyle::new(theme.font(Level::Monospace), palette.text_secondary)
-                .aligned(Align::End),
+            TextStyle::new(theme.font(Level::Monospace), palette.on_surface).aligned(Align::End),
             Align::Center,
         );
     }
-    painter.outlined(
-        knob_rect,
-        Corners::all(3.5),
-        Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
-        Border {
-            width: 1.0,
-            color: if info.press > 0.5 {
-                palette.accent
-            } else {
-                Color::white_alpha(0.9)
-            },
+    painter.rect(
+        handle_rect,
+        Corners::capsule(),
+        if info.press > 0.5 {
+            palette.primary.lerp(Color::WHITE, 0.25)
+        } else {
+            palette.primary
         },
-        Shadow::new(Color::black_alpha(0.45), 4.0, 1.0),
     );
 }
 
@@ -377,79 +384,84 @@ pub(super) fn paint_range(
     let palette = info.theme.palette;
     let rect = info.rect;
     let bar = Rect::from_min_max(
-        Vec2::new(rect.min.x + 6.0, rect.center().y - 4.0),
-        Vec2::new(rect.max.x - 6.0, rect.center().y + 4.0),
+        Vec2::new(rect.min.x + 4.0, rect.center().y - 8.0),
+        Vec2::new(rect.max.x - 4.0, rect.center().y + 8.0),
     );
     let low_t = runtime.value.value.clamp(0.0, 1.0);
     let high_t = runtime.extent.value.clamp(0.0, 1.0);
     let low_x = bar.min.x + bar.width() * low_t;
     let high_x = bar.min.x + bar.width() * high_t;
     let engaged = info.engaged;
-    painter.outlined(
-        bar,
-        Corners::all(3.0),
-        Fill::Solid(palette.field),
-        Border {
-            width: 1.0,
-            color: palette.material_border,
-        },
-        Shadow::NONE,
-    );
-    if range.gradient.len() > 1 {
-        let clip = painter.clip();
-        painter.push_clip(bar, Corners::all(3.0));
-        let segments = range.gradient.len() - 1;
-        for (index, color) in range.gradient.iter().take(segments).enumerate() {
-            let left = bar.min.x + bar.width() * index as f32 / segments as f32;
-            let right = bar.min.x + bar.width() * (index + 1) as f32 / segments as f32;
-            painter.rect(
-                Rect::from_min_max(
-                    Vec2::new(left, bar.min.y),
-                    Vec2::new(right + 0.6, bar.max.y),
-                ),
-                Corners::ZERO,
-                *color,
-            );
-        }
-        painter.pop_clip(clip);
-    }
-    let shade = palette.shade.amplify(0.65);
-    painter.rect(
-        Rect::from_min_max(bar.min, Vec2::new(low_x, bar.max.y)),
-        Corners {
-            top_left: 3.0,
-            bottom_left: 3.0,
-            ..Corners::ZERO
-        },
-        shade,
-    );
-    painter.rect(
-        Rect::from_min_max(Vec2::new(high_x, bar.min.y), bar.max),
-        Corners {
-            top_right: 3.0,
-            bottom_right: 3.0,
-            ..Corners::ZERO
-        },
-        shade,
-    );
-    let handle_size = Vec2::new(8.0 + engaged * 1.5, 16.0 + engaged * 2.0);
-    for x in [low_x, high_x] {
-        let knob = Rect::from_center_size(Vec2::new(x, bar.center().y), handle_size);
-        painter.outlined(
-            knob,
-            Corners::all(2.5),
-            Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
-            Border {
-                width: 1.0,
-                color: Color::white_alpha(0.9),
-            },
-            Shadow::new(Color::black_alpha(0.45), 3.0, 1.0),
+    let gap = info.theme.metrics.slider_gap;
+    let outer_r = 8.0;
+    let inner_r = 2.0;
+    let left_end = (low_x - gap).clamp(bar.min.x, bar.max.x);
+    if left_end > bar.min.x + 1.0 {
+        painter.rect(
+            Rect::from_min_max(bar.min, Vec2::new(left_end, bar.max.y)),
+            Corners::left(outer_r, inner_r),
+            palette.surface_container_highest,
         );
+    }
+    let right_start = (high_x + gap).clamp(bar.min.x, bar.max.x);
+    if bar.max.x > right_start + 1.0 {
+        painter.rect(
+            Rect::from_min_max(Vec2::new(right_start, bar.min.y), bar.max),
+            Corners::right(outer_r, inner_r),
+            palette.surface_container_highest,
+        );
+    }
+    let active_min = (low_x + gap).clamp(bar.min.x, bar.max.x);
+    let active_max = (high_x - gap).clamp(active_min, bar.max.x);
+    if active_max > active_min + 1.0 {
+        let active_bar = Rect::from_min_max(
+            Vec2::new(active_min, bar.min.y),
+            Vec2::new(active_max, bar.max.y),
+        );
+        if range.gradient.len() > 1 {
+            let clip = painter.clip();
+            painter.push_clip(active_bar, Corners::all(inner_r));
+            let segments = range.gradient.len() - 1;
+            for (index, color) in range.gradient.iter().take(segments).enumerate() {
+                let left = active_bar.min.x + active_bar.width() * index as f32 / segments as f32;
+                let right =
+                    active_bar.min.x + active_bar.width() * (index + 1) as f32 / segments as f32;
+                painter.rect(
+                    Rect::from_min_max(
+                        Vec2::new(left, active_bar.min.y),
+                        Vec2::new(right + 0.6, active_bar.max.y),
+                    ),
+                    Corners::ZERO,
+                    *color,
+                );
+            }
+            painter.pop_clip(clip);
+        } else {
+            painter.rect(active_bar, Corners::all(inner_r), palette.primary);
+        }
+    }
+    let handle_color = range
+        .gradient
+        .last()
+        .copied()
+        .unwrap_or(palette.primary)
+        .lerp(Color::WHITE, 0.18);
+    let handle_size = Vec2::new(4.0 + engaged * 1.2, 24.0 + engaged * 2.0);
+    for x in [low_x, high_x] {
+        let handle = Rect::from_center_size(Vec2::new(x, bar.center().y), handle_size);
+        painter.rect(handle, Corners::capsule(), handle_color);
     }
 }
 
 pub(super) fn paint_drag(drag: &DragValueContent, painter: &mut Painter, info: &PaintInfo<'_>) {
-    let look = info.theme.surface(Role::Field, crate::style::State::Rest);
+    let state = if info.press > 0.5 {
+        crate::style::State::Pressed
+    } else if info.hover > 0.5 {
+        crate::style::State::Hover
+    } else {
+        crate::style::State::Rest
+    };
+    let look = info.theme.surface(Role::Field, state);
     painter.surface(info.rect, look);
     let text = format!("{:.*}", drag.decimals, drag.value);
     painter.text_in(
@@ -467,15 +479,43 @@ pub(super) fn paint_progress(
 ) {
     let palette = info.theme.palette;
     let rect = info.rect;
-    painter.rect(rect, Corners::all(2.0), palette.track);
-    let filled = rect.width() * progress.fraction.clamp(0.0, 1.0);
-    if filled > 1.0 {
-        painter.gradient(
-            Rect::from_min_size(rect.min, Vec2::new(filled, rect.height())),
-            Corners::all(2.0),
-            palette.accent_hover,
-            palette.accent,
+    let center_y = rect.center().y;
+    let fraction = progress.fraction.clamp(0.0, 1.0);
+    let filled = rect.width() * fraction;
+    let gap = 4.0;
+    let active_end = (rect.min.x + filled - gap * 0.5).clamp(rect.min.x, rect.max.x);
+    if active_end > rect.min.x + 2.0 {
+        let step = 3.0;
+        let phase = info.time * 6.5;
+        let wavelength = 16.0;
+        let amplitude = 2.0;
+        let mut x = rect.min.x + 1.5;
+        while x < active_end {
+            let next_x = (x + step).min(active_end);
+            let y0 = center_y
+                + amplitude
+                    * (((x - rect.min.x) / wavelength) * std::f32::consts::TAU - phase).sin();
+            let y1 = center_y
+                + amplitude
+                    * (((next_x - rect.min.x) / wavelength) * std::f32::consts::TAU - phase).sin();
+            painter.segment(
+                Vec2::new(x, y0),
+                Vec2::new(next_x, y1),
+                2.8,
+                palette.tertiary,
+            );
+            x = next_x;
+        }
+    }
+    let inactive_start = (rect.min.x + filled + gap * 0.5).clamp(rect.min.x, rect.max.x);
+    if rect.max.x > inactive_start + 2.0 {
+        let bar = Rect::from_min_max(
+            Vec2::new(inactive_start, center_y - 2.0),
+            Vec2::new(rect.max.x, center_y + 2.0),
         );
+        painter.rect(bar, Corners::capsule(), palette.surface_container_highest);
+        let dot = Rect::from_center_size(Vec2::new(rect.max.x - 2.0, center_y), Vec2::splat(4.0));
+        painter.rect(dot, Corners::capsule(), palette.tertiary);
     }
 }
 
@@ -510,7 +550,7 @@ pub(super) fn paint_gradient_bar(
         Fill::None,
         Border {
             width: 1.0,
-            color: info.theme.palette.material_border,
+            color: info.theme.palette.outline_variant.with_alpha(0.5),
         },
         Shadow::NONE,
     );

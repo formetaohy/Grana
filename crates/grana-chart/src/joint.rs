@@ -126,7 +126,7 @@ impl Joint {
         let page = Rect::from_min_size(Vec2::ZERO, points);
         let style = Style::page(&theme, crate::style::DistributionStyle::Box);
         recorder.marks(points, |painter| {
-            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            painter.rect(page, Corners::ZERO, theme.palette.surface_dim);
             self.paint(painter, page, &style, None);
         })
     }
@@ -145,7 +145,7 @@ impl Joint {
         let y = Axis::new(0.0, 1.0, 4);
         grid::grid(painter, rect, &style, x, y);
         self.paint_cells(painter, frame);
-        let marker = palette.text_primary.with_alpha(0.55);
+        let marker = palette.on_surface.with_alpha(0.55);
         let column = x.x(frame, self.thresholds[0]);
         painter.segment(
             Vec2::new(column, frame.min.y),

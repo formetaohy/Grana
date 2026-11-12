@@ -4,27 +4,32 @@ use crate::style::{Border, Fill, Shadow, State, Surface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    Panel,
-    Hud,
-    Popover,
+    Sheet,
+    FloatingToolbar,
+    VibrantToolbar,
+    Menu,
     Card,
-    Control,
-    Prominent,
-    Quiet,
-    Tinted,
+    CardElevated,
+    Filled,
+    PrimaryContainer,
+    Tonal,
+    TertiaryContainer,
+    SurfaceHigh,
+    Outlined,
+    Standard,
     Field,
-    Danger,
+    Error,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
-    LargeTitle,
-    Title,
+    Display,
     Headline,
+    Title,
     Body,
-    Callout,
+    Label,
     Caption,
-    Micro,
+    Overline,
     Monospace,
 }
 
@@ -59,111 +64,111 @@ impl TypeStyle {
             ..self
         }
     }
+
+    pub const fn bold(self) -> Self {
+        Self {
+            weight: 700.0,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
-    pub text_primary: Color,
-    pub text_secondary: Color,
-    pub text_tertiary: Color,
-    pub text_quaternary: Color,
-    pub text_on_accent: Color,
-    pub accent: Color,
-    pub accent_hover: Color,
-    pub accent_press: Color,
-    pub danger: Color,
+    pub surface_dim: Color,
+    pub surface: Color,
+    pub surface_bright: Color,
+    pub surface_container_lowest: Color,
+    pub surface_container_low: Color,
+    pub surface_container: Color,
+    pub surface_container_high: Color,
+    pub surface_container_highest: Color,
+    pub on_surface: Color,
+    pub on_surface_variant: Color,
+    pub outline: Color,
+    pub outline_variant: Color,
+    pub primary: Color,
+    pub on_primary: Color,
+    pub primary_container: Color,
+    pub on_primary_container: Color,
+    pub secondary: Color,
+    pub on_secondary: Color,
+    pub secondary_container: Color,
+    pub on_secondary_container: Color,
+    pub tertiary: Color,
+    pub on_tertiary: Color,
+    pub tertiary_container: Color,
+    pub on_tertiary_container: Color,
+    pub error: Color,
+    pub on_error: Color,
+    pub error_container: Color,
+    pub on_error_container: Color,
     pub warning: Color,
     pub success: Color,
-    pub separator: Color,
-    pub border: Color,
-    pub selected: Color,
-    pub panel: Color,
-    pub card: Color,
-    pub field: Color,
-    pub focus: Color,
     pub scrim: Color,
-    pub scene_backdrop: Color,
-    pub material_fill: Color,
-    pub material_hover: Color,
-    pub material_press: Color,
-    pub material_border: Color,
-    pub hud_fill: Color,
-    pub hud_border: Color,
-    pub popover_fill: Color,
-    pub track: Color,
-    pub shade: Color,
 }
 
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text_primary: Color::white_alpha(0.94),
-            text_secondary: Color::white_alpha(0.72),
-            text_tertiary: Color::white_alpha(0.50),
-            text_quaternary: Color::white_alpha(0.28),
-            text_on_accent: Color::bytes(255, 255, 255),
-            accent: Color::bytes(10, 132, 255),
-            accent_hover: Color::bytes(56, 152, 255),
-            accent_press: Color::bytes(0, 110, 224),
-            danger: Color::bytes(255, 69, 58),
-            warning: Color::bytes(255, 159, 10),
-            success: Color::bytes(48, 209, 88),
-            separator: Color::white_alpha(0.08),
-            border: Color::white_alpha(0.12),
-            selected: Color::white_alpha(0.14),
-            panel: Color::rgba(0.075, 0.082, 0.098, 0.98),
-            card: Color::rgba(0.110, 0.118, 0.141, 0.96),
-            field: Color::rgba(0.047, 0.051, 0.063, 0.96),
-            focus: Color::bytes(10, 132, 255),
-            scrim: Color::rgba(0.0, 0.0, 0.0, 0.58),
-            scene_backdrop: Color::bytes(7, 8, 10),
-            material_fill: Color::white_alpha(0.09),
-            material_hover: Color::white_alpha(0.15),
-            material_press: Color::white_alpha(0.22),
-            material_border: Color::white_alpha(0.10),
-            hud_fill: Color::rgba(0.082, 0.090, 0.110, 0.78),
-            hud_border: Color::white_alpha(0.14),
-            popover_fill: Color::rgba(0.094, 0.102, 0.125, 0.90),
-            track: Color::white_alpha(0.16),
-            shade: Color::black_alpha(0.42),
+            surface_dim: Color::bytes(9, 11, 16),
+            surface: Color::bytes(15, 18, 24),
+            surface_bright: Color::bytes(52, 57, 70),
+            surface_container_lowest: Color::bytes(7, 9, 13),
+            surface_container_low: Color::bytes(22, 26, 35),
+            surface_container: Color::bytes(28, 33, 44),
+            surface_container_high: Color::bytes(38, 44, 58),
+            surface_container_highest: Color::bytes(49, 56, 72),
+            on_surface: Color::bytes(226, 228, 236),
+            on_surface_variant: Color::bytes(194, 198, 212),
+            outline: Color::bytes(140, 144, 159),
+            outline_variant: Color::bytes(66, 71, 84),
+            primary: Color::bytes(168, 199, 250),
+            on_primary: Color::bytes(6, 46, 111),
+            primary_container: Color::bytes(8, 66, 160),
+            on_primary_container: Color::bytes(211, 227, 253),
+            secondary: Color::bytes(190, 198, 220),
+            on_secondary: Color::bytes(40, 48, 65),
+            secondary_container: Color::bytes(51, 68, 94),
+            on_secondary_container: Color::bytes(216, 226, 255),
+            tertiary: Color::bytes(120, 243, 224),
+            on_tertiary: Color::bytes(0, 55, 49),
+            tertiary_container: Color::bytes(0, 80, 71),
+            on_tertiary_container: Color::bytes(156, 242, 228),
+            error: Color::bytes(242, 184, 181),
+            on_error: Color::bytes(96, 20, 16),
+            error_container: Color::bytes(140, 29, 24),
+            on_error_container: Color::bytes(249, 222, 220),
+            warning: Color::bytes(255, 185, 81),
+            success: Color::bytes(109, 213, 140),
+            scrim: Color::rgba(0.0, 0.0, 0.0, 0.62),
         }
     }
 
     pub fn contrasted(self) -> Self {
-        let lift = |color: Color| color.with_alpha((color.alpha * 1.3 + 0.08).min(1.0));
         Self {
-            text_primary: lift(self.text_primary),
-            text_secondary: lift(self.text_secondary),
-            text_tertiary: lift(self.text_tertiary),
-            text_quaternary: lift(self.text_quaternary),
-            separator: lift(self.separator),
-            border: lift(self.border),
-            material_border: lift(self.material_border),
-            hud_border: lift(self.hud_border),
-            track: lift(self.track),
-            ..self
-        }
-    }
-
-    pub fn opaque(self) -> Self {
-        Self {
-            panel: self.panel.with_alpha(1.0),
-            card: self.card.with_alpha(1.0),
-            field: self.field.with_alpha(1.0),
-            hud_fill: self.hud_fill.with_alpha(0.98),
-            popover_fill: self.popover_fill.with_alpha(0.99),
+            on_surface: Color::WHITE,
+            on_surface_variant: Color::bytes(224, 228, 240),
+            outline: Color::bytes(184, 190, 206),
+            outline_variant: Color::bytes(108, 114, 132),
+            surface_container_low: Color::bytes(24, 29, 40),
+            surface_container: Color::bytes(32, 38, 52),
+            surface_container_high: Color::bytes(44, 52, 68),
+            surface_container_highest: Color::bytes(58, 67, 86),
+            primary: Color::bytes(196, 218, 255),
+            secondary_container: Color::bytes(64, 84, 116),
             ..self
         }
     }
 
     pub fn series(self) -> [Color; 6] {
         [
-            self.accent,
-            Color::bytes(48, 209, 88),
-            Color::bytes(255, 159, 10),
-            Color::bytes(255, 69, 58),
-            Color::bytes(191, 90, 242),
-            Color::bytes(90, 200, 250),
+            self.primary,
+            self.tertiary,
+            self.warning,
+            self.error,
+            Color::bytes(216, 180, 254),
+            Color::bytes(109, 213, 140),
         ]
     }
 }
@@ -173,74 +178,119 @@ pub struct Metrics {
     pub control_height: f32,
     pub row_height: f32,
     pub gap: f32,
-    pub radius: f32,
-    pub card_radius: f32,
-    pub panel_radius: f32,
-    pub hairline: f32,
-    pub track: f32,
-    pub thumb: f32,
+    pub group_gap: f32,
+    pub corner_xs: f32,
+    pub corner_sm: f32,
+    pub corner_md: f32,
+    pub corner_lg: f32,
+    pub corner_xl: f32,
+    pub corner_xxl: f32,
+    pub slider_track: f32,
+    pub slider_gap: f32,
+    pub slider_handle_width: f32,
+    pub slider_handle_height: f32,
     pub switch_width: f32,
     pub switch_height: f32,
 }
 
 impl Metrics {
-    pub const fn standard() -> Self {
+    pub const fn expressive() -> Self {
         Self {
-            control_height: 26.0,
-            row_height: 28.0,
+            control_height: 30.0,
+            row_height: 32.0,
             gap: 6.0,
-            radius: 6.0,
-            card_radius: 8.0,
-            panel_radius: 10.0,
-            hairline: 1.0,
-            track: 4.0,
-            thumb: 14.0,
-            switch_width: 34.0,
-            switch_height: 18.0,
+            group_gap: 2.0,
+            corner_xs: 4.0,
+            corner_sm: 8.0,
+            corner_md: 12.0,
+            corner_lg: 16.0,
+            corner_xl: 24.0,
+            corner_xxl: 28.0,
+            slider_track: 14.0,
+            slider_gap: 5.0,
+            slider_handle_width: 4.0,
+            slider_handle_height: 22.0,
+            switch_width: 40.0,
+            switch_height: 22.0,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Typography {
-    pub large_title: TypeStyle,
-    pub title: TypeStyle,
+    pub display: TypeStyle,
     pub headline: TypeStyle,
+    pub title: TypeStyle,
     pub body: TypeStyle,
-    pub callout: TypeStyle,
+    pub label: TypeStyle,
     pub caption: TypeStyle,
-    pub micro: TypeStyle,
+    pub overline: TypeStyle,
     pub monospace: TypeStyle,
 }
 
 impl Typography {
-    pub const fn standard() -> Self {
+    pub const fn expressive() -> Self {
         Self {
-            large_title: TypeStyle::new(22.0, 700.0, 28.0),
-            title: TypeStyle::new(16.0, 600.0, 21.0),
-            headline: TypeStyle::new(14.0, 600.0, 18.0),
-            body: TypeStyle::new(12.5, 400.0, 17.0),
-            callout: TypeStyle::new(11.5, 400.0, 15.0),
-            caption: TypeStyle::new(10.5, 400.0, 14.0),
-            micro: TypeStyle {
-                size: 9.5,
-                weight: 500.0,
-                tracking: 0.25,
-                leading: 12.0,
+            display: TypeStyle {
+                size: 22.0,
+                weight: 700.0,
+                tracking: -0.2,
+                leading: 28.0,
             },
-            monospace: TypeStyle::new(11.0, 400.0, 14.0),
+            headline: TypeStyle {
+                size: 15.0,
+                weight: 600.0,
+                tracking: 0.0,
+                leading: 20.0,
+            },
+            title: TypeStyle {
+                size: 13.0,
+                weight: 600.0,
+                tracking: 0.0,
+                leading: 18.0,
+            },
+            body: TypeStyle {
+                size: 12.5,
+                weight: 400.0,
+                tracking: 0.0,
+                leading: 17.0,
+            },
+            label: TypeStyle {
+                size: 12.0,
+                weight: 500.0,
+                tracking: 0.1,
+                leading: 16.0,
+            },
+            caption: TypeStyle {
+                size: 11.0,
+                weight: 400.0,
+                tracking: 0.1,
+                leading: 14.5,
+            },
+            overline: TypeStyle {
+                size: 10.0,
+                weight: 600.0,
+                tracking: 0.65,
+                leading: 13.5,
+            },
+            monospace: TypeStyle {
+                size: 11.0,
+                weight: 400.0,
+                tracking: 0.0,
+                leading: 15.0,
+            },
         }
     }
 
     pub fn style(&self, level: Level) -> TypeStyle {
         match level {
-            Level::LargeTitle => self.large_title,
-            Level::Title => self.title,
+            Level::Display => self.display,
             Level::Headline => self.headline,
+            Level::Title => self.title,
             Level::Body => self.body,
-            Level::Callout => self.callout,
+            Level::Label => self.label,
             Level::Caption => self.caption,
-            Level::Micro => self.micro,
+            Level::Overline => self.overline,
             Level::Monospace => self.monospace,
         }
     }
@@ -251,16 +301,16 @@ pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
     pub metrics: Metrics,
-    pub reduce_transparency: bool,
+    pub reduce_motion: bool,
 }
 
 impl Theme {
     pub fn dark() -> Self {
         Self {
             palette: Palette::dark(),
-            typography: Typography::standard(),
-            metrics: Metrics::standard(),
-            reduce_transparency: false,
+            typography: Typography::expressive(),
+            metrics: Metrics::expressive(),
+            reduce_motion: false,
         }
     }
 
@@ -275,25 +325,20 @@ impl Theme {
         }
     }
 
-    pub fn with_transparency(self, reduce_transparency: bool) -> Self {
-        if reduce_transparency {
-            Self {
-                palette: self.palette.opaque(),
-                reduce_transparency: true,
-                ..self
-            }
-        } else {
-            self
+    pub fn with_reduce_motion(self, reduce_motion: bool) -> Self {
+        Self {
+            reduce_motion,
+            ..self
         }
     }
 
     pub fn text(&self, level: Level) -> Color {
         match level {
-            Level::LargeTitle | Level::Title | Level::Headline | Level::Body => {
-                self.palette.text_primary
+            Level::Display | Level::Headline | Level::Title | Level::Body => {
+                self.palette.on_surface
             }
-            Level::Callout | Level::Monospace => self.palette.text_secondary,
-            Level::Caption | Level::Micro => self.palette.text_tertiary,
+            Level::Label | Level::Monospace => self.palette.on_surface_variant,
+            Level::Caption | Level::Overline => self.palette.outline,
         }
     }
 
@@ -302,223 +347,250 @@ impl Theme {
     }
 
     pub fn button_font(&self) -> TypeStyle {
-        self.typography.callout.medium()
+        self.typography.label
     }
 
     pub fn label_font(&self) -> TypeStyle {
-        self.typography.caption.medium()
+        self.typography.caption
     }
 
     pub fn surface(&self, role: Role, state: State) -> Surface {
-        let palette = self.palette;
-        let metrics = self.metrics;
+        let p = self.palette;
+        let m = self.metrics;
         let disabled = state == State::Disabled;
         let hovered = state == State::Hover;
         let pressed = state == State::Pressed;
         let selected = state == State::Selected;
-        let interactive = hovered || pressed || selected;
-        let tint = if disabled {
-            palette.material_fill.with_alpha(0.04)
-        } else if pressed {
-            palette.material_press
-        } else if hovered || selected {
-            palette.material_hover
+        let button_corners = if pressed {
+            Corners::all(m.corner_sm)
+        } else if selected {
+            Corners::all(m.corner_md)
         } else {
-            palette.material_fill
+            Corners::capsule()
         };
-        let text = if disabled {
-            palette.text_quaternary
-        } else {
-            palette.text_primary
-        };
-        let blur = |radius: f32| {
-            if self.reduce_transparency {
-                0.0
+        let lift = |base: Color, on: Color| {
+            if disabled {
+                base.with_alpha(0.38)
+            } else if pressed {
+                base.lerp(on, 0.16)
+            } else if hovered || selected {
+                base.lerp(on, 0.10)
             } else {
-                radius
+                base
             }
         };
         match role {
-            Role::Panel => Surface {
-                fill: Fill::Solid(palette.panel),
+            Role::Sheet => Surface {
+                fill: Fill::Solid(p.surface_container_low),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.panel_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.border,
-                },
-                shadow: Shadow::new(Color::black_alpha(0.46), 18.0, 5.0),
-                text,
+                corners: Corners::all(m.corner_xl),
+                border: Border::NONE,
+                shadow: Shadow::new(Color::black_alpha(0.45), 24.0, 8.0),
+                text: p.on_surface,
             },
-            Role::Hud => Surface {
-                fill: Fill::Solid(palette.hud_fill),
-                backdrop: blur(16.0),
-                corners: Corners::all(metrics.panel_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.hud_border,
-                },
-                shadow: Shadow::new(Color::black_alpha(0.38), 14.0, 4.0),
-                text,
+            Role::FloatingToolbar => Surface {
+                fill: Fill::Solid(p.surface_container.with_alpha(0.95)),
+                backdrop: 18.0,
+                corners: Corners::capsule(),
+                border: Border::NONE,
+                shadow: Shadow::new(Color::black_alpha(0.50), 22.0, 6.0),
+                text: p.on_surface,
             },
-            Role::Popover => Surface {
-                fill: Fill::Solid(palette.popover_fill),
-                backdrop: blur(22.0),
-                corners: Corners::all(metrics.panel_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.hud_border,
-                },
-                shadow: Shadow::new(Color::black_alpha(0.54), 22.0, 7.0),
-                text,
+            Role::VibrantToolbar => Surface {
+                fill: Fill::Solid(p.primary_container.with_alpha(0.96)),
+                backdrop: 18.0,
+                corners: Corners::capsule(),
+                border: Border::NONE,
+                shadow: Shadow::new(Color::black_alpha(0.52), 24.0, 7.0),
+                text: p.on_primary_container,
+            },
+            Role::Menu => Surface {
+                fill: Fill::Solid(p.surface_container_high.with_alpha(0.98)),
+                backdrop: 20.0,
+                corners: Corners::all(m.corner_lg),
+                border: Border::NONE,
+                shadow: Shadow::new(Color::black_alpha(0.56), 26.0, 8.0),
+                text: p.on_surface,
             },
             Role::Card => Surface {
-                fill: Fill::Solid(palette.card),
+                fill: Fill::Solid(p.surface_container),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.card_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.material_border,
-                },
+                corners: Corners::all(m.corner_lg),
+                border: Border::NONE,
                 shadow: Shadow::NONE,
-                text,
+                text: p.on_surface,
             },
-            Role::Control => Surface {
-                fill: Fill::Gradient(tint, tint.with_alpha(tint.alpha * 0.82)),
+            Role::CardElevated => Surface {
+                fill: Fill::Solid(p.surface_container_high),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: if disabled {
-                        palette.material_border.with_alpha(0.04)
-                    } else if interactive {
-                        palette.border
-                    } else {
-                        palette.material_border
-                    },
-                },
-                shadow: if disabled {
-                    Shadow::NONE
-                } else {
-                    Shadow::new(Color::black_alpha(0.18), 3.0, 1.0)
-                },
-                text,
+                corners: Corners::all(m.corner_lg),
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: p.on_surface,
             },
-            Role::Prominent => Surface {
-                fill: Fill::Gradient(
-                    if disabled {
-                        palette.accent.with_alpha(0.28)
-                    } else if pressed {
-                        palette.accent_press
-                    } else if hovered {
-                        palette.accent_hover
-                    } else {
-                        palette.accent
-                    },
-                    if disabled {
-                        palette.accent.with_alpha(0.22)
-                    } else if pressed {
-                        palette.accent_press
-                    } else {
-                        palette.accent.with_alpha(0.90)
-                    },
-                ),
+            Role::Filled => Surface {
+                fill: Fill::Solid(lift(p.primary, p.on_primary)),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: Color::white_alpha(if disabled { 0.08 } else { 0.22 }),
-                },
-                shadow: if disabled {
-                    Shadow::NONE
-                } else {
-                    Shadow::new(Color::black_alpha(0.28), 6.0, 2.0)
-                },
-                text: if disabled {
-                    palette.text_on_accent.with_alpha(0.45)
-                } else {
-                    palette.text_on_accent
-                },
-            },
-            Role::Quiet => Surface {
-                fill: Fill::Solid(if disabled || !interactive {
-                    Color::TRANSPARENT
-                } else {
-                    tint
-                }),
-                backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
+                corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: if disabled {
-                    palette.text_quaternary
+                    p.on_surface.with_alpha(0.38)
                 } else {
-                    palette
-                        .text_secondary
-                        .lerp(palette.text_primary, f32::from(interactive))
+                    p.on_primary
                 },
             },
-            Role::Tinted => Surface {
-                fill: Fill::Gradient(
-                    if disabled {
-                        palette.accent.with_alpha(0.10)
-                    } else if pressed {
-                        palette.accent.with_alpha(0.36)
-                    } else if hovered {
-                        palette.accent.with_alpha(0.28)
-                    } else {
-                        palette.accent.with_alpha(0.20)
-                    },
-                    if disabled {
-                        palette.accent.with_alpha(0.08)
-                    } else {
-                        palette.accent.with_alpha(0.15)
-                    },
-                ),
+            Role::PrimaryContainer => Surface {
+                fill: Fill::Solid(lift(p.primary_container, p.on_primary_container)),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else {
+                    p.on_primary_container
+                },
+            },
+            Role::Tonal => Surface {
+                fill: Fill::Solid(lift(p.secondary_container, p.on_secondary_container)),
+                backdrop: 0.0,
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else {
+                    p.on_secondary_container
+                },
+            },
+            Role::TertiaryContainer => Surface {
+                fill: Fill::Solid(lift(p.tertiary_container, p.on_tertiary_container)),
+                backdrop: 0.0,
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else {
+                    p.on_tertiary_container
+                },
+            },
+            Role::SurfaceHigh => Surface {
+                fill: Fill::Solid(lift(p.surface_container_high, p.on_surface)),
+                backdrop: 0.0,
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else {
+                    p.on_surface
+                },
+            },
+            Role::Outlined => Surface {
+                fill: Fill::Solid(if pressed {
+                    p.on_surface.with_alpha(0.12)
+                } else if hovered || selected {
+                    p.on_surface.with_alpha(0.08)
+                } else {
+                    Color::TRANSPARENT
+                }),
+                backdrop: 0.0,
+                corners: button_corners,
                 border: Border {
-                    width: metrics.hairline,
-                    color: palette.accent.with_alpha(if pressed { 0.55 } else { 0.36 }),
+                    width: 1.0,
+                    color: if disabled {
+                        p.outline_variant.with_alpha(0.38)
+                    } else if hovered || pressed {
+                        p.outline
+                    } else {
+                        p.outline_variant
+                    },
                 },
                 shadow: Shadow::NONE,
-                text: palette.text_primary,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else {
+                    p.on_surface_variant.lerp(
+                        p.on_surface,
+                        if hovered || pressed || selected {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    )
+                },
+            },
+            Role::Standard => Surface {
+                fill: Fill::Solid(if disabled {
+                    Color::TRANSPARENT
+                } else if pressed {
+                    p.on_surface.with_alpha(0.14)
+                } else if hovered || selected {
+                    p.on_surface.with_alpha(0.09)
+                } else {
+                    Color::TRANSPARENT
+                }),
+                backdrop: 0.0,
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else if hovered || pressed || selected {
+                    p.on_surface
+                } else {
+                    p.on_surface_variant
+                },
             },
             Role::Field => Surface {
                 fill: Fill::Solid(if disabled {
-                    palette.field.with_alpha(0.5)
+                    p.surface_container_highest.with_alpha(0.45)
+                } else if pressed || selected {
+                    p.surface_container_highest.lerp(p.primary, 0.10)
+                } else if hovered {
+                    p.surface_container_highest.lerp(p.on_surface, 0.06)
                 } else {
-                    palette.field
+                    p.surface_container_highest
                 }),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
+                corners: Corners::all(m.corner_sm),
                 border: Border {
-                    width: metrics.hairline,
-                    color: if interactive && !disabled {
-                        palette.border.with_alpha(0.24)
+                    width: 1.0,
+                    color: if pressed || selected {
+                        p.primary.with_alpha(0.75)
                     } else {
-                        palette.material_border
+                        Color::TRANSPARENT
                     },
                 },
                 shadow: Shadow::NONE,
-                text,
-            },
-            Role::Danger => Surface {
-                fill: Fill::Solid(if pressed {
-                    palette.danger.with_alpha(0.26)
-                } else if hovered {
-                    palette.danger.with_alpha(0.16)
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
                 } else {
+                    p.on_surface
+                },
+            },
+            Role::Error => Surface {
+                fill: Fill::Solid(if disabled {
                     Color::TRANSPARENT
+                } else if pressed {
+                    p.error_container.with_alpha(0.85)
+                } else if hovered {
+                    p.error_container.with_alpha(0.55)
+                } else {
+                    p.error_container.with_alpha(0.28)
                 }),
                 backdrop: 0.0,
-                corners: Corners::all(metrics.radius),
+                corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: if disabled {
-                    palette.text_quaternary
+                    p.on_surface.with_alpha(0.38)
+                } else if hovered || pressed {
+                    p.on_error_container
                 } else {
-                    palette.danger
+                    p.error
                 },
             },
         }

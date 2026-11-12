@@ -249,7 +249,7 @@ pub struct Workspace {
     pub palette: Option<Palette>,
     pub language: grana_i18n::Language,
     pub contrast: bool,
-    pub reduce_transparency: bool,
+    pub reduce_motion: bool,
     pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
@@ -295,7 +295,7 @@ impl Default for Workspace {
             palette: None,
             language: grana_i18n::Language::English,
             contrast: false,
-            reduce_transparency: false,
+            reduce_motion: false,
             palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }

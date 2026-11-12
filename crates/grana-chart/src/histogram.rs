@@ -18,7 +18,7 @@ pub fn paint(
 ) {
     let metrics = style.metrics;
     let palette = style.palette;
-    let accent = palette.accent;
+    let accent = palette.primary;
     let frame = metrics.frame(rect);
     let x = Axis::new(histogram.low(), histogram.high(), 5);
     let y = Axis::new(0.0, histogram.peak().max(1) as f32, 4);
@@ -40,7 +40,7 @@ pub fn paint(
                 Vec2::new(left + bar, frame.max.y),
             ),
             Corners::top(1.5),
-            palette.text_primary.with_alpha(0.14),
+            palette.on_surface.with_alpha(0.14),
         );
         let gated = histogram.gated(bin);
         if gated > 0 {
@@ -116,7 +116,7 @@ pub fn paint(
             Vec2::new(pointer.x, frame.min.y),
             Vec2::new(pointer.x, frame.max.y),
             0.6,
-            palette.text_primary.with_alpha(0.12),
+            palette.on_surface.with_alpha(0.12),
         );
     }
     if histogram.peak() == 0

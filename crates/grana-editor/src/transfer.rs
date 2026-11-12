@@ -16,7 +16,7 @@ pub fn edit<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
-    let caption_style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
+    let caption_style = TextStyle::new(theme.font(Level::Monospace), palette.on_surface_variant);
     let lut = transfer.lut(96);
     let colors = lut
         .iter()
@@ -42,7 +42,7 @@ pub fn edit<'a>(
     for (index, stop) in stops.iter().enumerate() {
         let text = format!("{:>6.0}", window.value(stop.position()));
         let caption = ctx.measure(&text, caption_style).x.ceil() + 2.0;
-        let position_width = (width - caption - 112.0).max(40.0);
+        let position_width = (width - caption - 116.0).max(40.0);
         let moved = {
             let base = stops.clone();
             move |value: f32| {
@@ -75,7 +75,7 @@ pub fn edit<'a>(
                 set(next)
             }
         };
-        let swatch = grana_ui::widget::color_swatch(stop.color(), 16.0).key(anchor);
+        let swatch = grana_ui::widget::color_swatch(stop.color(), 18.0).key(anchor);
         let picker = grana_ui::widget::color_picker(stop.color()).on_color(recolor);
         let popup = grana_ui::popover::popup(anchor, 192.0, [picker]);
         children.push(
@@ -104,7 +104,7 @@ pub fn edit<'a>(
                     stop.opacity(),
                     0.0..=1.0,
                     false,
-                    Length::Fixed(52.0),
+                    Length::Fixed(54.0),
                 )
                 .named(&format!("{salt}.stop.{index}.opacity"))
                 .on_slide(faded),
@@ -112,8 +112,8 @@ pub fn edit<'a>(
                     control,
                     grana_ui::widget::icon_button(
                         Icon::Minus,
-                        18.0,
-                        Role::Quiet,
+                        22.0,
+                        Role::Standard,
                         grana_i18n::inspector::remove_stop(language),
                     )
                     .named(&format!("{salt}.stop.{index}.remove"))
@@ -126,7 +126,7 @@ pub fn edit<'a>(
         crate::view::button_with(
             ctx,
             grana_i18n::inspector::add_stop(language),
-            Role::Control,
+            Role::SurfaceHigh,
             Length::Fill,
         )
         .press({

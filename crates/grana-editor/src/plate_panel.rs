@@ -63,7 +63,7 @@ fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Ele
     let export = view::button(
         ctx,
         grana_i18n::plate::export_montage(language),
-        grana_ui::Role::Control,
+        Role::SurfaceHigh,
     )
     .named("plate.export")
     .press(Message::Command(Command::ExportPlate));
@@ -117,7 +117,7 @@ fn cell<'a>(
     let present = well.is_some();
     let label = well.map_or_else(String::new, |well| well.label().to_string());
     let drawn = label.clone();
-    let font = theme.font(Level::Micro);
+    let font = theme.font(Level::Caption);
     let thumbnail = well
         .and_then(|well| well.fields().first())
         .and_then(|field| view.thumbnail(field.series()))
@@ -126,43 +126,34 @@ fn cell<'a>(
     let element = grana_ui::canvas(Length::Fixed(side), side, move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
-        let corners = Corners::all(6.0);
+        let corners = Corners::all(if active { 12.0 } else { 8.0 });
         let border = if active {
-            palette.accent.with_alpha(0.95)
+            palette.primary
         } else {
-            palette.material_border.amplify(0.25 + 0.55 * engaged)
+            palette.outline_variant.amplify(0.4 + 0.6 * engaged)
         };
         if present {
             let fill = if active {
-                palette.accent.with_alpha(0.24)
+                palette.secondary_container
             } else {
                 palette
-                    .material_fill
-                    .lerp(palette.accent.with_alpha(0.14), 0.6 * engaged)
+                    .surface_container_high
+                    .lerp(palette.surface_container_highest, engaged)
             };
             painter.rect(rect, corners, fill);
         } else {
-            painter.outlined(
-                rect,
-                corners,
-                Fill::Solid(palette.card.with_alpha(0.35)),
-                grana_ui::Border {
-                    width: 1.0,
-                    color: palette.separator.with_alpha(0.5),
-                },
-                Shadow::NONE,
-            );
+            painter.rect(rect, corners, palette.surface_container_lowest);
         }
         if let Some(bitmap) = &thumbnail {
             painter.bitmap(rect, corners, bitmap);
         }
-        if present {
+        if present && active {
             painter.outlined(
                 rect,
                 corners,
                 Fill::None,
                 grana_ui::Border {
-                    width: if active { 1.5 } else { 1.0 },
+                    width: 2.0,
                     color: border,
                 },
                 Shadow::NONE,
@@ -170,22 +161,24 @@ fn cell<'a>(
         }
         if present {
             let tint = if lit {
-                Color::white_alpha(0.92)
+                Color::white_alpha(0.95)
+            } else if active {
+                palette.on_secondary_container
             } else {
-                palette.text_secondary.lerp(palette.text_primary, engaged)
+                palette.on_surface_variant.lerp(palette.on_surface, engaged)
             };
             let style = TextStyle::new(font, tint).aligned(Align::Center);
             let ink = painter.measure(&drawn, style);
             let pill = if lit {
                 Rect::from_min_size(
-                    Vec2::new(rect.min.x + 5.0, rect.max.y - 19.0),
-                    Vec2::new(ink.x + 10.0, 14.0),
+                    Vec2::new(rect.min.x + 5.0, rect.max.y - 20.0),
+                    Vec2::new(ink.x + 12.0, 15.0),
                 )
             } else {
                 Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
             };
             if lit {
-                painter.rect(pill, Corners::all(3.5), Color::black_alpha(0.65));
+                painter.rect(pill, Corners::capsule(), Color::black_alpha(0.68));
             }
             painter.text_in(pill, &drawn, style, Align::Center);
         }
@@ -226,9 +219,9 @@ fn fields<'a>(
     for (index, field) in well.fields().iter().enumerate() {
         let selected = field.series() == view.selected;
         let role = if selected {
-            Role::Tinted
+            Role::Tonal
         } else {
-            Role::Control
+            Role::SurfaceHigh
         };
         let name = field.name().strip_prefix(well.label()).map_or_else(
             || grana_i18n::plate::field_name(language, index + 1),

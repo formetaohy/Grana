@@ -262,11 +262,17 @@ impl<'a, A> Element<'a, A> {
 
     pub fn width(mut self, width: Length) -> Self {
         self.layout.size.width = width;
+        if let Content::Button(button) = &mut self.content {
+            button.width = width;
+        }
         self
     }
 
     pub fn height(mut self, height: Length) -> Self {
         self.layout.size.height = height;
+        if let (Content::Button(button), Length::Fixed(value)) = (&mut self.content, height) {
+            button.height = value;
+        }
         self
     }
 
@@ -357,6 +363,15 @@ impl<'a, A> Element<'a, A> {
 
     pub fn focus_ring(mut self, corners: Corners) -> Self {
         self.focus_ring = Some(corners);
+        self
+    }
+
+    pub fn shaped(mut self, corners: Corners) -> Self {
+        match &mut self.content {
+            Content::Button(button) => button.corners = Some(corners),
+            Content::IconButton(icon) => icon.corners = Some(corners),
+            _ => {}
+        }
         self
     }
 

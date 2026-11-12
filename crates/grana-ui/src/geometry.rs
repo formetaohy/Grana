@@ -214,6 +214,15 @@ impl Corners {
 
     pub const CAPSULE: f32 = 4096.0;
 
+    pub const fn new(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
+        Self {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }
+    }
+
     pub const fn all(value: f32) -> Self {
         Self {
             top_left: value,
@@ -241,8 +250,72 @@ impl Corners {
         }
     }
 
-    pub fn capsule() -> Self {
+    pub const fn left(value: f32, inner: f32) -> Self {
+        Self {
+            top_left: value,
+            top_right: inner,
+            bottom_right: inner,
+            bottom_left: value,
+        }
+    }
+
+    pub const fn right(value: f32, inner: f32) -> Self {
+        Self {
+            top_left: inner,
+            top_right: value,
+            bottom_right: value,
+            bottom_left: inner,
+        }
+    }
+
+    pub const fn capsule() -> Self {
         Self::all(Self::CAPSULE)
+    }
+
+    pub const fn split_leading(inner: f32) -> Self {
+        Self::left(Self::CAPSULE, inner)
+    }
+
+    pub const fn split_trailing(inner: f32) -> Self {
+        Self::right(Self::CAPSULE, inner)
+    }
+
+    pub fn group_vertical(
+        index: usize,
+        count: usize,
+        outer: f32,
+        inner: f32,
+        active: bool,
+    ) -> Self {
+        if active || count <= 1 {
+            return Self::all(outer);
+        }
+        if index == 0 {
+            Self::new(outer, outer, inner, inner)
+        } else if index + 1 >= count {
+            Self::new(inner, inner, outer, outer)
+        } else {
+            Self::all(inner)
+        }
+    }
+
+    pub fn group_horizontal(
+        index: usize,
+        count: usize,
+        outer: f32,
+        inner: f32,
+        active: bool,
+    ) -> Self {
+        if active || count <= 1 {
+            return Self::all(outer);
+        }
+        if index == 0 {
+            Self::left(outer, inner)
+        } else if index + 1 >= count {
+            Self::right(outer, inner)
+        } else {
+            Self::all(inner)
+        }
     }
 
     pub fn resolved(self, size: Vec2) -> Self {

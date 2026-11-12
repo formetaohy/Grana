@@ -349,7 +349,7 @@ pub(super) fn measure<'a>(
         view::button_with(
             ctx,
             grana_i18n::object::delete_object(language),
-            Role::Danger,
+            Role::Error,
             Length::Fill,
         )
         .press(Message::Command(Command::DeleteObject {

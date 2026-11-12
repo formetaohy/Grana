@@ -1,8 +1,7 @@
 use super::*;
 
-const CHANNEL_ROW: f32 = 30.0;
-
-const SWITCH_TRAIL: f32 = 4.0;
+const CHANNEL_ROW: f32 = 38.0;
+const SWITCH_TRAIL: f32 = 10.0;
 
 pub(super) fn channels<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -16,29 +15,26 @@ pub(super) fn channels<'a>(
         .filter(|channel| channel.enabled)
         .count();
     let language = ctx.language();
-    let detail = grana_i18n::inspector::visible_channels(language, enabled, count);
-    let title = view::card_title(
+    let detail = format!("{enabled} / {count}");
+    let header = view::section_header(
         ctx,
-        Icon::Layers,
         grana_i18n::inspector::channels(language),
         Some(&detail),
     );
-    let mut children = Vec::new();
-    children.push(
-        grana_ui::column()
-            .gap(0.0)
-            .children([title, grana_ui::spacer(2.0)]),
-    );
+    let mut rows = Vec::with_capacity(count);
     for index in 0..count {
-        children.push(channel_row(ctx, state, index));
+        rows.push(channel_row(ctx, state, index, count));
     }
-    view::card(ctx, 3.0, children)
+    let group_gap = ctx.theme().metrics.group_gap;
+    let list = grana_ui::column().gap(group_gap).children(rows);
+    grana_ui::column().gap(4.0).children([header, list])
 }
 
 pub(super) fn channel_row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
     index: usize,
+    count: usize,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -50,82 +46,90 @@ pub(super) fn channel_row<'a>(
     let opacity = scene.channels[index].opacity;
     let active = scene.selected == index;
     let font = if active {
-        theme.font(Level::Body).medium()
+        theme.font(Level::Title)
     } else {
-        theme.font(Level::Body)
+        theme.font(Level::Body).medium()
     };
     let mono = theme.font(Level::Monospace);
-    let switch_left = metrics.switch_width + 10.0;
-    let width = card_width() - switch_left;
+    let switch_left = metrics.switch_width + 12.0;
+    let width = panel_width() - switch_left;
+    let corners =
+        Corners::group_vertical(index, count, metrics.corner_lg, metrics.corner_xs, active);
     let canvas = grana_ui::canvas(Length::Fixed(width), CHANNEL_ROW, move |painter, info| {
         let rect = info.rect;
-        let full = Rect::from_min_max(
-            rect.min,
-            Vec2::new(rect.max.x + switch_left + SWITCH_TRAIL, rect.max.y),
-        );
-        if active {
-            painter.outlined(
-                full,
-                Corners::all(6.0),
-                Fill::Solid(palette.accent.with_alpha(0.16)),
-                Border {
-                    width: 1.0,
-                    color: palette.accent.with_alpha(0.36),
-                },
-                Shadow::NONE,
-            );
-        } else if info.hover > 0.01 {
-            painter.rect(
-                full,
-                Corners::all(6.0),
-                palette.material_hover.amplify(0.50 * info.hover),
-            );
-        }
+        let full = Rect::from_min_max(rect.min, Vec2::new(rect.max.x + switch_left, rect.max.y));
+        let fill = if active {
+            palette
+                .secondary_container
+                .lerp(palette.on_secondary_container, 0.06 * info.hover)
+        } else {
+            palette
+                .surface_container
+                .lerp(palette.surface_container_high, info.hover)
+        };
+        painter.rect(full, corners, fill);
         let dot = Rect::from_center_size(
-            Vec2::new(rect.min.x + 12.0, rect.center().y),
-            Vec2::splat(8.5),
+            Vec2::new(rect.min.x + 15.0, rect.center().y),
+            Vec2::splat(10.0),
         );
         if active {
             painter.ring(
                 dot.center(),
-                6.8,
-                1.2,
+                7.8,
+                1.5,
                 0.0,
                 std::f32::consts::TAU,
-                tint.with_alpha(if enabled { 0.48 } else { 0.20 }),
+                tint.with_alpha(if enabled { 0.65 } else { 0.25 }),
             );
         }
         painter.rect(
             dot,
             Corners::capsule(),
-            tint.with_alpha(if enabled { 1.0 } else { 0.28 }),
+            tint.with_alpha(if enabled { 1.0 } else { 0.30 }),
         );
         let label_right = if enabled && opacity < 0.995 {
             let badge = Rect::from_min_max(
-                Vec2::new(rect.max.x + switch_left - 42.0, rect.min.y),
-                Vec2::new(rect.max.x + switch_left - 8.0, rect.max.y),
+                Vec2::new(rect.max.x + switch_left - 96.0, rect.center().y - 9.0),
+                Vec2::new(rect.max.x + switch_left - 58.0, rect.center().y + 9.0),
+            );
+            painter.rect(
+                badge,
+                Corners::capsule(),
+                if active {
+                    palette.on_secondary_container.with_alpha(0.12)
+                } else {
+                    palette.surface_container_highest
+                },
             );
             painter.text_in(
                 badge,
                 &format!("{:.0}%", opacity * 100.0),
-                TextStyle::new(mono, palette.text_tertiary).aligned(Align::End),
+                TextStyle::new(
+                    mono,
+                    if active {
+                        palette.on_secondary_container
+                    } else {
+                        palette.on_surface_variant
+                    },
+                )
+                .aligned(Align::Center),
                 Align::Center,
             );
-            badge.min.x - 4.0
+            badge.min.x - 6.0
         } else {
-            rect.max.x + switch_left - 8.0
+            rect.max.x - 6.0
         };
         let color = if !enabled {
-            palette.text_quaternary
+            palette.outline
         } else if active {
-            palette.text_primary
+            palette.on_secondary_container
         } else {
-            palette.text_secondary
+            palette.on_surface
         };
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.min.x + 25.0, rect.min.y),
-                Vec2::new(label_right, rect.max.y),
+                Vec2::new(rect.min.x + 30.0, rect.min.y),
+                Vec2::new(label_right.max(rect.min.x + 30.0), rect.max.y),
             ),
             &name,
             TextStyle::new(font, color).truncating(),

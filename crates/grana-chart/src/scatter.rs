@@ -18,7 +18,7 @@ pub fn paint(
     empty: Option<&str>,
 ) {
     let palette = style.palette;
-    let accent = palette.accent;
+    let accent = palette.primary;
     let frame = style.metrics.frame(rect);
     let x = Axis::new(scatter.x_low(), scatter.x_high(), 5);
     let y = Axis::new(scatter.y_low(), scatter.y_high(), 4);
@@ -67,7 +67,7 @@ pub fn paint(
     let dimmed = decor.lasso.is_some();
     let ink = |alpha: f32| {
         palette
-            .text_primary
+            .on_surface
             .with_alpha(if dimmed { alpha * 0.5 } else { alpha })
     };
     if decor.sparse {
@@ -162,7 +162,7 @@ pub fn paint(
         painter.outlined(
             Rect::from_center_size(centre, Vec2::splat(9.0)),
             Corners::capsule(),
-            Fill::Solid(palette.text_primary.with_alpha(0.12)),
+            Fill::Solid(palette.on_surface.with_alpha(0.12)),
             Border {
                 width: 1.4,
                 color: accent,
@@ -171,7 +171,7 @@ pub fn paint(
         );
     }
     if let Some(pointer) = decor.pointer {
-        let line = palette.text_primary.with_alpha(0.10);
+        let line = palette.on_surface.with_alpha(0.10);
         painter.segment(
             Vec2::new(pointer.x, frame.min.y),
             Vec2::new(pointer.x, frame.max.y),

@@ -59,11 +59,11 @@ pub(crate) fn heading(painter: &mut Painter, rect: Rect, heading: &Heading, styl
         painter.text_in(
             metrics.title_band(rect),
             &heading.title,
-            TextStyle::new(metrics.title, palette.text_primary),
+            TextStyle::new(metrics.title, palette.on_surface),
             Align::Center,
         );
     }
-    let label = TextStyle::new(metrics.label, palette.text_tertiary);
+    let label = TextStyle::new(metrics.label, palette.outline);
     let band = metrics.label_band(rect);
     painter.text_in(band, &heading.y, label, Align::Center);
     painter.text_in(band, &heading.x, label.aligned(Align::End), Align::Center);
@@ -71,7 +71,7 @@ pub(crate) fn heading(painter: &mut Painter, rect: Rect, heading: &Heading, styl
         painter.text_in(
             metrics.summary_band(rect),
             &heading.summary,
-            TextStyle::new(metrics.summary, palette.text_tertiary).truncating(),
+            TextStyle::new(metrics.summary, palette.outline).truncating(),
             Align::Center,
         );
     }
@@ -153,7 +153,7 @@ impl Chart {
             },
         };
         recorder.marks(points, |painter| {
-            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            painter.rect(page, Corners::ZERO, theme.palette.surface_dim);
             view.paint(painter, page);
         })
     }

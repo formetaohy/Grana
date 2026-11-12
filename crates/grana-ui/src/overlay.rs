@@ -62,12 +62,12 @@ impl<A: Clone> Ui<A> {
                 let previous = painter.clip();
                 painter.push_clip(node_clip, Corners::ZERO);
                 painter.outlined(
-                    rect.expand(1.5),
+                    rect.expand(2.0),
                     corners,
                     Fill::None,
                     Border {
-                        width: 1.5,
-                        color: self.theme.palette.focus,
+                        width: 2.0,
+                        color: self.theme.palette.primary,
                     },
                     Shadow::NONE,
                 );
@@ -92,19 +92,16 @@ impl<A: Clone> Ui<A> {
                 painter.rect(
                     thumb,
                     Corners::capsule(),
-                    self.theme
-                        .palette
-                        .text_quaternary
-                        .with_alpha(0.75 * scroll.bar),
+                    self.theme.palette.outline.with_alpha(0.65 * scroll.bar),
                 );
             }
             if let Some((_, text)) = &tooltip {
                 let style = TextStyle::new(
                     self.theme.font(Level::Caption),
-                    self.theme.palette.text_primary,
+                    self.theme.palette.on_surface,
                 );
                 let layout = painter.layout(text, style, 0.0);
-                let box_size = layout.size + Vec2::new(14.0, 8.0);
+                let box_size = layout.size + Vec2::new(16.0, 10.0);
                 let mut origin = pointer + Vec2::new(12.0, 16.0);
                 if origin.x + box_size.x > self.size.x - 8.0 {
                     origin.x = self.size.x - 8.0 - box_size.x;
@@ -115,13 +112,13 @@ impl<A: Clone> Ui<A> {
                 let rect = Rect::from_min_size(origin, box_size);
                 let surface = self
                     .theme
-                    .surface(Role::Popover, State::Rest)
-                    .with_corners(Corners::all(self.theme.metrics.radius));
+                    .surface(Role::Menu, State::Rest)
+                    .with_corners(Corners::all(self.theme.metrics.corner_sm));
                 painter.surface(rect, surface);
                 painter.text(
                     &layout,
-                    rect.min + Vec2::new(7.0, 4.0),
-                    self.theme.palette.text_primary,
+                    rect.min + Vec2::new(8.0, 5.0),
+                    self.theme.palette.on_surface,
                 );
             }
         }

@@ -66,7 +66,7 @@ impl Sheet {
         let page = Rect::from_min_size(Vec2::ZERO, points);
         let style = Style::page(&theme, self.distribution());
         recorder.marks(points, |painter| {
-            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            painter.rect(page, Corners::ZERO, theme.palette.surface_dim);
             self.paint(painter, page, &style, &Decor::default());
         })
     }

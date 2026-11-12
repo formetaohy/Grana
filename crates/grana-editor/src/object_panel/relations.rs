@@ -103,8 +103,8 @@ pub(super) fn relation_row<'a>(
         ctx,
         &format!("relation.{}.{}.{}.matrix", id.raw(), target.raw(), shift),
         Icon::Grid,
-        22.0,
-        Role::Quiet,
+        24.0,
+        Role::SurfaceHigh,
         grana_i18n::object::open_pair_matrix(language),
         Message::OpenRelation {
             source: id,
@@ -116,8 +116,8 @@ pub(super) fn relation_row<'a>(
         ctx,
         &format!("relation.{}.{}.{}.remove", id.raw(), target.raw(), shift),
         Icon::Close,
-        22.0,
-        Role::Quiet,
+        24.0,
+        Role::Standard,
         grana_i18n::object::remove_relation(language),
         Message::Command(Command::RemoveRelation {
             source: id,
@@ -126,8 +126,8 @@ pub(super) fn relation_row<'a>(
         }),
     );
     let mut children = vec![grana_ui::row().gap(6.0).align(Align::Center).children([
-        crate::inspector::centered(22.0, caption),
-        crate::inspector::centered(22.0, count),
+        crate::inspector::centered(24.0, caption),
+        crate::inspector::centered(24.0, count),
         matrix,
         remove,
     ])];
@@ -145,8 +145,8 @@ pub(super) fn relation_row<'a>(
                 ctx,
                 &format!("relation.{}.{}.{}.back", id.raw(), target.raw(), shift),
                 Icon::ChevronLeft,
-                20.0,
-                Role::Quiet,
+                22.0,
+                Role::Standard,
                 grana_i18n::object::earlier_frame(language),
                 Message::Command(Command::MoveRelation {
                     source: id,
@@ -157,7 +157,7 @@ pub(super) fn relation_row<'a>(
             ));
         }
         cell.push(crate::inspector::centered(
-            20.0,
+            22.0,
             view::caption(ctx, &shift_label(language, shift)),
         ));
         if shift < limit && !taken.contains(&(shift + 1)) {
@@ -165,8 +165,8 @@ pub(super) fn relation_row<'a>(
                 ctx,
                 &format!("relation.{}.{}.{}.forward", id.raw(), target.raw(), shift),
                 Icon::ChevronRight,
-                20.0,
-                Role::Quiet,
+                22.0,
+                Role::Standard,
                 grana_i18n::object::later_frame(language),
                 Message::Command(Command::MoveRelation {
                     source: id,
@@ -182,8 +182,8 @@ pub(super) fn relation_row<'a>(
                 ctx,
                 &offset_key,
                 Icon::Plus,
-                20.0,
-                Role::Quiet,
+                22.0,
+                Role::SurfaceHigh,
                 grana_i18n::object::add_offset_relation(language),
                 Message::Noop,
             ));
@@ -209,7 +209,7 @@ pub(super) fn relation_row<'a>(
                     })),
                 ));
             }
-            children.push(view::menu(ctx, Key::new(&offset_key), 176.0, rows));
+            children.push(view::menu(ctx, Key::new(&offset_key), 180.0, rows));
         }
     }
     grana_ui::column().gap(6.0).children(children)
@@ -277,11 +277,11 @@ pub(super) fn unlinked<'a>(
     let anchor = view::button_with(
         ctx,
         grana_i18n::object::relate_to_set(language),
-        Role::Control,
+        Role::SurfaceHigh,
         Length::Fill,
     )
     .named(&key)
     .press(Message::Noop);
-    let menu = view::menu(ctx, Key::new(&key), 208.0, rows);
+    let menu = view::menu(ctx, Key::new(&key), 212.0, rows);
     vec![anchor, menu]
 }

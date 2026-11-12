@@ -34,7 +34,7 @@ pub(crate) struct LayerChange {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Accessibility {
-    pub reduce_transparency: bool,
+    pub reduce_motion: bool,
     pub increase_contrast: bool,
 }
 
@@ -176,7 +176,7 @@ impl<A: Clone> Ui<A> {
         self.accessibility = accessibility;
         self.theme = Theme::dark()
             .with_contrast(accessibility.increase_contrast)
-            .with_transparency(accessibility.reduce_transparency);
+            .with_reduce_motion(accessibility.reduce_motion);
     }
 
     pub fn copy(&mut self, text: &str) {
@@ -544,6 +544,11 @@ impl<A> BuildContext<'_, A> {
     }
 
     pub fn animate(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
+        let motion = if self.theme.reduce_motion {
+            motion.reduced()
+        } else {
+            motion
+        };
         let spring = self
             .animations
             .entry(key)

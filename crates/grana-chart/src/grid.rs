@@ -9,8 +9,8 @@ pub(crate) fn grid(painter: &mut Painter, rect: Rect, style: &Style, x: Axis, y:
     let metrics = style.metrics;
     let frame = metrics.frame(rect);
     let tick = metrics.tick_band(rect);
-    let line = style.palette.separator.with_alpha(0.45);
-    let text = TextStyle::new(metrics.tick, style.palette.text_tertiary);
+    let line = style.palette.outline_variant.with_alpha(0.35);
+    let text = TextStyle::new(metrics.tick, style.palette.outline);
     for value in x.ticks() {
         let pixel = x.x(frame, value);
         painter.segment(
@@ -35,8 +35,8 @@ pub(crate) fn axis(painter: &mut Painter, rect: Rect, style: &Style, y: Axis) {
 
 pub(crate) fn axis_in(painter: &mut Painter, rect: Rect, frame: Rect, style: &Style, y: Axis) {
     let metrics = style.metrics;
-    let text = TextStyle::new(metrics.tick, style.palette.text_tertiary);
-    let line = style.palette.separator.with_alpha(0.45);
+    let text = TextStyle::new(metrics.tick, style.palette.outline);
+    let line = style.palette.outline_variant.with_alpha(0.35);
     for value in y.ticks() {
         let pixel = y.y(frame, value);
         painter.segment(
@@ -68,7 +68,7 @@ pub(crate) fn tick_box(metrics: Metrics, band: Rect, pixel: f32) -> Rect {
 }
 
 pub(crate) fn slot_separators(painter: &mut Painter, frame: Rect, style: &Style, count: usize) {
-    let line = style.palette.separator.with_alpha(0.35);
+    let line = style.palette.outline_variant.with_alpha(0.28);
     for index in 1..count {
         let x = frame.min.x + slot(frame, count) * index as f32;
         painter.segment(

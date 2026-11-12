@@ -109,7 +109,7 @@ pub(crate) fn command(language: Language, id: &str) -> &'static str {
         "language.english" => ("Language: English", "语言：English"),
         "language.chinese" => ("Language: Chinese", "语言：中文"),
         "appearance.contrast" => ("Toggle Increased Contrast", "切换增强对比度"),
-        "appearance.transparency" => ("Toggle Reduced Transparency", "切换降低透明度"),
+        "appearance.motion" => ("Toggle Reduced Motion", "切换减弱动效"),
         "view.fit" => ("Frame the Volume", "适配体数据视图"),
         "panel.close" => ("Close Panel", "关闭面板"),
         "panel.statistics" => ("Show Statistics", "显示统计"),

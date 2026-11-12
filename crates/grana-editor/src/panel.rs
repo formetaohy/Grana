@@ -15,20 +15,20 @@ mod timeline;
 
 pub(crate) use stage::remote;
 
-pub const MARGIN: f32 = 10.0;
+pub const MARGIN: f32 = 12.0;
 pub const GAP: f32 = 8.0;
-pub const FORM_LABEL: f32 = 68.0;
+pub const FORM_LABEL: f32 = 70.0;
 
-pub const TOOLBAR_HEIGHT: f32 = 34.0;
-pub const SIDEBAR_WIDTH: f32 = 312.0;
-pub const SIDEBAR_PAD: f32 = 10.0;
-pub const TRANSPORT_HEIGHT: f32 = 38.0;
-pub const DOCK_HEADER: f32 = 32.0;
-pub const DOCK_DEFAULT: f32 = 320.0;
-pub const DOCK_MINIMUM: f32 = 200.0;
-pub const TOOLBAR_LEFT: f32 = 312.0;
-pub const TOOLBAR_RIGHT: f32 = 286.0;
-pub const STAGE_INSET: f32 = 10.0;
+pub const TOOLBAR_HEIGHT: f32 = 42.0;
+pub const SIDEBAR_WIDTH: f32 = 336.0;
+pub const SIDEBAR_PAD: f32 = 12.0;
+pub const TRANSPORT_HEIGHT: f32 = 44.0;
+pub const DOCK_HEADER: f32 = 36.0;
+pub const DOCK_DEFAULT: f32 = 332.0;
+pub const DOCK_MINIMUM: f32 = 210.0;
+pub const TOOLBAR_LEFT: f32 = 336.0;
+pub const TOOLBAR_RIGHT: f32 = 336.0;
+pub const STAGE_INSET: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -191,7 +191,7 @@ impl Layout {
         let sidebar_t = ctx.animate(
             Key::new("sidebar.open").id(),
             if sidebar_open { 1.0 } else { 0.0 },
-            Motion::snappy(),
+            Motion::spatial_default(),
         );
         let sidebar_visible = sidebar_t > 0.005;
         let sidebar_slide = (1.0 - sidebar_t) * (SIDEBAR_WIDTH + MARGIN + GAP);
@@ -233,7 +233,7 @@ impl Layout {
         let dock_t = ctx.animate(
             Key::new("dock.open").id(),
             if dock_open { 1.0 } else { 0.0 },
-            Motion::snappy(),
+            Motion::spatial_default(),
         );
         let dock_top = toolbar_left.max.y + GAP + 100.0;
         let dock_available = (dock_bottom - dock_top).max(DOCK_MINIMUM);
@@ -247,7 +247,7 @@ impl Layout {
             let height = ctx.animate(
                 Key::new("dock.height.spring").id(),
                 dock_height,
-                Motion::response(0.18, 0.04),
+                Motion::spatial_fast(),
             );
             let slide = (1.0 - dock_t) * (height + MARGIN + GAP * 2.0);
             Rect::from_min_max(
@@ -304,20 +304,26 @@ fn sidebar<'a>(
     );
     let active = state.workspace.sidebar_tab.min(1);
     let language = ctx.language();
+    let objects_count = state.scene.objects.len();
+    let objects_label = if objects_count > 0 {
+        format!(
+            "{} · {objects_count}",
+            grana_i18n::panel::objects_tab(language)
+        )
+    } else {
+        grana_i18n::panel::objects_tab(language).to_string()
+    };
     let tabs = crate::view::segmented_fill(
         ctx,
         "sidebar.tabs",
-        &[
-            grana_i18n::panel::view_tab(language),
-            grana_i18n::panel::objects_tab(language),
-        ],
+        &[grana_i18n::panel::view_tab(language), &objects_label],
         active,
         Message::SetSidebarTab,
     )
     .at(tabs_rect);
     let summary_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, tabs_rect.max.y + 5.0),
-        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 16.0),
+        Vec2::new(rect.min.x + SIDEBAR_PAD, tabs_rect.max.y + 6.0),
+        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 26.0),
     );
     let dataset = &state.scene.dataset;
     let extent = dataset.extent();
@@ -344,33 +350,31 @@ fn sidebar<'a>(
     let voxel = dataset.voxel_size();
     let spacing = format!("{:.2}×{:.2} µm", voxel.x, voxel.z);
     let mono = theme.font(Level::Monospace);
-    let summary = grana_ui::canvas(Length::Fill, 16.0, move |painter, info| {
-        painter.text_in(
+    let summary = grana_ui::canvas(Length::Fill, 26.0, move |painter, info| {
+        painter.rect(
             info.rect,
+            Corners::all(theme.metrics.corner_sm),
+            palette.surface_container,
+        );
+        let inner = info.rect.shrink2(Vec2::new(10.0, 0.0));
+        painter.text_in(
+            inner,
             &dims,
-            TextStyle::new(mono, palette.text_tertiary).truncating(),
+            TextStyle::new(mono, palette.on_surface_variant).truncating(),
             Align::Center,
         );
         painter.text_in(
-            info.rect,
+            inner,
             &spacing,
-            TextStyle::new(mono, palette.text_quaternary).aligned(Align::End),
+            TextStyle::new(mono, palette.primary).aligned(Align::End),
             Align::Center,
         );
     })
     .named("sidebar.summary")
     .at(summary_rect);
-    let separator_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, summary_rect.max.y + 5.0),
-        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 1.0),
-    );
-    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, palette.separator);
-    })
-    .at(separator_rect);
     let body_bottom = rect.max.y - SIDEBAR_PAD;
     let body = Rect::from_min_max(
-        Vec2::new(rect.min.x, separator_rect.max.y + 1.0),
+        Vec2::new(rect.min.x, summary_rect.max.y + 6.0),
         Vec2::new(rect.max.x, body_bottom),
     );
     let mut content = vec![crate::inspector::source(ctx, state)];
@@ -381,11 +385,11 @@ fn sidebar<'a>(
     let column = grana_ui::column()
         .padding(Edges {
             left: SIDEBAR_PAD,
-            top: 6.0,
+            top: 4.0,
             right: SIDEBAR_PAD,
             bottom: 12.0,
         })
-        .gap(6.0)
+        .gap(8.0)
         .children(content);
     let scroll = Element::new(UiLayout::column())
         .named("sidebar.scroll")
@@ -393,12 +397,12 @@ fn sidebar<'a>(
         .scroll(Axis::Column, Length::Fill, None)
         .clipped()
         .children([column]);
-    let surface = theme.surface(Role::Panel, State::Rest);
+    let surface = theme.surface(Role::Sheet, State::Rest);
     Element::new(UiLayout::column())
         .named("sidebar")
         .at(rect)
         .background(surface)
-        .children([tabs, summary, separator, scroll])
+        .children([tabs, summary, scroll])
 }
 
 fn dock<'a>(
@@ -408,16 +412,16 @@ fn dock<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 8.0));
-    let grip_element = grana_ui::canvas(Length::Fill, 8.0, move |painter, info| {
+    let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 10.0));
+    let grip_element = grana_ui::canvas(Length::Fill, 10.0, move |painter, info| {
         let engaged = info.hover.max(info.press);
         painter.rect(
             Rect::from_center_size(
-                Vec2::new(info.rect.center().x, info.rect.min.y + 4.0),
-                Vec2::new(32.0 + 12.0 * engaged, 3.0),
+                Vec2::new(info.rect.center().x, info.rect.min.y + 5.0),
+                Vec2::new(36.0 + 14.0 * engaged, 4.0),
             ),
-            Corners::all(1.5),
-            palette.text_quaternary.lerp(palette.text_tertiary, engaged),
+            Corners::capsule(),
+            palette.outline_variant.lerp(palette.outline, engaged),
         );
     })
     .at(grip)
@@ -426,12 +430,12 @@ fn dock<'a>(
         (pointer.phase == grana_ui::Phase::Move).then_some(Message::SetDockHeight(-pointer.delta.y))
     });
     let header = Rect::from_min_size(
-        rect.min + Vec2::new(12.0, 6.0),
-        Vec2::new(rect.width() - 24.0, DOCK_HEADER),
+        rect.min + Vec2::new(14.0, 10.0),
+        Vec2::new(rect.width() - 28.0, DOCK_HEADER),
     );
     let close = Rect::from_center_size(
-        Vec2::new(header.max.x - 13.0, header.center().y),
-        Vec2::splat(26.0),
+        Vec2::new(header.max.x - 15.0, header.center().y),
+        Vec2::splat(30.0),
     );
     let tabs_rect = Rect::from_min_max(header.min, Vec2::new(close.min.x - 10.0, header.max.y));
     let labels = Panel::ALL.map(|panel| panel.name(ctx.language()));
@@ -444,32 +448,24 @@ fn dock<'a>(
         Message::SetPanel(Some(Panel::ALL[index]))
     })
     .at(Rect::from_min_size(
-        Vec2::new(tabs_rect.min.x, header.center().y - 14.0),
-        Vec2::new(tabs_rect.width(), 28.0),
+        Vec2::new(tabs_rect.min.x, header.center().y - 16.0),
+        Vec2::new(tabs_rect.width(), 32.0),
     ));
     let close_element = crate::view::icon_button(
         ctx,
         "dock.close",
         Icon::Close,
-        26.0,
-        Role::Quiet,
+        30.0,
+        Role::SurfaceHigh,
         grana_i18n::panel::close_panel(ctx.language()),
         Message::SetPanel(None),
     )
     .at(close);
-    let separator_rect = Rect::from_min_size(
-        Vec2::new(rect.min.x + 12.0, header.max.y + 2.0),
-        Vec2::new(rect.width() - 24.0, 1.0),
-    );
-    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, palette.separator);
-    })
-    .at(separator_rect);
     let content = Rect::from_min_max(
-        Vec2::new(rect.min.x + 12.0, header.max.y + 9.0),
-        Vec2::new(rect.max.x - 12.0, rect.max.y - 10.0),
+        Vec2::new(rect.min.x + 14.0, header.max.y + 8.0),
+        Vec2::new(rect.max.x - 14.0, rect.max.y - 12.0),
     );
-    let mut children = vec![grip_element, tabs, close_element, separator];
+    let mut children = vec![grip_element, tabs, close_element];
     match panel {
         Panel::Statistics => children.push(clipped(
             content,
@@ -501,7 +497,7 @@ fn dock<'a>(
             );
         }
     }
-    let surface = theme.surface(Role::Panel, State::Rest);
+    let surface = theme.surface(Role::Sheet, State::Rest);
     Element::new(UiLayout::column())
         .named("dock")
         .at(rect)
@@ -598,9 +594,9 @@ pub fn apply(
             Message::SetLanguage(language) => workspace.language = language,
             Message::SetContrast(contrast) => workspace.contrast = contrast,
             Message::ToggleContrast => workspace.contrast = !workspace.contrast,
-            Message::SetReduceTransparency(reduce) => workspace.reduce_transparency = reduce,
-            Message::ToggleReduceTransparency => {
-                workspace.reduce_transparency = !workspace.reduce_transparency;
+            Message::SetReduceMotion(reduce) => workspace.reduce_motion = reduce,
+            Message::ToggleReduceMotion => {
+                workspace.reduce_motion = !workspace.reduce_motion;
             }
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {

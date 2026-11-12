@@ -19,7 +19,9 @@ pub(crate) mod segment;
 pub(crate) mod slider;
 pub(crate) mod toggle;
 
-pub use button::{action_button, button, button_enabled, button_width, icon_button};
+pub use button::{
+    Split, action_button, button, button_enabled, button_width, icon_button, split_button,
+};
 pub use color::color_picker;
 pub use field::text_field;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
@@ -72,9 +74,9 @@ pub(crate) fn measure(
         Content::ActionRow(_) => (Vec2::new(available.x, menu::MENU_ROW), None),
         Content::Badge(badge) => (label::measure_badge(badge, text), None),
         Content::Spinner(spinner) => (Vec2::splat(spinner.size), None),
-        Content::Progress(progress) => (Vec2::new(progress.width, 4.0), None),
+        Content::Progress(progress) => (Vec2::new(progress.width, 10.0), None),
         Content::GradientBar(bar) => (Vec2::new(available.x, bar.height), None),
-        Content::Labelled(_) => (Vec2::new(available.x, 20.0), None),
+        Content::Labelled(_) => (Vec2::new(available.x, 22.0), None),
         Content::ColorSwatch(swatch) => (Vec2::splat(swatch.size), None),
         Content::ColorPicker(_) => (color::measure(), None),
         Content::Separator => (Vec2::new(available.x, menu::SEPARATOR), None),
@@ -196,20 +198,28 @@ pub(crate) fn animate<A>(
     let hovered = frame.hovered && interactive;
     let active = frame.pressed && interactive;
     let press = if active {
-        Motion::response(0.14, 0.0)
+        Motion::effect_fast()
+    } else if theme.reduce_motion {
+        Motion::effect_default()
     } else {
-        Motion::snappy()
+        Motion::spatial_fast()
     };
-    node.runtime
-        .hover
-        .animate_to(if hovered { 1.0 } else { 0.0 }, Motion::quick().spring());
+    node.runtime.hover.animate_to(
+        if hovered { 1.0 } else { 0.0 },
+        Motion::effect_fast().spring(),
+    );
     node.runtime
         .press
         .animate_to(if active { 1.0 } else { 0.0 }, press.spring());
     if let Some((motion, target)) = value_target(node, frame, text, theme) {
+        let motion = if theme.reduce_motion {
+            motion.reduced()
+        } else {
+            motion
+        };
         node.runtime.engaged.animate_to(
             if hovered || active { 1.0 } else { 0.0 },
-            Motion::quick().spring(),
+            Motion::effect_fast().spring(),
         );
         if node.runtime.seeded {
             if motion.is_instant() {
@@ -243,7 +253,7 @@ pub(crate) fn animate<A>(
             animating = true;
         }
     }
-    if matches!(node.content, Content::Spinner(_)) {
+    if matches!(node.content, Content::Spinner(_) | Content::Progress(_)) && !theme.reduce_motion {
         node.paint_dirty = true;
         animating = true;
     }
@@ -282,19 +292,20 @@ pub(crate) fn hit_rect<A>(node: &Node<A>, text: &mut Text, theme: &Theme) -> Rec
 
 pub(crate) fn focus_corners(content: &Content, theme: &Theme) -> Corners {
     match content {
-        Content::Toggle(_) => Corners::capsule(),
-        Content::Checkbox(_) | Content::ColorSwatch(_) => Corners::all(4.0),
-        Content::Button(_)
+        Content::Toggle(_)
+        | Content::Button(_)
         | Content::IconButton(_)
         | Content::Segment(_)
         | Content::Tabs(_)
-        | Content::Slider(_)
+        | Content::ColorSwatch(_) => Corners::capsule(),
+        Content::Checkbox(_) => Corners::all(5.0),
+        Content::Slider(_)
         | Content::RangeSlider(_)
         | Content::DragValue(_)
         | Content::Field(_)
         | Content::MenuRow(_)
         | Content::ActionRow(_)
-        | Content::ColorPicker(_) => Corners::all(theme.metrics.radius),
+        | Content::ColorPicker(_) => Corners::all(theme.metrics.corner_sm),
         _ => Corners::ZERO,
     }
 }
@@ -320,5 +331,5 @@ pub(crate) fn cursor(content: &Content) -> Option<Cursor> {
 }
 
 pub(crate) fn padding(theme: &Theme) -> f32 {
-    (theme.metrics.control_height * 0.42).round()
+    (theme.metrics.control_height * 0.44).round()
 }

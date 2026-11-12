@@ -87,7 +87,7 @@ pub struct App {
     revision: Revision,
     language: Language,
     contrast: bool,
-    reduce_transparency: bool,
+    reduce_motion: bool,
     interacting: bool,
     animating: bool,
 }
@@ -103,7 +103,7 @@ impl App {
         let mut workspace = Workspace::default();
         workspace.language = language;
         workspace.contrast = preference.contrast;
-        workspace.reduce_transparency = preference.reduce_transparency;
+        workspace.reduce_motion = preference.reduce_motion;
         Self {
             surface: None,
             session,
@@ -139,7 +139,7 @@ impl App {
             revision: Revision::ZERO,
             language,
             contrast: preference.contrast,
-            reduce_transparency: preference.reduce_transparency,
+            reduce_motion: preference.reduce_motion,
             interacting: false,
             animating: false,
         }

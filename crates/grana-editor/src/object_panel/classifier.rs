@@ -45,7 +45,7 @@ pub(super) fn classifier<'a>(
             view::button_with(
                 ctx,
                 &grana_i18n::object::measurements(language, features.len()),
-                Role::Control,
+                Role::SurfaceHigh,
                 Length::Fill,
             )
             .named(&features_key)
@@ -75,19 +75,19 @@ pub(super) fn classifier<'a>(
             grana_i18n::object::train_classifier(language)
         };
         children.push(
-            view::button_with(ctx, label, Role::Tinted, Length::Fill).press(Message::Command(
-                Command::TrainClassifier {
+            view::button_with(ctx, label, Role::PrimaryContainer, Length::Fill).press(
+                Message::Command(Command::TrainClassifier {
                     set: id,
                     features: features.clone(),
-                },
-            )),
+                }),
+            ),
         );
         if current.is_some() {
             children.push(
                 view::button_with(
                     ctx,
                     grana_i18n::object::clear_classifier(language),
-                    Role::Danger,
+                    Role::Error,
                     Length::Fill,
                 )
                 .press(Message::Command(Command::ClearClassifier(id))),
@@ -143,7 +143,7 @@ pub(super) fn classifier_menu<'a>(
                 }),
         );
     }
-    let content = rows.len() as f32 * 28.0 + 16.0;
+    let content = rows.len() as f32 * 32.0 + 16.0;
     let list = Element::new(grana_ui::Layout::column())
         .named(&format!("{key}.list"))
         .scroll(

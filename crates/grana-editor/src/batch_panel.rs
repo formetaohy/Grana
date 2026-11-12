@@ -42,31 +42,35 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 &theme,
                 Icon::Camera,
                 grana_i18n::batch::capture(language),
-                Role::Control,
+                Role::PrimaryContainer,
             )
             .named("batch.capture")
             .press(Message::Command(Command::CaptureProtocol)),
         );
         actions.push(
-            view::button(ctx, grana_i18n::batch::load(language), Role::Quiet)
+            view::button(ctx, grana_i18n::batch::load(language), Role::SurfaceHigh)
                 .press(Message::Command(Command::LoadProtocol)),
         );
         actions.push(
-            view::button(ctx, grana_i18n::common::save(language), Role::Quiet)
+            view::button(ctx, grana_i18n::common::save(language), Role::SurfaceHigh)
                 .press(Message::Command(Command::SaveProtocol)),
         );
         actions.push(
-            view::button(ctx, grana_i18n::batch::provenance(language), Role::Quiet)
-                .press(Message::Command(Command::ExportProvenance)),
+            view::button(
+                ctx,
+                grana_i18n::batch::provenance(language),
+                Role::SurfaceHigh,
+            )
+            .press(Message::Command(Command::ExportProvenance)),
         );
         if has_protocol {
             actions.push(
-                view::button(ctx, grana_i18n::common::apply(language), Role::Quiet)
+                view::button(ctx, grana_i18n::common::apply(language), Role::Tonal)
                     .press(Message::Command(Command::ApplyProtocol)),
             );
             if let Some(text) = state.batch_protocol() {
                 actions.push(
-                    view::button(ctx, grana_i18n::batch::copy(language), Role::Quiet)
+                    view::button(ctx, grana_i18n::batch::copy(language), Role::Standard)
                         .press(Message::Copy(text.to_string())),
                 );
             }
@@ -75,6 +79,7 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
     let row = grana_ui::row()
         .gap(6.0)
         .align(Align::Center)
+        .wrap()
         .children(actions);
     let mut children = vec![
         view::card_title(
@@ -94,7 +99,7 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             let surface = ctx.theme().surface(Role::Field, State::Rest);
             let style = TextStyle::new(
                 ctx.theme().font(Level::Monospace),
-                ctx.theme().palette.text_secondary,
+                ctx.theme().palette.on_surface_variant,
             )
             .wrapping();
             let body = grana_ui::text(text, style);
@@ -126,8 +131,8 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
     } else {
         let theme = *ctx.theme();
         let palette = theme.palette;
-        let callout = theme.font(Level::Callout);
-        let micro = theme.font(Level::Micro);
+        let label_font = theme.font(Level::Label);
+        let caption_font = theme.font(Level::Caption);
         let mut rows = Vec::new();
         let reviewable = !running || state.batch_paused();
         for (index, dataset) in state.batch_datasets().iter().enumerate() {
@@ -135,40 +140,40 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             let name = dataset.name.clone();
             let label = state_label(language, &dataset.state).to_string();
             let detail = dataset.detail.clone();
-            let mut row = grana_ui::canvas(Length::Fill, 30.0, move |painter, info| {
+            let mut row = grana_ui::canvas(Length::Fill, 32.0, move |painter, info| {
                 if info.hover > 0.01 {
                     painter.rect(
                         info.rect,
-                        Corners::all(6.0),
-                        Color::white_alpha(0.04 * info.hover),
+                        Corners::all(theme.metrics.corner_sm),
+                        palette.on_surface.with_alpha(0.07 * info.hover),
                     );
                 }
                 icon::paint(
                     Icon::Folder,
                     painter,
-                    Vec2::new(info.rect.min.x + 10.0, info.rect.center().y),
+                    Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
                     14.0,
-                    palette.text_tertiary,
+                    palette.on_surface_variant,
                     1.5,
                 );
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(info.rect.min.x + 22.0, info.rect.min.y),
+                        Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
                         Vec2::new(info.rect.max.x - 100.0, info.rect.max.y),
                     ),
                     &name,
-                    TextStyle::new(callout, palette.text_primary).truncating(),
+                    TextStyle::new(label_font, palette.on_surface).truncating(),
                     Align::Center,
                 );
                 let badge = Rect::from_min_size(
-                    Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 9.0),
-                    Vec2::new(92.0, 18.0),
+                    Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 10.0),
+                    Vec2::new(92.0, 20.0),
                 );
-                painter.rect(badge, Corners::all(4.0), tint.with_alpha(0.16));
+                painter.rect(badge, Corners::capsule(), tint.with_alpha(0.18));
                 painter.text_in(
                     badge,
                     &label,
-                    TextStyle::new(micro, tint).aligned(Align::Center),
+                    TextStyle::new(caption_font, tint).aligned(Align::Center),
                     Align::Center,
                 );
             })
@@ -195,14 +200,14 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 &theme,
                 Icon::Plus,
                 grana_i18n::batch::add_folder(language),
-                Role::Control,
+                Role::SurfaceHigh,
             )
             .named("batch.add")
             .press(Message::Command(Command::AddBatchDatasets)),
         );
         if !state.batch_datasets().is_empty() {
             actions.push(
-                view::button(ctx, grana_i18n::common::clear(language), Role::Quiet)
+                view::button(ctx, grana_i18n::common::clear(language), Role::Standard)
                     .press(Message::Command(Command::ClearBatchDatasets)),
             );
         }
@@ -232,7 +237,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         let record = grana_ui::widget::button_enabled(
             &theme,
             grana_i18n::batch::record_correction(language),
-            Role::Prominent,
+            Role::Filled,
             Length::Fill,
             ready,
         )
@@ -248,7 +253,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 view::button(
                     ctx,
                     grana_i18n::batch::clear_correction(language),
-                    Role::Quiet,
+                    Role::SurfaceHigh,
                 )
                 .press(Message::Command(Command::ClearBatchCorrection)),
             );
@@ -278,12 +283,15 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     if let Some(path) = state.batch_output() {
         let theme = *ctx.theme();
         let look = theme.surface(Role::Field, State::Rest);
-        let style =
-            TextStyle::new(theme.font(Level::Monospace), theme.palette.text_secondary).truncating();
+        let style = TextStyle::new(
+            theme.font(Level::Monospace),
+            theme.palette.on_surface_variant,
+        )
+        .truncating();
         let path = path.to_string();
         children.push(grana_ui::canvas(
             Length::Fill,
-            28.0,
+            30.0,
             move |painter, info| {
                 painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
                 painter.text_in(
@@ -303,11 +311,11 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             &theme,
             Icon::Folder,
             grana_i18n::batch::choose_folder(language),
-            Role::Control,
+            Role::SurfaceHigh,
         )
         .named("batch.output")
         .press(Message::Command(Command::ChooseBatchOutput));
-        let open = view::button(ctx, grana_i18n::batch::open_run(language), Role::Quiet)
+        let open = view::button(ctx, grana_i18n::batch::open_run(language), Role::Standard)
             .named("batch.open")
             .press(Message::Command(Command::OpenBatchRun));
         children.push(
@@ -355,7 +363,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     if state.batch_running() {
         let paused = state.batch_paused();
         let mut actions = vec![
-            view::spinner(ctx, 14.0),
+            view::spinner(ctx, 16.0),
             view::caption(
                 ctx,
                 if paused {
@@ -372,7 +380,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                     &theme,
                     Icon::Play,
                     grana_i18n::batch::resume(language),
-                    Role::Quiet,
+                    Role::Filled,
                 )
                 .named("batch.resume")
                 .press(Message::Command(Command::ResumeBatch)),
@@ -384,14 +392,14 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                     &theme,
                     Icon::Pause,
                     grana_i18n::batch::pause(language),
-                    Role::Quiet,
+                    Role::SurfaceHigh,
                 )
                 .named("batch.pause")
                 .press(Message::Command(Command::PauseBatch)),
             );
         }
         actions.push(
-            view::button(ctx, grana_i18n::common::cancel(language), Role::Quiet)
+            view::button(ctx, grana_i18n::common::cancel(language), Role::Error)
                 .press(Message::Command(Command::CancelBatch)),
         );
         children.push(
@@ -408,7 +416,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         let run = grana_ui::widget::button_enabled(
             &theme,
             grana_i18n::batch::run_batch(language),
-            Role::Prominent,
+            Role::Filled,
             Length::Fill,
             ready,
         )
@@ -421,7 +429,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     }
     if let Some(message) = state.batch_message() {
         let style =
-            TextStyle::new(ctx.theme().font(Level::Caption), ctx.theme().palette.danger).wrapping();
+            TextStyle::new(ctx.theme().font(Level::Caption), ctx.theme().palette.error).wrapping();
         children.push(grana_ui::text(message, style));
     }
     children.push(view::weak(ctx, grana_i18n::batch::resume_hint(language)));
@@ -511,7 +519,7 @@ fn comparison<'a>(
             "comparison.export",
             Icon::Export,
             28.0,
-            Role::Quiet,
+            Role::SurfaceHigh,
             grana_i18n::batch::export_comparison(language),
             Message::Command(Command::SaveComparison),
         ),
@@ -681,17 +689,17 @@ fn detail<'a>(
     let mut parts = vec![
         grana_ui::text(
             readout,
-            TextStyle::new(theme.font(Level::Callout), palette.text_primary).wrapping(),
+            TextStyle::new(theme.font(Level::Label), palette.on_surface).wrapping(),
         ),
         grana_ui::text(
             sample_line(language, row, metric, index),
-            TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
+            TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).wrapping(),
         ),
     ];
     if !tests.is_empty() {
         parts.push(grana_ui::text(
             test_line(language, &row.group, &tests),
-            TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
+            TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).wrapping(),
         ));
     }
     parts
@@ -786,10 +794,10 @@ fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {
     match state {
         "complete" | "done" | "resumed" => theme.palette.success,
         "corrected" => theme.palette.warning,
-        "failed" => theme.palette.danger,
-        "cancelled" => theme.palette.text_tertiary,
-        "running" => theme.palette.warning,
-        _ => theme.palette.text_secondary,
+        "failed" => theme.palette.error,
+        "cancelled" => theme.palette.outline,
+        "running" => theme.palette.tertiary,
+        _ => theme.palette.on_surface_variant,
     }
 }
 

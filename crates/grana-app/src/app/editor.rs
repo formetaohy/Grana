@@ -23,7 +23,7 @@ impl App {
         surface.ui.resize(size);
         surface.ui.set_language(workspace.language);
         surface.ui.set_accessibility(grana_ui::Accessibility {
-            reduce_transparency: workspace.reduce_transparency,
+            reduce_motion: workspace.reduce_motion,
             increase_contrast: workspace.contrast,
         });
         let actions = surface

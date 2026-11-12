@@ -45,7 +45,7 @@ impl<A: Clone> Ui<A> {
             )
         };
         let background =
-            background.or_else(|| popup.then(|| self.theme.surface(Role::Popover, State::Rest)));
+            background.or_else(|| popup.then(|| self.theme.surface(Role::Menu, State::Rest)));
         let layer_index = layer.index();
         let order = self.change.next_orders[layer_index];
         self.change.next_orders[layer_index] =

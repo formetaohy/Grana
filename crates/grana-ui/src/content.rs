@@ -132,6 +132,7 @@ pub struct ButtonContent {
     pub inset: f32,
     pub width: crate::element::Length,
     pub height: f32,
+    pub corners: Option<Corners>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -139,6 +140,7 @@ pub struct IconButtonContent {
     pub symbol: Icon,
     pub size: f32,
     pub role: Role,
+    pub corners: Option<Corners>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

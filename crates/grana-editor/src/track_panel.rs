@@ -60,7 +60,7 @@ pub fn view<'a>(
         return Vec::new();
     };
     let selected = scene.selected_track(id);
-    let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 30.0));
+    let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 32.0));
     let mut elements = header(ctx, state, header_rect, &sets, id, object, selected);
     let full = Rect::from_min_max(Vec2::new(rect.min.x, header_rect.max.y + 8.0), rect.max);
     let gap = 12.0;
@@ -169,18 +169,12 @@ fn lineage_button<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label = grana_i18n::track::lineage(ctx.language());
-    let style = TextStyle::new(theme.button_font(), palette.text_primary);
-    let rest = theme.surface(Role::Control, State::Rest);
-    let hover = theme.surface(Role::Control, State::Hover);
-    grana_ui::canvas(Length::Fixed(74.0), 28.0, move |painter, info| {
+    let style = TextStyle::new(theme.button_font(), palette.on_surface);
+    let rest = theme.surface(Role::SurfaceHigh, State::Rest);
+    let hover = theme.surface(Role::SurfaceHigh, State::Hover);
+    grana_ui::canvas(Length::Fixed(78.0), 30.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
-        painter.outlined(
-            info.rect,
-            surface.corners,
-            surface.fill,
-            surface.border,
-            surface.shadow,
-        );
+        painter.surface(info.rect, surface);
         painter.text_in(
             info.rect,
             label,
@@ -238,7 +232,7 @@ fn tracking_controls<'a>(
             ctx,
             &format!("{prefix}.cut"),
             grana_i18n::track::cut(language),
-            Role::Control,
+            Role::SurfaceHigh,
             cuts.is_some(),
             cuts.map(|(time, object)| {
                 Message::Command(Command::CutTrack {
@@ -252,7 +246,11 @@ fn tracking_controls<'a>(
             ctx,
             &format!("{prefix}.join"),
             join,
-            if joining { Role::Tinted } else { Role::Control },
+            if joining {
+                Role::Tonal
+            } else {
+                Role::SurfaceHigh
+            },
             joining || joins.is_some(),
             Some(Message::SetJoin(if joining { None } else { joins })),
         ));
@@ -260,7 +258,7 @@ fn tracking_controls<'a>(
             ctx,
             &format!("{prefix}.export"),
             grana_i18n::track::export(language),
-            Role::Quiet,
+            Role::SurfaceHigh,
             !busy,
             Some(Message::ExportLineage(id)),
         ));
@@ -268,7 +266,7 @@ fn tracking_controls<'a>(
             ctx,
             &format!("{prefix}.recompute"),
             grana_i18n::track::recompute(language),
-            Role::Quiet,
+            Role::SurfaceHigh,
             !busy,
             Some(Message::Command(Command::Track(id))),
         ));
@@ -281,12 +279,12 @@ fn tracking_controls<'a>(
                 0.0
             };
             buttons.push(grana_ui::widget::progress(fraction, 110.0));
-            buttons.push(view::spinner(ctx, 14.0));
+            buttons.push(view::spinner(ctx, 16.0));
             buttons.push(enabled_button(
                 ctx,
                 &format!("{prefix}.cancel"),
                 grana_i18n::common::cancel(language),
-                Role::Quiet,
+                Role::SurfaceHigh,
                 true,
                 Some(Message::Command(Command::CancelTrack(id))),
             ));
@@ -295,7 +293,7 @@ fn tracking_controls<'a>(
             ctx,
             &format!("{prefix}.track"),
             grana_i18n::track::track(language),
-            Role::Prominent,
+            Role::Filled,
             detected > 0 && !busy,
             Some(Message::Command(Command::Track(id))),
         )),
@@ -345,7 +343,7 @@ fn header<'a>(
     match tracking {
         Some(_) => {
             widths.push(110.0);
-            widths.push(14.0);
+            widths.push(16.0);
             widths.push(button_width(ctx, grana_i18n::common::cancel(language)));
         }
         None => widths.push(button_width(ctx, grana_i18n::track::track(language))),
@@ -380,16 +378,17 @@ fn header<'a>(
             &grana_i18n::track::track_summary(language, tracks, divisions, merges, detected),
         ),
     ];
+    let badge_tint = ctx.theme().palette.tertiary;
     if joining {
         left_items.push(grana_ui::widget::badge(
             grana_i18n::track::select_join_target(language),
-            ctx.theme().palette.accent,
+            badge_tint,
         ));
     }
     if state.workspace.divide.is_some() {
         left_items.push(grana_ui::widget::badge(
             grana_i18n::track::select_daughters(language),
-            ctx.theme().palette.accent,
+            badge_tint,
         ));
     }
     if state.workspace.merge.is_some() {
@@ -398,12 +397,12 @@ fn header<'a>(
         } else {
             grana_i18n::track::select_merge_parent(language)
         };
-        left_items.push(grana_ui::widget::badge(prompt, ctx.theme().palette.accent));
+        left_items.push(grana_ui::widget::badge(prompt, badge_tint));
     }
     if state.workspace.reparent.is_some() {
         left_items.push(grana_ui::widget::badge(
             grana_i18n::track::select_parent(language),
-            ctx.theme().palette.accent,
+            badge_tint,
         ));
     }
     let left_row = grana_ui::row()
@@ -448,7 +447,7 @@ fn enabled_button<'a>(
 fn button_width(ctx: &mut BuildContext<'_, Message>, label: &str) -> f32 {
     let theme = *ctx.theme();
     let style = TextStyle::new(theme.button_font(), Color::WHITE);
-    ctx.measure(label, style).x + 22.0
+    ctx.measure(label, style).x + 26.0
 }
 
 fn lineage<'a>(
@@ -462,8 +461,8 @@ fn lineage<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let accent = palette.accent;
-    let tertiary = palette.text_tertiary;
+    let accent = palette.primary;
+    let tertiary = palette.outline;
     let inner = Rect::from_min_max(
         rect.min + Vec2::new(SIDE, AXIS + 4.0),
         rect.max - Vec2::new(SIDE + 6.0, 6.0),
@@ -504,15 +503,10 @@ fn lineage<'a>(
         let order = order.clone();
         move |painter, info| {
             let rect = info.rect;
-            painter.outlined(
+            painter.rect(
                 rect,
-                Corners::all(theme.metrics.card_radius),
-                grana_ui::Fill::Solid(palette.card),
-                grana_ui::Border {
-                    width: 1.0,
-                    color: palette.material_border,
-                },
-                grana_ui::Shadow::NONE,
+                Corners::all(theme.metrics.corner_lg),
+                palette.surface_container,
             );
             let clip = painter.clip();
             painter.push_clip(inner, Corners::ZERO);
@@ -522,14 +516,14 @@ fn lineage<'a>(
                     Vec2::new(grid, inner.min.y),
                     Vec2::new(grid, inner.max.y),
                     0.5,
-                    palette.separator,
+                    palette.outline_variant.with_alpha(0.35),
                 );
             }
             painter.segment(
                 Vec2::new(x(time), inner.min.y),
                 Vec2::new(x(time), inner.max.y),
-                1.0,
-                accent.with_alpha(0.50),
+                1.2,
+                accent.with_alpha(0.55),
             );
             if let Some(lane) = hovered {
                 painter.rect(
@@ -537,15 +531,15 @@ fn lineage<'a>(
                         Vec2::new(inner.min.x, lane_y(lane) - ROW * 0.5),
                         Vec2::new(inner.width(), ROW),
                     ),
-                    Corners::all(3.0),
-                    Color::white_alpha(0.05),
+                    Corners::capsule(),
+                    palette.on_surface.with_alpha(0.06),
                 );
             }
             painter.pop_clip(clip);
             if limit > 0.0 {
                 let bar = Rect::from_min_size(
                     Vec2::new(rect.max.x - 5.0, inner.min.y),
-                    Vec2::new(2.5, inner.height()),
+                    Vec2::new(3.0, inner.height()),
                 );
                 let thumb = (inner.height() * inner.height() / content).max(24.0);
                 let travel = (bar.height() - thumb).max(0.0);
@@ -553,13 +547,13 @@ fn lineage<'a>(
                 painter.rect(
                     Rect::from_min_size(
                         Vec2::new(bar.min.x, bar.min.y + travel * offset / limit),
-                        Vec2::new(2.5, thumb),
+                        Vec2::new(3.0, thumb),
                     ),
                     Corners::capsule(),
-                    Color::white_alpha(0.24),
+                    palette.outline.with_alpha(0.55),
                 );
             }
-            let label = TextStyle::new(TypeStyle::new(9.5, 400.0, 12.0), tertiary);
+            let label = TextStyle::new(TypeStyle::new(10.0, 500.0, 13.0), tertiary);
             for part in 0..4 {
                 let tick = span * part / 3;
                 let centre = Vec2::new(x(tick), inner.min.y - AXIS * 0.5);
@@ -592,7 +586,7 @@ fn lineage<'a>(
                         Vec2::new(64.0, ROW),
                     ),
                     &format!("#{}", order[lane] + 1),
-                    TextStyle::new(TypeStyle::new(9.5, 500.0, 12.0), tertiary),
+                    TextStyle::new(TypeStyle::new(10.0, 600.0, 13.0), palette.on_surface),
                     Align::Center,
                 );
             }
@@ -730,7 +724,7 @@ fn lineage<'a>(
                 painter.segment(
                     Vec2::new(start, y),
                     Vec2::new(end.max(start + 1.0), y),
-                    if chosen { 2.4 } else { 1.5 },
+                    if chosen { 2.6 } else { 1.6 },
                     tint,
                 );
                 let nodes = track.nodes();
@@ -750,7 +744,7 @@ fn lineage<'a>(
                                             * info.rect.width(),
                                     y,
                                 ),
-                                Vec2::splat(2.4),
+                                Vec2::splat(2.6),
                             ),
                             Corners::capsule(),
                             tint.with_alpha(0.88),
@@ -767,7 +761,7 @@ fn lineage<'a>(
                                             * info.rect.width(),
                                     y,
                                 ),
-                                Vec2::splat(2.8),
+                                Vec2::splat(3.0),
                             ),
                             Corners::capsule(),
                             tint,
@@ -937,9 +931,9 @@ fn summary<'a>(
             "tracks.summary.merge",
             merge,
             if state.workspace.merge.is_some() {
-                Role::Tinted
+                Role::Tonal
             } else {
-                Role::Control
+                Role::SurfaceHigh
             },
             true,
             Some(if state.workspace.merge.is_some() {
@@ -955,9 +949,9 @@ fn summary<'a>(
             "tracks.summary.divide",
             divide,
             if state.workspace.divide.is_some() {
-                Role::Tinted
+                Role::Tonal
             } else {
-                Role::Control
+                Role::SurfaceHigh
             },
             true,
             Some(if state.workspace.divide.is_some() {
@@ -973,9 +967,9 @@ fn summary<'a>(
             "tracks.summary.parent",
             reparent,
             if state.workspace.reparent.is_some() {
-                Role::Tinted
+                Role::Tonal
             } else {
-                Role::Control
+                Role::SurfaceHigh
             },
             !parented,
             Some(if state.workspace.reparent.is_some() {
@@ -988,7 +982,7 @@ fn summary<'a>(
             ctx,
             "tracks.summary.detach",
             grana_i18n::track::detach(language),
-            Role::Quiet,
+            Role::Standard,
             parented,
             Some(Message::Command(Command::DetachTrack {
                 set: id,
@@ -1082,8 +1076,7 @@ fn parameter_rows<'a>(
             &format!("{prefix}.step"),
             Some(grana_i18n::track::max_step(language)),
             step,
-            voxel..=step_max,
-            true,
+            (voxel..=step_max, true),
             &format!("{step:.3} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1095,8 +1088,7 @@ fn parameter_rows<'a>(
             &format!("{prefix}.gap"),
             Some(grana_i18n::track::max_gap(language)),
             gap,
-            0.0..=10.0,
-            false,
+            (0.0..=10.0, false),
             &format!("{gap:.0} f"),
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1121,8 +1113,7 @@ fn parameter_rows<'a>(
             &format!("{prefix}.division.range"),
             Some(grana_i18n::track::division_range(language)),
             clamped,
-            minimum..=maximum,
-            false,
+            (minimum..=maximum, false),
             &format!("{clamped:.2} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1149,8 +1140,7 @@ fn parameter_rows<'a>(
             &format!("{prefix}.merge.range"),
             Some(grana_i18n::track::merge_range(language)),
             merge_range,
-            merge_min..=merge_max,
-            false,
+            (merge_min..=merge_max, false),
             &format!("{merge_range:.2} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1163,8 +1153,7 @@ fn parameter_rows<'a>(
             &format!("{prefix}.merge.overlap"),
             Some(grana_i18n::track::merge_overlap(language)),
             overlap,
-            0.0..=1.0,
-            false,
+            (0.0..=1.0, false),
             &format!("{:.0}%", overlap * 100.0),
             move |value| Command::SetTrackParams {
                 set: id,
@@ -1188,8 +1177,7 @@ fn parameter_rows<'a>(
         &format!("{prefix}.width"),
         Some(grana_i18n::track::tube_width(language)),
         thickness,
-        min_thickness..=max_thickness,
-        true,
+        (min_thickness..=max_thickness, true),
         &format!("{thickness:.3} µm"),
         move |value| Command::SetTrackThickness {
             set: id,
@@ -1365,7 +1353,7 @@ fn appearance<'a>(
                 Color::from_rgb_f32(coloring.palette().sample(position))
             })
             .collect::<Vec<_>>();
-        children.push(grana_ui::widget::gradient_bar(&colors, 10.0));
+        children.push(grana_ui::widget::gradient_bar(&colors, 12.0));
         match (coloring.manual(), extent) {
             (Some((minimum, maximum)), _) => {
                 let speed = ((maximum - minimum).abs() / 100.0).max(1.0e-6);
@@ -1401,16 +1389,15 @@ fn appearance<'a>(
                                     Message::Noop
                                 }
                             }),
-                        view::button(ctx, grana_i18n::track::auto(language), Role::Quiet).press(
-                            Message::Command(Command::SetTrackColoring {
+                        view::button(ctx, grana_i18n::track::auto(language), Role::SurfaceHigh)
+                            .press(Message::Command(Command::SetTrackColoring {
                                 set: id,
                                 coloring: {
                                     let mut next = coloring_auto;
                                     next.set_manual(None);
                                     next
                                 },
-                            }),
-                        ),
+                            })),
                     ]),
                 );
             }
@@ -1421,19 +1408,26 @@ fn appearance<'a>(
                     &grana_figure::value(maximum, unit, decimals),
                 );
                 let coloring_fix = coloring.clone();
-                children.push(grana_ui::row().gap(6.0).align(Align::Center).children([
-                    view::caption(ctx, &text),
-                    view::button(ctx, grana_i18n::track::fix_range(language), Role::Quiet).press(
-                        Message::Command(Command::SetTrackColoring {
-                            set: id,
-                            coloring: {
-                                let mut next = coloring_fix;
-                                next.set_manual(Some((minimum, maximum)));
-                                next
+                children.push(
+                    grana_ui::row().gap(6.0).align(Align::Center).children([
+                        view::caption(ctx, &text),
+                        view::button(
+                            ctx,
+                            grana_i18n::track::fix_range(language),
+                            Role::SurfaceHigh,
+                        )
+                        .press(Message::Command(
+                            Command::SetTrackColoring {
+                                set: id,
+                                coloring: {
+                                    let mut next = coloring_fix;
+                                    next.set_manual(Some((minimum, maximum)));
+                                    next
+                                },
                             },
-                        }),
-                    ),
-                ]));
+                        )),
+                    ]),
+                );
             }
             (None, None) => children.push(view::weak(ctx, grana_i18n::track::no_values(language))),
         }
@@ -1459,7 +1453,7 @@ fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'
     let theme = *ctx.theme();
     grana_ui::text(
         text,
-        TextStyle::new(theme.label_font(), theme.palette.text_tertiary),
+        TextStyle::new(theme.label_font(), theme.palette.on_surface_variant),
     )
 }
 
@@ -1474,11 +1468,10 @@ fn combo<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let label = labels.get(selected).cloned().unwrap_or_default();
-    let style =
-        TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
-    let rest = theme.surface(Role::Control, State::Rest);
-    let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
+    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
+    let rest = theme.surface(Role::Field, State::Rest);
+    let hover = theme.surface(Role::Field, State::Hover);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,
@@ -1501,7 +1494,7 @@ fn combo<'a>(
             Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
             5.0,
             std::f32::consts::FRAC_PI_2,
-            palette.text_tertiary,
+            palette.on_surface_variant,
             1.5,
         );
     })

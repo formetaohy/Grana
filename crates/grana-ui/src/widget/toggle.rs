@@ -1,15 +1,15 @@
 use glam::Vec2;
 
-use crate::color::Color;
 use crate::content::{CheckboxContent, Content, ToggleContent};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
+use crate::icon::{self, Icon};
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
-use crate::theme::{Metrics, Theme};
+use crate::theme::{Level, Metrics, Theme};
 
 use super::PaintInfo;
 
@@ -24,7 +24,7 @@ pub fn toggle<'a, A>(theme: &Theme, value: bool) -> Element<'a, A> {
     .with_content(Content::Toggle(ToggleContent {
         value,
         label: None,
-        font: theme.font(crate::theme::Level::Callout).medium(),
+        font: theme.font(Level::Body).medium(),
         row: false,
     }))
 }
@@ -37,20 +37,20 @@ pub fn toggle_row<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a,
     .with_content(Content::Toggle(ToggleContent {
         value,
         label: Some(label.to_string()),
-        font: theme.font(crate::theme::Level::Callout).medium(),
+        font: theme.font(Level::Body).medium(),
         row: true,
     }))
 }
 
 pub fn checkbox<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Auto, Length::Fixed(24.0)),
+        size: Size::new(Length::Auto, Length::Fixed(26.0)),
         ..Layout::row()
     })
     .with_content(Content::Checkbox(CheckboxContent {
         value,
         label: label.to_string(),
-        font: theme.font(crate::theme::Level::Callout),
+        font: theme.font(Level::Label),
     }))
 }
 
@@ -74,7 +74,7 @@ pub(super) fn measure_checkbox(checkbox: &CheckboxContent, text: &mut crate::tex
         )
         .size
         .x;
-    Vec2::new(measured + 24.0, 24.0)
+    Vec2::new(measured + 26.0, 26.0)
 }
 
 pub(crate) fn switch_rect(toggle: &ToggleContent, rect: Rect, metrics: &Metrics) -> Rect {
@@ -88,32 +88,10 @@ pub(crate) fn switch_rect(toggle: &ToggleContent, rect: Rect, metrics: &Metrics)
     }
 }
 
-struct Switch {
-    track: Rect,
-    knob: Vec2,
-    travel: f32,
-}
-
-impl Switch {
-    fn new(rect: Rect) -> Self {
-        let knob_size = (rect.height() - 4.0).max(10.0);
-        let inset = 2.0;
-        let travel = (rect.width() - knob_size - inset * 2.0).max(0.0);
-        Self {
-            track: rect,
-            knob: Vec2::splat(knob_size),
-            travel,
-        }
-    }
-
-    fn center(&self, rect: Rect, progress: f32) -> f32 {
-        rect.min.x + 2.0 + self.knob.x * 0.5 + self.travel * progress
-    }
-}
-
 pub(crate) fn drag_value(rect: Rect, pointer: Vec2) -> f32 {
-    let switch = Switch::new(rect);
-    ((pointer.x - rect.min.x - 2.0 - switch.knob.x * 0.5) / switch.travel.max(1.0)).clamp(0.0, 1.0)
+    let min_x = rect.min.x + 11.0;
+    let max_x = rect.max.x - 11.0;
+    ((pointer.x - min_x) / (max_x - min_x).max(1.0)).clamp(0.0, 1.0)
 }
 
 pub(crate) fn normalized(toggle: &ToggleContent) -> f32 {
@@ -127,7 +105,7 @@ pub(crate) fn value_toggle<A>(node: &Node<A>, dragging: bool) -> Option<(Motion,
     let motion = if dragging {
         Motion::INSTANT
     } else {
-        Motion::snappy()
+        Motion::spatial_fast()
     };
     let target = if dragging {
         node.runtime.drag_value
@@ -142,7 +120,7 @@ pub(crate) fn value_checkbox<A>(node: &Node<A>) -> Option<(Motion, (f32, f32))> 
         return None;
     };
     let target = if checkbox.value { 1.0 } else { 0.0 };
-    Some((Motion::snappy(), (target, 0.0)))
+    Some((Motion::spatial_fast(), (target, 0.0)))
 }
 
 pub(super) fn paint_toggle(
@@ -157,8 +135,8 @@ pub(super) fn paint_toggle(
         if info.hover > 0.01 {
             painter.rect(
                 rect.shrink2(Vec2::new(1.0, 0.5)),
-                Corners::all(info.theme.metrics.radius),
-                info.theme.palette.material_hover.amplify(0.5 * info.hover),
+                Corners::all(info.theme.metrics.corner_sm),
+                info.theme.palette.on_surface.with_alpha(0.07 * info.hover),
             );
         }
         if let Some(label) = &toggle.label {
@@ -167,8 +145,8 @@ pub(super) fn paint_toggle(
                 label,
                 TextStyle::new(
                     toggle.font,
-                    info.theme.palette.text_secondary.lerp(
-                        info.theme.palette.text_primary,
+                    info.theme.palette.on_surface_variant.lerp(
+                        info.theme.palette.on_surface,
                         info.hover.max(if toggle.value { 1.0 } else { 0.0 }),
                     ),
                 )
@@ -183,29 +161,39 @@ pub(super) fn paint_toggle(
 fn paint_switch(runtime: &Runtime, painter: &mut Painter, info: &PaintInfo<'_>, rect: Rect) {
     let palette = info.theme.palette;
     let progress = runtime.value.value.clamp(0.0, 1.0);
-    let switch = Switch::new(rect);
-    let center = switch.center(rect, progress);
-    let knob_rect = Rect::from_center_size(Vec2::new(center, rect.center().y), switch.knob);
-    let fill = palette.track.lerp(palette.accent, progress);
+    let fill = palette
+        .surface_container_highest
+        .lerp(palette.primary, progress);
+    let border_color = palette.outline.with_alpha((1.0 - progress) * 0.9);
     painter.outlined(
-        switch.track,
+        rect,
         Corners::capsule(),
         Fill::Solid(fill),
         Border {
-            width: 1.0,
-            color: palette
-                .material_border
-                .lerp(palette.accent_hover.with_alpha(0.55), progress),
+            width: 1.5 * (1.0 - progress),
+            color: border_color,
         },
         Shadow::NONE,
     );
-    painter.outlined(
-        knob_rect,
-        Corners::capsule(),
-        Fill::Gradient(Color::bytes(250, 251, 253), Color::bytes(222, 226, 232)),
-        Border::NONE,
-        Shadow::new(Color::black_alpha(0.38), 3.0, 1.0),
-    );
+    let diameter = 11.0 + 5.5 * progress + 2.0 * info.press;
+    let start_x = rect.min.x + 10.5;
+    let end_x = rect.max.x - 10.5;
+    let center_x = start_x + (end_x - start_x) * progress;
+    let center = Vec2::new(center_x, rect.center().y);
+    let thumb_rect = Rect::from_center_size(center, Vec2::splat(diameter));
+    let thumb_color = palette.outline.lerp(palette.on_primary, progress);
+    painter.rect(thumb_rect, Corners::capsule(), thumb_color);
+    if progress > 0.35 {
+        let alpha = ((progress - 0.35) / 0.65).clamp(0.0, 1.0);
+        icon::paint(
+            Icon::Check,
+            painter,
+            center,
+            10.5,
+            palette.primary.with_alpha(alpha),
+            1.8,
+        );
+    }
 }
 
 pub(super) fn paint_checkbox(
@@ -216,38 +204,38 @@ pub(super) fn paint_checkbox(
 ) {
     let palette = info.theme.palette;
     let rect = info.rect;
-    let mark = runtime.value.value;
+    let mark = runtime.value.value.clamp(0.0, 1.0);
     let box_rect = Rect::from_center_size(
-        Vec2::new(rect.min.x + 8.0, rect.center().y),
-        Vec2::splat(15.0),
+        Vec2::new(rect.min.x + 9.0, rect.center().y),
+        Vec2::splat(16.0),
     );
-    let outline = palette
-        .text_tertiary
-        .lerp(palette.text_secondary, info.hover);
-    let fill = palette.accent.with_alpha(mark);
+    let outline = palette.outline.lerp(palette.on_surface, info.hover);
+    let fill = palette.primary.with_alpha(mark);
     let text_color = palette
-        .text_secondary
-        .lerp(palette.text_primary, info.hover.max(mark));
+        .on_surface_variant
+        .lerp(palette.on_surface, info.hover.max(mark));
     painter.outlined(
         box_rect,
-        Corners::all(4.0),
+        Corners::all(5.0),
         Fill::Solid(fill),
         Border {
-            width: 1.2,
-            color: outline.lerp(palette.accent, mark),
+            width: 1.5 * (1.0 - mark),
+            color: outline,
         },
         Shadow::NONE,
     );
-    if mark > 0.02 {
-        let color = palette.text_on_accent.with_alpha(mark);
-        let left = Vec2::new(box_rect.min.x + 3.6, box_rect.min.y + 7.6);
-        let bottom = Vec2::new(box_rect.min.x + 6.4, box_rect.max.y - 3.8);
-        let right = Vec2::new(box_rect.max.x - 3.2, box_rect.min.y + 4.2);
-        painter.segment(left, bottom, 1.8, color);
-        painter.segment(bottom, right, 1.8, color);
+    if mark > 0.05 {
+        icon::paint(
+            Icon::Check,
+            painter,
+            box_rect.center(),
+            11.5,
+            palette.on_primary.with_alpha(mark),
+            1.9,
+        );
     }
     painter.text_in(
-        Rect::from_min_max(Vec2::new(rect.min.x + 21.0, rect.min.y), rect.max),
+        Rect::from_min_max(Vec2::new(rect.min.x + 23.0, rect.min.y), rect.max),
         &checkbox.label,
         TextStyle::new(checkbox.font, text_color),
         Align::Center,

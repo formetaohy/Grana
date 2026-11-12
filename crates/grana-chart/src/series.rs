@@ -283,7 +283,7 @@ impl SeriesPage {
         let heading = &self.heading;
         let chart = &self.chart;
         recorder.marks(points, |painter| {
-            painter.rect(page, Corners::ZERO, theme.palette.scene_backdrop);
+            painter.rect(page, Corners::ZERO, theme.palette.surface_dim);
             let style = Style {
                 language: heading.language,
                 ..style
@@ -311,7 +311,7 @@ pub fn paint(
 ) {
     let metrics = style.metrics;
     let palette = style.palette;
-    let accent = palette.accent;
+    let accent = palette.primary;
     let frame = metrics.frame(rect);
     grid::grid(painter, rect, style, chart.x, chart.y);
     if chart.empty() {
@@ -360,7 +360,7 @@ pub fn paint(
             Shadow::NONE,
         );
     }
-    let neutral = palette.text_tertiary;
+    let neutral = palette.outline;
     let projected_bands = chart
         .bands
         .iter()
@@ -510,7 +510,7 @@ pub fn paint(
         painter.outlined(
             Rect::from_center_size(centre, Vec2::splat(7.5)),
             Corners::capsule(),
-            Fill::Solid(palette.scene_backdrop.with_alpha(0.45)),
+            Fill::Solid(palette.surface_dim.with_alpha(0.45)),
             Border {
                 width: 1.3,
                 color: accent,
@@ -525,7 +525,7 @@ pub fn paint(
         painter.outlined(
             Rect::from_center_size(centre, Vec2::splat(9.0)),
             Corners::capsule(),
-            Fill::Solid(palette.text_primary.with_alpha(0.10)),
+            Fill::Solid(palette.on_surface.with_alpha(0.10)),
             Border {
                 width: 1.3,
                 color: accent,
@@ -538,7 +538,7 @@ pub fn paint(
             Vec2::new(pointer.x, frame.min.y),
             Vec2::new(pointer.x, frame.max.y),
             0.6,
-            palette.text_primary.with_alpha(0.12),
+            palette.on_surface.with_alpha(0.12),
         );
     }
 }
@@ -547,8 +547,8 @@ fn paint_notes(painter: &mut Painter, frame: Rect, chart: &SeriesChart, style: &
     if chart.notes.is_empty() {
         return;
     }
-    let text =
-        TextStyle::new(style.metrics.caption, style.palette.text_secondary).aligned(Align::Center);
+    let text = TextStyle::new(style.metrics.caption, style.palette.on_surface_variant)
+        .aligned(Align::Center);
     let mut placed = Vec::<(f32, f32)>::new();
     for note in &chart.notes {
         let x = chart.x.x(frame, note.x);
@@ -574,7 +574,7 @@ fn paint_notes(painter: &mut Painter, frame: Rect, chart: &SeriesChart, style: &
 
 fn legend(painter: &mut Painter, frame: Rect, style: &Style, chart: &SeriesChart) {
     let metrics = style.metrics;
-    let text = TextStyle::new(metrics.caption, style.palette.text_tertiary);
+    let text = TextStyle::new(metrics.caption, style.palette.outline);
     let mut entries = Vec::new();
     let mut pen = LEGEND_INSET;
     let mut row = LEGEND_INSET;
@@ -600,7 +600,7 @@ fn legend(painter: &mut Painter, frame: Rect, style: &Style, chart: &SeriesChart
         let color = tint(style, index, curve);
         push(painter, &curve.label, color, false);
     }
-    let neutral = style.palette.text_tertiary;
+    let neutral = style.palette.outline;
     for band in &chart.bands {
         push(painter, &band.label, neutral, true);
     }
@@ -611,7 +611,7 @@ fn legend(painter: &mut Painter, frame: Rect, style: &Style, chart: &SeriesChart
     painter.rect(
         Rect::from_min_size(frame.min + Vec2::splat(2.0), Vec2::new(width, height)),
         Corners::all(6.0),
-        style.palette.scene_backdrop.with_alpha(0.72),
+        style.palette.surface_dim.with_alpha(0.72),
     );
     for (label, color, band, x, y, _) in entries {
         let swatch = Rect::from_center_size(

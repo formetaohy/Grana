@@ -30,45 +30,40 @@ fn navigation<'a>(
     } else {
         grana_i18n::header::hide_sidebar(language)
     };
-    let toggle_role = if hidden { Role::Quiet } else { Role::Tinted };
+    let toggle_role = if hidden {
+        Role::SurfaceHigh
+    } else {
+        Role::Tonal
+    };
+    let toggle_corners = if hidden {
+        Corners::capsule()
+    } else {
+        Corners::all(10.0)
+    };
     let toggle = crate::view::icon_button(
         ctx,
         "sidebar.toggle",
         Icon::Sidebar,
-        26.0,
+        30.0,
         toggle_role,
         tooltip,
         Message::ToggleSidebar,
-    );
-    let project = project_pill(ctx, state);
-    let open = open_pill(ctx);
+    )
+    .shaped(toggle_corners);
+    let project = project_split(ctx, state);
+    let open = open_split(ctx);
     let project_menu = project_menu(ctx);
     let open_menu = open_menu(ctx, state);
-    let surface = ctx.theme().surface(Role::Hud, State::Rest);
+    let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     grana_ui::row()
         .at(layout.toolbar_left)
         .named("header.navigation")
-        .padding(Edges::symmetric(5.0, 4.0))
-        .gap(4.0)
+        .padding(Edges::symmetric(6.0, 6.0))
+        .gap(6.0)
         .align(Align::Center)
         .height(Length::Fill)
         .background(surface)
-        .children([
-            toggle,
-            vertical_separator(ctx),
-            project,
-            vertical_separator(ctx),
-            open,
-            project_menu,
-            open_menu,
-        ])
-}
-
-fn vertical_separator<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let color = ctx.theme().palette.separator;
-    grana_ui::canvas(Length::Fixed(1.0), 16.0, move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, color);
-    })
+        .children([toggle, project, open, project_menu, open_menu])
 }
 
 fn settings_menu<'a>(
@@ -90,13 +85,13 @@ fn settings_menu<'a>(
     )
     .named("settings.contrast")
     .on_toggle(Message::SetContrast);
-    let transparency = grana_ui::widget::toggle_row(
+    let motion = grana_ui::widget::toggle_row(
         ctx.theme(),
-        grana_i18n::appearance::reduce_transparency(language),
-        state.workspace.reduce_transparency,
+        grana_i18n::appearance::reduce_motion(language),
+        state.workspace.reduce_motion,
     )
-    .named("settings.transparency")
-    .on_toggle(Message::SetReduceTransparency);
+    .named("settings.motion")
+    .on_toggle(Message::SetReduceMotion);
     grana_ui::popover::popup(
         key,
         width,
@@ -117,7 +112,7 @@ fn settings_menu<'a>(
             ),
             menu_separator(ctx),
             contrast,
-            transparency,
+            motion,
         ],
     )
     .persistent()
@@ -125,14 +120,14 @@ fn settings_menu<'a>(
     .gap(4.0)
 }
 
-fn project_pill<'a>(
+fn project_split<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let radius = theme.metrics.radius;
-    let project_font = theme.font(Level::Callout).medium();
+    let inner = theme.metrics.corner_xs;
+    let project_font = theme.font(Level::Label);
     let project = state
         .io
         .project
@@ -143,112 +138,109 @@ fn project_pill<'a>(
     let full = ctx
         .measure(&project, TextStyle::new(project_font, Color::WHITE))
         .x;
-    let measured = full.min(136.0);
-    let width = 10.0 + measured + if dirty { 10.0 } else { 0.0 } + 18.0;
-    let key = Key::new("project.menu");
-    let open = ctx.popup_open(key);
+    let open_label = grana_i18n::header::open(ctx.language());
+    let inset = (theme.metrics.control_height * 0.44).round() + 1.0;
+    let open_lead_w =
+        ctx.measure(
+            open_label,
+            TextStyle::new(theme.button_font(), Color::WHITE),
+        )
+        .x + inset * 2.0
+            + 20.0;
+    let open_split_w = open_lead_w + theme.metrics.group_gap + theme.metrics.control_height;
+    let available_lead =
+        (crate::panel::TOOLBAR_LEFT - 12.0 - 30.0 - 12.0 - open_split_w - 28.0).max(84.0);
+    let lead_width = available_lead;
+    let measured = (lead_width - 34.0 - if dirty { 12.0 } else { 0.0 }).max(32.0);
+    let menu_key = Key::new("project.menu");
+    let open = ctx.popup_open(menu_key);
     let title = project.clone();
     let tooltip = (full > measured).then_some(project.as_str());
-    let element = grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
-        let frame = info.rect;
-        let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
-        if engaged > 0.01 {
-            painter.rect(
-                frame,
-                Corners::all(radius),
-                palette.material_hover.amplify(0.65 * engaged),
+    let lead_element = grana_ui::canvas(
+        Length::Fixed(lead_width),
+        theme.metrics.control_height,
+        move |painter, info| {
+            let frame = info.rect;
+            let corners = Corners::split_leading(inner)
+                .resolved(frame.size())
+                .lerp(Corners::all(theme.metrics.corner_sm), info.press);
+            let fill = palette
+                .surface_container_high
+                .lerp(palette.surface_container_highest, info.hover)
+                .lerp(palette.on_surface, 0.08 * info.press);
+            painter.rect(frame, corners, fill);
+            icon::paint(
+                Icon::Cube,
+                painter,
+                Vec2::new(frame.min.x + 13.0, frame.center().y),
+                13.0,
+                palette.primary,
+                1.6,
             );
-        }
-        let title_left = frame.min.x + 8.0;
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(title_left, frame.min.y),
-                Vec2::new(title_left + measured, frame.max.y),
-            ),
-            &title,
-            TextStyle::new(
-                project_font,
-                palette.text_secondary.lerp(palette.text_primary, engaged),
-            )
-            .truncating(),
-            Align::Center,
-        );
-        if dirty {
-            painter.rect(
-                Rect::from_center_size(
-                    Vec2::new(title_left + measured + 6.0, frame.center().y),
-                    Vec2::splat(4.5),
+            let title_left = frame.min.x + 23.0;
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(title_left, frame.min.y),
+                    Vec2::new(title_left + measured, frame.max.y),
                 ),
-                Corners::capsule(),
-                palette.warning,
+                &title,
+                TextStyle::new(project_font, palette.on_surface).truncating(),
+                Align::Center,
             );
-        }
-        icon::paint(
-            Icon::ChevronDown,
-            painter,
-            Vec2::new(frame.max.x - 9.0, frame.center().y),
-            8.5,
-            palette.text_tertiary,
-            1.5,
-        );
-    })
-    .key(key)
-    .press(Message::Noop)
-    .focus_ring(Corners::all(radius));
-    match tooltip {
-        Some(tooltip) => element.tooltip(tooltip),
-        None => element,
-    }
+            if dirty {
+                painter.rect(
+                    Rect::from_center_size(
+                        Vec2::new(title_left + measured + 7.0, frame.center().y),
+                        Vec2::splat(6.0),
+                    ),
+                    Corners::capsule(),
+                    palette.tertiary,
+                );
+            }
+        },
+    )
+    .named("project.save")
+    .press(Message::Command(Command::SaveProject))
+    .focus_ring(Corners::capsule());
+    let lead = match tooltip {
+        Some(tooltip) => lead_element.tooltip(tooltip),
+        None => lead_element,
+    };
+    let trail_corners = if open {
+        Corners::capsule()
+    } else {
+        Corners::split_trailing(inner)
+    };
+    let trail_icon = if open {
+        Icon::ChevronUp
+    } else {
+        Icon::ChevronDown
+    };
+    let trail = grana_ui::widget::icon_button(
+        trail_icon,
+        26.0,
+        if open { Role::Tonal } else { Role::SurfaceHigh },
+        "",
+    )
+    .shaped(trail_corners)
+    .key(menu_key)
+    .press(Message::Noop);
+    grana_ui::row()
+        .gap(theme.metrics.group_gap)
+        .align(Align::Center)
+        .children([lead, trail])
 }
 
-fn open_pill<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let radius = theme.metrics.radius;
-    let font = theme.font(Level::Callout).medium();
-    let key = Key::new("open.menu");
-    let open = ctx.popup_open(key);
+fn open_split<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let label = grana_i18n::header::open(ctx.language());
-    grana_ui::canvas(Length::Fixed(78.0), 26.0, move |painter, info| {
-        let frame = info.rect;
-        let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
-        if engaged > 0.01 {
-            painter.rect(
-                frame,
-                Corners::all(radius),
-                palette.material_hover.amplify(0.65 * engaged),
-            );
-        }
-        let color = palette.text_secondary.lerp(palette.text_primary, engaged);
-        icon::paint(
-            Icon::Folder,
-            painter,
-            Vec2::new(frame.min.x + 12.0, frame.center().y),
-            12.5,
-            color,
-            1.5,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(frame.min.x + 22.0, frame.min.y),
-                Vec2::new(frame.max.x - 16.0, frame.max.y),
-            ),
-            label,
-            TextStyle::new(font, color),
-            Align::Center,
-        );
-        icon::paint(
-            Icon::ChevronDown,
-            painter,
-            Vec2::new(frame.max.x - 9.0, frame.center().y),
-            8.5,
-            palette.text_tertiary,
-            1.5,
-        );
-    })
-    .key(key)
-    .press(Message::Noop)
-    .focus_ring(Corners::all(radius))
+    crate::view::split_button(
+        ctx,
+        Some(Icon::Folder),
+        label,
+        Role::SurfaceHigh,
+        ("open.lead", Message::Command(Command::OpenImage)),
+        (Key::new("open.menu"), Message::Noop),
+    )
 }
 
 fn actions<'a>(
@@ -256,6 +248,8 @@ fn actions<'a>(
     layout: &Layout,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let inner = theme.metrics.corner_xs;
     let undo = state.history.undo;
     let redo = state.history.redo;
     let undo_tooltip = undo.map_or_else(
@@ -276,69 +270,105 @@ fn actions<'a>(
             )
         },
     );
-    let undo_element = grana_ui::widget::icon_button(Icon::Undo, 26.0, Role::Quiet, &undo_tooltip)
-        .named("undo")
-        .enabled(undo.is_some())
-        .press(Message::Command(Command::Undo));
-    let redo_element = grana_ui::widget::icon_button(Icon::Redo, 26.0, Role::Quiet, &redo_tooltip)
-        .named("redo")
-        .enabled(redo.is_some())
-        .press(Message::Command(Command::Redo));
-    let palette = ctx.theme().palette;
-    let pending = state.io.pending > 0 || !state.jobs.is_empty();
+    let undo_element =
+        grana_ui::widget::icon_button(Icon::Undo, 30.0, Role::SurfaceHigh, &undo_tooltip)
+            .shaped(Corners::split_leading(inner))
+            .named("undo")
+            .enabled(undo.is_some())
+            .press(Message::Command(Command::Undo));
+    let redo_element =
+        grana_ui::widget::icon_button(Icon::Redo, 30.0, Role::SurfaceHigh, &redo_tooltip)
+            .shaped(Corners::split_trailing(inner))
+            .named("redo")
+            .enabled(redo.is_some())
+            .press(Message::Command(Command::Redo));
+    let history_group = grana_ui::row()
+        .gap(theme.metrics.group_gap)
+        .align(Align::Center)
+        .children([undo_element, redo_element]);
+
+    let sliced = state.camera.slice().is_some();
     let fit = crate::view::icon_button(
         ctx,
         "view.fit",
         Icon::Fit,
-        26.0,
-        Role::Quiet,
+        30.0,
+        Role::SurfaceHigh,
         grana_i18n::header::frame_volume(ctx.language()),
         Message::FitView,
-    );
+    )
+    .shaped(Corners::group_horizontal(
+        0,
+        3,
+        Corners::CAPSULE,
+        inner,
+        false,
+    ));
+    let slice_btn = crate::view::icon_button(
+        ctx,
+        "view.slice.toggle",
+        Icon::Section,
+        30.0,
+        if sliced {
+            Role::Tonal
+        } else {
+            Role::SurfaceHigh
+        },
+        grana_i18n::inspector::slice_view(ctx.language()),
+        Message::ToggleSlice(!sliced),
+    )
+    .shaped(Corners::group_horizontal(
+        1,
+        3,
+        Corners::CAPSULE,
+        inner,
+        sliced,
+    ));
+    let settings_open = ctx.popup_open(Key::new("settings.menu"));
     let settings = crate::view::icon_button(
         ctx,
         "settings.menu",
         Icon::Sliders,
-        26.0,
-        Role::Quiet,
+        30.0,
+        if settings_open {
+            Role::Tonal
+        } else {
+            Role::SurfaceHigh
+        },
         grana_i18n::header::settings(ctx.language()),
         Message::Noop,
-    );
+    )
+    .shaped(Corners::group_horizontal(
+        2,
+        3,
+        Corners::CAPSULE,
+        inner,
+        settings_open,
+    ));
+    let tools_group = grana_ui::row()
+        .gap(theme.metrics.group_gap)
+        .align(Align::Center)
+        .children([fit, slice_btn, settings]);
+
     let settings_popup = settings_menu(ctx, state);
-    let mut children = vec![
+    let pending = state.io.pending > 0 || !state.jobs.is_empty();
+    let mut children = Vec::new();
+    if pending {
+        children.push(crate::view::spinner(ctx, 18.0));
+    }
+    children.extend([
         palette_button(ctx),
-        vertical_separator(ctx),
-        undo_element,
-        redo_element,
-        vertical_separator(ctx),
-        fit,
-        settings,
-        vertical_separator(ctx),
+        history_group,
+        tools_group,
         analysis(ctx, state),
         settings_popup,
-    ];
-    if pending {
-        let dot_rect = Rect::from_center_size(
-            Vec2::new(
-                layout.toolbar_right.max.x - 6.0,
-                layout.toolbar_right.min.y + 6.0,
-            ),
-            Vec2::splat(4.5),
-        );
-        children.push(
-            grana_ui::canvas(Length::Fixed(4.5), 4.5, move |painter, info| {
-                painter.rect(info.rect, Corners::capsule(), palette.accent);
-            })
-            .named("header.pending")
-            .at(dot_rect),
-        );
-    }
-    let surface = ctx.theme().surface(Role::Hud, State::Rest);
+    ]);
+    let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     grana_ui::row()
         .at(layout.toolbar_right)
         .named("header.actions")
-        .padding(Edges::symmetric(5.0, 4.0))
-        .gap(3.0)
+        .padding(Edges::symmetric(6.0, 6.0))
+        .gap(6.0)
         .align(Align::Center)
         .justify(Align::End)
         .width(Length::Fill)
@@ -356,8 +386,8 @@ fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Messag
         ctx,
         "header.palette",
         Icon::Search,
-        26.0,
-        Role::Quiet,
+        30.0,
+        Role::SurfaceHigh,
         &tooltip,
         Message::OpenPalette,
     )
@@ -365,7 +395,11 @@ fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Messag
 
 fn analysis<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let open = state.workspace.panel.is_some();
-    let role = if open { Role::Prominent } else { Role::Control };
+    let role = if open {
+        Role::Filled
+    } else {
+        Role::PrimaryContainer
+    };
     let message = if open {
         Message::SetPanel(None)
     } else {
@@ -380,7 +414,7 @@ fn analysis<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
 fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let key = Key::new("open.menu");
     if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 232.0, std::iter::empty());
+        return grana_ui::popover::popup(key, 240.0, std::iter::empty());
     }
     let mut rows = vec![
         command_row(ctx, "open.image"),
@@ -412,13 +446,13 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
             ));
         }
     }
-    menu(ctx, key, 232.0, rows)
+    menu(ctx, key, 240.0, rows)
 }
 
 fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let key = Key::new("project.menu");
     if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 220.0, std::iter::empty());
+        return grana_ui::popover::popup(key, 224.0, std::iter::empty());
     }
     let rows = vec![
         command_row(ctx, "save.project"),
@@ -428,7 +462,7 @@ fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message>
         command_row(ctx, "figure"),
         command_row(ctx, "labels"),
     ];
-    menu(ctx, key, 220.0, rows)
+    menu(ctx, key, 224.0, rows)
 }
 
 fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a, Message> {

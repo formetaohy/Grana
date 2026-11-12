@@ -54,7 +54,7 @@ pub fn edit<'a>(
         .iter()
         .map(|palette| (*palette, palette.name().to_string()))
         .collect::<Vec<_>>();
-    let combo_width = (width - crate::panel::FORM_LABEL - 64.0).max(88.0);
+    let combo_width = (width - crate::panel::FORM_LABEL - 68.0).max(88.0);
     let palette_combo = crate::inspector::combo(
         ctx,
         &format!("{salt}.palette"),
@@ -107,7 +107,7 @@ pub fn edit<'a>(
             Color::rgb(red, green, blue)
         })
         .collect::<Vec<_>>();
-    children.push(grana_ui::widget::gradient_bar(&colors, 10.0));
+    children.push(grana_ui::widget::gradient_bar(&colors, 12.0));
     children.extend(range(ctx, salt, set, coloring, extent, metric, width));
     children
 }
@@ -151,12 +151,16 @@ fn range<'a>(
                         apply(set, next)
                     }
                 });
-            let auto = crate::view::button(ctx, grana_i18n::inspector::auto(language), Role::Quiet)
-                .press({
-                    let mut next = base.clone();
-                    next.set_manual(None);
-                    apply(set, next)
-                });
+            let auto = crate::view::button(
+                ctx,
+                grana_i18n::inspector::auto(language),
+                Role::SurfaceHigh,
+            )
+            .press({
+                let mut next = base.clone();
+                next.set_manual(None);
+                apply(set, next)
+            });
             let row = grana_ui::row()
                 .gap(6.0)
                 .align(Align::Center)
@@ -173,20 +177,20 @@ fn range<'a>(
                 &grana_figure::value(minimum, unit, decimals),
                 &grana_figure::value(maximum, unit, decimals),
             );
-            let style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
-            let inset = (theme.metrics.control_height * 0.5).round() - 3.0;
+            let style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant);
+            let inset = (theme.metrics.control_height * 0.44).round();
             let fix_label = grana_i18n::inspector::fix_range(language);
             let button =
                 ctx.measure(
                     fix_label,
-                    TextStyle::new(theme.button_font(), palette.text_primary),
+                    TextStyle::new(theme.button_font(), palette.on_surface),
                 )
                 .x + inset * 2.0;
             let caption = (width - crate::panel::FORM_LABEL - 6.0 - button - 2.0).max(40.0);
             let label = grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
                 painter.text_in(info.rect, &text, style, Align::Center);
             });
-            let fix = crate::view::button(ctx, fix_label, Role::Quiet).press({
+            let fix = crate::view::button(ctx, fix_label, Role::SurfaceHigh).press({
                 let mut next = base.clone();
                 next.set_manual(Some((minimum, maximum)));
                 apply(set, next)

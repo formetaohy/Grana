@@ -11,7 +11,9 @@ impl App {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let theme = Theme::dark().with_contrast(self.contrast);
+        let theme = Theme::dark()
+            .with_contrast(self.contrast)
+            .with_reduce_motion(self.reduce_motion);
         if *surface.ui.theme() == theme {
             return;
         }
@@ -22,17 +24,17 @@ impl App {
     pub(super) fn sync_preference(&mut self) {
         if self.workspace.language == self.language
             && self.workspace.contrast == self.contrast
-            && self.workspace.reduce_transparency == self.reduce_transparency
+            && self.workspace.reduce_motion == self.reduce_motion
         {
             return;
         }
         self.language = self.workspace.language;
         self.contrast = self.workspace.contrast;
-        self.reduce_transparency = self.workspace.reduce_transparency;
+        self.reduce_motion = self.workspace.reduce_motion;
         let preference = Preference {
             language: self.language,
             contrast: self.contrast,
-            reduce_transparency: self.reduce_transparency,
+            reduce_motion: self.reduce_motion,
         };
         if let Err(detail) = preference.save() {
             self.output = Some(detail);

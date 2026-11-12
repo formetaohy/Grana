@@ -3,6 +3,8 @@ use super::*;
 pub(super) fn region<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
+    index: usize,
+    count: usize,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
@@ -34,8 +36,8 @@ pub(super) fn region<'a>(
                 Message::Command(Command::SetRegion(region))
             }),
         );
-        for (index, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-            let value = current.center()[index];
+        for (axis_idx, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+            let value = current.center()[axis_idx];
             let readout = format!("{value:.2} µm");
             let label = grana_i18n::inspector::center(language, axis);
             children.push(
@@ -43,22 +45,22 @@ pub(super) fn region<'a>(
                     &theme,
                     Some(&label),
                     value,
-                    -half[index]..=half[index],
+                    -half[axis_idx]..=half[axis_idx],
                     false,
                     &readout,
                 )
-                .named(&format!("region.center.{index}"))
+                .named(&format!("region.center.{axis_idx}"))
                 .on_slide(move |value| {
                     let mut region = current;
                     let mut center = current.center();
-                    center[index] = value.clamp(-half[index], half[index]);
+                    center[axis_idx] = value.clamp(-half[axis_idx], half[axis_idx]);
                     region.set_center(center);
                     Message::Command(Command::SetRegion(region))
                 }),
             );
         }
-        for (index, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-            let value = size[index];
+        for (axis_idx, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+            let value = size[axis_idx];
             let readout = format!("{value:.2} µm");
             let label = grana_i18n::inspector::size(language, axis);
             children.push(
@@ -70,11 +72,11 @@ pub(super) fn region<'a>(
                     false,
                     &readout,
                 )
-                .named(&format!("region.size.{index}"))
+                .named(&format!("region.size.{axis_idx}"))
                 .on_slide(move |value| {
                     let mut region = current;
                     let mut extents = current.half();
-                    extents[index] = 0.5 * value.clamp(minimum, 2.0 * reach);
+                    extents[axis_idx] = 0.5 * value.clamp(minimum, 2.0 * reach);
                     region.set_half(extents);
                     Message::Command(Command::SetRegion(region))
                 }),
@@ -86,30 +88,36 @@ pub(super) fn region<'a>(
             Message::Command(Command::SetRegion(region))
         };
         let fill = Message::Command(Command::SetRegion(grana_volume::Region::full(-half, half)));
-        let buttons = grana_ui::row().gap(8.0).children([
-            view::button_with(
+        let inner_sm = theme.metrics.corner_sm;
+        let buttons = grana_ui::row().gap(theme.metrics.group_gap).children([
+            view::button_shaped(
                 ctx,
                 grana_i18n::inspector::align_to_axes(language),
-                Role::Control,
+                Role::SurfaceHigh,
                 Length::Fill,
+                Corners::split_leading(inner_sm),
             )
             .press(align),
-            view::button_with(
+            view::button_shaped(
                 ctx,
                 grana_i18n::inspector::fill_volume(language),
-                Role::Control,
+                Role::SurfaceHigh,
                 Length::Fill,
+                Corners::split_trailing(inner_sm),
             )
             .press(fill),
         ]);
         children.push(buttons);
     }
-    view::disclosure_card(
+    view::disclosure_group_card(
         ctx,
+        (index, count),
         key,
-        Icon::Fit,
-        grana_i18n::inspector::region_of_interest(language),
-        Some(&summary),
+        (
+            Icon::Fit,
+            grana_i18n::inspector::region_of_interest(language),
+            Some(&summary),
+        ),
         children,
         open,
     )
@@ -118,6 +126,8 @@ pub(super) fn region<'a>(
 pub(super) fn drift<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
+    index: usize,
+    count: usize,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
@@ -145,7 +155,12 @@ pub(super) fn drift<'a>(
                 } else {
                     grana_i18n::inspector::aligning_frames(language).to_string()
                 };
-                let spinner = view::spinner(ctx, 12.0);
+                let fraction = if progress.total > 0 {
+                    progress.done as f32 / progress.total as f32
+                } else {
+                    0.5
+                };
+                let spinner = view::spinner(ctx, 14.0);
                 let caption = view::caption(ctx, &text);
                 children.push(
                     grana_ui::row()
@@ -153,11 +168,12 @@ pub(super) fn drift<'a>(
                         .align(Align::Center)
                         .children([spinner, caption]),
                 );
+                children.push(grana_ui::widget::progress(fraction, card_width()));
                 children.push(
                     view::button_with(
                         ctx,
                         grana_i18n::common::cancel(language),
-                        Role::Control,
+                        Role::SurfaceHigh,
                         Length::Fill,
                     )
                     .press(Message::Command(Command::CancelDrift)),
@@ -168,7 +184,7 @@ pub(super) fn drift<'a>(
                     view::button_with(
                         ctx,
                         grana_i18n::inspector::correct_drift(language),
-                        Role::Control,
+                        Role::PrimaryContainer,
                         Length::Fill,
                     )
                     .press(Message::Command(Command::ComputeDrift)),
@@ -220,7 +236,7 @@ pub(super) fn drift<'a>(
                         view::button_with(
                             ctx,
                             grana_i18n::inspector::clear_drift(language),
-                            Role::Danger,
+                            Role::Error,
                             Length::Fill,
                         )
                         .press(Message::Command(Command::ClearDrift)),
@@ -229,12 +245,15 @@ pub(super) fn drift<'a>(
             }
         }
     }
-    view::disclosure_card(
+    view::disclosure_group_card(
         ctx,
+        (index, count),
         key,
-        Icon::Target,
-        grana_i18n::inspector::drift_correction(language),
-        Some(&summary),
+        (
+            Icon::Target,
+            grana_i18n::inspector::drift_correction(language),
+            Some(&summary),
+        ),
         children,
         open,
     )
@@ -306,6 +325,8 @@ pub(super) fn frame_table<'a>(
 pub(super) fn mask<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
+    index: usize,
+    count: usize,
 ) -> Element<'a, Message> {
     let language = ctx.language();
     let sources = state
@@ -357,8 +378,7 @@ pub(super) fn mask<'a>(
             "mask.radius",
             Some(grana_i18n::inspector::grow_by(language)),
             radius,
-            0.0..=limit,
-            false,
+            (0.0..=limit, false),
             &readout,
             Command::SetMaskRadius,
         ));
@@ -451,13 +471,13 @@ pub(super) fn mask<'a>(
                         (grana_i18n::common::minimum(language), range[0]),
                         (grana_i18n::common::maximum(language), range[1]),
                     ];
-                    for (index, (label, value)) in bounds.into_iter().enumerate() {
-                        let other = match index {
+                    for (bound_idx, (label, value)) in bounds.into_iter().enumerate() {
+                        let other = match bound_idx {
                             0 => range[1],
                             _ => range[0],
                         };
                         let action = move |value: f32| {
-                            let (minimum, maximum) = if index == 0 {
+                            let (minimum, maximum) = if bound_idx == 0 {
                                 (value.min(other), other)
                             } else {
                                 (other, value.max(other))
@@ -468,7 +488,7 @@ pub(super) fn mask<'a>(
                         };
                         let widget =
                             grana_ui::widget::drag_value(&theme, value, field.decimals() as usize)
-                                .named(&format!("mask.filter.{index}"))
+                                .named(&format!("mask.filter.{bound_idx}"))
                                 .on_drag_value(unit_step(field), action);
                         let unit = view::caption(ctx, suffix);
                         let row = grana_ui::row()
@@ -505,12 +525,15 @@ pub(super) fn mask<'a>(
         };
         children.push(view::weak(ctx, &detail));
     }
-    view::disclosure_card(
+    view::disclosure_group_card(
         ctx,
+        (index, count),
         key,
-        Icon::Filter,
-        grana_i18n::inspector::analysis_mask(language),
-        Some(&summary),
+        (
+            Icon::Filter,
+            grana_i18n::inspector::analysis_mask(language),
+            Some(&summary),
+        ),
         children,
         open,
     )

@@ -465,14 +465,13 @@ fn caption(size: [u32; 2], title: &str, detail: &str) -> Vec<Mark> {
             rect,
             Corners::ZERO,
             Color::TRANSPARENT,
-            palette.scene_backdrop.with_alpha(0.84),
+            palette.surface_dim.with_alpha(0.84),
         );
         let inset = (points.x * 0.017).clamp(12.0, 24.0);
         let width = (points.x - 2.0 * inset).max(1.0);
-        let title_style =
-            TextStyle::new(theme.font(Level::Title), palette.text_primary).truncating();
+        let title_style = TextStyle::new(theme.font(Level::Title), palette.on_surface).truncating();
         let detail_style =
-            TextStyle::new(theme.font(Level::Callout), palette.text_secondary).truncating();
+            TextStyle::new(theme.font(Level::Label), palette.on_surface_variant).truncating();
         let top = points.y - band + 10.0;
         painter.text_in(
             Rect::from_min_size(Vec2::new(inset, top), Vec2::new(width, 24.0)),
