@@ -88,6 +88,11 @@ impl LevelKey {
     }
 }
 
+pub(super) struct ResidencyDemand {
+    pub(super) residency: Residency,
+    pub(super) bands: Vec<Demand>,
+}
+
 pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
     pub(super) accumulation: Texture,

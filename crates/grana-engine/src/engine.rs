@@ -38,7 +38,7 @@ struct Request {
     level_cap: usize,
     prefetch: bool,
     await_residency: bool,
-    uploads: u64,
+    generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +79,7 @@ pub struct Engine {
     sample: Option<Duration>,
     drawn_at: Option<Instant>,
     changed_at: Option<Instant>,
-    uploads: u64,
+    generation: u64,
     image_revision: u64,
     info: FrameInfo,
 }
@@ -98,7 +98,7 @@ impl Engine {
             sample: None,
             drawn_at: None,
             changed_at: None,
-            uploads: 0,
+            generation: 0,
             image_revision: 0,
             info: FrameInfo::default(),
         }
@@ -113,6 +113,7 @@ impl Engine {
         self.phase = Phase::Ready;
         self.drawn_at = None;
         self.changed_at = None;
+        self.generation = 0;
         self.info = FrameInfo::default();
     }
 
@@ -129,8 +130,8 @@ impl Engine {
     }
 
     pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) {
-        let count = self.renderer.upload(queue, bricks);
-        self.uploads = self.uploads.wrapping_add(count as u64);
+        self.renderer.upload(queue, bricks);
+        self.generation = self.renderer.generation();
     }
 
     pub fn draw(
@@ -153,7 +154,7 @@ impl Engine {
             level_cap: frame.level_cap,
             prefetch: frame.prefetch,
             await_residency: frame.await_residency,
-            uploads: self.uploads,
+            generation: self.generation,
         };
         if self.request != Some(request) {
             self.request = None;
@@ -249,7 +250,7 @@ impl Engine {
                 self.observe(now.saturating_duration_since(last));
             }
             self.drawn_at = Some(now);
-            if self.complete() {
+            if self.resolved(frame.await_residency) {
                 self.phase = Phase::Ready;
                 self.drawn_at = None;
             }
@@ -281,8 +282,11 @@ impl Engine {
         self.draft = draft_scale(blended);
     }
 
-    fn complete(&self) -> bool {
+    fn resolved(&self, streaming: bool) -> bool {
         let info = self.info;
+        if streaming {
+            return info.samples != 0 && !info.fading;
+        }
         info.samples >= SAMPLE_LIMIT && !info.fading && info.view.resident >= info.view.demand
     }
 

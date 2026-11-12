@@ -84,9 +84,10 @@ impl Renderer {
             epoch,
             resident,
             channels_key,
-            uploads,
+            generation,
             settled,
             planned,
+            demand,
             awaited,
             shadow,
             transparent,
@@ -219,7 +220,7 @@ impl Renderer {
             scene_table.write_channels(device, queue, pyramid, scene.channels);
             *channels_key = Some(channel_key);
         }
-        let stamp = digest(&[versions.data(), *uploads]);
+        let stamp = digest(&[versions.data(), *generation]);
         let next = Resident {
             objects: versions.objects(),
             style: versions.style(),
@@ -289,7 +290,7 @@ impl Renderer {
         );
         let shadow_keys = ShadowKeys::of(
             versions.objects(),
-            *uploads,
+            *generation,
             time,
             channel_key,
             ladder,
@@ -350,7 +351,7 @@ impl Renderer {
             levels,
             versions,
             channels: channel_key,
-            uploads: *uploads,
+            generation: *generation,
             time,
             exposure,
             epoch: *epoch,
@@ -922,6 +923,9 @@ impl Renderer {
             }
             frames[slot] = Some(residency);
             *planned = Some(residency);
+            if demand.as_ref().is_none_or(|held| !held.covers(&residency)) {
+                *demand = None;
+            }
         }
         queue.submit([encoder.finish()]);
         convergence.register();

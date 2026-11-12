@@ -86,25 +86,6 @@ pub(crate) struct Demand {
     pub indices: Vec<u32>,
 }
 
-impl Demand {
-    pub fn merge(&mut self, other: Self) {
-        self.info.visible += other.info.visible;
-        self.info.demand += other.info.demand;
-        self.info.resident += other.info.resident;
-        let mut requests = std::mem::take(&mut self.requests)
-            .into_iter()
-            .zip(std::mem::take(&mut self.buckets))
-            .chain(other.requests.into_iter().zip(other.buckets))
-            .collect::<Vec<_>>();
-        requests.sort_by_key(|(_, bucket)| *bucket);
-        for (request, bucket) in requests {
-            self.requests.push(request);
-            self.buckets.push(bucket);
-        }
-        self.indices.extend(other.indices);
-    }
-}
-
 pub(crate) struct Plan {
     capacity: usize,
     buffer: Buffer,

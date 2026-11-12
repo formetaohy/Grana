@@ -231,12 +231,7 @@ impl App {
         if animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.playing {
-            let fluid = interacting || self.frame_info().samples == 0;
-            delay = delay.min(if fluid {
-                STREAM_POLL
-            } else {
-                PLAYBACK_INTERVAL
-            });
+            delay = delay.min(STREAM_POLL);
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
         } else if self.session.scene().is_some() && self.converging() {
@@ -398,9 +393,7 @@ impl ApplicationHandler for App {
             return;
         }
         if self.repaint_at.is_none() {
-            if self.workspace.playback.playing {
-                self.repaint_at = Some(Instant::now() + PLAYBACK_INTERVAL);
-            } else if self.streaming() {
+            if self.workspace.playback.playing || self.streaming() {
                 self.repaint_at = Some(Instant::now() + STREAM_POLL);
             } else if self.export.running() {
                 self.repaint_at = Some(Instant::now() + EXPORT_POLL);

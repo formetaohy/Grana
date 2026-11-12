@@ -28,7 +28,7 @@ impl UploadScratch {
 }
 
 impl Renderer {
-    pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) -> usize {
+    pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) {
         let Self {
             bricks: tables,
             atlas,
@@ -36,7 +36,7 @@ impl Renderer {
             pyramid,
             channels,
             time: now,
-            uploads,
+            generation,
             pin,
             prefetched,
             staging,
@@ -46,7 +46,7 @@ impl Renderer {
         let (Some(pyramid), Some(atlas), Some(arena)) =
             (pyramid.as_ref(), atlas.as_mut(), arena.as_ref())
         else {
-            return 0;
+            return;
         };
         let UploadScratch {
             units,
@@ -58,7 +58,6 @@ impl Renderer {
         let total = (0..packs)
             .map(|pack| pack_texels(pack_components(*channels, pack)))
             .sum::<usize>();
-        let mut accepted = 0;
         for (request, data) in bricks {
             let BrickRequest { time, level, coord } = *request;
             if level >= pyramid.level_count()
@@ -78,7 +77,6 @@ impl Renderer {
             let grid = BrickGrid::new(extent);
             let index = grid.index(coord);
             if atlas.slot(time, level, index).is_some() || atlas.is_hollow(time, level, index) {
-                accepted += 1;
                 continue;
             }
             let voxels = data.channels()[0].voxel_count();
@@ -113,7 +111,8 @@ impl Renderer {
                 base += span;
             }
             let maximum = maxima.iter().flatten().copied().fold(0.0f32, f32::max);
-            let publish = time == *now
+            let current = time == *now;
+            let publish = current
                 && tables[level]
                     .as_ref()
                     .is_some_and(|table| table.time() == Some(time));
@@ -122,8 +121,9 @@ impl Renderer {
                 if publish && let Some(table) = tables[level].as_mut() {
                     table.set_record(queue, arena, index, BrickRecord::hollow(time));
                 }
-                *uploads += 1;
-                accepted += 1;
+                if current {
+                    *generation += 1;
+                }
                 continue;
             }
             summary.fill(0.0);
@@ -174,9 +174,9 @@ impl Renderer {
                     BrickRecord::new(slot + 1, time, maxima),
                 );
             }
-            *uploads += 1;
-            accepted += 1;
+            if current {
+                *generation += 1;
+            }
         }
-        accepted
     }
 }

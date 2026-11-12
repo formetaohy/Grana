@@ -4,7 +4,9 @@ mod residency;
 mod signature;
 mod upload;
 
-use residency::{FrameTarget, LevelKey, Levels, Mode, Residency, Resident, ViewState};
+use residency::{
+    FrameTarget, LevelKey, Levels, Mode, Residency, ResidencyDemand, Resident, ViewState,
+};
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -173,7 +175,7 @@ pub struct Renderer {
     epoch: u64,
     resident: Option<Resident>,
     channels_key: Option<u64>,
-    uploads: u64,
+    generation: u64,
     pin: u64,
     prefetch: bool,
     prefetched: HashSet<BrickRequest>,
@@ -190,6 +192,7 @@ pub struct Renderer {
     sliced: bool,
     settled: Option<Residency>,
     planned: Option<Residency>,
+    demand: Option<ResidencyDemand>,
     viewport: Option<[u32; 4]>,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
@@ -262,7 +265,7 @@ impl Renderer {
             epoch: 0,
             resident: None,
             channels_key: None,
-            uploads: 0,
+            generation: 0,
             pin: 0,
             prefetch: false,
             prefetched: HashSet::new(),
@@ -279,6 +282,7 @@ impl Renderer {
             sliced: false,
             settled: None,
             planned: None,
+            demand: None,
             viewport: None,
             pick_target: None,
             pick_readback: None,
@@ -299,6 +303,10 @@ impl Renderer {
 
     pub fn slot_bytes(&self) -> u64 {
         self.slot_bytes
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn slots(&self) -> usize {
@@ -348,6 +356,7 @@ impl Renderer {
         self.resident = None;
         self.convergence.forget();
         self.settled = None;
+        self.demand = None;
         self.exporting = true;
         self.fade = None;
         self.level_cap = None;
@@ -484,8 +493,10 @@ impl Renderer {
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.prefetch_rate = 1.0;
+        self.generation = 0;
         self.settled = None;
         self.planned = None;
+        self.demand = None;
         self.exporting = false;
         self.fade = None;
         self.motion = None;

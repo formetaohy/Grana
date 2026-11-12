@@ -9,7 +9,7 @@ pub(super) struct Signature<'a> {
     pub(super) levels: Levels,
     pub(super) versions: Versions,
     pub(super) channels: u64,
-    pub(super) uploads: u64,
+    pub(super) generation: u64,
     pub(super) time: u32,
     pub(super) exposure: f32,
     pub(super) epoch: u64,
@@ -25,7 +25,7 @@ impl Signature<'_> {
             levels,
             versions,
             channels,
-            uploads,
+            generation,
             time,
             exposure,
             epoch,
@@ -49,7 +49,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
-        uploads.hash(&mut hasher);
+        generation.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -147,7 +147,7 @@ pub(super) struct ShadowKeys {
 impl ShadowKeys {
     pub(super) fn of(
         objects: u64,
-        uploads: u64,
+        generation: u64,
         time: u32,
         style: u64,
         ladder: Ladder,
@@ -160,7 +160,7 @@ impl ShadowKeys {
                 ladder.base as u64,
                 ladder.count as u64,
                 u64::from(time),
-                uploads,
+                generation,
                 space,
             ]),
             objects: digest(&[objects, space]),
