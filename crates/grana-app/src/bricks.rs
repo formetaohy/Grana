@@ -17,9 +17,9 @@ impl ImageBricks {
 }
 
 impl Bricks for ImageBricks {
-    fn read(&self, request: BrickRequest, shift: [f32; 3]) -> Result<BrickData, String> {
+    fn read(&self, request: BrickRequest, warp: &grana_warp::Warp) -> Result<BrickData, String> {
         self.channels
-            .read_brick(request.time, request.level, request.coord, shift)
+            .read_brick(request.time, request.level, request.coord, warp)
             .map_err(|error| error.to_string())
     }
 }

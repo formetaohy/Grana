@@ -24,7 +24,7 @@ struct VolumeBricks {
 }
 
 impl Bricks for VolumeBricks {
-    fn read(&self, request: BrickRequest, _shift: [f32; 3]) -> Result<BrickData, String> {
+    fn read(&self, request: BrickRequest, _warp: &grana_warp::Warp) -> Result<BrickData, String> {
         let grid = BrickGrid::new(self.pyramid.level(request.level).extent());
         Ok(self.volume.brick(&grid, request.coord))
     }

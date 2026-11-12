@@ -3,6 +3,7 @@ use std::ops::Range;
 use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::SurfaceSet;
 use grana_volume::Level;
+use grana_warp::Warp;
 
 use crate::channels::Channels;
 
@@ -15,7 +16,7 @@ pub(super) fn surfaces(
     info: Level,
     ranges: &[Range<u32>; 3],
     labels: &[u32],
-    shift: [f32; 3],
+    warp: &Warp,
 ) -> Result<Option<SurfaceSet>, String> {
     let width = ranges[0].end - ranges[0].start;
     let height = ranges[1].end - ranges[1].start;
@@ -44,7 +45,7 @@ pub(super) fn surfaces(
         for channel in 0..channels {
             data.push(
                 reader
-                    .read_region(time, level, channel, &extent, shift)
+                    .read_region(time, level, channel, &extent, warp)
                     .map_err(|error| error.to_string())?,
             );
         }

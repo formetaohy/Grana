@@ -96,7 +96,7 @@ pub fn grow(
             continue;
         }
         let mask = domain.mask(request.roi.as_ref(), time)?;
-        let shift = request.drift.offset(time);
+        let warp = request.drift.warp(time);
         let leveling = Leveling::at(
             reader,
             time,
@@ -104,10 +104,10 @@ pub fn grow(
             level,
             &ranges,
             mask.as_ref(),
-            shift,
+            warp,
         )?;
         let values = reader
-            .read_region(time, level, request.channel, &ranges, shift)
+            .read_region(time, level, request.channel, &ranges, warp)
             .map_err(|error| error.to_string())?;
         let values = leveling.apply(&values);
         let seeds = frame
@@ -140,7 +140,7 @@ pub fn grow(
             info,
             growth.ranges(),
             growth.labels(),
-            shift,
+            warp,
         )?
         else {
             sink(Event::Progress {

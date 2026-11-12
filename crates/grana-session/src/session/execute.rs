@@ -105,6 +105,7 @@ impl Session {
                 numerator,
                 denominator,
             } => self.add_ratio_channel(numerator, denominator),
+            Command::AddBleachChannel { source } => self.add_bleach_channel(source),
             Command::SetSmoothChannel { channel, sigma } => {
                 self.set_smooth_channel(channel, sigma);
             }

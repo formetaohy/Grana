@@ -8,6 +8,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
     pad_brick,
 };
+use grana_warp::Warp;
 use grana_zarr::{Labels, Plate};
 use rayon::prelude::*;
 
@@ -148,14 +149,13 @@ impl Image {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<VoxelData, Error> {
         self.level_extent(level)?;
-        let shift = align::level_shift(shift, level);
-        if shift == [0.0; 3] {
+        if warp.identity() {
             return self.region_at(time, level, channel, ranges);
         }
-        self.aligned_region(time, level, channel, ranges, shift)
+        self.aligned_region(time, level, channel, ranges, warp)
     }
 
     pub fn read_brick(
@@ -163,9 +163,9 @@ impl Image {
         time: u32,
         level: usize,
         coord: BrickCoord,
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<BrickData, Error> {
-        if shift == [0.0; 3] && level < self.pyramid.stored() {
+        if warp.identity() && level < self.pyramid.stored() {
             return self.stored_brick(time, level, coord);
         }
         let extent = self.level_extent(level)?;
@@ -182,7 +182,7 @@ impl Image {
         let bricks = (0..self.pyramid.channel_count())
             .into_par_iter()
             .map(|channel| {
-                let data = self.brick_region(time, level, channel, coord, shift)?;
+                let data = self.brick_region(time, level, channel, coord, warp)?;
                 Ok(pad_brick(
                     &data,
                     origin,
@@ -201,15 +201,14 @@ impl Image {
         level: usize,
         channel: usize,
         coord: BrickCoord,
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<Arc<VoxelData>, Error> {
         let extent = self.level_extent(level)?;
         let grid = BrickGrid::new(extent);
         let spatial = grid.padded_range(coord);
-        let shift = align::level_shift(shift, level);
-        if shift != [0.0; 3] {
+        if !warp.identity() {
             return Ok(Arc::new(
-                self.aligned_region(time, level, channel, &spatial, shift)?,
+                self.aligned_region(time, level, channel, &spatial, warp)?,
             ));
         }
         if level < self.pyramid.stored() {
@@ -271,16 +270,17 @@ impl Image {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<VoxelData, Error> {
         let format = self.channel_format(channel)?;
         let extent = self.level_extent(level)?;
+        let info = self.pyramid.level(level);
         let limits = [extent.x(), extent.y(), extent.z()];
-        let plan = align::plan(ranges, shift, limits);
-        if plan.source.iter().any(|range| range.start >= range.end) {
+        let plan = align::plan(ranges, info, warp, limits);
+        if plan.source().iter().any(|range| range.start >= range.end) {
             return Ok(align::zeros(format, ranges));
         }
-        let data = self.region_at(time, level, channel, &plan.source)?;
+        let data = self.region_at(time, level, channel, plan.source())?;
         Ok(align::resample(&data, &plan, ranges))
     }
 

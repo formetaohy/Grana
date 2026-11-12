@@ -96,20 +96,29 @@ pub enum Operation {
     Smooth(SmoothSpec),
     Background(BackgroundSpec),
     Ratio(RatioSpec),
+    Bleach,
 }
 
 impl Operation {
     pub fn mask(&self) -> Option<ObjectSetId> {
         match self {
             Self::Mask { set } => Some(*set),
-            Self::Restore(_) | Self::Smooth(_) | Self::Background(_) | Self::Ratio(_) => None,
+            Self::Restore(_)
+            | Self::Smooth(_)
+            | Self::Background(_)
+            | Self::Ratio(_)
+            | Self::Bleach => None,
         }
     }
 
     pub fn restore(&self) -> Option<&RestoreSpec> {
         match self {
             Self::Restore(spec) => Some(spec),
-            Self::Mask { .. } | Self::Smooth(_) | Self::Background(_) | Self::Ratio(_) => None,
+            Self::Mask { .. }
+            | Self::Smooth(_)
+            | Self::Background(_)
+            | Self::Ratio(_)
+            | Self::Bleach => None,
         }
     }
 
@@ -132,6 +141,10 @@ impl Operation {
             Self::Ratio(spec) => Some(spec.denominator()),
             _ => None,
         }
+    }
+
+    pub fn bleach(&self) -> bool {
+        matches!(self, Self::Bleach)
     }
 }
 
@@ -253,6 +266,15 @@ impl DerivedSpec {
         )
     }
 
+    pub fn bleached(
+        source: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+    ) -> Self {
+        Self::new(source, name, tint, intensity, Operation::Bleach)
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -291,7 +313,8 @@ impl DerivedSpec {
             Operation::Mask { .. }
             | Operation::Restore(_)
             | Operation::Smooth(_)
-            | Operation::Background(_) => self.operation.clone(),
+            | Operation::Background(_)
+            | Operation::Bleach => self.operation.clone(),
         };
         Self {
             name: self.name.clone(),

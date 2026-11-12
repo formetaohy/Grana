@@ -31,6 +31,7 @@ use grana_scene::{
     SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
+use grana_warp::{Grid, Warp};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_CELLS, TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
@@ -118,6 +119,7 @@ impl Decode for DerivedSpec {
                 Operation::Background(BackgroundSpec::new(radius))
             }
             4 => Operation::Ratio(RatioSpec::new(reader.u32()? as usize)),
+            5 => Operation::Bleach,
             _ => return Err(FAULT_TAG),
         };
         Ok(Self::new(
@@ -1813,27 +1815,71 @@ impl Decode for Drift {
         let channel = reader.u32()? as usize;
         let reference = reader.u32()?;
         let frames = reader.count(1)?;
-        let mut offsets = Vec::with_capacity(frames.min(1 << 16));
+        let mut warps = Vec::with_capacity(frames.min(1 << 16));
         for _ in 0..frames {
-            let mut offset = [0f32; 3];
-            for value in &mut offset {
-                *value = finite(reader.f32()?)?;
-                if value.abs() > Drift::LIMIT {
-                    return Err(FAULT_VALUE);
-                }
-            }
-            offsets.push(offset);
+            warps.push(Warp::decode(reader)?);
         }
-        if offsets.is_empty() {
+        if warps.is_empty() {
             if reference != 0 {
                 return Err(FAULT_VALUE);
             }
             return Ok(Drift::default());
         }
-        if reference as usize >= offsets.len() || offsets[reference as usize] != [0.0; 3] {
+        if reference as usize >= warps.len() || !warps[reference as usize].identity() {
             return Err(FAULT_VALUE);
         }
-        Ok(Drift::new(channel, reference, offsets))
+        if warps.iter().any(|warp| warp.magnitude() > Drift::LIMIT) {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Drift::new(channel, reference, warps))
+    }
+}
+
+impl Decode for Warp {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => {
+                let mut offset = [0f32; 3];
+                for value in &mut offset {
+                    *value = finite(reader.f32()?)?;
+                }
+                Ok(Self::shift(offset))
+            }
+            1 => {
+                let mut dims = [0u32; 3];
+                for value in &mut dims {
+                    *value = reader.u32()?;
+                }
+                if dims.contains(&0) {
+                    return Err(FAULT_VALUE);
+                }
+                let mut origin = [0f32; 3];
+                for value in &mut origin {
+                    *value = finite(reader.f32()?)?;
+                }
+                let mut step = [0f32; 3];
+                for value in &mut step {
+                    *value = finite(reader.f32()?)?;
+                    if *value == 0.0 {
+                        return Err(FAULT_VALUE);
+                    }
+                }
+                let count = dims[0] as u64 * dims[1] as u64 * dims[2] as u64;
+                if count == 0 || count > u64::from(u32::MAX) || reader.count(12)? as u64 != count {
+                    return Err(FAULT_VALUE);
+                }
+                let mut values = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    let mut value = [0f32; 3];
+                    for component in &mut value {
+                        *component = finite(reader.f32()?)?;
+                    }
+                    values.push(value);
+                }
+                Ok(Self::field(Grid::new(dims, origin, step, values)))
+            }
+            _ => Err(FAULT_TAG),
+        }
     }
 }
 

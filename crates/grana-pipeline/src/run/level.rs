@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use grana_object::Mask;
 use grana_volume::{Intensity, Pyramid, Region, VoxelData};
+use grana_warp::Warp;
 
 use crate::channels::Channels;
 
@@ -24,9 +25,9 @@ impl Leveling {
         level: usize,
         ranges: &[Range<u32>; 3],
         mask: Option<&Mask>,
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<Self, String> {
-        Self::collect(reader, time, channel, level, ranges, mask, shift)
+        Self::collect(reader, time, channel, level, ranges, mask, warp)
     }
 
     pub(super) fn sampled(
@@ -42,7 +43,7 @@ impl Leveling {
             let extent = info.extent();
             [0..extent.x(), 0..extent.y(), 0..extent.z()]
         });
-        Self::collect(reader, time, channel, level, &ranges, None, [0.0; 3])
+        Self::collect(reader, time, channel, level, &ranges, None, &Warp::IDENTITY)
     }
 
     fn collect(
@@ -52,7 +53,7 @@ impl Leveling {
         level: usize,
         ranges: &[Range<u32>; 3],
         mask: Option<&Mask>,
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<Self, String> {
         let intensity = reader.pyramid().channels()[channel].intensity();
         let width = (ranges[0].end - ranges[0].start) as usize;
@@ -66,7 +67,7 @@ impl Leveling {
         while z < ranges[2].end {
             let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
             let values = reader
-                .read_region(time, level, channel, &slice, shift)
+                .read_region(time, level, channel, &slice, warp)
                 .map_err(|error| error.to_string())?;
             let mut voxels = vec![0.0f32; values.voxel_count()];
             values.write_values(&mut voxels);

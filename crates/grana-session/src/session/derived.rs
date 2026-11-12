@@ -31,6 +31,13 @@ pub(super) enum PendingChannel {
         denominator: usize,
         task: Task<Result<Intensity, String>>,
     },
+    AddBleach {
+        channels: Arc<Channels>,
+        source: usize,
+        name: String,
+        tint: [f32; 3],
+        task: Task<Result<Intensity, String>>,
+    },
 }
 
 impl PendingChannel {
@@ -39,6 +46,7 @@ impl PendingChannel {
             Self::AddRestore { task, .. } => task,
             Self::AddRatio { task, .. } => task,
             Self::SetRatio { task, .. } => task,
+            Self::AddBleach { task, .. } => task,
         }
     }
 
@@ -47,6 +55,7 @@ impl PendingChannel {
             Self::AddRestore { channels, .. } => channels,
             Self::AddRatio { channels, .. } => channels,
             Self::SetRatio { channels, .. } => channels,
+            Self::AddBleach { channels, .. } => channels,
         }
     }
 }

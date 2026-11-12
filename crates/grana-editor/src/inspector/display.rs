@@ -379,13 +379,14 @@ pub(super) fn display<'a>(
                 ));
             }
             grana_scene::Operation::Mask { .. } => {}
+            grana_scene::Operation::Bleach => {}
         }
     }
     children.push(view::divider(ctx));
     let voxel = scene.dataset.voxel_size().min_element();
     let sigma = voxel.max(0.05);
     let radius = (10.0 * voxel).max(1.0);
-    let third = (width - 12.0) / 3.0;
+    let half = (width - 6.0) * 0.5;
     children.push(view::caption(
         ctx,
         grana_i18n::inspector::channel_operators(language),
@@ -396,7 +397,7 @@ pub(super) fn display<'a>(
                 ctx,
                 grana_i18n::inspector::smooth(language),
                 Role::Quiet,
-                Length::Fixed(third),
+                Length::Fixed(half),
             )
             .named("operator.smooth")
             .press(Message::Command(Command::AddSmoothChannel {
@@ -407,21 +408,35 @@ pub(super) fn display<'a>(
                 ctx,
                 grana_i18n::inspector::background(language),
                 Role::Quiet,
-                Length::Fixed(third),
+                Length::Fixed(half),
             )
             .named("operator.background")
             .press(Message::Command(Command::AddBackgroundChannel {
                 source: index,
                 radius,
             })),
+        ]),
+    );
+    children.push(
+        grana_ui::row().gap(6.0).align(Align::Center).children([
             view::button_with(
                 ctx,
                 grana_i18n::inspector::ratio(language),
                 Role::Quiet,
-                Length::Fixed(third),
+                Length::Fixed(half),
             )
             .named("display.ratio")
             .press(Message::Noop),
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::bleach(language),
+                Role::Quiet,
+                Length::Fixed(half),
+            )
+            .named("operator.bleach")
+            .press(Message::Command(Command::AddBleachChannel {
+                source: index,
+            })),
         ]),
     );
     let ratio_edit = matches!(

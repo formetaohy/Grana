@@ -136,32 +136,7 @@ impl Protocol {
                     drift.channel
                 )));
             }
-            if drift.offsets.is_empty() {
-                return Err(ProtocolError::Invalid(
-                    "the drift correction carries no frame offsets".to_string(),
-                ));
-            }
-            if drift.reference as usize >= drift.offsets.len() {
-                return Err(ProtocolError::Invalid(format!(
-                    "the drift reference frame {} is not one of the aligned frames",
-                    drift.reference
-                )));
-            }
-            if drift.offsets[drift.reference as usize] != [0.0; 3] {
-                return Err(ProtocolError::Invalid(
-                    "the drift reference frame holds still".to_string(),
-                ));
-            }
-            for offset in &drift.offsets {
-                if offset
-                    .iter()
-                    .any(|value| !value.is_finite() || value.abs() > grana_scene::Drift::LIMIT)
-                {
-                    return Err(ProtocolError::Invalid(
-                        "a drift offset stays inside the volume".to_string(),
-                    ));
-                }
-            }
+            drift.checked()?;
         }
         for set in &self.sets {
             validate(&set.name, "a set name")?;

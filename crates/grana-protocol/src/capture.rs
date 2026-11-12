@@ -8,12 +8,13 @@ use grana_scene::{
 use grana_volume::Fingerprint;
 
 use crate::{
-    AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
-    ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
-    MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec,
-    NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec,
-    RelationSpec, RenderSpec, RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
-    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
+    AnnotationSpec, BackgroundSpec, BleachSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
+    ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec,
+    LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec,
+    MeasuredSpec, MetricSpec, NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol,
+    ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec,
+    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec,
+    ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -134,6 +135,12 @@ impl Protocol {
                             intensity: [intensity.min(), intensity.max()],
                         })
                     }
+                    grana_scene::Operation::Bleach => DerivedSpec::Bleach(BleachSpec {
+                        channel,
+                        name: spec.name().to_string(),
+                        tint: spec.tint(),
+                        intensity: [intensity.min(), intensity.max()],
+                    }),
                 })
             })
             .collect::<Result<Vec<_>, ProtocolError>>()?;
@@ -273,11 +280,26 @@ impl Protocol {
             view.as_ref().and_then(ViewSpec::export),
             views.iter().map(|named| named.name.clone()).collect(),
         ));
-        let drift = (!scene.drift().is_empty()).then(|| DriftSpec {
-            channel: channels[scene.drift().channel()].clone(),
-            reference: scene.drift().reference(),
-            offsets: scene.drift().offsets().to_vec(),
-        });
+        let drift = match scene.drift() {
+            drift if drift.is_empty() => None,
+            drift => Some(DriftSpec {
+                channel: channels[drift.channel()].clone(),
+                reference: drift.reference(),
+                lattice: lattice(drift)?,
+                warps: drift
+                    .warps()
+                    .iter()
+                    .map(|warp| match warp.field_grid() {
+                        Some(grid) => WarpSpec::Field {
+                            values: grid.values().to_vec(),
+                        },
+                        None => WarpSpec::Shift {
+                            offset: warp.translation(),
+                        },
+                    })
+                    .collect(),
+            }),
+        };
         let mask_filter = scene.mask_filter.and_then(|filter| {
             let source = scene.mask.and_then(|mask| scene.objects.get(mask))?;
             let target = scene.objects.get(filter.target())?;
@@ -849,4 +871,27 @@ impl MeasureSpec {
             }),
         }
     }
+}
+
+fn lattice(drift: &grana_scene::Drift) -> Result<Option<LatticeSpec>, ProtocolError> {
+    let mut lattice: Option<&grana_warp::Grid> = None;
+    for warp in drift.warps() {
+        let Some(grid) = warp.field_grid() else {
+            continue;
+        };
+        match lattice {
+            None => lattice = Some(grid),
+            Some(held) if held.same_lattice(grid) => {}
+            Some(_) => {
+                return Err(ProtocolError::Invalid(
+                    "the drift frames carry displacements on different lattices".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(lattice.map(|grid| LatticeSpec {
+        dims: grid.dims(),
+        origin: grid.origin(),
+        step: grid.step(),
+    }))
 }

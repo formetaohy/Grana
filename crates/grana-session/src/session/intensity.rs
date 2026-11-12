@@ -118,7 +118,7 @@ impl<'a> Sampler<'a> {
         for (channel, accumulator) in accumulators.iter_mut().enumerate() {
             let data = self
                 .channels
-                .read_region(time, index, channel, &ranges, [0.0; 3])
+                .read_region(time, index, channel, &ranges, &grana_warp::Warp::IDENTITY)
                 .map_err(|error| error.to_string())?;
             if data.voxel_count() != mask.len() {
                 return Err("the sampled region disagrees with its extent".to_string());

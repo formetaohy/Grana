@@ -21,6 +21,7 @@ use grana_scene::{
     SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
+use grana_warp::Warp;
 
 use grana_codec::Encoder;
 
@@ -117,6 +118,9 @@ impl Encode for DerivedSpec {
             grana_scene::Operation::Ratio(ratio) => {
                 writer.u8(4);
                 writer.u32(ratio.denominator() as u32);
+            }
+            grana_scene::Operation::Bleach => {
+                writer.u8(5);
             }
         }
     }
@@ -317,10 +321,39 @@ impl Encode for Drift {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.channel() as u32);
         writer.u32(self.reference());
-        writer.count(self.offsets().len());
-        for offset in self.offsets() {
-            for value in offset {
-                writer.f32(*value);
+        writer.count(self.warps().len());
+        for warp in self.warps() {
+            warp.encode(writer);
+        }
+    }
+}
+
+impl Encode for Warp {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Shift(offset) => {
+                writer.u8(0);
+                for value in offset {
+                    writer.f32(*value);
+                }
+            }
+            Self::Field(grid) => {
+                writer.u8(1);
+                for value in grid.dims() {
+                    writer.u32(value);
+                }
+                for value in grid.origin() {
+                    writer.f32(value);
+                }
+                for value in grid.step() {
+                    writer.f32(value);
+                }
+                writer.count(grid.values().len());
+                for value in grid.values() {
+                    for component in value {
+                        writer.f32(*component);
+                    }
+                }
             }
         }
     }

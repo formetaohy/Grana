@@ -12,6 +12,7 @@ use grana_scene::{DerivedSpec, MaskChannel, Operation, Scene};
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, Pyramid, VoxelData, pad_brick,
 };
+use grana_warp::Warp;
 
 use operator::RegionSource;
 
@@ -19,6 +20,10 @@ const TILE: u32 = 64;
 const TILE_LIMIT: usize = 16;
 const TILE_BATCH: usize = 6;
 const HALO_GROWTH_LIMIT: u32 = 32;
+const BLEACH_WINDOW: u32 = 32;
+const BLEACH_PLANES: u32 = 4;
+const BLEACH_FRAMES: u32 = 32;
+const BLEACH_PERCENTILE: usize = 99;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelsError {
@@ -38,6 +43,10 @@ enum Kind {
     Mask(Arc<MaskChannel>),
     Restore(RestoreChannel),
     Operator,
+    Bleach {
+        source: usize,
+        factors: Result<Arc<[f32]>, String>,
+    },
 }
 
 struct Node {
@@ -50,11 +59,11 @@ struct Site<'a> {
     time: u32,
     level: usize,
     info: Level,
-    shift: [f32; 3],
+    warp: &'a Warp,
 }
 
 struct RestoredTile {
-    key: (u32, u32, [u32; 3], [u32; 3]),
+    key: (u32, u32, u64, [u32; 3]),
     core: [Range<u32>; 3],
     ranges: [Range<u32>; 3],
     values: Vec<f32>,
@@ -106,22 +115,25 @@ impl Channels {
             || scene.dataset.pyramid().clone(),
             |metric| metric.pyramid().clone(),
         );
-        let derived = derived(scene);
-        Self {
+        let mut channels = Self {
             pyramid,
             reader,
-            derived,
+            derived: Vec::new(),
             metric,
-        }
+        };
+        channels.derived = channels.derive(scene);
+        channels
     }
 
     pub fn render(reader: Arc<Image>, scene: &Scene) -> Self {
-        Self {
+        let mut channels = Self {
             pyramid: scene.dataset.pyramid().clone(),
             reader,
-            derived: derived(scene),
+            derived: Vec::new(),
             metric: None,
-        }
+        };
+        channels.derived = channels.derive(scene);
+        channels
     }
 
     pub fn stored(reader: Arc<Image>) -> Self {
@@ -183,14 +195,14 @@ impl Channels {
             channels: self,
             time: 0,
             level: 0,
-            shift: [0.0; 3],
+            warp: &Warp::IDENTITY,
         };
         let site = Site {
             source: &reader,
             time: 0,
             level: 0,
             info,
-            shift: [0.0; 3],
+            warp: &Warp::IDENTITY,
         };
         let data = restore.region(&site, &ranges)?;
         let range = data.range();
@@ -224,8 +236,8 @@ impl Channels {
             let start = (limits[axis] - window) / 2;
             start..start + window
         });
-        let up = self.read_region(0, 0, numerator, &ranges, [0.0; 3])?;
-        let down = self.read_region(0, 0, denominator, &ranges, [0.0; 3])?;
+        let up = self.read_region(0, 0, numerator, &ranges, &Warp::IDENTITY)?;
+        let down = self.read_region(0, 0, denominator, &ranges, &Warp::IDENTITY)?;
         let mut up_values = vec![0.0f32; up.voxel_count()];
         up.write_values(&mut up_values);
         let mut down_values = vec![0.0f32; down.voxel_count()];
@@ -263,17 +275,17 @@ impl Channels {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<VoxelData, ChannelsError> {
         let stored = self.stored_channels();
         if channel < stored {
             return match &self.metric {
                 Some(metric) => metric
-                    .read_region(&self.reader, time, level, channel, ranges, shift)
+                    .read_region(&self.reader, time, level, channel, ranges, warp)
                     .map_err(ChannelsError::Image),
                 None => self
                     .reader
-                    .read_region(time, level, channel, ranges, shift)
+                    .read_region(time, level, channel, ranges, warp)
                     .map_err(ChannelsError::Image),
             };
         }
@@ -290,7 +302,7 @@ impl Channels {
             channels: self,
             time,
             level,
-            shift,
+            warp,
         };
         match &node.kind {
             Kind::Mask(mask_channel) => {
@@ -306,11 +318,23 @@ impl Channels {
                     time,
                     level,
                     info,
-                    shift,
+                    warp,
                 },
                 ranges,
             ),
             Kind::Operator => operator::read(&node.spec, &reader, ranges, info),
+            Kind::Bleach { source, factors } => {
+                let factors = factors.as_ref().map_err(|detail| ChannelsError::Derived {
+                    detail: detail.clone(),
+                })?;
+                let data = reader.read(*source, ranges)?;
+                let factor = factors
+                    .get(time as usize)
+                    .copied()
+                    .unwrap_or(1.0)
+                    .clamp(1.0e-3, 1.0e3);
+                Ok(scaled(&data, 1.0 / factor))
+            }
         }
     }
 
@@ -319,7 +343,7 @@ impl Channels {
         time: u32,
         level: usize,
         coord: BrickCoord,
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<BrickData, ChannelsError> {
         assert!(
             self.metric.is_none(),
@@ -327,7 +351,7 @@ impl Channels {
         );
         let data = self
             .reader
-            .read_brick(time, level, coord, shift)
+            .read_brick(time, level, coord, warp)
             .map_err(ChannelsError::Image)?;
         if self.derived.is_empty() {
             return Ok(data);
@@ -338,7 +362,7 @@ impl Channels {
         let mut channels = data.channels().to_vec();
         for index in 0..self.derived.len() {
             let ranges = grid.padded_range(coord);
-            let region = self.read_region(time, level, stored + index, &ranges, shift)?;
+            let region = self.read_region(time, level, stored + index, &ranges, warp)?;
             let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
             let covered = Extent::new(
                 ranges[0].end - ranges[0].start,
@@ -357,44 +381,154 @@ impl Channels {
     }
 }
 
-fn derived(scene: &Scene) -> Vec<Node> {
-    scene
-        .derived()
-        .iter()
-        .map(|entry| {
-            let spec = entry.spec().clone();
-            let kind = match spec.operation() {
-                Operation::Mask { .. } => Kind::Mask(
-                    entry
-                        .mask()
-                        .expect("a bound mask channel carries its object frames")
-                        .clone(),
-                ),
-                Operation::Restore(restore) => Kind::Restore(RestoreChannel::new(
-                    spec.source(),
-                    restore.psf().clone(),
-                    restore.iterations(),
-                )),
-                Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
-                    Kind::Operator
+impl Channels {
+    fn derive(&self, scene: &Scene) -> Vec<Node> {
+        scene
+            .derived()
+            .iter()
+            .map(|entry| {
+                let spec = entry.spec().clone();
+                let kind = match spec.operation() {
+                    Operation::Mask { .. } => Kind::Mask(
+                        entry
+                            .mask()
+                            .expect("a bound mask channel carries its object frames")
+                            .clone(),
+                    ),
+                    Operation::Restore(restore) => Kind::Restore(RestoreChannel::new(
+                        spec.source(),
+                        restore.psf().clone(),
+                        restore.iterations(),
+                    )),
+                    Operation::Bleach => Kind::Bleach {
+                        source: spec.source(),
+                        factors: self
+                            .bleach_factors(spec.source(), scene.drift())
+                            .map_err(|error| error.to_string()),
+                    },
+                    Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
+                        Kind::Operator
+                    }
+                };
+                Node { spec, kind }
+            })
+            .collect()
+    }
+
+    pub fn bleach_factors(
+        &self,
+        source: usize,
+        drift: &grana_scene::Drift,
+    ) -> Result<Arc<[f32]>, ChannelsError> {
+        let stored = self.stored_channels();
+        if source >= stored {
+            return Err(ChannelsError::Derived {
+                detail: "a bleach correction normalizes a stored channel".to_string(),
+            });
+        }
+        let frames = self.pyramid.frame_count();
+        let level = self.bleach_level();
+        let info = self.level(level)?;
+        let extent = info.extent();
+        let ranges = [0, 1, 2].map(|axis| {
+            let limit = [extent.x(), extent.y(), extent.z()][axis];
+            let span = limit.min(BLEACH_WINDOW).min(if axis == 2 {
+                BLEACH_PLANES
+            } else {
+                BLEACH_WINDOW
+            });
+            let start = (limit - span) / 2;
+            start..start + span
+        });
+        let sampled = frames.clamp(1, BLEACH_FRAMES);
+        let mut levels = Vec::with_capacity(sampled as usize);
+        for index in 0..sampled {
+            let time = (index as u64 * u64::from(frames - 1)
+                / u64::from(sampled.saturating_sub(1).max(1))) as u32;
+            let data = self
+                .reader
+                .read_region(
+                    time.min(frames - 1),
+                    level,
+                    source,
+                    &ranges,
+                    drift.warp(time),
+                )
+                .map_err(ChannelsError::Image)?;
+            let mut values = vec![0.0f32; data.voxel_count()];
+            data.write_values(&mut values);
+            values.retain(|value| value.is_finite());
+            values.sort_unstable_by(f32::total_cmp);
+            let bright = values
+                .get((values.len().saturating_sub(1)) * BLEACH_PERCENTILE / 100)
+                .copied()
+                .unwrap_or(0.0);
+            levels.push(bright);
+        }
+        let reference = levels.first().copied().unwrap_or(0.0);
+        let factors = (0..frames)
+            .map(|time| {
+                if frames <= 1 {
+                    return 1.0;
                 }
-            };
-            Node { spec, kind }
-        })
-        .collect()
+                let position = time as f32 * (sampled - 1) as f32 / (frames - 1) as f32;
+                let low = (position.floor() as u32).min(sampled - 1) as usize;
+                let high = (low + 1).min(sampled as usize - 1);
+                let weight = position - low as f32;
+                let bright = levels[low] * (1.0 - weight) + levels[high] * weight;
+                if reference > 0.0 && bright > 0.0 {
+                    (bright / reference).clamp(1.0e-3, 1.0e3)
+                } else {
+                    1.0
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(factors.into())
+    }
+
+    pub fn bleach_range(
+        &self,
+        source: usize,
+        drift: &grana_scene::Drift,
+    ) -> Result<Intensity, ChannelsError> {
+        let factors = self.bleach_factors(source, drift)?;
+        let low = factors.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = factors.iter().copied().fold(0.0f32, f32::max);
+        let fundus = self.reader.pyramid().channels()[source].intensity();
+        if !(low.is_finite() && high.is_finite() && low > 0.0 && high > 0.0) {
+            return Ok(fundus);
+        }
+        let min = fundus.min() / high;
+        let max = fundus.max() / low;
+        if min.is_finite() && max.is_finite() && min < max {
+            Ok(Intensity::new(min, max))
+        } else {
+            Ok(fundus)
+        }
+    }
+
+    fn bleach_level(&self) -> usize {
+        let mut level = 0;
+        for index in 0..self.pyramid.level_count() {
+            if self.pyramid.level(index).extent().max_dimension() >= BLEACH_WINDOW {
+                level = index;
+            }
+        }
+        level.min(self.pyramid.stored().saturating_sub(1))
+    }
 }
 
 struct ChannelSource<'a> {
     channels: &'a Channels,
     time: u32,
     level: usize,
-    shift: [f32; 3],
+    warp: &'a Warp,
 }
 
 impl RegionSource for ChannelSource<'_> {
     fn read(&self, channel: usize, ranges: &[Range<u32>; 3]) -> Result<VoxelData, ChannelsError> {
         self.channels
-            .read_region(self.time, self.level, channel, ranges, self.shift)
+            .read_region(self.time, self.level, channel, ranges, self.warp)
     }
 }
 
@@ -483,12 +617,7 @@ impl RestoreChannel {
     }
 
     fn held(&self, site: &Site<'_>, coord: [u32; 3]) -> Option<Arc<RestoredTile>> {
-        let key = (
-            site.time,
-            site.level as u32,
-            site.shift.map(f32::to_bits),
-            coord,
-        );
+        let key = (site.time, site.level as u32, site.warp.digest(), coord);
         let mut tiles = self.tiles.lock().unwrap_or_else(|error| error.into_inner());
         let index = tiles.iter().position(|tile| tile.key == key)?;
         let tile = Arc::clone(&tiles[index]);
@@ -515,12 +644,7 @@ impl RestoreChannel {
         let ranges = expand(&core, &halo, &limits);
         let probe = expand(&ranges, &[0, 1, 2].map(|axis| halo[axis] + growth), &limits);
         TilePlan {
-            key: (
-                site.time,
-                site.level as u32,
-                site.shift.map(f32::to_bits),
-                coord,
-            ),
+            key: (site.time, site.level as u32, site.warp.digest(), coord),
             core,
             ranges,
             probe,
@@ -592,7 +716,7 @@ impl RestoreChannel {
 }
 
 struct TilePlan {
-    key: (u32, u32, [u32; 3], [u32; 3]),
+    key: (u32, u32, u64, [u32; 3]),
     core: [Range<u32>; 3],
     ranges: [Range<u32>; 3],
     probe: [Range<u32>; 3],
@@ -640,6 +764,15 @@ impl Sum {
             }
         }
     }
+}
+
+fn scaled(data: &VoxelData, factor: f32) -> VoxelData {
+    let mut values = vec![0.0f32; data.voxel_count()];
+    data.write_values(&mut values);
+    for value in &mut values {
+        *value *= factor;
+    }
+    VoxelData::F32(values)
 }
 
 fn halo(dims: [u32; 3]) -> [u32; 3] {

@@ -12,12 +12,13 @@ use grana_object::{
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
+use grana_scene::{Dataset, Drift, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_volume::{
     BrickCoord, BrickRequest, Channel, Extent, Fingerprint, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
 };
+use grana_warp::{Grid, Warp};
 
 use crate::support::{self, Temp};
 
@@ -81,6 +82,64 @@ fn detects_surfaces_masks_a_channel_and_captures() {
     session.execute(Command::CaptureProtocol);
     let protocol = session.protocol().expect("the protocol captures");
     assert_eq!(protocol.derived().len(), 1);
+}
+
+#[test]
+fn round_trips_a_bleach_channel_through_protocol_and_project() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::AddBleachChannel { source: 0 });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while session
+        .scene()
+        .is_none_or(|scene| scene.derived().is_empty())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the bleach channel never calibrates"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    {
+        let scene = session.scene().expect("the series opens");
+        assert!(matches!(
+            scene.derived()[0].spec().operation(),
+            grana_scene::Operation::Bleach
+        ));
+    }
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    assert_eq!(protocol.derived().len(), 1);
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(text.contains("\"bleach\""), "the protocol names the bleach");
+    let restored = Protocol::from_json(&text).expect("the protocol parses");
+    assert_eq!(&restored, protocol);
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "nuclei".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([7; 32]),
+    );
+    let temp = Temp::new("suite-bleach");
+    let path = temp.path().join("bleach.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the bleach project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the bleach project reads");
+    assert_eq!(loaded, project);
 }
 
 #[test]
@@ -841,6 +900,90 @@ fn round_trips_a_project() {
         .write(&path, &AtomicBool::new(false), &mut |_, _| steps += 1)
         .expect("the project writes");
     assert!(steps > 0, "the save reports its steps");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    assert_eq!(loaded, project);
+}
+
+#[test]
+fn round_trips_a_deformation_through_protocol_and_project() {
+    let volume = support::spheres(
+        Extent::new(16, 16, 8),
+        Spacing::new(1.0, 1.0, 1.0),
+        &[([8.0, 8.0, 4.0], 3.0)],
+        HIGH,
+    );
+    let pyramid = VolumeSeries::new(vec![volume.clone(), volume], 1.0)
+        .pyramid()
+        .clone();
+    let mut scene = Scene::new(Dataset::synthetic("fixture", pyramid.clone()));
+    let grid = Grid::new(
+        [2, 2, 1],
+        [-8.0, -8.0, -4.0],
+        [16.0, 16.0, 1.0],
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+    );
+    let warps = vec![Warp::IDENTITY, Warp::field(grid.clone())];
+    assert!(
+        scene.set_drift(Drift::new(0, 0, warps.clone())),
+        "the scene accepts a deformation"
+    );
+    let spots = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        spots,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
+            IntensityTable::new(
+                1,
+                vec![SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0)],
+            ),
+        )),
+    );
+    let protocol = Protocol::capture(&scene, &Measure::new(), None, Vec::new(), None)
+        .expect("the protocol captures");
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(text.contains("\"field\""), "the protocol records the field");
+    let restored = Protocol::from_json(&text).expect("the protocol parses");
+    assert_eq!(restored, protocol);
+    let mut staged = Scene::new(Dataset::synthetic("fixture", pyramid));
+    let steps = restored.stage(&mut staged).expect("the protocol stages");
+    let staged_warps = steps
+        .steps()
+        .iter()
+        .find_map(|step| match step {
+            grana_protocol::Step::Drift { warps, .. } => Some(warps.clone()),
+            _ => None,
+        })
+        .expect("the protocol stages its drift");
+    assert_eq!(staged_warps, warps);
+
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([7; 32]),
+    );
+    let temp = Temp::new("suite-deformation");
+    let path = temp.path().join("field.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
     let loaded = Project::read(
         &path,
         GeometryStore::memory(),

@@ -17,7 +17,8 @@ use grana_object::{
 use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
 use grana_volume::{
-    Basis, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
+    Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
+    VolumeSeries, VoxelData, VoxelFormat,
 };
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
@@ -1214,4 +1215,308 @@ fn measures_a_relaxed_label_surface() {
         "a voxelised sphere surfaces with sphericity {}",
         object.sphericity()
     );
+}
+
+#[test]
+fn aligns_a_sequence_with_a_deformation_field() {
+    let dims = [128usize, 128, 32];
+    let extent = Extent::new(128, 128, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.3);
+    let reference = speckled(dims);
+    let translation = [3.0f32, -2.0, 1.0];
+    let field = |at: [f32; 3]| {
+        [
+            6.0 * (at[0] / 128.0 - 0.5),
+            4.0 * (at[1] / 128.0 - 0.5),
+            0.0,
+        ]
+    };
+    let frames = [
+        reference.clone(),
+        moved(&reference, dims, translation),
+        warped(&reference, dims, field),
+    ]
+    .into_iter()
+    .map(|values| {
+        Volume::new(
+            extent,
+            spacing,
+            vec![Channel::new(
+                "signal",
+                [0.4, 0.8, 1.0],
+                VoxelData::F32(values),
+            )],
+        )
+    })
+    .collect();
+    let image = Arc::new(
+        grana_image::Image::open(&Source::memory(VolumeSeries::new(frames, 1.0)))
+            .expect("the synthetic sequence opens"),
+    );
+    let channels = Channels::stored(image);
+    let mut found = None;
+    grana_pipeline::run::drift(
+        &channels,
+        grana_pipeline::DriftRequest::new(0, 0),
+        &AtomicBool::new(false),
+        &mut |event| {
+            if let grana_pipeline::Event::Drift(drift) = event {
+                found = Some(drift);
+            }
+        },
+    )
+    .expect("the synthetic sequence aligns");
+    let drift = found.expect("the alignment reaches its sink");
+    assert_eq!(drift.reference(), 0, "the first frame holds still");
+    let shift = drift.warp(1).translation();
+    for (axis, expected) in shift.iter().zip([0.3f32, -0.2, 0.3]) {
+        assert!(
+            (axis - expected).abs() < 0.05,
+            "the rigid frame reports {shift:?}"
+        );
+    }
+    assert!(
+        drift.warp(2).deformed(),
+        "the sheared frame carries a displacement field"
+    );
+    let ranges = [8..120u32, 8..120, 2..30];
+    let read = |time: u32, warp: &grana_warp::Warp| {
+        let data = channels
+            .read_region(time, 0, 0, &ranges, warp)
+            .expect("the frame reads");
+        let mut values = vec![0.0f32; data.voxel_count()];
+        data.write_values(&mut values);
+        values
+    };
+    let still = read(0, &grana_warp::Warp::IDENTITY);
+    let loose = read(2, &grana_warp::Warp::IDENTITY);
+    let aligned = read(2, drift.warp(2));
+    let departed = correlation(&still, &loose);
+    let restored = correlation(&still, &aligned);
+    assert!(
+        departed < 0.9,
+        "the sheared frame departs from the reference to {departed}"
+    );
+    assert!(
+        restored > 0.95,
+        "the field restores the sheared frame to {restored} from {departed}"
+    );
+}
+
+#[test]
+fn shifts_a_read_by_a_world_translation() {
+    let extent = Extent::new(16, 16, 8);
+    let spacing = Spacing::new(1.0, 1.0, 2.0);
+    let values = |offset: [i64; 3]| {
+        let mut data = vec![0.0f32; extent.voxel_count() as usize];
+        for z in 0..8u32 {
+            for y in 0..16u32 {
+                for x in 0..16u32 {
+                    let at = [
+                        x as f32 - offset[0] as f32,
+                        y as f32 - offset[1] as f32,
+                        z as f32 - offset[2] as f32,
+                    ];
+                    data[(x + 16 * (y + 16 * z)) as usize] =
+                        (at[0] + 10.0 * at[1] + 100.0 * at[2]).max(0.0);
+                }
+            }
+        }
+        data
+    };
+    let frames = [values([0, 0, 0]), values([3, -2, 1])]
+        .into_iter()
+        .map(|data| {
+            Volume::new(
+                extent,
+                spacing,
+                vec![Channel::new("ramp", [1.0, 1.0, 1.0], VoxelData::F32(data))],
+            )
+        })
+        .collect();
+    let image = Arc::new(
+        grana_image::Image::open(&Source::memory(VolumeSeries::new(frames, 1.0)))
+            .expect("the ramp opens"),
+    );
+    let ranges = [0..16u32, 0..16, 0..8];
+    let warp = grana_warp::Warp::shift([3.0, -2.0, 2.0]);
+    let field = grana_warp::Warp::field(grana_warp::Grid::sampled(
+        [2, 2, 2],
+        [-8.0, -8.0, -8.0],
+        [16.0, 16.0, 16.0],
+        |_| [3.0, -2.0, 2.0],
+    ));
+    let data = image
+        .read_region(1, 0, 0, &ranges, &warp)
+        .expect("the moved frame reads");
+    let through = image
+        .read_region(1, 0, 0, &ranges, &field)
+        .expect("the field reads");
+    for index in 0..data.voxel_count() {
+        assert!(
+            (data.value(index) - through.value(index)).abs() < 1.0e-3,
+            "the constant field at {index} reads {} for {}",
+            through.value(index),
+            data.value(index)
+        );
+    }
+    for z in 0..7u32 {
+        for y in 2..14u32 {
+            for x in 0..13u32 {
+                let expect = x as f32 + 10.0 * y as f32 + 100.0 * z as f32;
+                let found = data.value((x + 16 * (y + 16 * z)) as usize);
+                assert!(
+                    (found - expect).abs() < 1.0,
+                    "the warp at {x},{y},{z} reads {found} for {expect}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn normalizes_bleaching_across_frames() {
+    let extent = Extent::new(64, 32, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let peaks = [HIGH, HIGH / 5 * 4, HIGH / 5 * 3];
+    let frames = peaks
+        .into_iter()
+        .map(|peak| {
+            support::spheres(
+                extent,
+                spacing,
+                &[([26.0, 16.0, 16.0], 3.0), ([38.0, 16.0, 16.0], 5.0)],
+                peak,
+            )
+        })
+        .collect::<Vec<_>>();
+    let pyramid = VolumeSeries::new(frames, 1.0).pyramid().clone();
+    let mut scene = Scene::new(Dataset::synthetic("bleach", pyramid));
+    scene
+        .add_derived(grana_scene::DerivedSpec::bleached(
+            0,
+            "bleached",
+            [0.4, 0.8, 1.0],
+            Intensity::new(0.0, f32::from(HIGH)),
+        ))
+        .expect("the scene derives a bleach channel");
+    let image = Arc::new(
+        grana_image::Image::open(&Source::memory(VolumeSeries::new(
+            (0..3)
+                .map(|time| {
+                    support::spheres(
+                        extent,
+                        spacing,
+                        &[([26.0, 16.0, 16.0], 3.0), ([38.0, 16.0, 16.0], 5.0)],
+                        peaks[time],
+                    )
+                })
+                .collect(),
+            1.0,
+        )))
+        .expect("the bleaching sequence opens"),
+    );
+    let channels = Channels::analysis(image, &scene);
+    let ranges = [0..64u32, 0..32, 0..32];
+    let mean = |channel: usize, time: u32| {
+        let data = channels
+            .read_region(time, 0, channel, &ranges, &grana_warp::Warp::IDENTITY)
+            .expect("the channel reads");
+        let mut values = vec![0.0f32; data.voxel_count()];
+        data.write_values(&mut values);
+        values.iter().sum::<f32>() / values.len() as f32
+    };
+    for time in 1..3u32 {
+        let stored = mean(0, time) / mean(0, 0);
+        let bleached = mean(1, time) / mean(1, 0);
+        assert!(
+            (stored - 1.0).abs() > 0.1,
+            "the stored frame {time} dims to {stored}"
+        );
+        assert!(
+            (bleached - 1.0).abs() < 0.03,
+            "the bleached frame {time} keeps {bleached} of the first"
+        );
+    }
+}
+
+fn speckled(dims: [usize; 3]) -> Vec<f32> {
+    let mut values = vec![0.0f32; dims.iter().product()];
+    let mut state = 0x0bad_c0de_u64;
+    for value in &mut values {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *value = ((state >> 33) as f32) / ((u32::MAX >> 1) as f32);
+    }
+    for _ in 0..3 {
+        let mut blurred = vec![0.0f32; values.len()];
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let mut sum = 0.0f32;
+                    for dz in -1i64..=1 {
+                        for dy in -1i64..=1 {
+                            for dx in -1i64..=1 {
+                                let at = [x as i64 + dx, y as i64 + dy, z as i64 + dz];
+                                let at = [
+                                    at[0].clamp(0, dims[0] as i64 - 1) as usize,
+                                    at[1].clamp(0, dims[1] as i64 - 1) as usize,
+                                    at[2].clamp(0, dims[2] as i64 - 1) as usize,
+                                ];
+                                sum += values[at[0] + dims[0] * (at[1] + dims[1] * at[2])];
+                            }
+                        }
+                    }
+                    blurred[x + dims[0] * (y + dims[1] * z)] = sum / 27.0;
+                }
+            }
+        }
+        values = blurred;
+    }
+    let mean = values.iter().sum::<f32>() / values.len() as f32;
+    let spread = (values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f32>()
+        / values.len() as f32)
+        .sqrt();
+    values
+        .into_iter()
+        .map(|value| 0.5 + 0.2 * (value - mean) / spread)
+        .collect()
+}
+
+fn warped(source: &[f32], dims: [usize; 3], field: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<f32> {
+    let mut values = vec![0.0f32; source.len()];
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let at = [x as f32, y as f32, z as f32];
+                let offset = field(at);
+                values[x + dims[0] * (y + dims[1] * z)] = sample(
+                    source,
+                    dims,
+                    [at[0] - offset[0], at[1] - offset[1], at[2] - offset[2]],
+                );
+            }
+        }
+    }
+    values
+}
+
+fn correlation(left: &[f32], right: &[f32]) -> f32 {
+    let left_mean = left.iter().sum::<f32>() / left.len() as f32;
+    let right_mean = right.iter().sum::<f32>() / right.len() as f32;
+    let mut cross = 0.0f64;
+    let mut left_square = 0.0f64;
+    let mut right_square = 0.0f64;
+    for (a, b) in left.iter().zip(right) {
+        let a = f64::from(*a - left_mean);
+        let b = f64::from(*b - right_mean);
+        cross += a * b;
+        left_square += a * a;
+        right_square += b * b;
+    }
+    (cross / (left_square * right_square).sqrt()) as f32
 }

@@ -91,6 +91,7 @@ grana-session = { version = "0.1.1", path = "crates/grana-session" }
 grana-stitch = { version = "0.1.1", path = "crates/grana-stitch" }
 grana-video = { version = "0.1.1", path = "crates/grana-video" }
 grana-weight = { version = "0.1.1", path = "crates/grana-weight" }
+grana-warp = { version = "0.1.1", path = "crates/grana-warp" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -152,6 +153,7 @@ grana-text = { workspace = true }
 grana-ui = { workspace = true }
 grana-vector = { workspace = true }
 grana-volume = { workspace = true }
+grana-warp = { workspace = true }
 grana-weight = { workspace = true }
 grana-zarr = { workspace = true }
 wgpu = { workspace = true }

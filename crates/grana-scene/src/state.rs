@@ -294,6 +294,7 @@ impl Scene {
                 Operation::Ratio(ratio) => {
                     hash = mix(hash, ratio.denominator() as u64);
                 }
+                Operation::Bleach => {}
             }
         }
         for channel in &self.channels {
@@ -374,11 +375,7 @@ impl Scene {
         } else {
             hash = mix(hash, 0);
         }
-        for offset in self.drift().offsets() {
-            for value in offset {
-                hash = mix(hash, u64::from(value.to_bits()));
-            }
-        }
+        hash = mix(hash, self.drift().digest());
         hash = mix(hash, self.coloc.revision().raw());
         hash
     }

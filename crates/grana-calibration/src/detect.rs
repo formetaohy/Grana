@@ -32,7 +32,7 @@ pub(crate) fn read_level(
 ) -> Result<Vec<f32>, Error> {
     let extent = image.pyramid().level(level).extent();
     let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
-    let data = image.read_region(time, level, channel, &ranges, [0.0; 3])?;
+    let data = image.read_region(time, level, channel, &ranges, &grana_warp::Warp::IDENTITY)?;
     let mut values = vec![0.0f32; data.voxel_count()];
     data.write_values(&mut values);
     Ok(values)

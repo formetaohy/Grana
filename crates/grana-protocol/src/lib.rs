@@ -15,14 +15,15 @@ use thiserror::Error;
 pub use origin::{AlgorithmSpec, ExpectedSpec, OriginSpec};
 
 pub use spec::{
-    AnchorSpec, AnnotationSpec, BackgroundSpec, CameraSpec, ChannelSpec, ClassifierSpec,
-    ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec,
-    EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec,
-    MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, NodeSpec,
-    PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RelationSpec,
-    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec,
-    SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
+    AnchorSpec, AnnotationSpec, BackgroundSpec, BleachSpec, CameraSpec, ChannelSpec,
+    ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec,
+    DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
+    LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec,
+    MetricSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec,
+    RatioSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SetSpec,
+    ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec,
+    SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WarpSpec,
+    WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -324,6 +325,9 @@ impl Protocol {
                 " · aligned on {} to frame {}",
                 drift.channel, drift.reference
             ));
+            if drift.lattice.is_some() {
+                summary.push_str(" with deformation");
+            }
         }
         if self.mask_radius > 0.0 {
             summary.push_str(&format!(" · mask grows {:.2} µm", self.mask_radius));

@@ -234,6 +234,56 @@ impl Session {
         });
     }
 
+    pub(super) fn add_bleach_channel(&mut self, source: usize) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error(
+                "open a dataset before correcting its bleaching",
+            ));
+            return;
+        };
+        let prepared = (|| {
+            let scene = self.scene.as_ref()?;
+            let info = scene.dataset.channels().get(source)?;
+            if info.intensity().span() <= 0.0 {
+                return None;
+            }
+            let name = scene.unique_channel_name(&format!("{} bleached", info.name()));
+            Some((
+                name,
+                info.tint(),
+                info.name().to_string(),
+                scene.drift().clone(),
+            ))
+        })();
+        let Some((name, tint, source_name, drift)) = prepared else {
+            self.message = Some(Message::error(
+                "the channel has no intensity range to normalize",
+            ));
+            return;
+        };
+        let task = calibrate(Arc::clone(&channels), move |channels| {
+            channels
+                .bleach_range(source, &drift)
+                .map_err(|error| error.to_string())
+        });
+        self.message = Some(Message::info(format!(
+            "normalizing the bleaching of {source_name}"
+        )));
+        self.tasks.start_channel(PendingChannel::AddBleach {
+            channels,
+            source,
+            name,
+            tint,
+            task,
+        });
+    }
+
     pub(super) fn set_smooth_channel(&mut self, channel: usize, sigma: f32) {
         if self.recipe.is_some() {
             self.message = Some(Message::error(
@@ -483,6 +533,35 @@ impl Session {
                         self.after_mask_layout();
                         self.message = Some(Message::info(format!(
                             "ratio channel {name} divides {up} by {down}"
+                        )));
+                    }
+                    Err(detail) => {
+                        self.message = Some(Message::error(detail));
+                    }
+                }
+            }
+            PendingChannel::AddBleach {
+                source, name, tint, ..
+            } => {
+                let Some(scene) = self.scene.as_mut() else {
+                    return;
+                };
+                let fundus = scene
+                    .dataset
+                    .channels()
+                    .get(source)
+                    .map_or_else(String::new, |channel| channel.name().to_string());
+                match scene.add_derived(DerivedSpec::bleached(
+                    source,
+                    name.clone(),
+                    tint,
+                    intensity,
+                )) {
+                    Ok(_) => {
+                        self.message = None;
+                        self.after_mask_layout();
+                        self.message = Some(Message::info(format!(
+                            "bleach channel {name} normalizes {fundus}"
                         )));
                     }
                     Err(detail) => {

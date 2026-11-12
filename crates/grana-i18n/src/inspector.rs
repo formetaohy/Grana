@@ -47,6 +47,7 @@ labels! {
     smooth => "Smooth" / "平滑";
     background => "Background" / "背景";
     ratio => "Ratio" / "比值";
+    bleach => "Bleach" / "漂白";
     channel_operators => "Channel operators" / "通道算子";
     export_dataset => "Export Dataset" / "导出数据集";
     remove_channel => "Remove Channel" / "移除通道";
@@ -122,7 +123,8 @@ messages! {
     aligning_progress(done: usize, total: usize) => "Aligning · {done}/{total} frames" / "对齐中 · {done}/{total} 帧";
     drift_frames(frames: u32) => "{frames} frames" / "{frames} 帧";
     aligns_channel(channel: &str) => "Aligns {channel} across all time frames." / "在所有时间帧上对齐 {channel}。";
-    drift_summary(frames: u32, maximum: f32) => "{frames} frames aligned · max {maximum:.1} voxels" / "已对齐 {frames} 帧 · 最大 {maximum:.1} 体素";
+    drift_summary(frames: u32, maximum: f32) => "{frames} frames aligned · max {maximum:.2} µm" / "已对齐 {frames} 帧 · 最大 {maximum:.2} µm";
+    drift_deformation(maximum: f32) => "Deformation up to {maximum:.2} µm" / "形变达 {maximum:.2} µm";
     frame_number(frame: u32) => "Frame {frame}" / "第 {frame} 帧";
     detects_relation(field: &str, minimum: f32, maximum: f32, suffix: &str) => "Detects only where the mask relation keeps objects whose {field} lies in {minimum:.2}{suffix} to {maximum:.2}{suffix}." / "仅检测掩膜关系中 {field} 位于 {minimum:.2}{suffix} 至 {maximum:.2}{suffix} 的对象。";
     detects_filtered(name: &str) => "Detects inside filtered objects of {name}." / "在 {name} 的筛选后对象内部检测。";

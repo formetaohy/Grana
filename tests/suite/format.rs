@@ -329,7 +329,7 @@ fn opens_a_plane_tiff_through_the_image_layer() {
     assert_eq!(image.name(), "plane");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 1));
     let data = image
-        .read_region(0, 0, 0, &[0..4, 0..3, 0..1], [0.0; 3])
+        .read_region(0, 0, 0, &[0..4, 0..3, 0..1], &grana_warp::Warp::IDENTITY)
         .expect("the plane reads");
     let VoxelData::U8(values) = data else {
         panic!("the plane stores bytes");

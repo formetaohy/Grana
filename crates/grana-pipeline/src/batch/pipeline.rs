@@ -166,8 +166,8 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             Step::Drift {
                 channel,
                 reference,
-                offsets,
-            } => run.align(*channel, *reference, offsets)?,
+                warps,
+            } => run.align(*channel, *reference, warps)?,
             Step::Detect {
                 set,
                 mask,
@@ -531,18 +531,15 @@ impl Run<'_, '_> {
         &mut self,
         channel: usize,
         reference: u32,
-        offsets: &[[f32; 3]],
+        warps: &[grana_warp::Warp],
     ) -> Result<(), String> {
         let task = self.task;
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("aligning the frames of {}", self.channels.name()),
         });
-        self.scene.set_drift(grana_scene::Drift::new(
-            channel,
-            reference,
-            offsets.to_vec(),
-        ));
+        self.scene
+            .set_drift(grana_scene::Drift::new(channel, reference, warps.to_vec()));
         Ok(())
     }
 

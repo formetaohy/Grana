@@ -102,7 +102,7 @@ fn writes_a_stitched_mosaic() {
     );
     let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
     let data = image
-        .read_region(0, 0, 0, &ranges, [0.0; 3])
+        .read_region(0, 0, 0, &ranges, &grana_warp::Warp::IDENTITY)
         .expect("the stitched image reads");
     let side = width as u32;
     for (x, y) in [(4u32, 4u32), (150, 40), (200, 100), (side - 4, side - 4)] {
@@ -116,7 +116,7 @@ fn writes_a_stitched_mosaic() {
     let coarse = image.pyramid().level(1).extent();
     let ranges = [0..coarse.x(), 0..coarse.y(), 0..coarse.z()];
     let reduced = image
-        .read_region(0, 1, 0, &ranges, [0.0; 3])
+        .read_region(0, 1, 0, &ranges, &grana_warp::Warp::IDENTITY)
         .expect("the coarse level reads");
     for (x, y, z) in [(1u32, 1u32, 0u32), (60, 20, 1), (100, 90, 1)] {
         let mut sum = 0.0f32;

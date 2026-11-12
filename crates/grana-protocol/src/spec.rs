@@ -17,6 +17,7 @@ use grana_scene::{
     Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene, SegmentParams,
 };
 use grana_volume::Clip;
+use grana_warp::{Grid, Warp};
 use serde::{Deserialize, Serialize};
 
 use crate::Protocol;
@@ -545,6 +546,7 @@ pub enum DerivedSpec {
     Smooth(SmoothSpec),
     Background(BackgroundSpec),
     Ratio(RatioSpec),
+    Bleach(BleachSpec),
 }
 
 impl DerivedSpec {
@@ -555,6 +557,7 @@ impl DerivedSpec {
             Self::Smooth(spec) => &spec.name,
             Self::Background(spec) => &spec.name,
             Self::Ratio(spec) => &spec.name,
+            Self::Bleach(spec) => &spec.name,
         }
     }
 
@@ -565,6 +568,7 @@ impl DerivedSpec {
             Self::Smooth(spec) => &spec.channel,
             Self::Background(spec) => &spec.channel,
             Self::Ratio(spec) => &spec.channel,
+            Self::Bleach(spec) => &spec.channel,
         }
     }
 
@@ -575,6 +579,7 @@ impl DerivedSpec {
             Self::Smooth(spec) => spec.checked(),
             Self::Background(spec) => spec.checked(),
             Self::Ratio(spec) => spec.checked(),
+            Self::Bleach(spec) => spec.checked(),
         }
     }
 }
@@ -806,7 +811,9 @@ pub struct DriftSpec {
     pub channel: String,
     #[serde(default, skip_serializing_if = "is_u32_zero")]
     pub reference: u32,
-    pub offsets: Vec<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lattice: Option<LatticeSpec>,
+    pub warps: Vec<WarpSpec>,
 }
 
 impl DriftSpec {
@@ -818,8 +825,173 @@ impl DriftSpec {
         self.reference
     }
 
-    pub fn offsets(&self) -> &[[f32; 3]] {
-        &self.offsets
+    pub fn lattice(&self) -> Option<&LatticeSpec> {
+        self.lattice.as_ref()
+    }
+
+    pub fn warps(&self) -> &[WarpSpec] {
+        &self.warps
+    }
+
+    pub fn checked(&self) -> Result<(), ProtocolError> {
+        if self.warps.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "the drift correction carries no frame warps".to_string(),
+            ));
+        }
+        if self.reference as usize >= self.warps.len() {
+            return Err(ProtocolError::Invalid(format!(
+                "the drift reference frame {} is not one of the aligned frames",
+                self.reference
+            )));
+        }
+        let limit = grana_scene::Drift::LIMIT;
+        let mut deformed = false;
+        for (index, warp) in self.warps.iter().enumerate() {
+            match warp {
+                WarpSpec::Shift { offset } => {
+                    if offset
+                        .iter()
+                        .any(|value| !value.is_finite() || value.abs() > limit)
+                    {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the drift offset of frame {} stays inside the volume",
+                            index + 1
+                        )));
+                    }
+                }
+                WarpSpec::Field { values } => {
+                    deformed = true;
+                    let lattice = self.lattice.as_ref().ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the deformation of frame {} names no displacement lattice",
+                            index + 1
+                        ))
+                    })?;
+                    let count =
+                        lattice.dims[0] as u64 * lattice.dims[1] as u64 * lattice.dims[2] as u64;
+                    if count != values.len() as u64 {
+                        return Err(ProtocolError::Invalid(format!(
+                            "frame {} holds {} displacement nodes and its lattice holds {count}",
+                            index + 1,
+                            values.len()
+                        )));
+                    }
+                    if values
+                        .iter()
+                        .flatten()
+                        .any(|value| !value.is_finite() || value.abs() > limit)
+                    {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the deformation of frame {} stays inside the volume",
+                            index + 1
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(lattice) = &self.lattice {
+            if lattice.dims.contains(&0) {
+                return Err(ProtocolError::Invalid(
+                    "the displacement lattice spans at least one node per axis".to_string(),
+                ));
+            }
+            if lattice.origin.iter().any(|value| !value.is_finite()) {
+                return Err(ProtocolError::Invalid(
+                    "the displacement lattice starts at a finite world point".to_string(),
+                ));
+            }
+            if lattice
+                .step
+                .iter()
+                .any(|value| !value.is_finite() || *value == 0.0)
+            {
+                return Err(ProtocolError::Invalid(
+                    "the displacement lattice steps by a nonzero world distance".to_string(),
+                ));
+            }
+            if !deformed {
+                return Err(ProtocolError::Invalid(
+                    "the displacement lattice carries no deformation".to_string(),
+                ));
+            }
+        }
+        let built = self.built().map_err(ProtocolError::Invalid)?;
+        if !built[self.reference as usize].identity() {
+            return Err(ProtocolError::Invalid(
+                "the drift reference frame holds still".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn built(&self) -> Result<Vec<Warp>, String> {
+        let mut warps = Vec::with_capacity(self.warps.len());
+        for (index, warp) in self.warps.iter().enumerate() {
+            warps.push(match warp {
+                WarpSpec::Shift { offset } => Warp::shift(*offset),
+                WarpSpec::Field { values } => {
+                    let lattice = self.lattice.as_ref().ok_or_else(|| {
+                        format!(
+                            "the deformation of frame {} names no displacement lattice",
+                            index + 1
+                        )
+                    })?;
+                    let count =
+                        lattice.dims[0] as u64 * lattice.dims[1] as u64 * lattice.dims[2] as u64;
+                    if count != values.len() as u64 {
+                        return Err(format!(
+                            "frame {} holds {} displacement nodes and its lattice holds {count}",
+                            index + 1,
+                            values.len()
+                        ));
+                    }
+                    Warp::field(Grid::new(
+                        lattice.dims,
+                        lattice.origin,
+                        lattice.step,
+                        values.clone(),
+                    ))
+                }
+            });
+        }
+        Ok(warps)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatticeSpec {
+    pub dims: [u32; 3],
+    pub origin: [f32; 3],
+    pub step: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum WarpSpec {
+    Shift { offset: [f32; 3] },
+    Field { values: Vec<[f32; 3]> },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BleachSpec {
+    pub channel: String,
+    pub name: String,
+    pub tint: [f32; 3],
+    pub intensity: [f32; 2],
+}
+
+impl BleachSpec {
+    fn checked(&self) -> Result<(), ProtocolError> {
+        derived_common(
+            &self.channel,
+            &self.name,
+            self.tint,
+            self.intensity,
+            "bleach corrected",
+        )
     }
 }
 

@@ -107,6 +107,9 @@ pub enum Command {
         numerator: usize,
         denominator: usize,
     },
+    AddBleachChannel {
+        source: usize,
+    },
     SetSmoothChannel {
         channel: usize,
         sigma: f32,
@@ -662,6 +665,7 @@ impl Command {
             | Self::AddSmoothChannel { .. }
             | Self::AddBackgroundChannel { .. }
             | Self::AddRatioChannel { .. }
+            | Self::AddBleachChannel { .. }
             | Self::CalibratePsf { .. } => Edit::new(Action::Derived),
             Self::SetSmoothChannel { channel, .. }
             | Self::SetBackgroundChannel { channel, .. }

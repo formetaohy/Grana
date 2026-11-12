@@ -36,7 +36,7 @@ impl Source for ProfileSource<'_> {
 
     fn read(&self, channel: usize, ranges: &[Range<u32>; 3]) -> Result<VoxelData, String> {
         self.channels
-            .read_region(self.time, 0, channel, ranges, [0.0; 3])
+            .read_region(self.time, 0, channel, ranges, &grana_warp::Warp::IDENTITY)
             .map_err(|error| error.to_string())
     }
 }

@@ -1,12 +1,13 @@
 use grana_measure::ColocPair;
 use grana_scene::{Criteria, MaskFilter, ObjectSetId};
+use grana_warp::Warp;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     Drift {
         channel: usize,
         reference: u32,
-        offsets: Vec<[f32; 3]>,
+        warps: Vec<Warp>,
     },
     Detect {
         set: ObjectSetId,

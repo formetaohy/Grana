@@ -297,10 +297,11 @@ fn read(
     if request.time < time.load(AtomicOrdering::Relaxed) {
         return;
     }
-    let shift = drift
+    let warp = drift
         .read()
         .unwrap_or_else(|error| error.into_inner())
-        .offset(request.time);
+        .warp(request.time)
+        .clone();
     let Some(channels) = channels
         .read()
         .unwrap_or_else(|error| error.into_inner())
@@ -312,7 +313,7 @@ fn read(
         if stopped() {
             return;
         }
-        match channels.read_brick(request.time, request.level, request.coord, shift) {
+        match channels.read_brick(request.time, request.level, request.coord, &warp) {
             Ok(data) => {
                 events.send_until(Event::Brick { request, data }, stopped);
                 return;

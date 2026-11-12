@@ -25,7 +25,13 @@ pub(crate) fn patch(
         }
     }
     let ranges = [0, 1, 2].map(|axis| start[axis] as u32..start[axis] as u32 + dims[axis]);
-    let data = image.read_region(settings.time(), 0, settings.channel(), &ranges, [0.0; 3])?;
+    let data = image.read_region(
+        settings.time(),
+        0,
+        settings.channel(),
+        &ranges,
+        &grana_warp::Warp::IDENTITY,
+    )?;
     let mut values = vec![0.0f32; data.voxel_count()];
     data.write_values(&mut values);
     let background = border_median(&values, dims);

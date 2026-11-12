@@ -3387,6 +3387,7 @@ dependencies = [
  "grana-ui",
  "grana-vector",
  "grana-volume",
+ "grana-warp",
  "grana-weight",
  "grana-zarr",
  "serde_json",
@@ -3405,6 +3406,7 @@ dependencies = [
  "grana-measure",
  "grana-object",
  "grana-volume",
+ "grana-warp",
  "rayon",
 ]
 
@@ -3444,6 +3446,7 @@ dependencies = [
  "grana-stitch",
  "grana-ui",
  "grana-volume",
+ "grana-warp",
  "rfd",
  "serde",
  "serde_json",
@@ -3465,6 +3468,7 @@ dependencies = [
  "grana-image",
  "grana-optics",
  "grana-volume",
+ "grana-warp",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -3597,6 +3601,7 @@ dependencies = [
  "grana-readout",
  "grana-tiff",
  "grana-volume",
+ "grana-warp",
  "grana-zarr",
  "rayon",
  "sha2",
@@ -3680,6 +3685,7 @@ dependencies = [
  "grana-vector",
  "grana-video",
  "grana-volume",
+ "grana-warp",
  "wgpu",
 ]
 
@@ -3736,6 +3742,7 @@ dependencies = [
  "grana-stitch",
  "grana-text",
  "grana-volume",
+ "grana-warp",
  "grana-weight",
  "grana-zarr",
  "serde",
@@ -3752,6 +3759,7 @@ dependencies = [
  "grana-image",
  "grana-raster",
  "grana-volume",
+ "grana-warp",
 ]
 
 [[package]]
@@ -3777,6 +3785,7 @@ dependencies = [
  "grana-profile",
  "grana-scene",
  "grana-volume",
+ "grana-warp",
  "thiserror 2.0.21",
  "zstd 0.13.3",
 ]
@@ -3798,6 +3807,7 @@ dependencies = [
  "grana-project",
  "grana-scene",
  "grana-volume",
+ "grana-warp",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3875,6 +3885,7 @@ dependencies = [
  "grana-optics",
  "grana-profile",
  "grana-volume",
+ "grana-warp",
 ]
 
 [[package]]
@@ -3917,6 +3928,7 @@ dependencies = [
  "grana-stitch",
  "grana-text",
  "grana-volume",
+ "grana-warp",
  "grana-zarr",
  "rfd",
  "serde",
@@ -3929,6 +3941,7 @@ version = "0.1.1"
 dependencies = [
  "grana-image",
  "grana-volume",
+ "grana-warp",
  "grana-zarr",
  "thiserror 2.0.21",
 ]
@@ -3991,6 +4004,10 @@ version = "0.1.1"
 dependencies = [
  "glam",
 ]
+
+[[package]]
+name = "grana-warp"
+version = "0.1.1"
 
 [[package]]
 name = "grana-weight"

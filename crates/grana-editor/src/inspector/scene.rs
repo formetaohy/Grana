@@ -189,6 +189,15 @@ pub(super) fn drift<'a>(
                         ctx,
                         &grana_i18n::inspector::drift_summary(language, frames, drift.magnitude()),
                     ));
+                    if drift.deformed() {
+                        let deformation = (0..frames)
+                            .map(|frame| drift.deformation(frame))
+                            .fold(0.0, f32::max);
+                        children.push(view::weak(
+                            ctx,
+                            &grana_i18n::inspector::drift_deformation(language, deformation),
+                        ));
+                    }
                     let reference_field = grana_ui::widget::drag_value(&theme, reference as f32, 0)
                         .named("drift.reference")
                         .on_drag_value(0.2, move |value| {
@@ -242,7 +251,7 @@ pub(super) fn frame_table<'a>(
     let reference = drift.reference();
     let mut rows = Vec::new();
     for frame in 0..drift.frames() {
-        let offset = drift.offset(frame);
+        let offset = drift.translation(frame);
         let mut label = grana_i18n::inspector::frame_number(language, frame + 1);
         if frame == time {
             label.push_str(" •");
@@ -270,16 +279,16 @@ pub(super) fn frame_table<'a>(
             grana_i18n::inspector::reference_fixed(language),
         ));
     } else {
-        let offset = drift.offset(time);
+        let offset = drift.translation(time);
         for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
             let field = grana_ui::widget::drag_value(&theme, offset[axis], 2)
                 .named(&format!("drift.offset.{axis}"))
-                .on_drag_value(0.5, move |value| {
+                .on_drag_value(0.05, move |value| {
                     let mut next = offset;
                     next[axis] = (value * 100.0).round() / 100.0;
                     Message::Command(Command::SetDriftOffset { time, offset: next })
                 });
-            let unit = view::caption(ctx, "vx");
+            let unit = view::caption(ctx, "µm");
             let row = grana_ui::row()
                 .gap(6.0)
                 .align(Align::Center)

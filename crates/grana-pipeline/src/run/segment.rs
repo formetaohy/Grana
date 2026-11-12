@@ -113,7 +113,7 @@ pub fn segment(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let shift = request.drift.offset(time);
+        let warp = request.drift.warp(time);
         let mask = domain.mask(request.roi.as_ref(), time)?;
         let Some(ranges) = clip(&bounds, mask.as_ref(), info) else {
             continue;
@@ -127,7 +127,7 @@ pub fn segment(
             0,
             &ranges,
             mask.as_ref(),
-            shift,
+            warp,
         )?;
         let mut slices = Vec::with_capacity(depth as usize);
         for (offset, z) in ranges[2].clone().enumerate() {
@@ -136,7 +136,7 @@ pub fn segment(
             }
             let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
             let values = reader
-                .read_region(time, 0, request.channel, &slice, shift)
+                .read_region(time, 0, request.channel, &slice, warp)
                 .map_err(|error| error.to_string())?;
             let mut plane = leveling.apply(&values);
             let kept = match mask.as_ref() {
@@ -163,7 +163,7 @@ pub fn segment(
             continue;
         }
         if let Some(set) =
-            labelled::surfaces(reader, time, 0, info, &ranges, volume.labels(), shift)?
+            labelled::surfaces(reader, time, 0, info, &ranges, volume.labels(), warp)?
         {
             sink(Event::Frame {
                 time,

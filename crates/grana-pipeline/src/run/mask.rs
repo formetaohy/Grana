@@ -230,7 +230,7 @@ fn flood(
                 request.level,
                 request.channel,
                 &ranges,
-                request.drift.offset(frame),
+                request.drift.warp(frame),
             )
             .map_err(|error| error.to_string())?;
         let region = grow(
@@ -372,7 +372,7 @@ fn rebuild(
                         request.level,
                         channel,
                         &ranges,
-                        request.drift.offset(frame),
+                        request.drift.warp(frame),
                     )
                     .map_err(|error| error.to_string())?,
             );

@@ -25,7 +25,10 @@ pub(super) fn halo(spec: &DerivedSpec, info: Level) -> Result<[u32; 3], Channels
             .radius()
             .map_axis(spacing, |radius, step| radius / step)
             .map(|radius| (radius.round() as u32).max(1)),
-        Operation::Ratio(_) | Operation::Mask { .. } | Operation::Restore(_) => [0; 3],
+        Operation::Ratio(_)
+        | Operation::Mask { .. }
+        | Operation::Restore(_)
+        | Operation::Bleach => [0; 3],
     };
     for axis in 0..3 {
         if result[axis] > HALO_LIMIT || result[axis] >= limits[axis] {
@@ -50,9 +53,11 @@ pub(super) fn read(
         Operation::Smooth(smooth) => smooth_channel(spec, reader, ranges, info, smooth.sigma()),
         Operation::Background(_) => background_channel(spec, reader, ranges, info),
         Operation::Ratio(ratio) => ratio_channel(spec, reader, ranges, ratio.denominator()),
-        Operation::Mask { .. } | Operation::Restore(_) => Err(ChannelsError::Derived {
-            detail: format!("{} is not an operator channel", spec.name()),
-        }),
+        Operation::Mask { .. } | Operation::Restore(_) | Operation::Bleach => {
+            Err(ChannelsError::Derived {
+                detail: format!("{} is not an operator channel", spec.name()),
+            })
+        }
     }
 }
 

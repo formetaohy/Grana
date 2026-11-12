@@ -2,6 +2,7 @@ use std::f32::consts::TAU;
 use std::ops::Range;
 
 use grana_volume::{Extent, Pyramid, VoxelData};
+use grana_warp::{Grid, Warp};
 
 const WINDOW: u32 = 64;
 
@@ -398,5 +399,368 @@ fn signed_index(index: usize, length: usize) -> isize {
         index - length as isize
     } else {
         index
+    }
+}
+
+pub const BLOCK: u32 = 64;
+
+const BLOCKS_PER_AXIS: u32 = 4;
+const MINIMUM_SAMPLES: usize = 4;
+const NOISE_FLOOR: f32 = 0.35;
+const REGULARITY: f32 = 0.05;
+const ANCHOR: f32 = 0.02;
+const RESIDUAL_LIMIT: f32 = 0.5;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sample {
+    pub point: [f32; 3],
+    pub shift: [f32; 3],
+    pub weight: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lattice {
+    dims: [u32; 3],
+    origin: [f32; 3],
+    step: [f32; 3],
+}
+
+impl Lattice {
+    pub fn covering(bounds: ([f32; 3], [f32; 3]), nodes: [u32; 3]) -> Self {
+        let dims = nodes.map(|count| count.max(1));
+        let step = [0, 1, 2].map(|axis| {
+            let span = bounds.1[axis] - bounds.0[axis];
+            if dims[axis] <= 1 || span <= 0.0 {
+                1.0
+            } else {
+                span / (dims[axis] - 1) as f32
+            }
+        });
+        assert!(
+            step.iter().all(|value| value.is_finite() && *value > 0.0),
+            "a displacement lattice spans a positive world box"
+        );
+        Self {
+            dims,
+            origin: bounds.0,
+            step,
+        }
+    }
+
+    pub fn dims(self) -> [u32; 3] {
+        self.dims
+    }
+
+    pub fn origin(self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn step(self) -> [f32; 3] {
+        self.step
+    }
+
+    pub fn nodes(self) -> usize {
+        (self.dims[0] * self.dims[1] * self.dims[2]) as usize
+    }
+}
+
+pub struct Blocks {
+    pub ranges: Vec<[Range<u32>; 3]>,
+    pub counts: [u32; 3],
+}
+
+pub fn blocks(extent: Extent, side: u32) -> Blocks {
+    let dims = [extent.x(), extent.y(), extent.z()];
+    let sizes = [0, 1, 2].map(|axis| side.min(dims[axis]).max(1));
+    let counts = [0, 1, 2].map(|axis| (dims[axis] / sizes[axis]).clamp(1, BLOCKS_PER_AXIS));
+    let starts = [0, 1, 2].map(|axis| {
+        let count = counts[axis];
+        let free = dims[axis] - sizes[axis];
+        (0..count)
+            .map(|index| {
+                if count == 1 {
+                    free / 2
+                } else {
+                    index * free / (count - 1)
+                }
+            })
+            .collect::<Vec<u32>>()
+    });
+    let mut ranges = Vec::with_capacity((counts[0] * counts[1] * counts[2]) as usize);
+    for z in &starts[2] {
+        for y in &starts[1] {
+            for x in &starts[0] {
+                ranges.push([*x..*x + sizes[0], *y..*y + sizes[1], *z..*z + sizes[2]]);
+            }
+        }
+    }
+    Blocks { ranges, counts }
+}
+
+pub fn correlation(reference: &[f32], moving: &[f32]) -> f32 {
+    assert_eq!(
+        reference.len(),
+        moving.len(),
+        "a correlation compares windows of one size"
+    );
+    let count = reference.len() as f64;
+    let mean_reference = reference.iter().map(|value| f64::from(*value)).sum::<f64>() / count;
+    let mean_moving = moving.iter().map(|value| f64::from(*value)).sum::<f64>() / count;
+    let mut cross = 0.0f64;
+    let mut square_reference = 0.0f64;
+    let mut square_moving = 0.0f64;
+    for (left, right) in reference.iter().zip(moving) {
+        let left = f64::from(*left) - mean_reference;
+        let right = f64::from(*right) - mean_moving;
+        cross += left * right;
+        square_reference += left * left;
+        square_moving += right * right;
+    }
+    let denominator = (square_reference * square_moving).sqrt();
+    if denominator <= 1.0e-12 {
+        0.0
+    } else {
+        (cross / denominator) as f32
+    }
+}
+
+pub fn spread(samples: &[Sample]) -> f32 {
+    let Some(mean) = mean(samples) else {
+        return 0.0;
+    };
+    let mut total = 0.0f32;
+    let mut weighed = 0.0f32;
+    for sample in samples {
+        let offset = [0, 1, 2].map(|axis| sample.shift[axis] - mean[axis]);
+        total += sample.weight * offset.iter().map(|value| value * value).sum::<f32>();
+        weighed += sample.weight;
+    }
+    if weighed <= 0.0 {
+        0.0
+    } else {
+        (total / weighed).sqrt()
+    }
+}
+
+pub fn mean(samples: &[Sample]) -> Option<[f32; 3]> {
+    let mut sum = [0.0f32; 3];
+    let mut total = 0.0f32;
+    for sample in samples.iter().filter(|sample| sample.weight > 0.0) {
+        for (sum, shift) in sum.iter_mut().zip(sample.shift) {
+            *sum += sample.weight * shift;
+        }
+        total += sample.weight;
+    }
+    (total > 0.0).then(|| sum.map(|value| value / total))
+}
+
+pub fn deform(samples: &[Sample], lattice: Lattice, scale: f32) -> Option<Warp> {
+    if samples.len() < MINIMUM_SAMPLES {
+        return None;
+    }
+    let spread = spread(samples);
+    if !(spread.is_finite() && spread > NOISE_FLOOR * scale) {
+        return None;
+    }
+    let mean = mean(samples)?;
+    let values = fit(samples, lattice, mean)?;
+    let grid = Grid::new(lattice.dims, lattice.origin, lattice.step, values);
+    let residual = residual(&grid, samples);
+    let deviation = grid
+        .values()
+        .iter()
+        .map(|value| {
+            let offset = [0, 1, 2].map(|axis| value[axis] - mean[axis]);
+            offset.iter().map(|value| value * value).sum::<f32>().sqrt()
+        })
+        .fold(0.0, f32::max);
+    if !residual.is_finite() || residual > RESIDUAL_LIMIT * spread {
+        return None;
+    }
+    if deviation < NOISE_FLOOR * scale {
+        return None;
+    }
+    Some(Warp::field(grid))
+}
+
+struct Tap {
+    node: [usize; 8],
+    weight: [f32; 8],
+}
+
+fn taps(lattice: Lattice, point: [f32; 3]) -> Tap {
+    let mut node = [0usize; 8];
+    let mut weight = [0.0f32; 8];
+    let mut low = [0usize; 3];
+    let mut high = [0usize; 3];
+    let mut fraction = [0.0f32; 3];
+    for axis in 0..3 {
+        let dims = lattice.dims[axis];
+        if dims <= 1 {
+            fraction[axis] = 0.0;
+            continue;
+        }
+        let position = ((point[axis] - lattice.origin[axis]) / lattice.step[axis])
+            .clamp(0.0, (dims - 1) as f32);
+        let base = position.floor() as u32;
+        low[axis] = base.min(dims - 2) as usize;
+        high[axis] = low[axis] + 1;
+        fraction[axis] = position - low[axis] as f32;
+    }
+    let stride = [
+        1,
+        lattice.dims[0] as usize,
+        lattice.dims[0] as usize * lattice.dims[1] as usize,
+    ];
+    for corner in 0..8usize {
+        let at = [
+            if corner & 1 == 0 { low[0] } else { high[0] },
+            if corner & 2 == 0 { low[1] } else { high[1] },
+            if corner & 4 == 0 { low[2] } else { high[2] },
+        ];
+        node[corner] = at[0] * stride[0] + at[1] * stride[1] + at[2] * stride[2];
+        let mut factor = 1.0f32;
+        for (axis, component) in fraction.iter().enumerate() {
+            factor *= if (corner >> axis) & 1 == 1 {
+                *component
+            } else {
+                1.0 - *component
+            };
+        }
+        weight[corner] = factor;
+    }
+    Tap { node, weight }
+}
+
+fn fit(samples: &[Sample], lattice: Lattice, mean: [f32; 3]) -> Option<Vec<[f32; 3]>> {
+    let count = lattice.nodes();
+    let dims = lattice.dims;
+    let stride = [
+        1usize,
+        dims[0] as usize,
+        dims[0] as usize * dims[1] as usize,
+    ];
+    let taps = samples
+        .iter()
+        .map(|sample| taps(lattice, sample.point))
+        .collect::<Vec<_>>();
+    let total = samples.iter().map(|sample| sample.weight).sum::<f32>();
+    let regularity = REGULARITY * total / count as f32;
+    let anchor = ANCHOR * total / count as f32;
+    let mut rhs = vec![[0.0f32; 3]; count];
+    for (sample, tap) in samples.iter().zip(&taps) {
+        for corner in 0..8usize {
+            let weight = sample.weight * tap.weight[corner];
+            for (value, shift) in rhs[tap.node[corner]].iter_mut().zip(sample.shift) {
+                *value += weight * shift;
+            }
+        }
+    }
+    let apply = |field: &[[f32; 3]], target: &mut [[f32; 3]]| {
+        target.fill([0.0; 3]);
+        for (sample, tap) in samples.iter().zip(&taps) {
+            let mut value = [0.0f32; 3];
+            for corner in 0..8usize {
+                let weight = tap.weight[corner];
+                for (value, component) in value.iter_mut().zip(field[tap.node[corner]]) {
+                    *value += weight * component;
+                }
+            }
+            for corner in 0..8usize {
+                let weight = sample.weight * tap.weight[corner];
+                for (target, value) in target[tap.node[corner]].iter_mut().zip(value) {
+                    *target += weight * value;
+                }
+            }
+        }
+        for node in 0..count {
+            let at = [
+                node % stride[1],
+                (node / stride[1]) % dims[1] as usize,
+                node / stride[2],
+            ];
+            for axis in 0..3 {
+                if at[axis] + 1 >= dims[axis] as usize {
+                    continue;
+                }
+                let other = node + stride[axis];
+                for component in 0..3 {
+                    let delta = regularity * (field[node][component] - field[other][component]);
+                    target[node][component] += delta;
+                    target[other][component] -= delta;
+                }
+            }
+        }
+        for (node, target) in target.iter_mut().enumerate() {
+            for (axis, target) in target.iter_mut().enumerate() {
+                *target += anchor * (field[node][axis] - mean[axis]);
+            }
+        }
+    };
+    let mut matrix = vec![vec![0.0f32; count]; count];
+    for column in 0..count {
+        let mut unit = vec![[0.0f32; 3]; count];
+        unit[column][0] = 1.0;
+        let mut out = vec![[0.0f32; 3]; count];
+        apply(&unit, &mut out);
+        for row in 0..count {
+            matrix[row][column] = out[row][0];
+        }
+    }
+    let mut lower = vec![vec![0.0f32; count]; count];
+    for row in 0..count {
+        for column in 0..=row {
+            let mut sum = matrix[row][column];
+            for (row_tap, column_tap) in lower[row][..column].iter().zip(&lower[column][..column]) {
+                sum -= row_tap * column_tap;
+            }
+            if row == column {
+                if sum <= 0.0 {
+                    return None;
+                }
+                lower[row][row] = sum.sqrt();
+            } else {
+                lower[row][column] = sum / lower[column][column];
+            }
+        }
+    }
+    let mut field = vec![[0.0f32; 3]; count];
+    for axis in 0..3 {
+        let mut forward = vec![0.0f32; count];
+        for row in 0..count {
+            let mut sum = rhs[row][axis];
+            for column in 0..row {
+                sum -= lower[row][column] * forward[column];
+            }
+            forward[row] = sum / lower[row][row];
+        }
+        let mut backward = vec![0.0f32; count];
+        for row in (0..count).rev() {
+            let mut sum = forward[row];
+            for column in row + 1..count {
+                sum -= lower[column][row] * backward[column];
+            }
+            backward[row] = sum / lower[row][row];
+        }
+        for (value, solved) in field.iter_mut().zip(backward) {
+            value[axis] = solved;
+        }
+    }
+    Some(field)
+}
+
+fn residual(grid: &Grid, samples: &[Sample]) -> f32 {
+    let mut total = 0.0f32;
+    let mut weighed = 0.0f32;
+    for sample in samples.iter().filter(|sample| sample.weight > 0.0) {
+        let fitted = grid.sample(sample.point);
+        let offset = [0, 1, 2].map(|axis| fitted[axis] - sample.shift[axis]);
+        total += sample.weight * offset.iter().map(|value| value * value).sum::<f32>();
+        weighed += sample.weight;
+    }
+    if weighed <= 0.0 {
+        f32::INFINITY
+    } else {
+        (total / weighed).sqrt()
     }
 }

@@ -279,7 +279,7 @@ fn intensities(
         reader.pyramid().level(0),
         time,
         &spots,
-        request.drift.offset(time),
+        request.drift.warp(time),
     )
 }
 
@@ -288,7 +288,7 @@ fn measure(
     info: Level,
     time: u32,
     spots: &[Spot],
-    shift: [f32; 3],
+    warp: &grana_warp::Warp,
 ) -> Result<IntensityTable, String> {
     let channels = reader.pyramid().channel_count();
     let extent = info.extent();
@@ -319,7 +319,7 @@ fn measure(
                 low[2]..high[2] + 1,
             ];
             let data: VoxelData = reader
-                .read_region(time, 0, channel, &ranges, shift)
+                .read_region(time, 0, channel, &ranges, warp)
                 .map_err(|error| error.to_string())?;
             let mut samples = vec![0.0f32; data.voxel_count()];
             data.write_values(&mut samples);

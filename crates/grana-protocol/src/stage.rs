@@ -78,14 +78,16 @@ impl Protocol {
                     drift.reference()
                 )));
             }
-            if drift.offsets().len() != scene.frame_count() as usize {
+            if drift.warps().len() != scene.frame_count() as usize {
                 return Err(ProtocolError::Invalid(format!(
                     "the drift correction aligns {} frames and the dataset holds {}",
-                    drift.offsets().len(),
+                    drift.warps().len(),
                     scene.frame_count()
                 )));
             }
-            if drift.offsets()[drift.reference() as usize] != [0.0; 3] {
+            if !drift.built().map_err(ProtocolError::Invalid)?[drift.reference() as usize]
+                .identity()
+            {
                 return Err(ProtocolError::Invalid(
                     "the drift reference frame holds still".to_string(),
                 ));
@@ -309,10 +311,11 @@ impl Protocol {
         };
         builder.scene.set_drift(grana_scene::Drift::default());
         if let Some(drift) = &self.drift {
+            let warps = drift.built().map_err(ProtocolError::Invalid)?;
             builder.steps.push(Step::Drift {
                 channel: channel(&names, drift.channel())?,
                 reference: drift.reference(),
-                offsets: drift.offsets().to_vec(),
+                warps,
             });
         }
         let mut sets = Vec::new();

@@ -1270,7 +1270,7 @@ impl Session {
         }
         let offset =
             offset.map(|value| value.clamp(-grana_scene::Drift::LIMIT, grana_scene::Drift::LIMIT));
-        if scene.set_drift(drift.with_offset(time, offset)) {
+        if scene.set_drift(drift.placed(time, offset)) {
             self.realign();
         }
     }

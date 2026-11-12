@@ -13,6 +13,7 @@ use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, Roi};
 use grana_scene::{Drift, ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
+use grana_warp::Warp;
 
 use crate::event::Event;
 
@@ -300,7 +301,7 @@ pub fn coloc(
         cancel,
         &|time, channel, ranges| {
             reader
-                .read_region(time, scan_level, channel, ranges, drift.offset(time))
+                .read_region(time, scan_level, channel, ranges, drift.warp(time))
                 .map_err(String::from)
         },
         &|time| scan_domain.mask(roi.as_ref(), time),
@@ -440,7 +441,7 @@ pub fn object_coloc(
             };
             let read = |time: u32, channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
                 reader
-                    .read_region(time, level_index, channel, ranges, drift.offset(time))
+                    .read_region(time, level_index, channel, ranges, drift.warp(time))
                     .map_err(String::from)
             };
             let mut notify = |done: usize, blocks: usize| report(done, blocks);
@@ -521,7 +522,7 @@ fn spots(
             let mask = domain.mask(roi.as_ref(), time)?;
             let read = |measured: usize, ranges: &[Range<u32>; 3]| {
                 reader
-                    .read_region(time, level_index, measured, ranges, drift.offset(time))
+                    .read_region(time, level_index, measured, ranges, drift.warp(time))
                     .map_err(String::from)
             };
             let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
@@ -604,12 +605,12 @@ fn surfaces(
                 Sources::new(
                     &|ranges| {
                         reader
-                            .read_region(time, level_index, channel, ranges, drift.offset(time))
+                            .read_region(time, level_index, channel, ranges, drift.warp(time))
                             .map_err(String::from)
                     },
                     &|measured, core| {
                         reader
-                            .read_region(time, level_index, measured, core, drift.offset(time))
+                            .read_region(time, level_index, measured, core, drift.warp(time))
                             .map_err(String::from)
                     },
                     &store,
@@ -669,10 +670,10 @@ fn filaments(
         cancel,
         || FilamentScan::new(level, info, params, channels, channel, region, intensity),
         |scan, time, _report| {
-            let detection = full_region(reader, pyramid, time, level, channel, drift.offset(time))?;
+            let detection = full_region(reader, pyramid, time, level, channel, drift.warp(time))?;
             let mask = domain.mask(roi.as_ref(), time)?;
             let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
-                full_region(reader, pyramid, time, level, measured, drift.offset(time))
+                full_region(reader, pyramid, time, level, measured, drift.warp(time))
             })?;
             Ok(Some(ObjectFrame::Filaments(set)))
         },
@@ -707,7 +708,7 @@ fn full_region(
     time: u32,
     level: usize,
     channel: usize,
-    shift: [f32; 3],
+    warp: &grana_warp::Warp,
 ) -> Result<VoxelData, String> {
     let extent = pyramid.level(level).extent();
     reader
@@ -716,7 +717,7 @@ fn full_region(
             level,
             channel,
             &[0..extent.x(), 0..extent.y(), 0..extent.z()],
-            shift,
+            warp,
         )
         .map_err(String::from)
 }
@@ -760,6 +761,8 @@ pub fn drift(
     }
     let level = grana_analysis::drift_level(pyramid)
         .ok_or_else(|| "the dataset is too small to align".to_string())?;
+    let ratio = (1u64 << level) as f32;
+    let base = pyramid.level(0);
     let ranges = grana_analysis::drift_spans(pyramid, level);
     let dims = window_dims(&ranges);
     let total = frames as usize;
@@ -770,17 +773,16 @@ pub fn drift(
     });
     let anchor = grana_analysis::drift_window(
         &reader
-            .read_region(reference, level, channel, &ranges, [0.0; 3])
+            .read_region(reference, level, channel, &ranges, &Warp::IDENTITY)
             .map_err(String::from)?,
         &ranges,
     );
-    let ratio = (1u64 << level) as f32;
     let fine = if level > 0 {
         let ranges = grana_analysis::drift_spans(pyramid, 0);
         let dims = window_dims(&ranges);
         let anchor = grana_analysis::drift_window(
             &reader
-                .read_region(reference, 0, channel, &ranges, [0.0; 3])
+                .read_region(reference, 0, channel, &ranges, &Warp::IDENTITY)
                 .map_err(String::from)?,
             &ranges,
         );
@@ -788,38 +790,91 @@ pub fn drift(
     } else {
         None
     };
-    let mut offsets = Vec::with_capacity(total);
+    let plan = grana_analysis::drift_blocks(base.extent(), grana_analysis::BLOCK);
+    let mut anchors = Vec::with_capacity(plan.ranges.len());
+    let mut centres = Vec::with_capacity(plan.ranges.len());
+    for ranges in &plan.ranges {
+        anchors.push(grana_analysis::drift_window(
+            &reader
+                .read_region(reference, 0, channel, ranges, &Warp::IDENTITY)
+                .map_err(String::from)?,
+            ranges,
+        ));
+        centres.push(base.corner([
+            (ranges[0].start + ranges[0].end) as f32 / 2.0,
+            (ranges[1].start + ranges[1].end) as f32 / 2.0,
+            (ranges[2].start + ranges[2].end) as f32 / 2.0,
+        ]));
+    }
+    let scale = {
+        let voxel = base.voxel();
+        voxel[0].min(voxel[1]).min(voxel[2])
+    };
+    let lattice = grana_analysis::Lattice::covering(
+        base.bounds(),
+        plan.counts.map(|count| (count + 1).clamp(2, 5)),
+    );
+    let mut warps = Vec::with_capacity(total);
     for time in 0..frames {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let offset = if time == reference {
+        let global = if time == reference {
             [0.0; 3]
         } else {
             let moving = grana_analysis::drift_window(
                 &reader
-                    .read_region(time, level, channel, &ranges, [0.0; 3])
+                    .read_region(time, level, channel, &ranges, &Warp::IDENTITY)
                     .map_err(String::from)?,
                 &ranges,
             );
-            let coarse =
-                grana_analysis::drift_shift(&anchor, &moving, dims).map(|value| value * ratio);
-            match &fine {
-                None => coarse,
+            let coarse = grana_analysis::drift_shift(&anchor, &moving, dims);
+            let shift = match &fine {
+                None => coarse.map(|value| value * ratio),
                 Some((ranges, dims, fine_anchor)) => {
-                    let whole = coarse.map(f32::round);
+                    let whole = coarse.map(|value| (value * ratio).round());
+                    let warp = Warp::shift(base.basis().transform(whole));
                     let moving = grana_analysis::drift_window(
                         &reader
-                            .read_region(time, 0, channel, ranges, whole)
+                            .read_region(time, 0, channel, ranges, &warp)
                             .map_err(String::from)?,
                         ranges,
                     );
                     let residual = grana_analysis::drift_shift(fine_anchor, &moving, *dims);
                     [0, 1, 2].map(|axis| whole[axis] + residual[axis])
                 }
-            }
+            };
+            base.basis().transform(shift)
         };
-        offsets.push(offset.map(|value| value.clamp(-Drift::LIMIT, Drift::LIMIT)));
+        let warp = if time == reference || plan.ranges.len() < 4 {
+            Warp::shift(global)
+        } else {
+            let placement = Warp::shift(global);
+            let mut samples = Vec::with_capacity(plan.ranges.len());
+            for ((ranges, anchor), point) in plan.ranges.iter().zip(&anchors).zip(&centres) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let moving = grana_analysis::drift_window(
+                    &reader
+                        .read_region(time, 0, channel, ranges, &placement)
+                        .map_err(String::from)?,
+                    ranges,
+                );
+                let residual = grana_analysis::drift_shift(anchor, &moving, window_dims(ranges));
+                let local = base.basis().transform(residual);
+                let shift = [0, 1, 2].map(|axis| global[axis] + local[axis]);
+                let weight = (grana_analysis::drift_correlation(anchor, &moving) - 0.2).max(0.0);
+                samples.push(grana_analysis::Sample {
+                    point: *point,
+                    shift,
+                    weight,
+                });
+            }
+            grana_analysis::drift_deform(&samples, lattice, scale)
+                .unwrap_or_else(|| Warp::shift(global))
+        };
+        warps.push(warp);
         sink(Event::Progress {
             time,
             done: time as usize + 1,
@@ -829,7 +884,7 @@ pub fn drift(
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
     }
-    sink(Event::Drift(Drift::new(channel, reference, offsets)));
+    sink(Event::Drift(Drift::new(channel, reference, warps)));
     sink(Event::Done);
     Ok(())
 }

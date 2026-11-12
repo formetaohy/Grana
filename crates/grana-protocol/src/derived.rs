@@ -35,6 +35,9 @@ impl Protocol {
                     }
                     operator_info(&ratio.name, ratio.tint, ratio.intensity)
                 }
+                DerivedSpec::Bleach(bleach) => {
+                    operator_info(&bleach.name, bleach.tint, bleach.intensity)
+                }
             };
             channels.push(info.clone());
             infos.push(info);
@@ -138,6 +141,12 @@ impl Protocol {
                             Intensity::new(ratio.intensity[0], ratio.intensity[1]),
                         )
                     }
+                    DerivedSpec::Bleach(bleach) => SceneDerivedSpec::bleached(
+                        source,
+                        bleach.name.clone(),
+                        bleach.tint,
+                        Intensity::new(bleach.intensity[0], bleach.intensity[1]),
+                    ),
                 })
             })
             .collect()

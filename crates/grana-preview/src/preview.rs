@@ -33,7 +33,7 @@ pub fn field(source: &Source, size: u32) -> Result<Bitmap, String> {
                 level,
                 channel,
                 &[0..extent.x(), 0..extent.y(), 0..extent.z()],
-                [0.0; 3],
+                &grana_warp::Warp::IDENTITY,
             )
             .map_err(|error| error.to_string())?;
         let projected = project(&data, extent, width, height);

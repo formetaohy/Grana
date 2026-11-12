@@ -53,7 +53,7 @@ pub(super) fn segment(
                 info,
                 channel: request.channel,
                 roi: mask.as_ref(),
-                shift: request.drift.offset(time),
+                warp: request.drift.warp(time),
                 time,
                 settings,
             };
@@ -152,7 +152,7 @@ struct Grow<'a> {
     info: Level,
     channel: usize,
     roi: Option<&'a Mask>,
-    shift: [f32; 3],
+    warp: &'a grana_warp::Warp,
     time: u32,
     settings: Settings,
 }
@@ -234,7 +234,7 @@ impl Grow<'_> {
             ];
             let data = self
                 .reader
-                .read_region(self.time, 0, self.channel, &ranges, self.shift)
+                .read_region(self.time, 0, self.channel, &ranges, self.warp)
                 .map_err(|error| error.to_string())?;
             let mut plane = self.leveling.apply(&data);
             self.erase(&mut plane, &window, z);
@@ -481,7 +481,7 @@ fn surfaces(
     drift: &grana_scene::Drift,
 ) -> Result<Option<SurfaceSet>, String> {
     let channels = reader.pyramid().channel_count();
-    let shift = drift.offset(time);
+    let warp = drift.warp(time);
     let mut merged: Option<SurfaceSet> = None;
     for block in blocks {
         let extent = block.extent;
@@ -494,7 +494,7 @@ fn surfaces(
         for channel in 0..channels {
             data.push(
                 reader
-                    .read_region(time, 0, channel, &ranges, shift)
+                    .read_region(time, 0, channel, &ranges, warp)
                     .map_err(|error| error.to_string())?,
             );
         }

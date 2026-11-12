@@ -464,7 +464,7 @@ impl Mosaic {
             ranges[2] = origin[2]..origin[2] + length[2];
             spans[2] = length[2];
             let data = image
-                .read_region(time, 0, channel, &ranges, [0.0; 3])
+                .read_region(time, 0, channel, &ranges, &grana_warp::Warp::IDENTITY)
                 .map_err(|error| error.to_string())?;
             let axes = [self.tile.x(), self.tile.y(), self.tile.z()];
             let feather = axes.map(|axis| (axis as f32 / 8.0).clamp(1.0, FEATHER));
@@ -514,7 +514,7 @@ fn plane(image: &Image, time: u32, level: usize, channel: usize) -> Result<Plane
     let extent = image.pyramid().level(level).extent();
     let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
     let data = image
-        .read_region(time, level, channel, &ranges, [0.0; 3])
+        .read_region(time, level, channel, &ranges, &grana_warp::Warp::IDENTITY)
         .map_err(|error| Error::new(error.to_string()))?;
     let pixels = (extent.x() * extent.y()) as usize;
     let mut values = vec![f32::NEG_INFINITY; pixels];

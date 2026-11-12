@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use glam::Vec3;
 use grana_volume::{Basis, Extent, Level, Pyramid, VoxelData};
+use grana_warp::Warp;
 
 use crate::Error;
 use crate::align;
@@ -68,7 +69,7 @@ impl Metric {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [f32; 3],
+        warp: &Warp,
     ) -> Result<VoxelData, Error> {
         let Some(format) = image
             .pyramid()
@@ -82,20 +83,19 @@ impl Metric {
         };
         let source = image.pyramid().level(level);
         let target = self.pyramid.level(level);
-        let shift = align::level_shift(shift, level);
         let limits = [
             source.extent().x(),
             source.extent().y(),
             source.extent().z(),
         ];
-        let Some(gather) = gather(source, target, ranges, shift, limits) else {
+        let Some(gather) = gather(source, target, ranges, warp, limits) else {
             return Ok(align::zeros(format, ranges));
         };
-        let data = image.read_region(time, level, channel, &gather, [0.0; 3])?;
+        let data = image.read_region(time, level, channel, &gather, &Warp::IDENTITY)?;
         let view = View {
             source,
             target,
-            shift,
+            warp,
             limits,
             gather,
         };
@@ -107,19 +107,19 @@ impl Metric {
     }
 }
 
-struct View {
+struct View<'a> {
     source: Level,
     target: Level,
-    shift: [f32; 3],
+    warp: &'a Warp,
     limits: [u32; 3],
     gather: [Range<u32>; 3],
 }
 
-fn resample<T: Value>(data: &[T], ranges: &[Range<u32>; 3], view: &View) -> Vec<T> {
+fn resample<T: Value>(data: &[T], ranges: &[Range<u32>; 3], view: &View<'_>) -> Vec<T> {
     let View {
         source,
         target,
-        shift,
+        warp,
         limits,
         gather,
     } = view;
@@ -138,16 +138,12 @@ fn resample<T: Value>(data: &[T], ranges: &[Range<u32>; 3], view: &View) -> Vec<
     let depth = (ranges[2].end - ranges[2].start) as usize;
     let matrix = target.basis().matrix();
     let inverse = source.basis().inverse();
-    let center = Vec3::from(target.origin())
-        + matrix
-            * Vec3::new(
-                ranges[0].start as f32 + 0.5,
-                ranges[1].start as f32 + 0.5,
-                ranges[2].start as f32 + 0.5,
-            )
-        - Vec3::from(source.origin());
-    let start = inverse * center - Vec3::splat(0.5) + Vec3::from(*shift);
-    let steps = [0, 1, 2].map(|axis| inverse * matrix.col(axis));
+    let origin = Vec3::from(target.origin()) - Vec3::from(source.origin());
+    let start = Vec3::new(
+        ranges[0].start as f32,
+        ranges[1].start as f32,
+        ranges[2].start as f32,
+    );
     let reach = Vec3::new(
         limits[0] as f32 - 1.0,
         limits[1] as f32 - 1.0,
@@ -161,15 +157,12 @@ fn resample<T: Value>(data: &[T], ranges: &[Range<u32>; 3], view: &View) -> Vec<
     let mut values = Vec::with_capacity(width * height * depth);
     for z in 0..depth {
         for y in 0..height {
-            let row = start + steps[2] * z as f32 + steps[1] * y as f32;
             for x in 0..width {
-                values.push(T::encode(sample(
-                    data,
-                    &gathered,
-                    &base,
-                    row + steps[0] * x as f32,
-                    reach,
-                )));
+                let at = start + Vec3::new(x as f32, y as f32, z as f32);
+                let world = target.corner((at + Vec3::splat(0.5)).to_array());
+                let delta = source.basis().untransform(warp.sample(world));
+                let point = inverse * (origin + matrix * at) + Vec3::from(delta);
+                values.push(T::encode(sample(data, &gathered, &base, point, reach)));
             }
         }
     }
@@ -228,12 +221,17 @@ fn gather(
     source: Level,
     target: Level,
     ranges: &[Range<u32>; 3],
-    shift: [f32; 3],
+    warp: &Warp,
     limits: [u32; 3],
 ) -> Option<[Range<u32>; 3]> {
     let matrix = target.basis().matrix();
     let inverse = source.basis().inverse();
     let origin = Vec3::from(target.origin()) - Vec3::from(source.origin());
+    let magnitude = warp.magnitude();
+    let pad = [0, 1, 2].map(|axis| {
+        let row = inverse.row(axis);
+        magnitude * (row.x.abs() + row.y.abs() + row.z.abs()) + 1.0
+    });
     let mut low = Vec3::splat(f32::INFINITY);
     let mut high = Vec3::splat(f32::NEG_INFINITY);
     let mut corner_of = [[0u32; 3]; 8];
@@ -249,18 +247,20 @@ fn gather(
     }
     for corner in corner_of {
         let index = Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32);
-        let point = inverse * (origin + matrix * index) - Vec3::splat(0.5) + Vec3::from(shift);
+        let point = inverse * (origin + matrix * index);
         low = low.min(point);
         high = high.max(point);
     }
     let mut gathered = [0..0, 0..0, 0..0];
     for axis in 0..3 {
         let limit = i64::from(limits[axis]);
-        if high[axis] < 0.0 || low[axis] > (limit - 1) as f32 {
+        let first_edge = low[axis] - pad[axis];
+        let last_edge = high[axis] + pad[axis];
+        if last_edge < 0.0 || first_edge > (limit - 1) as f32 {
             return None;
         }
-        let first = (low[axis].floor() as i64).clamp(0, limit - 1);
-        let last = ((high[axis].floor() as i64) + 2).clamp(first + 1, limit);
+        let first = (first_edge.floor() as i64).clamp(0, limit - 1);
+        let last = ((last_edge.floor() as i64) + 2).clamp(first + 1, limit);
         gathered[axis] = first as u32..last as u32;
     }
     Some(gathered)

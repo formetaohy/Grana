@@ -87,7 +87,7 @@ fn digest_patch(
         integer(hasher, u64::from(range.start));
         integer(hasher, u64::from(range.end));
     }
-    let data = image.read_region(frame, index, channel, &ranges, [0.0; 3])?;
+    let data = image.read_region(frame, index, channel, &ranges, &grana_warp::Warp::IDENTITY)?;
     digest_values(hasher, &data);
     Ok(())
 }

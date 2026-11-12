@@ -132,10 +132,10 @@ impl Session {
                 Step::Drift {
                     channel,
                     reference,
-                    offsets,
+                    warps,
                 } => {
                     if let Some(scene) = self.scene.as_mut() {
-                        scene.set_drift(grana_scene::Drift::new(channel, reference, offsets));
+                        scene.set_drift(grana_scene::Drift::new(channel, reference, warps.clone()));
                     }
                     self.realign();
                     self.advance_step();

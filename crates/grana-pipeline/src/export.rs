@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_object::{LabelRaster, Shape};
 use grana_scene::{ObjectFrame, ObjectSet};
 use grana_volume::{Intensity, Level};
+use grana_warp::Warp;
 use grana_zarr::{ImageSpec, LabelSpec, WriteChannel};
 
 use crate::channels::Channels;
@@ -77,7 +78,7 @@ pub struct DatasetSpec {
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
-    pub drift: Vec<[f32; 3]>,
+    pub drift: Vec<Warp>,
     pub labels: Vec<LabelLayer>,
 }
 
@@ -155,9 +156,9 @@ pub fn write_dataset(
             origin[1]..origin[1] + extent[1],
             origin[2]..origin[2] + extent[2],
         ];
-        let shift = drift.get(time as usize).copied().unwrap_or([0.0; 3]);
+        let warp = drift.get(time as usize).unwrap_or(&Warp::IDENTITY);
         let values = channels
-            .read_region(time, level, index, &ranges, shift)
+            .read_region(time, level, index, &ranges, warp)
             .map_err(|error| error.to_string())?;
         values.write_values(data);
         Ok(())

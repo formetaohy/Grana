@@ -1,10 +1,24 @@
 use std::ops::Range;
 
-use grana_volume::{VoxelData, VoxelFormat};
+use glam::Vec3;
+use grana_volume::{Level, VoxelData, VoxelFormat};
+use grana_warp::Warp;
 
-pub(crate) struct Plan {
-    pub(crate) source: [Range<u32>; 3],
+pub(crate) enum Plan {
+    Shift(ShiftPlan),
+    Field(FieldPlan),
+}
+
+pub(crate) struct ShiftPlan {
+    source: [Range<u32>; 3],
     axes: [Axis; 3],
+}
+
+pub(crate) struct FieldPlan {
+    source: [Range<u32>; 3],
+    level: Level,
+    warp: Warp,
+    limits: [u32; 3],
 }
 
 struct Axis {
@@ -22,16 +36,31 @@ impl Axis {
     }
 }
 
-pub(crate) fn level_shift(shift: [f32; 3], level: usize) -> [f32; 3] {
-    assert!(
-        shift.iter().all(|value| value.is_finite()),
-        "an alignment offset is finite"
-    );
-    let ratio = (1u64 << level) as f32;
-    shift.map(|value| value / ratio)
+impl Plan {
+    pub(crate) fn source(&self) -> &[Range<u32>; 3] {
+        match self {
+            Self::Shift(plan) => &plan.source,
+            Self::Field(plan) => &plan.source,
+        }
+    }
 }
 
-pub(crate) fn plan(ranges: &[Range<u32>; 3], shift: [f32; 3], limits: [u32; 3]) -> Plan {
+pub(crate) fn plan(ranges: &[Range<u32>; 3], level: Level, warp: &Warp, limits: [u32; 3]) -> Plan {
+    match warp.field_grid() {
+        None => {
+            let delta = level.basis().inverse() * Vec3::from(warp.translation());
+            Plan::Shift(shift_plan(ranges, delta.to_array(), limits))
+        }
+        Some(_) => Plan::Field(FieldPlan {
+            source: field_source(ranges, level, warp, limits),
+            level,
+            warp: warp.clone(),
+            limits,
+        }),
+    }
+}
+
+fn shift_plan(ranges: &[Range<u32>; 3], shift: [f32; 3], limits: [u32; 3]) -> ShiftPlan {
     let mut source = [0..0, 0..0, 0..0];
     let axes = std::array::from_fn(|axis| {
         let size = i64::from(ranges[axis].end - ranges[axis].start);
@@ -59,14 +88,47 @@ pub(crate) fn plan(ranges: &[Range<u32>; 3], shift: [f32; 3], limits: [u32; 3]) 
             upper_weight: fraction,
         }
     });
-    Plan { source, axes }
+    ShiftPlan { source, axes }
+}
+
+fn field_source(
+    ranges: &[Range<u32>; 3],
+    level: Level,
+    warp: &Warp,
+    limits: [u32; 3],
+) -> [Range<u32>; 3] {
+    let inverse = level.basis().inverse();
+    let magnitude = warp.magnitude();
+    [0, 1, 2].map(|axis| {
+        let row = inverse.row(axis);
+        let reach = magnitude * (row.x.abs() + row.y.abs() + row.z.abs());
+        let pad = reach.ceil() as i64 + 1;
+        let start = (i64::from(ranges[axis].start) - pad).clamp(0, i64::from(limits[axis]));
+        let end = (i64::from(ranges[axis].end) + pad).clamp(0, i64::from(limits[axis]));
+        start as u32..(end.max(start) as u32)
+    })
 }
 
 pub(crate) fn resample(data: &VoxelData, plan: &Plan, ranges: &[Range<u32>; 3]) -> VoxelData {
-    match data {
-        VoxelData::U8(values) => VoxelData::U8(interpolate(values, plan, ranges)),
-        VoxelData::U16(values) => VoxelData::U16(interpolate(values, plan, ranges)),
-        VoxelData::F32(values) => VoxelData::F32(interpolate(values, plan, ranges)),
+    match (data, plan) {
+        (VoxelData::U8(values), Plan::Shift(plan)) => {
+            VoxelData::U8(interpolate_shift(values, plan, ranges))
+        }
+        (VoxelData::U16(values), Plan::Shift(plan)) => {
+            VoxelData::U16(interpolate_shift(values, plan, ranges))
+        }
+        (VoxelData::F32(values), Plan::Shift(plan)) => {
+            VoxelData::F32(interpolate_shift(values, plan, ranges))
+        }
+        (VoxelData::U8(values), Plan::Field(plan)) => {
+            VoxelData::U8(interpolate_field(values, plan, ranges))
+        }
+        (VoxelData::U16(values), Plan::Field(plan)) => {
+            VoxelData::U16(interpolate_field(values, plan, ranges))
+        }
+        (VoxelData::F32(values), Plan::Field(plan)) => {
+            VoxelData::F32(interpolate_field(values, plan, ranges))
+        }
     }
 }
 
@@ -82,7 +144,7 @@ pub(crate) fn zeros(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData 
     }
 }
 
-fn interpolate<T: Value>(data: &[T], plan: &Plan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
     let [x_axis, y_axis, z_axis] = &plan.axes;
     let width = (ranges[0].end - ranges[0].start) as usize;
     let height = (ranges[1].end - ranges[1].start) as usize;
@@ -120,6 +182,111 @@ fn interpolate<T: Value>(data: &[T], plan: &Plan, ranges: &[Range<u32>; 3]) -> V
         }
     }
     values
+}
+
+fn interpolate_field<T: Value>(data: &[T], plan: &FieldPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+    let width = (ranges[0].end - ranges[0].start) as usize;
+    let height = (ranges[1].end - ranges[1].start) as usize;
+    let depth = (ranges[2].end - ranges[2].start) as usize;
+    let source = &plan.source;
+    let dims = [0, 1, 2].map(|axis| (source[axis].end - source[axis].start) as usize);
+    assert_eq!(
+        data.len(),
+        dims[0] * dims[1] * dims[2],
+        "the read holds every voxel of the warped source"
+    );
+    let origin = Vec3::from(plan.level.origin());
+    let basis = plan.level.basis();
+    let matrix = basis.matrix();
+    let inverse = basis.inverse();
+    let start = Vec3::new(
+        ranges[0].start as f32,
+        ranges[1].start as f32,
+        ranges[2].start as f32,
+    );
+    let anchor = origin + matrix * (start + Vec3::splat(0.5));
+    let step = [matrix.col(0), matrix.col(1), matrix.col(2)];
+    let first = Vec3::new(
+        source[0].start as f32,
+        source[1].start as f32,
+        source[2].start as f32,
+    );
+    let stride = [1usize, dims[0], dims[0] * dims[1]];
+    let mut values = Vec::with_capacity(width * height * depth);
+    for z in 0..depth {
+        for y in 0..height {
+            let index = start + Vec3::new(0.0, y as f32, z as f32);
+            let row = anchor + step[2] * z as f32 + step[1] * y as f32;
+            for x in 0..width {
+                let point = row + step[0] * x as f32;
+                let at = index + Vec3::new(x as f32, 0.0, 0.0);
+                let offset = inverse * Vec3::from(plan.warp.sample(point.to_array()));
+                let position = at + offset;
+                values.push(T::encode(sample(
+                    data,
+                    &dims,
+                    &stride,
+                    position,
+                    first,
+                    plan.limits,
+                )));
+            }
+        }
+    }
+    values
+}
+
+fn sample<T: Value>(
+    data: &[T],
+    dims: &[usize; 3],
+    stride: &[usize; 3],
+    position: Vec3,
+    first: Vec3,
+    limits: [u32; 3],
+) -> f32 {
+    let low = [
+        position.x.floor() as i64,
+        position.y.floor() as i64,
+        position.z.floor() as i64,
+    ];
+    let weight = [
+        position.x - low[0] as f32,
+        position.y - low[1] as f32,
+        position.z - low[2] as f32,
+    ];
+    let mut sum = 0.0f32;
+    for corner in 0..8usize {
+        let mut factor = 1.0f32;
+        for (axis, component) in weight.iter().enumerate() {
+            factor *= if (corner >> axis) & 1 == 1 {
+                *component
+            } else {
+                1.0 - *component
+            };
+        }
+        if factor == 0.0 {
+            continue;
+        }
+        let at = [
+            low[0] + (corner & 1) as i64,
+            low[1] + ((corner >> 1) & 1) as i64,
+            low[2] + ((corner >> 2) & 1) as i64,
+        ];
+        if (0..3).any(|axis| at[axis] < 0 || at[axis] >= i64::from(limits[axis])) {
+            continue;
+        }
+        let local = [
+            (at[0] as f32 - first.x) as usize,
+            (at[1] as f32 - first.y) as usize,
+            (at[2] as f32 - first.z) as usize,
+        ];
+        if (0..3).any(|axis| local[axis] >= dims[axis]) {
+            continue;
+        }
+        sum += data[local[0] * stride[0] + local[1] * stride[1] + local[2] * stride[2]].decode()
+            * factor;
+    }
+    sum
 }
 
 trait Value: Copy {

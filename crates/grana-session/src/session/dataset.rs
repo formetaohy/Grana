@@ -22,7 +22,7 @@ struct Request {
     placement: [f32; 3],
     frames: u32,
     interval: f32,
-    drift: Vec<[f32; 3]>,
+    drift: Vec<grana_warp::Warp>,
 }
 
 impl DatasetExport {
@@ -137,7 +137,9 @@ impl super::Session {
             .filter_map(LabelLayer::of)
             .collect::<Vec<_>>();
         let frames = scene.frame_count();
-        let drift = (0..frames).map(|time| scene.drift().offset(time)).collect();
+        let drift = (0..frames)
+            .map(|time| scene.drift().warp(time).clone())
+            .collect();
         let name = scene.dataset.name().to_string();
         let suggested = format!("{}.ome.zarr", crate::slug(&name));
         let Some(path) = rfd::FileDialog::new()
