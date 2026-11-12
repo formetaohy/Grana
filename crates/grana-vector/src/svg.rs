@@ -7,10 +7,16 @@ use crate::document::{Cap, Page, Paint, Rect, Rgba};
 use crate::number::{byte, text};
 
 pub fn write(page: &Page) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}",
+        write_inline(page, "")
+    )
+}
+
+pub fn write_inline(page: &Page, namespace: &str) -> String {
     let width = text(page.width());
     let height = text(page.height());
     let mut svg = String::new();
-    svg.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     let _ = writeln!(
         svg,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{width}pt\" height=\"{height}pt\" viewBox=\"0 0 {width} {height}\">"
@@ -22,7 +28,7 @@ pub fn write(page: &Page) -> String {
         for (index, clip) in clips.iter().enumerate() {
             let _ = writeln!(
                 svg,
-                "<clipPath id=\"clip{index}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
+                "<clipPath id=\"{namespace}clip{index}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
                 text(clip.min[0]),
                 text(clip.min[1]),
                 text(clip.width()),
@@ -32,7 +38,7 @@ pub fn write(page: &Page) -> String {
         for (index, (top, bottom)) in gradients.iter().enumerate() {
             let _ = writeln!(
                 svg,
-                "<linearGradient id=\"grad{index}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"{}\" stop-opacity=\"{}\"/><stop offset=\"1\" stop-color=\"{}\" stop-opacity=\"{}\"/></linearGradient>",
+                "<linearGradient id=\"{namespace}grad{index}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"{}\" stop-opacity=\"{}\"/><stop offset=\"1\" stop-color=\"{}\" stop-opacity=\"{}\"/></linearGradient>",
                 hex(*top),
                 text(top.alpha),
                 hex(*bottom),
@@ -59,7 +65,7 @@ pub fn write(page: &Page) -> String {
                 .expect("the clip is declared")
         });
         if let Some(index) = clip {
-            let _ = writeln!(svg, "<g clip-path=\"url(#clip{index})\">");
+            let _ = writeln!(svg, "<g clip-path=\"url(#{namespace}clip{index})\">");
         }
         let data = path(&shape.contours);
         match shape.paint {
@@ -76,7 +82,10 @@ pub fn write(page: &Page) -> String {
                     .iter()
                     .position(|candidate| *candidate == (top, bottom))
                     .expect("the gradient is declared");
-                let _ = writeln!(svg, "<path d=\"{data}\" fill=\"url(#grad{index})\"/>");
+                let _ = writeln!(
+                    svg,
+                    "<path d=\"{data}\" fill=\"url(#{namespace}grad{index})\"/>"
+                );
             }
             Paint::Stroke { width, color, cap } => {
                 let _ = writeln!(

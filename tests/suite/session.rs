@@ -2230,6 +2230,7 @@ fn exports_a_share_package_that_opens_read_only() {
     }
     session.execute(Command::AddObject(ObjectKind::Spots));
     session.observe_view(view_state());
+    session.set_capture_factory(std::sync::Arc::new(|| std::sync::Arc::new(StillCapture)));
     let shared = temp.path().join("shared");
     std::fs::create_dir_all(&shared).expect("the shared folder is created");
     assert!(
@@ -2277,7 +2278,28 @@ fn exports_a_share_package_that_opens_read_only() {
     );
     assert!(
         package.join("ro-crate-metadata.json").is_file(),
-        "the package holds no report: {detail}"
+        "the package holds no manifest: {detail}"
+    );
+    let report =
+        std::fs::read_to_string(package.join("report.html")).expect("the package writes a report");
+    assert!(
+        report.starts_with("<!doctype html>"),
+        "the report is not a page: {detail}"
+    );
+    assert!(
+        report.contains("data:image/png;base64,"),
+        "the report embeds no thumbnail: {detail}"
+    );
+    assert!(
+        grana_raster::read(&package.join("thumbnail.png")).is_ok(),
+        "the package holds no thumbnail: {detail}"
+    );
+    let manifest = std::fs::read_to_string(package.join("ro-crate-metadata.json"))
+        .expect("the manifest reads")
+        .replace(char::is_whitespace, "");
+    assert!(
+        manifest.contains("\"report.html\"") && manifest.contains("\"thumbnail.png\""),
+        "the manifest names the report: {detail}"
     );
     let mut viewer = Session::new();
     viewer.open_path(package);
@@ -2297,6 +2319,30 @@ fn exports_a_share_package_that_opens_read_only() {
         viewer.message().is_some(),
         "the packaged analysis refuses edits"
     );
+}
+
+struct StillCapture;
+
+impl grana_pipeline::Capture for StillCapture {
+    fn open(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn capture(
+        &self,
+        _channels: &grana_pipeline::Channels,
+        _scene: &Scene,
+        request: &grana_pipeline::CaptureRequest,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let [width, height] = request.size;
+        let pixels = (0..width as usize * height as usize)
+            .flat_map(|index| [(index % 251) as u8, 32, 96, 255])
+            .collect::<Vec<u8>>();
+        let raster = grana_raster::Raster::new(width, height, pixels);
+        let png = grana_raster::encode(&raster).map_err(|error| error.to_string())?;
+        std::fs::write(path, png).map_err(|error| error.to_string())
+    }
 }
 
 fn cells_series() -> VolumeSeries {

@@ -3,6 +3,7 @@ mod comparison;
 mod format;
 mod interaction;
 mod quality;
+pub mod share;
 mod significance;
 
 pub use chart::{Axis, Charted, Request, chart, group_names, pages, set_names};

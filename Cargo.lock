@@ -3377,6 +3377,7 @@ dependencies = [
  "grana-raster",
  "grana-readout",
  "grana-render",
+ "grana-report",
  "grana-restore",
  "grana-scene",
  "grana-segment",
@@ -3857,6 +3858,9 @@ dependencies = [
  "grana-chart",
  "grana-i18n",
  "grana-measure",
+ "grana-page",
+ "grana-ui",
+ "grana-vector",
  "serde",
 ]
 
@@ -3924,6 +3928,7 @@ dependencies = [
  "grana-protocol",
  "grana-raster",
  "grana-readout",
+ "grana-report",
  "grana-scene",
  "grana-stitch",
  "grana-text",

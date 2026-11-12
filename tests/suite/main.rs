@@ -11,6 +11,7 @@ mod optics;
 mod playback;
 mod provenance;
 mod render;
+mod report;
 mod restore;
 mod segment;
 mod session;

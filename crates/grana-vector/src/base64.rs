@@ -1,6 +1,6 @@
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-pub(crate) fn encode(bytes: &[u8]) -> String {
+pub fn encode(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let first = u32::from(chunk[0]);
