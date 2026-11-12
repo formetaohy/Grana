@@ -30,7 +30,7 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
 @compute @workgroup_size(64)
 fn splat_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
-    if (index >= arrayLength(&splats)) {
+    if (index >= frame.tag.z || index >= arrayLength(&splats)) {
         return;
     }
     let data = splats[index];

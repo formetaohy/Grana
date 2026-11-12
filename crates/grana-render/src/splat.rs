@@ -158,7 +158,6 @@ pub(crate) struct SplatPasses {
     slice: RenderPipeline,
     key: RenderPipeline,
     color: RenderPipeline,
-    tail: RenderPipeline,
     pick: RenderPipeline,
     slice_pick: RenderPipeline,
     count: u32,
@@ -234,18 +233,14 @@ impl SplatPasses {
                 module: &module,
                 entry_point: Some("fs_oit_key"),
                 compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: crate::oit::COVERAGE_FORMAT,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,
         });
         let color = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.oit.color"),
-            layout: Some(&layouts.splat_tail),
+            layout: Some(&layouts.splat_oit),
             vertex: VertexState {
                 module: &module,
                 entry_point: Some("vs_main"),
@@ -256,37 +251,13 @@ impl SplatPasses {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: Some(depth_state(false, CompareFunction::Always)),
+            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &module,
                 entry_point: Some("fs_oit_color"),
                 compilation_options: Default::default(),
-                targets: &[],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let tail = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.splat.oit.tail"),
-            layout: Some(&layouts.splat_tail),
-            vertex: VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &module,
-                entry_point: Some("fs_oit_tail"),
-                compilation_options: Default::default(),
-                targets: &crate::oit::tail_targets(),
+                targets: &crate::oit::residual_targets(),
             }),
             multiview_mask: None,
             cache: None,
@@ -358,7 +329,6 @@ impl SplatPasses {
             slice,
             key,
             color,
-            tail,
             pick,
             slice_pick,
             count: 0,
@@ -414,6 +384,10 @@ impl SplatPasses {
 
     pub fn rewind(&self, queue: &Queue) {
         self.args.reset(queue, 6);
+    }
+
+    pub fn count(&self) -> u32 {
+        self.count
     }
 
     pub fn cull_volume(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
@@ -499,7 +473,6 @@ impl SplatPasses {
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
-        coverage: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -508,25 +481,6 @@ impl SplatPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.render_group, &[]);
         pass.set_bind_group(4, oit, &[]);
-        pass.set_bind_group(6, coverage, &[]);
-        pass.draw_indirect(self.args.buffer(), 0);
-    }
-
-    pub fn draw_tail<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        scene: &'a BindGroup,
-        oit: &'a BindGroup,
-        coverage: &'a BindGroup,
-    ) {
-        if self.count == 0 {
-            return;
-        }
-        pass.set_pipeline(&self.tail);
-        pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.render_group, &[]);
-        pass.set_bind_group(4, oit, &[]);
-        pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.args.buffer(), 0);
     }
 

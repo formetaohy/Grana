@@ -18,7 +18,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> ResolveOutput {
 
 @fragment
 fn fs_main(input: ResolveOutput) -> @location(0) vec4<f32> {
-    let layers = append_tail(gather_layers(input.clip_position), input.clip_position);
+    let layers = append_residual(gather_layers(input.clip_position), input.clip_position);
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     for (var index = 0u; index < layers.count; index += 1u) {

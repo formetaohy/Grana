@@ -124,7 +124,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
         );
     }
     let resolution = resolve(input.clip_position, ndc);
-    let layers = append_tail(gather_layers(input.clip_position), input.clip_position);
+    let layers = append_residual(gather_layers(input.clip_position), input.clip_position);
     let segment = march_projected(
         resolution.origin,
         resolution.start + min(resolution.jitter, max(resolution.exit - resolution.start, 0.0)),

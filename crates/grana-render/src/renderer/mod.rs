@@ -215,7 +215,6 @@ pub struct Renderer {
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
-    oit_readback: Readback,
     sequence: u64,
     info: FrameInfo,
 }
@@ -303,7 +302,6 @@ impl Renderer {
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
-            oit_readback: Readback::new(device, "grana.oit.dropped", 4, FEEDBACK_SLOTS),
             sequence: 0,
             info: FrameInfo::default(),
         }

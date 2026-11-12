@@ -26,7 +26,6 @@ pub(crate) struct Layouts {
     pub splat_cull: BindGroupLayout,
     pub splat_rows: BindGroupLayout,
     pub oit_write: BindGroupLayout,
-    pub oit_coverage: BindGroupLayout,
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
     pub ao_compute: BindGroupLayout,
@@ -40,7 +39,6 @@ pub(crate) struct Layouts {
     pub mesh_cull: PipelineLayout,
     pub splat_slice: PipelineLayout,
     pub splat_oit: PipelineLayout,
-    pub splat_tail: PipelineLayout,
     pub splat_pick: PipelineLayout,
     pub splat_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
@@ -248,19 +246,6 @@ impl Layouts {
                 storage(3, ShaderStages::FRAGMENT, false),
             ],
         });
-        let oit_coverage = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.oit.coverage.layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Uint,
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
         let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.oit.read.layout"),
             entries: &[
@@ -269,7 +254,6 @@ impl Layouts {
                 storage(2, ShaderStages::FRAGMENT, true),
                 texture(3, ShaderStages::FRAGMENT),
                 texture(4, ShaderStages::FRAGMENT),
-                texture(5, ShaderStages::FRAGMENT),
             ],
         });
         let ao_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -380,19 +364,6 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
-        let splat_tail = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.splat.tail.layout"),
-            bind_group_layouts: &[
-                Some(&scene),
-                Some(&splat_rows),
-                None,
-                None,
-                Some(&oit_write),
-                None,
-                Some(&oit_coverage),
-            ],
-            immediate_size: 0,
-        });
         let splat_pick = pipeline_layout(device, "grana.splat.pick.layout", &[&scene, &splat_rows]);
         let splat_cull_pipeline = pipeline_layout(
             device,
@@ -439,7 +410,6 @@ impl Layouts {
             splat_cull,
             splat_rows,
             oit_write,
-            oit_coverage,
             oit_read,
             ao_read,
             ao_compute,
@@ -453,7 +423,6 @@ impl Layouts {
             mesh_cull,
             splat_slice,
             splat_oit,
-            splat_tail,
             splat_pick,
             splat_cull_pipeline,
             shadow_pipeline,

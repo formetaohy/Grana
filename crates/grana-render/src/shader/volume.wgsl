@@ -12,7 +12,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
         );
     }
     let resolution = resolve(input.clip_position, ndc);
-    let layers = append_tail(gather_layers(input.clip_position), input.clip_position);
+    let layers = append_residual(gather_layers(input.clip_position), input.clip_position);
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     var moment = 0.0;

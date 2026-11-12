@@ -1,11 +1,9 @@
 @group(4) @binding(0) var<storage, read_write> oit_keys: array<atomic<u32>>;
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
-@group(4) @binding(3) var<storage, read_write> oit_dropped: atomic<u32>;
-@group(6) @binding(0) var oit_coverage: texture_2d<u32>;
+@group(4) @binding(3) var<storage, read_write> oit_claims: array<atomic<u32>>;
 
-const OIT_WEIGHT_FLOOR: f32 = 1.0e-2;
-const OIT_WEIGHT_CEIL: f32 = 3.0e3;
+const OIT_ALPHA_FLOOR: f32 = 1.0e-3;
 
 fn oit_key(depth: f32) -> u32 {
     return ~bitcast<u32>(clamp(depth, 0.0, 1.0));
@@ -19,20 +17,19 @@ fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     return local.y * size.x + local.x;
 }
 
-fn oit_covered(pixel: vec2<i32>) -> f32 {
-    return f32(textureLoad(oit_coverage, pixel, 0).r);
-}
-
 fn oit_offer(index: u32, layers: u32, key: u32) {
     let base = index * layers;
     atomicAdd(&oit_counts[index], 1u);
     var value = key;
     for (var slot = 0u; slot < layers; slot += 1u) {
+        if (value == 0u) {
+            break;
+        }
         let stored = atomicMax(&oit_keys[base + slot], value);
+        if (stored == value) {
+            break;
+        }
         value = min(stored, value);
-    }
-    if (value != 0u) {
-        atomicAdd(&oit_dropped, 1u);
     }
 }
 
@@ -47,20 +44,9 @@ fn oit_slot(index: u32, layers: u32, key: u32) -> i32 {
     return -1;
 }
 
-fn oit_beyond(index: u32, layers: u32, key: u32) -> bool {
+fn oit_claim(index: u32, layers: u32, slot: u32) -> bool {
     let base = index * layers;
-    let stored = min(atomicLoad(&oit_counts[index]), layers);
-    if (stored == 0u) {
-        return true;
-    }
-    var farthest = 0xffffffffu;
-    for (var slot = 0u; slot < stored; slot += 1u) {
-        let loaded = atomicLoad(&oit_keys[base + slot]);
-        if (loaded != 0u) {
-            farthest = min(farthest, loaded);
-        }
-    }
-    return key < farthest;
+    return atomicCompareExchangeWeak(&oit_claims[base + slot], 0u, 1u).exchanged;
 }
 
 fn oit_write(index: u32, layers: u32, slot: u32, premultiplied: vec4<f32>) {
@@ -71,8 +57,20 @@ fn oit_write(index: u32, layers: u32, slot: u32, premultiplied: vec4<f32>) {
     );
 }
 
-fn oit_weight(depth: f32, alpha: f32) -> f32 {
-    let reach = clamp(depth, 0.0, 1.0);
-    let falloff = 0.03 / (1.0e-5 + reach * reach * reach * reach);
-    return alpha * clamp(falloff, OIT_WEIGHT_FLOOR, OIT_WEIGHT_CEIL);
+struct Residual {
+    @location(0) color: vec4<f32>,
+    @location(1) moment: vec2<f32>,
+}
+
+fn oit_residual(alpha: f32, color: vec3<f32>, depth: f32) -> Residual {
+    var output: Residual;
+    output.color = vec4<f32>(0.0);
+    output.moment = vec2<f32>(0.0);
+    if (alpha <= OIT_ALPHA_FLOOR) {
+        return output;
+    }
+    let tau = -log(max(1.0 - alpha, OIT_ALPHA_FLOOR));
+    output.color = vec4<f32>(color * tau, tau);
+    output.moment = vec2<f32>(clamp(depth, 0.0, 1.0) * tau, 0.0);
+    return output;
 }

@@ -8,7 +8,6 @@ impl Renderer {
             };
             self.accept(meta, &bytes);
         }
-        while self.oit_readback.take(device).is_some() {}
         self.emit()
     }
 

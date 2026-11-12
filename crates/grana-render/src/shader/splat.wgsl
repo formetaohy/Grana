@@ -177,7 +177,7 @@ fn fs_slice(input: SplatVertex) -> SliceFragment {
 }
 
 @fragment
-fn fs_oit_key(input: SplatVertex) -> @location(0) u32 {
+fn fs_oit_key(input: SplatVertex) {
     let ray = splat_ray(input.world);
     if (splat_alpha(input, ray.origin, ray.direction) <= 0.0) {
         discard;
@@ -190,72 +190,29 @@ fn fs_oit_key(input: SplatVertex) -> @location(0) u32 {
         discard;
     }
     oit_offer(u32(index), frame.oit.y, oit_key(input.depth));
-    return 1u;
 }
 
 @fragment
-fn fs_oit_color(input: SplatVertex) {
+fn fs_oit_color(input: SplatVertex) -> Residual {
+    var output = oit_residual(0.0, vec3<f32>(0.0), 0.0);
     let ray = splat_ray(input.world);
     let alpha = splat_alpha(input, ray.origin, ray.direction);
     if (alpha <= 0.0) {
-        return;
+        return output;
     }
     let origin = vec2<i32>(frame.viewport.xy);
     let size = vec2<i32>(frame.viewport.zw);
     let pixel = vec2<i32>(input.clip_position.xy);
     let index = oit_index(origin, size, pixel);
     if (index < 0) {
-        return;
-    }
-    let covered = oit_covered(pixel);
-    if (covered <= 0.0) {
-        return;
+        return output;
     }
     let slot = oit_slot(u32(index), frame.oit.y, oit_key(input.depth));
-    if (slot < 0) {
-        return;
+    if (slot >= 0 && oit_claim(u32(index), frame.oit.y, u32(slot))) {
+        oit_write(u32(index), frame.oit.y, u32(slot), vec4<f32>(input.color * alpha, alpha));
+        return output;
     }
-    let premultiplied = vec4<f32>(input.color * alpha, alpha) * covered;
-    oit_write(u32(index), frame.oit.y, u32(slot), premultiplied);
-}
-
-struct TailFragment {
-    @location(0) accumulate: vec4<f32>,
-    @location(1) reveal: vec4<f32>,
-    @location(2) depth: vec2<f32>,
-}
-
-@fragment
-fn fs_oit_tail(input: SplatVertex) -> TailFragment {
-    let scale = max(frame.oit.w, 1u);
-    let origin = vec2<i32>(frame.viewport.xy);
-    let size = vec2<i32>(frame.viewport.zw);
-    let pixel = vec2<i32>(floor(input.clip_position.xy * f32(scale))) + origin;
-    var output: TailFragment;
-    output.accumulate = vec4<f32>(0.0);
-    output.reveal = vec4<f32>(0.0);
-    output.depth = vec2<f32>(1.0, 1.0);
-    let ray = splat_ray(input.world);
-    let alpha = splat_alpha(input, ray.origin, ray.direction);
-    if (alpha <= 0.0) {
-        discard;
-    }
-    let index = oit_index(origin, size, pixel);
-    if (index < 0) {
-        discard;
-    }
-    let covered = oit_covered(pixel);
-    if (covered <= 0.0) {
-        discard;
-    }
-    if (!oit_beyond(u32(index), frame.oit.y, oit_key(input.depth))) {
-        discard;
-    }
-    let weight = oit_weight(input.depth, alpha) * covered;
-    output.accumulate = vec4<f32>(input.color * alpha * weight, alpha * weight);
-    output.reveal = vec4<f32>(alpha);
-    output.depth = vec2<f32>(input.depth, 1.0);
-    return output;
+    return oit_residual(alpha, input.color, input.depth);
 }
 
 @fragment

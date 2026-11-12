@@ -2137,3 +2137,83 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
         "another plane reuses the history of the old one"
     );
 }
+
+#[test]
+fn converges_the_brightness_of_overlapping_splats() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers)
+        .into_iter()
+        .map(|row| grana_render::ChannelRow {
+            visible: false,
+            ..row
+        })
+        .collect::<Vec<_>>();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let [cx, cy] = project(&camera, [0.0, 0.0, 0.0]);
+    let core = [cx - 1, cy - 1, cx + 2, cy + 2];
+    let mut brightness = |count: usize| {
+        let splats = (0..count)
+            .map(|_| Splat::point([0.0, 0.0, 0.0], 0.4, [1.0, 0.0, 0.0], 0.25))
+            .collect::<Vec<_>>();
+        let chunks = [SplatChunk::new(0, splats)];
+        let scene = SceneFrame {
+            versions: versions(),
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 0.5,
+            styles: &[],
+            layers: &[],
+            splats: Splats::new(&chunks),
+        };
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            display: grana_render::Display::Export,
+        };
+        snapshot(&gpu, &mut renderer, &view, &target, &volume).contrast(core)
+    };
+    let encoded = |alpha: f32| {
+        let mapped = 0.8038 * alpha;
+        let encoded = if mapped <= 0.0031308 {
+            12.92 * mapped
+        } else {
+            1.055 * mapped.powf(1.0 / 2.4) - 0.055
+        };
+        255.0 * encoded
+    };
+    let expected = |count: i32| encoded(1.0 - 0.75f32.powi(count));
+    let single = brightness(1);
+    let eight = brightness(8);
+    let many = brightness(64);
+    assert!(
+        (single - expected(1)).abs() < 10.0,
+        "one splat paints {single} against {}",
+        expected(1)
+    );
+    assert!(
+        (eight - expected(8)).abs() < 10.0,
+        "eight splats paint {eight} against {}",
+        expected(8)
+    );
+    assert!(
+        (many - expected(64)).abs() < 6.0,
+        "sixty four splats paint {many} against {}",
+        expected(64)
+    );
+    assert!(
+        eight > single + 80.0,
+        "overlapping splats keep the brightness of one: {eight} against {single}"
+    );
+}

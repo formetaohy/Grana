@@ -1,9 +1,8 @@
 @group(4) @binding(0) var<storage, read> oit_keys: array<u32>;
 @group(4) @binding(1) var<storage, read> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read> oit_counts: array<u32>;
-@group(4) @binding(3) var oit_accumulate: texture_2d<f32>;
-@group(4) @binding(4) var oit_reveal: texture_2d<f32>;
-@group(4) @binding(5) var oit_tail_depth: texture_2d<f32>;
+@group(4) @binding(3) var oit_residual_color: texture_2d<f32>;
+@group(4) @binding(4) var oit_residual_moment: texture_2d<f32>;
 
 const MAXIMUM_ENTRIES: u32 = 9u;
 
@@ -15,10 +14,10 @@ struct Layers {
     count: u32,
 }
 
-struct Tail {
-    color: vec3<f32>,
+struct Proxy {
     alpha: f32,
     depth: f32,
+    color: vec3<f32>,
 }
 
 fn gather_layers(clip_position: vec4<f32>) -> Layers {
@@ -42,6 +41,9 @@ fn gather_layers(clip_position: vec4<f32>) -> Layers {
         if (key == 0u) {
             break;
         }
+        if (layers.count > 0u && key == oit_keys[base + slot - 1u]) {
+            continue;
+        }
         layers.depth[layers.count] = bitcast<f32>(~key);
         layers.color[layers.count] = oit_colors[base + slot];
         layers.count += 1u;
@@ -49,91 +51,57 @@ fn gather_layers(clip_position: vec4<f32>) -> Layers {
     return layers;
 }
 
-fn tail_layer(local: vec2<i32>) -> Tail {
-    let scale = max(frame.oit.w, 1u);
-    let coordinate = (vec2<f32>(local) + 0.5) / f32(scale) - 0.5;
-    let base = vec2<i32>(floor(coordinate));
-    let fraction = coordinate - floor(coordinate);
-    let extent = vec2<i32>(textureDimensions(oit_accumulate)) - vec2<i32>(1);
-    let low = clamp(base, vec2<i32>(0), extent);
-    let high = clamp(base + vec2<i32>(1), vec2<i32>(0), extent);
-    let across = vec2<i32>(high.x, low.y);
-    let down = vec2<i32>(low.x, high.y);
-    let accumulation = mix(
-        mix(
-            textureLoad(oit_accumulate, low, 0),
-            textureLoad(oit_accumulate, across, 0),
-            fraction.x,
-        ),
-        mix(
-            textureLoad(oit_accumulate, down, 0),
-            textureLoad(oit_accumulate, high, 0),
-            fraction.x,
-        ),
-        fraction.y,
-    );
-    if (accumulation.a <= 0.0) {
-        return Tail(vec3<f32>(0.0), 0.0, 1.0e19);
+fn residual_proxy(clip_position: vec4<f32>) -> Proxy {
+    var proxy: Proxy;
+    proxy.alpha = 0.0;
+    proxy.depth = 1.0;
+    proxy.color = vec3<f32>(0.0);
+    if (frame.oit.x == 0u) {
+        return proxy;
     }
-    let reveal = mix(
-        mix(
-            textureLoad(oit_reveal, low, 0).r,
-            textureLoad(oit_reveal, across, 0).r,
-            fraction.x,
-        ),
-        mix(
-            textureLoad(oit_reveal, down, 0).r,
-            textureLoad(oit_reveal, high, 0).r,
-            fraction.x,
-        ),
-        fraction.y,
-    );
-    let nearest = min(
-        min(
-            textureLoad(oit_tail_depth, low, 0).x,
-            textureLoad(oit_tail_depth, across, 0).x,
-        ),
-        min(
-            textureLoad(oit_tail_depth, down, 0).x,
-            textureLoad(oit_tail_depth, high, 0).x,
-        ),
-    );
-    return Tail(
-        accumulation.rgb / accumulation.a,
-        1.0 - reveal,
-        select(1.0e19, nearest, nearest < 1.0),
-    );
+    let extent = vec2<i32>(textureDimensions(oit_residual_color));
+    let pixel = vec2<i32>(floor(clip_position.xy));
+    if (pixel.x < 0 || pixel.y < 0 || pixel.x >= extent.x || pixel.y >= extent.y) {
+        return proxy;
+    }
+    let accumulation = textureLoad(oit_residual_color, pixel, 0);
+    let tau = accumulation.a;
+    if (tau <= 0.0) {
+        return proxy;
+    }
+    let moment = textureLoad(oit_residual_moment, pixel, 0);
+    proxy.alpha = 1.0 - exp(-tau);
+    proxy.depth = clamp(moment.x / tau, 0.0, 1.0);
+    proxy.color = accumulation.rgb / tau;
+    return proxy;
 }
 
-fn append_tail(layers: Layers, clip_position: vec4<f32>) -> Layers {
+fn append_residual(layers: Layers, clip_position: vec4<f32>) -> Layers {
     var result = layers;
-    if (frame.oit.x == 0u) {
+    let proxy = residual_proxy(clip_position);
+    if (proxy.alpha <= 0.0) {
         return result;
     }
-    let scene_pixel = vec2<i32>(floor(clip_position.xy));
-    let local = scene_pixel - vec2<i32>(frame.viewport.xy);
-    if (local.x < 0
-        || local.y < 0
-        || local.x >= i32(frame.viewport.z)
-        || local.y >= i32(frame.viewport.w)) {
-        return result;
+    var at = result.count;
+    for (var index = 0u; index < result.count; index += 1u) {
+        if (result.depth[index] > proxy.depth) {
+            at = index;
+            break;
+        }
     }
-    let tail = tail_layer(local);
-    if (tail.alpha <= 0.0) {
-        return result;
+    var cursor = result.count;
+    while (cursor > at) {
+        result.depth[cursor] = result.depth[cursor - 1u];
+        result.color[cursor] = result.color[cursor - 1u];
+        cursor -= 1u;
     }
-    var depth = tail.depth;
-    if (result.count > 0u) {
-        depth = max(depth, result.depth[result.count - 1u]);
-    }
-    let premultiplied = vec4<f32>(tail.color * tail.alpha, tail.alpha);
-    let at = result.count;
-    result.depth[at] = depth;
+    let premultiplied = vec4<f32>(proxy.color * proxy.alpha, proxy.alpha);
+    result.depth[at] = proxy.depth;
     result.color[at] = vec2<u32>(
         pack2x16float(premultiplied.rg),
         pack2x16float(premultiplied.ba),
     );
-    result.count = at + 1u;
+    result.count = result.count + 1u;
     return result;
 }
 

@@ -91,7 +91,6 @@ impl Renderer {
             dummy_oit,
             dummy_ao,
             budget,
-            oit_readback,
             sections,
             sliced,
             occupancy_group,
@@ -333,7 +332,6 @@ impl Renderer {
         }
         if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
             data.oit[1] = oit.layers();
-            data.oit[3] = oit.tail_scale();
         }
         let signature = Signature {
             data: &data,
@@ -441,6 +439,7 @@ impl Renderer {
             scene.step_scale.max(1.0e-3),
         ];
         data.lens = crate::frame::lens(camera, sample_index, samples, aspect);
+        data.tag[2] = splats.count();
         scene_table.write_frame(queue, data);
         if replan {
             let scale = bucket_scale(
@@ -628,15 +627,7 @@ impl Renderer {
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.key.pass"),
-                        color_attachments: &[Some(RenderPassColorAttachment {
-                            view: oit.coverage(),
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: Operations {
-                                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: StoreOp::Store,
-                            },
-                        })],
+                        color_attachments: &[],
                         depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                             view: target.scene.depth(),
                             depth_ops: Some(Operations {
@@ -662,7 +653,26 @@ impl Renderer {
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.color.pass"),
-                        color_attachments: &[],
+                        color_attachments: &[
+                            Some(RenderPassColorAttachment {
+                                view: oit.residual_color(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: Operations {
+                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: StoreOp::Store,
+                                },
+                            }),
+                            Some(RenderPassColorAttachment {
+                                view: oit.residual_moment(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: Operations {
+                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: StoreOp::Store,
+                                },
+                            }),
+                        ],
                         depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                             view: target.scene.depth(),
                             depth_ops: Some(Operations {
@@ -682,69 +692,8 @@ impl Renderer {
                         1.0,
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
-                    meshes.draw_color(
-                        &mut pass,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                    splats.draw_color(&mut pass, group, oit.write_group(), oit.coverage_group());
-                }
-                {
-                    let tail = oit.tail_size(viewport);
-                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                        label: Some("grana.oit.pass"),
-                        color_attachments: &[
-                            Some(RenderPassColorAttachment {
-                                view: oit.accumulate(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: StoreOp::Store,
-                                },
-                            }),
-                            Some(RenderPassColorAttachment {
-                                view: oit.reveal(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color::WHITE),
-                                    store: StoreOp::Store,
-                                },
-                            }),
-                            Some(RenderPassColorAttachment {
-                                view: oit.tail_depth(),
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color {
-                                        r: 1.0,
-                                        g: 1.0,
-                                        b: 1.0,
-                                        a: 1.0,
-                                    }),
-                                    store: StoreOp::Store,
-                                },
-                            }),
-                        ],
-                        depth_stencil_attachment: None,
-                        ..Default::default()
-                    });
-                    pass.set_viewport(0.0, 0.0, tail[0] as f32, tail[1] as f32, 0.0, 1.0);
-                    pass.set_scissor_rect(0, 0, tail[0], tail[1]);
-                    meshes.draw_tail(
-                        &mut pass,
-                        shadow_group,
-                        oit.write_group(),
-                        oit.coverage_group(),
-                        ao_group,
-                    );
-                    splats.draw_tail(&mut pass, group, oit.write_group(), oit.coverage_group());
-                }
-                if let Some(slot) = oit_readback.reserve() {
-                    oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
+                    meshes.draw_color(&mut pass, shadow_group, oit.write_group(), ao_group);
+                    splats.draw_color(&mut pass, group, oit.write_group());
                 }
                 if !volume_visible {
                     oit_resolve.draw(
@@ -884,7 +833,6 @@ impl Renderer {
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
         }
-        oit_readback.register();
         info.view.level = ladder.base;
         info.seeded = target.seeded;
         info.history = temporal.is_some()
