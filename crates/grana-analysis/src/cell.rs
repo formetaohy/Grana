@@ -4,10 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_object::{CellParams, Mask};
 use grana_volume::Level;
 
+use crate::schedule;
+
+mod ridge;
+
 const LEVELS: usize = 1 << 16;
 const TOP: u16 = (LEVELS - 1) as u16;
-const SIGMA_LIMIT: f32 = 4.0;
-const KERNEL_LIMIT: usize = 16;
 const CHECK: usize = 1 << 16;
 const SEED_SNAP: i64 = 2;
 
@@ -73,24 +75,34 @@ pub fn grow(field: GrowField<'_>, cancel: &AtomicBool) -> Option<Growth> {
     if count == 0 || seeds.is_empty() {
         return None;
     }
-    assert_eq!(
-        values.len(),
-        count,
-        "the membrane field covers every voxel of the growth box"
-    );
-    let mut values = values.to_vec();
-    if let Some(smoothing) = Smoothing::new(level, params.grain()) {
-        smoothing.apply(&mut values, dims);
-    }
+    let workers = schedule::workers(0);
+    let elevations = ridge::elevations(values, dims, level, params.grain(), workers, cancel)?;
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let barrier = barrier(params.barrier());
-    let steps = level.voxel().map(|step| step * step);
     let centres = seeds
         .iter()
-        .map(|seed| level.voxel_of(seed.centre))
+        .map(|seed| {
+            let voxel = level.voxel_of(seed.centre);
+            [
+                voxel[0] - ranges[0].start as f32,
+                voxel[1] - ranges[1].start as f32,
+                voxel[2] - ranges[2].start as f32,
+            ]
+        })
         .collect::<Vec<_>>();
+    let shells = seeds
+        .iter()
+        .zip(&centres)
+        .map(|(seed, centre)| ridge::Shell {
+            centre: *centre,
+            inner: seed.radius,
+            outer: params.reach() * seed.radius,
+        })
+        .collect::<Vec<_>>();
+    let barrier = ridge::barrier(&elevations, dims, level.voxel(), &shells);
+
+    let steps = level.voxel().map(|step| step * step);
     let reaches = seeds
         .iter()
         .map(|seed| (params.reach() * seed.radius).powi(2))
@@ -98,12 +110,19 @@ pub fn grow(field: GrowField<'_>, cancel: &AtomicBool) -> Option<Growth> {
     let mut labels = vec![0u32; count];
     let mut queue = Queue::new();
     for (index, centre) in centres.iter().enumerate() {
-        let Some(voxel) = snap(centre, dims, &labels, &values, barrier) else {
+        let Some(voxel) = snap(centre, dims, &labels, &elevations, barrier) else {
             continue;
         };
         labels[offset(&voxel, &dims)] = index as u32 + 1;
         push(
-            &mut queue, &values, &labels, &voxel, &dims, barrier, mask, &ranges,
+            &mut queue,
+            &elevations,
+            &labels,
+            &voxel,
+            &dims,
+            barrier,
+            mask,
+            &ranges,
         );
     }
     if labels.iter().all(|label| *label == 0) {
@@ -118,7 +137,7 @@ pub fn grow(field: GrowField<'_>, cancel: &AtomicBool) -> Option<Growth> {
         if labels[at] != 0 {
             continue;
         }
-        let Some(owner) = owner(&labels, &values, &dims, at) else {
+        let Some(owner) = owner(&labels, &elevations, &dims, at) else {
             continue;
         };
         let voxel = voxel(at, &dims);
@@ -130,7 +149,14 @@ pub fn grow(field: GrowField<'_>, cancel: &AtomicBool) -> Option<Growth> {
         }
         labels[at] = owner;
         push(
-            &mut queue, &values, &labels, &voxel, &dims, barrier, mask, &ranges,
+            &mut queue,
+            &elevations,
+            &labels,
+            &voxel,
+            &dims,
+            barrier,
+            mask,
+            &ranges,
         );
     }
     if cancel.load(Ordering::Relaxed) {
@@ -171,7 +197,7 @@ fn compact(labels: Vec<u32>, seeds: usize) -> Option<(Vec<u32>, Vec<usize>)> {
 #[allow(clippy::too_many_arguments)]
 fn push(
     queue: &mut Queue,
-    values: &[f32],
+    elevations: &[u16],
     labels: &[u32],
     voxel: &[usize; 3],
     dims: &[usize; 3],
@@ -191,8 +217,8 @@ fn push(
             if labels[neighbour] != 0 {
                 continue;
             }
-            let elevation = elevation(values[neighbour]);
-            if elevation > barrier {
+            let altitude = elevations[neighbour];
+            if altitude > barrier {
                 continue;
             }
             if let Some(mask) = mask {
@@ -205,12 +231,12 @@ fn push(
                     continue;
                 }
             }
-            queue.push(elevation as usize, neighbour);
+            queue.push(altitude as usize, neighbour);
         }
     }
 }
 
-fn owner(labels: &[u32], values: &[f32], dims: &[usize; 3], at: usize) -> Option<u32> {
+fn owner(labels: &[u32], elevations: &[u16], dims: &[usize; 3], at: usize) -> Option<u32> {
     let voxel = voxel(at, dims);
     let mut best: Option<(u16, u32)> = None;
     for axis in 0..3 {
@@ -226,7 +252,7 @@ fn owner(labels: &[u32], values: &[f32], dims: &[usize; 3], at: usize) -> Option
             if label == 0 {
                 continue;
             }
-            let candidate = (elevation(values[neighbour]), label);
+            let candidate = (elevations[neighbour], label);
             if best.is_none_or(|best| candidate < best) {
                 best = Some(candidate);
             }
@@ -239,7 +265,7 @@ fn snap(
     centre: &[f32; 3],
     dims: [usize; 3],
     labels: &[u32],
-    values: &[f32],
+    elevations: &[u16],
     barrier: u16,
 ) -> Option<[usize; 3]> {
     let base = [0, 1, 2].map(|axis| centre[axis].floor() as i64);
@@ -256,12 +282,12 @@ fn snap(
                 if labels[index] != 0 {
                     continue;
                 }
-                let elevation = elevation(values[index]);
-                if elevation > barrier {
+                let altitude = elevations[index];
+                if altitude > barrier {
                     continue;
                 }
                 let distance = dx * dx + dy * dy + dz * dz;
-                let candidate = (elevation, distance, voxel);
+                let candidate = (altitude, distance, voxel);
                 if best.is_none_or(|best| (candidate.0, candidate.1) < (best.0, best.1)) {
                     best = Some(candidate);
                 }
@@ -271,11 +297,7 @@ fn snap(
     best.map(|(_, _, voxel)| voxel)
 }
 
-fn barrier(barrier: f32) -> u16 {
-    (barrier.clamp(0.0, 1.0) * f32::from(TOP)).round() as u16
-}
-
-fn elevation(value: f32) -> u16 {
+pub(crate) fn elevation(value: f32) -> u16 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
     }
@@ -335,69 +357,4 @@ impl Queue {
         }
         None
     }
-}
-
-struct Smoothing {
-    kernel: Vec<f32>,
-    radius: usize,
-}
-
-impl Smoothing {
-    fn new(level: Level, grain: f32) -> Option<Self> {
-        if !(grain.is_finite() && grain > 0.0) {
-            return None;
-        }
-        let spacing = level.spacing();
-        let narrowest = spacing.x().min(spacing.y()).min(spacing.z());
-        let sigma = (grain / narrowest).min(SIGMA_LIMIT);
-        if sigma < 0.5 {
-            return None;
-        }
-        let radius = ((3.0 * sigma).ceil() as usize).min(KERNEL_LIMIT);
-        let mut kernel = Vec::with_capacity(2 * radius + 1);
-        let mut sum = 0.0f32;
-        for step in -(radius as i64)..=radius as i64 {
-            let weight = (-0.5 * (step as f32 / sigma).powi(2)).exp();
-            kernel.push(weight);
-            sum += weight;
-        }
-        for weight in &mut kernel {
-            *weight /= sum;
-        }
-        Some(Self { kernel, radius })
-    }
-
-    fn apply(&self, values: &mut [f32], dims: [usize; 3]) {
-        let mut scratch = vec![0.0f32; values.len()];
-        for axis in 0..3 {
-            self.axis(values, &mut scratch, dims, axis);
-            values.copy_from_slice(&scratch);
-        }
-    }
-
-    fn axis(&self, input: &[f32], output: &mut [f32], dims: [usize; 3], axis: usize) {
-        let [width, height, depth] = dims;
-        let radius = self.radius as i64;
-        for z in 0..depth {
-            for y in 0..height {
-                for x in 0..width {
-                    let mut sum = 0.0f32;
-                    for (index, weight) in self.kernel.iter().enumerate() {
-                        let step = index as i64 - radius;
-                        let at = match axis {
-                            0 => (clamp(x as i64 + step, width), y, z),
-                            1 => (x, clamp(y as i64 + step, height), z),
-                            _ => (x, y, clamp(z as i64 + step, depth)),
-                        };
-                        sum += weight * input[at.0 + width * (at.1 + height * at.2)];
-                    }
-                    output[x + width * (y + height * z)] = sum;
-                }
-            }
-        }
-    }
-}
-
-fn clamp(index: i64, length: usize) -> usize {
-    index.clamp(0, length as i64 - 1) as usize
 }

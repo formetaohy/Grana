@@ -1153,11 +1153,9 @@ impl Decode for ObjectParams {
             ObjectKind::Filaments if unit(values[0]) && values[1] > 0.0 => Ok(Self::Filaments(
                 grana_object::FilamentParams::new(values[0], values[1]),
             )),
-            ObjectKind::Cells if unit(values[0]) && values[1] > 0.0 && length(values[2]) => {
-                Ok(Self::Cells(grana_object::CellParams::new(
-                    values[0], values[1], values[2],
-                )))
-            }
+            ObjectKind::Cells if values[0] > 0.0 && length(values[1]) => Ok(Self::Cells(
+                grana_object::CellParams::new(values[0], values[1]),
+            )),
             _ => Err(FAULT_VALUE),
         }
     }

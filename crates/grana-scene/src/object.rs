@@ -28,7 +28,6 @@ const SURFACE_MIN_SPHERICITY: f32 = 0.0;
 const SURFACE_MIN_MEAN_INTENSITY: f32 = 0.0;
 const FILAMENT_THRESHOLD: f32 = 0.5;
 const FILAMENT_MIN_LENGTH: f32 = 2.0;
-const CELL_BARRIER: f32 = 0.7;
 const CELL_REACH: f32 = 2.0;
 const CELL_GRAIN: f32 = 0.3;
 
@@ -151,13 +150,6 @@ const FILAMENT_FIELDS: [ParamField; 2] = [
 
 const CELL_FIELDS: [ParamField; CellParams::FIELD_COUNT] = [
     ParamField {
-        label: "barrier",
-        suffix: "",
-        minimum: ParamScale::Absolute(0.0),
-        maximum: ParamScale::Absolute(1.0),
-        logarithmic: false,
-    },
-    ParamField {
         label: "reach",
         suffix: "×",
         minimum: ParamScale::Absolute(0.5),
@@ -264,9 +256,7 @@ impl ObjectKind {
                 FILAMENT_THRESHOLD,
                 FILAMENT_MIN_LENGTH,
             )),
-            Self::Cells => {
-                ObjectParams::Cells(CellParams::new(CELL_BARRIER, CELL_REACH, CELL_GRAIN))
-            }
+            Self::Cells => ObjectParams::Cells(CellParams::new(CELL_REACH, CELL_GRAIN)),
         }
     }
 

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::channels::Channels;
 use grana_analysis::{
     ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun, SeedPolicy, Sources,
-    SpotScanner, SurfaceBuilder, TrackBuilder, coloc_sampling, filament_level, relate_frames,
-    spot_level, surface_level,
+    SpotScanner, SurfaceBuilder, coloc_sampling, filament_level, relate_frames, spot_level,
+    surface_level,
 };
 use grana_geometry::GeometryStore;
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
@@ -133,24 +133,19 @@ pub fn tracks(
         done: 0,
         total,
     });
-    let mut builder = TrackBuilder::new(params);
-    for (time, detections) in frames.iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        builder.push(time as u32, detections);
-        if time % 8 == 0 || time + 1 == total {
-            sink(Event::Progress {
-                time: time as u32,
-                done: time + 1,
-                total,
-            });
-        }
-    }
-    if cancel.load(Ordering::Relaxed) {
+    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let linker = grana_analysis::TrackLinker::new(params);
+    let mut progress = |done: usize, total: usize| {
+        sink(Event::Progress {
+            time: 0,
+            done,
+            total,
+        });
+    };
+    let Some(set) = linker.link(&slices, frame_interval, cancel, &mut progress) else {
         return;
-    }
-    sink(Event::Tracks(builder.finish(frame_interval)));
+    };
+    sink(Event::Tracks(set));
     sink(Event::Done);
 }
 

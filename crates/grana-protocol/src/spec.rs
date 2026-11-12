@@ -907,7 +907,6 @@ pub enum SourceSpec {
     },
     Cells {
         channel: String,
-        barrier: f32,
         reach: f32,
         grain: f32,
         seed_source: String,
@@ -2741,12 +2740,7 @@ impl SourceSpec {
                 min_length,
                 ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
-            Self::Cells {
-                barrier,
-                reach,
-                grain,
-                ..
-            } => ObjectParams::Cells(CellParams::new(barrier, reach, grain)),
+            Self::Cells { reach, grain, .. } => ObjectParams::Cells(CellParams::new(reach, grain)),
             Self::Labels { .. }
             | Self::Segments { .. }
             | Self::Tracks { .. }
@@ -2905,15 +2899,11 @@ impl SourceSpec {
             }
             Self::Cells {
                 channel,
-                barrier,
                 reach,
                 grain,
                 seed_source,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
-                if !(0.0..=1.0).contains(barrier) {
-                    return invalid("needs a unit membrane barrier".to_string());
-                }
                 if !(reach.is_finite() && *reach > 0.0) {
                     return invalid("needs a positive reach".to_string());
                 }

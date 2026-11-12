@@ -564,7 +564,6 @@ fn detection(
             })?;
             Ok(SourceSpec::Cells {
                 channel: channel.to_string(),
-                barrier: params.barrier(),
                 reach: params.reach(),
                 grain: params.grain(),
                 seed_source: source.key().as_str().to_string(),

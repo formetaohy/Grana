@@ -184,7 +184,6 @@ pub fn parameter(language: Language, english: &str) -> String {
         "min sphericity" => "最小球形度",
         "min mean intensity" => "最小平均强度",
         "min length" => "最小长度",
-        "barrier" => "膜屏障",
         "reach" => "延伸范围",
         "cell probability" => "细胞概率",
         "flow error" => "光流误差",

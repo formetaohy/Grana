@@ -1917,7 +1917,7 @@ fn grows_cells_around_nuclei_through_a_project_and_protocol() {
     });
     session.execute(Command::SetObjectParams {
         set: cells,
-        params: ObjectParams::Cells(CellParams::new(0.5, 2.0, 0.0)),
+        params: ObjectParams::Cells(CellParams::new(2.0, 0.0)),
     });
     session.execute(Command::Detect(cells));
     settle(&mut session);
