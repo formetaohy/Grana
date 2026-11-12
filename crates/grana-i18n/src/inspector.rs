@@ -7,6 +7,7 @@ labels! {
     views => "Views" / "视图";
     region_of_interest => "Region of Interest" / "感兴趣区域";
     drift_correction => "Drift Correction" / "漂移校正";
+    channel_registration => "Channel Registration" / "通道配准";
     analysis_mask => "Analysis Mask" / "分析掩膜";
     slice_view => "Slice View" / "切片视图";
     clipping_plane => "Clipping Plane" / "裁剪平面";
@@ -76,7 +77,10 @@ labels! {
     aligning => "Aligning…" / "对齐中…";
     aligning_frames => "Aligning frames…" / "正在对齐帧…";
     correct_drift => "Correct Drift" / "校正漂移";
+    registering => "Registering…" / "正在配准…";
     clear_drift => "Clear Drift" / "清除漂移";
+    register_channels => "Register Channels" / "配准通道";
+    clear_registration => "Clear Registration" / "清除配准";
     reference => "Reference" / "参考帧";
     frame_unit => "frame" / "帧";
     reference_suffix => " (ref)" / "（参考）";
@@ -125,6 +129,10 @@ messages! {
     aligns_channel(channel: &str) => "Aligns {channel} across all time frames." / "在所有时间帧上对齐 {channel}。";
     drift_summary(frames: u32, maximum: f32) => "{frames} frames aligned · max {maximum:.2} µm" / "已对齐 {frames} 帧 · 最大 {maximum:.2} µm";
     drift_deformation(maximum: f32) => "Deformation up to {maximum:.2} µm" / "形变达 {maximum:.2} µm";
+    registering_channels(done: usize, total: usize) => "Channel {done} of {total}" / "第 {done} 个通道，共 {total} 个";
+    registration_summary(channels: usize, maximum: f32) => "{channels} channels aligned · max {maximum:.2} µm" / "已对齐 {channels} 个通道 · 最大 {maximum:.2} µm";
+    registration_deformation(maximum: f32) => "Deformation up to {maximum:.2} µm" / "形变达 {maximum:.2} µm";
+    registration_hint(name: &str) => "Aligns every channel onto {name}." / "把所有通道对齐到 {name}。";
     frame_number(frame: u32) => "Frame {frame}" / "第 {frame} 帧";
     detects_relation(field: &str, minimum: f32, maximum: f32, suffix: &str) => "Detects only where the mask relation keeps objects whose {field} lies in {minimum:.2}{suffix} to {maximum:.2}{suffix}." / "仅检测掩膜关系中 {field} 位于 {minimum:.2}{suffix} 至 {maximum:.2}{suffix} 的对象。";
     detects_filtered(name: &str) => "Detects inside filtered objects of {name}." / "在 {name} 的筛选后对象内部检测。";

@@ -26,6 +26,7 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
+use crate::registration::Registration;
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, mix};
 use crate::table_request::TableRequest;
@@ -63,6 +64,7 @@ pub struct Scene {
     pub mask_filter: Option<MaskFilter>,
     pub annotations: Annotations,
     drift: Drift,
+    registration: Registration,
     pub objects: Objects,
     pub coloc: Coloc,
     derived: Vec<Derived>,
@@ -95,6 +97,7 @@ impl Scene {
             mask_filter: None,
             annotations: Annotations::new(),
             drift: Drift::default(),
+            registration: Registration::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count),
             derived: Vec::new(),
@@ -1074,6 +1077,20 @@ impl Scene {
             return false;
         }
         self.drift = drift;
+        self.clear_object_coloc_all();
+        true
+    }
+
+    pub fn registration(&self) -> &Registration {
+        &self.registration
+    }
+
+    pub fn set_registration(&mut self, registration: Registration) -> bool {
+        if self.registration == registration {
+            return false;
+        }
+        self.registration = registration;
+        self.coloc.clear();
         self.clear_object_coloc_all();
         true
     }

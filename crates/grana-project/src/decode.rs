@@ -27,10 +27,10 @@ use grana_scene::{
     ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
     LabelExport, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
     ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
-    RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState, SmoothSpec,
-    SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    Registration, RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState,
+    SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
 };
-use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
+use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
 
 use crate::codec::{Decode, Reader};
@@ -364,6 +364,7 @@ impl Decode for SceneState {
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
             drift: Drift::decode(reader)?,
+            registration: Registration::decode(reader)?,
             annotations: AnnotationState::decode(reader)?,
         };
         state.check().map_err(|_| FAULT_SHAPE)?;
@@ -1807,6 +1808,30 @@ impl<T: Decode> Decode for Vec<T> {
             values.push(T::decode(reader)?);
         }
         Ok(values)
+    }
+}
+
+impl Decode for Registration {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let reference = reader.u32()? as usize;
+        let channels = reader.count(1)?;
+        if channels > CHANNEL_LIMIT {
+            return Err(FAULT_VALUE);
+        }
+        let mut warps = Vec::with_capacity(channels.min(1 << 10));
+        for _ in 0..channels {
+            warps.push(Warp::decode(reader)?);
+        }
+        if warps.is_empty() {
+            if reference != 0 {
+                return Err(FAULT_VALUE);
+            }
+            return Ok(Registration::default());
+        }
+        if reference >= warps.len() || !warps[reference].identity() {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Registration::new(reference, warps))
     }
 }
 

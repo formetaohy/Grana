@@ -17,6 +17,7 @@ use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::ObjectSetId;
 use crate::provenance::Provenance;
+use crate::registration::Registration;
 use crate::revision::Revision;
 use crate::scene::{Item, Scene, Selection};
 use crate::seed::Seeds;
@@ -38,6 +39,7 @@ pub struct SceneState {
     pub region: Region,
     pub clip: Clip,
     pub drift: Drift,
+    pub registration: Registration,
     pub mask: Option<u64>,
     pub mask_filter: Option<MaskFilter>,
     pub mask_radius: f32,
@@ -130,6 +132,7 @@ impl Scene {
             region: self.region,
             clip: self.clip,
             drift: self.drift().clone(),
+            registration: self.registration().clone(),
             mask: self.mask.map(|set| set.raw()),
             mask_filter: self.mask_filter,
             mask_radius: self.mask_radius,
@@ -188,6 +191,7 @@ impl Scene {
         self.region = state.region;
         self.clip = state.clip;
         self.set_drift(state.drift);
+        self.set_registration(state.registration);
         self.objects.restore(state.sets, &self.dataset);
         if derived {
             let specs = state
@@ -376,6 +380,7 @@ impl Scene {
             hash = mix(hash, 0);
         }
         hash = mix(hash, self.drift().digest());
+        hash = mix(hash, self.registration().digest());
         hash = mix(hash, self.coloc.revision().raw());
         hash
     }

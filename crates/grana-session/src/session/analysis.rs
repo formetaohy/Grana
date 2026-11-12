@@ -64,6 +64,7 @@ impl Session {
             Coloc(Box<grana_measure::ColocSeries>, Region),
             ObjectColoc(Box<grana_measure::ObjectColoc>),
             Drift(grana_scene::Drift),
+            Registration(grana_scene::Registration),
             Calibration {
                 source: usize,
                 psf: Box<grana_optics::MeasuredPsf>,
@@ -99,6 +100,9 @@ impl Session {
                     }
                     Poll::Event(Event::Drift(drift)) => {
                         updates.push((index, job, Update::Drift(drift)));
+                    }
+                    Poll::Event(Event::Registration(registration)) => {
+                        updates.push((index, job, Update::Registration(registration)));
                     }
                     Poll::Event(Event::Calibration {
                         source,
@@ -202,6 +206,13 @@ impl Session {
                     }
                     self.realign();
                 }
+                Update::Registration(registration) => {
+                    if let (Job::Register, Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.set_registration(registration);
+                    }
+                    self.install_channels();
+                    self.realign();
+                }
                 Update::Calibration {
                     source,
                     psf,
@@ -231,7 +242,8 @@ impl Session {
                         | Job::Relation { .. }
                         | Job::Coloc
                         | Job::ObjectColoc(_)
-                        | Job::Drift => {}
+                        | Job::Drift
+                        | Job::Register => {}
                         Job::Calibrate => {}
                     }
                 }
@@ -1280,6 +1292,54 @@ impl Session {
             return;
         };
         if scene.set_drift(grana_scene::Drift::default()) {
+            self.realign();
+        }
+    }
+
+    pub(super) fn start_registration(&mut self, reference: usize) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Register)
+        {
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error("the dataset is still opening"));
+            return;
+        };
+        let stored = {
+            let Some(scene) = self.scene.as_ref() else {
+                return;
+            };
+            if scene.base_channels() < 2 {
+                self.message = Some(Message::error("the dataset holds one channel to register"));
+                return;
+            }
+            if reference >= scene.base_channels() {
+                self.message = Some(Message::error(
+                    "the channel registration aligns a stored channel",
+                ));
+                return;
+            }
+            (scene.base_channels(), scene.time())
+        };
+        self.message = None;
+        self.record_progress(Job::Register, 0, 0, stored.0);
+        self.analysis.push(crate::register(
+            Job::Register,
+            channels,
+            grana_pipeline::RegisterRequest::new(reference, stored.1),
+        ));
+    }
+
+    pub(super) fn clear_registration(&mut self) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if scene.set_registration(grana_scene::Registration::default()) {
+            self.install_channels();
             self.realign();
         }
     }

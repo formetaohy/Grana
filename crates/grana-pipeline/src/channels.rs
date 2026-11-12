@@ -8,7 +8,7 @@ use grana_image::{Format, Image, Labels, Metric};
 use grana_object::Mask;
 use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
-use grana_scene::{DerivedSpec, MaskChannel, Operation, Scene};
+use grana_scene::{DerivedSpec, MaskChannel, Operation, Registration, Scene};
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, Pyramid, VoxelData, pad_brick,
 };
@@ -97,6 +97,7 @@ struct RestoreChannel {
     source: usize,
     psf: Psf,
     iterations: u32,
+    registration: u64,
     banks: Mutex<HashMap<u32, Arc<KernelBank>>>,
     tiles: Mutex<Vec<Arc<RestoredTile>>>,
 }
@@ -106,6 +107,7 @@ pub struct Channels {
     derived: Vec<Node>,
     pyramid: Pyramid,
     metric: Option<Metric>,
+    registration: Registration,
 }
 
 impl Channels {
@@ -120,6 +122,7 @@ impl Channels {
             reader,
             derived: Vec::new(),
             metric,
+            registration: scene.registration().clone(),
         };
         channels.derived = channels.derive(scene);
         channels
@@ -131,6 +134,7 @@ impl Channels {
             reader,
             derived: Vec::new(),
             metric: None,
+            registration: scene.registration().clone(),
         };
         channels.derived = channels.derive(scene);
         channels
@@ -143,6 +147,7 @@ impl Channels {
             reader,
             derived: Vec::new(),
             metric: None,
+            registration: Registration::default(),
         }
     }
 
@@ -190,7 +195,7 @@ impl Channels {
             let start = (limits[axis] - window) / 2;
             start..start + window
         });
-        let restore = RestoreChannel::new(source, psf, iterations);
+        let restore = RestoreChannel::new(source, psf, iterations, self.registration.digest());
         let reader = ChannelSource {
             channels: self,
             time: 0,
@@ -279,15 +284,8 @@ impl Channels {
     ) -> Result<VoxelData, ChannelsError> {
         let stored = self.stored_channels();
         if channel < stored {
-            return match &self.metric {
-                Some(metric) => metric
-                    .read_region(&self.reader, time, level, channel, ranges, warp)
-                    .map_err(ChannelsError::Image),
-                None => self
-                    .reader
-                    .read_region(time, level, channel, ranges, warp)
-                    .map_err(ChannelsError::Image),
-            };
+            let warp = self.aligned(channel, warp);
+            return self.read_stored(time, level, channel, ranges, &warp);
         }
         let node = self
             .derived
@@ -349,10 +347,13 @@ impl Channels {
             self.metric.is_none(),
             "a brick belongs to the source grid the renderer streams"
         );
-        let data = self
-            .reader
-            .read_brick(time, level, coord, warp)
-            .map_err(ChannelsError::Image)?;
+        let data = match self.registration.is_empty() {
+            true => self
+                .reader
+                .read_brick(time, level, coord, warp)
+                .map_err(ChannelsError::Image)?,
+            false => self.aligned_brick(time, level, coord, warp)?,
+        };
         if self.derived.is_empty() {
             return Ok(data);
         }
@@ -369,6 +370,75 @@ impl Channels {
                 ranges[1].end - ranges[1].start,
                 ranges[2].end - ranges[2].start,
             );
+            channels.push(pad_brick(
+                &region,
+                origin,
+                covered,
+                grid.origin(coord),
+                info.extent(),
+            ));
+        }
+        Ok(BrickData::new(channels))
+    }
+
+    pub fn stored_region(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+        warp: &Warp,
+    ) -> Result<VoxelData, ChannelsError> {
+        assert!(
+            channel < self.stored_channels(),
+            "a stored read names a stored channel"
+        );
+        self.read_stored(time, level, channel, ranges, warp)
+    }
+
+    fn aligned(&self, channel: usize, warp: &Warp) -> Warp {
+        warp.added(self.registration.warp(channel))
+    }
+
+    fn read_stored(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+        warp: &Warp,
+    ) -> Result<VoxelData, ChannelsError> {
+        match &self.metric {
+            Some(metric) => metric
+                .read_region(&self.reader, time, level, channel, ranges, warp)
+                .map_err(ChannelsError::Image),
+            None => self
+                .reader
+                .read_region(time, level, channel, ranges, warp)
+                .map_err(ChannelsError::Image),
+        }
+    }
+
+    fn aligned_brick(
+        &self,
+        time: u32,
+        level: usize,
+        coord: BrickCoord,
+        warp: &Warp,
+    ) -> Result<BrickData, ChannelsError> {
+        let info = self.level(level)?;
+        let grid = BrickGrid::new(info.extent());
+        let ranges = grid.padded_range(coord);
+        let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
+        let covered = Extent::new(
+            ranges[0].end - ranges[0].start,
+            ranges[1].end - ranges[1].start,
+            ranges[2].end - ranges[2].start,
+        );
+        let mut channels = Vec::with_capacity(self.stored_channels());
+        for channel in 0..self.stored_channels() {
+            let warp = self.aligned(channel, warp);
+            let region = self.read_stored(time, level, channel, &ranges, &warp)?;
             channels.push(pad_brick(
                 &region,
                 origin,
@@ -399,6 +469,7 @@ impl Channels {
                         spec.source(),
                         restore.psf().clone(),
                         restore.iterations(),
+                        self.registration.digest(),
                     )),
                     Operation::Bleach => Kind::Bleach {
                         source: spec.source(),
@@ -533,14 +604,21 @@ impl RegionSource for ChannelSource<'_> {
 }
 
 impl RestoreChannel {
-    fn new(source: usize, psf: Psf, iterations: u32) -> Self {
+    fn new(source: usize, psf: Psf, iterations: u32, registration: u64) -> Self {
         Self {
             source,
             psf,
             iterations,
+            registration,
             banks: Mutex::new(HashMap::new()),
             tiles: Mutex::new(Vec::new()),
         }
+    }
+
+    fn warp_digest(&self, warp: &Warp) -> u64 {
+        let mut digest = warp.digest();
+        digest = digest.rotate_left(17) ^ self.registration;
+        digest.wrapping_mul(0x0000_0100_0000_01b3)
     }
 
     fn bank(&self, site: &Site<'_>) -> Arc<KernelBank> {
@@ -617,7 +695,12 @@ impl RestoreChannel {
     }
 
     fn held(&self, site: &Site<'_>, coord: [u32; 3]) -> Option<Arc<RestoredTile>> {
-        let key = (site.time, site.level as u32, site.warp.digest(), coord);
+        let key = (
+            site.time,
+            site.level as u32,
+            self.warp_digest(site.warp),
+            coord,
+        );
         let mut tiles = self.tiles.lock().unwrap_or_else(|error| error.into_inner());
         let index = tiles.iter().position(|tile| tile.key == key)?;
         let tile = Arc::clone(&tiles[index]);
@@ -644,7 +727,12 @@ impl RestoreChannel {
         let ranges = expand(&core, &halo, &limits);
         let probe = expand(&ranges, &[0, 1, 2].map(|axis| halo[axis] + growth), &limits);
         TilePlan {
-            key: (site.time, site.level as u32, site.warp.digest(), coord),
+            key: (
+                site.time,
+                site.level as u32,
+                self.warp_digest(site.warp),
+                coord,
+            ),
             core,
             ranges,
             probe,

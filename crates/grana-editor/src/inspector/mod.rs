@@ -21,7 +21,7 @@ mod scene;
 use channel::channels;
 use display::display;
 use render::{clip, rendering, slice};
-use scene::{drift, mask, region};
+use scene::{drift, mask, region, registration};
 
 pub(crate) fn panel_width() -> f32 {
     crate::panel::SIDEBAR_WIDTH - crate::panel::SIDEBAR_PAD * 2.0
@@ -293,12 +293,14 @@ pub fn objects_body<'a>(
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
     let group_gap = ctx.theme().metrics.group_gap;
-    let roi = region(ctx, state, 0, 3);
-    let drift_card = drift(ctx, state, 1, 3);
-    let mask_card = mask(ctx, state, 2, 3);
-    let prep_group = grana_ui::column()
-        .gap(group_gap)
-        .children([roi, drift_card, mask_card]);
+    let roi = region(ctx, state, 0, 4);
+    let drift_card = drift(ctx, state, 1, 4);
+    let registration_card = registration(ctx, state, 2, 4);
+    let mask_card = mask(ctx, state, 3, 4);
+    let prep_group =
+        grana_ui::column()
+            .gap(group_gap)
+            .children([roi, drift_card, registration_card, mask_card]);
     let mut elements = vec![prep_group];
     elements.extend(crate::object_panel::view(ctx, state));
     elements

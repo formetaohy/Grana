@@ -79,6 +79,7 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::ObjectColoc => ("object colocalization", "对象共定位"),
         Action::ApplyProtocol => ("protocol replay", "重放协议"),
         Action::Drift => ("drift correction", "漂移校正"),
+        Action::Registration => ("channel registration", "通道配准"),
         Action::Keyframe => ("keyframes", "关键帧"),
         Action::TimelineFps => ("frame rate", "帧率"),
         Action::TimelineDuration => ("duration", "时长"),

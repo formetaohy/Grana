@@ -58,6 +58,37 @@ impl Warp {
         }
     }
 
+    pub fn added(&self, other: &Self) -> Self {
+        match (self.identity(), other.identity()) {
+            (true, _) => other.clone(),
+            (_, true) => self.clone(),
+            (false, false) => match (self, other) {
+                (Self::Shift(left), Self::Shift(right)) => {
+                    Self::Shift([0, 1, 2].map(|axis| left[axis] + right[axis]))
+                }
+                (Self::Field(grid), Self::Shift(offset))
+                | (Self::Shift(offset), Self::Field(grid)) => {
+                    Self::Field(Arc::new(grid.offset(*offset)))
+                }
+                (Self::Field(grid), Self::Field(other)) => match grid.same_lattice(other) {
+                    true => Self::Field(Arc::new(grid.combine(other, |left, right| {
+                        [0, 1, 2].map(|axis| left[axis] + right[axis])
+                    }))),
+                    false => Self::Field(Arc::new(Grid::sampled(
+                        grid.dims(),
+                        grid.origin(),
+                        grid.step(),
+                        |point| {
+                            let left = self.sample(point);
+                            let right = other.sample(point);
+                            [0, 1, 2].map(|axis| left[axis] + right[axis])
+                        },
+                    ))),
+                },
+            },
+        }
+    }
+
     pub fn translated(&self, delta: [f32; 3]) -> Self {
         match self {
             Self::Shift(offset) => Self::Shift([0, 1, 2].map(|axis| offset[axis] + delta[axis])),

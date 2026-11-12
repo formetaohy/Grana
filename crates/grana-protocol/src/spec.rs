@@ -891,30 +891,7 @@ impl DriftSpec {
             }
         }
         if let Some(lattice) = &self.lattice {
-            if lattice.dims.contains(&0) {
-                return Err(ProtocolError::Invalid(
-                    "the displacement lattice spans at least one node per axis".to_string(),
-                ));
-            }
-            if lattice.origin.iter().any(|value| !value.is_finite()) {
-                return Err(ProtocolError::Invalid(
-                    "the displacement lattice starts at a finite world point".to_string(),
-                ));
-            }
-            if lattice
-                .step
-                .iter()
-                .any(|value| !value.is_finite() || *value == 0.0)
-            {
-                return Err(ProtocolError::Invalid(
-                    "the displacement lattice steps by a nonzero world distance".to_string(),
-                ));
-            }
-            if !deformed {
-                return Err(ProtocolError::Invalid(
-                    "the displacement lattice carries no deformation".to_string(),
-                ));
-            }
+            lattice.checked(deformed)?;
         }
         let built = self.built().map_err(ProtocolError::Invalid)?;
         if !built[self.reference as usize].identity() {
@@ -961,10 +938,151 @@ impl DriftSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RegistrationSpec {
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lattice: Option<LatticeSpec>,
+    pub warps: Vec<WarpSpec>,
+}
+
+impl RegistrationSpec {
+    pub fn reference(&self) -> &str {
+        &self.reference
+    }
+
+    pub fn lattice(&self) -> Option<&LatticeSpec> {
+        self.lattice.as_ref()
+    }
+
+    pub fn warps(&self) -> &[WarpSpec] {
+        &self.warps
+    }
+
+    pub fn checked(&self) -> Result<(), ProtocolError> {
+        if self.warps.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "the channel registration carries no channel warps".to_string(),
+            ));
+        }
+        let mut deformed = false;
+        for (index, warp) in self.warps.iter().enumerate() {
+            match warp {
+                WarpSpec::Shift { offset: shift } => {
+                    if shift.iter().any(|value| {
+                        !value.is_finite() || value.abs() > grana_scene::Registration::LIMIT
+                    }) {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the registration offset of channel {} stays inside the volume",
+                            index + 1
+                        )));
+                    }
+                }
+                WarpSpec::Field { values } => {
+                    deformed = true;
+                    let lattice = self.lattice.as_ref().ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the deformation of channel {} names no displacement lattice",
+                            index + 1
+                        ))
+                    })?;
+                    if lattice.nodes() != values.len() as u64 {
+                        return Err(ProtocolError::Invalid(format!(
+                            "channel {} holds {} displacement nodes and its lattice holds {}",
+                            index + 1,
+                            values.len(),
+                            lattice.nodes()
+                        )));
+                    }
+                    if values.iter().flatten().any(|value| {
+                        !value.is_finite() || value.abs() > grana_scene::Registration::LIMIT
+                    }) {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the deformation of channel {} stays inside the volume",
+                            index + 1
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(lattice) = &self.lattice {
+            lattice.checked(deformed)?;
+        }
+        Ok(())
+    }
+
+    pub fn built(&self) -> Result<Vec<Warp>, String> {
+        let mut warps = Vec::with_capacity(self.warps.len());
+        for (index, warp) in self.warps.iter().enumerate() {
+            warps.push(match warp {
+                WarpSpec::Shift { offset } => Warp::shift(*offset),
+                WarpSpec::Field { values } => {
+                    let lattice = self.lattice.as_ref().ok_or_else(|| {
+                        format!(
+                            "the deformation of channel {} names no displacement lattice",
+                            index + 1
+                        )
+                    })?;
+                    if lattice.nodes() != values.len() as u64 {
+                        return Err(format!(
+                            "channel {} holds {} displacement nodes and its lattice holds {}",
+                            index + 1,
+                            values.len(),
+                            lattice.nodes()
+                        ));
+                    }
+                    Warp::field(Grid::new(
+                        lattice.dims,
+                        lattice.origin,
+                        lattice.step,
+                        values.clone(),
+                    ))
+                }
+            });
+        }
+        Ok(warps)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LatticeSpec {
     pub dims: [u32; 3],
     pub origin: [f32; 3],
     pub step: [f32; 3],
+}
+
+impl LatticeSpec {
+    fn nodes(&self) -> u64 {
+        self.dims[0] as u64 * self.dims[1] as u64 * self.dims[2] as u64
+    }
+
+    fn checked(&self, deformed: bool) -> Result<(), ProtocolError> {
+        if self.dims.contains(&0) {
+            return Err(ProtocolError::Invalid(
+                "the displacement lattice spans at least one node per axis".to_string(),
+            ));
+        }
+        if self.origin.iter().any(|value| !value.is_finite()) {
+            return Err(ProtocolError::Invalid(
+                "the displacement lattice starts at a finite world point".to_string(),
+            ));
+        }
+        if self
+            .step
+            .iter()
+            .any(|value| !value.is_finite() || *value == 0.0)
+        {
+            return Err(ProtocolError::Invalid(
+                "the displacement lattice steps by a nonzero world distance".to_string(),
+            ));
+        }
+        if !deformed {
+            return Err(ProtocolError::Invalid(
+                "the displacement lattice carries no deformation".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

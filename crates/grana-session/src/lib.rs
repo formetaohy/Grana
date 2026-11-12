@@ -19,7 +19,7 @@ pub use grana_project::{EXTENSION as PROJECT_EXTENSION, Export, NamedView, is_pr
 pub use grana_scene::slug;
 pub use job::{
     Analysis, calibration, coloc, detect, drift, grow, import, interop, object_coloc, recut,
-    relation, segment, track,
+    register, relation, segment, track,
 };
 pub use loader::Loader;
 pub use recent::{Entry as RecentEntry, Kind as RecentKind, Recent};

@@ -661,7 +661,8 @@ pub fn progress_caption(
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
         | grana_scene::Job::ObjectColoc(_)
-        | grana_scene::Job::Drift => grana_i18n::common::frames(language),
+        | grana_scene::Job::Drift
+        | grana_scene::Job::Register => grana_i18n::common::frames(language),
         grana_scene::Job::Calibrate => grana_i18n::common::beads(language),
     };
     let prefix = match job {
@@ -676,6 +677,7 @@ pub fn progress_caption(
         | grana_scene::Job::Coloc
         | grana_scene::Job::ObjectColoc(_)
         | grana_scene::Job::Drift
+        | grana_scene::Job::Register
         | grana_scene::Job::Calibrate => String::new(),
     };
     if progress.total > 0 {

@@ -380,6 +380,9 @@ pub enum Command {
         time: u32,
         offset: [f32; 3],
     },
+    RegisterChannels(usize),
+    CancelRegistration,
+    ClearRegistration,
     ExportColoc,
     ExportMeasure,
     ExportProvenance,
@@ -518,6 +521,7 @@ pub enum Action {
     ObjectColoc,
     ApplyProtocol,
     Drift,
+    Registration,
     Keyframe,
     TimelineFps,
     TimelineDuration,
@@ -748,6 +752,7 @@ impl Command {
             Self::ClearDrift | Self::SetDriftReference(_) | Self::SetDriftOffset { .. } => {
                 Edit::new(Action::Drift)
             }
+            Self::ClearRegistration => Edit::new(Action::Registration),
             Self::ApplyProtocol => Edit::new(Action::ApplyProtocol),
             Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
             Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),

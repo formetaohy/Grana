@@ -13,12 +13,8 @@ struct InstanceArgs {
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read_write> opaque_order: array<u32>;
 @group(1) @binding(2) var<storage, read_write> layer_order: array<u32>;
-@group(1) @binding(3) var<storage, read_write> behind_order: array<u32>;
-@group(1) @binding(4) var<storage, read_write> front_order: array<u32>;
 @group(1) @binding(5) var<storage, read_write> opaque_args: InstanceArgs;
 @group(1) @binding(6) var<storage, read_write> layer_args: InstanceArgs;
-@group(1) @binding(7) var<storage, read_write> behind_args: InstanceArgs;
-@group(1) @binding(8) var<storage, read_write> front_args: InstanceArgs;
 
 fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     for (var index = 0u; index < 6u; index += 1u) {

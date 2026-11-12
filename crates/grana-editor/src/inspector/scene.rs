@@ -259,6 +259,128 @@ pub(super) fn drift<'a>(
     )
 }
 
+pub(super) fn registration<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    index: usize,
+    count: usize,
+) -> Element<'a, Message> {
+    let language = ctx.language();
+    let registration = state.scene.registration();
+    let running = view::progress(state.jobs, grana_scene::Job::Register);
+    let channels = state.scene.base_channels();
+    let summary = if running.is_some() {
+        grana_i18n::inspector::registering(language).to_string()
+    } else if registration.is_empty() {
+        grana_i18n::inspector::inactive(language).to_string()
+    } else {
+        grana_i18n::inspector::registration_summary(
+            language,
+            registration.channels(),
+            registration.magnitude(),
+        )
+    };
+    let key = Key::new("registration");
+    let open = state.workspace.disclosures.is_open(key);
+    let mut children = Vec::new();
+    if open {
+        match running {
+            Some(progress) => {
+                let text = if progress.total > 0 {
+                    grana_i18n::inspector::registering_channels(
+                        language,
+                        progress.done,
+                        progress.total,
+                    )
+                } else {
+                    grana_i18n::inspector::registering(language).to_string()
+                };
+                let fraction = if progress.total > 0 {
+                    progress.done as f32 / progress.total as f32
+                } else {
+                    0.5
+                };
+                let spinner = view::spinner(ctx, 14.0);
+                let caption = view::caption(ctx, &text);
+                children.push(
+                    grana_ui::row()
+                        .gap(8.0)
+                        .align(Align::Center)
+                        .children([spinner, caption]),
+                );
+                children.push(grana_ui::widget::progress(fraction, card_width()));
+                children.push(
+                    view::button_with(
+                        ctx,
+                        grana_i18n::common::cancel(language),
+                        Role::SurfaceHigh,
+                        Length::Fill,
+                    )
+                    .press(Message::Command(Command::CancelRegistration)),
+                );
+            }
+            None => {
+                let reference = state.scene.selected.min(channels.saturating_sub(1));
+                children.push(
+                    view::button_with(
+                        ctx,
+                        grana_i18n::inspector::register_channels(language),
+                        Role::PrimaryContainer,
+                        Length::Fill,
+                    )
+                    .press(Message::Command(Command::RegisterChannels(reference))),
+                );
+                if registration.is_empty() {
+                    let name = state.scene.dataset.channels()[reference].name().to_string();
+                    children.push(view::weak(
+                        ctx,
+                        &grana_i18n::inspector::registration_hint(language, &name),
+                    ));
+                } else {
+                    children.push(view::caption(
+                        ctx,
+                        &grana_i18n::inspector::registration_summary(
+                            language,
+                            registration.channels(),
+                            registration.magnitude(),
+                        ),
+                    ));
+                    if registration.deformed() {
+                        children.push(view::weak(
+                            ctx,
+                            &grana_i18n::inspector::registration_deformation(
+                                language,
+                                registration.deformation(),
+                            ),
+                        ));
+                    }
+                    children.push(
+                        view::button_with(
+                            ctx,
+                            grana_i18n::inspector::clear_registration(language),
+                            Role::Error,
+                            Length::Fill,
+                        )
+                        .press(Message::Command(Command::ClearRegistration)),
+                    );
+                }
+            }
+        }
+    }
+    view::disclosure_group_card(
+        ctx,
+        (index, count),
+        key,
+        (
+            Icon::Layers,
+            grana_i18n::inspector::channel_registration(language),
+            Some(&summary),
+        ),
+        children,
+        open,
+    )
+}
+
 pub(super) fn frame_table<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,

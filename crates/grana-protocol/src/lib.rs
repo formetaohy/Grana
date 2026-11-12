@@ -20,10 +20,10 @@ pub use spec::{
     DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
     LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec,
     MetricSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec,
-    RatioSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SetSpec,
-    ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec,
-    SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WarpSpec,
-    WindowSpec,
+    RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec,
+    SetSpec, ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StitchSpec,
+    StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec,
+    WarpSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -45,6 +45,8 @@ pub struct Protocol {
     derived: Vec<DerivedSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drift: Option<DriftSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    registration: Option<RegistrationSpec>,
     #[serde(default, skip_serializing_if = "spec::is_f32_zero")]
     mask_radius: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +107,10 @@ impl Protocol {
 
     pub fn drift(&self) -> Option<&DriftSpec> {
         self.drift.as_ref()
+    }
+
+    pub fn registration(&self) -> Option<&RegistrationSpec> {
+        self.registration.as_ref()
     }
 
     pub fn mask_radius(&self) -> f32 {
@@ -326,6 +332,16 @@ impl Protocol {
                 drift.channel, drift.reference
             ));
             if drift.lattice.is_some() {
+                summary.push_str(" with deformation");
+            }
+        }
+        if let Some(registration) = &self.registration {
+            summary.push_str(&format!(
+                " · registered {} channels on {}",
+                registration.warps.len(),
+                registration.reference
+            ));
+            if registration.lattice.is_some() {
                 summary.push_str(" with deformation");
             }
         }

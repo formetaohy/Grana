@@ -168,6 +168,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 reference,
                 warps,
             } => run.align(*channel, *reference, warps)?,
+            Step::Register { reference, warps } => run.register(*reference, warps)?,
             Step::Detect {
                 set,
                 mask,
@@ -543,6 +544,22 @@ impl Run<'_, '_> {
         Ok(())
     }
 
+    fn register(&mut self, reference: usize, warps: &[grana_warp::Warp]) -> Result<(), String> {
+        let task = self.task;
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!(
+                "registering the channels of {}",
+                self.scene.dataset.channels()[reference].name()
+            ),
+        });
+        self.scene
+            .set_registration(grana_scene::Registration::new(reference, warps.to_vec()));
+        let reader = self.channels.image_shared();
+        self.channels = Channels::analysis(reader, &self.scene);
+        Ok(())
+    }
+
     fn detect(
         &mut self,
         id: ObjectSetId,
@@ -689,6 +706,7 @@ impl Run<'_, '_> {
             | RunEvent::Coloc { .. }
             | RunEvent::ObjectColoc { .. }
             | RunEvent::Drift(_)
+            | RunEvent::Registration(_)
             | RunEvent::Calibration { .. }
             | RunEvent::Done => {}
         };
@@ -1369,6 +1387,7 @@ fn detect(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::Registration(_)
         | RunEvent::Calibration { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
@@ -1414,6 +1433,7 @@ fn grow_frames(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::Registration(_)
         | RunEvent::Calibration { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
@@ -1457,6 +1477,7 @@ fn segment_frames(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::Registration(_)
         | RunEvent::Calibration { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}

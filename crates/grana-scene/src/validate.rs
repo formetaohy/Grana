@@ -79,6 +79,14 @@ impl SceneState {
                 "the drift correction covers another time series than its dataset",
             ));
         }
+        if !self.registration.is_empty()
+            && (self.registration.channels() != shape.base_channels
+                || self.registration.reference() >= self.registration.channels())
+        {
+            return Err(fault(
+                "the registration aligns another channel layout than its dataset",
+            ));
+        }
         if self
             .coloc
             .results

@@ -42,6 +42,8 @@ pub use self::segment::{SegmentRequest, segment};
 
 const FRAME_WORKERS: usize = 4;
 
+const MINIMUM_AGREEMENT: f32 = 0.1;
+
 const FILAMENT_BYTES: u64 = 512 << 20;
 
 const FILAMENT_VOXEL_BYTES: u64 = 12;
@@ -891,4 +893,199 @@ pub fn drift(
 
 fn window_dims(ranges: &[Range<u32>; 3]) -> [usize; 3] {
     [0, 1, 2].map(|axis| (ranges[axis].end - ranges[axis].start) as usize)
+}
+
+pub struct RegisterRequest {
+    reference: usize,
+    time: u32,
+}
+
+impl RegisterRequest {
+    pub fn new(reference: usize, time: u32) -> Self {
+        Self { reference, time }
+    }
+}
+
+pub fn register(
+    reader: &Channels,
+    request: RegisterRequest,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<(), String> {
+    let RegisterRequest { reference, time } = request;
+    let pyramid = reader.pyramid();
+    let channels = pyramid.channel_count();
+    if channels < 2 {
+        return Err("the dataset holds one channel to align".to_string());
+    }
+    if reference >= channels {
+        return Err(format!(
+            "the dataset has {channels} channels but channel {reference} was requested as the reference"
+        ));
+    }
+    if time >= pyramid.frame_count() {
+        return Err(format!(
+            "the dataset holds {} frames but frame {time} was requested",
+            pyramid.frame_count()
+        ));
+    }
+    let level = grana_analysis::drift_level(pyramid)
+        .ok_or_else(|| "the dataset is too small to align".to_string())?;
+    let ratio = (1u64 << level) as f32;
+    let base = pyramid.level(0);
+    let ranges = grana_analysis::drift_spans(pyramid, level);
+    let dims = window_dims(&ranges);
+    let anchor = grana_analysis::drift_window(
+        &reader
+            .stored_region(time, level, reference, &ranges, &Warp::IDENTITY)
+            .map_err(String::from)?,
+        &ranges,
+    );
+    let fine = if level > 0 {
+        let ranges = grana_analysis::drift_spans(pyramid, 0);
+        let dims = window_dims(&ranges);
+        let anchor = grana_analysis::drift_window(
+            &reader
+                .stored_region(time, 0, reference, &ranges, &Warp::IDENTITY)
+                .map_err(String::from)?,
+            &ranges,
+        );
+        Some((ranges, dims, anchor))
+    } else {
+        None
+    };
+    let plan = grana_analysis::drift_blocks(base.extent(), grana_analysis::BLOCK);
+    let mut anchors = Vec::with_capacity(plan.ranges.len());
+    let mut centres = Vec::with_capacity(plan.ranges.len());
+    for ranges in &plan.ranges {
+        anchors.push(grana_analysis::drift_window(
+            &reader
+                .stored_region(time, 0, reference, ranges, &Warp::IDENTITY)
+                .map_err(String::from)?,
+            ranges,
+        ));
+        centres.push(base.corner([
+            (ranges[0].start + ranges[0].end) as f32 / 2.0,
+            (ranges[1].start + ranges[1].end) as f32 / 2.0,
+            (ranges[2].start + ranges[2].end) as f32 / 2.0,
+        ]));
+    }
+    let scale = {
+        let voxel = base.voxel();
+        voxel[0].min(voxel[1]).min(voxel[2])
+    };
+    let lattice = grana_analysis::Lattice::covering(
+        base.bounds(),
+        plan.counts.map(|count| (count + 1).clamp(2, 5)),
+    );
+    let mut warps = Vec::with_capacity(channels);
+    sink(Event::Progress {
+        time: 0,
+        done: 0,
+        total: channels,
+    });
+    for channel in 0..channels {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if channel == reference {
+            warps.push(Warp::IDENTITY);
+            sink(Event::Progress {
+                time: 0,
+                done: channel + 1,
+                total: channels,
+            });
+            continue;
+        }
+        if pyramid.channels()[channel].intensity().span() <= 0.0 {
+            return Err(format!(
+                "the channel {} has no intensity range to align",
+                pyramid.channels()[channel].name()
+            ));
+        }
+        let moving = grana_analysis::drift_window(
+            &reader
+                .stored_region(time, level, channel, &ranges, &Warp::IDENTITY)
+                .map_err(String::from)?,
+            &ranges,
+        );
+        let coarse = grana_analysis::drift_shift(&anchor, &moving, dims);
+        let shift = match &fine {
+            None => coarse.map(|value| value * ratio),
+            Some((ranges, dims, fine_anchor)) => {
+                let whole = coarse.map(|value| (value * ratio).round());
+                let warp = Warp::shift(base.basis().transform(whole));
+                let moving = grana_analysis::drift_window(
+                    &reader
+                        .stored_region(time, 0, channel, ranges, &warp)
+                        .map_err(String::from)?,
+                    ranges,
+                );
+                let residual = grana_analysis::drift_shift(fine_anchor, &moving, *dims);
+                [0, 1, 2].map(|axis| whole[axis] + residual[axis])
+            }
+        };
+        let placed = Warp::shift(base.basis().transform(shift));
+        let (probe, matched, matched_level) = match &fine {
+            None => (&anchor, &ranges, level),
+            Some((ranges, _, anchor)) => (anchor, ranges, 0),
+        };
+        let moving = grana_analysis::drift_window(
+            &reader
+                .stored_region(time, matched_level, channel, matched, &placed)
+                .map_err(String::from)?,
+            matched,
+        );
+        let agreement = grana_analysis::drift_correlation(probe, &moving);
+        if !(agreement.is_finite() && agreement >= MINIMUM_AGREEMENT) {
+            return Err(format!(
+                "the channel {} shares too little structure with {} to align",
+                pyramid.channels()[channel].name(),
+                pyramid.channels()[reference].name()
+            ));
+        }
+        let global = base.basis().transform(shift);
+        let warp = if plan.ranges.len() < 4 {
+            Warp::shift(global)
+        } else {
+            let placement = Warp::shift(global);
+            let mut samples = Vec::with_capacity(plan.ranges.len());
+            for ((ranges, anchor), point) in plan.ranges.iter().zip(&anchors).zip(&centres) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let moving = grana_analysis::drift_window(
+                    &reader
+                        .stored_region(time, 0, channel, ranges, &placement)
+                        .map_err(String::from)?,
+                    ranges,
+                );
+                let residual = grana_analysis::drift_shift(anchor, &moving, window_dims(ranges));
+                let local = base.basis().transform(residual);
+                let shift = [0, 1, 2].map(|axis| global[axis] + local[axis]);
+                let weight = (grana_analysis::drift_correlation(anchor, &moving) - 0.2).max(0.0);
+                samples.push(grana_analysis::Sample {
+                    point: *point,
+                    shift,
+                    weight,
+                });
+            }
+            grana_analysis::drift_deform(&samples, lattice, scale)
+                .unwrap_or_else(|| Warp::shift(global))
+        };
+        warps.push(warp);
+        sink(Event::Progress {
+            time: 0,
+            done: channel + 1,
+            total: channels,
+        });
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    sink(Event::Registration(grana_scene::Registration::new(
+        reference, warps,
+    )));
+    sink(Event::Done);
+    Ok(())
 }

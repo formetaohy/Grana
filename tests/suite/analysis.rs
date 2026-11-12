@@ -1304,6 +1304,125 @@ fn aligns_a_sequence_with_a_deformation_field() {
 }
 
 #[test]
+fn registers_channels_onto_a_reference_channel() {
+    let dims = [128usize, 128, 32];
+    let extent = Extent::new(128, 128, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.3);
+    let reference = speckled(dims);
+    let translation = [3.0f32, -2.0, 1.0];
+    let drifting = moved(&reference, dims, translation);
+    let frame = Volume::new(
+        extent,
+        spacing,
+        vec![
+            Channel::new("reference", [0.4, 0.8, 1.0], VoxelData::F32(reference)),
+            Channel::new("drifting", [1.0, 0.4, 0.2], VoxelData::F32(drifting)),
+        ],
+    );
+    let image = Arc::new(
+        grana_image::Image::open(&Source::memory(VolumeSeries::new(vec![frame], 1.0)))
+            .expect("the synthetic pair opens"),
+    );
+    let stored = Channels::stored(Arc::clone(&image));
+    let mut found = None;
+    grana_pipeline::run::register(
+        &stored,
+        grana_pipeline::RegisterRequest::new(0, 0),
+        &AtomicBool::new(false),
+        &mut |event| {
+            if let grana_pipeline::Event::Registration(registration) = event {
+                found = Some(registration);
+            }
+        },
+    )
+    .expect("the synthetic pair registers");
+    let registration = found.expect("the registration reaches its sink");
+    assert_eq!(registration.reference(), 0, "the first channel holds still");
+    assert!(
+        registration.warp(0).identity(),
+        "the reference channel holds still"
+    );
+    let shift = registration.warp(1).translation();
+    for (axis, expected) in shift.iter().zip([0.3f32, -0.2, 0.3]) {
+        assert!(
+            (axis - expected).abs() < 0.05,
+            "the drifting channel reports {shift:?}"
+        );
+    }
+    let pyramid = image.pyramid().clone();
+    let mut scene = Scene::new(Dataset::synthetic("pair", pyramid.clone()));
+    assert!(
+        scene.set_registration(registration.clone()),
+        "the scene accepts the registration"
+    );
+    let channels = Channels::render(Arc::clone(&image), &scene);
+    let ranges = [8..120u32, 8..120, 2..30];
+    let read = |channels: &Channels, channel: usize| {
+        let data = channels
+            .read_region(0, 0, channel, &ranges, &grana_warp::Warp::IDENTITY)
+            .expect("the channel reads");
+        let mut values = vec![0.0f32; data.voxel_count()];
+        data.write_values(&mut values);
+        values
+    };
+    let still = read(&stored, 0);
+    let departed = correlation(&still, &read(&stored, 1));
+    let restored = correlation(&still, &read(&channels, 1));
+    assert!(
+        departed < 0.6,
+        "the drifting channel departs from the reference to {departed}"
+    );
+    assert!(
+        restored > 0.95,
+        "the registration restores the drifting channel to {restored} from {departed}"
+    );
+    let spots = scene.add_object(grana_scene::ObjectKind::Spots, 0);
+    scene.install(
+        spots,
+        0,
+        ObjectFrame::Spots(grana_object::SpotSet::new(
+            0,
+            vec![Spot::new([6.0, 6.0, 3.0], 1.0, 0.5)],
+            grana_object::IntensityTable::new(
+                2,
+                vec![
+                    grana_object::SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0),
+                    grana_object::SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0),
+                ],
+            ),
+        )),
+    );
+    let protocol = grana_protocol::Protocol::capture(
+        &scene,
+        &grana_scene::Measure::new(),
+        None,
+        Vec::new(),
+        None,
+    )
+    .expect("the protocol captures the registration");
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored_protocol =
+        grana_protocol::Protocol::from_json(&text).expect("the protocol parses");
+    assert_eq!(restored_protocol, protocol);
+    let mut staged = Scene::new(Dataset::synthetic("pair", pyramid));
+    let steps = restored_protocol
+        .stage(&mut staged)
+        .expect("the protocol stages the registration");
+    let staged_warps = steps
+        .steps()
+        .iter()
+        .find_map(|step| match step {
+            grana_protocol::Step::Register { reference, warps } => {
+                assert_eq!(*reference, 0);
+                Some(warps.clone())
+            }
+            _ => None,
+        })
+        .expect("the protocol stages its registration");
+    assert_eq!(staged_warps, registration.warps());
+}
+
+#[test]
 fn shifts_a_read_by_a_world_translation() {
     let extent = Extent::new(16, 16, 8);
     let spacing = Spacing::new(1.0, 1.0, 2.0);

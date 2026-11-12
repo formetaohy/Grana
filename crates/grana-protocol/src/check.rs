@@ -138,6 +138,21 @@ impl Protocol {
             }
             drift.checked()?;
         }
+        if let Some(registration) = &self.registration {
+            validate(&registration.reference, "a channel name")?;
+            if !self.channels.is_empty()
+                && !self
+                    .channels
+                    .iter()
+                    .any(|channel| channel.name == registration.reference)
+            {
+                return Err(ProtocolError::Invalid(format!(
+                    "the channel registration holds the channel {}, which the protocol does not present",
+                    registration.reference
+                )));
+            }
+            registration.checked()?;
+        }
         for set in &self.sets {
             validate(&set.name, "a set name")?;
             if let Some(material) = set.material {

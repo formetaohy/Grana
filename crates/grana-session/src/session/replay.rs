@@ -141,6 +141,18 @@ impl Session {
                     self.advance_step();
                     continue;
                 }
+                Step::Register { reference, warps } => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.set_registration(grana_scene::Registration::new(
+                            reference,
+                            warps.clone(),
+                        ));
+                    }
+                    self.install_channels();
+                    self.realign();
+                    self.advance_step();
+                    continue;
+                }
                 Step::Detect {
                     set,
                     mask,

@@ -9,6 +9,10 @@ pub enum Step {
         reference: u32,
         warps: Vec<Warp>,
     },
+    Register {
+        reference: usize,
+        warps: Vec<Warp>,
+    },
     Detect {
         set: ObjectSetId,
         mask: Option<ObjectSetId>,
@@ -60,7 +64,7 @@ pub enum Step {
 impl Step {
     pub fn installs(&self) -> Option<ObjectSetId> {
         match self {
-            Self::Drift { .. } => None,
+            Self::Drift { .. } | Self::Register { .. } => None,
             Self::Detect { set, .. }
             | Self::Import { set }
             | Self::Filter { set, .. }

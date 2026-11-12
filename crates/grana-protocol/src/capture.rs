@@ -12,9 +12,9 @@ use crate::{
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec,
     LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec,
     MeasuredSpec, MetricSpec, NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol,
-    ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec,
-    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec,
-    ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
+    ProtocolError, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RenderSpec, RestoreSpec,
+    SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec,
+    TransferSpec, ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -285,19 +285,16 @@ impl Protocol {
             drift => Some(DriftSpec {
                 channel: channels[drift.channel()].clone(),
                 reference: drift.reference(),
-                lattice: lattice(drift)?,
-                warps: drift
-                    .warps()
-                    .iter()
-                    .map(|warp| match warp.field_grid() {
-                        Some(grid) => WarpSpec::Field {
-                            values: grid.values().to_vec(),
-                        },
-                        None => WarpSpec::Shift {
-                            offset: warp.translation(),
-                        },
-                    })
-                    .collect(),
+                lattice: lattice(drift.warps())?,
+                warps: drift.warps().iter().map(warp_spec).collect(),
+            }),
+        };
+        let registration = match scene.registration() {
+            registration if registration.is_empty() => None,
+            registration => Some(RegistrationSpec {
+                reference: channels[registration.reference()].clone(),
+                lattice: lattice(registration.warps())?,
+                warps: registration.warps().iter().map(warp_spec).collect(),
             }),
         };
         let mask_filter = scene.mask_filter.and_then(|filter| {
@@ -336,6 +333,7 @@ impl Protocol {
             channels: specs,
             derived,
             drift,
+            registration,
             mask_radius: scene.mask_radius,
             mask_filter,
             annotations,
@@ -873,9 +871,20 @@ impl MeasureSpec {
     }
 }
 
-fn lattice(drift: &grana_scene::Drift) -> Result<Option<LatticeSpec>, ProtocolError> {
+fn warp_spec(warp: &grana_warp::Warp) -> WarpSpec {
+    match warp.field_grid() {
+        Some(grid) => WarpSpec::Field {
+            values: grid.values().to_vec(),
+        },
+        None => WarpSpec::Shift {
+            offset: warp.translation(),
+        },
+    }
+}
+
+fn lattice(warps: &[grana_warp::Warp]) -> Result<Option<LatticeSpec>, ProtocolError> {
     let mut lattice: Option<&grana_warp::Grid> = None;
-    for warp in drift.warps() {
+    for warp in warps {
         let Some(grid) = warp.field_grid() else {
             continue;
         };

@@ -10,7 +10,7 @@ use crate::task::{Poll, Task};
 use grana_pipeline::Event;
 use grana_pipeline::run::{
     self, ColocRequest, DetectRequest, DriftRequest, GrowRequest, ImportRequest, InteropRequest,
-    SegmentRequest,
+    RegisterRequest, SegmentRequest,
 };
 
 pub struct Analysis {
@@ -163,6 +163,12 @@ pub fn object_coloc(
 pub fn drift(job: Job, channels: Arc<Channels>, request: DriftRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::drift(&channels, request, cancel, sink)
+    })
+}
+
+pub fn register(job: Job, channels: Arc<Channels>, request: RegisterRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::register(&channels, request, cancel, sink)
     })
 }
 

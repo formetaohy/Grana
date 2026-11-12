@@ -54,7 +54,7 @@ impl Recipe {
 
     pub(crate) fn step_sets(&self) -> Vec<ObjectSetId> {
         match self.step() {
-            Step::Drift { .. } => Vec::new(),
+            Step::Drift { .. } | Step::Register { .. } => Vec::new(),
             Step::Detect { set, .. }
             | Step::Import { set }
             | Step::Filter { set, .. }
@@ -78,6 +78,7 @@ impl Recipe {
     pub(crate) fn job(&self) -> Option<Job> {
         match self.step() {
             Step::Drift { .. } => Some(Job::Drift),
+            Step::Register { .. } => Some(Job::Register),
             Step::Detect { set, .. } => Some(Job::Detect(*set)),
             Step::Import { set } => Some(Job::Import(*set)),
             Step::Relation {

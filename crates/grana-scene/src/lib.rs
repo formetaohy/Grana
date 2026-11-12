@@ -15,6 +15,7 @@ mod object;
 mod object_set;
 mod objects;
 mod provenance;
+mod registration;
 mod relation;
 mod revision;
 mod scene;
@@ -52,6 +53,7 @@ pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, 
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
 pub use provenance::{Criteria, FilterRange, IntensitySource, LassoPath, Provenance, Recipe};
+pub use registration::Registration;
 pub use relation::Relation;
 pub use revision::{Revision, Revisions};
 pub use scene::{Item, Scene, Selection};

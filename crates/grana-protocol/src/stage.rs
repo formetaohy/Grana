@@ -8,6 +8,7 @@ use grana_scene::{
     ObjectKind, ObjectSetId, ObjectSetKey, Scene, TrackColor,
 };
 use grana_volume::Region;
+use grana_warp::Warp;
 
 use crate::step::Step;
 use crate::{ColorSpec, FilterSpec, LassoSpec, Protocol, ProtocolError, SourceSpec};
@@ -90,6 +91,31 @@ impl Protocol {
             {
                 return Err(ProtocolError::Invalid(
                     "the drift reference frame holds still".to_string(),
+                ));
+            }
+        }
+        if let Some(registration) = &self.registration {
+            channel(&names, registration.reference())?;
+            if registration.warps().len() != scene.base_channels() {
+                return Err(ProtocolError::Invalid(format!(
+                    "the channel registration aligns {} channels and the dataset holds {}",
+                    registration.warps().len(),
+                    scene.base_channels()
+                )));
+            }
+            let built = registration.built().map_err(ProtocolError::Invalid)?;
+            let reference = built.iter().position(Warp::identity).ok_or_else(|| {
+                ProtocolError::Invalid(
+                    "the channel registration holds no still reference channel".to_string(),
+                )
+            })?;
+            if names
+                .get(reference)
+                .is_none_or(|name| name != registration.reference())
+            {
+                return Err(ProtocolError::Invalid(
+                    "the channel registration holds still on a channel other than its reference"
+                        .to_string(),
                 ));
             }
         }
@@ -310,6 +336,14 @@ impl Protocol {
             mask_radius: self.mask_radius,
         };
         builder.scene.set_drift(grana_scene::Drift::default());
+        builder
+            .scene
+            .set_registration(grana_scene::Registration::default());
+        if let Some(registration) = &self.registration {
+            let warps = registration.built().map_err(ProtocolError::Invalid)?;
+            let reference = channel(&names, registration.reference())?;
+            builder.steps.push(Step::Register { reference, warps });
+        }
         if let Some(drift) = &self.drift {
             let warps = drift.built().map_err(ProtocolError::Invalid)?;
             builder.steps.push(Step::Drift {
@@ -1009,6 +1043,9 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     let drift = steps
         .iter()
         .position(|step| matches!(step, Step::Drift { .. }));
+    let registration = steps
+        .iter()
+        .position(|step| matches!(step, Step::Register { .. }));
     let mut ready = HashMap::<ObjectSetId, usize>::new();
     let mut base = HashMap::<ObjectSetId, usize>::new();
     for (index, step) in steps.iter().enumerate() {
@@ -1024,12 +1061,16 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     let mut merges = HashMap::<ObjectSetId, usize>::new();
     for (index, step) in steps.iter().enumerate() {
         match step {
-            Step::Drift { .. } => {}
-            Step::Import { .. } => dependencies[index].extend(drift),
+            Step::Drift { .. } | Step::Register { .. } => {}
+            Step::Import { .. } => {
+                dependencies[index].extend(drift);
+                dependencies[index].extend(registration);
+            }
             Step::Detect {
                 set, mask, filter, ..
             } => {
                 dependencies[index].extend(drift);
+                dependencies[index].extend(registration);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
                 }
@@ -1082,6 +1123,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
             }
             Step::ObjectColoc { set, .. } => {
                 dependencies[index].extend(drift);
+                dependencies[index].extend(registration);
                 dependencies[index].push(settled(&ready, *set)?);
             }
             Step::Labels { set } => {
@@ -1089,6 +1131,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
             }
             Step::Coloc { mask, filter, .. } => {
                 dependencies[index].extend(drift);
+                dependencies[index].extend(registration);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
                 }

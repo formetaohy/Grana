@@ -17,8 +17,9 @@ use grana_object::{
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
-    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
-    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, Registration,
+    RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
+    TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 use grana_warp::Warp;
@@ -250,6 +251,7 @@ impl Encode for SceneState {
         self.sets.encode(writer);
         self.coloc.encode(writer);
         self.drift.encode(writer);
+        self.registration.encode(writer);
         self.annotations.encode(writer);
     }
 }
@@ -313,6 +315,16 @@ impl Encode for AnnotationKind {
             for value in end {
                 writer.f32(value);
             }
+        }
+    }
+}
+
+impl Encode for Registration {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.reference() as u32);
+        writer.count(self.warps().len());
+        for warp in self.warps() {
+            warp.encode(writer);
         }
     }
 }
