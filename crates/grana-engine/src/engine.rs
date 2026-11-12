@@ -241,7 +241,9 @@ impl Engine {
         self.info = info;
         self.request = Some(request);
         self.display = frame.size;
-        self.image_revision = self.image_revision.wrapping_add(1);
+        if info.samples != 0 {
+            self.image_revision = self.image_revision.wrapping_add(1);
+        }
         if self.phase == Phase::Refine {
             if let Some(last) = self.drawn_at {
                 self.observe(now.saturating_duration_since(last));

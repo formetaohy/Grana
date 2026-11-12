@@ -227,21 +227,26 @@ impl App {
         self.interacting = false;
         self.fit_view();
         let mut delay = self.render(interacting).unwrap_or(Duration::MAX);
+        self.mark_presented();
         if animating {
             delay = Duration::ZERO;
+        } else if self.workspace.playback.playing {
+            let fluid = interacting || self.frame_info().samples == 0;
+            delay = delay.min(if fluid {
+                STREAM_POLL
+            } else {
+                PLAYBACK_INTERVAL
+            });
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
         } else if self.session.scene().is_some() && self.converging() {
             delay = Duration::ZERO;
         }
-        if self.streaming() {
+        if !self.workspace.playback.playing && self.streaming() {
             delay = delay.min(STREAM_POLL);
         }
         if self.session.stitching() {
             delay = delay.min(STREAM_POLL);
-        }
-        if self.workspace.playback.playing {
-            delay = delay.min(PLAYBACK_INTERVAL);
         }
         if self.export.running() {
             delay = delay.min(EXPORT_POLL);

@@ -36,21 +36,10 @@ impl App {
             return;
         }
         let current = scene.time();
-        let now = Instant::now();
-        let samples = self.frame_info().samples;
-        if samples == 0 {
-            return;
-        }
         if self.presented_time != Some(current) {
-            self.presented_time = Some(current);
-            if self
-                .last_advance
-                .is_none_or(|last| now.duration_since(last) >= PLAYBACK_INTERVAL)
-            {
-                self.last_advance = Some(now);
-            }
             return;
         }
+        let now = Instant::now();
         let due = self
             .last_advance
             .is_none_or(|last| now.duration_since(last) >= PLAYBACK_INTERVAL);
@@ -62,6 +51,16 @@ impl App {
         self.session.set_time(next);
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);
+    }
+
+    pub(super) fn mark_presented(&mut self) {
+        if self.frame_info().samples == 0 {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        self.presented_time = Some(scene.time());
     }
 
     pub(super) fn advance_animation(&mut self) {

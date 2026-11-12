@@ -180,7 +180,7 @@ impl App {
 
     pub(super) fn converging(&self) -> bool {
         let info = self.frame_info();
-        info.samples < SAMPLE_LIMIT || info.fading
+        (info.samples > 0 && info.samples < SAMPLE_LIMIT) || info.fading
     }
 
     pub(super) fn streaming(&self) -> bool {

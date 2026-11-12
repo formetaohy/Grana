@@ -238,8 +238,8 @@ impl Renderer {
                 levels,
             },
         );
-        let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
-        info.settled = !replan;
+        let replan = planned.as_ref() != Some(&residency);
+        info.settled = *settled == Some(residency);
         info.truncated = info.view.level == ladder.base && info.view.visible > info.view.demand;
         let ready_at_time = info.settled && (!assured || !info.truncated);
         let ready = if holding || assured {
@@ -249,6 +249,18 @@ impl Renderer {
         };
         if ready_at_time {
             *awaited = None;
+        }
+        let reserved = if replan {
+            feedback.as_mut().and_then(Readback::reserve)
+        } else {
+            None
+        };
+        if holding && !ready_at_time && reserved.is_none() {
+            target.samples = 0;
+            info.samples = 0;
+            info.rebuilt = false;
+            info.fading = false;
+            return *info;
         }
         let slot_grid = atlas.slot_grid();
         let mut prepared = [usize::MAX; BAND + 2];
@@ -466,7 +478,6 @@ impl Renderer {
                 );
             }
             planner.encode(&mut encoder, scene_table.group());
-            *planned = Some(residency);
         }
         if target.samples < samples && ready {
             target.samples += 1;
@@ -897,9 +908,8 @@ impl Renderer {
             }
         }
         info.fading = ready && fade.is_some();
-        if replan
+        if let Some(slot) = reserved
             && let Some(feedback) = feedback.as_mut()
-            && let Some(slot) = feedback.reserve()
         {
             for band in 0..BAND {
                 feedback.stage(
@@ -911,6 +921,7 @@ impl Renderer {
                 );
             }
             frames[slot] = Some(residency);
+            *planned = Some(residency);
         }
         queue.submit([encoder.finish()]);
         convergence.register();
