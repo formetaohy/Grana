@@ -147,6 +147,7 @@ pub(crate) fn write_picture(
     pixels: &[u16],
     scene: &Scene,
     time: u32,
+    physical: f32,
     transparent: bool,
 ) -> Result<(), String> {
     let name = if scene.dataset.frame_count() > 1 {
@@ -161,6 +162,8 @@ pub(crate) fn write_picture(
             samples: 4,
             pixels,
             name: &name,
+            physical: Some([physical, physical]),
+            interval: Some(scene.dataset.frame_interval()),
         }
     } else {
         rgb = strip_alpha(pixels);
@@ -169,6 +172,8 @@ pub(crate) fn write_picture(
             samples: 3,
             pixels: &rgb,
             name: &name,
+            physical: Some([physical, physical]),
+            interval: Some(scene.dataset.frame_interval()),
         }
     };
     grana_tiff::write(path, &picture).map_err(|error| error.to_string())

@@ -62,7 +62,7 @@ impl Session {
                 self.analysis.push(crate::interop(
                     Job::Import(set),
                     channels,
-                    InteropRequest::new(&file, drift),
+                    InteropRequest::new(&file, drift, Arc::clone(&self.store)),
                 ));
             }
             Provenance::Detection

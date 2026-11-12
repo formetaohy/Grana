@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use grana_display::Coloring;
 use grana_measure::{ChildField, ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
 use grana_scene::{
     Annotation, AnnotationState, Criteria, FilterRange, LassoPath, MaskFilter, ObjectColor,
-    ObjectSetId, ObjectSetKey, Scene, TrackColor,
+    ObjectKind, ObjectSetId, ObjectSetKey, Scene, TrackColor,
 };
 use grana_volume::Region;
 
@@ -688,7 +689,13 @@ impl Builder<'_> {
         named: bool,
         track: Option<crate::TrackSpec>,
     ) -> Result<ObjectSetId, ProtocolError> {
-        let id = self.scene.import_tracks(file);
+        let kind = match grana_interop::geff::kind(Path::new(file)) {
+            Ok(grana_interop::Kind::Points) => ObjectKind::Spots,
+            Ok(grana_interop::Kind::Surfaces) => ObjectKind::Surfaces,
+            Ok(grana_interop::Kind::Filaments) => ObjectKind::Filaments,
+            Err(_) => ObjectKind::Spots,
+        };
+        let id = self.scene.import_graph(file, kind);
         self.rename(id, name, named)?;
         self.apply_track(id, track);
         self.steps.push(Step::Import { set: id });

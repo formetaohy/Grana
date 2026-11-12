@@ -305,6 +305,16 @@ fn exports_a_sixteen_bit_ome_tiff() {
     let size = export_image(&gpu, Destination::Image { path: path.clone() }, false);
     let image = grana_tiff::Image::open(&path).expect("the wide export reads");
     assert_eq!(image.name(), "export");
+    let bytes = std::fs::read(&path).expect("the wide export reads as bytes");
+    let metadata = String::from_utf8_lossy(&bytes);
+    assert!(
+        metadata.contains("PhysicalSizeX=\"") && metadata.contains("PhysicalSizeY=\""),
+        "the wide export records its physical pixel size"
+    );
+    assert!(
+        metadata.contains("TimeIncrement=\""),
+        "the wide export records its frame interval"
+    );
     let pyramid = image.pyramid();
     assert_eq!(pyramid.channel_count(), 3);
     assert_eq!(pyramid.level(0).extent(), Extent::new(size[0], size[1], 1));

@@ -12,12 +12,21 @@ use zarrs::storage::WritableStorageTraits;
 use crate::error::Error;
 use crate::lineage::{Detection, Edge, Lineage};
 
-pub const VERSION: &str = "0.4.0";
+pub use crate::graph::{Kind, Mesh, Objects, Related, Shape};
+
+pub const VERSION: &str = "1.0.0";
 
 const CONTINUE: u8 = 0;
 const GAP: u8 = 1;
 const DIVISION: u8 = 2;
 const MERGE: u8 = 3;
+
+const POLYGON: &str = "polygon";
+const MESH_VERTEX: &str = "grana_mesh_vertex";
+const MESH_NORMAL: &str = "grana_mesh_normal";
+const MESH_INDEX: &str = "grana_mesh_index";
+const INTENSITY: &str = "grana_intensity";
+const POLYGON_LIMIT: usize = 96;
 
 pub struct Axes {
     pub spacing: [f32; 3],
@@ -39,6 +48,37 @@ impl Axes {
 }
 
 pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
+    store(path, lineage, axes, None)
+}
+
+pub fn write_objects(
+    path: &Path,
+    lineage: &Lineage,
+    axes: &Axes,
+    objects: &Objects,
+) -> Result<(), Error> {
+    if objects.shapes().len() != lineage.len() || objects.labels().len() != lineage.len() {
+        return Err(Error::Graph {
+            detail: "the graph shapes do not cover every node".to_string(),
+        });
+    }
+    if objects
+        .intensities()
+        .is_some_and(|intensities| intensities.len() != lineage.len())
+    {
+        return Err(Error::Graph {
+            detail: "the graph intensities do not cover every node".to_string(),
+        });
+    }
+    store(path, lineage, axes, Some(objects))
+}
+
+fn store(
+    path: &Path,
+    lineage: &Lineage,
+    axes: &Axes,
+    objects: Option<&Objects>,
+) -> Result<(), Error> {
     if lineage.is_empty() {
         return Err(Error::Graph {
             detail: "the graph carries no node".to_string(),
@@ -56,7 +96,7 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
         detail: format!("{}: {error}", path.display()),
     })?);
     let limits = bounds(lineage);
-    let attributes = json!({
+    let mut attributes = json!({
         "geff": {
             "geff_version": VERSION,
             "directed": true,
@@ -117,6 +157,7 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
             },
         },
     });
+    declare_objects(&mut attributes, objects);
     group(
         &store,
         "/",
@@ -135,6 +176,11 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
         "lineage_id",
     ] {
         group(&store, &format!("/nodes/props/{name}"), Map::new())?;
+    }
+    if let Some(objects) = objects {
+        for name in object_properties(objects.kind(), objects.channels() > 0) {
+            group(&store, &format!("/nodes/props/{name}"), Map::new())?;
+        }
     }
     group(&store, "/edges", Map::new())?;
     group(&store, "/edges/props", Map::new())?;
@@ -249,7 +295,11 @@ pub fn write(path: &Path, lineage: &Lineage, axes: &Axes) -> Result<(), Error> {
         data_type::uint8(),
         0u8,
         &kind,
-    )
+    )?;
+    if let Some(objects) = objects {
+        write_shapes(&store, lineage, objects)?;
+    }
+    Ok(())
 }
 
 pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
@@ -398,18 +448,482 @@ pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
     if let Some(recorded) = recorded {
         validate_kinds(&lineage, &keys, &recorded)?;
     }
-    validate_identity(&lineage, &slots, tracklets.as_deref(), Kind::Tracklet)?;
-    validate_identity(&lineage, &slots, lineages.as_deref(), Kind::Lineage)?;
+    validate_identity(&lineage, &slots, tracklets.as_deref(), Identity::Tracklet)?;
+    validate_identity(&lineage, &slots, lineages.as_deref(), Identity::Lineage)?;
     Ok(lineage)
 }
 
+pub fn kind(path: &Path) -> Result<Kind, Error> {
+    let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Read {
+        detail: format!("{}: {error}", path.display()),
+    })?);
+    let graph = graph(&store)?;
+    let attributes = graph.attributes();
+    let metadata = attributes
+        .get("geff")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::Format {
+            detail: "the group carries no geff metadata".to_string(),
+        })?;
+    graph_kind(metadata)
+}
+
+pub fn read_objects(path: &Path, default_radius: f32) -> Result<(Lineage, Objects), Error> {
+    let lineage = read(path, default_radius)?;
+    let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Read {
+        detail: format!("{}: {error}", path.display()),
+    })?);
+    let graph = graph(&store)?;
+    let attributes = graph.attributes();
+    let metadata = attributes
+        .get("geff")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::Format {
+            detail: "the group carries no geff metadata".to_string(),
+        })?;
+    let kind = graph_kind(metadata)?;
+    let related = read_related(metadata)?;
+    let ids = read_ids(&store, &graph, "nodes/ids")?;
+    if ids.len() != lineage.len() {
+        return Err(Error::Format {
+            detail: "the graph nodes do not cover its detections".to_string(),
+        });
+    }
+    let labels = read_labels(&store, &graph, &ids, metadata)?;
+    let intensities = read_intensities(&store, &graph, &ids, metadata)?;
+    let shapes = read_shapes(&store, &graph, &ids, kind)?;
+    let mut pending = HashMap::with_capacity(ids.len());
+    for (slot, id) in ids.iter().enumerate() {
+        pending.insert(*id, (shapes[slot].clone(), labels[slot]));
+    }
+    let mut ordered = Vec::with_capacity(lineage.len());
+    let mut ordered_labels = Vec::with_capacity(lineage.len());
+    for detection in lineage.detections() {
+        let (shape, label) = pending
+            .remove(&detection.id())
+            .ok_or_else(|| Error::Format {
+                detail: format!("the node {} carries no shape", detection.id()),
+            })?;
+        ordered.push(shape);
+        ordered_labels.push(label);
+    }
+    let objects = Objects::new(kind, ordered, ordered_labels, intensities, related);
+    Ok((lineage, objects))
+}
+
+fn graph_kind(metadata: &Map<String, Value>) -> Result<Kind, Error> {
+    let Some(name) = metadata
+        .get("extra")
+        .and_then(|extra| extra.get("grana"))
+        .and_then(|grana| grana.get("kind"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(Kind::Points);
+    };
+    Kind::parse(name).ok_or_else(|| Error::Format {
+        detail: format!("the graph kind {name} is unknown"),
+    })
+}
+
+fn read_related(metadata: &Map<String, Value>) -> Result<Vec<Related>, Error> {
+    let Some(list) = metadata.get("related_objects").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut related = Vec::with_capacity(list.len());
+    for value in list {
+        let object = value.as_object().ok_or_else(|| Error::Format {
+            detail: "a related object is not an object".to_string(),
+        })?;
+        let object_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|kind| !kind.trim().is_empty())
+            .ok_or_else(|| Error::Format {
+                detail: "a related object names no type".to_string(),
+            })?;
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| Error::Format {
+                detail: format!("the related {object_type} names no path"),
+            })?;
+        let node_prop = match object.get("node_prop") {
+            Some(Value::String(name)) if !name.trim().is_empty() => Some(name.as_str()),
+            Some(_) => {
+                return Err(Error::Format {
+                    detail: format!("the related {object_type} names an invalid node property"),
+                });
+            }
+            None => None,
+        };
+        related.push(Related::new(object_type, path, node_prop));
+    }
+    Ok(related)
+}
+
+fn read_labels(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    ids: &[u64],
+    metadata: &Map<String, Value>,
+) -> Result<Vec<u64>, Error> {
+    if !declared(metadata, "seg_id") {
+        return Ok((1..=ids.len() as u64).collect());
+    }
+    let values = read_ids(store, graph, "nodes/props/seg_id/values")?;
+    if values.len() != ids.len() {
+        return Err(Error::Format {
+            detail: "the segmentation labels do not cover every node".to_string(),
+        });
+    }
+    if values.contains(&0) {
+        return Err(Error::Format {
+            detail: "a segmentation label is zero".to_string(),
+        });
+    }
+    Ok(values)
+}
+
+fn read_intensities(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    ids: &[u64],
+    metadata: &Map<String, Value>,
+) -> Result<Option<Vec<Vec<grana_object::SampleStatistics>>>, Error> {
+    if !declared(metadata, INTENSITY) {
+        return Ok(None);
+    }
+    let path = format!("nodes/props/{INTENSITY}/values");
+    let array = open(store, graph, &path)?;
+    let shape = array.shape().to_vec();
+    if shape.len() != 3 || shape[0] as usize != ids.len() || shape[2] != 5 || shape[1] == 0 {
+        return Err(Error::Format {
+            detail: "the graph intensities are not shaped as nodes by channels by five statistics"
+                .to_string(),
+        });
+    }
+    let channels = shape[1] as usize;
+    let values = read_values::<f32>(&array, &path)?;
+    if values.len() != ids.len() * channels * 5 {
+        return Err(Error::Format {
+            detail: "the graph intensities do not cover every node".to_string(),
+        });
+    }
+    let mut intensities = Vec::with_capacity(ids.len());
+    for (slot, id) in ids.iter().enumerate() {
+        let mut samples = Vec::with_capacity(channels);
+        for channel in 0..channels {
+            let base = (slot * channels + channel) * 5;
+            let values = &values[base..base + 5];
+            if !values.iter().all(|value| value.is_finite())
+                || values[1] > values[0]
+                || values[0] > values[2]
+                || values[3] < 0.0
+                || values[4] < 0.0
+            {
+                return Err(Error::Format {
+                    detail: format!("the node {id} carries degenerate intensities"),
+                });
+            }
+            samples.push(grana_object::SampleStatistics::new(
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                f64::from(values[4]),
+            ));
+        }
+        intensities.push(samples);
+    }
+    Ok(Some(intensities))
+}
+
+fn read_shapes(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    ids: &[u64],
+    kind: Kind,
+) -> Result<Vec<Shape>, Error> {
+    if kind == Kind::Points {
+        return Ok(vec![Shape::Point; ids.len()]);
+    }
+    let vertices = read_variable(store, graph, MESH_VERTEX, 2)?;
+    let normals = read_variable(store, graph, MESH_NORMAL, 2)?;
+    let indices = read_variable(store, graph, MESH_INDEX, 1)?;
+    let vertex_values = read_numbers(store, graph, &format!("nodes/props/{MESH_VERTEX}/data"))?;
+    let normal_values = read_numbers(store, graph, &format!("nodes/props/{MESH_NORMAL}/data"))?;
+    let index_values = read_ids(store, graph, &format!("nodes/props/{MESH_INDEX}/data"))?;
+    let statistics = match kind {
+        Kind::Surfaces => Statistics::surfaces(store, graph, ids.len())?,
+        Kind::Filaments => Statistics::filaments(store, graph, ids.len())?,
+        Kind::Points => unreachable!("a point graph carries no mesh"),
+    };
+    let mut shapes = Vec::with_capacity(ids.len());
+    for (slot, id) in ids.iter().enumerate() {
+        let positions = mesh_positions(&vertices, &vertex_values, slot, *id)?;
+        let normals = mesh_positions(&normals, &normal_values, slot, *id)?;
+        let triangles = mesh_indices(&indices, &index_values, slot, *id)?;
+        let mesh = Mesh::new(positions, normals, triangles);
+        shapes.push(match kind {
+            Kind::Surfaces => Shape::Surface {
+                mesh,
+                voxels: statistics.voxels[slot],
+                volume: statistics.volume[slot],
+                area: statistics.area[slot],
+            },
+            Kind::Filaments => Shape::Filament {
+                mesh,
+                length: statistics.length[slot],
+                diameter: statistics.diameter[slot],
+                volume: statistics.volume[slot],
+                branches: statistics.branches[slot],
+                terminals: statistics.terminals[slot],
+                junctions: statistics.junctions[slot],
+                nodes: statistics.nodes[slot],
+            },
+            Kind::Points => unreachable!("a point graph carries no mesh"),
+        });
+    }
+    Ok(shapes)
+}
+
+struct Statistics {
+    voxels: Vec<u64>,
+    volume: Vec<f64>,
+    area: Vec<f64>,
+    length: Vec<f64>,
+    diameter: Vec<f64>,
+    branches: Vec<u32>,
+    terminals: Vec<u32>,
+    junctions: Vec<u32>,
+    nodes: Vec<u32>,
+}
+
+impl Statistics {
+    fn surfaces(
+        store: &Arc<FilesystemStore>,
+        graph: &Group<FilesystemStore>,
+        count: usize,
+    ) -> Result<Self, Error> {
+        let voxels = read_node_ids(store, graph, "grana_voxels", count)?;
+        let volume = read_node_numbers(store, graph, "grana_volume", count)?;
+        let area = read_node_numbers(store, graph, "grana_area", count)?;
+        if voxels.contains(&0)
+            || volume
+                .iter()
+                .any(|value| !(value.is_finite() && *value > 0.0))
+            || area
+                .iter()
+                .any(|value| !(value.is_finite() && *value > 0.0))
+        {
+            return Err(Error::Format {
+                detail: "a surface carries a degenerate statistic".to_string(),
+            });
+        }
+        Ok(Self {
+            voxels,
+            volume,
+            area,
+            length: Vec::new(),
+            diameter: Vec::new(),
+            branches: Vec::new(),
+            terminals: Vec::new(),
+            junctions: Vec::new(),
+            nodes: Vec::new(),
+        })
+    }
+
+    fn filaments(
+        store: &Arc<FilesystemStore>,
+        graph: &Group<FilesystemStore>,
+        count: usize,
+    ) -> Result<Self, Error> {
+        let length = read_node_numbers(store, graph, "grana_length", count)?;
+        let diameter = read_node_numbers(store, graph, "grana_diameter", count)?;
+        let volume = read_node_numbers(store, graph, "grana_volume", count)?;
+        let branches = read_node_ids(store, graph, "grana_branches", count)?;
+        let terminals = read_node_ids(store, graph, "grana_terminals", count)?;
+        let junctions = read_node_ids(store, graph, "grana_junctions", count)?;
+        let nodes = read_node_ids(store, graph, "grana_nodes", count)?;
+        let finite = |values: &[f64]| values.iter().all(|value| value.is_finite() && *value > 0.0);
+        if !finite(&length) || !finite(&diameter) || !finite(&volume) {
+            return Err(Error::Format {
+                detail: "a filament carries a degenerate statistic".to_string(),
+            });
+        }
+        let mut topology = Vec::with_capacity(count);
+        for slot in 0..count {
+            let branches = u32::try_from(branches[slot]).map_err(|_| Error::Format {
+                detail: "a filament counts more branches than a graph holds".to_string(),
+            })?;
+            let terminals = u32::try_from(terminals[slot]).map_err(|_| Error::Format {
+                detail: "a filament counts more terminals than a graph holds".to_string(),
+            })?;
+            let junctions = u32::try_from(junctions[slot]).map_err(|_| Error::Format {
+                detail: "a filament counts more junctions than a graph holds".to_string(),
+            })?;
+            let nodes = u32::try_from(nodes[slot]).map_err(|_| Error::Format {
+                detail: "a filament counts more nodes than a graph holds".to_string(),
+            })?;
+            if branches == 0 || nodes == 0 || terminals > 2 * branches || junctions >= branches {
+                return Err(Error::Format {
+                    detail: "a filament carries an inconsistent topology".to_string(),
+                });
+            }
+            topology.push((branches, terminals, junctions, nodes));
+        }
+        Ok(Self {
+            voxels: Vec::new(),
+            volume,
+            area: Vec::new(),
+            length,
+            diameter,
+            branches: topology.iter().map(|value| value.0).collect(),
+            terminals: topology.iter().map(|value| value.1).collect(),
+            junctions: topology.iter().map(|value| value.2).collect(),
+            nodes: topology.iter().map(|value| value.3).collect(),
+        })
+    }
+}
+
+fn read_node_ids(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    name: &str,
+    count: usize,
+) -> Result<Vec<u64>, Error> {
+    let values = read_ids(store, graph, &format!("nodes/props/{name}/values"))?;
+    if values.len() != count {
+        return Err(Error::Format {
+            detail: format!("the {name} property does not cover every node"),
+        });
+    }
+    Ok(values)
+}
+
+fn read_node_numbers(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    name: &str,
+    count: usize,
+) -> Result<Vec<f64>, Error> {
+    let values = read_numbers(store, graph, &format!("nodes/props/{name}/values"))?;
+    if values.len() != count {
+        return Err(Error::Format {
+            detail: format!("the {name} property does not cover every node"),
+        });
+    }
+    Ok(values)
+}
+
+struct Variable {
+    offsets: Vec<u64>,
+    dims: Vec<Vec<u64>>,
+}
+
+fn read_variable(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    name: &str,
+    dims: usize,
+) -> Result<Variable, Error> {
+    let path = format!("nodes/props/{name}/values");
+    let array = open(store, graph, &path)?;
+    let shape = array.shape().to_vec();
+    if shape.len() != 2 || shape[1] as usize != dims + 1 {
+        return Err(Error::Format {
+            detail: format!("the {name} rows do not hold {dims} dimensions"),
+        });
+    }
+    let width = shape[1] as usize;
+    let values = read_ids(store, graph, &path)?;
+    if values.len() != shape[0] as usize * width {
+        return Err(Error::Format {
+            detail: format!("the {name} rows do not cover every node"),
+        });
+    }
+    let mut offsets = Vec::with_capacity(shape[0] as usize);
+    let mut rows = Vec::with_capacity(shape[0] as usize);
+    for row in values.chunks(width) {
+        offsets.push(row[0]);
+        rows.push(row[1..].to_vec());
+    }
+    Ok(Variable {
+        offsets,
+        dims: rows,
+    })
+}
+
+fn mesh_positions(
+    rows: &Variable,
+    values: &[f64],
+    slot: usize,
+    id: u64,
+) -> Result<Vec<[f32; 3]>, Error> {
+    let dims = &rows.dims[slot];
+    if dims.len() != 2 || dims[1] != 3 || dims[0] == 0 {
+        return Err(Error::Format {
+            detail: format!("the node {id} carries no vertex mesh"),
+        });
+    }
+    let count = dims[0] as usize;
+    let start = usize::try_from(rows.offsets[slot]).map_err(|_| Error::Format {
+        detail: format!("the node {id} names an unaddressable vertex offset"),
+    })?;
+    let end = start.checked_add(count * 3).ok_or_else(|| Error::Format {
+        detail: format!("the node {id} names an unaddressable vertex range"),
+    })?;
+    let values = values.get(start..end).ok_or_else(|| Error::Format {
+        detail: format!("the node {id} names vertices outside the graph"),
+    })?;
+    let mut positions = Vec::with_capacity(count);
+    for point in values.chunks(3) {
+        let position = [point[0] as f32, point[1] as f32, point[2] as f32];
+        if position.iter().any(|value| !value.is_finite()) {
+            return Err(Error::Format {
+                detail: format!("the node {id} carries a non finite vertex"),
+            });
+        }
+        positions.push(position);
+    }
+    Ok(positions)
+}
+
+fn mesh_indices(rows: &Variable, values: &[u64], slot: usize, id: u64) -> Result<Vec<u32>, Error> {
+    let dims = &rows.dims[slot];
+    if dims.len() != 1 || dims[0] == 0 || !dims[0].is_multiple_of(3) {
+        return Err(Error::Format {
+            detail: format!("the node {id} carries no triangle mesh"),
+        });
+    }
+    let count = dims[0] as usize;
+    let start = usize::try_from(rows.offsets[slot]).map_err(|_| Error::Format {
+        detail: format!("the node {id} names an unaddressable index offset"),
+    })?;
+    let end = start.checked_add(count).ok_or_else(|| Error::Format {
+        detail: format!("the node {id} names an unaddressable index range"),
+    })?;
+    let values = values.get(start..end).ok_or_else(|| Error::Format {
+        detail: format!("the node {id} names indices outside the graph"),
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            u32::try_from(*value).map_err(|_| Error::Format {
+                detail: format!("the node {id} names an unaddressable vertex"),
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy)]
-enum Kind {
+enum Identity {
     Tracklet,
     Lineage,
 }
 
-impl Kind {
+impl Identity {
     fn name(self) -> &'static str {
         match self {
             Self::Tracklet => "tracklet",
@@ -705,7 +1219,7 @@ fn validate_identity(
     lineage: &Lineage,
     slots: &HashMap<u64, usize>,
     values: Option<&[u64]>,
-    kind: Kind,
+    kind: Identity,
 ) -> Result<(), Error> {
     let Some(values) = values else {
         return Ok(());
@@ -964,6 +1478,469 @@ fn property(name: &str, dtype: &str, unit: Option<&str>) -> Value {
         property.insert("unit".to_string(), json!(unit));
     }
     Value::Object(property)
+}
+
+fn variable(name: &str, dtype: &str) -> Value {
+    let mut property = Map::new();
+    property.insert("identifier".to_string(), json!(name));
+    property.insert("dtype".to_string(), json!(dtype));
+    property.insert("varlength".to_string(), json!(true));
+    Value::Object(property)
+}
+
+fn declare_objects(attributes: &mut Value, objects: Option<&Objects>) {
+    let Some(objects) = objects else {
+        return;
+    };
+    let Some(geff) = attributes.get_mut("geff").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(properties) = geff
+        .get_mut("node_props_metadata")
+        .and_then(Value::as_object_mut)
+    {
+        properties.insert("seg_id".to_string(), property("seg_id", "uint64", None));
+        properties.insert(POLYGON.to_string(), variable(POLYGON, "float32"));
+        if objects.kind() != Kind::Points {
+            properties.insert(MESH_VERTEX.to_string(), variable(MESH_VERTEX, "float32"));
+            properties.insert(MESH_NORMAL.to_string(), variable(MESH_NORMAL, "float32"));
+            properties.insert(MESH_INDEX.to_string(), variable(MESH_INDEX, "uint32"));
+            match objects.kind() {
+                Kind::Surfaces => {
+                    properties.insert(
+                        "grana_voxels".to_string(),
+                        property("grana_voxels", "uint64", None),
+                    );
+                    properties.insert(
+                        "grana_volume".to_string(),
+                        property("grana_volume", "float32", None),
+                    );
+                    properties.insert(
+                        "grana_area".to_string(),
+                        property("grana_area", "float32", None),
+                    );
+                }
+                Kind::Filaments => {
+                    for name in ["grana_length", "grana_diameter", "grana_volume"] {
+                        properties.insert(name.to_string(), property(name, "float32", None));
+                    }
+                    for name in [
+                        "grana_branches",
+                        "grana_terminals",
+                        "grana_junctions",
+                        "grana_nodes",
+                    ] {
+                        properties.insert(name.to_string(), property(name, "uint32", None));
+                    }
+                }
+                Kind::Points => {}
+            }
+        }
+        if objects.channels() > 0 {
+            properties.insert(INTENSITY.to_string(), property(INTENSITY, "float32", None));
+        }
+    }
+    if let Some(grana) = geff
+        .get_mut("extra")
+        .and_then(|extra| extra.get_mut("grana"))
+        .and_then(Value::as_object_mut)
+    {
+        grana.insert("kind".to_string(), json!(objects.kind().name()));
+    }
+    geff.insert("polygon".to_string(), json!(POLYGON));
+    if !objects.related().is_empty() {
+        let related = objects
+            .related()
+            .iter()
+            .map(|related| {
+                let mut value = Map::new();
+                value.insert("type".to_string(), json!(related.object_type()));
+                value.insert("path".to_string(), json!(related.path()));
+                if let Some(property) = related.node_prop() {
+                    value.insert("node_prop".to_string(), json!(property));
+                }
+                Value::Object(value)
+            })
+            .collect::<Vec<_>>();
+        geff.insert("related_objects".to_string(), Value::Array(related));
+    }
+}
+
+fn object_properties(kind: Kind, intensities: bool) -> Vec<&'static str> {
+    let mut names = vec!["seg_id", POLYGON];
+    match kind {
+        Kind::Points => {}
+        Kind::Surfaces => names.extend([
+            MESH_VERTEX,
+            MESH_NORMAL,
+            MESH_INDEX,
+            "grana_voxels",
+            "grana_volume",
+            "grana_area",
+        ]),
+        Kind::Filaments => names.extend([
+            MESH_VERTEX,
+            MESH_NORMAL,
+            MESH_INDEX,
+            "grana_length",
+            "grana_diameter",
+            "grana_volume",
+            "grana_branches",
+            "grana_terminals",
+            "grana_junctions",
+            "grana_nodes",
+        ]),
+    }
+    if intensities {
+        names.push(INTENSITY);
+    }
+    names
+}
+
+fn write_shapes(
+    store: &Arc<FilesystemStore>,
+    lineage: &Lineage,
+    objects: &Objects,
+) -> Result<(), Error> {
+    let count = lineage.len() as u64;
+    array(
+        store,
+        "/nodes/props/seg_id/values",
+        vec![count],
+        data_type::uint64(),
+        0u64,
+        objects.labels(),
+    )?;
+    let mut polygons = Vec::with_capacity(lineage.len() * 3);
+    let mut points = Vec::new();
+    let mut vertex_rows = Vec::new();
+    let mut vertex_values = Vec::new();
+    let mut normal_rows = Vec::new();
+    let mut normal_values = Vec::new();
+    let mut index_rows = Vec::new();
+    let mut index_values = Vec::new();
+    for (detection, shape) in lineage.detections().iter().zip(objects.shapes()) {
+        let polygon = footprint(detection, shape);
+        polygons.extend([points.len() as u64, polygon.len() as u64, 3]);
+        for point in &polygon {
+            points.extend_from_slice(point);
+        }
+        if let Some(mesh) = shape.mesh() {
+            vertex_rows.extend([vertex_values.len() as u64, mesh.positions().len() as u64, 3]);
+            normal_rows.extend([normal_values.len() as u64, mesh.normals().len() as u64, 3]);
+            index_rows.extend([index_values.len() as u64, mesh.indices().len() as u64]);
+            for position in mesh.positions() {
+                vertex_values.extend_from_slice(position);
+            }
+            for normal in mesh.normals() {
+                normal_values.extend_from_slice(normal);
+            }
+            index_values.extend_from_slice(mesh.indices());
+        }
+    }
+    array(
+        store,
+        "/nodes/props/polygon/values",
+        vec![count, 3],
+        data_type::uint64(),
+        0u64,
+        &polygons,
+    )?;
+    array(
+        store,
+        "/nodes/props/polygon/data",
+        vec![points.len() as u64],
+        data_type::float32(),
+        0.0f32,
+        &points,
+    )?;
+    if objects.kind() != Kind::Points {
+        array(
+            store,
+            &format!("/nodes/props/{MESH_VERTEX}/values"),
+            vec![count, 3],
+            data_type::uint64(),
+            0u64,
+            &vertex_rows,
+        )?;
+        array(
+            store,
+            &format!("/nodes/props/{MESH_VERTEX}/data"),
+            vec![vertex_values.len() as u64],
+            data_type::float32(),
+            0.0f32,
+            &vertex_values,
+        )?;
+        array(
+            store,
+            &format!("/nodes/props/{MESH_NORMAL}/values"),
+            vec![count, 3],
+            data_type::uint64(),
+            0u64,
+            &normal_rows,
+        )?;
+        array(
+            store,
+            &format!("/nodes/props/{MESH_NORMAL}/data"),
+            vec![normal_values.len() as u64],
+            data_type::float32(),
+            0.0f32,
+            &normal_values,
+        )?;
+        array(
+            store,
+            &format!("/nodes/props/{MESH_INDEX}/values"),
+            vec![count, 2],
+            data_type::uint64(),
+            0u64,
+            &index_rows,
+        )?;
+        array(
+            store,
+            &format!("/nodes/props/{MESH_INDEX}/data"),
+            vec![index_values.len() as u64],
+            data_type::uint32(),
+            0u32,
+            &index_values,
+        )?;
+        write_statistics(store, objects)?;
+    }
+    if let Some(intensities) = objects.intensities() {
+        let channels = objects.channels();
+        let mut values = Vec::with_capacity(intensities.len() * channels * 5);
+        for samples in intensities {
+            for sample in samples {
+                values.extend([
+                    sample.mean(),
+                    sample.minimum(),
+                    sample.maximum(),
+                    sample.deviation(),
+                    sample.sum() as f32,
+                ]);
+            }
+        }
+        array(
+            store,
+            &format!("/nodes/props/{INTENSITY}/values"),
+            vec![count, channels as u64, 5],
+            data_type::float32(),
+            0.0f32,
+            &values,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_statistics(store: &Arc<FilesystemStore>, objects: &Objects) -> Result<(), Error> {
+    let mut voxels = Vec::new();
+    let mut volume = Vec::new();
+    let mut area = Vec::new();
+    let mut length = Vec::new();
+    let mut diameter = Vec::new();
+    let mut branches = Vec::new();
+    let mut terminals = Vec::new();
+    let mut junctions = Vec::new();
+    let mut nodes = Vec::new();
+    for shape in objects.shapes() {
+        match shape {
+            Shape::Surface {
+                voxels: count,
+                volume: measured,
+                area: spanned,
+                ..
+            } => {
+                voxels.push(*count);
+                volume.push(*measured as f32);
+                area.push(*spanned as f32);
+            }
+            Shape::Filament {
+                length: measured,
+                diameter: width,
+                volume: occupied,
+                branches: forks,
+                terminals: ends,
+                junctions: joins,
+                nodes: points,
+                ..
+            } => {
+                length.push(*measured as f32);
+                diameter.push(*width as f32);
+                volume.push(*occupied as f32);
+                branches.push(*forks);
+                terminals.push(*ends);
+                junctions.push(*joins);
+                nodes.push(*points);
+            }
+            Shape::Point => {
+                return Err(Error::Graph {
+                    detail: "a point graph carries no surface statistics".to_string(),
+                });
+            }
+        }
+    }
+    let count = objects.shapes().len() as u64;
+    match objects.kind() {
+        Kind::Surfaces => {
+            array(
+                store,
+                "/nodes/props/grana_voxels/values",
+                vec![count],
+                data_type::uint64(),
+                0u64,
+                &voxels,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_volume/values",
+                vec![count],
+                data_type::float32(),
+                0.0f32,
+                &volume,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_area/values",
+                vec![count],
+                data_type::float32(),
+                0.0f32,
+                &area,
+            )?;
+        }
+        Kind::Filaments => {
+            array(
+                store,
+                "/nodes/props/grana_length/values",
+                vec![count],
+                data_type::float32(),
+                0.0f32,
+                &length,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_diameter/values",
+                vec![count],
+                data_type::float32(),
+                0.0f32,
+                &diameter,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_volume/values",
+                vec![count],
+                data_type::float32(),
+                0.0f32,
+                &volume,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_branches/values",
+                vec![count],
+                data_type::uint32(),
+                0u32,
+                &branches,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_terminals/values",
+                vec![count],
+                data_type::uint32(),
+                0u32,
+                &terminals,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_junctions/values",
+                vec![count],
+                data_type::uint32(),
+                0u32,
+                &junctions,
+            )?;
+            array(
+                store,
+                "/nodes/props/grana_nodes/values",
+                vec![count],
+                data_type::uint32(),
+                0u32,
+                &nodes,
+            )?;
+        }
+        Kind::Points => {}
+    }
+    Ok(())
+}
+
+fn footprint(detection: &Detection, shape: &Shape) -> Vec<[f32; 3]> {
+    let origin = detection.position();
+    let projected = match shape.mesh() {
+        Some(mesh) => mesh
+            .positions()
+            .iter()
+            .map(|position| [position[0] - origin[0], position[1] - origin[1]])
+            .collect::<Vec<_>>(),
+        None => {
+            let radius = detection.radius();
+            (0..12)
+                .map(|step| {
+                    let angle = std::f32::consts::TAU * step as f32 / 12.0;
+                    [radius * angle.cos(), radius * angle.sin()]
+                })
+                .collect()
+        }
+    };
+    let mut hull = convex_hull(projected);
+    if hull.len() < 3 {
+        hull = vec![
+            [-detection.radius(), -detection.radius()],
+            [detection.radius(), -detection.radius()],
+            [detection.radius(), detection.radius()],
+            [-detection.radius(), detection.radius()],
+        ];
+    }
+    if hull.len() > POLYGON_LIMIT {
+        let stride = hull.len().div_ceil(POLYGON_LIMIT);
+        hull = hull.into_iter().step_by(stride).collect();
+    }
+    hull.into_iter()
+        .map(|point| [point[0], point[1], 0.0])
+        .collect()
+}
+
+fn convex_hull(mut points: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
+    points.sort_by(|left, right| {
+        left[0]
+            .total_cmp(&right[0])
+            .then(left[1].total_cmp(&right[1]))
+    });
+    points.dedup();
+    if points.len() <= 2 {
+        return points;
+    }
+    let cross = |origin: [f32; 2], first: [f32; 2], second: [f32; 2]| {
+        (first[0] - origin[0]) * (second[1] - origin[1])
+            - (first[1] - origin[1]) * (second[0] - origin[0])
+    };
+    let mut lower = Vec::new();
+    for point in &points {
+        while lower.len() >= 2
+            && cross(lower[lower.len() - 2], lower[lower.len() - 1], *point) <= 0.0
+        {
+            lower.pop();
+        }
+        lower.push(*point);
+    }
+    let mut upper = Vec::new();
+    for point in points.iter().rev() {
+        while upper.len() >= 2
+            && cross(upper[upper.len() - 2], upper[upper.len() - 1], *point) <= 0.0
+        {
+            upper.pop();
+        }
+        upper.push(*point);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 struct Limits {

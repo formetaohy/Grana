@@ -1,12 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use grana_chart::Page;
 use grana_text::{Contour, Curve};
-use grana_ui::{Color, Corners, Mark, Rect, Vec2};
+use grana_ui::{
+    Align, Color, Corners, Level, Mark, Painter, Recorder, Rect, TextStyle, Theme, Vec2,
+};
 
 pub struct Recorded {
     size: [u32; 2],
     marks: Vec<Mark>,
+    image: Option<PathBuf>,
 }
 
 impl Recorded {
@@ -14,7 +17,20 @@ impl Recorded {
         Self {
             size: page.size(),
             marks: page.marks(),
+            image: None,
         }
+    }
+
+    pub fn picture(path: &Path, title: &str, detail: &str) -> Result<Self, String> {
+        let raster = grana_raster::read(path)
+            .map_err(|error| format!("the snapshot {} cannot be read: {error}", path.display()))?;
+        let size = raster.size();
+        let marks = caption(size, title, detail);
+        Ok(Self {
+            size,
+            marks,
+            image: Some(path.to_path_buf()),
+        })
     }
 
     pub fn size(&self) -> [u32; 2] {
@@ -23,6 +39,10 @@ impl Recorded {
 
     pub fn marks(&self) -> &[Mark] {
         &self.marks
+    }
+
+    pub fn image(&self) -> Option<&Path> {
+        self.image.as_deref()
     }
 
     pub fn encode(pages: &[Self]) -> Result<String, String> {
@@ -36,6 +56,11 @@ impl Recorded {
                         .iter()
                         .map(MarkRecord::of)
                         .collect::<Result<Vec<_>, String>>()?,
+                    image: page
+                        .image
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned()),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -59,7 +84,17 @@ impl Recorded {
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|error| format!("{} holds no recorded page: {error}", path.display()))?;
-        Self::decode(text)
+        let mut pages = Self::decode(text)?;
+        if let Some(parent) = path.parent() {
+            for page in &mut pages {
+                if let Some(image) = &page.image
+                    && image.is_relative()
+                {
+                    page.image = Some(parent.join(image));
+                }
+            }
+        }
+        Ok(pages)
     }
 }
 
@@ -67,6 +102,8 @@ impl Recorded {
 struct PageRecord {
     size: [u32; 2],
     marks: Vec<MarkRecord>,
+    #[serde(default)]
+    image: Option<String>,
 }
 
 impl PageRecord {
@@ -78,6 +115,7 @@ impl PageRecord {
                 .into_iter()
                 .map(MarkRecord::into_mark)
                 .collect::<Result<Vec<_>, String>>()?,
+            image: self.image.map(PathBuf::from),
         })
     }
 }
@@ -411,4 +449,44 @@ fn color_of(color: Color) -> [f32; 4] {
 
 fn into_color(color: [f32; 4]) -> Color {
     Color::rgba(color[0], color[1], color[2], color[3])
+}
+
+fn caption(size: [u32; 2], title: &str, detail: &str) -> Vec<Mark> {
+    let mut recorder = Recorder::new(Theme::dark());
+    let theme = *recorder.theme();
+    let palette = theme.palette;
+    let points = Vec2::new(size[0] as f32, size[1] as f32);
+    let title = title.to_string();
+    let detail = detail.to_string();
+    recorder.marks(points, |painter: &mut Painter| {
+        let band = (points.y * 0.24).clamp(56.0, 168.0).min(points.y);
+        let rect = Rect::from_min_size(Vec2::new(0.0, points.y - band), Vec2::new(points.x, band));
+        painter.gradient(
+            rect,
+            Corners::ZERO,
+            Color::TRANSPARENT,
+            palette.scene_backdrop.with_alpha(0.84),
+        );
+        let inset = (points.x * 0.017).clamp(12.0, 24.0);
+        let width = (points.x - 2.0 * inset).max(1.0);
+        let title_style =
+            TextStyle::new(theme.font(Level::Title), palette.text_primary).truncating();
+        let detail_style =
+            TextStyle::new(theme.font(Level::Callout), palette.text_secondary).truncating();
+        let top = points.y - band + 10.0;
+        painter.text_in(
+            Rect::from_min_size(Vec2::new(inset, top), Vec2::new(width, 24.0)),
+            &title,
+            title_style,
+            Align::Start,
+        );
+        if !detail.is_empty() {
+            painter.text_in(
+                Rect::from_min_size(Vec2::new(inset, top + 26.0), Vec2::new(width, 18.0)),
+                &detail,
+                detail_style,
+                Align::Start,
+            );
+        }
+    })
 }

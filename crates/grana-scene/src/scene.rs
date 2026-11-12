@@ -589,6 +589,11 @@ impl Scene {
             .import_tracks(file, self.selected, &self.dataset)
     }
 
+    pub fn import_graph(&mut self, file: &str, kind: ObjectKind) -> ObjectSetId {
+        self.objects
+            .import_graph(file, kind, self.selected, &self.dataset)
+    }
+
     pub fn remove_object(&mut self, id: ObjectSetId) {
         self.objects.remove(id);
         self.selections

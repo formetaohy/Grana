@@ -31,9 +31,21 @@ fn writes_a_sixteen_bit_ome_tiff() {
             samples: 3,
             pixels: &pixels,
             name: "figure & frame",
+            physical: Some([0.5, 0.5]),
+            interval: Some(2.0),
         },
     )
     .expect("the picture writes");
+    let bytes = std::fs::read(&path).expect("the picture reads as bytes");
+    let metadata = String::from_utf8_lossy(&bytes);
+    assert!(
+        metadata.contains("PhysicalSizeX=\"0.5\"") && metadata.contains("PhysicalSizeY=\"0.5\""),
+        "the picture records its physical pixel size"
+    );
+    assert!(
+        metadata.contains("TimeIncrement=\"2\""),
+        "the picture records its frame interval"
+    );
     let image = grana_tiff::Image::open(&path).expect("the written picture opens");
     assert_eq!(image.name(), "figure & frame");
     let pyramid = image.pyramid();
@@ -78,6 +90,8 @@ fn writes_an_alpha_channel_plane() {
             samples: 4,
             pixels: &pixels,
             name: "transparent",
+            physical: None,
+            interval: None,
         },
     )
     .expect("the transparent picture writes");
@@ -695,4 +709,147 @@ fn round_trips_a_typed_geff_lineage() {
         geff::read(&path, 0.5).is_err(),
         "the graph rejects edge kinds that contradict its topology"
     );
+}
+
+#[test]
+fn round_trips_a_shaped_geff_graph() {
+    use grana_interop::{Kind, Mesh, Objects, Related, Shape};
+
+    let temp = Temp::new("suite-geff-shapes");
+    let path = temp.path().join("shapes.geff");
+    let detections = vec![
+        Detection::new(1, 0, [2.0, 2.0, 2.0], 1.5, 0.4),
+        Detection::new(2, 1, [2.5, 2.0, 2.0], 1.5, 0.5),
+    ];
+    let lineage =
+        Lineage::new(detections, vec![Edge::new(1, 2)]).expect("the lineage is consistent");
+    let mesh = || {
+        Mesh::new(
+            vec![
+                [1.0, 1.0, 1.0],
+                [3.0, 1.0, 1.0],
+                [1.0, 3.0, 1.0],
+                [1.0, 1.0, 3.0],
+            ],
+            vec![[0.0, 0.0, 1.0]; 4],
+            vec![0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3],
+        )
+    };
+    let shapes = vec![
+        Shape::Surface {
+            mesh: mesh(),
+            voxels: 10,
+            volume: 2.5,
+            area: 6.0,
+        },
+        Shape::Surface {
+            mesh: mesh(),
+            voxels: 11,
+            volume: 2.6,
+            area: 6.2,
+        },
+    ];
+    let intensities = Some(vec![
+        vec![grana_object::SampleStatistics::new(
+            5.0, 1.0, 9.0, 2.0, 50.0,
+        )],
+        vec![grana_object::SampleStatistics::new(
+            6.0, 2.0, 8.0, 1.0, 60.0,
+        )],
+    ]);
+    let related = vec![Related::new("labels", "../labels/", Some("seg_id"))];
+    let objects = Objects::new(Kind::Surfaces, shapes, vec![1, 2], intensities, related);
+    let axes = geff::Axes::new([0.25, 0.25, 0.5], 2.0);
+    geff::write_objects(&path, &lineage, &axes, &objects).expect("the shaped graph writes");
+    assert_eq!(geff::kind(&path).expect("the kind reads"), Kind::Surfaces);
+    let store = std::sync::Arc::new(
+        zarrs::filesystem::FilesystemStore::new(&path).expect("the graph opens as a store"),
+    );
+    let polygon = zarrs::array::Array::open(store, "/nodes/props/polygon/data")
+        .expect("the polygon points open");
+    assert!(polygon.shape()[0] > 0, "the graph writes object polygons");
+    let (read, objects) = geff::read_objects(&path, 0.5).expect("the shaped graph reads");
+    assert_eq!(read.len(), 2);
+    assert_eq!(objects.kind(), Kind::Surfaces);
+    assert_eq!(objects.labels(), &[1, 2]);
+    assert_eq!(objects.related().len(), 1);
+    assert_eq!(objects.related()[0].object_type(), "labels");
+    assert_eq!(objects.related()[0].path(), "../labels/");
+    assert_eq!(objects.related()[0].node_prop(), Some("seg_id"));
+    let Shape::Surface {
+        mesh,
+        voxels,
+        volume,
+        area,
+    } = &objects.shapes()[0]
+    else {
+        panic!("the first shape is a surface");
+    };
+    assert_eq!(*voxels, 10);
+    assert!((volume - 2.5).abs() < 1.0e-6);
+    assert!((area - 6.0).abs() < 1.0e-6);
+    assert_eq!(mesh.positions().len(), 4);
+    assert_eq!(mesh.indices(), &[0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3]);
+    let intensities = objects
+        .intensities()
+        .expect("the graph carries intensities");
+    assert_eq!(intensities.len(), 2);
+    assert_eq!(intensities[0][0].mean(), 5.0);
+    assert_eq!(objects.channels(), 1);
+}
+
+#[test]
+fn round_trips_a_filament_geff_graph() {
+    use grana_interop::{Kind, Mesh, Objects, Shape};
+
+    let temp = Temp::new("suite-geff-filaments");
+    let path = temp.path().join("filaments.geff");
+    let lineage = Lineage::new(
+        vec![Detection::new(1, 0, [0.0, 0.0, 0.0], 2.0, 0.5)],
+        Vec::new(),
+    )
+    .expect("the lineage is consistent");
+    let mesh = Mesh::new(
+        vec![
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0.0, 0.0, 1.0]; 4],
+        vec![0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3],
+    );
+    let objects = Objects::new(
+        Kind::Filaments,
+        vec![Shape::Filament {
+            mesh,
+            length: 3.0,
+            diameter: 0.5,
+            volume: 0.4,
+            branches: 1,
+            terminals: 2,
+            junctions: 0,
+            nodes: 3,
+        }],
+        vec![1],
+        None,
+        Vec::new(),
+    );
+    let axes = geff::Axes::new([0.25, 0.25, 0.5], 2.0);
+    geff::write_objects(&path, &lineage, &axes, &objects).expect("the filament graph writes");
+    let (read, objects) = geff::read_objects(&path, 0.5).expect("the filament graph reads");
+    assert_eq!(read.len(), 1);
+    assert_eq!(objects.kind(), Kind::Filaments);
+    let Shape::Filament {
+        length,
+        branches,
+        terminals,
+        ..
+    } = &objects.shapes()[0]
+    else {
+        panic!("the shape is a filament");
+    };
+    assert!((length - 3.0).abs() < 1.0e-6);
+    assert_eq!(*branches, 1);
+    assert_eq!(*terminals, 2);
 }

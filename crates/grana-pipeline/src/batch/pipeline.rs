@@ -367,13 +367,6 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             pages.push(page);
         }
     }
-    grana_page::Recorded::write(
-        &folder.join(super::PAGES),
-        &pages
-            .iter()
-            .map(grana_page::Recorded::of)
-            .collect::<Vec<_>>(),
-    )?;
     if task
         .protocol
         .sets()
@@ -446,6 +439,26 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             scene.set_time(time.min(scene.frame_count() - 1));
         }
     }
+    let mut recorded = Vec::new();
+    if let Some(spec) = task.protocol.snapshot() {
+        for (index, stem) in capture_stems(task.protocol).iter().enumerate() {
+            let file = folder.join(format!("snapshot{stem}.png"));
+            if !file.is_file() {
+                continue;
+            }
+            let mut detail = format!("{} · {}", dataset.group(), dataset.scene_label());
+            if let Some(view) = spec.views().get(index) {
+                detail.push_str(&format!(" · {view}"));
+            }
+            recorded.push(grana_page::Recorded::picture(
+                &file,
+                &dataset.title(),
+                &detail,
+            )?);
+        }
+    }
+    recorded.extend(pages.iter().map(grana_page::Recorded::of));
+    grana_page::Recorded::write(&folder.join(super::PAGES), &recorded)?;
     if task.project {
         let _ = task.events.send(Event::Step {
             index: task.index,

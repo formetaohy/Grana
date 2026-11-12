@@ -38,6 +38,8 @@ pub struct Picture<'a> {
     pub samples: u8,
     pub pixels: &'a [u16],
     pub name: &'a str,
+    pub physical: Option<[f32; 2]>,
+    pub interval: Option<f32>,
 }
 
 pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
@@ -99,8 +101,27 @@ fn encode(picture: &Picture<'_>) -> Result<Vec<u8>, String> {
             picture.pixels.len()
         ));
     }
+    if let Some(physical) = picture.physical
+        && physical
+            .iter()
+            .any(|value| !(value.is_finite() && *value > 0.0))
+    {
+        return Err("a sixteen bit TIFF picture spans a positive physical pixel size".to_string());
+    }
+    if let Some(interval) = picture.interval
+        && !(interval.is_finite() && interval > 0.0)
+    {
+        return Err("a sixteen bit TIFF picture carries a positive frame interval".to_string());
+    }
     let pages = u64::from(picture.samples);
-    let description = metadata(picture.name, width, height, samples);
+    let description = metadata(
+        picture.name,
+        width,
+        height,
+        samples,
+        picture.physical,
+        picture.interval,
+    );
     let described = page_bytes(DESCRIBED_TAGS);
     let plain = page_bytes(PAGE_TAGS);
     let first = HEADER;
@@ -194,14 +215,34 @@ fn offset_fault(_: impl std::fmt::Display) -> String {
     "a sixteen bit TIFF picture of this size has no addressable layout".to_string()
 }
 
-fn metadata(name: &str, width: u32, height: u32, samples: usize) -> String {
+fn metadata(
+    name: &str,
+    width: u32,
+    height: u32,
+    samples: usize,
+    physical: Option<[f32; 2]>,
+    interval: Option<f32>,
+) -> String {
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     xml.push_str(
         "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n <Image ID=\"Image:0\"",
     );
     xml.push_str(&format!(" Name=\"{}\">\n", escape(name)));
+    let physical = physical.map_or_else(String::new, |[x, y]| {
+        format!(
+            " PhysicalSizeX=\"{}\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"{}\" PhysicalSizeYUnit=\"µm\"",
+            number(x),
+            number(y)
+        )
+    });
+    let interval = interval.map_or_else(String::new, |interval| {
+        format!(
+            " TimeIncrement=\"{}\" TimeIncrementUnit=\"s\"",
+            number(interval)
+        )
+    });
     xml.push_str(&format!(
-        "  <Pixels ID=\"Pixels:0\" DimensionOrder=\"XYCZT\" Type=\"uint16\" SizeX=\"{width}\" SizeY=\"{height}\" SizeZ=\"1\" SizeC=\"{samples}\" SizeT=\"1\" Interleaved=\"false\">\n"
+        "  <Pixels ID=\"Pixels:0\" DimensionOrder=\"XYCZT\" Type=\"uint16\" SizeX=\"{width}\" SizeY=\"{height}\" SizeZ=\"1\" SizeC=\"{samples}\" SizeT=\"1\" Interleaved=\"false\"{physical}{interval}>\n"
     ));
     for (index, (channel, color)) in NAMES.iter().zip(COLORS).take(samples).enumerate() {
         xml.push_str(&format!(
@@ -212,6 +253,10 @@ fn metadata(name: &str, width: u32, height: u32, samples: usize) -> String {
         "   <TiffData IFD=\"0\" PlaneCount=\"{samples}\"/>\n  </Pixels>\n </Image>\n</OME>"
     ));
     xml
+}
+
+fn number(value: f32) -> String {
+    value.to_string()
 }
 
 fn escape(text: &str) -> String {

@@ -1,4 +1,4 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -399,6 +399,10 @@ fn captures_a_protocol_film_without_a_window() {
     assert!(
         text.contains("/Type /Pages") && text.contains("/Kids [3 0 R"),
         "the report keeps a page tree"
+    );
+    assert!(
+        text.contains("/Subtype /Image"),
+        "the report embeds the rendered snapshot"
     );
 }
 

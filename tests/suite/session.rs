@@ -335,6 +335,57 @@ fn settle(session: &mut Session) {
 }
 
 #[test]
+fn round_trips_detected_surfaces_through_geff() {
+    let temp = Temp::new("session-geff-surfaces");
+    let path = temp.path().join("objects.geff");
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "the two nuclei are detected");
+    session
+        .export_geff(set, &path)
+        .expect("the surfaces export");
+    assert_eq!(
+        grana_interop::geff::kind(&path).expect("the graph kind reads"),
+        grana_interop::Kind::Surfaces
+    );
+    assert!(session.import_tracks(&path), "the shaped graph imports");
+    settle(&mut session);
+    let imported = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .find(|object| object.kind() == ObjectKind::Surfaces && object.id() != set)
+        .expect("the imported surface set lands");
+    assert_eq!(
+        imported.frame(0).map_or(0, ObjectFrame::object_count),
+        2,
+        "the imported graph restores both surfaces"
+    );
+    assert!(
+        imported
+            .frame(0)
+            .is_some_and(|frame| frame.geometry().is_ok()),
+        "the restored surfaces carry their meshes"
+    );
+}
+
+#[test]
 fn imports_imaris_filaments() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/imaris-filaments.ims");

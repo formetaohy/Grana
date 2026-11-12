@@ -173,6 +173,16 @@ impl Objects {
     }
 
     pub fn import_tracks(&mut self, file: &str, channel: usize, dataset: &Dataset) -> ObjectSetId {
+        self.import_graph(file, ObjectKind::Spots, channel, dataset)
+    }
+
+    pub fn import_graph(
+        &mut self,
+        file: &str,
+        kind: ObjectKind,
+        channel: usize,
+        dataset: &Dataset,
+    ) -> ObjectSetId {
         assert!(
             !file.trim().is_empty(),
             "an imported track set names its file"
@@ -192,7 +202,7 @@ impl Objects {
         }
         let key = self.key_for(&name, None);
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
-        let mut set = ObjectSet::new(id, key, ObjectKind::Spots, name, channel, color, dataset);
+        let mut set = ObjectSet::new(id, key, kind, name, channel, color, dataset);
         set.set_provenance(Provenance::interop(file));
         self.sets.push(set);
         id

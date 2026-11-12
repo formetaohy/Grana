@@ -387,14 +387,19 @@ impl Export {
         );
         let mut sink = self.sink.take().expect("the export is alive");
         let written = match &sink {
-            Sink::Tiff { path } => crate::sink::write_picture(
-                path,
-                image.size(),
-                image.pixels(),
-                drawn.scene,
-                drawn.pose.time,
-                self.transparent,
-            ),
+            Sink::Tiff { path } => {
+                let physical =
+                    camera.world_per_point(self.viewport.size[1] as f32, camera.distance());
+                crate::sink::write_picture(
+                    path,
+                    image.size(),
+                    image.pixels(),
+                    drawn.scene,
+                    drawn.pose.time,
+                    physical,
+                    self.transparent,
+                )
+            }
             _ => sink.push(drawn.pose.time, image.size(), &image, self.transparent),
         };
         if let Err(detail) = written {

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 grana-chart = { workspace = true }
 grana-file = { workspace = true }
+grana-raster = { workspace = true }
 grana-text = { workspace = true }
 grana-ui = { workspace = true }
 grana-vector = { workspace = true }
