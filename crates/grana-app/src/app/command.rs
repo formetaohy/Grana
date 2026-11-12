@@ -101,6 +101,9 @@ impl App {
     }
 
     pub(super) fn release_document(&mut self, next: Resume) -> bool {
+        if self.session.access().viewer() {
+            return true;
+        }
         if self.resume.is_some() {
             return false;
         }

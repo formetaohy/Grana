@@ -2142,6 +2142,77 @@ fn grows_cells_around_nuclei_through_a_project_and_protocol() {
     assert_eq!(loaded, project, "the cells survive a project");
 }
 
+#[test]
+fn a_viewer_keeps_a_recorded_analysis_read_only() {
+    let mut session = Session::viewer();
+    session.open_series("neuromast", cells_series());
+    session.execute(Command::SelectChannel(1));
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    assert!(
+        session.message().is_some(),
+        "the viewer explains why the change was refused"
+    );
+    session.execute(Command::SetChannelEnabled {
+        channel: 0,
+        enabled: false,
+    });
+    let scene = session.scene().expect("the series opens");
+    assert_eq!(
+        scene.selected, 1,
+        "the viewer follows the requested channel"
+    );
+    assert!(
+        scene.objects.iter().next().is_none(),
+        "the viewer stages no object set"
+    );
+    assert!(
+        !scene.channels[0].enabled,
+        "the viewer keeps the display controls"
+    );
+}
+
+#[test]
+fn a_project_finds_its_dataset_beside_itself() {
+    let temp = Temp::new("suite-beside");
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ome.tif");
+    let elsewhere = temp.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("the dataset folder is created");
+    let moved = elsewhere.join("dataset.ome.tif");
+    std::fs::copy(&fixture, &moved).expect("the fixture copies");
+    let mut session = Session::new();
+    session.begin_load(moved);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the dataset never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let shared = temp.path().join("shared");
+    std::fs::create_dir_all(&shared).expect("the shared folder is created");
+    let project = shared.join("shared.grana");
+    session.save_project(project.clone(), view_state());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.project().is_none() {
+        assert!(Instant::now() < deadline, "the project never saves");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::fs::remove_dir_all(&elsewhere).expect("the recorded folder is removed");
+    std::fs::copy(&fixture, shared.join("dataset.ome.tif")).expect("the dataset moves beside it");
+    let mut viewer = Session::viewer();
+    viewer.begin_project(project);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while viewer.scene().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the project never finds its dataset"
+        );
+        viewer.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn cells_series() -> VolumeSeries {
     let extent = Extent::new(64, 32, 32);
     let mut nuclei = vec![0u16; extent.voxel_count() as usize];

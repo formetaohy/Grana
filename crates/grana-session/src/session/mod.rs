@@ -42,6 +42,7 @@ use grana_scene::{
 };
 use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 
+use crate::access::Access;
 use crate::command::{Edit, Export};
 use crate::document::{self, Document};
 use crate::history::{History, Snapshot};
@@ -95,6 +96,7 @@ pub struct Effects {
 }
 
 pub struct Session {
+    access: Access,
     scene: Option<Scene>,
     store: Arc<GeometryStore>,
     measure: Measure,
@@ -170,7 +172,16 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Self {
+        Self::with_access(Access::Author)
+    }
+
+    pub fn viewer() -> Self {
+        Self::with_access(Access::Viewer)
+    }
+
+    fn with_access(access: Access) -> Self {
         Self {
+            access,
             scene: None,
             store: GeometryStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
@@ -254,6 +265,9 @@ impl Session {
     }
     pub fn scene(&self) -> Option<&Scene> {
         self.scene.as_ref()
+    }
+    pub fn access(&self) -> Access {
+        self.access
     }
     pub(super) fn analysis_channels(&self) -> Option<Arc<grana_pipeline::Channels>> {
         self.channels.clone()

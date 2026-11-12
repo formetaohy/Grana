@@ -616,6 +616,94 @@ impl Command {
         )
     }
 
+    pub fn authors(&self) -> bool {
+        !matches!(
+            self,
+            Self::OpenDataset
+                | Self::OpenImage
+                | Self::OpenTiles
+                | Self::OpenPath(_)
+                | Self::OpenRemote(_)
+                | Self::OpenRecent(_)
+                | Self::OpenProject
+                | Self::SaveSnapshot
+                | Self::SaveFigure
+                | Self::SaveLineage
+                | Self::SaveChart
+                | Self::SaveComparison
+                | Self::SetTime(_)
+                | Self::SelectSeries(_)
+                | Self::SelectField(_)
+                | Self::Select(_)
+                | Self::ToggleSelect(_)
+                | Self::SelectChannel(_)
+                | Self::SetChannelEnabled { .. }
+                | Self::SetChannelOpacity { .. }
+                | Self::SetWindow { .. }
+                | Self::ResetWindow(_)
+                | Self::SetTransfer { .. }
+                | Self::SetVolumeMode { .. }
+                | Self::SetIsovalue { .. }
+                | Self::SetObjectVisible { .. }
+                | Self::SetObjectLabels { .. }
+                | Self::SetLabelMetric { .. }
+                | Self::SetObjectColor { .. }
+                | Self::SetObjectOpacity { .. }
+                | Self::SetObjectMaterial { .. }
+                | Self::SetObjectColoring { .. }
+                | Self::SelectTrack { .. }
+                | Self::SelectAnnotation(_)
+                | Self::SetAnnotationVisible { .. }
+                | Self::SetTrackVisible { .. }
+                | Self::SetTrackThickness { .. }
+                | Self::SetTrackColoring { .. }
+                | Self::SetRegion(_)
+                | Self::SetClip(_)
+                | Self::SetExposure(_)
+                | Self::SetStepScale(_)
+                | Self::SetShading(_)
+                | Self::ResetRendering
+                | Self::SetMeasureSet(_)
+                | Self::SetMeasureGroup(_)
+                | Self::SetMeasureAggregate(_)
+                | Self::SetMeasureScope(_)
+                | Self::SetColumnVisible { .. }
+                | Self::ShowAllColumns
+                | Self::SetMeasureVisibility(_)
+                | Self::SetMeasureView(_)
+                | Self::SetPlotAxis { .. }
+                | Self::ToggleSort(_)
+                | Self::SetLasso(_)
+                | Self::AddFilter
+                | Self::RemoveFilter(_)
+                | Self::SetFilter { .. }
+                | Self::RetargetFilter { .. }
+                | Self::SetGate { .. }
+                | Self::SetExport(_)
+                | Self::ExportGeff(_)
+                | Self::ExportColoc
+                | Self::ExportMeasure
+                | Self::ExportProvenance
+                | Self::ExportRelation { .. }
+                | Self::ExportMesh { .. }
+                | Self::ExportLabels(_)
+                | Self::ExportAllLabels
+                | Self::ExportDataset
+                | Self::ExportPlate
+                | Self::ExportMovie { .. }
+                | Self::ExportSequence
+                | Self::CancelExport
+                | Self::ApplyView(_)
+                | Self::CancelDetect(_)
+                | Self::CancelTrack(_)
+                | Self::CancelColoc
+                | Self::CancelObjectColoc(_)
+                | Self::CancelDrift
+                | Self::CancelRegistration
+                | Self::CancelStitch
+        )
+    }
+
     pub(crate) fn edit(&self) -> Option<Edit> {
         let edit = match self {
             Self::AddObject(_) | Self::AddSegment => Edit::new(Action::AddObject),

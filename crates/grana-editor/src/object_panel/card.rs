@@ -218,22 +218,25 @@ pub(super) fn object_menu<'a>(
         .filter(|candidate| candidate.id() != id && candidate.kind() == kind)
         .map(|candidate| (candidate.id(), candidate.name().to_string()))
         .collect::<Vec<_>>();
+    let authoring = state.access.author();
     let mut rows = Vec::new();
-    rows.push(action_row(
-        ctx,
-        &format!("object.{}.menu.rename", id.raw()),
-        Icon::Pencil,
-        grana_i18n::object::rename(language),
-        Message::BeginRename(id),
-    ));
-    rows.push(action_row(
-        ctx,
-        &format!("object.{}.menu.duplicate", id.raw()),
-        Icon::Layers,
-        grana_i18n::object::duplicate(language),
-        Message::Command(Command::DuplicateObject(id)),
-    ));
-    if set.detected() > 0 {
+    if authoring {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.rename", id.raw()),
+            Icon::Pencil,
+            grana_i18n::object::rename(language),
+            Message::BeginRename(id),
+        ));
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.duplicate", id.raw()),
+            Icon::Layers,
+            grana_i18n::object::duplicate(language),
+            Message::Command(Command::DuplicateObject(id)),
+        ));
+    }
+    if authoring && set.detected() > 0 {
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.mask", id.raw()),
@@ -249,7 +252,7 @@ pub(super) fn object_menu<'a>(
             Message::Command(Command::ComputeObjectColoc(id)),
         ));
     }
-    if view::progress(state.jobs, Job::ObjectColoc(id)).is_some() {
+    if authoring && view::progress(state.jobs, Job::ObjectColoc(id)).is_some() {
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.cancel.coloc", id.raw()),
@@ -258,7 +261,7 @@ pub(super) fn object_menu<'a>(
             Message::Command(Command::CancelObjectColoc(id)),
         ));
     }
-    if set.object_coloc().is_some() {
+    if authoring && set.object_coloc().is_some() {
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.clear.coloc", id.raw()),
@@ -267,7 +270,11 @@ pub(super) fn object_menu<'a>(
             Message::Command(Command::ClearObjectColoc(id)),
         ));
     }
-    if kind == ObjectKind::Surfaces && set.detected() > 0 && set.provenance().editing().is_none() {
+    if authoring
+        && kind == ObjectKind::Surfaces
+        && set.detected() > 0
+        && set.provenance().editing().is_none()
+    {
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.paint", id.raw()),
@@ -276,7 +283,7 @@ pub(super) fn object_menu<'a>(
             Message::ArmMask(id),
         ));
     }
-    if set.provenance().masking().is_some() {
+    if authoring && set.provenance().masking().is_some() {
         rows.push(action_row(
             ctx,
             &format!("object.{}.menu.clear.mask", id.raw()),
@@ -333,7 +340,7 @@ pub(super) fn object_menu<'a>(
             Message::Command(Command::ExportGeff(id)),
         ));
     }
-    if !merges.is_empty() {
+    if authoring && !merges.is_empty() {
         rows.push(view::menu_separator(ctx));
         rows.push(view::caption(ctx, grana_i18n::object::merge_into(language)));
         for (index, (candidate, label)) in merges.iter().enumerate() {
@@ -349,39 +356,41 @@ pub(super) fn object_menu<'a>(
             ));
         }
     }
-    rows.extend(object_edit_rows(ctx, state, id, set));
-    rows.push(view::menu_separator(ctx));
-    if position > 0 {
+    if authoring {
+        rows.extend(object_edit_rows(ctx, state, id, set));
+        rows.push(view::menu_separator(ctx));
+        if position > 0 {
+            rows.push(action_row(
+                ctx,
+                &format!("object.{}.menu.up", id.raw()),
+                Icon::ChevronUp,
+                grana_i18n::object::move_up(language),
+                Message::Command(Command::ReorderObject {
+                    set: id,
+                    index: position - 1,
+                }),
+            ));
+        }
+        if position + 1 < sets {
+            rows.push(action_row(
+                ctx,
+                &format!("object.{}.menu.down", id.raw()),
+                Icon::ChevronDown,
+                grana_i18n::object::move_down(language),
+                Message::Command(Command::ReorderObject {
+                    set: id,
+                    index: position + 1,
+                }),
+            ));
+        }
         rows.push(action_row(
             ctx,
-            &format!("object.{}.menu.up", id.raw()),
-            Icon::ChevronUp,
-            grana_i18n::object::move_up(language),
-            Message::Command(Command::ReorderObject {
-                set: id,
-                index: position - 1,
-            }),
+            &format!("object.{}.menu.remove", id.raw()),
+            Icon::Trash,
+            grana_i18n::object::delete_set(language),
+            Message::Command(Command::RemoveObject(id)),
         ));
     }
-    if position + 1 < sets {
-        rows.push(action_row(
-            ctx,
-            &format!("object.{}.menu.down", id.raw()),
-            Icon::ChevronDown,
-            grana_i18n::object::move_down(language),
-            Message::Command(Command::ReorderObject {
-                set: id,
-                index: position + 1,
-            }),
-        ));
-    }
-    rows.push(action_row(
-        ctx,
-        &format!("object.{}.menu.remove", id.raw()),
-        Icon::Trash,
-        grana_i18n::object::delete_set(language),
-        Message::Command(Command::RemoveObject(id)),
-    ));
     rows
 }
 

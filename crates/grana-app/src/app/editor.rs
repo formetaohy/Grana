@@ -32,6 +32,7 @@ impl App {
         let exporting = export.progress();
         let export_message = output.clone();
         let view = SessionView {
+            access: session.access(),
             scene: session.scene(),
             measure: session.measure(),
             measuring: session.measuring(),
@@ -72,6 +73,7 @@ impl App {
                 return false;
             };
             let view = SessionView {
+                access: session.access(),
                 scene: session.scene(),
                 measure: session.measure(),
                 measuring: session.measuring(),

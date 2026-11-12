@@ -54,6 +54,24 @@ impl Panel {
         Panel::Animation,
     ];
 
+    pub const VIEWED: [Panel; 7] = [
+        Panel::Statistics,
+        Panel::Tracks,
+        Panel::Colocalization,
+        Panel::Relations,
+        Panel::Annotations,
+        Panel::Plate,
+        Panel::Animation,
+    ];
+
+    pub fn available(authoring: bool) -> &'static [Panel] {
+        if authoring {
+            &Panel::ALL
+        } else {
+            &Panel::VIEWED
+        }
+    }
+
     pub fn name(self, language: grana_i18n::Language) -> &'static str {
         match self {
             Self::Statistics => grana_i18n::panel::statistics(language),
@@ -105,6 +123,7 @@ pub fn build(
     }
     let palette = crate::palette::resolve(ui, view, workspace);
     let state = View {
+        access: view.access,
         scene,
         measure: view.measure,
         measuring: view.measuring,
@@ -438,14 +457,18 @@ fn dock<'a>(
         Vec2::splat(30.0),
     );
     let tabs_rect = Rect::from_min_max(header.min, Vec2::new(close.min.x - 10.0, header.max.y));
-    let labels = Panel::ALL.map(|panel| panel.name(ctx.language()));
+    let panels = Panel::available(state.access.author());
+    let labels = panels
+        .iter()
+        .map(|panel| panel.name(ctx.language()))
+        .collect::<Vec<_>>();
     let panel = state.workspace.panel.unwrap_or(state.workspace.last_panel);
-    let active = Panel::ALL
+    let active = panels
         .iter()
         .position(|candidate| *candidate == panel)
         .unwrap_or(0);
-    let tabs = crate::view::tabs(ctx, "dock.tabs", &labels, active, |index| {
-        Message::SetPanel(Some(Panel::ALL[index]))
+    let tabs = crate::view::tabs(ctx, "dock.tabs", &labels, active, move |index| {
+        Message::SetPanel(panels.get(index).copied())
     })
     .at(Rect::from_min_size(
         Vec2::new(tabs_rect.min.x, header.center().y - 16.0),

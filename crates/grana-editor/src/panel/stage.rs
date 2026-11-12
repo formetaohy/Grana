@@ -35,8 +35,34 @@ pub(super) fn view<'a>(
         elements.extend(region_handles(state, layout));
     }
     elements.extend(recording_chip(ctx, layout, state));
+    elements.extend(viewer_chip(ctx, layout, state));
     elements.extend(mask_bar(ctx, state, layout));
     elements
+}
+
+fn viewer_chip<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    if state.access.author() || state.io.exporting.is_some() {
+        return Vec::new();
+    }
+    let origin = layout.content().shrink(STAGE_INSET).min;
+    let tint = ctx.theme().palette.tertiary;
+    let language = ctx.language();
+    vec![
+        chip(
+            ctx,
+            "figure.readonly",
+            layout.viewport,
+            origin,
+            Icon::Lock,
+            grana_i18n::app::read_only(language),
+            tint,
+        )
+        .tooltip(grana_i18n::app::read_only_detail(language)),
+    ]
 }
 
 fn mask_bar<'a>(

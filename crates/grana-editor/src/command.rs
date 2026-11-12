@@ -128,6 +128,30 @@ pub enum Action {
 }
 
 impl Action {
+    pub fn authors(self) -> bool {
+        matches!(
+            self,
+            Self::OpenTiles
+                | Self::SaveProject
+                | Self::SaveProjectAs
+                | Self::SaveView
+                | Self::Keyframe
+                | Self::ClearKeyframes
+                | Self::CaptureProtocol
+                | Self::LoadProtocol
+                | Self::SaveProtocol
+                | Self::ApplyProtocol
+                | Self::Undo
+                | Self::Redo
+                | Self::ComputeColoc
+                | Self::ComputeDrift
+                | Self::RunBatch
+                | Self::PauseBatch
+                | Self::ResumeBatch
+                | Self::CancelBatch
+        )
+    }
+
     pub fn message(self) -> Message {
         match self {
             Self::OpenPalette => Message::OpenPalette,

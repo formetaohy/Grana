@@ -218,21 +218,28 @@ fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         grana_i18n::inspector::views(language),
         detail.as_deref(),
     )];
-    children.push(
-        view::button_with(
-            ctx,
-            grana_i18n::inspector::save_current_view(language),
-            Role::SurfaceHigh,
-            Length::Fill,
-        )
-        .named("view.save")
-        .press(Message::Command(Command::SaveView)),
-    );
+    if state.access.author() {
+        children.push(
+            view::button_with(
+                ctx,
+                grana_i18n::inspector::save_current_view(language),
+                Role::SurfaceHigh,
+                Length::Fill,
+            )
+            .named("view.save")
+            .press(Message::Command(Command::SaveView)),
+        );
+    }
+    let authoring = state.access.author();
     for (index, named) in state.views.iter().enumerate() {
         let name = named.name.clone();
         let apply = view::button_with(ctx, &name, Role::Tonal, Length::Fill)
             .named(&format!("view.apply.{index}"))
             .press(Message::Command(Command::ApplyView(index)));
+        if !authoring {
+            children.push(apply);
+            continue;
+        }
         let remove = view::icon_button(
             ctx,
             &format!("view.remove.{index}"),

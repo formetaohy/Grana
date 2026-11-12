@@ -88,7 +88,7 @@ impl App {
     }
 
     pub(super) fn autosave(&mut self) {
-        if self.capture.is_some() {
+        if self.capture.is_some() || self.session.access().viewer() {
             return;
         }
         let now = Instant::now();
@@ -118,8 +118,15 @@ impl App {
             .session
             .project_name()
             .unwrap_or_else(|| grana_i18n::common::untitled(self.workspace.language).to_string());
-        let marker = if self.dirty() { " •" } else { "" };
-        let title = format!("Grana — {name}{marker}");
+        let title = if self.session.access().viewer() {
+            format!(
+                "Grana — {name} · {}",
+                grana_i18n::app::viewer(self.workspace.language)
+            )
+        } else {
+            let marker = if self.dirty() { " •" } else { "" };
+            format!("Grana — {name}{marker}")
+        };
         if self.title.as_deref() == Some(title.as_str()) {
             return;
         }

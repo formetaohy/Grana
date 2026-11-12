@@ -86,11 +86,13 @@ pub(crate) fn resolve(
 fn catalog(view: &SessionView<'_>, workspace: &Workspace, query: &str) -> Vec<Entry> {
     let language = workspace.language;
     let scene = view.scene.is_some();
+    let authoring = view.access.author();
     let mut entries = Vec::new();
     for group in Group::ALL {
         for spec in crate::command::SPECS
             .iter()
             .filter(|spec| spec.group == group)
+            .filter(|spec| authoring || !spec.action.authors())
         {
             if spec.scope == Scope::Scene && !scene {
                 continue;

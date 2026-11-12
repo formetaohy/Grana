@@ -13,6 +13,15 @@ pub(super) struct Recording {
 
 impl Session {
     pub fn execute(&mut self, command: Command) -> Effects {
+        if !self.access().permits(&command) {
+            self.message = Some(Message::info(
+                "this viewer shows a recorded analysis and cannot change it",
+            ));
+            return Effects {
+                repaint: true,
+                ..Effects::default()
+            };
+        }
         self.settle_measure();
         match command {
             Command::Undo => return self.undo(),

@@ -206,6 +206,12 @@ impl Session {
     }
 
     pub fn save_project(&mut self, path: PathBuf, view: ViewState) {
+        if self.access.viewer() {
+            self.message = Some(Message::info(
+                "this viewer shows a recorded analysis and cannot save it",
+            ));
+            return;
+        }
         if self.reject_transfer() {
             return;
         }
@@ -275,7 +281,7 @@ impl Session {
             ProjectSource::File {
                 path: data, series, ..
             } => {
-                let data = data.clone();
+                let data = beside_project(path, data);
                 let series = *series;
                 if !data.is_dir() && !data.is_file() {
                     self.message = Some(Message::error(format!(
@@ -576,4 +582,22 @@ impl Session {
 fn frame_duration(scene: &Scene) -> f32 {
     (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
         .clamp(1.0, Timeline::MAX_DURATION)
+}
+
+fn beside_project(project: &Path, data: &Path) -> PathBuf {
+    if data.exists() {
+        return data.to_path_buf();
+    }
+    let Some(folder) = project.parent() else {
+        return data.to_path_buf();
+    };
+    let Some(name) = data.file_name() else {
+        return data.to_path_buf();
+    };
+    let beside = folder.join(name);
+    if beside.exists() {
+        beside
+    } else {
+        data.to_path_buf()
+    }
 }

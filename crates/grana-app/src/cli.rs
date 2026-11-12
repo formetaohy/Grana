@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use grana_pipeline::{Batch, BatchEvent, Control, Outcome, Plan, discover};
 use grana_protocol::Protocol;
+use grana_session::Access;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::app::App;
@@ -11,9 +12,17 @@ use crate::capture::OfflineCapture;
 use crate::render::Request;
 
 pub fn gui(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
+    open(capture, startup, Access::Author)
+}
+
+pub fn viewer(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
+    open(capture, startup, Access::Viewer)
+}
+
+fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> ExitCode {
     let event_loop = EventLoop::new().expect("failed to create the event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new(capture, startup);
+    let mut app = App::new(capture, startup, access);
     event_loop
         .run_app(&mut app)
         .expect("the event loop terminated abnormally");

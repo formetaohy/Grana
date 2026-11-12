@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--lineage <set>] [--transparent] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --stitch <folder> <output.zarr> <rows>x<cols> [--channel <n>] [--series <n>] | grana --clear-cache";
+const USAGE: &str = "usage: grana [<dataset>] | grana --view <project|dataset> | grana --capture <image.png> [<dataset>] | grana --capture <image.png> --view <project|dataset> | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--lineage <set>] [--transparent] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --stitch <folder> <output.zarr> <rows>x<cols> [--channel <n>] [--series <n>] | grana --clear-cache";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -20,6 +20,14 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
                 Some(PathBuf::from(path)),
                 Some(dataset.clone()),
             )),
+            [_, path, flag, dataset] if flag == "--view" => Some(grana_app::viewer(
+                Some(PathBuf::from(path)),
+                Some(dataset.clone()),
+            )),
+            _ => None,
+        },
+        Some("--view") => match arguments {
+            [_, path] => Some(grana_app::viewer(None, Some(path.clone()))),
             _ => None,
         },
         Some("--stitch") => grana_app::stitch_command(&arguments[1..]),

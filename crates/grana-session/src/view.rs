@@ -5,6 +5,7 @@ use grana_image::{Plate, Series, Well};
 use grana_project::{Export, NamedView};
 use grana_scene::{Measure, Progress, Scene};
 
+use crate::access::Access;
 use crate::command::Action;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,6 +146,7 @@ pub struct StitchView {
 }
 
 pub struct SessionView<'a> {
+    pub access: Access,
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
     pub measuring: bool,

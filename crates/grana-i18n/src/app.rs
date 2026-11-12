@@ -24,6 +24,9 @@ labels! {
     choose_sequence_folder => "Choose a folder for the frame sequence" / "选择帧序列的保存文件夹";
     export_running => "Export running" / "导出进行中";
     export_running_detail => "An export is still writing its file. Cancel it before closing grana." / "导出仍在写入文件。请在关闭 Grana 前取消导出。";
+    read_only => "Read-only" / "只读";
+    read_only_detail => "This viewer shows a recorded analysis. Open the project in grana to edit it." / "查看器仅展示已记录的分析，请在 Grana 中打开项目以编辑。";
+    viewer => "Viewer" / "查看器";
 }
 
 use crate::messages;

@@ -8,7 +8,7 @@ use grana_engine::{Engine, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_i18n::Language;
 use grana_scene::Revision;
-use grana_session::{Command, Session};
+use grana_session::{Access, Command, Session};
 use grana_ui::Ui;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -93,10 +93,15 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(capture: Option<PathBuf>, startup: Option<String>) -> Self {
-        let mut session = Session::new();
+    pub fn new(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> Self {
+        let mut session = match access {
+            Access::Author => Session::new(),
+            Access::Viewer => Session::viewer(),
+        };
         session.attach_recent_store();
-        session.attach_recovery_store();
+        if access.author() {
+            session.attach_recovery_store();
+        }
         session.set_capture_factory(Arc::new(|| Arc::new(crate::capture::OfflineCapture::new())));
         let preference = Preference::load();
         let language = Language::from_environment().unwrap_or(preference.language);
@@ -397,7 +402,10 @@ impl ApplicationHandler for App {
                 self.repaint_at = Some(Instant::now() + STREAM_POLL);
             } else if self.export.running() {
                 self.repaint_at = Some(Instant::now() + EXPORT_POLL);
-            } else if self.capture.is_none() && self.session.dirty() {
+            } else if self.capture.is_none()
+                && self.session.access().author()
+                && self.session.dirty()
+            {
                 self.repaint_at = Some(Instant::now() + self.autosave_wait());
             }
         }

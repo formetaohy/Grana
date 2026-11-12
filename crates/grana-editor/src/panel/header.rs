@@ -52,7 +52,7 @@ fn navigation<'a>(
     .shaped(toggle_corners);
     let project = project_split(ctx, state);
     let open = open_split(ctx);
-    let project_menu = project_menu(ctx);
+    let project_menu = project_menu(ctx, state);
     let open_menu = open_menu(ctx, state);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     grana_ui::row()
@@ -134,7 +134,7 @@ fn project_split<'a>(
         .as_deref()
         .unwrap_or(grana_i18n::common::untitled(ctx.language()))
         .to_string();
-    let dirty = state.io.dirty;
+    let dirty = state.io.dirty && state.access.author();
     let full = ctx
         .measure(&project, TextStyle::new(project_font, Color::WHITE))
         .x;
@@ -155,7 +155,14 @@ fn project_split<'a>(
     let menu_key = Key::new("project.menu");
     let open = ctx.popup_open(menu_key);
     let title = project.clone();
-    let tooltip = (full > measured).then_some(project.as_str());
+    let language = ctx.language();
+    let read_only = state.access.viewer();
+    let tooltip: Option<String> = if read_only {
+        Some(grana_i18n::app::read_only_detail(language).to_string())
+    } else {
+        (full > measured).then(|| project.clone())
+    };
+    let mark = if read_only { Icon::Lock } else { Icon::Cube };
     let lead_element = grana_ui::canvas(
         Length::Fixed(lead_width),
         theme.metrics.control_height,
@@ -170,7 +177,7 @@ fn project_split<'a>(
                 .lerp(palette.on_surface, 0.08 * info.press);
             painter.rect(frame, corners, fill);
             icon::paint(
-                Icon::Cube,
+                mark,
                 painter,
                 Vec2::new(frame.min.x + 13.0, frame.center().y),
                 13.0,
@@ -200,10 +207,14 @@ fn project_split<'a>(
         },
     )
     .named("project.save")
-    .press(Message::Command(Command::SaveProject))
     .focus_ring(Corners::capsule());
+    let lead_element = if state.access.author() {
+        lead_element.press(Message::Command(Command::SaveProject))
+    } else {
+        lead_element
+    };
     let lead = match tooltip {
-        Some(tooltip) => lead_element.tooltip(tooltip),
+        Some(tooltip) => lead_element.tooltip(&tooltip),
         None => lead_element,
     };
     let trail_corners = if open {
@@ -424,6 +435,9 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         menu_separator(ctx),
         command_row(ctx, "open.project"),
     ];
+    if state.access.viewer() {
+        rows.remove(1);
+    }
     if !state.recent.is_empty() {
         rows.push(menu_separator(ctx));
         rows.push(crate::view::section_header(
@@ -449,19 +463,23 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     menu(ctx, key, 240.0, rows)
 }
 
-fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
+fn project_menu<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
     let key = Key::new("project.menu");
     if !ctx.popup_open(key) {
         return grana_ui::popover::popup(key, 224.0, std::iter::empty());
     }
-    let rows = vec![
-        command_row(ctx, "save.project"),
-        command_row(ctx, "save.as"),
-        menu_separator(ctx),
-        command_row(ctx, "snapshot"),
-        command_row(ctx, "figure"),
-        command_row(ctx, "labels"),
-    ];
+    let mut rows = Vec::new();
+    if state.access.author() {
+        rows.push(command_row(ctx, "save.project"));
+        rows.push(command_row(ctx, "save.as"));
+        rows.push(menu_separator(ctx));
+    }
+    rows.push(command_row(ctx, "snapshot"));
+    rows.push(command_row(ctx, "figure"));
+    rows.push(command_row(ctx, "labels"));
     menu(ctx, key, 224.0, rows)
 }
 

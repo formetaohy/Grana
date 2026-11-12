@@ -372,107 +372,109 @@ pub(super) fn display<'a>(
             grana_scene::Operation::Bleach => {}
         }
     }
-    children.push(view::divider(ctx));
-    let voxel = scene.dataset.voxel_size().min_element();
-    let sigma = voxel.max(0.05);
-    let radius = (10.0 * voxel).max(1.0);
-    let half = (width - group_gap) * 0.5;
-    children.push(view::caption(
-        ctx,
-        grana_i18n::inspector::channel_operators(language),
-    ));
-    children.push(
-        grana_ui::row()
-            .gap(group_gap)
-            .align(Align::Center)
-            .children([
-                view::button_shaped(
-                    ctx,
-                    grana_i18n::inspector::smooth(language),
-                    Role::SurfaceHigh,
-                    Length::Fixed(half),
-                    Corners::split_leading(inner_sm),
-                )
-                .named("operator.smooth")
-                .press(Message::Command(Command::AddSmoothChannel {
-                    source: index,
-                    sigma,
-                })),
-                view::button_shaped(
-                    ctx,
-                    grana_i18n::inspector::background(language),
-                    Role::SurfaceHigh,
-                    Length::Fixed(half),
-                    Corners::split_trailing(inner_sm),
-                )
-                .named("operator.background")
-                .press(Message::Command(Command::AddBackgroundChannel {
-                    source: index,
-                    radius,
-                })),
-            ]),
-    );
-    children.push(
-        grana_ui::row()
-            .gap(group_gap)
-            .align(Align::Center)
-            .children([
-                view::button_shaped(
-                    ctx,
-                    grana_i18n::inspector::ratio(language),
-                    Role::SurfaceHigh,
-                    Length::Fixed(half),
-                    Corners::split_leading(inner_sm),
-                )
-                .named("display.ratio")
-                .press(Message::Noop),
-                view::button_shaped(
-                    ctx,
-                    grana_i18n::inspector::bleach(language),
-                    Role::SurfaceHigh,
-                    Length::Fixed(half),
-                    Corners::split_trailing(inner_sm),
-                )
-                .named("operator.bleach")
-                .press(Message::Command(Command::AddBleachChannel {
-                    source: index,
-                })),
-            ]),
-    );
-    let ratio_edit = matches!(
-        derived.as_ref().map(|spec| spec.operation()),
-        Some(grana_scene::Operation::Ratio(_))
-    );
-    let mut ratio_rows = Vec::new();
-    for (candidate, info) in scene.dataset.channels().iter().enumerate() {
-        if candidate == index {
-            continue;
-        }
-        let command = if ratio_edit {
-            Command::SetRatioChannel {
-                channel: index,
-                denominator: candidate,
-            }
-        } else {
-            Command::AddRatioChannel {
-                numerator: index,
-                denominator: candidate,
-            }
-        };
-        ratio_rows.push(view::menu_row(
+    if state.access.author() {
+        children.push(view::divider(ctx));
+        let voxel = scene.dataset.voxel_size().min_element();
+        let sigma = voxel.max(0.05);
+        let radius = (10.0 * voxel).max(1.0);
+        let half = (width - group_gap) * 0.5;
+        children.push(view::caption(
             ctx,
-            &format!("display.ratio.{candidate}"),
-            info.name(),
-            false,
-            Some(Message::Command(command)),
+            grana_i18n::inspector::channel_operators(language),
+        ));
+        children.push(
+            grana_ui::row()
+                .gap(group_gap)
+                .align(Align::Center)
+                .children([
+                    view::button_shaped(
+                        ctx,
+                        grana_i18n::inspector::smooth(language),
+                        Role::SurfaceHigh,
+                        Length::Fixed(half),
+                        Corners::split_leading(inner_sm),
+                    )
+                    .named("operator.smooth")
+                    .press(Message::Command(Command::AddSmoothChannel {
+                        source: index,
+                        sigma,
+                    })),
+                    view::button_shaped(
+                        ctx,
+                        grana_i18n::inspector::background(language),
+                        Role::SurfaceHigh,
+                        Length::Fixed(half),
+                        Corners::split_trailing(inner_sm),
+                    )
+                    .named("operator.background")
+                    .press(Message::Command(Command::AddBackgroundChannel {
+                        source: index,
+                        radius,
+                    })),
+                ]),
+        );
+        children.push(
+            grana_ui::row()
+                .gap(group_gap)
+                .align(Align::Center)
+                .children([
+                    view::button_shaped(
+                        ctx,
+                        grana_i18n::inspector::ratio(language),
+                        Role::SurfaceHigh,
+                        Length::Fixed(half),
+                        Corners::split_leading(inner_sm),
+                    )
+                    .named("display.ratio")
+                    .press(Message::Noop),
+                    view::button_shaped(
+                        ctx,
+                        grana_i18n::inspector::bleach(language),
+                        Role::SurfaceHigh,
+                        Length::Fixed(half),
+                        Corners::split_trailing(inner_sm),
+                    )
+                    .named("operator.bleach")
+                    .press(Message::Command(Command::AddBleachChannel {
+                        source: index,
+                    })),
+                ]),
+        );
+        let ratio_edit = matches!(
+            derived.as_ref().map(|spec| spec.operation()),
+            Some(grana_scene::Operation::Ratio(_))
+        );
+        let mut ratio_rows = Vec::new();
+        for (candidate, info) in scene.dataset.channels().iter().enumerate() {
+            if candidate == index {
+                continue;
+            }
+            let command = if ratio_edit {
+                Command::SetRatioChannel {
+                    channel: index,
+                    denominator: candidate,
+                }
+            } else {
+                Command::AddRatioChannel {
+                    numerator: index,
+                    denominator: candidate,
+                }
+            };
+            ratio_rows.push(view::menu_row(
+                ctx,
+                &format!("display.ratio.{candidate}"),
+                info.name(),
+                false,
+                Some(Message::Command(command)),
+            ));
+        }
+        children.push(view::menu(
+            ctx,
+            Key::new("display.ratio"),
+            220.0,
+            ratio_rows,
         ));
     }
-    children.push(view::menu(
-        ctx,
-        Key::new("display.ratio"),
-        220.0,
-        ratio_rows,
-    ));
     children.push(view::divider(ctx));
     children.push(
         view::button_with(
@@ -484,7 +486,7 @@ pub(super) fn display<'a>(
         .named("display.export")
         .press(Message::Command(Command::ExportDataset)),
     );
-    if derived.is_some() {
+    if derived.is_some() && state.access.author() {
         children.push(
             view::button_with(
                 ctx,
@@ -497,7 +499,8 @@ pub(super) fn display<'a>(
                 channel: index,
             })),
         );
-    } else {
+    } else if state.access.author() {
+        let half = (width - group_gap) * 0.5;
         let depth = scene.dataset.world_size().z * 0.5;
         let psf_key = Key::new("display.psf");
         let psf_open = state.workspace.disclosures.is_open(psf_key);

@@ -45,8 +45,13 @@ pub fn view<'a>(
     let count = state.scene.objects.len();
     let language = ctx.language();
     let loading = state.io.loading.is_some();
-    let mut elements = add_menu(ctx, state);
-    elements.insert(0, header(ctx, count, loading));
+    let authoring = state.access.author();
+    let mut elements = if authoring {
+        add_menu(ctx, state)
+    } else {
+        Vec::new()
+    };
+    elements.insert(0, header(ctx, count, loading, authoring));
     if !state.import.is_empty() {
         elements.insert(1, notes(ctx, state.import));
     }
@@ -105,6 +110,7 @@ fn header<'a>(
     ctx: &mut BuildContext<'_, Message>,
     count: usize,
     loading: bool,
+    authoring: bool,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -119,7 +125,11 @@ fn header<'a>(
         )
         .x + inset * 2.0
             + 20.0;
-    let split_w = lead_w + theme.metrics.group_gap + theme.metrics.control_height;
+    let split_w = if authoring {
+        lead_w + theme.metrics.group_gap + theme.metrics.control_height
+    } else {
+        0.0
+    };
     let title_w = (total - split_w - 8.0).max(60.0);
     let label_style = TextStyle::new(theme.font(Level::Overline), palette.on_surface_variant);
     let badge_style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
@@ -158,12 +168,16 @@ fn header<'a>(
         ("objects.add.spots", lead_msg),
         (Key::new("objects.add"), Message::Noop),
     );
+    let mut children = vec![title];
+    if authoring {
+        children.push(split);
+    }
     grana_ui::row()
         .width(Length::Fill)
         .height(Length::Fixed(30.0))
         .gap(8.0)
         .align(Align::Center)
-        .children([title, split])
+        .children(children)
 }
 
 fn add_menu<'a>(
@@ -354,7 +368,7 @@ fn object<'a>(
         }
         if imported {
             children.extend(importing(ctx, state, id, kind));
-        } else if !merged && !imported_root {
+        } else if !merged && !imported_root && state.access.author() {
             children.extend(params(ctx, state, id));
             if matches!(kind, ObjectKind::Surfaces | ObjectKind::Cells) {
                 children.extend(seeds(ctx, state, id));

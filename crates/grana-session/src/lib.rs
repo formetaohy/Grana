@@ -1,3 +1,4 @@
+mod access;
 mod command;
 mod document;
 mod history;
@@ -11,6 +12,7 @@ mod task;
 mod transfer;
 mod view;
 
+pub use access::Access;
 pub use command::{Action, Command};
 pub use grana_image::{Image, Plate, Series, Source, Well, is_image, is_remote};
 pub use grana_mesh::Format as MeshFormat;
