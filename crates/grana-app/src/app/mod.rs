@@ -174,8 +174,10 @@ impl App {
                 let path = PathBuf::from(target);
                 if grana_session::is_project(&path) {
                     self.session.begin_project(path);
-                } else {
+                } else if grana_session::is_image(&path) {
                     self.session.begin_load(path);
+                } else {
+                    self.session.begin_stitch(path);
                 }
             }
         }
@@ -233,6 +235,9 @@ impl App {
             delay = Duration::ZERO;
         }
         if self.streaming() {
+            delay = delay.min(STREAM_POLL);
+        }
+        if self.session.stitching() {
             delay = delay.min(STREAM_POLL);
         }
         if self.workspace.playback.playing {

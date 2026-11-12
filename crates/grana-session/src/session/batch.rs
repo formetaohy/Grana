@@ -8,7 +8,11 @@ impl Session {
         else {
             return;
         };
-        match grana_pipeline::discover(&root) {
+        let tiles = self
+            .protocol
+            .as_ref()
+            .is_some_and(|protocol| protocol.stitch().is_some());
+        match grana_pipeline::discover(&root, tiles) {
             Ok(found) => {
                 let mut added = 0;
                 for dataset in found {

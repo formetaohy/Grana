@@ -49,6 +49,7 @@ impl Session {
 
     pub fn begin_load_series(&mut self, path: PathBuf, series: usize) {
         self.batch_review_pending = None;
+        self.stitch = None;
         if self.reject_transfer() {
             return;
         }
@@ -110,14 +111,19 @@ impl Session {
     pub fn open_path(&mut self, path: PathBuf) {
         if grana_project::is_project(&path) {
             self.begin_project(path);
-        } else if grana_image::is_image(&path) {
-            self.begin_load(path);
-        } else {
-            self.message = Some(Message::error(format!(
-                "{} is neither a supported image nor a grana project",
-                path.display()
-            )));
+            return;
         }
+        if grana_image::is_image(&path) {
+            self.begin_load(path);
+            return;
+        }
+        if path.is_dir() && self.begin_stitch(path.clone()) {
+            return;
+        }
+        self.message = Some(Message::error(format!(
+            "{} is neither a supported image nor a grana project",
+            path.display()
+        )));
     }
 
     pub fn select_series(&mut self, index: usize) -> bool {

@@ -11,6 +11,9 @@ impl Protocol {
                 "a protocol names at least one object set".to_string(),
             ));
         }
+        if let Some(stitch) = &self.stitch {
+            stitch.checked()?;
+        }
         if let Some(region) = &self.region {
             region.checked()?;
         }

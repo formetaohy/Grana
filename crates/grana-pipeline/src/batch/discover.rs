@@ -36,6 +36,7 @@ impl WellKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatasetEntry {
     path: PathBuf,
+    stitched: Option<PathBuf>,
     group: String,
     scene: usize,
     scenes: usize,
@@ -48,6 +49,7 @@ impl DatasetEntry {
     pub fn new(path: PathBuf, group: String) -> Self {
         Self {
             path,
+            stitched: None,
             group,
             scene: 0,
             scenes: 1,
@@ -70,6 +72,7 @@ impl DatasetEntry {
         );
         Self {
             path,
+            stitched: None,
             group,
             scene,
             scenes,
@@ -82,6 +85,7 @@ impl DatasetEntry {
     pub fn well(path: PathBuf, group: String, key: WellKey, field: String) -> Self {
         Self {
             path,
+            stitched: None,
             group,
             scene: 0,
             scenes: 1,
@@ -106,6 +110,7 @@ impl DatasetEntry {
         );
         Self {
             path,
+            stitched: None,
             group,
             scene,
             scenes,
@@ -113,6 +118,36 @@ impl DatasetEntry {
             well,
             plate_label,
         }
+    }
+
+    pub fn at_stitched(mut self, path: Option<PathBuf>) -> Self {
+        self.stitched = path;
+        self
+    }
+
+    pub fn stitched(&self) -> Option<&Path> {
+        self.stitched.as_deref()
+    }
+
+    pub fn image_path(&self) -> &Path {
+        self.stitched.as_deref().unwrap_or(&self.path)
+    }
+
+    pub fn image_scene(&self) -> usize {
+        if self.stitched.is_some() {
+            0
+        } else {
+            self.scene
+        }
+    }
+
+    pub fn with_stitched(mut self, path: PathBuf) -> Self {
+        self.stitched = Some(path);
+        self
+    }
+
+    pub fn set_stitched(&mut self, path: PathBuf) {
+        self.stitched = Some(path);
     }
 
     pub fn scenes(&self) -> usize {
@@ -222,7 +257,7 @@ pub(super) fn dataset_workers(jobs: usize) -> usize {
         .max(1)
 }
 
-pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
+pub fn discover(root: &Path, tiles: bool) -> Result<Vec<DatasetEntry>, DiscoverError> {
     if let Some(plate) = grana_image::plate_at(root).map_err(|error| DiscoverError::Read {
         path: root.display().to_string(),
         detail: error.to_string(),
@@ -232,8 +267,14 @@ pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
     if grana_image::is_image(root) {
         return Ok(entries_of(root, ""));
     }
+    if tiles {
+        let found = tiles_of(root);
+        if found > 1 {
+            return Ok(tile_entries(root, ""));
+        }
+    }
     let mut datasets = Vec::new();
-    walk(root, root, &mut datasets)?;
+    walk(root, root, &mut datasets, tiles)?;
     datasets.sort_by(|left, right| {
         left.group
             .cmp(&right.group)
@@ -242,6 +283,35 @@ pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
             .then_with(|| left.scene.cmp(&right.scene))
     });
     Ok(datasets)
+}
+
+fn tiles_of(folder: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| grana_image::is_image(&entry.path()))
+        .count()
+}
+
+fn tile_entries(folder: &Path, group: &str) -> Vec<DatasetEntry> {
+    let scenes = grana_stitch::tiles(folder)
+        .ok()
+        .and_then(|tiles| tiles.into_iter().next())
+        .and_then(|tile| {
+            tile.path()
+                .and_then(|path| grana_image::series_count(path).ok())
+        })
+        .unwrap_or(1);
+    if scenes < 2 {
+        return vec![DatasetEntry::new(folder.to_path_buf(), group.to_string())];
+    }
+    (0..scenes)
+        .map(|scene| {
+            DatasetEntry::scene_of(folder.to_path_buf(), group.to_string(), scene, scenes, None)
+        })
+        .collect()
 }
 
 fn plate_entries(root: &Path, plate: &grana_image::Plate) -> Vec<DatasetEntry> {
@@ -287,7 +357,12 @@ fn entries_of(path: &Path, group: &str) -> Vec<DatasetEntry> {
         .collect()
 }
 
-fn walk(root: &Path, folder: &Path, datasets: &mut Vec<DatasetEntry>) -> Result<(), DiscoverError> {
+fn walk(
+    root: &Path,
+    folder: &Path,
+    datasets: &mut Vec<DatasetEntry>,
+    tiles: bool,
+) -> Result<(), DiscoverError> {
     let mut entries = std::fs::read_dir(folder)
         .map_err(|error| DiscoverError::Read {
             path: folder.display().to_string(),
@@ -305,7 +380,11 @@ fn walk(root: &Path, folder: &Path, datasets: &mut Vec<DatasetEntry>) -> Result<
         let directory = entry.file_type().is_ok_and(|kind| kind.is_dir())
             && !entry.file_name().to_string_lossy().starts_with('.');
         if directory {
-            walk(root, &path, datasets)?;
+            if tiles && tiles_of(&path) > 1 {
+                datasets.extend(tile_entries(&path, &group_of(root, &path)));
+                continue;
+            }
+            walk(root, &path, datasets, tiles)?;
         }
     }
     Ok(())

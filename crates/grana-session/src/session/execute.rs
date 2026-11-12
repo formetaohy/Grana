@@ -24,6 +24,7 @@ impl Session {
         match command {
             Command::OpenDataset => effects.open_dataset = true,
             Command::OpenImage => effects.open_image = true,
+            Command::OpenTiles => effects.open_tiles = true,
             Command::OpenPath(path) => self.open_path(path),
             Command::OpenRemote(url) => self.begin_remote(url),
             Command::OpenRecent(index) => self.open_recent(index),
@@ -720,6 +721,21 @@ impl Session {
             Command::SetBatchChannels(channels) => {
                 self.batch_channels = channels;
                 self.reset_batch_rows();
+            }
+            Command::SetStitchGrid { rows, columns } => {
+                self.set_stitch_grid(rows, columns);
+            }
+            Command::SetStitchChannel(channel) => {
+                self.set_stitch_channel(channel);
+            }
+            Command::SetStitchSeries(series) => {
+                self.set_stitch_series(series);
+            }
+            Command::ConfirmStitch => {
+                self.confirm_stitch();
+            }
+            Command::CancelStitch => {
+                self.cancel_stitch();
             }
             Command::RunBatch => self.run_batch(),
             Command::PauseBatch => self.set_batch_paused(true),

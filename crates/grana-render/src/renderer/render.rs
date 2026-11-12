@@ -76,6 +76,7 @@ impl Renderer {
             volume_level,
             volume_measure,
             volume_rejection,
+            fit_cache,
             level_cap,
             feedback,
             frames,
@@ -176,10 +177,24 @@ impl Renderer {
             capacity: share,
             current,
         };
+        let fit_key = digest(&[
+            motion,
+            share as u64,
+            u64::from(height),
+            ceiling as u64,
+            first as u64,
+            u64::from(u32::from(measured)),
+        ]);
         let (fit, overflowed) = if measured {
             fit_measured(view, volume_measure, rejected)
+        } else if let Some((key, held)) = *fit_cache
+            && key == fit_key
+        {
+            (held, None)
         } else {
-            (fit_volume(view), None)
+            let computed = fit_volume(view);
+            *fit_cache = Some((fit_key, computed));
+            (computed, None)
         };
         let base = fit.ladder.base.min(allowed - 1);
         let count = BAND.min(allowed - base);

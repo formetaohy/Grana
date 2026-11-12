@@ -384,6 +384,7 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     }
     let mut rows = vec![
         command_row(ctx, "open.image"),
+        command_row(ctx, "open.tiles"),
         command_row(ctx, "open.folder"),
         command_row(ctx, "open.remote"),
         menu_separator(ctx),

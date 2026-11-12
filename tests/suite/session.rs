@@ -1623,7 +1623,7 @@ fn reads_a_batch_run_record() {
     })
     .collect::<Vec<_>>();
     let record = serde_json::json!({
-        "format": 4,
+        "format": 5,
         "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 2,
@@ -1731,7 +1731,7 @@ fn reads_a_batch_run_record() {
 fn records_a_batch_correction() {
     let temp = Temp::new("run-correction");
     let record = serde_json::json!({
-        "format": 4,
+        "format": 5,
         "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 1,

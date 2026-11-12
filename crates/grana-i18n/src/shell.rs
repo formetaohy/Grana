@@ -5,6 +5,11 @@ labels! {
     remote_ome_zarr => "Remote OME-Zarr" / "远程 OME-Zarr";
     project => "Project" / "项目";
     open_image => "Open Image…" / "打开图像…";
+    tiles => "Tiles" / "瓦片";
+    stitch => "Stitch" / "拼接";
+    channel => "Channel" / "通道";
+    series => "Series" / "序列";
+    grid => "Grid" / "网格";
     recover => "Recover" / "恢复";
     discard => "Discard" / "放弃";
     recent => "RECENT" / "最近";
@@ -24,6 +29,8 @@ use crate::messages;
 
 messages! {
     steps_complete(done: usize, total: usize) => "{done} of {total} steps complete." / "已完成 {done}/{total} 步。";
+    tile_count(count: usize) => "{count} tiles" / "{count} 个瓦片";
+    stitching(count: usize) => "Stitching {count} tiles" / "正在拼接 {count} 个瓦片";
     opening(label: &str) => "Opening {label}" / "正在打开 {label}";
     steps_stored(done: usize, total: usize) => "{done} of {total} steps stored." / "已存储 {done}/{total} 步。";
     unsaved_analysis(name: &str) => "Unsaved analysis of {name}" / "{name} 的未保存分析";

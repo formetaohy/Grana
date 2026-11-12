@@ -330,7 +330,7 @@ fn captures_a_protocol_film_without_a_window() {
     protocol.write(&protocol_path).expect("the protocol writes");
     let plan = grana_pipeline::Plan {
         protocol,
-        datasets: grana_pipeline::discover(&datasets).expect("the folder discovers"),
+        datasets: grana_pipeline::discover(&datasets, false).expect("the folder discovers"),
         output: output.clone(),
         jobs: 1,
         project: false,
@@ -444,7 +444,7 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
     let start = || {
         grana_pipeline::Batch::start(grana_pipeline::Plan {
             protocol: protocol.clone(),
-            datasets: grana_pipeline::discover(&datasets).expect("the folder discovers"),
+            datasets: grana_pipeline::discover(&datasets, false).expect("the folder discovers"),
             output: output.clone(),
             jobs: 1,
             project: false,

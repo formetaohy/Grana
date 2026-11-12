@@ -302,6 +302,7 @@ impl App {
                 jobs: session.progress(),
                 io: session.io(exporting, export_message),
                 batch: session.batch(),
+                stitch: session.stitch().map(|stitch| stitch.view()),
                 history: session.history(),
                 series: session.series(),
                 plate: session.plate(),

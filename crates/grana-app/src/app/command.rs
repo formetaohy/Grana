@@ -38,6 +38,12 @@ impl App {
             self.session.begin_load(path);
             return true;
         }
+        if effects.open_tiles
+            && let Some(path) = self.pick_tiles()
+        {
+            self.session.begin_stitch(path);
+            return true;
+        }
         if effects.open_project
             && let Some(path) = self.pick_project()
         {
@@ -156,6 +162,12 @@ impl App {
             .set_title(grana_i18n::app::open_ome_zarr_folder(
                 self.workspace.language,
             ))
+            .pick_folder()
+    }
+
+    pub(super) fn pick_tiles(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title(grana_i18n::app::open_tile_folder(self.workspace.language))
             .pick_folder()
     }
 

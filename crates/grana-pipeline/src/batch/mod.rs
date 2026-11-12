@@ -7,6 +7,7 @@ mod profile;
 mod resume;
 mod ro_crate;
 mod sheet;
+mod stitch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,7 +56,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 17;
+const ANALYSIS_REVISION: u32 = 18;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -220,6 +221,7 @@ impl Progress<'_> {
 }
 
 fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc<Gate>) {
+    let mut plan = plan;
     let corrections = match manifest::corrections(&plan) {
         Ok(corrections) => corrections,
         Err(detail) => {
@@ -233,10 +235,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         let _ = events.send(Event::Done { cancelled: false });
         return;
     }
+    if let Err(detail) = restitch(&mut plan, &events, &cancel, &gate) {
+        let _ = events.send(Event::Failed(detail));
+        let _ = events.send(Event::Done { cancelled: false });
+        return;
+    }
+    if cancel.load(Ordering::Relaxed) {
+        let _ = events.send(Event::Done { cancelled: true });
+        return;
+    }
     let evidence = plan
         .datasets
         .iter()
-        .map(|dataset| evidence(dataset.path()))
+        .map(|dataset| evidence(dataset.image_path()))
         .collect::<Vec<_>>();
     if let Err(detail) = manifest::write(&plan, &evidence, &[], &corrections) {
         let _ = events.send(Event::Failed(detail));
@@ -423,6 +434,31 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     let _ = events.send(Event::Done {
         cancelled: cancel.load(Ordering::Relaxed),
     });
+}
+
+fn restitch(
+    plan: &mut Plan,
+    events: &Sender<Event>,
+    cancel: &AtomicBool,
+    gate: &Gate,
+) -> Result<(), String> {
+    let Some(spec) = plan.protocol.stitch().cloned() else {
+        return Ok(());
+    };
+    let output = plan.output.clone();
+    for (index, dataset) in plan.datasets.iter_mut().enumerate() {
+        if !gate.hold(cancel) {
+            return Ok(());
+        }
+        let progress = Progress {
+            index,
+            events,
+            cancel,
+            gate,
+        };
+        stitch::place(&output, dataset, &spec, &progress)?;
+    }
+    Ok(())
 }
 
 fn prepare(plan: &Plan, corrections: &[Option<Protocol>]) -> Result<(), String> {

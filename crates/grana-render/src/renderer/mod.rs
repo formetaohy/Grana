@@ -36,8 +36,8 @@ use crate::oit::Oit;
 use crate::oit_resolve::OitResolve;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, bucket_scale, capacities,
-    decode_plan, fit_measured, fit_volume, volume_dispatch,
+    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, VolumeFit, bucket_scale,
+    capacities, decode_plan, fit_measured, fit_volume, volume_dispatch,
 };
 use crate::present::Present;
 use crate::sample;
@@ -161,6 +161,7 @@ pub struct Renderer {
     volume_level: Option<usize>,
     volume_measure: Vec<Option<usize>>,
     volume_rejection: Option<(u64, usize)>,
+    fit_cache: Option<(u64, VolumeFit)>,
     motion: Option<u64>,
     level_cap: Option<usize>,
     budget: u64,
@@ -249,6 +250,7 @@ impl Renderer {
             volume_level: None,
             volume_measure: Vec::new(),
             volume_rejection: None,
+            fit_cache: None,
             motion: None,
             level_cap: None,
             budget,
@@ -465,6 +467,7 @@ impl Renderer {
         self.volume_level = None;
         self.volume_measure = vec![None; pyramid.level_count()];
         self.volume_rejection = None;
+        self.fit_cache = None;
         self.meshes.clear();
         self.sections.clear();
         self.sliced = false;

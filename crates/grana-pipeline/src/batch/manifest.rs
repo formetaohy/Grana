@@ -13,7 +13,7 @@ pub(super) const RUN: &str = "run.json";
 
 const CORRECTION: &str = "correction.json";
 
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +31,8 @@ pub struct Run {
 #[serde(deny_unknown_fields)]
 pub struct RunDataset {
     path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stitched: Option<String>,
     group: String,
     title: String,
     scene: usize,
@@ -110,15 +112,22 @@ impl RunDataset {
         if self.scenes == 0 || self.scene >= self.scenes || self.title.is_empty() {
             return None;
         }
-        Some(DatasetEntry::restored(
-            Path::new(&self.path).to_path_buf(),
-            self.group.clone(),
-            self.scene,
-            self.scenes,
-            self.scene_name.clone(),
-            self.well,
-            self.plate.clone(),
-        ))
+        Some(
+            DatasetEntry::restored(
+                Path::new(&self.path).to_path_buf(),
+                self.group.clone(),
+                self.scene,
+                self.scenes,
+                self.scene_name.clone(),
+                self.well,
+                self.plate.clone(),
+            )
+            .at_stitched(
+                self.stitched
+                    .as_ref()
+                    .map(|path| Path::new(path).to_path_buf()),
+            ),
+        )
     }
 }
 
@@ -211,6 +220,7 @@ pub(super) fn write(
                 });
                 RunDataset {
                     path: dataset.path().display().to_string(),
+                    stitched: dataset.stitched().map(|path| path.display().to_string()),
                     group: dataset.group().to_string(),
                     title: dataset.title(),
                     scene: dataset.scene(),

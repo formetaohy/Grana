@@ -51,7 +51,7 @@ pub fn batch(
             return ExitCode::FAILURE;
         }
     };
-    let datasets = match discover(datasets) {
+    let datasets = match discover(datasets, protocol.stitch().is_some()) {
         Ok(found) if found.is_empty() => {
             eprintln!("{} holds no dataset", datasets.display());
             return ExitCode::FAILURE;

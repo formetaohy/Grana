@@ -17,6 +17,8 @@ const RECENT_HEADER: f32 = 20.0;
 const RECENT_ROW: f32 = 34.0;
 const RECOVERY_HEIGHT: f32 = 82.0;
 const LANGUAGE_HEIGHT: f32 = 26.0;
+const STITCH_ROW: f32 = 26.0;
+const STITCH_GAP: f32 = 8.0;
 
 struct Status {
     text: String,
@@ -62,6 +64,14 @@ pub(crate) fn view<'a>(
     } else {
         0.0
     };
+    let actions_height = match view.stitch.as_ref() {
+        Some(stitch) => {
+            let rows =
+                3 + usize::from(stitch.channels.len() > 1) + usize::from(stitch.series_count > 1);
+            STITCH_ROW * rows as f32 + STITCH_GAP * (rows as f32 - 1.0) + CARD_GAP
+        }
+        None => button + CARD_GAP + button + CARD_GAP,
+    };
     let height = 2.0 * CARD_PADDING
         + BRAND_HEIGHT
         + CARD_GAP
@@ -69,9 +79,7 @@ pub(crate) fn view<'a>(
         + CARD_GAP
         + detail_height
         + CARD_GAP
-        + button
-        + CARD_GAP
-        + button
+        + actions_height
         + recovered
         + CARD_GAP
         + LANGUAGE_HEIGHT
@@ -98,39 +106,45 @@ pub(crate) fn view<'a>(
         brand(),
         state(ctx, &status),
         grana_ui::text(status.detail.clone(), detail_style),
-        actions(ctx),
     ];
-    if let Some(recovery) = view.recovery.as_ref() {
-        children.push(recovery_block(ctx, recovery));
+    let mut popups = Vec::new();
+    match view.stitch.as_ref() {
+        Some(stitch) => children.push(stitch_block(ctx, stitch, &mut popups)),
+        None => {
+            children.push(actions(ctx));
+            if let Some(recovery) = view.recovery.as_ref() {
+                children.push(recovery_block(ctx, recovery));
+            }
+            children.push(
+                grana_ui::row().gap(6.0).children([
+                    grana_ui::widget::action_button(
+                        ctx.theme(),
+                        Icon::Folder,
+                        grana_i18n::shell::ome_zarr_folder(language),
+                        Role::Control,
+                    )
+                    .named("shell.open.dataset")
+                    .press(Message::Command(Command::OpenDataset)),
+                    grana_ui::widget::action_button(
+                        ctx.theme(),
+                        Icon::Globe,
+                        grana_i18n::shell::remote_ome_zarr(language),
+                        Role::Control,
+                    )
+                    .named("shell.open.remote")
+                    .press(Message::BeginRemote),
+                    grana_ui::widget::action_button(
+                        ctx.theme(),
+                        Icon::Folder,
+                        grana_i18n::shell::project(language),
+                        Role::Control,
+                    )
+                    .named("shell.open.project")
+                    .press(Message::Command(Command::OpenProject)),
+                ]),
+            );
+        }
     }
-    children.push(
-        grana_ui::row().gap(6.0).children([
-            grana_ui::widget::action_button(
-                ctx.theme(),
-                Icon::Folder,
-                grana_i18n::shell::ome_zarr_folder(language),
-                Role::Control,
-            )
-            .named("shell.open.dataset")
-            .press(Message::Command(Command::OpenDataset)),
-            grana_ui::widget::action_button(
-                ctx.theme(),
-                Icon::Globe,
-                grana_i18n::shell::remote_ome_zarr(language),
-                Role::Control,
-            )
-            .named("shell.open.remote")
-            .press(Message::BeginRemote),
-            grana_ui::widget::action_button(
-                ctx.theme(),
-                Icon::Folder,
-                grana_i18n::shell::project(language),
-                Role::Control,
-            )
-            .named("shell.open.project")
-            .press(Message::Command(Command::OpenProject)),
-        ]),
-    );
     children.push(language_switch(ctx));
     children.push(recent_block(ctx, view));
     let surface = ctx.theme().surface(Role::Panel, State::Rest);
@@ -142,11 +156,163 @@ pub(crate) fn view<'a>(
         .at(rect)
         .named("shell.card");
     elements.push(card);
+    elements.extend(popups);
     elements.extend(crate::panel::remote(ctx, full, workspace.remote_open));
     elements
 }
 
+fn stitch_block<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    stitch: &grana_session::StitchView,
+    popups: &mut Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let language = ctx.language();
+    let grid_key = Key::new("shell.stitch.grid");
+    let channel_key = Key::new("shell.stitch.channel");
+    let detail = if stitch.running {
+        grana_i18n::shell::stitching(language, stitch.tiles)
+    } else {
+        grana_i18n::shell::tile_count(language, stitch.tiles)
+    };
+    let mut children = vec![crate::view::card_title(
+        ctx,
+        Icon::Grid,
+        grana_i18n::shell::tiles(language),
+        Some(&detail),
+    )];
+    let rows = grids(stitch.tiles);
+    if rows.len() > 1 {
+        let label = format!("{} × {}", stitch.rows, stitch.columns);
+        let button = crate::view::button_with(ctx, &label, Role::Control, Length::Fill)
+            .key(grid_key)
+            .press(Message::ToggleOpen(grid_key));
+        children.push(crate::view::form_row(
+            ctx,
+            grana_i18n::shell::grid(language),
+            button,
+        ));
+        let entries = rows
+            .into_iter()
+            .map(|(rows, columns)| {
+                let label = format!("{rows} × {columns}");
+                let checked = rows == stitch.rows && columns == stitch.columns;
+                crate::view::menu_row(
+                    ctx,
+                    &format!("shell.stitch.grid.{rows}.{columns}"),
+                    &label,
+                    checked,
+                    Some(Message::Command(Command::SetStitchGrid { rows, columns })),
+                )
+            })
+            .collect::<Vec<_>>();
+        popups.push(crate::view::menu(ctx, grid_key, 132.0, entries));
+    }
+    if stitch.channels.len() > 1 {
+        let label = stitch
+            .channels
+            .get(stitch.channel)
+            .cloned()
+            .unwrap_or_default();
+        let button = crate::view::button_with(ctx, &label, Role::Control, Length::Fill)
+            .key(channel_key)
+            .press(Message::ToggleOpen(channel_key));
+        children.push(crate::view::form_row(
+            ctx,
+            grana_i18n::shell::channel(language),
+            button,
+        ));
+        let entries = stitch
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                crate::view::menu_row(
+                    ctx,
+                    &format!("shell.stitch.channel.{index}"),
+                    name,
+                    index == stitch.channel,
+                    Some(Message::Command(Command::SetStitchChannel(index))),
+                )
+            })
+            .collect::<Vec<_>>();
+        popups.push(crate::view::menu(ctx, channel_key, 168.0, entries));
+    }
+    if stitch.series_count > 1 {
+        let series_key = Key::new("shell.stitch.series");
+        let label = format!("{} / {}", stitch.series + 1, stitch.series_count);
+        let button = crate::view::button_with(ctx, &label, Role::Control, Length::Fill)
+            .key(series_key)
+            .press(Message::ToggleOpen(series_key));
+        children.push(crate::view::form_row(
+            ctx,
+            grana_i18n::shell::series(language),
+            button,
+        ));
+        let entries = (0..stitch.series_count)
+            .map(|index| {
+                let label = format!("{} / {}", index + 1, stitch.series_count);
+                crate::view::menu_row(
+                    ctx,
+                    &format!("shell.stitch.series.{index}"),
+                    &label,
+                    index == stitch.series,
+                    Some(Message::Command(Command::SetStitchSeries(index))),
+                )
+            })
+            .collect::<Vec<_>>();
+        popups.push(crate::view::menu(ctx, series_key, 132.0, entries));
+    }
+    let confirm = if stitch.running {
+        Message::Noop
+    } else {
+        Message::Command(Command::ConfirmStitch)
+    };
+    let label = if stitch.running {
+        grana_i18n::shell::stitching(language, stitch.tiles)
+    } else {
+        grana_i18n::shell::stitch(language).to_string()
+    };
+    let mut row = Vec::new();
+    if stitch.running {
+        row.push(crate::view::spinner(ctx, 14.0));
+    }
+    row.push(
+        crate::view::button_with(ctx, &label, Role::Prominent, Length::Fill)
+            .named("shell.stitch.confirm")
+            .press(confirm),
+    );
+    row.push(crate::view::icon_button(
+        ctx,
+        "shell.stitch.close",
+        Icon::Close,
+        26.0,
+        Role::Quiet,
+        "",
+        Message::Command(Command::CancelStitch),
+    ));
+    children.push(grana_ui::row().gap(6.0).align(Align::Center).children(row));
+    crate::view::card(ctx, STITCH_GAP, children)
+}
+
+fn grids(tiles: usize) -> Vec<(usize, usize)> {
+    let mut rows = Vec::new();
+    for row in 1..=tiles {
+        if tiles.is_multiple_of(row) {
+            rows.push((row, tiles / row));
+        }
+    }
+    rows
+}
+
 fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
+    if let Some(stitch) = view.stitch.as_ref() {
+        return Status {
+            text: grana_i18n::shell::no_dataset(language).to_string(),
+            detail: stitch.folder.clone(),
+            busy: stitch.running,
+            error: false,
+        };
+    }
     if let Some((label, done, total)) = view.io.document {
         return Status {
             text: grana_i18n::common::task(language, label),

@@ -115,9 +115,11 @@ fn install(
 }
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
-    let source = match grana_image::series_group(dataset.path(), dataset.scene())? {
-        Some(group) => Source::file_group(dataset.path().to_path_buf(), dataset.scene(), group),
-        None => Source::file_series(dataset.path().to_path_buf(), dataset.scene()),
+    let path = dataset.image_path();
+    let scene = dataset.image_scene();
+    let source = match grana_image::series_group(path, scene)? {
+        Some(group) => Source::file_group(path.to_path_buf(), scene, group),
+        None => Source::file_series(path.to_path_buf(), scene),
     };
     let reader = Arc::new(Image::open(&source)?);
     let store = GeometryStore::temporary(DEFAULT_BUDGET)

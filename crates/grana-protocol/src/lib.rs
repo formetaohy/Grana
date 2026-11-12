@@ -21,8 +21,8 @@ pub use spec::{
     MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, NodeSpec,
     PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RelationSpec,
     RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec,
-    SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec,
-    TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
+    SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec,
+    TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -32,6 +32,8 @@ pub use step::Step;
 pub struct Protocol {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<OriginSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stitch: Option<StitchSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     region: Option<RegionSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +80,10 @@ pub enum ProtocolError {
 impl Protocol {
     pub fn origin(&self) -> Option<&OriginSpec> {
         self.origin.as_ref()
+    }
+
+    pub fn stitch(&self) -> Option<&StitchSpec> {
+        self.stitch.as_ref()
     }
 
     pub fn region(&self) -> Option<RegionSpec> {
@@ -397,6 +403,12 @@ impl Protocol {
         }
         if let Some(origin) = self.origin.as_ref() {
             summary.push_str(&format!(" · captured from {}", origin.software()));
+        }
+        if let Some(stitch) = self.stitch.as_ref() {
+            summary.push_str(&format!(
+                " · stitches {}×{} tiles on {}",
+                stitch.rows, stitch.columns, stitch.channel
+            ));
         }
         summary
     }

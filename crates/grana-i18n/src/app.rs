@@ -4,6 +4,7 @@ labels! {
     unsaved_analysis => "Unsaved analysis" / "未保存的分析";
     unsaved_detail => "The analysis has unsaved changes. Save them before continuing?" / "分析中有未保存的更改。是否在继续前保存？";
     open_ome_zarr_folder => "Open an OME-Zarr folder" / "打开 OME-Zarr 文件夹";
+    open_tile_folder => "Open a tile folder" / "打开瓦片文件夹";
     open_microscopy_image => "Open a microscopy image" / "打开显微图像";
     microscopy_image => "Microscopy image" / "显微图像";
     grana_project => "grana project" / "Grana 项目";

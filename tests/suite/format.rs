@@ -613,7 +613,7 @@ fn orders_plate_fields_naturally() {
     assert_eq!(plate.fields()[2].index(), 2);
     assert_eq!(plate.fields()[2].series(), 2);
     assert_eq!(plate.field(0).map(grana_zarr::Field::series), Some(0));
-    let entries = grana_pipeline::discover(&root).expect("the plate discovers its fields");
+    let entries = grana_pipeline::discover(&root, false).expect("the plate discovers its fields");
     assert_eq!(
         entries
             .iter()

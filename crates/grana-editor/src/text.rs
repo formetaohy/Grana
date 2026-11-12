@@ -93,6 +93,7 @@ pub(crate) fn command(language: Language, id: &str) -> &'static str {
     let (english, chinese) = match id {
         "palette.open" => ("Search Commands…", "搜索命令…"),
         "open.image" => ("Open Image…", "打开图像…"),
+        "open.tiles" => ("Open Tile Folder…", "打开瓦片文件夹…"),
         "open.folder" => ("Open OME-Zarr Folder…", "打开 OME-Zarr 文件夹…"),
         "open.remote" => ("Open Remote OME-Zarr…", "打开远程 OME-Zarr…"),
         "open.project" => ("Open Project…", "打开项目…"),

@@ -21,6 +21,7 @@ pub use grana_project::Export;
 pub enum Command {
     OpenDataset,
     OpenImage,
+    OpenTiles,
     OpenPath(PathBuf),
     OpenRemote(String),
     OpenRecent(usize),
@@ -406,6 +407,14 @@ pub enum Command {
     SetBatchJobs(u32),
     SetBatchProject(bool),
     SetBatchChannels(bool),
+    SetStitchGrid {
+        rows: usize,
+        columns: usize,
+    },
+    SetStitchChannel(usize),
+    SetStitchSeries(usize),
+    ConfirmStitch,
+    CancelStitch,
     RunBatch,
     PauseBatch,
     ResumeBatch,
@@ -591,6 +600,7 @@ impl Command {
             self,
             Self::OpenDataset
                 | Self::OpenImage
+                | Self::OpenTiles
                 | Self::OpenPath(_)
                 | Self::OpenRemote(_)
                 | Self::OpenRecent(_)

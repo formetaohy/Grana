@@ -472,6 +472,39 @@ pub struct RegionSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct StitchSpec {
+    pub rows: usize,
+    pub columns: usize,
+    pub channel: String,
+}
+
+impl StitchSpec {
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        if self.rows == 0 || self.columns == 0 {
+            return Err(ProtocolError::Invalid(
+                "a tile grid holds at least one row and one column".to_string(),
+            ));
+        }
+        if self.rows * self.columns < 2 {
+            return Err(ProtocolError::Invalid(
+                "a tile grid spans at least two tiles".to_string(),
+            ));
+        }
+        if self.channel.trim().is_empty() {
+            return Err(ProtocolError::Invalid(
+                "a tile registration names a channel".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn tiles(&self) -> usize {
+        self.rows * self.columns
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaskSpec {
     pub set: String,
     pub channel: String,

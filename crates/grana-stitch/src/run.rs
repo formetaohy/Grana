@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use grana_image::{Image, Source};
-use grana_volume::{Extent, Level, Spacing};
+use grana_volume::{Extent, Intensity, Level, Spacing};
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
 use crate::Error;
@@ -10,6 +10,9 @@ use crate::mosaic::{self, Edge, Offset, Plane, Side};
 const REGISTRATION_SIDE: u32 = 1024;
 const FEATHER: f32 = 32.0;
 const WEIGHT_FLOOR: f32 = 1.0e-3;
+const BLOCK: u32 = 64;
+const LEVEL_LIMIT: usize = 6;
+const LEVEL_FLOOR: u32 = 32;
 
 pub struct Request {
     pub tiles: Vec<Source>,
@@ -17,6 +20,7 @@ pub struct Request {
     pub rows: usize,
     pub columns: usize,
     pub channel: usize,
+    pub series: usize,
 }
 
 pub struct Summary {
@@ -25,6 +29,8 @@ pub struct Summary {
     depth: u32,
     channels: usize,
     frames: u32,
+    series: usize,
+    levels: usize,
     bytes: u64,
     offsets: Vec<[i64; 2]>,
 }
@@ -50,6 +56,14 @@ impl Summary {
         self.frames
     }
 
+    pub fn series(&self) -> usize {
+        self.series
+    }
+
+    pub fn levels(&self) -> usize {
+        self.levels
+    }
+
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
@@ -59,13 +73,36 @@ impl Summary {
     }
 }
 
+pub fn series_count(tiles: &[Source]) -> Result<usize, Error> {
+    if tiles.is_empty() {
+        return Err(Error::new("a mosaic holds at least one tile"));
+    }
+    let mut count = None;
+    for source in tiles {
+        let image = Image::open_with_cache(source, None)
+            .map_err(|error| Error::new(format!("failed to open {}: {error}", source.label())))?;
+        let scened = image.series().len();
+        match count {
+            None => count = Some(scened),
+            Some(known) if known == scened => {}
+            Some(known) => {
+                return Err(Error::new(format!(
+                    "{} holds {scened} series and the first tile holds {known}",
+                    source.label()
+                )));
+            }
+        }
+    }
+    Ok(count.expect("a mosaic holds a tile"))
+}
+
 pub fn stitch(request: &Request) -> Result<Summary, Error> {
     let mosaic = Mosaic::new(request)?;
     let name = request.output.file_stem().map_or_else(
         || "stitched".to_string(),
         |stem| stem.to_string_lossy().into_owned(),
     );
-    let levels = [mosaic.level()];
+    let levels = mosaic.levels();
     let channels = mosaic.channels();
     let mut fill =
         |level: usize,
@@ -95,6 +132,8 @@ pub fn stitch(request: &Request) -> Result<Summary, Error> {
         depth: mosaic.extent.z(),
         channels: channels.len(),
         frames: mosaic.frames,
+        series: request.series,
+        levels: levels.len(),
         bytes: written.bytes(),
         offsets: mosaic.offsets(),
     })
@@ -131,9 +170,18 @@ impl Mosaic {
         }
         let mut images = Vec::with_capacity(request.tiles.len());
         for source in &request.tiles {
-            let image = Image::open_with_cache(source, None).map_err(|error| {
+            let source = at_series(source, request.series);
+            let image = Image::open_with_cache(&source, None).map_err(|error| {
                 Error::new(format!("failed to open {}: {error}", source.label()))
             })?;
+            if image.selected() != request.series {
+                return Err(Error::new(format!(
+                    "{} holds {} series and series {} was chosen",
+                    source.label(),
+                    image.series().len(),
+                    request.series
+                )));
+            }
             images.push(image);
         }
         let base = images[0].pyramid();
@@ -173,6 +221,16 @@ impl Mosaic {
                     "{path} carries another voxel spacing than the first tile"
                 )));
             }
+            for (channel, (held, first)) in
+                pyramid.channels().iter().zip(base.channels()).enumerate()
+            {
+                if held.name() != first.name() {
+                    return Err(Error::new(format!(
+                        "{path} names channel {} another way than the first tile",
+                        channel + 1
+                    )));
+                }
+            }
         }
         let mut registration = 0;
         while registration + 1 < base.level_count()
@@ -188,54 +246,20 @@ impl Mosaic {
         ];
         let placement = base.placement();
         let interval = base.frame_interval();
-        let mut positions = Vec::with_capacity(frames as usize);
+        let mut solved = Vec::with_capacity(frames as usize);
+        let mut failure = None;
         for time in 0..frames {
-            let planes = (0..images.len())
-                .map(|index| plane(&images[index], time, registration, request.channel))
-                .collect::<Result<Vec<_>, Error>>()?;
-            let mut edges = Vec::new();
-            for row in 0..request.rows {
-                for column in 0..request.columns {
-                    let tile = row * request.columns + column;
-                    if column + 1 < request.columns {
-                        let next = tile + 1;
-                        let offset = mosaic::estimate(&planes[tile], &planes[next], Side::Right)
-                            .map_err(|error| {
-                                Error::new(format!(
-                                    "the tiles {} and {} do not register: {error}",
-                                    tile + 1,
-                                    next + 1
-                                ))
-                            })?;
-                        edges.push(Edge::new(tile, next, offset));
+            match frame_positions(&images, request, time, registration, scale) {
+                Ok(positions) => solved.push(Some(positions)),
+                Err(error) => {
+                    if failure.is_none() {
+                        failure = Some(error);
                     }
-                    if row + 1 < request.rows {
-                        let next = tile + request.columns;
-                        let offset = mosaic::estimate(&planes[tile], &planes[next], Side::Below)
-                            .map_err(|error| {
-                                Error::new(format!(
-                                    "the tiles {} and {} do not register: {error}",
-                                    tile + 1,
-                                    next + 1
-                                ))
-                            })?;
-                        edges.push(Edge::new(tile, next, offset));
-                    }
+                    solved.push(None);
                 }
             }
-            let solved = mosaic::solve(images.len(), &edges)?;
-            positions.push(
-                solved
-                    .iter()
-                    .map(|offset| {
-                        Offset::new(
-                            (offset.x as f64 * scale[0]).round() as i64,
-                            (offset.y as f64 * scale[1]).round() as i64,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            );
         }
+        let positions = propagate(solved, failure)?;
         let mut min = Offset::new(i64::MAX, i64::MAX);
         let mut max = Offset::new(i64::MIN, i64::MIN);
         for positions in &positions {
@@ -277,19 +301,36 @@ impl Mosaic {
         })
     }
 
-    fn level(&self) -> Level {
-        Level::new(self.extent, self.spacing)
+    fn levels(&self) -> Vec<Level> {
+        let mut levels = vec![Level::new(self.extent, self.spacing)];
+        while levels.len() < LEVEL_LIMIT {
+            let coarser = levels[levels.len() - 1].coarser();
+            let extent = coarser.extent();
+            if extent.max_dimension() < LEVEL_FLOOR || extent == levels[levels.len() - 1].extent() {
+                break;
+            }
+            levels.push(coarser);
+        }
+        levels
     }
 
     fn channels(&self) -> Vec<WriteChannel<'_>> {
-        self.images[0]
-            .pyramid()
-            .channels()
-            .iter()
-            .map(|channel| WriteChannel {
-                name: channel.name(),
-                tint: channel.tint(),
-                range: channel.intensity(),
+        let base = self.images[0].pyramid().channels();
+        (0..base.len())
+            .map(|channel| {
+                let window = self
+                    .images
+                    .iter()
+                    .map(|image| image.pyramid().channels()[channel].intensity())
+                    .reduce(|held, value| {
+                        Intensity::new(held.min().min(value.min()), held.max().max(value.max()))
+                    })
+                    .expect("a mosaic holds a tile");
+                WriteChannel {
+                    name: base[channel].name(),
+                    tint: base[channel].tint(),
+                    range: window,
+                }
             })
             .collect()
     }
@@ -310,14 +351,87 @@ impl Mosaic {
         length: [u32; 3],
         out: &mut [f32],
     ) -> Result<(), String> {
-        if level != 0 {
-            return Err("the stitched image holds a single level".to_string());
-        }
-        if out.len() != (length[0] * length[1] * length[2]) as usize {
+        let voxels = (length[0] * length[1] * length[2]) as usize;
+        if out.len() != voxels {
             return Err("the stitched chunk does not cover its region".to_string());
         }
+        if level == 0 {
+            return self.fill_base(time, channel, origin, length, out);
+        }
+        let factor = 1u32
+            .checked_shl(level as u32)
+            .ok_or_else(|| "the stitched level lies beyond the pyramid".to_string())?;
+        let base = [0, 1, 2].map(|axis| {
+            let limit = match axis {
+                0 => self.extent.x(),
+                1 => self.extent.y(),
+                _ => self.extent.z(),
+            };
+            (
+                (origin[axis] * factor).min(limit),
+                ((origin[axis] + length[axis]) * factor).min(limit),
+            )
+        });
+        out.fill(0.0);
+        let mut counts = vec![0u32; out.len()];
+        let step = BLOCK - BLOCK % factor;
+        let mut scratch = vec![0.0f32; (step * step * step) as usize];
+        let mut z = base[2].0;
+        while z < base[2].1 {
+            let depth = step.min(base[2].1 - z);
+            let mut y = base[1].0;
+            while y < base[1].1 {
+                let rows = step.min(base[1].1 - y);
+                let mut x = base[0].0;
+                while x < base[0].1 {
+                    let columns = step.min(base[0].1 - x);
+                    let span = [columns, rows, depth];
+                    let held = (columns * rows * depth) as usize;
+                    self.fill_base(time, channel, [x, y, z], span, &mut scratch[..held])?;
+                    for window in 0..depth {
+                        for row in 0..rows {
+                            for column in 0..columns {
+                                let source = (column + columns * (row + rows * window)) as usize;
+                                let target = [
+                                    ((x + column) / factor - origin[0]) as usize,
+                                    ((y + row) / factor - origin[1]) as usize,
+                                    ((z + window) / factor - origin[2]) as usize,
+                                ];
+                                let slot = target[0]
+                                    + length[0] as usize
+                                        * (target[1] + length[1] as usize * target[2]);
+                                out[slot] += scratch[source];
+                                counts[slot] += 1;
+                            }
+                        }
+                    }
+                    x += step;
+                }
+                y += step;
+            }
+            z += step;
+        }
+        for (value, count) in out.iter_mut().zip(&counts) {
+            *value = if *count > 0 {
+                *value / *count as f32
+            } else {
+                0.0
+            };
+        }
+        Ok(())
+    }
+
+    fn fill_base(
+        &self,
+        time: u32,
+        channel: usize,
+        origin: [u32; 3],
+        length: [u32; 3],
+        out: &mut [f32],
+    ) -> Result<(), String> {
         let width = length[0] as usize;
         let height = length[1] as usize;
+        out.fill(0.0);
         let mut weights = vec![0.0f32; out.len()];
         let positions = &self.positions[time as usize];
         for (index, image) in self.images.iter().enumerate() {
@@ -387,6 +501,15 @@ impl Mosaic {
     }
 }
 
+fn at_series(source: &Source, series: usize) -> Source {
+    match source {
+        Source::File {
+            path, group: None, ..
+        } => Source::file_series(path.clone(), series),
+        held => held.clone(),
+    }
+}
+
 fn plane(image: &Image, time: u32, level: usize, channel: usize) -> Result<Plane, Error> {
     let extent = image.pyramid().level(level).extent();
     let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
@@ -404,6 +527,99 @@ fn plane(image: &Image, time: u32, level: usize, channel: usize) -> Result<Plane
         }
     }
     Ok(Plane::new(extent.x() as usize, extent.y() as usize, values))
+}
+
+fn frame_positions(
+    images: &[Image],
+    request: &Request,
+    time: u32,
+    registration: usize,
+    scale: [f64; 2],
+) -> Result<Vec<Offset>, Error> {
+    let planes = (0..images.len())
+        .map(|index| plane(&images[index], time, registration, request.channel))
+        .collect::<Result<Vec<_>, Error>>()?;
+    if planes.iter().all(flat) {
+        return Err(Error::new("the frame carries no signal to register"));
+    }
+    let mut edges = Vec::new();
+    for row in 0..request.rows {
+        for column in 0..request.columns {
+            let tile = row * request.columns + column;
+            if column + 1 < request.columns {
+                let next = tile + 1;
+                let offset = mosaic::estimate(&planes[tile], &planes[next], Side::Right).map_err(
+                    |error| {
+                        Error::new(format!(
+                            "the tiles {} and {} do not register: {error}",
+                            tile + 1,
+                            next + 1
+                        ))
+                    },
+                )?;
+                edges.push(Edge::new(tile, next, offset));
+            }
+            if row + 1 < request.rows {
+                let next = tile + request.columns;
+                let offset = mosaic::estimate(&planes[tile], &planes[next], Side::Below).map_err(
+                    |error| {
+                        Error::new(format!(
+                            "the tiles {} and {} do not register: {error}",
+                            tile + 1,
+                            next + 1
+                        ))
+                    },
+                )?;
+                edges.push(Edge::new(tile, next, offset));
+            }
+        }
+    }
+    let solved = mosaic::solve(images.len(), &edges)?;
+    Ok(solved
+        .iter()
+        .map(|offset| {
+            Offset::new(
+                (offset.x as f64 * scale[0]).round() as i64,
+                (offset.y as f64 * scale[1]).round() as i64,
+            )
+        })
+        .collect())
+}
+
+fn flat(plane: &Plane) -> bool {
+    let low = plane.values().iter().copied().fold(f32::INFINITY, f32::min);
+    let high = plane
+        .values()
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    !(high.is_finite() && low.is_finite() && high > low)
+}
+
+fn propagate(
+    solved: Vec<Option<Vec<Offset>>>,
+    failure: Option<Error>,
+) -> Result<Vec<Vec<Offset>>, Error> {
+    let Some(seed) = solved.iter().position(Option::is_some) else {
+        return Err(failure.unwrap_or_else(|| Error::new("the tiles do not register")));
+    };
+    let mut last = solved[seed]
+        .clone()
+        .expect("the seed frame carries offsets");
+    let mut positions = solved;
+    for slot in positions.iter_mut().take(seed) {
+        *slot = Some(last.clone());
+    }
+    for slot in positions.iter_mut().skip(seed) {
+        match slot {
+            Some(held) => last = held.clone(),
+            None => *slot = Some(last.clone()),
+        }
+    }
+    Ok(positions
+        .into_iter()
+        .map(|slot| slot.expect("every frame carries offsets"))
+        .collect())
 }
 
 fn weight(local: [u32; 3], extent: [u32; 3], feather: [f32; 3]) -> f32 {

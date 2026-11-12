@@ -303,6 +303,7 @@ impl Protocol {
             .collect::<Vec<_>>();
         Protocol {
             origin: Some(OriginSpec::of(scene, fingerprint)),
+            stitch: None,
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
                 scene.shading,

@@ -132,6 +132,18 @@ pub struct RecoveryView<'a> {
     pub age: u64,
 }
 
+pub struct StitchView {
+    pub folder: String,
+    pub tiles: usize,
+    pub channels: Vec<String>,
+    pub channel: usize,
+    pub series: usize,
+    pub series_count: usize,
+    pub rows: usize,
+    pub columns: usize,
+    pub running: bool,
+}
+
 pub struct SessionView<'a> {
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
@@ -140,6 +152,7 @@ pub struct SessionView<'a> {
     pub jobs: &'a [Progress],
     pub io: IoView<'a>,
     pub batch: Option<BatchView<'a>>,
+    pub stitch: Option<StitchView>,
     pub history: HistoryView,
     pub series: SeriesView<'a>,
     pub plate: Option<PlateView<'a>>,

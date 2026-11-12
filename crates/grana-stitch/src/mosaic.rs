@@ -3,9 +3,9 @@ use std::collections::VecDeque;
 use crate::Error;
 
 const MIN_OVERLAP: i64 = 16;
-const MIN_SCORE: f32 = 0.3;
 const MIN_AGREEMENT: f32 = 0.4;
-const REFINE: i64 = 2;
+const COARSE_SIDE: usize = 128;
+const REFINE_REACH: i64 = 2;
 const RELAXATIONS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,25 @@ impl Plane {
     pub fn values(&self) -> &[f32] {
         &self.values
     }
+
+    fn reduced(&self, scale: usize) -> Plane {
+        if scale <= 1 {
+            return self.clone();
+        }
+        let width = self.width.div_ceil(scale);
+        let height = self.height.div_ceil(scale);
+        let mut values = vec![0.0f32; width * height];
+        for y in 0..self.height {
+            for x in 0..self.width {
+                values[(x / scale) + width * (y / scale)] += self.values[x + self.width * y];
+            }
+        }
+        let count = (scale * scale) as f32;
+        for value in &mut values {
+            *value /= count;
+        }
+        Plane::new(width, height, values)
+    }
 }
 
 pub fn estimate(first: &Plane, second: &Plane, side: Side) -> Result<Offset, Error> {
@@ -87,37 +106,22 @@ pub fn estimate(first: &Plane, second: &Plane, side: Side) -> Result<Offset, Err
             "the tiles of a mosaic share the extent of their registration plane",
         ));
     }
-    let left = profile(first, true);
-    let right = profile(second, true);
-    let top = profile(first, false);
-    let bottom = profile(second, false);
-    let (x, y) = match side {
-        Side::Right => (
-            overlap(&left, &right, first.width)?,
-            jitter(&top, &bottom, first.height)?,
-        ),
-        Side::Below => (
-            jitter(&left, &right, first.width)?,
-            overlap(&top, &bottom, first.height)?,
-        ),
+    let widest = first.width.max(first.height);
+    let scale = widest.div_ceil(COARSE_SIDE).max(1);
+    let coarse = (first.reduced(scale), second.reduced(scale));
+    let overlap = (MIN_OVERLAP / scale as i64).max(2);
+    let bounds = search_bounds(coarse.0.width, coarse.0.height, side, overlap);
+    let Some((found, _)) = search(&coarse.0, &coarse.1, bounds, overlap) else {
+        return Err(Error::new("the tiles share no overlapping region"));
     };
-    refine(first, second, Offset::new(x, y))
-}
-
-fn refine(first: &Plane, second: &Plane, offset: Offset) -> Result<Offset, Error> {
-    let mut best: Option<(Offset, f32)> = None;
-    for y in -REFINE..=REFINE {
-        for x in -REFINE..=REFINE {
-            let candidate = Offset::new(offset.x + x, offset.y + y);
-            let Some(score) = agreement(first, second, candidate) else {
-                continue;
-            };
-            if best.is_none_or(|(_, current)| score > current) {
-                best = Some((candidate, score));
-            }
-        }
-    }
-    match best {
+    let guess = Offset::new(found.x * scale as i64, found.y * scale as i64);
+    let reach = REFINE_REACH * scale as i64;
+    let bounds = search_bounds(first.width, first.height, side, MIN_OVERLAP);
+    let window = Bounds {
+        x: (guess.x - reach).max(*bounds.x.start())..=(guess.x + reach).min(*bounds.x.end()),
+        y: (guess.y - reach).max(*bounds.y.start())..=(guess.y + reach).min(*bounds.y.end()),
+    };
+    match search(first, second, window, MIN_OVERLAP) {
         Some((offset, score)) if score >= MIN_AGREEMENT => Ok(offset),
         Some((_, score)) => Err(Error::new(format!(
             "the tiles overlap by too little structure to register (correlation {score:.2})"
@@ -126,14 +130,53 @@ fn refine(first: &Plane, second: &Plane, offset: Offset) -> Result<Offset, Error
     }
 }
 
-fn agreement(first: &Plane, second: &Plane, offset: Offset) -> Option<f32> {
+#[derive(Clone, Debug)]
+struct Bounds {
+    x: std::ops::RangeInclusive<i64>,
+    y: std::ops::RangeInclusive<i64>,
+}
+
+fn search_bounds(width: usize, height: usize, side: Side, overlap: i64) -> Bounds {
+    let (width, height) = (width as i64, height as i64);
+    match side {
+        Side::Right => Bounds {
+            x: (width / 2).max(1)..=width - overlap,
+            y: -(height / 2)..=height / 2,
+        },
+        Side::Below => Bounds {
+            x: -(width / 2)..=width / 2,
+            y: (height / 2).max(1)..=height - overlap,
+        },
+    }
+}
+
+fn search(first: &Plane, second: &Plane, bounds: Bounds, overlap: i64) -> Option<(Offset, f32)> {
+    if bounds.x.is_empty() || bounds.y.is_empty() {
+        return None;
+    }
+    let mut best: Option<(Offset, f32)> = None;
+    for y in bounds.y {
+        for x in bounds.x.clone() {
+            let offset = Offset::new(x, y);
+            let Some(score) = agreement(first, second, offset, overlap) else {
+                continue;
+            };
+            if best.is_none_or(|(_, current)| score > current) {
+                best = Some((offset, score));
+            }
+        }
+    }
+    best
+}
+
+fn agreement(first: &Plane, second: &Plane, offset: Offset, overlap: i64) -> Option<f32> {
     let width = first.width as i64;
     let height = first.height as i64;
     let x_start = offset.x.max(0);
     let x_end = (width + offset.x).min(width);
     let y_start = offset.y.max(0);
     let y_end = (height + offset.y).min(height);
-    if x_end - x_start < MIN_OVERLAP || y_end - y_start < MIN_OVERLAP {
+    if x_end - x_start < overlap || y_end - y_start < overlap {
         return None;
     }
     let mut count = 0.0f64;
@@ -226,83 +269,4 @@ fn relax(values: &mut [f64], first: usize, second: usize, offset: f64) {
         values[first] += 0.5 * error;
         values[second] -= 0.5 * error;
     }
-}
-
-fn profile(plane: &Plane, x: bool) -> Vec<f32> {
-    let length = if x { plane.width } else { plane.height };
-    let mut profile = vec![0.0f32; length];
-    for (row, values) in plane.values.chunks_exact(plane.width).enumerate() {
-        if x {
-            for (slot, value) in profile.iter_mut().zip(values) {
-                *slot += *value;
-            }
-        } else {
-            profile[row] = values.iter().sum();
-        }
-    }
-    profile
-}
-
-fn overlap(a: &[f32], b: &[f32], size: usize) -> Result<i64, Error> {
-    let length = size as i64;
-    let low = (length / 2).max(1);
-    let high = length - MIN_OVERLAP;
-    search(a, b, low, high).ok_or_else(|| Error::new("the tiles overlap too little to register"))
-}
-
-fn jitter(a: &[f32], b: &[f32], size: usize) -> Result<i64, Error> {
-    let length = size as i64;
-    let low = -(length / 2);
-    let high = length / 2;
-    search(a, b, low, high)
-        .ok_or_else(|| Error::new("the tiles share too little signal to register"))
-}
-
-fn search(a: &[f32], b: &[f32], low: i64, high: i64) -> Option<i64> {
-    if high < low {
-        return None;
-    }
-    let mut best: Option<(i64, f32)> = None;
-    for lag in low..=high {
-        let Some(score) = correlation(a, b, lag) else {
-            continue;
-        };
-        if best.is_none_or(|(_, current)| score > current) {
-            best = Some((lag, score));
-        }
-    }
-    match best {
-        Some((lag, score)) if score >= MIN_SCORE => Some(lag),
-        _ => None,
-    }
-}
-
-fn correlation(a: &[f32], b: &[f32], lag: i64) -> Option<f32> {
-    let length = a.len() as i64;
-    let start = lag.max(0);
-    let end = (length + lag).min(length);
-    if end - start < MIN_OVERLAP {
-        return None;
-    }
-    let mut count = 0.0f64;
-    let mut left = 0.0f64;
-    let mut right = 0.0f64;
-    let mut left_square = 0.0f64;
-    let mut right_square = 0.0f64;
-    let mut product = 0.0f64;
-    for index in start..end {
-        let a = f64::from(a[index as usize]);
-        let b = f64::from(b[(index - lag) as usize]);
-        count += 1.0;
-        left += a;
-        right += b;
-        left_square += a * a;
-        right_square += b * b;
-        product += a * b;
-    }
-    let covariance = product - left * right / count;
-    let variance = (left_square - left * left / count).max(0.0)
-        * (right_square - right * right / count).max(0.0);
-    let scale = variance.sqrt();
-    (scale > 1.0e-9).then(|| (covariance / scale) as f32)
 }

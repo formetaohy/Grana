@@ -80,6 +80,7 @@ pub enum Scope {
 pub enum Action {
     OpenPalette,
     OpenImage,
+    OpenTiles,
     OpenFolder,
     OpenRemote,
     OpenProject,
@@ -131,6 +132,7 @@ impl Action {
         match self {
             Self::OpenPalette => Message::OpenPalette,
             Self::OpenImage => Message::Command(Command::OpenImage),
+            Self::OpenTiles => Message::Command(Command::OpenTiles),
             Self::OpenFolder => Message::Command(Command::OpenDataset),
             Self::OpenRemote => Message::BeginRemote,
             Self::OpenProject => Message::Command(Command::OpenProject),
@@ -206,6 +208,14 @@ pub const SPECS: &[Spec] = &[
         scope: Scope::Always,
         shortcut: None,
         action: Action::OpenImage,
+    },
+    Spec {
+        id: "open.tiles",
+        group: Group::File,
+        symbol: Icon::Grid,
+        scope: Scope::Always,
+        shortcut: None,
+        action: Action::OpenTiles,
     },
     Spec {
         id: "open.folder",

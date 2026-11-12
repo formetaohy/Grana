@@ -20,6 +20,7 @@ mod recover;
 mod replay;
 mod scene_import;
 mod seed;
+mod stitch;
 mod tasks;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -62,6 +63,7 @@ use grana_pipeline::{
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
 use recover::Restore;
+use stitch::Stitch;
 use tasks::Tasks;
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -77,6 +79,7 @@ struct Pending {
 pub struct Effects {
     pub open_dataset: bool,
     pub open_image: bool,
+    pub open_tiles: bool,
     pub open_project: bool,
     pub save_project: Option<bool>,
     pub snapshot: bool,
@@ -156,6 +159,7 @@ pub struct Session {
     transfer: Transfer,
     recent: Recent,
     import: Vec<ImportNote>,
+    stitch: Option<Stitch>,
 }
 
 impl Default for Session {
@@ -232,6 +236,7 @@ impl Session {
             transfer: Transfer::default(),
             recent: Recent::default(),
             import: Vec::new(),
+            stitch: None,
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -534,6 +539,7 @@ impl Session {
         repaint |= stepped;
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
+        repaint |= self.poll_stitch();
         repaint |= self.refresh_masks();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
             self.baseline = self.document_hash();
