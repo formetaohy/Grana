@@ -551,6 +551,25 @@ fn detection(
             threshold: params.threshold(),
             min_length: params.min_length(),
         }),
+        ObjectParams::Cells(params) => {
+            let Seeds::Source(source) = seeds else {
+                return Err(ProtocolError::Invalid(
+                    "the cells grow from a nucleus object set".to_string(),
+                ));
+            };
+            let source = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(
+                    "a cell body grows from an object set that left the scene".to_string(),
+                )
+            })?;
+            Ok(SourceSpec::Cells {
+                channel: channel.to_string(),
+                barrier: params.barrier(),
+                reach: params.reach(),
+                grain: params.grain(),
+                seed_source: source.key().as_str().to_string(),
+            })
+        }
     }
 }
 
@@ -635,6 +654,7 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         SourceSpec::Surfaces { seed_source, .. } | SourceSpec::Segments { seed_source, .. } => {
             names.extend(seed_source.clone())
         }
+        SourceSpec::Cells { seed_source, .. } => names.push(seed_source.clone()),
         SourceSpec::Filtered { source, .. }
         | SourceSpec::Copy { source }
         | SourceSpec::Edited { source, .. }

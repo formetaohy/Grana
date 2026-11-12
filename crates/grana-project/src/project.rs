@@ -264,6 +264,7 @@ impl Project {
                 ObjectFrame::Spots(_) => 1,
                 ObjectFrame::Surfaces(set) => 2 + usize::from(set.topology().is_some()),
                 ObjectFrame::Filaments(_) => 2,
+                ObjectFrame::Cells(set) => 2 + usize::from(set.bodies().topology().is_some()),
             })
             .sum()
     }

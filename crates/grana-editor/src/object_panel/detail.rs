@@ -361,18 +361,28 @@ pub(super) fn seeds<'a>(
     let language = ctx.language();
     let source = state.scene.seed_source(id);
     let count = state.scene.seed_count(id);
+    let kind = state
+        .scene
+        .objects
+        .get(id)
+        .map_or(ObjectKind::Surfaces, |set| set.kind());
+    let nucleus_source = kind == ObjectKind::Cells;
     let candidates = state
         .scene
         .objects
         .iter()
         .filter(|set| set.id() != id && (set.detected() > 0 || Some(set.id()) == source))
+        .filter(|set| !nucleus_source || set.kind() == ObjectKind::Surfaces)
         .filter(|set| !state.scene.depends_on(set.id(), id))
         .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
-    let mut options = vec![(
-        0usize,
-        grana_i18n::object::manual_seeds(language).to_string(),
-    )];
+    let mut options = Vec::new();
+    if !nucleus_source {
+        options.push((
+            0usize,
+            grana_i18n::object::manual_seeds(language).to_string(),
+        ));
+    }
     options.extend(
         candidates
             .iter()
@@ -396,12 +406,13 @@ pub(super) fn seeds<'a>(
             })
         }
     };
+    let fallback = options.first().map(|(index, _)| *index);
     children.push(crate::inspector::form_combo(
         ctx,
         &format!("object.{}.seed.source", id.raw()),
         grana_i18n::object::seeds(language),
         &options,
-        selected.or(Some(0)),
+        selected.or(fallback),
         width() - crate::panel::FORM_LABEL,
         choose,
     ));
@@ -418,6 +429,9 @@ pub(super) fn seeds<'a>(
             grana_i18n::object::active_seeds(language),
             &grana_i18n::object::active_seeds_detail(language, count, name),
         ));
+        return children;
+    }
+    if nucleus_source {
         return children;
     }
     let armed = state.workspace.seed == Some(id);

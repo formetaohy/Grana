@@ -569,8 +569,8 @@ impl Recipe {
                 );
             }
             Seeds::Source(_) => assert!(
-                params.kind() == ObjectKind::Surfaces,
-                "only a surface part seeds from another object set"
+                matches!(params.kind(), ObjectKind::Surfaces | ObjectKind::Cells),
+                "only a surface or a cell part seeds from another object set"
             ),
         }
         Self {

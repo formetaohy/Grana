@@ -217,8 +217,26 @@ impl Session {
         let Some(object) = scene.objects.get(set) else {
             return false;
         };
-        if object.kind() != grana_scene::ObjectKind::Surfaces {
-            self.message = Some(Message::error("only surfaces carry seed points"));
+        if !matches!(
+            object.kind(),
+            grana_scene::ObjectKind::Surfaces | grana_scene::ObjectKind::Cells
+        ) {
+            self.message = Some(Message::error(
+                "only surfaces and cells seed from another object set",
+            ));
+            return false;
+        }
+        if object.kind() == grana_scene::ObjectKind::Cells
+            && source.is_some_and(|source| {
+                scene
+                    .objects
+                    .get(source)
+                    .is_none_or(|source| source.kind() != grana_scene::ObjectKind::Surfaces)
+            })
+        {
+            self.message = Some(Message::error(
+                "the cells grow from a surface nucleus object set",
+            ));
             return false;
         }
         if let Some(source) = source {

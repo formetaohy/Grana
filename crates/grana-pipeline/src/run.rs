@@ -20,8 +20,11 @@ mod calibration;
 mod domain;
 mod edit;
 mod frames;
+mod grow;
 mod import;
 mod interop;
+mod labelled;
+mod level;
 mod mask;
 mod segment;
 
@@ -30,6 +33,7 @@ use self::domain::Domain;
 pub use self::edit::edit;
 use self::frames::Notice;
 use self::frames::frames as pipeline;
+pub use self::grow::{GrowRequest, grow};
 pub use self::import::{ImportRequest, import};
 pub use self::interop::{InteropRequest, interop};
 pub use self::mask::{MaskRequest, mask};
@@ -112,6 +116,7 @@ pub fn detect(
         ObjectParams::Spots(params) => spots(reader, params, request, cancel, sink),
         ObjectParams::Surfaces(params) => surfaces(reader, params, request, cancel, sink),
         ObjectParams::Filaments(params) => filaments(reader, params, request, cancel, sink),
+        ObjectParams::Cells(_) => Err("cells grow from a nucleus object set".to_string()),
     }
 }
 

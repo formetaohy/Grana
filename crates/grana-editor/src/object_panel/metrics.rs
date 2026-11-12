@@ -251,6 +251,66 @@ pub(super) fn measure<'a>(
                 (property("Intensity"), intensity_text(intensity)),
             ]
         }
+        ObjectFrame::Cells(cells) => {
+            let body = cells.body(index);
+            let nucleus = cells.nucleus(index);
+            let intensity = cells.intensities().object(index, channel);
+            let centroid = body.centroid();
+            let size = body.bounds().size();
+            let (diameter, hull, axes) = match body.shape() {
+                Some(shape) => (
+                    format!("{:.3} µm", shape.diameter()),
+                    format!("{:.2} µm³", shape.hull_volume()),
+                    {
+                        let axes = shape.axes();
+                        format!("{:.2} × {:.2} × {:.2} µm", axes[0], axes[1], axes[2])
+                    },
+                ),
+                None => ("—".to_string(), "—".to_string(), "—".to_string()),
+            };
+            vec![
+                (property("Object"), format!("#{}", index + 1)),
+                (property("Volume"), format!("{:.2} µm³", body.volume())),
+                (property("Area"), format!("{:.2} µm²", body.area())),
+                (property("Sphericity"), format!("{:.3}", body.sphericity())),
+                (property("Max diameter"), diameter),
+                (property("Hull volume"), hull),
+                (property("Ellipsoid axes"), axes),
+                (
+                    property("Nucleus volume"),
+                    format!("{:.2} µm³", nucleus.volume()),
+                ),
+                (
+                    property("Nucleus area"),
+                    format!("{:.2} µm²", nucleus.area()),
+                ),
+                (
+                    property("Nucleus sphericity"),
+                    format!("{:.3}", nucleus.sphericity()),
+                ),
+                (
+                    property("Cytoplasm volume"),
+                    format!("{:.2} µm³", (body.volume() - nucleus.volume()).max(0.0)),
+                ),
+                (
+                    property("Nuclear ratio"),
+                    format!("{:.3}", nucleus.volume() / body.volume()),
+                ),
+                (
+                    property("Centroid"),
+                    format!(
+                        "{:.2}, {:.2}, {:.2} µm",
+                        centroid[0], centroid[1], centroid[2]
+                    ),
+                ),
+                (
+                    property("Extent"),
+                    format!("{:.2} × {:.2} × {:.2} µm", size[0], size[1], size[2]),
+                ),
+                (property("Voxels"), body.voxel_count().to_string()),
+                (property("Intensity"), intensity_text(intensity)),
+            ]
+        }
         ObjectFrame::Filaments(filaments) => {
             let Some(object) = filaments.object(index) else {
                 return children;

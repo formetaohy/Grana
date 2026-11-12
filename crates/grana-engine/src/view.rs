@@ -110,6 +110,9 @@ pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
             (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
                 surfaces.select_detail(triangle_target(surfaces, lens))
             }
+            (ObjectFrame::Cells(cells), Some(lens)) => {
+                cells.select_detail(triangle_target(cells.bodies(), lens))
+            }
             _ => 0,
         });
     }
@@ -213,6 +216,10 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
             ObjectFrame::Surfaces(surfaces) => {
                 let (mesh, available) =
                     surfaces.detail(wanted).map_err(|error| error.to_string())?;
+                (Some(mesh), available)
+            }
+            ObjectFrame::Cells(cells) => {
+                let (mesh, available) = cells.detail(wanted).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
             _ => (frame.geometry().map_err(|error| error.to_string())?, 0),

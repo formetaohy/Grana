@@ -186,6 +186,14 @@ impl Protocol {
                 channel(names, name)?;
                 self.validate_seeds(seeds, seed_source, frames)?;
             }
+            SourceSpec::Cells {
+                channel: name,
+                seed_source,
+                ..
+            } => {
+                channel(names, name)?;
+                self.validate_seeds(&[], &Some(seed_source.clone()), frames)?;
+            }
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 if !self.sets.iter().any(|set| set.key == *source) {
                     return Err(ProtocolError::Invalid(format!(
@@ -507,6 +515,7 @@ impl Builder<'_> {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. }
+            | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
             SourceSpec::Tracks { file } => self.tracks(file, name, named, track),

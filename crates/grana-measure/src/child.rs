@@ -42,7 +42,12 @@ impl ChildMetric {
             Measurement::Position(_)
             | Measurement::MaxDiameter
             | Measurement::HullVolume
-            | Measurement::Ellipsoid(_) => None,
+            | Measurement::Ellipsoid(_)
+            | Measurement::NucleusVolume
+            | Measurement::NucleusArea
+            | Measurement::NucleusSphericity
+            | Measurement::CytoplasmVolume
+            | Measurement::NuclearRatio => None,
         }
     }
 
@@ -165,6 +170,25 @@ impl ChildMetric {
                     | Self::Junctions
                     | Self::Nodes => {
                         panic!("the spot child metric {self:?} is read from surfaces")
+                    }
+                }
+            }
+            Objects::Cells(set) => {
+                let statistics = set.body(object);
+                match self {
+                    Self::Volume => statistics.volume() as f32,
+                    Self::Area => statistics.area() as f32,
+                    Self::Sphericity => statistics.sphericity() as f32,
+                    Self::Voxels => statistics.voxel_count() as f32,
+                    Self::Intensity(channel) => intensities.object(object, channel).mean(),
+                    Self::Diameter
+                    | Self::Contrast
+                    | Self::Length
+                    | Self::Branches
+                    | Self::Terminals
+                    | Self::Junctions
+                    | Self::Nodes => {
+                        panic!("the spot child metric {self:?} is read from cells")
                     }
                 }
             }

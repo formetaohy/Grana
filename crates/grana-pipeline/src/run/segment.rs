@@ -1,8 +1,7 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_analysis::{LabelBuilder, LabelSlab};
-use grana_object::{Mask, Roi, SurfaceSet};
+use grana_object::{Mask, Roi};
 use grana_scene::{Drift, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, assemble};
 use grana_volume::{Level, Region};
@@ -10,13 +9,10 @@ use grana_volume::{Level, Region};
 use crate::channels::Channels;
 use crate::event::Event;
 use crate::run::domain::Domain;
+use crate::run::labelled;
+use crate::run::level::Leveling;
 
-mod level;
 mod prompt;
-
-use level::Leveling;
-
-const LABEL_SLAB: u32 = 32;
 
 pub struct SegmentRequest {
     channel: usize,
@@ -124,7 +120,15 @@ pub fn segment(
         };
         let width = ranges[0].end - ranges[0].start;
         let height = ranges[1].end - ranges[1].start;
-        let leveling = Leveling::of(reader, time, request.channel, &ranges, mask.as_ref(), shift)?;
+        let leveling = Leveling::at(
+            reader,
+            time,
+            request.channel,
+            0,
+            &ranges,
+            mask.as_ref(),
+            shift,
+        )?;
         let mut slices = Vec::with_capacity(depth as usize);
         for (offset, z) in ranges[2].clone().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -158,7 +162,9 @@ pub fn segment(
         if volume.count() == 0 {
             continue;
         }
-        if let Some(set) = surfaces(reader, time, info, &ranges, &volume, shift)? {
+        if let Some(set) =
+            labelled::surfaces(reader, time, 0, info, &ranges, volume.labels(), shift)?
+        {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Surfaces(set),
@@ -218,49 +224,4 @@ fn keep_labels(labels: &mut [u32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32
             }
         }
     }
-}
-
-fn surfaces(
-    reader: &Channels,
-    time: u32,
-    info: grana_volume::Level,
-    ranges: &[Range<u32>; 3],
-    volume: &grana_segment::Volume,
-    shift: [f32; 3],
-) -> Result<Option<SurfaceSet>, String> {
-    let width = ranges[0].end - ranges[0].start;
-    let height = ranges[1].end - ranges[1].start;
-    let depth = ranges[2].end - ranges[2].start;
-    let plane = width as usize * height as usize;
-    let mut builder = LabelBuilder::new(0, info, reader.pyramid().channel_count());
-    let mut z = 0u32;
-    while z < depth {
-        let core = LABEL_SLAB.min(depth - z);
-        let span = (core + 1).min(depth - z);
-        let start = z as usize * plane;
-        let labels = &volume.labels()[start..start + span as usize * plane];
-        let origin = [ranges[0].start, ranges[1].start, ranges[2].start + z];
-        let extent = [
-            ranges[0].clone(),
-            ranges[1].clone(),
-            origin[2]..origin[2] + span,
-        ];
-        let mut channels = Vec::with_capacity(reader.pyramid().channel_count());
-        for channel in 0..reader.pyramid().channel_count() {
-            channels.push(
-                reader
-                    .read_region(time, 0, channel, &extent, shift)
-                    .map_err(|error| error.to_string())?,
-            );
-        }
-        builder.push(LabelSlab {
-            origin,
-            core: [width, height, core],
-            extent: [width, height, span],
-            labels,
-            channels: &channels,
-        });
-        z += core;
-    }
-    Ok(builder.finish())
 }

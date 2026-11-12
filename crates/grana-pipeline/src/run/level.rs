@@ -17,15 +17,16 @@ pub(super) struct Leveling {
 }
 
 impl Leveling {
-    pub(super) fn of(
+    pub(super) fn at(
         reader: &Channels,
         time: u32,
         channel: usize,
+        level: usize,
         ranges: &[Range<u32>; 3],
         mask: Option<&Mask>,
         shift: [f32; 3],
     ) -> Result<Self, String> {
-        Self::collect(reader, time, channel, 0, ranges, mask, shift)
+        Self::collect(reader, time, channel, level, ranges, mask, shift)
     }
 
     pub(super) fn sampled(

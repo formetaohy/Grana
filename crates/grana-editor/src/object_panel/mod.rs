@@ -158,6 +158,7 @@ fn add_menu<'a>(
         ("add.spots", Icon::Target, ObjectKind::Spots),
         ("add.surfaces", Icon::Cube, ObjectKind::Surfaces),
         ("add.filaments", Icon::Channel, ObjectKind::Filaments),
+        ("add.cells", Icon::Cube, ObjectKind::Cells),
     ] {
         let message = if loading {
             Message::Noop
@@ -256,6 +257,7 @@ fn kind_icon(kind: ObjectKind) -> Icon {
         ObjectKind::Spots => Icon::Target,
         ObjectKind::Surfaces => Icon::Cube,
         ObjectKind::Filaments => Icon::Channel,
+        ObjectKind::Cells => Icon::Cube,
     }
 }
 
@@ -264,6 +266,7 @@ fn kind_name(language: Language, kind: ObjectKind) -> &'static str {
         ObjectKind::Spots => grana_i18n::object::spots(language),
         ObjectKind::Surfaces => grana_i18n::object::surfaces(language),
         ObjectKind::Filaments => grana_i18n::object::filaments(language),
+        ObjectKind::Cells => grana_i18n::object::cells(language),
     }
 }
 
@@ -272,6 +275,7 @@ fn count_noun(language: Language, kind: ObjectKind) -> &'static str {
         ObjectKind::Spots => grana_i18n::object::spots_noun(language),
         ObjectKind::Surfaces => grana_i18n::object::objects_noun(language),
         ObjectKind::Filaments => grana_i18n::object::filaments_noun(language),
+        ObjectKind::Cells => grana_i18n::object::cells_noun(language),
     }
 }
 
@@ -280,6 +284,7 @@ fn description(language: Language, kind: ObjectKind) -> &'static str {
         ObjectKind::Spots => grana_i18n::object::spots_description(language),
         ObjectKind::Surfaces => grana_i18n::object::surfaces_description(language),
         ObjectKind::Filaments => grana_i18n::object::filaments_description(language),
+        ObjectKind::Cells => grana_i18n::object::cells_description(language),
     }
 }
 
@@ -334,7 +339,7 @@ fn object<'a>(
             children.extend(importing(ctx, state, id, kind));
         } else if !merged && !imported_root {
             children.extend(params(ctx, state, id));
-            if kind == ObjectKind::Surfaces {
+            if matches!(kind, ObjectKind::Surfaces | ObjectKind::Cells) {
                 children.extend(seeds(ctx, state, id));
             }
             children.push(detect(ctx, state, id, kind, frames));

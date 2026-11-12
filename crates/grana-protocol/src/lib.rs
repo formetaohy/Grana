@@ -240,6 +240,9 @@ impl Protocol {
                     } => {
                         text = format!("{text} · seeded from {source}");
                     }
+                    SourceSpec::Cells { seed_source, .. } => {
+                        text = format!("{text} · grown around {seed_source}");
+                    }
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
                     | SourceSpec::Segments { .. }

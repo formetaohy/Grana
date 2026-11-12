@@ -11,12 +11,15 @@ labels! {
     spots => "Spots" / "斑点";
     surfaces => "Surfaces" / "表面";
     filaments => "Filaments" / "丝状结构";
+    cells => "Cells" / "细胞";
     spots_noun => "spots" / "斑点";
     objects_noun => "objects" / "对象";
     filaments_noun => "filaments" / "丝状结构";
+    cells_noun => "cells" / "细胞";
     spots_description => "detects intensity maxima in" / "检测强度极大值";
     surfaces_description => "extracts connected surfaces of" / "提取连通表面";
     filaments_description => "traces centerlines through" / "追踪中心线";
+    cells_description => "grows cell bodies around the nuclei in" / "沿细胞膜围绕细胞核生长胞体";
     segments_unlicensed => "Segments · unlicensed" / "分割 · 未授权";
     import_labels => "Import Labels" / "导入标签";
     import_tracks => "Import Tracks" / "导入轨迹";
@@ -155,6 +158,11 @@ pub fn property(language: Language, english: &str) -> String {
         "Ellipsoid axes" => "椭球轴",
         "Centroid" => "质心",
         "Extent" => "范围",
+        "Nucleus volume" => "细胞核体积",
+        "Nucleus area" => "细胞核面积",
+        "Nucleus sphericity" => "细胞核球形度",
+        "Cytoplasm volume" => "细胞质体积",
+        "Nuclear ratio" => "核质比",
         _ => english,
     };
     chinese.to_string()
@@ -176,6 +184,8 @@ pub fn parameter(language: Language, english: &str) -> String {
         "min sphericity" => "最小球形度",
         "min mean intensity" => "最小平均强度",
         "min length" => "最小长度",
+        "barrier" => "膜屏障",
+        "reach" => "延伸范围",
         "cell probability" => "细胞概率",
         "flow error" => "光流误差",
         "minimum size" => "最小尺寸",

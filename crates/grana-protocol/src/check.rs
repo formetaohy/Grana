@@ -593,6 +593,19 @@ impl Protocol {
                 }
                 Ok(())
             }
+            SourceSpec::Cells { seed_source, .. } => {
+                if !earlier.contains(seed_source) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{set} grows from {seed_source}, which does not run before it"
+                    )));
+                }
+                if self.kind_of(seed_source) != Some(grana_scene::ObjectKind::Surfaces) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{set} grows from {seed_source}, which holds no nucleus surfaces"
+                    )));
+                }
+                Ok(())
+            }
             SourceSpec::Spots { .. }
             | SourceSpec::Filaments { .. }
             | SourceSpec::Labels { .. }

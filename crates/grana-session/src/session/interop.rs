@@ -179,7 +179,7 @@ fn objects(
 ) -> Result<Objects, String> {
     let kind = match set.kind() {
         ObjectKind::Spots => geff::Kind::Points,
-        ObjectKind::Surfaces => geff::Kind::Surfaces,
+        ObjectKind::Surfaces | ObjectKind::Cells => geff::Kind::Surfaces,
         ObjectKind::Filaments => geff::Kind::Filaments,
     };
     let channels = scene.dataset.channels().len();
@@ -227,6 +227,19 @@ fn shape(
                 .objects()
                 .get(object)
                 .ok_or_else(|| format!("the surface {object} left its frame"))?;
+            Ok(Shape::Surface {
+                mesh: mesh(geometry, object)?,
+                voxels: statistics.voxel_count(),
+                volume: statistics.volume(),
+                area: statistics.area(),
+            })
+        }
+        ObjectFrame::Cells(set) => {
+            let statistics = set
+                .bodies()
+                .objects()
+                .get(object)
+                .ok_or_else(|| format!("the cell {object} left its frame"))?;
             Ok(Shape::Surface {
                 mesh: mesh(geometry, object)?,
                 voxels: statistics.voxel_count(),

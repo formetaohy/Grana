@@ -1,7 +1,7 @@
 use super::*;
 
 use grana_calibration::Settings;
-use grana_pipeline::run::SegmentRequest;
+use grana_pipeline::run::{GrowRequest, SegmentRequest};
 
 const CALIBRATION_ITERATIONS: u32 = 10;
 
@@ -750,6 +750,7 @@ impl Session {
         let seed_source = scene.seed_source(set);
         let seeds = scene.seed_frames(set);
         if let Some(source) = seed_source
+            && !matches!(params, ObjectParams::Cells(_))
             && seeds.iter().all(|frame| frame.is_empty())
         {
             let name = scene
@@ -812,6 +813,35 @@ impl Session {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
+        if let ObjectParams::Cells(params) = params {
+            let Some(source) = seed_source else {
+                self.message = Some(Message::error("the cells grow from a nucleus object set"));
+                return;
+            };
+            let Some(nuclei) = scene.objects.get(source) else {
+                return;
+            };
+            if nuclei.detected() == 0 {
+                self.message = Some(Message::error(
+                    "the nucleus object set holds no detected objects",
+                ));
+                return;
+            }
+            let sources = (0..scene.frame_count())
+                .map(|time| nuclei.frame_shared(time))
+                .collect::<Vec<_>>();
+            self.message = None;
+            self.record_progress(Job::Detect(set), 0, 0, 0);
+            if let Some(scene) = self.scene.as_mut() {
+                scene.clear_object(set);
+            }
+            self.analysis.push(crate::grow(
+                Job::Detect(set),
+                Arc::clone(&channels),
+                GrowRequest::new(channel, params, region, drift, roi, sources),
+            ));
+            return;
+        }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
         if let Some(params) = segment {
@@ -844,6 +874,15 @@ impl Session {
     }
 
     pub(super) fn recut(&mut self, set: ObjectSetId, previous: ObjectParams, params: ObjectParams) {
+        if previous == params {
+            return;
+        }
+        if matches!(params, ObjectParams::Cells(_)) {
+            if self.scene.is_some() {
+                self.start_detect(set);
+            }
+            return;
+        }
         let restore = previous;
         let (ObjectParams::Surfaces(previous), ObjectParams::Surfaces(params)) = (previous, params)
         else {

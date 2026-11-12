@@ -318,8 +318,10 @@ impl SceneState {
                 }
             }
             Seeds::Source(source) => {
-                if set.kind != ObjectKind::Surfaces || source.raw() == set.id {
-                    return Err(fault("a seed source names another surface set"));
+                if !matches!(set.kind, ObjectKind::Surfaces | ObjectKind::Cells)
+                    || source.raw() == set.id
+                {
+                    return Err(fault("a seed source names another surface or cell set"));
                 }
                 if !self
                     .sets
@@ -402,7 +404,7 @@ impl SceneState {
                     }
                 }
                 Seeds::Source(_) => {
-                    if part.kind() != ObjectKind::Surfaces {
+                    if !matches!(part.kind(), ObjectKind::Surfaces | ObjectKind::Cells) {
                         return Err(fault("only a surface part carries a seed source"));
                     }
                 }

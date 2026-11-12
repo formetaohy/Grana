@@ -31,7 +31,7 @@ const PALETTE: [[f32; 3]; 8] = [
 pub struct Objects {
     sets: Vec<ObjectSet>,
     next_id: u64,
-    ordinals: [u64; 3],
+    ordinals: [u64; ObjectKind::COUNT],
     revisions: Revisions,
     extents: Mutex<HashMap<ObjectSetId, ExtentEntry>>,
     values: Mutex<HashMap<(ObjectSetId, ObjectColor), Values>>,
@@ -57,7 +57,7 @@ impl Objects {
         Self {
             sets: Vec::new(),
             next_id: 1,
-            ordinals: [0; 3],
+            ordinals: [0; ObjectKind::COUNT],
             revisions: Revisions::new(),
             extents: Mutex::new(HashMap::new()),
             values: Mutex::new(HashMap::new()),
@@ -851,7 +851,7 @@ impl Objects {
     pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {
         self.sets.clear();
         self.next_id = 1;
-        self.ordinals = [0; 3];
+        self.ordinals = [0; ObjectKind::COUNT];
         self.forget_caches();
         for state in states {
             assert!(state.id > 0, "an object set id is positive");

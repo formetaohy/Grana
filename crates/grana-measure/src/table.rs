@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use grana_object::{FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
+use grana_object::{CellSet, FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
 
 use crate::child::Child;
 use crate::column::{Column, Unit};
@@ -268,6 +268,7 @@ impl Observation {
 pub enum Objects<'a> {
     Spots(&'a SpotSet),
     Surfaces(&'a SurfaceSet),
+    Cells(&'a CellSet),
     Filaments(&'a FilamentSet),
 }
 
@@ -276,6 +277,7 @@ impl<'a> Objects<'a> {
         match self {
             Self::Spots(set) => set.len(),
             Self::Surfaces(set) => set.object_count(),
+            Self::Cells(set) => set.object_count(),
             Self::Filaments(set) => set.object_count(),
         }
     }
@@ -288,6 +290,7 @@ impl<'a> Objects<'a> {
         match self {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
+            Self::Cells(set) => set.intensities(),
             Self::Filaments(set) => set.intensities(),
         }
     }
@@ -1066,6 +1069,7 @@ fn measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
     match objects {
         Objects::Spots(_) => Measurement::spots(channels),
         Objects::Surfaces(_) => Measurement::surfaces(channels),
+        Objects::Cells(_) => Measurement::cells(channels),
         Objects::Filaments(_) => Measurement::filaments(channels),
     }
 }
@@ -1121,6 +1125,7 @@ fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
         (left, right),
         (Objects::Spots(_), Objects::Spots(_))
             | (Objects::Surfaces(_), Objects::Surfaces(_))
+            | (Objects::Cells(_), Objects::Cells(_))
             | (Objects::Filaments(_), Objects::Filaments(_))
     )
 }

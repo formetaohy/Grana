@@ -3,8 +3,9 @@ use std::sync::Arc;
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{Measurement, Objects};
 use grana_object::{
-    FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, Shape, Spot, SpotParams, SpotSet,
-    SurfaceFilter, SurfaceParams, SurfaceSet, TrackDetection, TrackEvents, TrackParams,
+    CellParams, CellSet, FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, Shape, Spot,
+    SpotParams, SpotSet, SurfaceFilter, SurfaceParams, SurfaceSet, TrackDetection, TrackEvents,
+    TrackParams,
 };
 
 const SPOT_STEP: f32 = 8.0;
@@ -27,12 +28,16 @@ const SURFACE_MIN_SPHERICITY: f32 = 0.0;
 const SURFACE_MIN_MEAN_INTENSITY: f32 = 0.0;
 const FILAMENT_THRESHOLD: f32 = 0.5;
 const FILAMENT_MIN_LENGTH: f32 = 2.0;
+const CELL_BARRIER: f32 = 0.7;
+const CELL_REACH: f32 = 2.0;
+const CELL_GRAIN: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
     Spots,
     Surfaces,
     Filaments,
+    Cells,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -144,12 +149,39 @@ const FILAMENT_FIELDS: [ParamField; 2] = [
     },
 ];
 
+const CELL_FIELDS: [ParamField; CellParams::FIELD_COUNT] = [
+    ParamField {
+        label: "barrier",
+        suffix: "",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "reach",
+        suffix: "×",
+        minimum: ParamScale::Absolute(0.5),
+        maximum: ParamScale::Absolute(4.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "grain",
+        suffix: " µm",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Voxel(3.0),
+        logarithmic: false,
+    },
+];
+
 impl ObjectKind {
+    pub const COUNT: usize = 4;
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Spots => "Spots",
             Self::Surfaces => "Surfaces",
             Self::Filaments => "Filaments",
+            Self::Cells => "Cells",
         }
     }
 
@@ -158,6 +190,7 @@ impl ObjectKind {
             Self::Spots => "spot",
             Self::Surfaces => "object",
             Self::Filaments => "filament",
+            Self::Cells => "cell",
         }
     }
 
@@ -166,6 +199,7 @@ impl ObjectKind {
             Self::Spots => "spots",
             Self::Surfaces => "objects",
             Self::Filaments => "filaments",
+            Self::Cells => "cells",
         }
     }
 
@@ -174,6 +208,7 @@ impl ObjectKind {
             Self::Spots => "detects intensity maxima in",
             Self::Surfaces => "extracts connected surfaces of",
             Self::Filaments => "traces centerlines through",
+            Self::Cells => "grows cell bodies around the nuclei in",
         }
     }
 
@@ -182,6 +217,7 @@ impl ObjectKind {
             Self::Spots => 0,
             Self::Surfaces => 1,
             Self::Filaments => 2,
+            Self::Cells => 3,
         }
     }
 
@@ -194,6 +230,7 @@ impl ObjectKind {
             Self::Spots => Measurement::spots(channels),
             Self::Surfaces => Measurement::surfaces(channels),
             Self::Filaments => Measurement::filaments(channels),
+            Self::Cells => Measurement::cells(channels),
         }
     }
 
@@ -202,6 +239,7 @@ impl ObjectKind {
             Self::Spots => &SPOT_FIELDS,
             Self::Surfaces => &SURFACE_FIELDS,
             Self::Filaments => &FILAMENT_FIELDS,
+            Self::Cells => &CELL_FIELDS,
         }
     }
 
@@ -226,13 +264,16 @@ impl ObjectKind {
                 FILAMENT_THRESHOLD,
                 FILAMENT_MIN_LENGTH,
             )),
+            Self::Cells => {
+                ObjectParams::Cells(CellParams::new(CELL_BARRIER, CELL_REACH, CELL_GRAIN))
+            }
         }
     }
 
     pub fn track_style(self, voxel: f32) -> Option<TrackStyle> {
         let (step, thickness) = match self {
             Self::Spots => (SPOT_STEP, SPOT_THICKNESS),
-            Self::Surfaces => (SURFACE_STEP, SURFACE_THICKNESS),
+            Self::Surfaces | Self::Cells => (SURFACE_STEP, SURFACE_THICKNESS),
             Self::Filaments => (FILAMENT_STEP, FILAMENT_THICKNESS),
         };
         let step = step * voxel;
@@ -293,6 +334,7 @@ pub enum ObjectParams {
     Spots(SpotParams),
     Surfaces(SurfaceParams),
     Filaments(FilamentParams),
+    Cells(CellParams),
 }
 
 impl ObjectParams {
@@ -301,6 +343,7 @@ impl ObjectParams {
             Self::Spots(_) => ObjectKind::Spots,
             Self::Surfaces(_) => ObjectKind::Surfaces,
             Self::Filaments(_) => ObjectKind::Filaments,
+            Self::Cells(_) => ObjectKind::Cells,
         }
     }
 
@@ -309,6 +352,7 @@ impl ObjectParams {
             Self::Spots(params) => params.field(index),
             Self::Surfaces(params) => params.field(index),
             Self::Filaments(params) => params.field(index),
+            Self::Cells(params) => params.field(index),
         }
     }
 
@@ -317,6 +361,7 @@ impl ObjectParams {
             Self::Spots(params) => params.set_field(index, value),
             Self::Surfaces(params) => params.set_field(index, value),
             Self::Filaments(params) => params.set_field(index, value),
+            Self::Cells(params) => params.set_field(index, value),
         }
     }
 }
@@ -326,6 +371,7 @@ pub enum ObjectFrame {
     Spots(SpotSet),
     Surfaces(SurfaceSet),
     Filaments(FilamentSet),
+    Cells(CellSet),
 }
 
 impl ObjectFrame {
@@ -356,6 +402,12 @@ impl ObjectFrame {
                 .iter()
                 .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
                 .collect(),
+            Self::Cells(set) => set
+                .bodies()
+                .objects()
+                .iter()
+                .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
+                .collect(),
         }
     }
 
@@ -364,6 +416,7 @@ impl ObjectFrame {
             Self::Spots(_) => ObjectKind::Spots,
             Self::Surfaces(_) => ObjectKind::Surfaces,
             Self::Filaments(_) => ObjectKind::Filaments,
+            Self::Cells(_) => ObjectKind::Cells,
         }
     }
 
@@ -372,6 +425,7 @@ impl ObjectFrame {
             Self::Spots(set) => set.level(),
             Self::Surfaces(set) => set.level(),
             Self::Filaments(set) => set.level(),
+            Self::Cells(set) => set.level(),
         }
     }
 
@@ -380,6 +434,7 @@ impl ObjectFrame {
             Self::Spots(set) => set.len(),
             Self::Surfaces(set) => set.object_count(),
             Self::Filaments(set) => set.object_count(),
+            Self::Cells(set) => set.object_count(),
         }
     }
 
@@ -390,7 +445,7 @@ impl ObjectFrame {
     pub fn spots(&self) -> Option<&SpotSet> {
         match self {
             Self::Spots(set) => Some(set),
-            Self::Surfaces(_) | Self::Filaments(_) => None,
+            Self::Surfaces(_) | Self::Filaments(_) | Self::Cells(_) => None,
         }
     }
 
@@ -399,6 +454,7 @@ impl ObjectFrame {
             Self::Spots(_) => None,
             Self::Surfaces(set) => Some(set.geometry()?),
             Self::Filaments(set) => Some(set.geometry()?),
+            Self::Cells(set) => Some(set.geometry()?),
         })
     }
 
@@ -407,6 +463,7 @@ impl ObjectFrame {
             Self::Spots(set) => Shape::spots(Arc::from(set.spots())),
             Self::Surfaces(set) => Shape::mesh(set.geometry()?),
             Self::Filaments(set) => Shape::mesh(set.geometry()?),
+            Self::Cells(set) => Shape::mesh(set.geometry()?),
         })
     }
 
@@ -415,6 +472,7 @@ impl ObjectFrame {
             Self::Spots(_) => 0,
             Self::Surfaces(set) => set.bytes(),
             Self::Filaments(set) => set.bytes(),
+            Self::Cells(set) => set.bytes(),
         }
     }
 
@@ -423,6 +481,7 @@ impl ObjectFrame {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
             Self::Filaments(set) => set.intensities(),
+            Self::Cells(set) => set.intensities(),
         }
     }
 
@@ -431,6 +490,7 @@ impl ObjectFrame {
             Self::Spots(set) => Objects::Spots(set),
             Self::Surfaces(set) => Objects::Surfaces(set),
             Self::Filaments(set) => Objects::Filaments(set),
+            Self::Cells(set) => Objects::Cells(set),
         }
     }
 
@@ -443,6 +503,12 @@ impl ObjectFrame {
                 .map(|object| object.centroid())
                 .collect(),
             Self::Filaments(set) => set
+                .objects()
+                .iter()
+                .map(|object| object.centroid())
+                .collect(),
+            Self::Cells(set) => set
+                .bodies()
                 .objects()
                 .iter()
                 .map(|object| object.centroid())
@@ -471,13 +537,21 @@ impl ObjectFrame {
                     TrackDetection::new(object.centroid(), (0.5 * object.diameter()) as f32)
                 })
                 .collect(),
+            Self::Cells(set) => set
+                .bodies()
+                .objects()
+                .iter()
+                .map(|object| {
+                    TrackDetection::new(object.centroid(), equivalent_radius(object.volume()))
+                })
+                .collect(),
         }
     }
 
     pub fn spots_of(&self) -> &[Spot] {
         match self {
             Self::Spots(set) => set.spots(),
-            Self::Surfaces(_) | Self::Filaments(_) => &[],
+            Self::Surfaces(_) | Self::Filaments(_) | Self::Cells(_) => &[],
         }
     }
 
@@ -489,6 +563,7 @@ impl ObjectFrame {
             Self::Spots(set) => set.without(object).map(Self::Spots),
             Self::Surfaces(set) => set.without(object)?.map(Self::Surfaces),
             Self::Filaments(set) => set.without(object)?.map(Self::Filaments),
+            Self::Cells(set) => set.without(object)?.map(Self::Cells),
         })
     }
 
@@ -509,6 +584,7 @@ impl ObjectFrame {
             Self::Spots(set) => Self::Spots(set.retain(keep)),
             Self::Surfaces(set) => Self::Surfaces(set.retain(keep)?),
             Self::Filaments(set) => Self::Filaments(set.retain(keep)?),
+            Self::Cells(set) => Self::Cells(set.retain(keep)?),
         }))
     }
 
@@ -520,6 +596,9 @@ impl ObjectFrame {
             }
             (Self::Filaments(carried), Self::Filaments(absorbed)) => {
                 Self::Filaments(carried.merge(absorbed).map_err(|error| error.to_string())?)
+            }
+            (Self::Cells(carried), Self::Cells(absorbed)) => {
+                Self::Cells(carried.merge(absorbed).map_err(|error| error.to_string())?)
             }
             _ => return Err("an object frame merges into a frame of its own kind".to_string()),
         })

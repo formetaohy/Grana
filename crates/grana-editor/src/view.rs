@@ -604,6 +604,7 @@ pub fn progress_caption(
             grana_scene::ObjectKind::Spots => grana_i18n::common::blocks(language),
             grana_scene::ObjectKind::Surfaces => grana_i18n::common::tiles(language),
             grana_scene::ObjectKind::Filaments => grana_i18n::common::frames(language),
+            grana_scene::ObjectKind::Cells => grana_i18n::common::frames(language),
         },
         grana_scene::Job::Import(_) => grana_i18n::common::tiles(language),
         grana_scene::Job::Track(_)

@@ -10,9 +10,9 @@ use grana_measure::{
     ObjectColocValue,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, RelationFrame,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackLink, TrackNode,
-    TrackSet,
+    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link,
+    RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
+    TrackLink, TrackNode, TrackSet,
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
@@ -30,6 +30,7 @@ use crate::project::{Export, NamedView, Project, Shape, Source, ViewState};
 pub(crate) const TAG_SPOTS: u8 = 0;
 pub(crate) const TAG_SURFACES: u8 = 1;
 pub(crate) const TAG_FILAMENTS: u8 = 2;
+pub(crate) const TAG_CELLS: u8 = 3;
 
 impl Encode for Project {
     fn encode(&self, writer: &mut Encoder<'_>) {
@@ -830,6 +831,11 @@ impl Encode for Measurement {
                 writer.count(*channel);
                 writer.u8(statistic.index());
             }
+            Self::NucleusVolume => writer.u8(16),
+            Self::NucleusArea => writer.u8(17),
+            Self::NucleusSphericity => writer.u8(18),
+            Self::CytoplasmVolume => writer.u8(19),
+            Self::NuclearRatio => writer.u8(20),
         }
     }
 }
@@ -959,6 +965,20 @@ impl Encode for ObjectFrame {
                 writer.u8(TAG_FILAMENTS);
                 set.encode(writer);
             }
+            Self::Cells(set) => {
+                writer.u8(TAG_CELLS);
+                set.encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for CellSet {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.bodies().encode(writer);
+        writer.count(self.nuclei().len());
+        for nucleus in self.nuclei() {
+            nucleus.encode(writer);
         }
     }
 }

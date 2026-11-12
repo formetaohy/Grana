@@ -1,4 +1,4 @@
-use grana_object::{SampleStatistics, TrackSet};
+use grana_object::{IntensityTable, SampleStatistics, SurfaceStatistics, TrackSet};
 
 use crate::column::{Column, Unit};
 use crate::table::Objects;
@@ -83,6 +83,11 @@ pub enum Measurement {
     Terminals,
     Junctions,
     Nodes,
+    NucleusVolume,
+    NucleusArea,
+    NucleusSphericity,
+    CytoplasmVolume,
+    NuclearRatio,
     Intensity {
         channel: usize,
         statistic: Statistic,
@@ -126,6 +131,28 @@ impl Measurement {
         )
     }
 
+    pub fn cells(channels: usize) -> Vec<Self> {
+        Self::tail(
+            channels,
+            &[
+                Self::Volume,
+                Self::Area,
+                Self::Sphericity,
+                Self::MaxDiameter,
+                Self::HullVolume,
+                Self::Ellipsoid(0),
+                Self::Ellipsoid(1),
+                Self::Ellipsoid(2),
+                Self::Voxels,
+                Self::NucleusVolume,
+                Self::NucleusArea,
+                Self::NucleusSphericity,
+                Self::CytoplasmVolume,
+                Self::NuclearRatio,
+            ],
+        )
+    }
+
     pub fn label(self, channels: &[String]) -> String {
         match self {
             Self::Position(axis) => ["x", "y", "z"][axis].to_string(),
@@ -143,6 +170,11 @@ impl Measurement {
             Self::Terminals => "terminals".to_string(),
             Self::Junctions => "junctions".to_string(),
             Self::Nodes => "nodes".to_string(),
+            Self::NucleusVolume => "nucleus volume".to_string(),
+            Self::NucleusArea => "nucleus area".to_string(),
+            Self::NucleusSphericity => "nucleus sphericity".to_string(),
+            Self::CytoplasmVolume => "cytoplasm volume".to_string(),
+            Self::NuclearRatio => "nuclear ratio".to_string(),
             Self::Intensity { channel, statistic } => {
                 format!("{} · {}", channels[channel], statistic.name())
             }
@@ -166,6 +198,11 @@ impl Measurement {
             Self::Terminals => "terminals".to_string(),
             Self::Junctions => "junctions".to_string(),
             Self::Nodes => "nodes".to_string(),
+            Self::NucleusVolume => "nucleus_volume_um3".to_string(),
+            Self::NucleusArea => "nucleus_area_um2".to_string(),
+            Self::NucleusSphericity => "nucleus_sphericity".to_string(),
+            Self::CytoplasmVolume => "cytoplasm_volume_um3".to_string(),
+            Self::NuclearRatio => "nuclear_ratio".to_string(),
             Self::Intensity { channel, statistic } => {
                 format!("{}_intensity_{}", keys[channel], statistic.key())
             }
@@ -179,10 +216,14 @@ impl Measurement {
             | Self::Length
             | Self::MaxDiameter
             | Self::Ellipsoid(_) => Unit::Micrometer,
-            Self::Volume | Self::HullVolume => Unit::CubicMicrometer,
-            Self::Area => Unit::SquareMicrometer,
+            Self::Volume | Self::HullVolume | Self::NucleusVolume | Self::CytoplasmVolume => {
+                Unit::CubicMicrometer
+            }
+            Self::Area | Self::NucleusArea => Unit::SquareMicrometer,
             Self::Contrast
             | Self::Sphericity
+            | Self::NucleusSphericity
+            | Self::NuclearRatio
             | Self::Voxels
             | Self::Branches
             | Self::Terminals
@@ -196,8 +237,10 @@ impl Measurement {
         match self {
             Self::Position(_) | Self::Diameter | Self::Length => 3,
             Self::MaxDiameter | Self::Ellipsoid(_) | Self::HullVolume => 3,
-            Self::Contrast | Self::Sphericity => 4,
-            Self::Volume | Self::Area => 3,
+            Self::Contrast | Self::Sphericity | Self::NucleusSphericity => 4,
+            Self::NuclearRatio => 3,
+            Self::Volume | Self::Area | Self::NucleusVolume | Self::NucleusArea => 3,
+            Self::CytoplasmVolume => 3,
             Self::Voxels | Self::Branches | Self::Terminals | Self::Junctions | Self::Nodes => 0,
             Self::Intensity { .. } => 2,
         }
@@ -223,51 +266,22 @@ impl Measurement {
                     Self::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
                     }
-                    Self::Volume
-                    | Self::Area
-                    | Self::Sphericity
-                    | Self::MaxDiameter
-                    | Self::HullVolume
-                    | Self::Ellipsoid(_)
-                    | Self::Voxels
-                    | Self::Length
-                    | Self::Branches
-                    | Self::Terminals
-                    | Self::Junctions
-                    | Self::Nodes => {
-                        panic!("the surface measurement {self:?} is read from spots")
-                    }
+                    _ => self.unsupported("spots"),
                 }
             }
             Objects::Surfaces(set) => {
-                let statistics = set.objects()[object];
+                self.body(set.objects()[object], intensities, object, "surfaces")
+            }
+            Objects::Cells(set) => {
+                let body = set.body(object);
+                let nucleus = set.nucleus(object);
                 match self {
-                    Self::Position(axis) => statistics.centroid()[axis],
-                    Self::Volume => statistics.volume() as f32,
-                    Self::Area => statistics.area() as f32,
-                    Self::Sphericity => statistics.sphericity() as f32,
-                    Self::MaxDiameter => statistics
-                        .shape()
-                        .map_or(f32::NAN, |shape| shape.diameter() as f32),
-                    Self::HullVolume => statistics
-                        .shape()
-                        .map_or(f32::NAN, |shape| shape.hull_volume() as f32),
-                    Self::Ellipsoid(axis) => statistics
-                        .shape()
-                        .map_or(f32::NAN, |shape| shape.axes()[axis] as f32),
-                    Self::Voxels => statistics.voxel_count() as f32,
-                    Self::Intensity { channel, statistic } => {
-                        statistic.value(intensities.object(object, channel))
-                    }
-                    Self::Diameter
-                    | Self::Contrast
-                    | Self::Length
-                    | Self::Branches
-                    | Self::Terminals
-                    | Self::Junctions
-                    | Self::Nodes => {
-                        panic!("the spot measurement {self:?} is read from surfaces")
-                    }
+                    Self::NucleusVolume => nucleus.volume() as f32,
+                    Self::NucleusArea => nucleus.area() as f32,
+                    Self::NucleusSphericity => nucleus.sphericity() as f32,
+                    Self::CytoplasmVolume => (body.volume() - nucleus.volume()).max(0.0) as f32,
+                    Self::NuclearRatio => (nucleus.volume() / body.volume()) as f32,
+                    _ => self.body(body, intensities, object, "cells"),
                 }
             }
             Objects::Filaments(set) => {
@@ -284,18 +298,43 @@ impl Measurement {
                     Self::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
                     }
-                    Self::Contrast
-                    | Self::Area
-                    | Self::Sphericity
-                    | Self::MaxDiameter
-                    | Self::HullVolume
-                    | Self::Ellipsoid(_)
-                    | Self::Voxels => {
-                        panic!("the filament measurement {self:?} is read from filaments")
-                    }
+                    _ => self.unsupported("filaments"),
                 }
             }
         }
+    }
+
+    fn body(
+        self,
+        statistics: SurfaceStatistics,
+        intensities: &IntensityTable,
+        object: usize,
+        kind: &str,
+    ) -> f32 {
+        match self {
+            Self::Position(axis) => statistics.centroid()[axis],
+            Self::Volume => statistics.volume() as f32,
+            Self::Area => statistics.area() as f32,
+            Self::Sphericity => statistics.sphericity() as f32,
+            Self::MaxDiameter => statistics
+                .shape()
+                .map_or(f32::NAN, |shape| shape.diameter() as f32),
+            Self::HullVolume => statistics
+                .shape()
+                .map_or(f32::NAN, |shape| shape.hull_volume() as f32),
+            Self::Ellipsoid(axis) => statistics
+                .shape()
+                .map_or(f32::NAN, |shape| shape.axes()[axis] as f32),
+            Self::Voxels => statistics.voxel_count() as f32,
+            Self::Intensity { channel, statistic } => {
+                statistic.value(intensities.object(object, channel))
+            }
+            _ => self.unsupported(kind),
+        }
+    }
+
+    fn unsupported(self, kind: &str) -> f32 {
+        panic!("the measurement {self:?} is not measured on {kind}")
     }
 
     pub(crate) fn column(self, channels: &[String], keys: &[String]) -> Column {

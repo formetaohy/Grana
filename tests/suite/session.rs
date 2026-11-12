@@ -7,7 +7,7 @@ use grana_display::CameraState;
 use grana_geometry::GeometryStore;
 use grana_measure::MeasureView;
 use grana_object::{
-    IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
+    CellParams, IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
     SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
@@ -15,7 +15,8 @@ use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_volume::{
-    BrickCoord, BrickRequest, Extent, Fingerprint, Region, Spacing, VolumeSeries, VoxelData,
+    BrickCoord, BrickRequest, Channel, Extent, Fingerprint, Region, Spacing, Volume, VolumeSeries,
+    VoxelData,
 };
 
 use crate::support::{self, Temp};
@@ -1884,6 +1885,170 @@ fn refuses_a_project_written_by_another_schema() {
         format!("{error}").contains("schema"),
         "the error names the schema: {error}"
     );
+}
+
+#[test]
+fn grows_cells_around_nuclei_through_a_project_and_protocol() {
+    let mut session = Session::new();
+    session.open_series("neuromast", cells_series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let nuclei = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set: nuclei,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(nuclei));
+    settle(&mut session);
+    assert_eq!(objects(&session, nuclei), 2, "the two nuclei are detected");
+
+    session.execute(Command::SelectChannel(1));
+    session.execute(Command::AddObject(ObjectKind::Cells));
+    let cells = last_cells(&session);
+    session.execute(Command::SetSeedSource {
+        set: cells,
+        source: Some(nuclei),
+    });
+    session.execute(Command::SetObjectParams {
+        set: cells,
+        params: ObjectParams::Cells(CellParams::new(0.5, 2.0, 0.0)),
+    });
+    session.execute(Command::Detect(cells));
+    settle(&mut session);
+
+    let scene = session.scene().expect("the series stays open");
+    let set = scene.objects.get(cells).expect("the cells stay staged");
+    assert_eq!(set.kind(), ObjectKind::Cells);
+    let frame = set.frame(0).expect("the cells grow on the first frame");
+    let ObjectFrame::Cells(frame) = frame else {
+        panic!("the growth installs a cell frame");
+    };
+    assert_eq!(frame.object_count(), 2, "each nucleus grows one cell");
+    for index in 0..2 {
+        let body = frame.body(index);
+        let nucleus = frame.nucleus(index);
+        assert!(
+            nucleus.volume() > 0.0 && body.volume() > nucleus.volume(),
+            "a cell body holds its nucleus"
+        );
+        assert!(
+            body.volume() < 4.0,
+            "the membrane bounds the cell body: {}",
+            body.volume()
+        );
+        assert!(
+            nucleus.volume() / body.volume() < 1.0,
+            "a nucleus never fills its cell"
+        );
+    }
+
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(
+        text.contains("\"cells\""),
+        "the protocol names the cell growth: {text}"
+    );
+    let restored = Protocol::from_json(&text).expect("the protocol parses");
+    assert_eq!(&restored, protocol);
+
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let rebuilt = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Cells)
+        .and_then(|set| set.frame(0))
+        .map(ObjectFrame::object_count);
+    assert_eq!(
+        rebuilt,
+        Some(2),
+        "the protocol replay grows the cells again"
+    );
+
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "neuromast".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([9; 32]),
+    );
+    let temp = Temp::new("suite-cells");
+    let path = temp.path().join("cells.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the cell project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the cell project reads");
+    assert_eq!(loaded, project, "the cells survive a project");
+}
+
+fn cells_series() -> VolumeSeries {
+    let extent = Extent::new(64, 32, 32);
+    let mut nuclei = vec![0u16; extent.voxel_count() as usize];
+    let mut membranes = vec![0u16; extent.voxel_count() as usize];
+    let cells = [
+        ([16.0f32, 16.0, 16.0], 3.0f32, 7.0f32),
+        ([40.0f32, 16.0, 16.0], 5.0f32, 10.0f32),
+    ];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let point = [x as f32, y as f32, z as f32];
+                let index = extent.index(x, y, z) as usize;
+                for (centre, nucleus, body) in cells {
+                    let offset = [0, 1, 2]
+                        .map(|axis| (point[axis] - centre[axis]).powi(2))
+                        .into_iter()
+                        .sum::<f32>()
+                        .sqrt();
+                    if offset <= nucleus {
+                        nuclei[index] = HIGH;
+                    }
+                    if (offset - body).abs() <= 1.0 {
+                        membranes[index] = HIGH;
+                    }
+                }
+            }
+        }
+    }
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.1),
+        vec![
+            Channel::new("nuclei", [0.3, 0.6, 1.0], VoxelData::U16(nuclei)),
+            Channel::new("membranes", [1.0, 0.6, 0.3], VoxelData::U16(membranes)),
+        ],
+    );
+    VolumeSeries::new(vec![volume], 1.0)
+}
+
+fn last_cells(session: &Session) -> grana_scene::ObjectSetId {
+    session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .iter()
+        .filter(|set| set.kind() == ObjectKind::Cells)
+        .map(|set| set.id())
+        .last()
+        .expect("the cell set is staged")
 }
 
 fn wait_for_scene(session: &mut Session, frames: u32) {

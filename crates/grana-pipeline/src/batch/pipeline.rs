@@ -589,7 +589,18 @@ impl Run<'_, '_> {
         let params = object.params();
         let segmented = object.provenance().segment().cloned();
         let seeds = self.scene.seed_frames(id);
-        let policy = match self.scene.seed_source(id) {
+        let seed_source = self.scene.seed_source(id);
+        let sources = seed_source.map(|source| {
+            let nuclei = self
+                .scene
+                .objects
+                .get(source)
+                .expect("the staged seed source exists");
+            (0..nuclei.frame_count())
+                .map(|time| nuclei.frame_shared(time))
+                .collect::<Vec<_>>()
+        });
+        let policy = match seed_source {
             Some(_) => crate::SeedPolicy::Sourced,
             None if seeds.iter().any(|frame| !frame.is_empty()) => crate::SeedPolicy::Strict,
             None => crate::SeedPolicy::Unseeded,
@@ -605,9 +616,14 @@ impl Run<'_, '_> {
             roi,
             drift: self.scene.drift().clone(),
         };
-        let frames = match segmented {
-            Some(params) => segment_frames(reading, params, seeds, &self.progress)?,
-            None => detect(
+        let frames = match (segmented, params) {
+            (Some(params), _) => segment_frames(reading, params, seeds, &self.progress)?,
+            (None, ObjectParams::Cells(params)) => {
+                let sources = sources
+                    .ok_or_else(|| format!("the cells {name} grow from no nucleus object set"))?;
+                grow_frames(reading, params, sources, &self.progress)?
+            }
+            (None, params) => detect(
                 task,
                 reading,
                 params,
@@ -1372,6 +1388,49 @@ fn detect(
             Arc::clone(store),
         )
         .with_seeds(seeds, policy),
+        progress.cancel,
+        &mut sink,
+    )?;
+    Ok(collected)
+}
+
+fn grow_frames(
+    reading: Reading<'_>,
+    params: grana_object::CellParams,
+    sources: Vec<Option<Arc<ObjectFrame>>>,
+    progress: &Progress<'_>,
+) -> Result<Vec<Option<ObjectFrame>>, String> {
+    let frames = reading.reader.pyramid().frame_count() as usize;
+    let mut collected = vec![None; frames];
+    let mut sink = |event: RunEvent| match event {
+        RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
+        RunEvent::Progress { done, total, .. } if progress.hold() => {
+            let _ = progress.events.send(Event::Progress {
+                index: progress.index,
+                done,
+                total,
+            });
+        }
+        RunEvent::Progress { .. } => {}
+        RunEvent::Tracks(_)
+        | RunEvent::Relation { .. }
+        | RunEvent::Coloc { .. }
+        | RunEvent::ObjectColoc { .. }
+        | RunEvent::Drift(_)
+        | RunEvent::Calibration { .. }
+        | RunEvent::Done
+        | RunEvent::Failed(_) => {}
+    };
+    run::grow(
+        reading.reader,
+        run::GrowRequest::new(
+            reading.channel,
+            params,
+            reading.region,
+            reading.drift,
+            reading.roi,
+            sources,
+        ),
         progress.cancel,
         &mut sink,
     )?;

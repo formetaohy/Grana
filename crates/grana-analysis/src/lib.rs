@@ -1,4 +1,5 @@
 mod assignment;
+mod cell;
 mod coloc;
 mod drift;
 mod filament;
@@ -14,6 +15,7 @@ mod surface;
 mod table;
 mod track;
 
+pub use cell::{CellSeed, GrowField, Growth, grow};
 pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};
 pub use drift::{
     shift as drift_shift, spans as drift_spans, window as drift_window,

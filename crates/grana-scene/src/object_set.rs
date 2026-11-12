@@ -243,10 +243,9 @@ impl ObjectSet {
     }
 
     pub(crate) fn set_seed_source(&mut self, source: Option<ObjectSetId>, frames: usize) -> bool {
-        assert_eq!(
-            self.kind,
-            ObjectKind::Surfaces,
-            "seed points cut a surface detection"
+        assert!(
+            matches!(self.kind, ObjectKind::Surfaces | ObjectKind::Cells),
+            "only a surface or a cell set seeds from another object set"
         );
         let seeds = match source {
             Some(source) => {
@@ -1089,10 +1088,9 @@ impl ObjectSet {
                 );
             }
             Seeds::Source(source) => {
-                assert_eq!(
-                    kind,
-                    ObjectKind::Surfaces,
-                    "only a surface set seeds from another object set"
+                assert!(
+                    matches!(kind, ObjectKind::Surfaces | ObjectKind::Cells),
+                    "only a surface or a cell set seeds from another object set"
                 );
                 assert!(
                     source.raw() > 0 && *source != ObjectSetId::new(id),
@@ -1283,11 +1281,9 @@ impl ObjectSet {
     }
 
     pub(crate) fn add_seed(&mut self, time: u32, position: [f32; 3], stamp: Revision) -> bool {
-        assert_eq!(
-            self.kind,
-            ObjectKind::Surfaces,
-            "seed points cut a surface detection"
-        );
+        if self.kind != ObjectKind::Surfaces {
+            return false;
+        }
         assert!(
             position.iter().all(|value| value.is_finite()),
             "a seed point is finite"

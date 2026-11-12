@@ -9,7 +9,9 @@ use grana_measure::{
     Statistic, Table,
 };
 use grana_mesh::Format as MeshFormat;
-use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
+use grana_object::{
+    CellParams, FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams,
+};
 use grana_project::{Export, ViewState};
 use grana_scene::{
     Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene, SegmentParams,
@@ -902,6 +904,13 @@ pub enum SourceSpec {
         channel: String,
         threshold: f32,
         min_length: f32,
+    },
+    Cells {
+        channel: String,
+        barrier: f32,
+        reach: f32,
+        grain: f32,
+        seed_source: String,
     },
     Segments {
         channel: String,
@@ -2645,6 +2654,7 @@ impl SourceSpec {
                 Some(ObjectKind::Surfaces)
             }
             Self::Filaments { .. } => Some(ObjectKind::Filaments),
+            Self::Cells { .. } => Some(ObjectKind::Cells),
             Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -2658,6 +2668,7 @@ impl SourceSpec {
             Self::Spots { channel, .. }
             | Self::Surfaces { channel, .. }
             | Self::Filaments { channel, .. }
+            | Self::Cells { channel, .. }
             | Self::Segments { channel, .. } => Some(channel),
             Self::Labels { .. }
             | Self::Tracks { .. }
@@ -2676,6 +2687,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
+            | Self::Cells { .. }
             | Self::Segments { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
@@ -2691,6 +2703,7 @@ impl SourceSpec {
             Self::Spots { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
+            | Self::Cells { .. }
             | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Filtered { .. }
@@ -2728,6 +2741,12 @@ impl SourceSpec {
                 min_length,
                 ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
+            Self::Cells {
+                barrier,
+                reach,
+                grain,
+                ..
+            } => ObjectParams::Cells(CellParams::new(barrier, reach, grain)),
             Self::Labels { .. }
             | Self::Segments { .. }
             | Self::Tracks { .. }
@@ -2770,6 +2789,7 @@ impl SourceSpec {
             Self::Surfaces { seeds, .. } | Self::Segments { seeds, .. } => seeds,
             Self::Spots { .. }
             | Self::Filaments { .. }
+            | Self::Cells { .. }
             | Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -2785,6 +2805,7 @@ impl SourceSpec {
             Self::Surfaces { seed_source, .. } | Self::Segments { seed_source, .. } => {
                 seed_source.as_deref()
             }
+            Self::Cells { seed_source, .. } => Some(seed_source),
             Self::Spots { .. }
             | Self::Filaments { .. }
             | Self::Labels { .. }
@@ -2880,6 +2901,28 @@ impl SourceSpec {
                 }
                 if !(min_length.is_finite() && *min_length > 0.0) {
                     return invalid("needs a positive minimum length".to_string());
+                }
+            }
+            Self::Cells {
+                channel,
+                barrier,
+                reach,
+                grain,
+                seed_source,
+            } => {
+                validate(channel, &format!("the channel of {set}"))?;
+                if !(0.0..=1.0).contains(barrier) {
+                    return invalid("needs a unit membrane barrier".to_string());
+                }
+                if !(reach.is_finite() && *reach > 0.0) {
+                    return invalid("needs a positive reach".to_string());
+                }
+                if !(grain.is_finite() && *grain >= 0.0) {
+                    return invalid("needs a non-negative cell grain".to_string());
+                }
+                validate(seed_source, "a cell nucleus source")?;
+                if seed_source == set {
+                    return invalid("grows from itself".to_string());
                 }
             }
             Self::Segments {
@@ -3079,6 +3122,7 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. }
+            | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
             | SourceSpec::Tracks { .. } => source.kind(),
@@ -3108,6 +3152,7 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. }
+            | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. } => source.channel(),
             SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
             SourceSpec::Filtered { source, .. }

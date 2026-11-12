@@ -16,8 +16,8 @@ use grana_measure::{
     ColocSettings, ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit, MaskMode,
-    MaskTool, RelationFrame, RelationPair, SampleStatistics, Spot, SpotSet, SurfaceSet,
+    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
+    MaskMode, MaskTool, RelationFrame, RelationPair, SampleStatistics, Spot, SpotSet, SurfaceSet,
     SurfaceStatistics, SurfaceTopology, Track, TrackLink, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
@@ -33,7 +33,7 @@ use grana_scene::{
 use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
 
 use crate::codec::{Decode, Reader};
-use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
+use crate::encode::{TAG_CELLS, TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
 use crate::project::{Export, NamedView, Project, Shape, Source, ViewState};
 
 const FAULT_VALUE: &str = "the project data carries a value outside its domain";
@@ -620,6 +620,7 @@ impl Decode for SetState {
             0 => ObjectKind::Spots,
             1 => ObjectKind::Surfaces,
             2 => ObjectKind::Filaments,
+            3 => ObjectKind::Cells,
             _ => return Err(FAULT_SHAPE),
         };
         let key = ObjectSetKey::parse(&reader.string()?).ok_or(FAULT_VALUE)?;
@@ -938,7 +939,7 @@ fn decode_recipe(reader: &mut Reader<'_>, depth: usize) -> Result<Recipe, &'stat
             }
         }
         Seeds::Source(_) => {
-            if params.kind() != ObjectKind::Surfaces {
+            if !matches!(params.kind(), ObjectKind::Surfaces | ObjectKind::Cells) {
                 return Err(FAULT_SHAPE);
             }
         }
@@ -1113,6 +1114,7 @@ impl Decode for ObjectParams {
             0 => ObjectKind::Spots,
             1 => ObjectKind::Surfaces,
             2 => ObjectKind::Filaments,
+            3 => ObjectKind::Cells,
             _ => return Err(FAULT_SHAPE),
         };
         const FIELDS: usize = 8;
@@ -1151,6 +1153,11 @@ impl Decode for ObjectParams {
             ObjectKind::Filaments if unit(values[0]) && values[1] > 0.0 => Ok(Self::Filaments(
                 grana_object::FilamentParams::new(values[0], values[1]),
             )),
+            ObjectKind::Cells if unit(values[0]) && values[1] > 0.0 && length(values[2]) => {
+                Ok(Self::Cells(grana_object::CellParams::new(
+                    values[0], values[1], values[2],
+                )))
+            }
             _ => Err(FAULT_VALUE),
         }
     }
@@ -1291,6 +1298,11 @@ impl Decode for Measurement {
                 channel: reader.u32()? as usize,
                 statistic: Statistic::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?,
             },
+            16 => Self::NucleusVolume,
+            17 => Self::NucleusArea,
+            18 => Self::NucleusSphericity,
+            19 => Self::CytoplasmVolume,
+            20 => Self::NuclearRatio,
             _ => return Err(FAULT_SHAPE),
         };
         if let Self::Position(axis) = measurement
@@ -1467,8 +1479,20 @@ impl Decode for ObjectFrame {
             TAG_SPOTS => Ok(Self::Spots(SpotSet::decode(reader)?)),
             TAG_SURFACES => Ok(Self::Surfaces(SurfaceSet::decode(reader)?)),
             TAG_FILAMENTS => Ok(Self::Filaments(FilamentSet::decode(reader)?)),
+            TAG_CELLS => Ok(Self::Cells(CellSet::decode(reader)?)),
             _ => Err(FAULT_SHAPE),
         }
+    }
+}
+
+impl Decode for CellSet {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let bodies = SurfaceSet::decode(reader)?;
+        let nuclei = Vec::<SurfaceStatistics>::decode(reader)?;
+        if nuclei.len() != bodies.object_count() {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(Self::new(bodies, nuclei))
     }
 }
 

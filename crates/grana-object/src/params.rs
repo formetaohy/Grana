@@ -429,6 +429,91 @@ impl FilamentParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellParams {
+    barrier: f32,
+    reach: f32,
+    grain: f32,
+}
+
+impl CellParams {
+    pub const FIELD_COUNT: usize = 3;
+
+    pub fn new(barrier: f32, reach: f32, grain: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&barrier),
+            "a cell barrier is a fraction of the membrane range"
+        );
+        assert!(
+            reach.is_finite() && reach > 0.0,
+            "a cell reach is a positive multiple of the nucleus radius"
+        );
+        assert!(
+            grain.is_finite() && grain >= 0.0,
+            "a cell grain is a non-negative length"
+        );
+        Self {
+            barrier,
+            reach,
+            grain,
+        }
+    }
+
+    pub fn barrier(self) -> f32 {
+        self.barrier
+    }
+
+    pub fn reach(self) -> f32 {
+        self.reach
+    }
+
+    pub fn grain(self) -> f32 {
+        self.grain
+    }
+
+    pub fn field(&self, index: usize) -> f32 {
+        match index {
+            0 => self.barrier,
+            1 => self.reach,
+            2 => self.grain,
+            _ => panic!("a cell carries three parameters"),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.set_barrier(value),
+            1 => self.set_reach(value),
+            2 => self.set_grain(value),
+            _ => panic!("a cell carries three parameters"),
+        }
+    }
+
+    pub fn set_barrier(&mut self, barrier: f32) {
+        assert!(
+            (0.0..=1.0).contains(&barrier),
+            "a cell barrier is a fraction of the membrane range"
+        );
+        self.barrier = barrier;
+    }
+
+    pub fn set_reach(&mut self, reach: f32) {
+        assert!(
+            reach.is_finite() && reach > 0.0,
+            "a cell reach must be a positive length"
+        );
+        self.reach = reach;
+    }
+
+    pub fn set_grain(&mut self, grain: f32) {
+        assert!(
+            grain.is_finite() && grain >= 0.0,
+            "a cell grain is a non-negative length"
+        );
+        self.grain = grain;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackEvents {
     division: bool,
     division_range: f32,

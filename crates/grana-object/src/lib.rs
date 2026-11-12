@@ -1,5 +1,6 @@
 mod algorithm;
 mod anchor;
+mod cell;
 mod filament;
 mod intensity;
 mod label;
@@ -16,6 +17,7 @@ mod track;
 
 pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
+pub use cell::CellSet;
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
@@ -23,7 +25,8 @@ pub use layout::TrackLayout;
 pub use mask::{Mask, Roi};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
-    FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackEvents, TrackParams,
+    CellParams, FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackEvents,
+    TrackParams,
 };
 pub use relation::{RelationFrame, RelationPair};
 pub use shape::Shape;

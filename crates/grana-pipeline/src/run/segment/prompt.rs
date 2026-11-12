@@ -11,8 +11,8 @@ use crate::event::Event;
 use crate::run::domain::Domain;
 
 use super::SegmentRequest;
-use super::level::Leveling;
 use super::segmenter;
+use crate::run::level::Leveling;
 
 const WINDOW_LIMIT: u32 = 1024;
 const WINDOW_GROWTH: u32 = 3;
