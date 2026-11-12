@@ -83,10 +83,8 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             exposure: 1.0,
             samples: SAMPLES,
             scene: &scene,
-            prefetch: false,
-            await_residency: false,
+            display: grana_render::Display::Export,
             level_cap: usize::MAX,
-            assured: true,
             temporal: None,
         };
         settle(&gpu, &mut renderer, &frame, &volume);
@@ -191,10 +189,8 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
         exposure: frame.exposure,
         samples: frame.samples,
         scene: frame.scene,
-        prefetch: frame.prefetch,
-        await_residency: frame.await_residency,
+        display: frame.display,
         level_cap: frame.level_cap,
-        assured: frame.assured,
         temporal: frame.temporal,
     }
 }

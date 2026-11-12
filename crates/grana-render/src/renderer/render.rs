@@ -23,23 +23,15 @@ impl Renderer {
             exposure,
             samples,
             scene,
-            prefetch,
-            await_residency,
+            display,
             level_cap: _,
-            assured,
             temporal,
         } = frame;
         assert!(inside(viewport, size), "the view lies on the surface");
-        if await_residency && (!self.awaiting || time != self.time) {
-            self.awaited = Some(time);
-        }
-        if !await_residency {
-            self.awaited = None;
-        }
-        self.awaiting = await_residency;
-        let holding = self.awaited == Some(time);
+        let awaits = display.awaits();
+        let assured = display.assures();
         self.time = time;
-        self.prefetch = prefetch;
+        self.prefetch = display.prefetches();
         self.viewport = Some(viewport);
         let slice = camera.slice().is_some();
         let slice_objects = slice && (!scene.layers.is_empty() || !scene.markers.is_empty());
@@ -88,7 +80,6 @@ impl Renderer {
             settled,
             planned,
             demand,
-            awaited,
             shadow,
             transparent,
             exporting,
@@ -225,12 +216,15 @@ impl Renderer {
             objects: versions.objects(),
             style: versions.style(),
         };
-        let fresh = *resident != Some(next);
+        let stale = *resident != Some(next);
         let residency = Residency::of(
             *epoch,
             stamp,
             channel_key,
-            Mode { prefetch, assured },
+            Mode {
+                prefetch: display.prefetches(),
+                assured,
+            },
             time,
             ViewState {
                 camera,
@@ -243,20 +237,17 @@ impl Renderer {
         info.settled = *settled == Some(residency);
         info.truncated = info.view.level == ladder.base && info.view.visible > info.view.demand;
         let ready_at_time = info.settled && (!assured || !info.truncated);
-        let ready = if holding || assured {
+        let ready = if awaits || assured {
             ready_at_time
         } else {
             true
         };
-        if ready_at_time {
-            *awaited = None;
-        }
         let reserved = if replan {
             feedback.as_mut().and_then(Readback::reserve)
         } else {
             None
         };
-        if holding && !ready_at_time && reserved.is_none() {
+        if awaits && !ready_at_time && reserved.is_none() {
             target.samples = 0;
             info.samples = 0;
             info.rebuilt = false;
@@ -323,7 +314,7 @@ impl Renderer {
             viewport[3] as f32,
         ];
         data.oit = [u32::from(translucent), 0, 0, 0];
-        data.tag[1] = u32::from(!await_residency && !assured);
+        data.tag[1] = u32::from(!awaits);
         data.occupancy[0] = scene_table.threshold_floor();
         let pixels = u64::from(width) * u64::from(height);
         if translucent
@@ -422,8 +413,8 @@ impl Renderer {
         info.samples = target.samples;
         info.rebuilt = false;
         if reset {
-            info.rebuilt = fresh;
-            if fresh {
+            info.rebuilt = stale;
+            if stale {
                 meshes.set(device, queue, layouts, scene);
                 markers.set(device, queue, layouts, scene.markers);
                 *resident = Some(next);

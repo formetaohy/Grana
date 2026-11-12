@@ -34,6 +34,7 @@ use crate::stream::Stream;
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
+const PLAYBACK_POLL: Duration = Duration::from_millis(4);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
@@ -69,7 +70,6 @@ pub struct App {
     needs_fit: bool,
     last_advance: Option<Instant>,
     last_animation: Option<Instant>,
-    presented_time: Option<u32>,
     repaint_at: Option<Instant>,
     title: Option<String>,
     modifiers: ModifiersState,
@@ -121,7 +121,6 @@ impl App {
             needs_fit: true,
             last_advance: None,
             last_animation: None,
-            presented_time: None,
             repaint_at: None,
             title: None,
             modifiers: ModifiersState::default(),
@@ -223,15 +222,14 @@ impl App {
         self.autosave();
         self.advance_playback();
         self.advance_animation();
-        let interacting = animating || self.interacting || self.workspace.playback.previewing;
+        let display = self.display_mode(animating);
         self.interacting = false;
         self.fit_view();
-        let mut delay = self.render(interacting).unwrap_or(Duration::MAX);
-        self.mark_presented();
+        let mut delay = self.render(display).unwrap_or(Duration::MAX);
         if animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.playing {
-            delay = delay.min(STREAM_POLL);
+            delay = delay.min(PLAYBACK_POLL);
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
         } else if self.session.scene().is_some() && self.converging() {
@@ -393,7 +391,9 @@ impl ApplicationHandler for App {
             return;
         }
         if self.repaint_at.is_none() {
-            if self.workspace.playback.playing || self.streaming() {
+            if self.workspace.playback.playing {
+                self.repaint_at = Some(Instant::now() + PLAYBACK_POLL);
+            } else if self.streaming() {
                 self.repaint_at = Some(Instant::now() + STREAM_POLL);
             } else if self.export.running() {
                 self.repaint_at = Some(Instant::now() + EXPORT_POLL);

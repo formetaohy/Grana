@@ -1,5 +1,5 @@
 use grana_display::Camera;
-use grana_render::{Frame, FrameInfo, Renderer, Temporal};
+use grana_render::{Display, Frame, FrameInfo, Renderer, Temporal};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
 
@@ -14,8 +14,7 @@ pub(crate) struct View<'a> {
     pub viewport: [u32; 4],
     pub size: [u32; 2],
     pub samples: u32,
-    pub prefetch: bool,
-    pub await_residency: bool,
+    pub display: Display,
     pub level_cap: usize,
 }
 
@@ -42,10 +41,8 @@ pub(crate) fn draw(
             exposure: frame.scene.exposure,
             samples: frame.samples,
             scene: &scene,
-            prefetch: frame.prefetch,
-            await_residency: frame.await_residency,
+            display: frame.display,
             level_cap: frame.level_cap,
-            assured: false,
             temporal: Some(Temporal::new(HISTORY)),
         },
     )

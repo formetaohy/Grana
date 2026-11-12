@@ -1,9 +1,21 @@
 use std::time::Instant;
 
 use grana_animation::Keyframe;
+use grana_engine::Display;
 
 use super::{App, PLAYBACK_INTERVAL};
+
 impl App {
+    pub(super) fn display_mode(&self, animating: bool) -> Display {
+        if animating || self.interacting || self.workspace.playback.previewing {
+            Display::Interactive
+        } else if self.workspace.playback.playing {
+            Display::Playback
+        } else {
+            Display::Still
+        }
+    }
+
     pub(super) fn set_keyframe(&mut self) {
         let Some(scene) = self.session.scene() else {
             return;
@@ -36,7 +48,7 @@ impl App {
             return;
         }
         let current = scene.time();
-        if self.presented_time != Some(current) {
+        if self.frame_info().samples == 0 {
             return;
         }
         let now = Instant::now();
@@ -47,20 +59,9 @@ impl App {
             return;
         }
         let next = (current + 1) % frames;
-        self.presented_time = None;
         self.session.set_time(next);
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);
-    }
-
-    pub(super) fn mark_presented(&mut self) {
-        if self.frame_info().samples == 0 {
-            return;
-        }
-        let Some(scene) = self.session.scene() else {
-            return;
-        };
-        self.presented_time = Some(scene.time());
     }
 
     pub(super) fn advance_animation(&mut self) {
@@ -99,6 +100,7 @@ impl App {
             self.workspace.playback.previewing = false;
             self.last_animation = None;
         }
+        self.request_redraw();
     }
 
     pub(super) fn step_slice(&mut self, steps: i32) {

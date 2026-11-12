@@ -161,7 +161,7 @@ impl App {
             WindowEvent::Ime(Ime::Commit(text)) => {
                 input.push(UiEvent::Text(text.clone()));
             }
-            _ => {}
+            _ => return,
         }
         self.interacting = true;
         self.request_redraw();

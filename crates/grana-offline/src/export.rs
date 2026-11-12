@@ -224,10 +224,8 @@ impl Export {
                 exposure: scene.exposure,
                 samples: self.samples,
                 scene: &frame,
-                prefetch: false,
-                await_residency: false,
+                display: grana_render::Display::Export,
                 level_cap: usize::MAX,
-                assured: true,
                 temporal: self.temporal,
             },
         );

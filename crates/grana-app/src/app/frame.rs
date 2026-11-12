@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use grana_engine::{SAMPLE_LIMIT, Viewport};
+use grana_engine::{Display, SAMPLE_LIMIT, Viewport};
 use grana_render::FrameInfo;
 
 use super::App;
@@ -48,7 +48,6 @@ impl App {
             self.workspace.playback.previewing = false;
             self.last_advance = None;
             self.last_animation = None;
-            self.presented_time = None;
         }
         let view = session.take_view();
         if let Some(view) = view {
@@ -87,9 +86,8 @@ impl App {
         Viewport::screen(scale, size)
     }
 
-    pub(super) fn render(&mut self, interacting: bool) -> Option<Duration> {
+    pub(super) fn render(&mut self, display: Display) -> Option<Duration> {
         let viewport = self.viewport();
-        let playing = self.workspace.playback.playing;
         let cap = self.level_cap();
         let App {
             surface,
@@ -106,14 +104,12 @@ impl App {
             && let Err(detail) = engine.draw(
                 &surface.gpu.device,
                 &surface.gpu.queue,
-                grana_engine::ViewportFrame {
+                grana_engine::View {
                     scene,
                     camera,
                     size: [viewport.region[2], viewport.region[3]],
-                    prefetch: playing,
-                    await_residency: playing,
+                    display,
                     level_cap: cap,
-                    interacting,
                 },
             )
         {

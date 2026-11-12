@@ -29,6 +29,6 @@ pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget}
 pub use image::{Image16, read16 as read_image16};
 pub use marker::{Marker, MarkerChunk, Marks};
 pub use pick::PickId;
-pub use renderer::{Frame, FrameInfo, Renderer, Requests, ViewInfo};
+pub use renderer::{Display, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Digest, Layer, LayerKey, SceneFrame, Style, Versions};
 pub use temporal::Temporal;

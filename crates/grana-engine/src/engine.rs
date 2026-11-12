@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
-use grana_display::{Camera, CameraState};
+use grana_display::CameraState;
 use grana_render::{FrameInfo, PickId, Renderer, Requests};
-use grana_scene::{Scene, Selection};
+use grana_scene::Selection;
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
-use crate::frame::{self, View};
+use crate::display::View;
+use crate::frame;
 use crate::image::ViewportImage;
 use crate::view::{self, RenderedScene};
 
@@ -20,24 +21,12 @@ const DRAFT_MINIMUM: f32 = 0.25;
 const SAMPLE_FLOOR: Duration = Duration::from_millis(20);
 const SAMPLE_BLEND: f64 = 0.5;
 
-pub struct ViewportFrame<'a> {
-    pub scene: &'a Scene,
-    pub camera: &'a Camera,
-    pub size: [u32; 2],
-    pub prefetch: bool,
-    pub await_residency: bool,
-    pub level_cap: usize,
-    pub interacting: bool,
-}
-
 #[derive(Clone, Copy, PartialEq)]
 struct Request {
     scene: u64,
     camera: CameraState,
     size: [u32; 2],
     level_cap: usize,
-    prefetch: bool,
-    await_residency: bool,
     generation: u64,
 }
 
@@ -134,31 +123,25 @@ impl Engine {
         self.generation = self.renderer.generation();
     }
 
-    pub fn draw(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        frame: ViewportFrame<'_>,
-    ) -> Result<(), String> {
+    pub fn draw(&mut self, device: &Device, queue: &Queue, view: View<'_>) -> Result<(), String> {
         assert!(
-            frame.size[0] > 0 && frame.size[1] > 0,
+            view.size[0] > 0 && view.size[1] > 0,
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
         let now = Instant::now();
-        let scene_key = view::key(frame.scene);
+        let scene_key = view::key(view.scene);
         let request = Request {
             scene: scene_key,
-            camera: frame.camera.state(),
-            size: frame.size,
-            level_cap: frame.level_cap,
-            prefetch: frame.prefetch,
-            await_residency: frame.await_residency,
+            camera: view.camera.state(),
+            size: view.size,
+            level_cap: view.level_cap,
             generation: self.generation,
         };
+        let animating = view.display == crate::display::Display::Interactive;
         if self.request != Some(request) {
             self.request = None;
-            self.phase = if frame.interacting {
+            self.phase = if animating {
                 Phase::Draft
             } else {
                 Phase::Refine
@@ -172,7 +155,7 @@ impl Engine {
                     let held = self
                         .changed_at
                         .is_some_and(|at| now.saturating_duration_since(at) >= DRAFT_HOLD);
-                    if frame.interacting || !held {
+                    if animating || !held {
                         self.drawn_at = None;
                         return Ok(());
                     }
@@ -180,7 +163,7 @@ impl Engine {
                     self.drawn_at = None;
                 }
                 Phase::Refine => {
-                    if frame.interacting {
+                    if animating {
                         self.drawn_at = None;
                         return Ok(());
                     }
@@ -188,17 +171,17 @@ impl Engine {
             }
         }
         let size = match self.phase {
-            Phase::Draft => draft_size(frame.size, self.draft),
-            _ => frame.size,
+            Phase::Draft => draft_size(view.size, self.draft),
+            _ => view.size,
         };
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
         let detail = view::detail(
-            frame.scene,
+            view.scene,
             Some(view::Lens {
-                camera: frame.camera,
-                height: frame.size[1],
+                camera: view.camera,
+                height: view.size[1],
             }),
         );
         if self
@@ -208,7 +191,7 @@ impl Engine {
         {
             self.prepared = Some(Prepared {
                 scene_key,
-                scene: view::frame(frame.scene, &detail)?,
+                scene: view::frame(view.scene, &detail)?,
                 detail,
             });
         }
@@ -225,23 +208,22 @@ impl Engine {
                 renderer,
                 device,
                 queue,
-                View {
+                frame::View {
                     target: &image.view,
-                    scene: frame.scene,
-                    camera: frame.camera,
+                    scene: view.scene,
+                    camera: view.camera,
                     viewport: [0, 0, size[0], size[1]],
                     size,
                     samples: SAMPLE_LIMIT,
-                    prefetch: frame.prefetch,
-                    await_residency: frame.await_residency,
-                    level_cap: frame.level_cap,
+                    display: view.display.render(),
+                    level_cap: view.level_cap,
                 },
                 &prepared.scene,
             )
         };
         self.info = info;
         self.request = Some(request);
-        self.display = frame.size;
+        self.display = view.size;
         if info.samples != 0 {
             self.image_revision = self.image_revision.wrapping_add(1);
         }
@@ -250,7 +232,7 @@ impl Engine {
                 self.observe(now.saturating_duration_since(last));
             }
             self.drawn_at = Some(now);
-            if self.resolved(frame.await_residency) {
+            if self.resolved(view.display) {
                 self.phase = Phase::Ready;
                 self.drawn_at = None;
             }
@@ -282,9 +264,9 @@ impl Engine {
         self.draft = draft_scale(blended);
     }
 
-    fn resolved(&self, streaming: bool) -> bool {
+    fn resolved(&self, display: crate::display::Display) -> bool {
         let info = self.info;
-        if streaming {
+        if display.awaits() {
             return info.samples != 0 && !info.fading;
         }
         info.samples >= SAMPLE_LIMIT && !info.fading && info.view.resident >= info.view.demand
