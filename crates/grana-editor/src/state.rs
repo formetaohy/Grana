@@ -145,8 +145,6 @@ pub enum RelationMetric {
     Center,
 }
 
-pub use grana_session::BatchMetric as ComparisonMetric;
-
 pub use grana_report::Axis as ComparisonAxis;
 
 impl RelationMetric {
@@ -243,7 +241,7 @@ pub struct Workspace {
     pub relation_metric: RelationMetric,
     pub relation_filter: f32,
     pub distribution_style: DistributionStyle,
-    pub comparison_metric: ComparisonMetric,
+    pub comparison_metric: Option<String>,
     pub comparison_axis: ComparisonAxis,
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
@@ -289,7 +287,7 @@ impl Default for Workspace {
             relation_metric: RelationMetric::Contact,
             relation_filter: 0.0,
             distribution_style: DistributionStyle::Box,
-            comparison_metric: ComparisonMetric::default(),
+            comparison_metric: None,
             comparison_axis: ComparisonAxis::default(),
             comparison_group: None,
             comparison_key: None,
@@ -363,6 +361,10 @@ impl<'a> View<'a> {
 
     pub fn batch_datasets(&self) -> &[grana_session::BatchDataset] {
         self.batch.map_or(&[], |batch| batch.datasets)
+    }
+
+    pub fn batch_metrics(&self) -> &[grana_session::BatchMetric] {
+        self.batch.map_or(&[], |batch| batch.metrics)
     }
 
     pub fn batch_comparison(&self) -> &[grana_session::BatchComparison] {

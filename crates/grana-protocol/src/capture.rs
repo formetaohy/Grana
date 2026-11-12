@@ -819,6 +819,7 @@ impl MeasureSpec {
             lasso,
             filters,
             columns,
+            compare: Vec::new(),
             sort: table.and_then(|table| {
                 let (column, descending) = measure.sort()?;
                 Some(SortSpec {

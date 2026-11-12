@@ -279,6 +279,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             .objects
             .get(sets[index])
             .expect("the batch measures its detected set");
+        let compare = spec.measure().map_or(&[][..], |measure| measure.compare());
         quality.push(grana_report::quality_of(
             &table,
             &rows,
@@ -291,7 +292,8 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 channel: object.channel(),
             },
             &keys,
-        ));
+            compare,
+        )?);
     }
     for set in scene.objects.iter() {
         for relation in set.relations() {

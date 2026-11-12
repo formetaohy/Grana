@@ -1,7 +1,10 @@
 use crate::math::{normal_two_sided, student_quantile, student_two_sided};
 use crate::sample::Sample;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
     Object,
     Image,

@@ -94,6 +94,7 @@ impl Session {
             })
             .collect();
         let report = run.comparison();
+        self.batch_metrics = report.metrics;
         self.batch_comparison = report.groups;
         self.batch_significance = report.tests;
         self.batch_interactions = report.interactions;
@@ -230,6 +231,7 @@ impl Session {
             return;
         };
         self.reset_batch_rows();
+        self.batch_metrics.clear();
         self.batch_comparison.clear();
         self.batch_significance.clear();
         self.batch_interactions.clear();
@@ -328,6 +330,7 @@ impl Session {
                     }
                 }
                 BatchEvent::Comparison(report) => {
+                    self.batch_metrics = report.metrics;
                     self.batch_comparison = report.groups;
                     self.batch_significance = report.tests;
                     self.batch_interactions = report.interactions;

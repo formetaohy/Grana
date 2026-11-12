@@ -35,7 +35,8 @@ pub struct Request<'a> {
     pub rows: &'a [Comparison],
     pub tests: &'a [Significance],
     pub interactions: &'a [Interaction],
-    pub metric: Metric,
+    pub metric: &'a Metric,
+    pub index: usize,
     pub axis: Axis,
     pub group: Option<&'a str>,
     pub key: Option<&'a str>,
@@ -54,6 +55,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
         tests,
         interactions,
         metric,
+        index,
         axis,
         group,
         key,
@@ -78,7 +80,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
         .collect::<Vec<_>>();
     let group_count = distinct(visible.iter().map(|row| row.group.as_str()));
     let set_count = distinct(visible.iter().map(|row| row.key.as_str()));
-    let title = grana_i18n::measure::comparison_title(language, metric_name(language, metric));
+    let title = grana_i18n::measure::comparison_title(language, &metric_name(language, metric));
     let y = format!("Y: {}", metric_axis(language, metric));
     let heading = |x: String, summary: String| {
         Heading::new(title.clone(), y.clone(), x)
@@ -95,8 +97,8 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
                     values: row
                         .samples
                         .iter()
-                        .filter_map(|sample| metric.sample(sample))
-                        .map(|value| value as f32)
+                        .filter_map(|sample| sample.values.get(index).copied().flatten())
+                        .map(|summary| summary.mean() as f32)
                         .collect(),
                 })
                 .collect::<Vec<_>>();
@@ -124,7 +126,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
                             .iter()
                             .enumerate()
                             .filter_map(|(time, frames)| {
-                                let frame = frames[metric.index()]?;
+                                let frame = frames.get(index).copied().flatten()?;
                                 Some(CurvePoint {
                                     x: time as f32 + 1.0,
                                     value: frame.mean as f32,
@@ -134,7 +136,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
                             })
                             .collect(),
                     )
-                    .with_members(members(row, metric))
+                    .with_members(members(row, index))
                 })
                 .collect::<Vec<_>>();
             let mut low = f32::INFINITY;
@@ -162,7 +164,7 @@ pub fn chart(request: Request<'_>) -> Option<Charted> {
                 low -= padding;
                 high += padding;
             }
-            let notes = frame_notes(&visible, tests, metric);
+            let notes = frame_notes(&visible, tests, metric, index);
             let summary = interaction_note(&visible, interactions, metric, language)
                 .unwrap_or_else(|| {
                     grana_i18n::measure::comparison_frames_summary(language, curves.len(), frames)
@@ -195,12 +197,13 @@ pub fn pages(report: &ComparisonReport, style: DistributionStyle, language: Lang
             .filter(|row| row.key == key && row.kind == kind)
             .cloned()
             .collect::<Vec<_>>();
-        for metric in Metric::ALL {
-            if !rows.iter().any(|row| {
+        for (index, metric) in report.metrics.iter().enumerate() {
+            let present = rows.iter().any(|row| {
                 row.samples
                     .iter()
-                    .any(|sample| metric.summary_of(sample).is_some())
-            }) {
+                    .any(|sample| sample.values.get(index).copied().flatten().is_some())
+            });
+            if !present {
                 continue;
             }
             if let Some(charted) = chart(Request {
@@ -208,6 +211,7 @@ pub fn pages(report: &ComparisonReport, style: DistributionStyle, language: Lang
                 tests: &report.tests,
                 interactions: &report.interactions,
                 metric,
+                index,
                 axis: Axis::Conditions,
                 group: None,
                 key: Some(&key),
@@ -219,7 +223,7 @@ pub fn pages(report: &ComparisonReport, style: DistributionStyle, language: Lang
             let frames = rows.iter().any(|row| {
                 row.frames
                     .iter()
-                    .any(|frames| frames[metric.index()].is_some())
+                    .any(|frames| frames.get(index).copied().flatten().is_some())
             });
             if frames
                 && let Some(charted) = chart(Request {
@@ -227,6 +231,7 @@ pub fn pages(report: &ComparisonReport, style: DistributionStyle, language: Lang
                     tests: &report.tests,
                     interactions: &report.interactions,
                     metric,
+                    index,
                     axis: Axis::Frames,
                     group: None,
                     key: Some(&key),
@@ -295,7 +300,7 @@ fn category_label(row: &Comparison, groups: usize, sets: usize) -> String {
     }
 }
 
-fn members(row: &Comparison, metric: Metric) -> Vec<Vec<CurvePoint>> {
+fn members(row: &Comparison, metric: usize) -> Vec<Vec<CurvePoint>> {
     let stride = row.samples.len().div_ceil(MEMBER_LIMIT).max(1);
     row.samples
         .iter()
@@ -305,7 +310,7 @@ fn members(row: &Comparison, metric: Metric) -> Vec<Vec<CurvePoint>> {
                 .frames
                 .iter()
                 .filter_map(|(time, values)| {
-                    let value = values[metric.index()]?;
+                    let value = values.get(metric).copied().flatten()?;
                     Some(CurvePoint {
                         x: *time as f32 + 1.0,
                         value: value.mean as f32,
@@ -322,11 +327,11 @@ fn members(row: &Comparison, metric: Metric) -> Vec<Vec<CurvePoint>> {
 fn comparison_notes(
     slots: &[(String, String)],
     tests: &[Significance],
-    metric: Metric,
+    metric: &Metric,
 ) -> Vec<ComparisonNote> {
     let mut notes = tests
         .iter()
-        .filter(|test| test.frame.is_none() && test.metric == metric && test.significant())
+        .filter(|test| test.frame.is_none() && &test.metric == metric && test.significant())
         .filter_map(|test| {
             let from = slots
                 .iter()
@@ -358,10 +363,11 @@ fn comparison_notes(
 fn frame_notes(
     rows: &[&Comparison],
     tests: &[Significance],
-    metric: Metric,
+    metric: &Metric,
+    index: usize,
 ) -> Vec<grana_chart::Note> {
     let mut pairs = Vec::<(usize, usize, Vec<(u32, f64, &'static str)>)>::new();
-    for test in tests.iter().filter(|test| test.metric == metric) {
+    for test in tests.iter().filter(|test| &test.metric == metric) {
         let Some(frame) = test.frame else {
             continue;
         };
@@ -401,27 +407,27 @@ fn frame_notes(
     let mut notes = Vec::new();
     for (from, to, mut points) in pairs.into_iter().take(NOTE_LIMIT) {
         points.sort_by_key(|point| point.0);
-        let mut index = 0;
-        while index < points.len() {
-            let start = index;
-            while index + 1 < points.len() && points[index + 1].0 == points[index].0 + 1 {
-                index += 1;
+        let mut cursor = 0;
+        while cursor < points.len() {
+            let start = cursor;
+            while cursor + 1 < points.len() && points[cursor + 1].0 == points[cursor].0 + 1 {
+                cursor += 1;
             }
-            let run = &points[start..=index];
+            let run = &points[start..=cursor];
             let frame = run[run.len() / 2].0;
             let mark = run
                 .iter()
                 .min_by(|left, right| left.1.total_cmp(&right.1))
                 .map(|point| point.2)
                 .expect("a significant stretch holds a test");
-            if let Some(y) = frame_peak(rows, from, to, metric, frame) {
+            if let Some(y) = frame_peak(rows, from, to, index, frame) {
                 notes.push(grana_chart::Note {
                     x: frame as f32 + 1.0,
                     y,
                     mark: mark.to_string(),
                 });
             }
-            index += 1;
+            cursor += 1;
         }
     }
     notes
@@ -430,13 +436,13 @@ fn frame_notes(
 fn interaction_note(
     rows: &[&Comparison],
     interactions: &[Interaction],
-    metric: Metric,
+    metric: &Metric,
     language: Language,
 ) -> Option<String> {
     let best = interactions
         .iter()
         .filter(|test| {
-            test.metric == metric
+            &test.metric == metric
                 && rows.iter().any(|row| {
                     row.key == test.key && row.kind == test.kind && row.group == test.group_a
                 })
@@ -462,7 +468,7 @@ fn frame_peak(
     rows: &[&Comparison],
     from: usize,
     to: usize,
-    metric: Metric,
+    metric: usize,
     frame: u32,
 ) -> Option<f32> {
     let mut peak = f32::NEG_INFINITY;
@@ -470,7 +476,9 @@ fn frame_peak(
         if let Some(value) = rows[index]
             .frames
             .get(frame as usize)
-            .and_then(|frames| frames[metric.index()])
+            .and_then(|frames| frames.get(metric))
+            .copied()
+            .flatten()
             .map(|frame| frame.mean as f32)
         {
             peak = peak.max(value);
@@ -479,20 +487,14 @@ fn frame_peak(
     peak.is_finite().then_some(peak)
 }
 
-fn metric_name(language: Language, metric: Metric) -> &'static str {
-    match metric {
-        Metric::Objects => grana_i18n::batch::metric_objects(language),
-        Metric::Volume => grana_i18n::batch::metric_volume(language),
-        Metric::Area => grana_i18n::batch::metric_area(language),
-        Metric::Size => grana_i18n::batch::metric_size(language),
-        Metric::Intensity => grana_i18n::batch::metric_intensity(language),
-    }
+fn metric_name(language: Language, metric: &Metric) -> String {
+    grana_i18n::measure::column(language, metric.name())
 }
 
-fn metric_axis(language: Language, metric: Metric) -> String {
+fn metric_axis(language: Language, metric: &Metric) -> String {
     let name = metric_name(language, metric);
-    match metric.unit() {
-        "" => name.to_string(),
+    match metric.unit().suffix() {
+        "" => name,
         unit => format!("{name} ({unit})"),
     }
 }

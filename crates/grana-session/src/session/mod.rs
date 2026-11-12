@@ -51,8 +51,8 @@ use crate::recovery::Recovery;
 use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{
-    BatchComparison, BatchDataset, BatchInteraction, BatchSignificance, BatchView, HistoryView,
-    ImportNote, IoView, Message, PlateView, SeriesView, StoreView,
+    BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSignificance, BatchView,
+    HistoryView, ImportNote, IoView, Message, PlateView, SeriesView, StoreView,
 };
 use crate::{Action, Analysis, Command, Series, Source};
 use field::{Fields, Recovered};
@@ -122,6 +122,7 @@ pub struct Session {
     batch_datasets: Vec<grana_pipeline::DatasetEntry>,
     batch_rows: Vec<BatchDataset>,
     batch_comparison: Vec<BatchComparison>,
+    batch_metrics: Vec<BatchMetric>,
     batch_significance: Vec<BatchSignificance>,
     batch_interactions: Vec<BatchInteraction>,
     batch_output: Option<PathBuf>,
@@ -197,6 +198,7 @@ impl Session {
             batch_datasets: Vec::new(),
             batch_rows: Vec::new(),
             batch_comparison: Vec::new(),
+            batch_metrics: Vec::new(),
             batch_significance: Vec::new(),
             batch_interactions: Vec::new(),
             batch_output: None,
@@ -337,6 +339,7 @@ impl Session {
             protocol: self.protocol_text.as_deref(),
             datasets: &self.batch_rows,
             comparison: &self.batch_comparison,
+            metrics: &self.batch_metrics,
             significance: &self.batch_significance,
             interactions: &self.batch_interactions,
             output: self

@@ -61,6 +61,7 @@ pub type BatchInteraction = grana_pipeline::Interaction;
 pub struct BatchView<'a> {
     pub protocol: Option<&'a str>,
     pub datasets: &'a [BatchDataset],
+    pub metrics: &'a [BatchMetric],
     pub comparison: &'a [BatchComparison],
     pub significance: &'a [BatchSignificance],
     pub interactions: &'a [BatchInteraction],

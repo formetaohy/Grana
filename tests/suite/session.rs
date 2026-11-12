@@ -1542,10 +1542,20 @@ fn reads_a_batch_run_record() {
                     "name": "Nuclei",
                     "kind": "Surfaces",
                     "objects": objects,
-                    "volume": {"objects": objects, "mean": volume, "deviation": 0.5},
-                    "area": {"objects": objects, "mean": 1.0},
-                    "size": {"objects": objects, "mean": 2.0, "deviation": 0.1},
-                    "intensity": {"objects": objects, "mean": intensity, "deviation": 4.0},
+                    "metrics": [
+                        {"key": "objects", "label": "objects", "unit": "count", "decimals": 0, "level": "image"},
+                        {"key": "volume_um3", "label": "volume", "unit": "cubic_micrometer", "decimals": 3, "level": "object"},
+                        {"key": "area_um2", "label": "area", "unit": "square_micrometer", "decimals": 3, "level": "object"},
+                        {"key": "diameter_um", "label": "diameter", "unit": "micrometer", "decimals": 3, "level": "object"},
+                        {"key": "nuclei_intensity_mean", "label": "Nuclei · mean", "unit": "count", "decimals": 2, "level": "object"}
+                    ],
+                    "values": [
+                        {"objects": 1, "mean": objects},
+                        {"objects": objects, "mean": volume, "deviation": 0.5},
+                        {"objects": objects, "mean": 1.0},
+                        {"objects": objects, "mean": 2.0, "deviation": 0.1},
+                        {"objects": objects, "mean": intensity, "deviation": 4.0}
+                    ],
                     "frames": [
                         {
                             "time": 0,
@@ -1562,7 +1572,7 @@ fn reads_a_batch_run_record() {
     })
     .collect::<Vec<_>>();
     let record = serde_json::json!({
-        "format": 3,
+        "format": 4,
         "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 2,
@@ -1590,8 +1600,22 @@ fn reads_a_batch_run_record() {
     assert_eq!(report.groups[0].objects, 26);
     assert_eq!(report.groups[0].samples[0].dataset, "A1");
     assert_eq!(
-        grana_pipeline::Metric::Objects.sample(&report.groups[0].samples[1]),
+        report.groups[0].samples[1].values[0].map(grana_pipeline::QualitySummary::mean),
         Some(14.0)
+    );
+    assert_eq!(
+        report
+            .metrics
+            .iter()
+            .map(grana_pipeline::Metric::key)
+            .collect::<Vec<_>>(),
+        [
+            "objects",
+            "volume_um3",
+            "area_um2",
+            "diameter_um",
+            "nuclei_intensity_mean"
+        ]
     );
     assert_eq!(report.tests.len(), 7);
     assert!(
@@ -1604,7 +1628,7 @@ fn reads_a_batch_run_record() {
         report
             .tests
             .iter()
-            .filter(|test| test.metric != grana_pipeline::Metric::Objects)
+            .filter(|test| test.metric.key() != "objects")
             .all(|test| test.test.samples_a() == 26 && test.test.samples_b() == 18)
     );
     assert!(
@@ -1641,7 +1665,7 @@ fn reads_a_batch_run_record() {
         .interactions
         .first()
         .expect("the per-frame values test their slopes");
-    assert_eq!(interaction.metric, grana_pipeline::Metric::Volume);
+    assert_eq!(interaction.metric.key(), "volume_um3");
     assert_eq!(interaction.samples(), (2, 2));
     assert!((interaction.slope_a() - 0.2).abs() < 1.0e-1);
     assert!((interaction.slope_b() + 1.0).abs() < 1.0e-1);
@@ -1656,7 +1680,7 @@ fn reads_a_batch_run_record() {
 fn records_a_batch_correction() {
     let temp = Temp::new("run-correction");
     let record = serde_json::json!({
-        "format": 3,
+        "format": 4,
         "build": "0.1.1/12",
         "protocol": 7,
         "jobs": 1,

@@ -151,41 +151,7 @@ pub(crate) fn command(language: Language, id: &str) -> &'static str {
 }
 
 pub(crate) fn column(language: Language, label: &str) -> String {
-    if let Some(translated) = grana_i18n::measure::term(language, label) {
-        return translated;
-    }
-    if let Some((head, tail)) = label.rsplit_once(" · ") {
-        let head = phrase(language, head).unwrap_or_else(|| head.to_string());
-        let tail = grana_i18n::measure::term(language, tail).unwrap_or_else(|| tail.to_string());
-        return format!("{head} · {tail}");
-    }
-    phrase(language, label).unwrap_or_else(|| label.to_string())
-}
-
-fn phrase(language: Language, label: &str) -> Option<String> {
-    if let Some(translated) = grana_i18n::measure::term(language, label) {
-        return Some(translated);
-    }
-    if let Some(rest) = label.strip_prefix("classifier ") {
-        let name = grana_i18n::measure::term(language, "classifier")?;
-        if let Some(aggregate) = grana_i18n::measure::term(language, rest) {
-            return Some(format!("{name} {aggregate}"));
-        }
-    }
-    if let Some(rest) = label.strip_prefix("ellipsoid axis ")
-        && let Ok(axis) = rest.parse::<usize>()
-    {
-        return Some(match language {
-            Language::English => label.to_string(),
-            Language::Chinese => format!("椭球轴 {axis}"),
-        });
-    }
-    if let Some((target, field)) = label.rsplit_once(' ')
-        && let Some(field) = grana_i18n::measure::term(language, field)
-    {
-        return Some(format!("{target} {field}"));
-    }
-    None
+    grana_i18n::measure::column(language, label)
 }
 
 pub(crate) fn legend(language: Language, title: &str) -> String {

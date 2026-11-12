@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 grana-object = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

@@ -3626,6 +3626,7 @@ name = "grana-measure"
 version = "0.1.1"
 dependencies = [
  "grana-object",
+ "serde",
 ]
 
 [[package]]

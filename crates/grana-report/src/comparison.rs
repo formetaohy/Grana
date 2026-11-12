@@ -11,8 +11,8 @@ use crate::significance::{self, Significance};
 pub struct ComparisonSample {
     pub dataset: String,
     pub objects: usize,
-    pub values: [Option<Summary>; Metric::COUNT],
-    pub frames: BTreeMap<u32, [Option<FrameValue>; Metric::COUNT]>,
+    pub values: Vec<Option<Summary>>,
+    pub frames: BTreeMap<u32, Vec<Option<FrameValue>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -31,39 +31,67 @@ pub struct Comparison {
     pub kind: String,
     pub images: usize,
     pub objects: usize,
-    pub means: [Option<f64>; Metric::COUNT],
-    pub deviations: [Option<f64>; Metric::COUNT],
+    pub means: Vec<Option<f64>>,
+    pub deviations: Vec<Option<f64>>,
     pub samples: Vec<ComparisonSample>,
-    pub frames: Vec<[Option<ComparisonFrame>; Metric::COUNT]>,
+    pub frames: Vec<Vec<Option<ComparisonFrame>>>,
+}
+
+impl Comparison {
+    pub fn value(&self, index: usize) -> Option<f64> {
+        self.means.get(index).copied().flatten()
+    }
+
+    pub fn deviation(&self, index: usize) -> Option<f64> {
+        self.deviations.get(index).copied().flatten()
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ComparisonReport {
+    pub metrics: Vec<Metric>,
     pub groups: Vec<Comparison>,
     pub tests: Vec<Significance>,
     pub interactions: Vec<Interaction>,
 }
 
 pub fn comparison<'a>(qualities: impl Iterator<Item = &'a Quality>) -> (ComparisonReport, String) {
-    let groups = comparison_of(qualities);
-    let tests = significance::all(&groups);
-    let interactions = interaction::all(&groups);
-    let mut lines = vec![header()];
-    for comparison in &groups {
-        lines.push(line(comparison));
+    let report = comparison_of(qualities);
+    let mut lines = vec![header(&report.metrics)];
+    for row in &report.groups {
+        lines.push(line(&report.metrics, row));
     }
-    (
-        ComparisonReport {
-            groups,
-            tests,
-            interactions,
-        },
-        lines.concat(),
-    )
+    (report, lines.concat())
 }
 
-pub fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) -> Vec<Comparison> {
-    let mut buckets = BTreeMap::<(String, String, String), Bucket>::new();
+pub fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) -> ComparisonReport {
+    let qualities = qualities.collect::<Vec<_>>();
+    let metrics = union(&qualities);
+    let groups = comparison_of_metrics(&qualities, &metrics);
+    let tests = significance::all(&metrics, &groups);
+    let interactions = interaction::all(&metrics, &groups);
+    ComparisonReport {
+        metrics,
+        groups,
+        tests,
+        interactions,
+    }
+}
+
+fn union(qualities: &[&Quality]) -> Vec<Metric> {
+    let mut metrics = Vec::new();
+    for quality in qualities {
+        for metric in &quality.metrics {
+            if !metrics.contains(metric) {
+                metrics.push(metric.clone());
+            }
+        }
+    }
+    metrics
+}
+
+fn comparison_of_metrics(qualities: &[&Quality], metrics: &[Metric]) -> Vec<Comparison> {
+    let mut buckets = BTreeMap::<(String, String, String), Vec<&Quality>>::new();
     for quality in qualities {
         buckets
             .entry((
@@ -76,186 +104,75 @@ pub fn comparison_of<'a>(qualities: impl Iterator<Item = &'a Quality>) -> Vec<Co
     }
     let mut compared = Vec::with_capacity(buckets.len());
     for ((group, key, kind), bucket) in buckets {
-        let mut means = [None; Metric::COUNT];
-        let mut deviations = [None; Metric::COUNT];
-        for (index, metric) in Metric::ALL.iter().enumerate() {
-            let (mean, deviation) = bucket.pooled(*metric);
-            means[index] = mean;
-            deviations[index] = deviation;
-        }
-        let frames = bucket.frames();
+        let summaries = metrics
+            .iter()
+            .map(|metric| {
+                bucket
+                    .iter()
+                    .filter_map(|quality| metric_summary(quality, metric))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let means = summaries
+            .iter()
+            .map(|summaries| pooled(summaries).0)
+            .collect::<Vec<_>>();
+        let deviations = summaries
+            .iter()
+            .map(|summaries| pooled(summaries).1)
+            .collect::<Vec<_>>();
+        let samples = bucket
+            .iter()
+            .map(|quality| sample_of(quality, metrics))
+            .collect::<Vec<_>>();
         compared.push(Comparison {
             group,
             key,
-            name: bucket.name,
+            name: bucket
+                .last()
+                .map(|quality| quality.name.clone())
+                .unwrap_or_default(),
             kind,
-            images: bucket.images,
-            objects: bucket.objects,
+            images: bucket.len(),
+            objects: bucket.iter().map(|quality| quality.objects).sum(),
             means,
             deviations,
-            frames,
-            samples: bucket.samples,
+            frames: frames_of(&samples, metrics.len()),
+            samples,
         });
     }
     compared
 }
 
-pub fn comparison_frames(comparison: &[Comparison]) -> String {
-    let mut fields = vec![
-        "group", "set_key", "set", "kind", "metric", "frame", "images",
-    ];
-    fields.extend(["value", "lower", "upper"]);
-    let mut lines = vec![grana_measure::csv::line(&fields)];
-    for row in comparison {
-        for metric in Metric::ALL {
-            for (time, frame) in row.frames.iter().enumerate() {
-                let Some(frame) = frame[metric.index()] else {
-                    continue;
-                };
-                let values = [
-                    format!("{:.decimals$}", frame.mean, decimals = metric.decimals()),
-                    format!("{:.decimals$}", frame.lower, decimals = metric.decimals()),
-                    format!("{:.decimals$}", frame.upper, decimals = metric.decimals()),
-                ];
-                lines.push(grana_measure::csv::line(&[
-                    row.group.as_str(),
-                    row.key.as_str(),
-                    row.name.as_str(),
-                    row.kind.as_str(),
-                    metric.key(),
-                    &time.to_string(),
-                    &frame.images.to_string(),
-                    values[0].as_str(),
-                    values[1].as_str(),
-                    values[2].as_str(),
-                ]));
-            }
-        }
-    }
-    lines.concat()
+fn metric_summary(quality: &Quality, metric: &Metric) -> Option<Summary> {
+    let index = quality.metrics.iter().position(|other| other == metric)?;
+    quality.values.get(index).copied().flatten()
 }
 
-pub fn samples(comparison: &[Comparison]) -> String {
-    let mut fields = vec!["group", "set_key", "set", "kind", "dataset", "objects"];
-    fields.extend(Metric::ALL.map(Metric::key));
-    let mut lines = vec![grana_measure::csv::line(&fields)];
-    for row in comparison {
-        for sample in &row.samples {
-            let objects = sample.objects.to_string();
-            let mut fields = vec![
-                row.group.as_str(),
-                row.key.as_str(),
-                row.name.as_str(),
-                row.kind.as_str(),
-                sample.dataset.as_str(),
-                objects.as_str(),
-            ];
-            let values =
-                Metric::ALL.map(|metric| formatted(metric.sample(sample), metric.decimals()));
-            fields.extend(values.iter().map(String::as_str));
-            lines.push(grana_measure::csv::line(&fields));
-        }
-    }
-    lines.concat()
-}
-
-fn header() -> String {
-    let mut fields = vec!["group", "set_key", "set", "kind", "images", "objects"];
-    let means = Metric::ALL.map(|metric| format!("{}_mean", metric.key()));
-    let deviations = Metric::ALL.map(|metric| format!("{}_std", metric.key()));
-    fields.extend(means.iter().map(String::as_str));
-    fields.extend(deviations.iter().map(String::as_str));
-    grana_measure::csv::line(&fields)
-}
-
-fn line(comparison: &Comparison) -> String {
-    let mut fields = vec![
-        comparison.group.clone(),
-        comparison.key.clone(),
-        comparison.name.clone(),
-        comparison.kind.clone(),
-        comparison.images.to_string(),
-        comparison.objects.to_string(),
-    ];
-    let means = Metric::ALL.map(|metric| formatted(metric.value(comparison), metric.decimals()));
-    let deviations =
-        Metric::ALL.map(|metric| formatted(metric.deviation(comparison), metric.decimals()));
-    fields.extend(means);
-    fields.extend(deviations);
-    grana_measure::csv::line(&fields.iter().map(String::as_str).collect::<Vec<_>>())
-}
-
-#[derive(Default)]
-struct Bucket {
-    name: String,
-    images: usize,
-    objects: usize,
-    summaries: [Vec<Summary>; Metric::COUNT],
-    samples: Vec<ComparisonSample>,
-}
-
-impl Bucket {
-    fn push(&mut self, quality: &Quality) {
-        self.images += 1;
-        self.objects += quality.objects;
-        self.name.clone_from(&quality.name);
-        let values = std::array::from_fn(|index| Metric::ALL[index].summary(quality));
-        for (bucket, value) in self.summaries.iter_mut().zip(&values) {
-            if let Some(summary) = value {
-                bucket.push(*summary);
-            }
-        }
-        let frames = quality
-            .frames
-            .iter()
-            .map(|frame| (frame.time, frame.values))
-            .collect::<BTreeMap<_, _>>();
-        self.samples.push(ComparisonSample {
-            dataset: quality.dataset.clone(),
-            objects: quality.objects,
-            values,
-            frames,
-        });
-    }
-
-    fn pooled(&self, metric: Metric) -> (Option<f64>, Option<f64>) {
-        pooled(&self.summaries[metric.index()])
-    }
-
-    fn frames(&self) -> Vec<[Option<ComparisonFrame>; Metric::COUNT]> {
-        let span = self
-            .samples
-            .iter()
-            .flat_map(|sample| sample.frames.keys())
-            .max()
-            .map_or(0, |time| time + 1) as usize;
-        let mut frames = vec![[None; Metric::COUNT]; span];
-        for metric in Metric::ALL {
-            let mut pooled = BTreeMap::<u32, Vec<f64>>::new();
-            for sample in &self.samples {
-                for (time, values) in &sample.frames {
-                    if let Some(value) = values[metric.index()] {
-                        pooled.entry(*time).or_default().push(value.mean);
-                    }
-                }
-            }
-            for (time, means) in pooled {
-                let Some(slot) = frames.get_mut(time as usize) else {
-                    continue;
-                };
-                let mean = means.iter().sum::<f64>() / means.len() as f64;
-                let (lower, upper) = Sample::of(&means)
-                    .and_then(|sample| sample.mean_interval(0.95))
-                    .unwrap_or((mean, mean));
-                slot[metric.index()] = Some(ComparisonFrame {
-                    mean,
-                    lower,
-                    upper,
-                    images: means.len(),
-                });
-            }
-        }
-        frames
+fn sample_of(quality: &Quality, metrics: &[Metric]) -> ComparisonSample {
+    let values = metrics
+        .iter()
+        .map(|metric| metric_summary(quality, metric))
+        .collect::<Vec<_>>();
+    let frames = quality
+        .frames
+        .iter()
+        .map(|frame| {
+            let values = metrics
+                .iter()
+                .map(|metric| {
+                    let index = quality.metrics.iter().position(|other| other == metric)?;
+                    frame.values.get(index).copied().flatten()
+                })
+                .collect::<Vec<_>>();
+            (frame.time, values)
+        })
+        .collect::<BTreeMap<_, _>>();
+    ComparisonSample {
+        dataset: quality.dataset.clone(),
+        objects: quality.objects,
+        values,
+        frames,
     }
 }
 
@@ -291,6 +208,156 @@ fn pooled(summaries: &[Summary]) -> (Option<f64>, Option<f64>) {
         ((within + between) / (total - 1) as f64).max(0.0).sqrt()
     });
     (Some(mean), deviation)
+}
+
+fn frames_of(samples: &[ComparisonSample], metrics: usize) -> Vec<Vec<Option<ComparisonFrame>>> {
+    let span = samples
+        .iter()
+        .flat_map(|sample| sample.frames.keys())
+        .max()
+        .map_or(0, |time| time + 1) as usize;
+    let mut frames = vec![vec![None; metrics]; span];
+    for (index, frame) in frames.iter_mut().enumerate() {
+        for (metric, slot) in frame.iter_mut().enumerate() {
+            let pooled = samples
+                .iter()
+                .filter_map(|sample| {
+                    let value = sample
+                        .frames
+                        .get(&(index as u32))
+                        .and_then(|values| values.get(metric))
+                        .copied()
+                        .flatten()?;
+                    Some(value.mean)
+                })
+                .collect::<Vec<_>>();
+            if pooled.is_empty() {
+                continue;
+            }
+            let mean = pooled.iter().sum::<f64>() / pooled.len() as f64;
+            let (lower, upper) = Sample::of(&pooled)
+                .and_then(|sample| sample.mean_interval(0.95))
+                .unwrap_or((mean, mean));
+            *slot = Some(ComparisonFrame {
+                mean,
+                lower,
+                upper,
+                images: pooled.len(),
+            });
+        }
+    }
+    frames
+}
+
+pub fn comparison_frames(metrics: &[Metric], comparison: &[Comparison]) -> String {
+    let mut fields = vec![
+        "group", "set_key", "set", "kind", "metric", "frame", "images",
+    ];
+    fields.extend(["value", "lower", "upper"]);
+    let mut lines = vec![grana_measure::csv::line(&fields)];
+    for row in comparison {
+        for (index, metric) in metrics.iter().enumerate() {
+            for (time, frame) in row.frames.iter().enumerate() {
+                let Some(frame) = frame.get(index).copied().flatten() else {
+                    continue;
+                };
+                let values = [
+                    format!("{:.decimals$}", frame.mean, decimals = metric.decimals()),
+                    format!("{:.decimals$}", frame.lower, decimals = metric.decimals()),
+                    format!("{:.decimals$}", frame.upper, decimals = metric.decimals()),
+                ];
+                lines.push(grana_measure::csv::line(&[
+                    row.group.as_str(),
+                    row.key.as_str(),
+                    row.name.as_str(),
+                    row.kind.as_str(),
+                    metric.key(),
+                    &time.to_string(),
+                    &frame.images.to_string(),
+                    values[0].as_str(),
+                    values[1].as_str(),
+                    values[2].as_str(),
+                ]));
+            }
+        }
+    }
+    lines.concat()
+}
+
+pub fn samples(metrics: &[Metric], comparison: &[Comparison]) -> String {
+    let mut fields = vec!["group", "set_key", "set", "kind", "dataset", "objects"];
+    fields.extend(metrics.iter().map(Metric::key));
+    let mut lines = vec![grana_measure::csv::line(&fields)];
+    for row in comparison {
+        for sample in &row.samples {
+            let objects = sample.objects.to_string();
+            let mut fields = vec![
+                row.group.as_str(),
+                row.key.as_str(),
+                row.name.as_str(),
+                row.kind.as_str(),
+                sample.dataset.as_str(),
+                objects.as_str(),
+            ];
+            let values = metrics
+                .iter()
+                .enumerate()
+                .map(|(index, metric)| {
+                    formatted(
+                        sample
+                            .values
+                            .get(index)
+                            .copied()
+                            .flatten()
+                            .map(Summary::mean),
+                        metric.decimals(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            fields.extend(values.iter().map(String::as_str));
+            lines.push(grana_measure::csv::line(&fields));
+        }
+    }
+    lines.concat()
+}
+
+fn header(metrics: &[Metric]) -> String {
+    let mut fields = vec!["group", "set_key", "set", "kind", "images", "objects"];
+    let means = metrics
+        .iter()
+        .map(|metric| format!("{}_mean", metric.key()))
+        .collect::<Vec<_>>();
+    let deviations = metrics
+        .iter()
+        .map(|metric| format!("{}_std", metric.key()))
+        .collect::<Vec<_>>();
+    fields.extend(means.iter().map(String::as_str));
+    fields.extend(deviations.iter().map(String::as_str));
+    grana_measure::csv::line(&fields)
+}
+
+fn line(metrics: &[Metric], comparison: &Comparison) -> String {
+    let mut fields = vec![
+        comparison.group.clone(),
+        comparison.key.clone(),
+        comparison.name.clone(),
+        comparison.kind.clone(),
+        comparison.images.to_string(),
+        comparison.objects.to_string(),
+    ];
+    let means = metrics
+        .iter()
+        .enumerate()
+        .map(|(index, metric)| formatted(comparison.value(index), metric.decimals()))
+        .collect::<Vec<_>>();
+    let deviations = metrics
+        .iter()
+        .enumerate()
+        .map(|(index, metric)| formatted(comparison.deviation(index), metric.decimals()))
+        .collect::<Vec<_>>();
+    fields.extend(means);
+    fields.extend(deviations);
+    grana_measure::csv::line(&fields.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 pub(crate) fn pairs(groups: &[Comparison]) -> Vec<(&Comparison, &Comparison)> {

@@ -13,7 +13,7 @@ pub(super) const RUN: &str = "run.json";
 
 const CORRECTION: &str = "correction.json";
 
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,18 +77,11 @@ impl Run {
     }
 
     pub fn comparison(&self) -> ComparisonReport {
-        let groups = comparison_of(
+        comparison_of(
             self.datasets
                 .iter()
                 .flat_map(|dataset| dataset.quality.iter()),
-        );
-        let tests = grana_report::tests(&groups);
-        let interactions = grana_report::interactions(&groups);
-        ComparisonReport {
-            groups,
-            tests,
-            interactions,
-        }
+        )
     }
 }
 

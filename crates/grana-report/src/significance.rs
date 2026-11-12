@@ -101,35 +101,27 @@ impl Significance {
     pub fn interval_text(&self) -> Option<String> {
         let (low, high) = self.interval?;
         let decimals = self.metric.decimals();
-        Some(format!("{low:.*} 鈥?{high:.*}", decimals, decimals))
+        Some(format!("{low:.*} – {high:.*}", decimals, decimals))
     }
 }
 
-pub fn all(groups: &[Comparison]) -> Vec<Significance> {
-    let mut tests = tests(groups);
-    tests.extend(frames(groups));
-    tests.sort_by(|left, right| {
-        left.key
-            .cmp(&right.key)
-            .then(left.kind.cmp(&right.kind))
-            .then(left.metric.cmp(&right.metric))
-            .then(left.frame.cmp(&right.frame))
-            .then(left.group_a.cmp(&right.group_a))
-            .then(left.group_b.cmp(&right.group_b))
-    });
+pub fn all(metrics: &[Metric], groups: &[Comparison]) -> Vec<Significance> {
+    let mut tests = tests(metrics, groups);
+    tests.extend(frames(metrics, groups));
+    tests.sort_by(order);
     tests
 }
 
-pub fn tests(groups: &[Comparison]) -> Vec<Significance> {
+pub fn tests(metrics: &[Metric], groups: &[Comparison]) -> Vec<Significance> {
     let mut tested = Vec::new();
     for (first, second) in pairs(groups) {
-        for metric in Metric::ALL {
-            let a = clusters(first, metric);
-            let b = clusters(second, metric);
+        for (index, metric) in metrics.iter().enumerate() {
+            let a = clusters(first, index);
+            let b = clusters(second, index);
             let Some(test) = ClusteredWelch::of(&a, &b) else {
                 continue;
             };
-            let Some(rank) = MannWhitney::of(&means(first, metric), &means(second, metric)) else {
+            let Some(rank) = MannWhitney::of(&means(first, index), &means(second, index)) else {
                 continue;
             };
             tested.push(build(first, second, metric, None, test, rank));
@@ -145,15 +137,15 @@ pub fn tests(groups: &[Comparison]) -> Vec<Significance> {
     tested
 }
 
-pub fn frames(groups: &[Comparison]) -> Vec<Significance> {
+pub fn frames(metrics: &[Metric], groups: &[Comparison]) -> Vec<Significance> {
     let mut tested = Vec::new();
     let mut families = Vec::new();
     for (first, second) in pairs(groups) {
-        for metric in Metric::ALL {
+        for (index, metric) in metrics.iter().enumerate() {
             let start = tested.len();
-            for time in times(first, second, metric) {
-                let a = frame_clusters(first, metric, time);
-                let b = frame_clusters(second, metric, time);
+            for time in times(first, second, index) {
+                let a = frame_clusters(first, index, time);
+                let b = frame_clusters(second, index, time);
                 let Some(test) = ClusteredWelch::of(&a.0, &b.0) else {
                     continue;
                 };
@@ -227,7 +219,7 @@ pub fn table(tests: &[Significance]) -> String {
     ]);
     let mut text = header;
     for test in tests {
-        let metric = test.metric;
+        let metric = &test.metric;
         let decimals = metric.decimals();
         let interval = test.interval;
         let frame = test
@@ -239,7 +231,7 @@ pub fn table(tests: &[Significance]) -> String {
             &test.key,
             &test.name,
             &test.kind,
-            metric.name(),
+            metric.key(),
             &frame,
             test.level().key(),
             &test.test.samples_a().to_string(),
@@ -280,7 +272,7 @@ pub fn table(tests: &[Significance]) -> String {
 fn build(
     first: &Comparison,
     second: &Comparison,
-    metric: Metric,
+    metric: &Metric,
     frame: Option<u32>,
     test: ClusteredWelch,
     rank: MannWhitney,
@@ -290,7 +282,7 @@ fn build(
         key: first.key.clone(),
         name: first.name.clone(),
         kind: first.kind.clone(),
-        metric,
+        metric: metric.clone(),
         group_a: first.group.clone(),
         group_b: second.group.clone(),
         effect: hedges_g_pooled(
@@ -309,29 +301,30 @@ fn build(
     }
 }
 
-fn clusters(row: &Comparison, metric: Metric) -> Vec<ClusterSample> {
+fn clusters(row: &Comparison, metric: usize) -> Vec<ClusterSample> {
     row.samples
         .iter()
-        .filter_map(|sample| metric.summary_of(sample))
+        .filter_map(|sample| sample.values.get(metric).copied().flatten())
         .filter_map(|summary| {
             ClusterSample::from_summary(summary.objects(), summary.mean(), summary.deviation())
         })
         .collect()
 }
 
-fn means(row: &Comparison, metric: Metric) -> Vec<f64> {
+fn means(row: &Comparison, metric: usize) -> Vec<f64> {
     row.samples
         .iter()
-        .filter_map(|sample| metric.sample(sample))
+        .filter_map(|sample| sample.values.get(metric).copied().flatten())
+        .map(|summary| summary.mean())
         .collect()
 }
 
-fn times(first: &Comparison, second: &Comparison, metric: Metric) -> Vec<u32> {
+fn times(first: &Comparison, second: &Comparison, metric: usize) -> Vec<u32> {
     let mut times = BTreeSet::new();
     for row in [first, second] {
         for sample in &row.samples {
             for (time, values) in &sample.frames {
-                if values[metric.index()].is_some() {
+                if values.get(metric).copied().flatten().is_some() {
                     times.insert(*time);
                 }
             }
@@ -340,14 +333,14 @@ fn times(first: &Comparison, second: &Comparison, metric: Metric) -> Vec<u32> {
     times.into_iter().collect()
 }
 
-fn frame_clusters(row: &Comparison, metric: Metric, time: u32) -> (Vec<ClusterSample>, Vec<f64>) {
+fn frame_clusters(row: &Comparison, metric: usize, time: u32) -> (Vec<ClusterSample>, Vec<f64>) {
     let mut clusters = Vec::new();
     let mut means = Vec::new();
     for sample in &row.samples {
         let Some(values) = sample.frames.get(&time) else {
             continue;
         };
-        let Some(value) = values[metric.index()] else {
+        let Some(value) = values.get(metric).copied().flatten() else {
             continue;
         };
         let Some(cluster) =

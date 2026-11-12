@@ -1,5 +1,5 @@
 use grana_raster::{Cell, Group, Raster, Row, Sheet, Table};
-use grana_report::{Comparison, ComparisonReport, Metric, Significance};
+use grana_report::{ComparisonReport, Metric, Significance};
 use grana_text::Fonts;
 
 use super::{Plan, Row as ResultRow};
@@ -76,7 +76,7 @@ pub(super) fn write(
         }
         start = end;
     }
-    let tables = tables(&comparison.groups);
+    let tables = tables(comparison);
     let groups = groups(&entries, &tables);
     let mut fonts = Fonts::system();
     let sheet = Sheet::new(TILE, COLUMNS).compose(&mut fonts, &groups);
@@ -104,15 +104,15 @@ pub(super) fn write(
         .map_err(|error| format!("failed to write the quality sheet manifest: {error}"))
 }
 
-fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
+fn tables(comparison: &ComparisonReport) -> Vec<(String, Table)> {
     let mut tables = Vec::<(String, Table)>::new();
-    for entry in comparison {
+    for entry in &comparison.groups {
         let position = match tables.iter().position(|(group, _)| *group == entry.group) {
             Some(position) => position,
             None => {
                 let rows = std::iter::once("images".to_string())
                     .chain(std::iter::once("objects".to_string()))
-                    .chain(Metric::ALL.map(metric_label))
+                    .chain(comparison.metrics.iter().map(metric_label))
                     .map(|label| Row {
                         label,
                         values: Vec::new(),
@@ -131,13 +131,19 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
         let table = &mut tables[position].1;
         table.columns.push(entry.name.clone());
         let mut values = vec![entry.images.to_string(), entry.objects.to_string()];
-        values.extend(Metric::ALL.map(|metric| {
-            deviated(
-                metric.value(entry),
-                metric.deviation(entry),
-                metric.decimals(),
-            )
-        }));
+        values.extend(
+            comparison
+                .metrics
+                .iter()
+                .enumerate()
+                .map(|(index, metric)| {
+                    deviated(
+                        entry.value(index),
+                        entry.deviation(index),
+                        metric.decimals(),
+                    )
+                }),
+        );
         for (row, value) in table.rows.iter_mut().zip(values) {
             row.values.push(value);
         }
@@ -145,19 +151,20 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
     tables
 }
 
-fn metric_label(metric: Metric) -> String {
-    match metric.unit() {
+fn metric_label(metric: &Metric) -> String {
+    match metric.unit().suffix() {
         "" => metric.name().to_string(),
         unit => format!("{} {unit}", metric.name()),
     }
 }
 
-pub(super) fn significance(plan: &Plan, tests: &[Significance]) -> Result<(), String> {
-    let tests = tests
+pub(super) fn significance(plan: &Plan, report: &ComparisonReport) -> Result<(), String> {
+    let tests = report
+        .tests
         .iter()
         .filter(|test| test.frame.is_none())
         .collect::<Vec<_>>();
-    let mut tables = significance_tables(&tests);
+    let mut tables = significance_tables(report, &tests);
     if tables.is_empty() {
         return Ok(());
     }
@@ -181,7 +188,7 @@ pub(super) fn significance(plan: &Plan, tests: &[Significance]) -> Result<(), St
     grana_raster::write(&plan.output.join(SIGNIFICANCE), &sheet).map_err(String::from)
 }
 
-fn significance_tables(tests: &[&Significance]) -> Vec<(String, Table)> {
+fn significance_tables(report: &ComparisonReport, tests: &[&Significance]) -> Vec<(String, Table)> {
     let mut tables = Vec::<(String, Table)>::new();
     for test in tests {
         let name = if test.name == test.kind {
@@ -193,12 +200,13 @@ fn significance_tables(tests: &[&Significance]) -> Vec<(String, Table)> {
             .iter()
             .position(|(other, _)| *other == name)
             .unwrap_or_else(|| {
-                let rows = Metric::ALL
+                let rows = report
+                    .metrics
+                    .iter()
                     .map(|metric| Row {
                         label: metric_label(metric),
                         values: Vec::new(),
                     })
-                    .into_iter()
                     .collect();
                 tables.push((
                     name.clone(),
@@ -218,7 +226,13 @@ fn significance_tables(tests: &[&Significance]) -> Vec<(String, Table)> {
                 table.columns.len() - 1
             }
         };
-        let row = test.metric.index();
+        let Some(row) = report
+            .metrics
+            .iter()
+            .position(|metric| *metric == test.metric)
+        else {
+            continue;
+        };
         let cell = format!(
             "{} q={} r={} g={}",
             test.mark(),

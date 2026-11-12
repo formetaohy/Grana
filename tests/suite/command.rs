@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+﻿use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -319,6 +319,11 @@ fn captures_a_protocol_film_without_a_window() {
     .expect("the protocol is json");
     json["snapshot"]["movies"] = serde_json::Value::Bool(true);
     json["snapshot"]["sequences"] = serde_json::Value::Bool(true);
+    json["sets"][0]["measure"] = serde_json::json!({
+        "group": "objects",
+        "aggregate": "mean",
+        "compare": ["diameter_um", "contrast"]
+    });
     let protocol =
         grana_protocol::Protocol::from_json(&json.to_string()).expect("the filmed protocol parses");
     let protocol_path = temp.path().join("protocol.json");
@@ -361,8 +366,15 @@ fn captures_a_protocol_film_without_a_window() {
         "the sequence writes its frames"
     );
     let comparison =
+        find(&output, "comparison.csv").expect("the batch writes the comparison table");
+    let text = std::fs::read_to_string(comparison).expect("the comparison table reads");
+    assert!(text.starts_with(
+        "group,set_key,set,kind,images,objects,objects_mean,diameter_um_mean,contrast_mean,"
+    ));
+    assert!(!text.contains("volume_um3"));
+    let frames =
         find(&output, "comparison_frames.csv").expect("the batch writes the per-frame comparison");
-    let text = std::fs::read_to_string(comparison).expect("the comparison frames read");
+    let text = std::fs::read_to_string(frames).expect("the comparison frames read");
     assert!(text.starts_with("group,set_key,set,kind,metric,frame,images,value,lower,upper"));
     let chart = find(&output, "comparison.svg").expect("the batch writes the comparison page");
     let svg = std::fs::read_to_string(chart).expect("the comparison page reads");

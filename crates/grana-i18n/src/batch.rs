@@ -49,11 +49,6 @@ labels! {
     filter_empty => "No reported group matches this filter." / "没有符合此筛选的报告组。";
     dataset_fallback => "the dataset" / "该数据集";
     no_samples => "The run recorded no dataset samples." / "该运行未记录数据集样本。";
-    metric_objects => "Objects" / "对象数";
-    metric_volume => "Volume" / "体积";
-    metric_area => "Area" / "面积";
-    metric_size => "Size" / "尺寸";
-    metric_intensity => "Intensity" / "强度";
 }
 
 use crate::Language;

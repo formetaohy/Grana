@@ -55,7 +55,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 16;
+const ANALYSIS_REVISION: u32 = 17;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -368,7 +368,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("comparison_frames.csv"),
-        grana_report::comparison_frames(&report.groups),
+        grana_report::comparison_frames(&report.metrics, &report.groups),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison frames: {error}"
@@ -376,7 +376,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     }
     if let Err(error) = std::fs::write(
         plan.output.join("samples.csv"),
-        grana_report::samples(&report.groups),
+        grana_report::samples(&report.metrics, &report.groups),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison samples: {error}"
@@ -412,7 +412,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     if let Err(detail) = sheet::write(&plan, &rows, &report) {
         let _ = events.send(Event::Failed(detail));
     }
-    if let Err(detail) = sheet::significance(&plan, &report.tests) {
+    if let Err(detail) = sheet::significance(&plan, &report) {
         let _ = events.send(Event::Failed(detail));
     }
     if let Err(detail) = ro_crate::write(&plan, &rows) {

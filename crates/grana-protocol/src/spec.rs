@@ -959,6 +959,8 @@ pub struct MeasureSpec {
     pub filters: Vec<FilterSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compare: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortSpec>,
 }
@@ -2520,6 +2522,10 @@ impl MeasureSpec {
         self.lasso.as_ref()
     }
 
+    pub fn compare(&self) -> &[String] {
+        &self.compare
+    }
+
     pub fn filters(&self, table: &Table) -> Result<Vec<Filter>, String> {
         self.filters
             .iter()
@@ -2579,6 +2585,14 @@ impl MeasureSpec {
             }
             if self.columns[..index].contains(column) {
                 return invalid(format!("shows the column {column} twice"));
+            }
+        }
+        for (index, column) in self.compare.iter().enumerate() {
+            if column.trim().is_empty() {
+                return invalid("compares an unnamed column".to_string());
+            }
+            if self.compare[..index].contains(column) {
+                return invalid(format!("compares the column {column} twice"));
             }
         }
         if let Some(sort) = &self.sort

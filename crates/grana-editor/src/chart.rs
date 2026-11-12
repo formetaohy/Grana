@@ -19,6 +19,7 @@ pub fn page(
 }
 
 pub fn comparison_page(view: &SessionView<'_>, workspace: &Workspace) -> Option<Page> {
+    let metrics = view.batch.as_ref().map_or(&[][..], |batch| batch.metrics);
     let rows = view
         .batch
         .as_ref()
@@ -31,11 +32,18 @@ pub fn comparison_page(view: &SessionView<'_>, workspace: &Workspace) -> Option<
         .batch
         .as_ref()
         .map_or(&[][..], |batch| batch.interactions);
+    let index = workspace
+        .comparison_metric
+        .as_ref()
+        .and_then(|key| metrics.iter().position(|metric| metric.key() == key))
+        .unwrap_or(0);
+    let metric = metrics.get(index)?;
     comparison_chart(ComparisonRequest {
         rows,
         tests,
         interactions,
-        metric: workspace.comparison_metric,
+        metric,
+        index,
         axis: workspace.comparison_axis,
         group: workspace.comparison_group.as_deref(),
         key: workspace.comparison_key.as_deref(),

@@ -8,7 +8,7 @@ use grana_ui::{
 
 use crate::chart::{ComparisonRequest, comparison_chart, group_names, set_names};
 use crate::message::Message;
-use crate::state::{ComparisonMetric, View};
+use crate::state::View;
 use crate::view;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -466,9 +466,25 @@ fn comparison<'a>(
         ));
         return view::card(ctx, 6.0, children);
     }
-    let metric = state.workspace.comparison_metric;
+    let metrics = state.batch_metrics();
+    let selected = state
+        .workspace
+        .comparison_metric
+        .as_ref()
+        .and_then(|key| metrics.iter().position(|metric| metric.key() == key))
+        .unwrap_or(0);
+    let Some(metric) = metrics.get(selected) else {
+        children.push(view::weak(
+            ctx,
+            grana_i18n::batch::comparison_hint(language),
+        ));
+        return view::card(ctx, 6.0, children);
+    };
     let axis = state.workspace.comparison_axis;
-    let labels = ComparisonMetric::ALL.map(|metric| metric_label(language, metric));
+    let choices = metrics
+        .iter()
+        .map(|metric| (metric.key().to_string(), metric_label(language, metric)))
+        .collect::<Vec<_>>();
     let axes = [
         grana_i18n::batch::conditions(language),
         grana_i18n::batch::frames(language),
@@ -481,11 +497,13 @@ fn comparison<'a>(
             usize::from(axis.index()),
             Message::SetComparisonAxis,
         ),
-        view::segmented(
+        crate::inspector::combo(
             ctx,
             "comparison.metric",
-            &labels,
-            metric.index(),
+            Length::Fixed(180.0),
+            240.0,
+            &choices,
+            Some(metric.key().to_string()),
             Message::SetComparisonMetric,
         ),
         view::icon_button(
@@ -564,6 +582,7 @@ fn comparison<'a>(
         tests: state.batch_significance(),
         interactions: state.batch_interactions(),
         metric,
+        index: selected,
         axis,
         group: group.as_deref(),
         key: key.as_deref(),
@@ -609,7 +628,7 @@ fn comparison<'a>(
         });
     if let Some(row) = open {
         children.push(view::divider(ctx));
-        children.extend(detail(ctx, state, row, metric));
+        children.extend(detail(ctx, state, row, metric, selected));
     }
     children.push(view::weak(
         ctx,
@@ -622,7 +641,8 @@ fn detail<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
     row: &grana_session::BatchComparison,
-    metric: ComparisonMetric,
+    metric: &grana_session::BatchMetric,
+    index: usize,
 ) -> Vec<Element<'a, Message>> {
     let language = ctx.language();
     let theme = *ctx.theme();
@@ -631,10 +651,10 @@ fn detail<'a>(
         .batch_significance()
         .iter()
         .filter(|test| test.frame.is_none())
-        .filter(|test| test.key == row.key && test.metric == metric && test.involves(&row.group))
+        .filter(|test| test.key == row.key && &test.metric == metric && test.involves(&row.group))
         .collect::<Vec<_>>();
     let best = tests.iter().map(|test| test.adjusted).fold(1.0, f64::min);
-    let mut readout = match (metric.value(row), metric.deviation(row)) {
+    let mut readout = match (row.value(index), row.deviation(index)) {
         (Some(mean), Some(deviation)) => grana_i18n::batch::value_deviation(
             language,
             &title(row),
@@ -664,7 +684,7 @@ fn detail<'a>(
             TextStyle::new(theme.font(Level::Callout), palette.text_primary).wrapping(),
         ),
         grana_ui::text(
-            sample_line(language, row, metric),
+            sample_line(language, row, metric, index),
             TextStyle::new(theme.font(Level::Caption), palette.text_secondary).wrapping(),
         ),
     ];
@@ -684,7 +704,8 @@ fn title(row: &grana_session::BatchComparison) -> String {
 fn sample_line(
     language: grana_i18n::Language,
     row: &grana_session::BatchComparison,
-    metric: ComparisonMetric,
+    metric: &grana_session::BatchMetric,
+    index: usize,
 ) -> String {
     const LIMIT: usize = 12;
     if row.samples.is_empty() {
@@ -694,11 +715,11 @@ fn sample_line(
         .samples
         .iter()
         .take(LIMIT)
-        .map(|sample| match metric.sample(sample) {
+        .map(|sample| match sample.values.get(index).copied().flatten() {
             Some(value) => grana_i18n::batch::sample_value(
                 language,
                 &sample.dataset,
-                &metric.format(value),
+                &metric.format(value.mean()),
                 sample.objects,
             ),
             None => grana_i18n::batch::sample_missing(language, &sample.dataset),
@@ -749,13 +770,15 @@ fn test_line(
         .join("   ·   ")
 }
 
-fn metric_label(language: grana_i18n::Language, metric: ComparisonMetric) -> &'static str {
-    match metric {
-        ComparisonMetric::Objects => grana_i18n::batch::metric_objects(language),
-        ComparisonMetric::Volume => grana_i18n::batch::metric_volume(language),
-        ComparisonMetric::Area => grana_i18n::batch::metric_area(language),
-        ComparisonMetric::Size => grana_i18n::batch::metric_size(language),
-        ComparisonMetric::Intensity => grana_i18n::batch::metric_intensity(language),
+fn metric_label(language: grana_i18n::Language, metric: &grana_session::BatchMetric) -> String {
+    let translated = grana_i18n::measure::column(language, metric.name());
+    let mut characters = translated.chars();
+    let name = characters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + characters.as_str()
+    });
+    match metric.unit().suffix() {
+        "" => name,
+        unit => format!("{name} ({unit})"),
     }
 }
 

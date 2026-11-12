@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use grana_measure::{Level, Mask, Measurement, Statistic, Table, channel_keys};
+use grana_measure::{Column, Level, Mask, Measurement, Statistic, Table, Unit, channel_keys};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -73,7 +73,7 @@ pub struct FrameValue {
 #[serde(deny_unknown_fields)]
 pub struct QualityFrame {
     pub time: u32,
-    pub values: [Option<FrameValue>; Metric::COUNT],
+    pub values: Vec<Option<FrameValue>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,124 +85,68 @@ pub struct Quality {
     pub name: String,
     pub kind: String,
     pub objects: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub volume: Option<Summary>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub area: Option<Summary>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<Summary>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intensity: Option<Summary>,
+    pub metrics: Vec<Metric>,
+    pub values: Vec<Option<Summary>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<QualityFrame>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Metric {
-    #[default]
-    Objects,
-    Volume,
-    Area,
-    Size,
-    Intensity,
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Metric {
+    key: String,
+    label: String,
+    unit: Unit,
+    decimals: u8,
+    level: Level,
 }
 
 impl Metric {
-    pub const ALL: [Self; 5] = [
-        Self::Objects,
-        Self::Volume,
-        Self::Area,
-        Self::Size,
-        Self::Intensity,
-    ];
-
-    pub const COUNT: usize = Self::ALL.len();
-
-    pub fn index(self) -> usize {
-        match self {
-            Self::Objects => 0,
-            Self::Volume => 1,
-            Self::Area => 2,
-            Self::Size => 3,
-            Self::Intensity => 4,
+    pub fn objects() -> Self {
+        Self {
+            key: "objects".to_string(),
+            label: "objects".to_string(),
+            unit: Unit::Count,
+            decimals: 0,
+            level: Level::Image,
         }
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Objects => "Objects",
-            Self::Volume => "Volume",
-            Self::Area => "Area",
-            Self::Size => "Size",
-            Self::Intensity => "Intensity",
+    pub fn column(column: &Column) -> Self {
+        Self {
+            key: column.key().to_string(),
+            label: column.label().to_string(),
+            unit: column.unit(),
+            decimals: column.decimals(),
+            level: Level::Object,
         }
     }
 
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Objects => "objects",
-            Self::Volume => "volume_um3",
-            Self::Area => "area_um2",
-            Self::Size => "size_um",
-            Self::Intensity => "intensity",
-        }
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
-    pub fn unit(self) -> &'static str {
-        match self {
-            Self::Objects | Self::Intensity => "",
-            Self::Volume => "µm³",
-            Self::Area => "µm²",
-            Self::Size => "µm",
-        }
+    pub fn name(&self) -> &str {
+        &self.label
     }
 
-    pub fn decimals(self) -> usize {
-        match self {
-            Self::Objects => 1,
-            Self::Volume | Self::Area | Self::Size => 3,
-            Self::Intensity => 2,
-        }
+    pub fn unit(&self) -> Unit {
+        self.unit
     }
 
-    pub fn level(self) -> Level {
-        match self {
-            Self::Objects => Level::Image,
-            Self::Volume | Self::Area | Self::Size | Self::Intensity => Level::Object,
-        }
+    pub fn decimals(&self) -> usize {
+        usize::from(self.decimals)
     }
 
-    pub fn format(self, value: f64) -> String {
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
+    pub fn format(&self, value: f64) -> String {
         let number = format!("{value:.*}", self.decimals());
-        match self.unit() {
+        match self.unit.suffix() {
             "" => number,
             unit => format!("{number} {unit}"),
-        }
-    }
-
-    pub fn value(self, row: &super::Comparison) -> Option<f64> {
-        row.means[self.index()]
-    }
-
-    pub fn deviation(self, row: &super::Comparison) -> Option<f64> {
-        row.deviations[self.index()]
-    }
-
-    pub fn sample(self, sample: &super::ComparisonSample) -> Option<f64> {
-        self.summary_of(sample).map(Summary::mean)
-    }
-
-    pub fn summary_of(self, sample: &super::ComparisonSample) -> Option<Summary> {
-        sample.values[self.index()]
-    }
-
-    pub fn summary(self, quality: &Quality) -> Option<Summary> {
-        match self {
-            Self::Objects => Summary::counted(quality.objects),
-            Self::Volume => quality.volume,
-            Self::Area => quality.area,
-            Self::Size => quality.size,
-            Self::Intensity => quality.intensity,
         }
     }
 }
@@ -228,43 +172,92 @@ pub fn keys(channels: &[String]) -> Vec<String> {
     channel_keys(channels)
 }
 
-pub fn of(table: &Table, rows: &[usize], input: &QualityInput<'_>, keys: &[String]) -> Quality {
+fn columns(
+    table: &Table,
+    channel: usize,
+    keys: &[String],
+    wanted: &[String],
+) -> Result<Vec<Column>, String> {
+    if wanted.is_empty() {
+        return Ok(default_columns(table, channel, keys));
+    }
+    wanted
+        .iter()
+        .map(|key| {
+            table
+                .column(key)
+                .map(|index| table.columns()[index].clone())
+                .ok_or_else(|| format!("the table has no column named {key}"))
+        })
+        .collect()
+}
+
+fn default_columns(table: &Table, channel: usize, keys: &[String]) -> Vec<Column> {
     let intensity = Measurement::Intensity {
-        channel: input.channel,
+        channel,
         statistic: Statistic::Mean,
     }
     .key(keys);
-    let columns = [
-        None,
-        table.column("volume_um3"),
-        table.column("area_um2"),
+    let size = if table.column("diameter_um").is_some() {
+        "diameter_um"
+    } else {
+        "length_um"
+    };
+    [
+        Some("volume_um3"),
+        Some("area_um2"),
+        Some(size),
+        Some(intensity.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|key| {
         table
-            .column("diameter_um")
-            .or_else(|| table.column("length_um")),
-        table.column(&intensity),
-    ];
+            .column(key)
+            .map(|index| table.columns()[index].clone())
+    })
+    .collect()
+}
+
+pub fn of(
+    table: &Table,
+    rows: &[usize],
+    input: &QualityInput<'_>,
+    keys: &[String],
+    wanted: &[String],
+) -> Result<Quality, String> {
+    let columns = columns(table, input.channel, keys, wanted)?;
+    let indices = columns
+        .iter()
+        .map(|column| {
+            table
+                .column(column.key())
+                .expect("a reported column belongs to the table")
+        })
+        .collect::<Vec<_>>();
+    let mut metrics = vec![Metric::objects()];
+    metrics.extend(columns.iter().map(Metric::column));
+    let mut values = vec![Summary::counted(rows.len())];
+    values.extend(indices.iter().map(|index| summary(table, rows, *index)));
     let mut admitted = vec![false; table.rows()];
     for row in rows {
         admitted[*row] = true;
     }
     let gated = Mask::of(table.rows(), |row| admitted[row]);
-    Quality {
+    Ok(Quality {
         dataset: input.dataset.to_string(),
         group: input.group.to_string(),
         key: input.key.to_string(),
         name: input.name.to_string(),
         kind: input.kind.to_string(),
         objects: rows.len(),
-        volume: summary(table, rows, columns[Metric::Volume.index()]),
-        area: summary(table, rows, columns[Metric::Area.index()]),
-        size: summary(table, rows, columns[Metric::Size.index()]),
-        intensity: summary(table, rows, columns[Metric::Intensity.index()]),
-        frames: frame_series(table, &gated, &columns),
-    }
+        frames: frame_series(table, &gated, &metrics, &indices),
+        metrics,
+        values,
+    })
 }
 
-fn summary(table: &Table, rows: &[usize], column: Option<usize>) -> Option<Summary> {
-    let column = column?;
+fn summary(table: &Table, rows: &[usize], column: usize) -> Option<Summary> {
     let values = rows
         .iter()
         .map(|row| f64::from(table.value(*row, column)))
@@ -275,12 +268,16 @@ fn summary(table: &Table, rows: &[usize], column: Option<usize>) -> Option<Summa
 fn frame_series(
     table: &Table,
     gated: &Mask,
-    columns: &[Option<usize>; Metric::COUNT],
+    metrics: &[Metric],
+    indices: &[usize],
 ) -> Vec<QualityFrame> {
-    let trends = columns.map(|column| column.map(|column| table.trend(column, gated)));
+    let trends = indices
+        .iter()
+        .map(|index| table.trend(*index, gated))
+        .collect::<Vec<_>>();
     let counts = frame_counts(table, gated);
     let mut times = counts.keys().copied().collect::<Vec<_>>();
-    for trend in trends.iter().flatten() {
+    for trend in &trends {
         times.extend(trend.points().iter().map(|point| point.time()));
     }
     times.sort_unstable();
@@ -289,23 +286,26 @@ fn frame_series(
         .into_iter()
         .map(|time| QualityFrame {
             time,
-            values: std::array::from_fn(|index| {
-                if index == Metric::Objects.index() {
-                    return counts.get(&time).map(|count| FrameValue {
-                        count: *count,
-                        mean: *count as f64,
-                        deviation: None,
-                    });
-                }
-                trends[index]
-                    .as_ref()
-                    .and_then(|trend| trend.points().iter().find(|point| point.time() == time))
-                    .map(|point| FrameValue {
-                        count: point.count(),
-                        mean: f64::from(point.value()),
-                        deviation: point.deviation().map(f64::from),
-                    })
-            }),
+            values: metrics
+                .iter()
+                .zip([None].into_iter().chain(trends.iter().map(Some)))
+                .map(|(metric, trend)| {
+                    if metric.level() == Level::Image {
+                        return counts.get(&time).map(|count| FrameValue {
+                            count: *count,
+                            mean: *count as f64,
+                            deviation: None,
+                        });
+                    }
+                    trend
+                        .and_then(|trend| trend.points().iter().find(|point| point.time() == time))
+                        .map(|point| FrameValue {
+                            count: point.count(),
+                            mean: f64::from(point.value()),
+                            deviation: point.deviation().map(f64::from),
+                        })
+                })
+                .collect(),
         })
         .collect()
 }
@@ -345,35 +345,37 @@ pub fn table(datasets: &[QualityDataset<'_>]) -> String {
         "set",
         "kind",
         "objects",
-        "volume_um3",
-        "area_um2",
-        "size_um",
-        "intensity",
+        "metric",
+        "unit",
+        "mean",
+        "deviation",
     ])];
     for dataset in datasets {
-        lines.extend(dataset.quality.iter().map(|quality| {
-            grana_measure::csv::line(&[
-                &dataset.group,
-                &dataset.name,
-                &dataset.scene,
-                dataset.status,
-                &quality.key,
-                &quality.name,
-                &quality.kind,
-                &quality.objects.to_string(),
-                &formatted(quality.volume.map(Summary::mean), 3),
-                &formatted(quality.area.map(Summary::mean), 3),
-                &formatted(quality.size.map(Summary::mean), 3),
-                &formatted(quality.intensity.map(Summary::mean), 2),
-            ])
-        }));
+        for quality in dataset.quality {
+            for (index, metric) in quality.metrics.iter().enumerate() {
+                let value = quality.values.get(index).copied().flatten();
+                lines.push(grana_measure::csv::line(&[
+                    &dataset.group,
+                    &dataset.name,
+                    &dataset.scene,
+                    dataset.status,
+                    &quality.key,
+                    &quality.name,
+                    &quality.kind,
+                    &quality.objects.to_string(),
+                    metric.key(),
+                    metric.unit().suffix(),
+                    &value.map_or_else(String::new, |value| {
+                        format!("{:.*}", metric.decimals(), value.mean())
+                    }),
+                    &value.map_or_else(String::new, |value| {
+                        value.deviation().map_or_else(String::new, |deviation| {
+                            format!("{:.*}", metric.decimals(), deviation)
+                        })
+                    }),
+                ]));
+            }
+        }
     }
     lines.concat()
-}
-
-fn formatted(value: Option<f64>, decimals: usize) -> String {
-    match value {
-        Some(value) => format!("{value:.decimals$}"),
-        None => String::new(),
-    }
 }

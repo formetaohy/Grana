@@ -613,10 +613,8 @@ pub fn apply(
                     workspace.distribution_style = *style;
                 }
             }
-            Message::SetComparisonMetric(index) => {
-                if let Some(metric) = crate::state::ComparisonMetric::ALL.get(index).copied() {
-                    workspace.comparison_metric = metric;
-                }
+            Message::SetComparisonMetric(key) => {
+                workspace.comparison_metric = Some(key);
             }
             Message::SetComparisonAxis(index) => {
                 if let Some(axis) = crate::state::ComparisonAxis::ALL.get(index).copied() {

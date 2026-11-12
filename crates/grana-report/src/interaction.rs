@@ -91,12 +91,12 @@ impl Interaction {
     }
 }
 
-pub fn all(groups: &[Comparison]) -> Vec<Interaction> {
+pub fn all(metrics: &[Metric], groups: &[Comparison]) -> Vec<Interaction> {
     let mut tested = Vec::new();
     for (first, second) in pairs(groups) {
-        for metric in Metric::ALL {
-            let a = slopes(first, metric);
-            let b = slopes(second, metric);
+        for (index, metric) in metrics.iter().enumerate() {
+            let a = slopes(first, index);
+            let b = slopes(second, index);
             let Some(test) = WelchTest::of(&a, &b) else {
                 continue;
             };
@@ -107,7 +107,7 @@ pub fn all(groups: &[Comparison]) -> Vec<Interaction> {
                 key: first.key.clone(),
                 name: first.name.clone(),
                 kind: first.kind.clone(),
-                metric,
+                metric: metric.clone(),
                 group_a: first.group.clone(),
                 group_b: second.group.clone(),
                 effect: hedges_g(&a, &b),
@@ -158,7 +158,7 @@ pub fn table(tests: &[Interaction]) -> String {
     ]);
     let mut text = header;
     for test in tests {
-        let metric = test.metric;
+        let metric = &test.metric;
         let decimals = metric.decimals();
         let interval = test.interval();
         text.push_str(&grana_measure::csv::line(&[
@@ -167,7 +167,7 @@ pub fn table(tests: &[Interaction]) -> String {
             &test.key,
             &test.name,
             &test.kind,
-            metric.name(),
+            metric.key(),
             test.level().key(),
             &test.test.n_a().to_string(),
             &test.test.n_b().to_string(),
@@ -194,19 +194,19 @@ pub fn table(tests: &[Interaction]) -> String {
     text
 }
 
-fn slopes(row: &Comparison, metric: Metric) -> Vec<f64> {
+fn slopes(row: &Comparison, metric: usize) -> Vec<f64> {
     row.samples
         .iter()
         .filter_map(|sample| slope(sample, metric))
         .collect()
 }
 
-fn slope(sample: &ComparisonSample, metric: Metric) -> Option<f64> {
+fn slope(sample: &ComparisonSample, metric: usize) -> Option<f64> {
     let points = sample
         .frames
         .iter()
         .filter_map(|(time, values)| {
-            let value = values[metric.index()]?;
+            let value = values.get(metric).copied().flatten()?;
             Some((f64::from(*time), value.mean))
         })
         .collect::<Vec<_>>();
