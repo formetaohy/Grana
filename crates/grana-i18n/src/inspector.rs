@@ -68,7 +68,8 @@ labels! {
     diffuse => "Diffuse" / "漫反射";
     reset_rendering => "Reset Rendering" / "重置渲染";
 
-    limit_analysis => "Limit Analysis" / "限制分析";
+    limit_analysis => "Limit Analysis and Export" / "限制分析与导出";
+    region_crops_export => "Exported datasets hold only this box." / "导出只写入此框内的数据。";
     align_to_axes => "Align to Axes" / "对齐坐标轴";
     fill_volume => "Fill Volume" / "填满体数据";
     active => "Active" / "已启用";

@@ -30,5 +30,5 @@ pub use image::{Image16, read16 as read_image16};
 pub use pick::PickId;
 pub use renderer::{Display, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Digest, Layer, LayerKey, SceneFrame, Style, Versions};
-pub use splat::{SIGMA_PER_RADIUS, Splat, SplatChunk, Splats};
+pub use splat::{SIGMA_PER_RADIUS, Splat, SplatChunk, SplatGeometry, SplatStyle, Splats};
 pub use temporal::Temporal;

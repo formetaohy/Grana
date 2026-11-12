@@ -2,15 +2,47 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use glam::Vec3;
 use grana_object::{LabelRaster, Shape};
 use grana_scene::{ObjectFrame, ObjectSet};
-use grana_volume::{Intensity, Level};
+use grana_volume::{Extent, Intensity, Level, Region};
 use grana_warp::Warp;
 use grana_zarr::{ImageSpec, LabelSpec, WriteChannel};
 
 use crate::channels::Channels;
 
 const LABEL_LIMIT: usize = u16::MAX as usize;
+
+pub struct Crop {
+    pub levels: Vec<Level>,
+    pub origins: Vec<[u32; 3]>,
+}
+
+pub fn cropped_levels(region: Region, levels: &[Level]) -> Result<Crop, String> {
+    let mut cropped = Vec::with_capacity(levels.len());
+    let mut origins = Vec::with_capacity(levels.len());
+    for (index, level) in levels.iter().enumerate() {
+        let ranges = region.voxel_range(*level).ok_or_else(|| {
+            format!("the region does not overlap resolution level {index} of the dataset")
+        })?;
+        let start = [ranges[0].start, ranges[1].start, ranges[2].start];
+        let extent = Extent::new(
+            ranges[0].end - ranges[0].start,
+            ranges[1].end - ranges[1].start,
+            ranges[2].end - ranges[2].start,
+        );
+        let origin = (Vec3::from(level.origin())
+            + level.basis().matrix()
+                * Vec3::new(start[0] as f32, start[1] as f32, start[2] as f32))
+        .to_array();
+        cropped.push(Level::placed(extent, level.basis(), origin));
+        origins.push(start);
+    }
+    Ok(Crop {
+        levels: cropped,
+        origins,
+    })
+}
 
 pub struct ChannelLayer {
     pub index: usize,
@@ -75,6 +107,7 @@ pub struct DatasetSpec {
     pub name: String,
     pub channels: Vec<ChannelLayer>,
     pub levels: Vec<Level>,
+    pub origins: Vec<[u32; 3]>,
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
@@ -87,6 +120,7 @@ pub struct Summary {
     channels: usize,
     labels: usize,
     frames: u32,
+    cropped: bool,
 }
 
 impl Summary {
@@ -105,6 +139,10 @@ impl Summary {
     pub fn frames(&self) -> u32 {
         self.frames
     }
+
+    pub fn cropped(&self) -> bool {
+        self.cropped
+    }
 }
 
 pub fn write_dataset(
@@ -118,6 +156,7 @@ pub fn write_dataset(
         name,
         channels: layers,
         levels,
+        origins,
         placement,
         frames,
         interval,
@@ -130,6 +169,11 @@ pub fn write_dataset(
     if levels.is_empty() {
         return Err("the dataset holds no stored resolution level".to_string());
     }
+    assert_eq!(
+        origins.len(),
+        levels.len(),
+        "every exported level names the voxel its crop starts at"
+    );
     let write_channels = layers
         .iter()
         .map(|layer| WriteChannel {
@@ -151,10 +195,18 @@ pub fn write_dataset(
             .get(channel)
             .map(|layer| layer.index)
             .ok_or_else(|| format!("the export names no channel {channel}"))?;
+        let base = origins
+            .get(level)
+            .ok_or_else(|| format!("the export names no resolution level {level}"))?;
+        let start = [
+            origin[0] + base[0],
+            origin[1] + base[1],
+            origin[2] + base[2],
+        ];
         let ranges = [
-            origin[0]..origin[0] + extent[0],
-            origin[1]..origin[1] + extent[1],
-            origin[2]..origin[2] + extent[2],
+            start[0]..start[0] + extent[0],
+            start[1]..start[1] + extent[1],
+            start[2]..start[2] + extent[2],
         ];
         let warp = drift.get(time as usize).unwrap_or(&Warp::IDENTITY);
         let values = channels
@@ -259,5 +311,6 @@ pub fn write_dataset(
         channels: layers.len(),
         labels: written,
         frames,
+        cropped: origins.iter().any(|origin| *origin != [0, 0, 0]),
     })
 }

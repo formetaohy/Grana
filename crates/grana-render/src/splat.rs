@@ -34,10 +34,54 @@ pub const SIGMA_PER_RADIUS: f32 = 1.0 / RADIUS_PER_SIGMA;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct Splat {
+pub struct SplatGeometry {
     center: [f32; 4],
-    sigma_alpha: [f32; 4],
+    sigma: [f32; 4],
+}
+
+impl SplatGeometry {
+    pub fn gaussian(center: [f32; 3], sigma: [f32; 3]) -> Self {
+        assert!(
+            center.iter().all(|value| value.is_finite()),
+            "a splat center must be finite"
+        );
+        assert!(
+            sigma.iter().all(|value| value.is_finite() && *value > 0.0),
+            "a splat sigma is a positive length on every axis"
+        );
+        Self {
+            center: [center[0], center[1], center[2], 0.0],
+            sigma: [sigma[0], sigma[1], sigma[2], 0.0],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SplatStyle {
     color: [f32; 4],
+}
+
+impl SplatStyle {
+    pub fn new(radiance: [f32; 3], alpha: f32) -> Self {
+        assert!(
+            radiance.iter().all(|value| (0.0..=1.0).contains(value)),
+            "a splat radiance is a linear triple"
+        );
+        assert!(
+            (0.0..=1.0).contains(&alpha),
+            "a splat alpha lies in the unit interval"
+        );
+        Self {
+            color: [radiance[0], radiance[1], radiance[2], alpha],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Splat {
+    geometry: SplatGeometry,
+    style: SplatStyle,
 }
 
 impl Splat {
@@ -55,26 +99,9 @@ impl Splat {
     }
 
     pub fn gaussian(center: [f32; 3], sigma: [f32; 3], radiance: [f32; 3], alpha: f32) -> Self {
-        assert!(
-            center.iter().all(|value| value.is_finite()),
-            "a splat center must be finite"
-        );
-        assert!(
-            sigma.iter().all(|value| value.is_finite() && *value > 0.0),
-            "a splat sigma is a positive length on every axis"
-        );
-        assert!(
-            radiance.iter().all(|value| (0.0..=1.0).contains(value)),
-            "a splat radiance is a linear triple"
-        );
-        assert!(
-            (0.0..=1.0).contains(&alpha),
-            "a splat alpha lies in the unit interval"
-        );
         Self {
-            center: [center[0], center[1], center[2], 0.0],
-            sigma_alpha: [sigma[0], sigma[1], sigma[2], alpha],
-            color: [radiance[0], radiance[1], radiance[2], 0.0],
+            geometry: SplatGeometry::gaussian(center, sigma),
+            style: SplatStyle::new(radiance, alpha),
         }
     }
 }
@@ -82,25 +109,66 @@ impl Splat {
 #[derive(Clone, Debug)]
 pub struct SplatChunk {
     key: u64,
-    stamp: u64,
-    splats: Vec<Splat>,
+    geometry_stamp: u64,
+    style_stamp: u64,
+    geometry: Vec<SplatGeometry>,
+    style: Vec<SplatStyle>,
 }
 
 impl SplatChunk {
     pub fn new(key: u64, stamp: u64, splats: Vec<Splat>) -> Self {
-        Self { key, stamp, splats }
+        let (geometry, style) = splats
+            .into_iter()
+            .map(|splat| (splat.geometry, splat.style))
+            .unzip();
+        Self {
+            key,
+            geometry_stamp: stamp,
+            style_stamp: stamp,
+            geometry,
+            style,
+        }
+    }
+
+    pub fn split(
+        key: u64,
+        geometry_stamp: u64,
+        style_stamp: u64,
+        geometry: Vec<SplatGeometry>,
+        style: Vec<SplatStyle>,
+    ) -> Self {
+        assert_eq!(
+            geometry.len(),
+            style.len(),
+            "a splat chunk styles every one of its instances"
+        );
+        Self {
+            key,
+            geometry_stamp,
+            style_stamp,
+            geometry,
+            style,
+        }
     }
 
     pub fn key(&self) -> u64 {
         self.key
     }
 
-    pub fn stamp(&self) -> u64 {
-        self.stamp
+    pub fn geometry_stamp(&self) -> u64 {
+        self.geometry_stamp
     }
 
-    pub fn splats(&self) -> &[Splat] {
-        &self.splats
+    pub fn style_stamp(&self) -> u64 {
+        self.style_stamp
+    }
+
+    pub fn geometry(&self) -> &[SplatGeometry] {
+        &self.geometry
+    }
+
+    pub fn style(&self) -> &[SplatStyle] {
+        &self.style
     }
 }
 
@@ -123,28 +191,26 @@ impl<'a> Splats<'a> {
     }
 
     pub fn is_empty(self) -> bool {
-        self.chunks.iter().all(|chunk| chunk.splats.is_empty())
+        self.chunks.iter().all(|chunk| chunk.geometry.is_empty())
     }
 
     pub fn len(self) -> usize {
-        self.chunks.iter().map(|chunk| chunk.splats.len()).sum()
-    }
-
-    pub fn iter(self) -> impl Iterator<Item = &'a Splat> {
-        self.chunks.iter().flat_map(|chunk| chunk.splats.iter())
+        self.chunks.iter().map(|chunk| chunk.geometry.len()).sum()
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct SplatSlot {
     key: u64,
-    stamp: u64,
+    geometry_stamp: u64,
+    style_stamp: u64,
     offset: usize,
     len: usize,
 }
 
 pub(crate) struct SplatPasses {
-    splats: Table<Splat>,
+    geometry: Table<SplatGeometry>,
+    style: Table<SplatStyle>,
     order: Table<u32>,
     slots: Vec<SplatSlot>,
     render_group: BindGroup,
@@ -161,11 +227,25 @@ pub(crate) struct SplatPasses {
 
 impl SplatPasses {
     pub fn new(device: &Device, layouts: &Layouts) -> Self {
-        let splats = Table::new(device, "grana.splats");
+        let geometry = Table::new(device, "grana.splats");
+        let style = Table::new(device, "grana.splat.styles");
         let order = Table::new(device, "grana.splat.order");
         let args = InstanceCommands::new(device, "grana.splat.args");
-        let render_group = render_group(device, layouts, splats.buffer(), order.buffer());
-        let cull_group = cull_group(device, layouts, splats.buffer(), order.buffer(), &args);
+        let render_group = render_group(
+            device,
+            layouts,
+            geometry.buffer(),
+            order.buffer(),
+            style.buffer(),
+        );
+        let cull_group = cull_group(
+            device,
+            layouts,
+            geometry.buffer(),
+            order.buffer(),
+            style.buffer(),
+            &args,
+        );
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.splat.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -315,7 +395,8 @@ impl SplatPasses {
             cache: None,
         });
         Self {
-            splats,
+            geometry,
+            style,
             order,
             slots: Vec::new(),
             render_group,
@@ -339,37 +420,57 @@ impl SplatPasses {
             self.slots.clear();
             return;
         }
-        let mut rebuilt = self.splats.reserve(device, total);
+        let mut rebuilt = self.geometry.reserve(device, total);
+        rebuilt |= self.style.reserve(device, total);
         rebuilt |= self.order.reserve(device, total);
         if rebuilt {
-            self.render_group =
-                render_group(device, layouts, self.splats.buffer(), self.order.buffer());
+            self.render_group = render_group(
+                device,
+                layouts,
+                self.geometry.buffer(),
+                self.order.buffer(),
+                self.style.buffer(),
+            );
             self.cull_group = cull_group(
                 device,
                 layouts,
-                self.splats.buffer(),
+                self.geometry.buffer(),
                 self.order.buffer(),
+                self.style.buffer(),
                 &self.args,
             );
         }
         let mut layout = Vec::with_capacity(chunks.len());
         let mut offset = 0usize;
         for chunk in chunks {
-            let len = chunk.splats().len();
-            let settled = !rebuilt
-                && self.slots.iter().any(|slot| {
-                    slot.key == chunk.key()
-                        && slot.stamp == chunk.stamp()
-                        && slot.offset == offset
-                        && slot.len == len
-                });
-            if !settled && len > 0 {
-                let start = (offset * size_of::<Splat>()) as u64;
-                queue.write_buffer(self.splats.buffer(), start, cast_slice(chunk.splats()));
+            let len = chunk.geometry().len();
+            let previous = self.slots.iter().find(|slot| slot.key == chunk.key());
+            let placed =
+                !rebuilt && previous.is_some_and(|slot| slot.offset == offset && slot.len == len);
+            let geometry_settled = placed
+                && previous.is_some_and(|slot| slot.geometry_stamp == chunk.geometry_stamp());
+            let style_settled =
+                placed && previous.is_some_and(|slot| slot.style_stamp == chunk.style_stamp());
+            if len > 0 {
+                if !geometry_settled {
+                    queue.write_buffer(
+                        self.geometry.buffer(),
+                        (offset * size_of::<SplatGeometry>()) as u64,
+                        cast_slice(chunk.geometry()),
+                    );
+                }
+                if !style_settled {
+                    queue.write_buffer(
+                        self.style.buffer(),
+                        (offset * size_of::<SplatStyle>()) as u64,
+                        cast_slice(chunk.style()),
+                    );
+                }
             }
             layout.push(SplatSlot {
                 key: chunk.key(),
-                stamp: chunk.stamp(),
+                geometry_stamp: chunk.geometry_stamp(),
+                style_stamp: chunk.style_stamp(),
                 offset,
                 len,
             });
@@ -504,8 +605,9 @@ impl SplatPasses {
 fn render_group(
     device: &Device,
     layouts: &Layouts,
-    splats: &wgpu::Buffer,
+    geometry: &wgpu::Buffer,
     order: &wgpu::Buffer,
+    style: &wgpu::Buffer,
 ) -> BindGroup {
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("grana.splat.render.group"),
@@ -513,11 +615,15 @@ fn render_group(
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: splats.as_entire_binding(),
+                resource: geometry.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 1,
                 resource: order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: style.as_entire_binding(),
             },
         ],
     })
@@ -526,8 +632,9 @@ fn render_group(
 fn cull_group(
     device: &Device,
     layouts: &Layouts,
-    splats: &wgpu::Buffer,
+    geometry: &wgpu::Buffer,
     order: &wgpu::Buffer,
+    style: &wgpu::Buffer,
     args: &InstanceCommands,
 ) -> BindGroup {
     device.create_bind_group(&BindGroupDescriptor {
@@ -536,11 +643,15 @@ fn cull_group(
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: splats.as_entire_binding(),
+                resource: geometry.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 1,
                 resource: order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: style.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 5,

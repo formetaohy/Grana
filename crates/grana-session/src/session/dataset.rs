@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use grana_pipeline::Channels;
-use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, Summary};
+use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, Summary, cropped_levels};
 use grana_volume::Level;
 
 use crate::loader::Loader;
@@ -19,6 +19,7 @@ struct Request {
     layers: Vec<ChannelLayer>,
     labels: Vec<LabelLayer>,
     levels: Vec<Level>,
+    origins: Vec<[u32; 3]>,
     placement: [f32; 3],
     frames: u32,
     interval: f32,
@@ -34,6 +35,7 @@ impl DatasetExport {
             layers,
             labels,
             levels,
+            origins,
             placement,
             frames,
             interval,
@@ -46,6 +48,7 @@ impl DatasetExport {
                     name,
                     channels: layers,
                     levels,
+                    origins,
                     placement,
                     frames,
                     interval,
@@ -112,13 +115,20 @@ impl super::Session {
             ));
             return;
         }
-        let levels = scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()].to_vec();
-        if levels.is_empty() {
+        let stored = scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()].to_vec();
+        if stored.is_empty() {
             self.message = Some(crate::Message::error(
                 "the dataset holds no stored resolution level",
             ));
             return;
         }
+        let cropped = match cropped_levels(scene.region, &stored) {
+            Ok(cropped) => cropped,
+            Err(detail) => {
+                self.message = Some(crate::Message::error(detail));
+                return;
+            }
+        };
         let layers = scene
             .dataset
             .channels()
@@ -157,7 +167,8 @@ impl super::Session {
             channels,
             layers,
             labels,
-            levels,
+            levels: cropped.levels,
+            origins: cropped.origins,
             placement: scene.dataset.pyramid().placement(),
             frames,
             interval,
@@ -167,13 +178,20 @@ impl super::Session {
 
     pub(super) fn finish_dataset(&mut self, outcome: Result<Summary, String>) {
         self.message = Some(match outcome {
-            Ok(written) => crate::Message::info(format!(
-                "wrote {} channels and {} labels over {} frames to {}",
-                written.channels(),
-                written.labels(),
-                written.frames(),
-                written.path().display()
-            )),
+            Ok(written) => {
+                let scope = if written.cropped() {
+                    " inside the region"
+                } else {
+                    ""
+                };
+                crate::Message::info(format!(
+                    "wrote {} channels and {} labels over {} frames{scope} to {}",
+                    written.channels(),
+                    written.labels(),
+                    written.frames(),
+                    written.path().display()
+                ))
+            }
             Err(detail) => crate::Message::error(detail),
         });
     }

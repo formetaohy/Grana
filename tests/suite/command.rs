@@ -552,3 +552,95 @@ fn find(root: &std::path::Path, name: &str) -> Option<PathBuf> {
     }
     None
 }
+
+fn find_suffix(root: &std::path::Path, suffix: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.ends_with(suffix))
+        {
+            return Some(path);
+        }
+        if path.is_dir()
+            && let Some(found) = find_suffix(&path, suffix)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[test]
+fn exports_only_the_protocol_region_in_a_batch() {
+    let temp = Temp::new("grana-batch-region");
+    let datasets = temp.path().join("datasets");
+    std::fs::create_dir_all(&datasets).expect("the dataset folder is created");
+    std::fs::copy(fixture("ome.tif"), datasets.join("ome.tif")).expect("the fixture is copied");
+    let image = grana_image::Image::open(&grana_image::Source::file(fixture("ome.tif")))
+        .expect("the fixture opens");
+    let channel = image.pyramid().channels()[0].name().to_string();
+    let protocol = grana_protocol::Protocol::from_json(&format!(
+        r#"{{
+            "sets": [{{
+                "key": "s0",
+                "name": "spots",
+                "color": [0.0, 1.0, 0.0],
+                "source": {{ "kind": "spots", "channel": "{channel}", "diameter": 0.5, "contrast": 0.1 }}
+            }}],
+            "region": {{
+                "center": [0.5, 0.5, 0.5],
+                "axes": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "half": [1.6, 1.6, 0.5]
+            }}
+        }}"#
+    ))
+    .expect("the region protocol parses");
+    let output = temp.path().join("runs");
+    let running = grana_pipeline::Batch::start(grana_pipeline::Plan {
+        protocol,
+        datasets: grana_pipeline::discover(&datasets, false).expect("the folder discovers"),
+        output: output.clone(),
+        jobs: 1,
+        project: false,
+        channels: true,
+        capture: None,
+    });
+    let mut done = false;
+    while let Some(event) = running.wait() {
+        match event {
+            grana_pipeline::BatchEvent::Failed(detail) => panic!("the batch failed: {detail}"),
+            grana_pipeline::BatchEvent::Dataset {
+                outcome: grana_pipeline::Outcome::Failed { detail },
+                ..
+            } => panic!("the dataset failed: {detail}"),
+            grana_pipeline::BatchEvent::Done { cancelled } => {
+                assert!(!cancelled, "the batch was cancelled");
+                done = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(done, "the batch stopped before it finished");
+    let path = find_suffix(&output, ".ome.zarr").expect("the batch writes the dataset");
+    let image = grana_zarr::Image::open(&path).expect("the exported dataset opens");
+    let region = grana_volume::Region::axis_aligned(
+        glam::Vec3::new(-1.6, -1.6, -0.5),
+        glam::Vec3::new(1.6, 1.6, 0.5),
+    );
+    let ranges = region
+        .voxel_range(image.pyramid().level(0))
+        .expect("the region covers the dataset");
+    let extent = grana_volume::Extent::new(
+        ranges[0].end - ranges[0].start,
+        ranges[1].end - ranges[1].start,
+        ranges[2].end - ranges[2].start,
+    );
+    assert_eq!(
+        image.pyramid().level(0).extent(),
+        extent,
+        "the export holds only the protocol region"
+    );
+}

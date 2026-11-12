@@ -36,6 +36,12 @@ pub(super) fn region<'a>(
                 Message::Command(Command::SetRegion(region))
             }),
         );
+        if current.enabled() {
+            children.push(view::weak(
+                ctx,
+                grana_i18n::inspector::region_crops_export(language),
+            ));
+        }
         for (axis_idx, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
             let value = current.center()[axis_idx];
             let readout = format!("{value:.2} µm");

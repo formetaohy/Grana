@@ -1,7 +1,7 @@
-﻿use glam::Vec3;
+use glam::Vec3;
 use grana_display::srgb_to_linear;
 use grana_object::{Spot, SpotSet};
-use grana_render::{SIGMA_PER_RADIUS, Splat};
+use grana_render::{SIGMA_PER_RADIUS, SplatGeometry, SplatStyle};
 
 const RAW_PIXELS: f32 = 3.0;
 const CELL_PIXELS: f32 = 4.0;
@@ -38,13 +38,15 @@ pub(crate) struct Appearance {
 
 #[derive(Default)]
 pub(crate) struct Detections {
-    pub(crate) splats: Vec<Splat>,
+    pub(crate) geometry: Vec<SplatGeometry>,
+    pub(crate) style: Vec<SplatStyle>,
     pub(crate) members: Vec<Option<usize>>,
 }
 
 impl Detections {
-    fn push(&mut self, splat: Splat, member: Option<usize>) {
-        self.splats.push(splat);
+    fn push(&mut self, geometry: SplatGeometry, style: SplatStyle, member: Option<usize>) {
+        self.geometry.push(geometry);
+        self.style.push(style);
         self.members.push(member);
     }
 }
@@ -102,19 +104,16 @@ where
         grid.add(index, spot, palette.radiance(look.color));
     }
     let mut detections = Detections {
-        splats: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
+        geometry: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
+        style: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
         members: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
     };
     grid.finish(opacity, &mut detections);
     let highlight = palette.radiance(SELECTED_COLOR);
     for (index, center, radius) in selected {
         detections.push(
-            Splat::gaussian(
-                center,
-                [SELECTED_SCALE * radius * SIGMA_PER_RADIUS; 3],
-                highlight,
-                opacity,
-            ),
+            SplatGeometry::gaussian(center, [SELECTED_SCALE * radius * SIGMA_PER_RADIUS; 3]),
+            SplatStyle::new(highlight, opacity),
             Some(index),
         );
     }
@@ -127,25 +126,22 @@ where
 {
     let mut palette = Palette::default();
     let mut detections = Detections {
-        splats: Vec::with_capacity(entries.len()),
+        geometry: Vec::with_capacity(entries.len()),
+        style: Vec::with_capacity(entries.len()),
         members: Vec::with_capacity(entries.len()),
     };
     for (index, spot) in entries.iter().enumerate() {
         let look = style(index);
-        if !look.visible {
-            continue;
-        }
         let (radius, color) = if look.selected {
             (SELECTED_SCALE * spot.radius(), SELECTED_COLOR)
         } else {
             (spot.radius(), look.color)
         };
         detections.push(
-            Splat::gaussian(
-                spot.center(),
-                [radius * SIGMA_PER_RADIUS; 3],
+            SplatGeometry::gaussian(spot.center(), [radius * SIGMA_PER_RADIUS; 3]),
+            SplatStyle::new(
                 palette.radiance(color),
-                opacity,
+                if look.visible { opacity } else { 0.0 },
             ),
             Some(index),
         );
@@ -307,7 +303,8 @@ impl Grid {
             let radiance = cell.radiance.map(|sum| (sum / count) as f32);
             let alpha = (1.0 - (1.0 - opacity).powi(cell.count as i32)).clamp(0.0, 1.0);
             detections.push(
-                Splat::gaussian(center, sigma, radiance, alpha),
+                SplatGeometry::gaussian(center, sigma),
+                SplatStyle::new(radiance, alpha),
                 (cell.member != EMPTY).then_some(cell.member as usize),
             );
         }

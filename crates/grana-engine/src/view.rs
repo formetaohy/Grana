@@ -1,4 +1,4 @@
-﻿use glam::Vec3;
+use glam::Vec3;
 use grana_display::{Camera, Shading};
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, Splats, Style, Versions,
@@ -170,19 +170,21 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
         };
         let choice = targets.splats[ordinal];
         ordinal += 1;
-        let stamp = splat_stamp(scene, set, choice);
+        let stamps = splat_stamps(scene, set, choice);
         objects.mix(detail as u64);
         objects.mix(choice.digest());
-        objects.mix(stamp);
+        objects.mix(stamps.geometry);
+        objects.mix(stamps.style);
         let mut seeded = Vec::new();
         for seed in scene.seeds(set.id()) {
             seeded.push(Splat::point(*seed, seed_radius, SEED_COLOR, 1.0));
             splat_ids.push(None);
         }
         if !seeded.is_empty() {
+            let seed_stamp = seed_stamp(scene, set);
             splats.push(SplatChunk::new(
                 splat_key(set.id().raw(), SEED_PART),
-                stamp,
+                seed_stamp,
                 seeded,
             ));
         }
@@ -203,11 +205,13 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
                 selected: scene.object_selected(set.id(), index),
             };
             let detections = spot::detections(spots, choice, world, set.opacity(), style);
-            if !detections.splats.is_empty() {
-                splats.push(SplatChunk::new(
+            if !detections.geometry.is_empty() {
+                splats.push(SplatChunk::split(
                     splat_key(set.id().raw(), DETECTION_PART),
-                    stamp,
-                    detections.splats,
+                    stamps.geometry,
+                    stamps.style,
+                    detections.geometry,
+                    detections.style,
                 ));
                 for member in detections.members {
                     splat_ids.push(member.map(|index| Selection {
@@ -340,22 +344,52 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
     })
 }
 
-fn splat_stamp(scene: &Scene, set: &ObjectSet, choice: Choice) -> u64 {
-    let mut stamp = Digest::new();
-    stamp.mix(set.id().raw());
-    stamp.mix(set.revision().raw());
-    stamp.mix(set.document().raw());
-    stamp.mix(set.frame_stamp(scene.time()).map_or(u64::MAX, |s| s.raw()));
-    stamp.mix(set.tracks().map_or(u64::MAX, |t| t.revision().raw()));
-    stamp.mix(choice.digest());
-    for selection in scene.selections() {
-        if selection.set == set.id() {
-            stamp.mix(match selection.item {
+#[derive(Clone, Copy)]
+struct SplatStamps {
+    geometry: u64,
+    style: u64,
+}
+
+fn splat_stamps(scene: &Scene, set: &ObjectSet, choice: Choice) -> SplatStamps {
+    let mut selection = Digest::new();
+    for held in scene.selections() {
+        if held.set == set.id() {
+            selection.mix(match held.item {
                 Item::Object(index) => (index as u64) * 2,
                 Item::Track(index) => (index as u64) * 2 + 1,
             });
         }
     }
+    let selection = selection.finish();
+    let mut style = Digest::new();
+    style.mix(set.id().raw());
+    style.mix(set.document().raw());
+    style.real(set.opacity());
+    style.mix(choice.digest());
+    style.mix(u64::from(scene.time()));
+    style.mix(selection);
+    let style = style.finish();
+    let mut geometry = Digest::new();
+    geometry.mix(set.id().raw());
+    geometry.mix(set.frame_stamp(scene.time()).map_or(u64::MAX, |s| s.raw()));
+    geometry.mix(u64::from(scene.time()));
+    geometry.mix(choice.digest());
+    geometry.mix(selection);
+    if matches!(choice, Choice::Grid(_)) {
+        geometry.mix(style);
+    }
+    SplatStamps {
+        geometry: geometry.finish(),
+        style,
+    }
+}
+
+fn seed_stamp(scene: &Scene, set: &ObjectSet) -> u64 {
+    let mut stamp = Digest::new();
+    stamp.mix(set.id().raw());
+    stamp.mix(set.revision().raw());
+    stamp.mix(set.document().raw());
+    stamp.mix(u64::from(scene.time()));
     stamp.finish()
 }
 

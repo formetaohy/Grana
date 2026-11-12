@@ -1,11 +1,15 @@
 struct SplatInstance {
     center: vec4<f32>,
-    sigma_alpha: vec4<f32>,
+    sigma: vec4<f32>,
+}
+
+struct SplatAppearance {
     color: vec4<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> splats: array<SplatInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
+@group(1) @binding(2) var<storage, read> appearances: array<SplatAppearance>;
 
 const SPLAT_REACH: f32 = 3.0;
 const SPLAT_MINIMUM_SIGMA: f32 = 0.5;
@@ -143,8 +147,9 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     let local = corners[index];
     let slot = order[instance];
     let data = splats[slot];
+    let look = appearances[slot];
     let center = data.center.xyz;
-    let sigma = max(data.sigma_alpha.xyz, vec3<f32>(1.0e-7));
+    let sigma = max(data.sigma.xyz, vec3<f32>(1.0e-7));
     let clip_center = frame.view_projection * vec4<f32>(center, 1.0);
     let world_per_pixel = clip_center.w / max(frame.march.w, 1.0e-6);
     let floor = SPLAT_REACH * SPLAT_MINIMUM_SIGMA * world_per_pixel;
@@ -158,8 +163,8 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
     output.center = center;
     output.sigma = sigma;
-    output.color = data.color.rgb;
-    output.alpha = data.sigma_alpha.w;
+    output.color = look.color.rgb;
+    output.alpha = look.color.a;
     output.depth = clip_center.z / clip_center.w;
     output.index = slot;
     output.pixel = world_per_pixel;

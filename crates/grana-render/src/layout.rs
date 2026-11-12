@@ -227,6 +227,7 @@ impl Layouts {
             entries: &[
                 storage(0, ShaderStages::COMPUTE, true),
                 storage(1, ShaderStages::COMPUTE, false),
+                storage(2, ShaderStages::COMPUTE, true),
                 storage(5, ShaderStages::COMPUTE, false),
             ],
         });
@@ -235,6 +236,7 @@ impl Layouts {
             entries: &[
                 storage(0, ShaderStages::VERTEX, true),
                 storage(1, ShaderStages::VERTEX, true),
+                storage(2, ShaderStages::VERTEX, true),
             ],
         });
         let oit_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {

@@ -1,8 +1,17 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use glam::Vec3;
 use grana_image::{Format, Image, Source};
 use grana_interop::{Detection, Edge, Lineage, geff};
-use grana_volume::{Basis, Extent, Intensity, Level, Spacing, VoxelData};
+use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
+use grana_pipeline::Channels;
+use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
+use grana_scene::ObjectFrame;
+use grana_volume::{
+    Basis, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
+};
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
 use crate::support;
@@ -204,6 +213,125 @@ fn writes_and_reads_a_tiny_ome_zarr() {
             }
         }
     }
+}
+
+#[test]
+fn exports_a_region_of_the_channels_and_labels() {
+    let temp = Temp::new("suite-zarr-crop");
+    let path = temp.path().join("crop.ome.zarr");
+    let extent = Extent::new(16, 12, 8);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                values[extent.index(x, y, z) as usize] = (x + 10 * y + 100 * z) as u16;
+            }
+        }
+    }
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "signal",
+            [1.0, 1.0, 1.0],
+            VoxelData::U16(values),
+        )],
+    );
+    let image = Arc::new(
+        Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+            .expect("the image opens"),
+    );
+    let source_level = image.pyramid().level(0);
+    let levels = image.pyramid().levels().to_vec();
+    let region = Region::axis_aligned(
+        Vec3::from(source_level.corner([4.0, 2.0, 1.0])),
+        Vec3::from(source_level.corner([12.0, 10.0, 5.0])),
+    );
+    let cropped = cropped_levels(region, &levels).expect("the region crops the levels");
+    assert_eq!(cropped.levels.len(), 1);
+    assert_eq!(cropped.levels[0].extent(), Extent::new(8, 8, 4));
+    assert_eq!(cropped.origins[0], [4, 2, 1]);
+    let whole = cropped_levels(Region::none(), &levels).expect("no region keeps the levels");
+    assert_eq!(whole.levels[0].extent(), extent);
+    assert_eq!(whole.origins[0], [0, 0, 0]);
+
+    let center = source_level.voxel_center([5.0, 3.0, 2.0]);
+    let spots = SpotSet::new(
+        0,
+        vec![Spot::new(center, 0.9, 1.0)],
+        IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]),
+    );
+    let label = LabelLayer {
+        name: "spot".to_string(),
+        frames: vec![0],
+        labels: 1,
+        color: [1.0, 0.0, 0.0],
+        opacity: 1.0,
+        properties: vec![(1, "spot 1".to_string())],
+        shapes: vec![Some(Arc::new(ObjectFrame::Spots(spots)))],
+        visible: vec![vec![true]],
+    };
+    let channels = Channels::stored(Arc::clone(&image));
+    let mut progress = |_, _| {};
+    grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: path.clone(),
+            name: "crop".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                range: Intensity::new(0.0, 1000.0),
+            }],
+            levels: cropped.levels,
+            origins: cropped.origins,
+            placement: image.pyramid().placement(),
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: vec![label],
+        },
+        &channels,
+        &AtomicBool::new(false),
+        &mut progress,
+    )
+    .expect("the region exports");
+    let written = grana_zarr::Image::open(&path).expect("the cropped image opens");
+    let level = written.pyramid().level(0);
+    assert_eq!(level.extent(), Extent::new(8, 8, 4));
+    let expected = [0, 1, 2].map(|axis| {
+        0.5 * (source_level.corner([4.0, 2.0, 1.0])[axis]
+            + source_level.corner([12.0, 10.0, 5.0])[axis])
+            + image.pyramid().placement()[axis]
+    });
+    for (axis, value) in written.pyramid().placement().into_iter().enumerate() {
+        assert!(
+            (value - expected[axis]).abs() <= 1.0e-4,
+            "the cropped image keeps the world centre of its box on axis {axis}: {value} against {}",
+            expected[axis]
+        );
+    }
+    let data = written
+        .read_region(0, 0, 0, 0..8, 0..8, 0..4)
+        .expect("the cropped channel reads");
+    let VoxelData::F32(data) = data else {
+        panic!("the cropped channel stores float voxels");
+    };
+    assert_eq!(
+        data[0],
+        4.0 + 20.0 + 100.0,
+        "the crop starts at voxel 4,2,1"
+    );
+    let labels = written.labels().expect("the cropped labels read");
+    let label = labels.get("spot").expect("the cropped label exists");
+    let crop = label
+        .read(0, 0, &[0..8, 0..8, 0..4], [0, 0, 0])
+        .expect("the cropped label reads");
+    assert_eq!(crop[1 + 8 * (1 + 8)], 1, "the spot keeps its identity");
+    assert_eq!(
+        label.level(0).expect("the label level exists").extent(),
+        Extent::new(8, 8, 4)
+    );
 }
 
 #[test]

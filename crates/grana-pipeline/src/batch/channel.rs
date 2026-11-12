@@ -4,7 +4,7 @@ use grana_scene::{Scene, slug};
 
 use super::{Event, Task};
 use crate::channels::Channels;
-use crate::export::{ChannelLayer, DatasetSpec, LabelLayer, write_dataset};
+use crate::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels, write_dataset};
 
 pub(super) fn write(
     task: &Task<'_>,
@@ -12,10 +12,11 @@ pub(super) fn write(
     channels: &Channels,
     folder: &Path,
 ) -> Result<(), String> {
-    let levels = &scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()];
-    if levels.is_empty() {
+    let stored = &scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()];
+    if stored.is_empty() {
         return Err("the dataset holds no stored resolution level".to_string());
     }
+    let cropped = cropped_levels(scene.region, stored)?;
     let name = scene.dataset.name().to_string();
     let _ = task.events.send(Event::Step {
         index: task.index,
@@ -55,7 +56,8 @@ pub(super) fn write(
             path,
             name,
             channels: layers,
-            levels: levels.to_vec(),
+            levels: cropped.levels,
+            origins: cropped.origins,
             placement: scene.dataset.pyramid().placement(),
             frames,
             interval: scene.dataset.frame_interval(),
