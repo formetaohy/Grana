@@ -123,7 +123,7 @@ impl Offline {
         let mut ui: Ui<()> = Ui::new(&self.device, &self.queue, self.format);
         ui.resize(export.size());
         progress(0, export.progress().1);
-        let mut prepared: Option<(u32, Vec<usize>, RenderedScene)> = None;
+        let mut prepared: Option<(u32, grana_engine::Targets, RenderedScene)> = None;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 export.discard();
@@ -131,13 +131,13 @@ impl Offline {
             }
             let pose = export.pose();
             scene.set_time(pose.time);
-            let detail = grana_engine::detail(&scene, export.lens());
+            let targets = grana_engine::plan(&scene, export.lens());
             let stale = prepared
                 .as_ref()
-                .is_none_or(|(time, cached, _)| *time != pose.time || *cached != detail);
+                .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);
             if stale {
-                match grana_engine::frame(&scene, &detail) {
-                    Ok(rendered) => prepared = Some((pose.time, detail, rendered)),
+                match grana_engine::frame(&scene, &targets) {
+                    Ok(rendered) => prepared = Some((pose.time, targets, rendered)),
                     Err(detail) => {
                         export.discard();
                         return Outcome::Failed { detail };

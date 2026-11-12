@@ -52,7 +52,7 @@ struct Identities {
 
 struct Prepared {
     scene_key: u64,
-    detail: Vec<usize>,
+    targets: view::Targets,
     scene: RenderedScene,
 }
 
@@ -177,7 +177,7 @@ impl Engine {
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
-        let detail = view::detail(
+        let detail = view::plan(
             view.scene,
             Some(view::Lens {
                 camera: view.camera,
@@ -187,12 +187,12 @@ impl Engine {
         if self
             .prepared
             .as_ref()
-            .is_none_or(|prepared| prepared.scene_key != scene_key || prepared.detail != detail)
+            .is_none_or(|prepared| prepared.scene_key != scene_key || prepared.targets != detail)
         {
             self.prepared = Some(Prepared {
                 scene_key,
                 scene: view::frame(view.scene, &detail)?,
-                detail,
+                targets: detail,
             });
         }
         let info = {

@@ -1,6 +1,3 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use bytemuck::{Pod, Zeroable, cast_slice};
 use grana_gpu::{InstanceCommands, Table};
 use wgpu::{
@@ -33,6 +30,8 @@ const SPLAT_SHADER: &str = concat!(
 
 const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
 
+pub const SIGMA_PER_RADIUS: f32 = 1.0 / RADIUS_PER_SIGMA;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Splat {
@@ -44,10 +43,6 @@ pub struct Splat {
 impl Splat {
     pub fn point(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> Self {
         assert!(
-            center.iter().all(|value| value.is_finite()),
-            "a splat center must be finite"
-        );
-        assert!(
             radius.is_finite() && radius > 0.0,
             "a splat radius must be a positive length"
         );
@@ -55,25 +50,32 @@ impl Splat {
             color.iter().all(|value| (0.0..=1.0).contains(value)),
             "a splat color is an srgb triple"
         );
+        let sigma = radius * SIGMA_PER_RADIUS;
+        Self::gaussian(center, [sigma; 3], srgb_to_linear(color), alpha)
+    }
+
+    pub fn gaussian(center: [f32; 3], sigma: [f32; 3], radiance: [f32; 3], alpha: f32) -> Self {
+        assert!(
+            center.iter().all(|value| value.is_finite()),
+            "a splat center must be finite"
+        );
+        assert!(
+            sigma.iter().all(|value| value.is_finite() && *value > 0.0),
+            "a splat sigma is a positive length on every axis"
+        );
+        assert!(
+            radiance.iter().all(|value| (0.0..=1.0).contains(value)),
+            "a splat radiance is a linear triple"
+        );
         assert!(
             (0.0..=1.0).contains(&alpha),
             "a splat alpha lies in the unit interval"
         );
-        let sigma = radius / RADIUS_PER_SIGMA;
-        let [red, green, blue] = srgb_to_linear(color);
         Self {
             center: [center[0], center[1], center[2], 0.0],
-            sigma_alpha: [sigma, sigma, sigma, alpha],
-            color: [red, green, blue, 0.0],
+            sigma_alpha: [sigma[0], sigma[1], sigma[2], alpha],
+            color: [radiance[0], radiance[1], radiance[2], 0.0],
         }
-    }
-}
-
-impl Hash for Splat {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.center.map(f32::to_bits).hash(state);
-        self.sigma_alpha.map(f32::to_bits).hash(state);
-        self.color.map(f32::to_bits).hash(state);
     }
 }
 
@@ -85,14 +87,8 @@ pub struct SplatChunk {
 }
 
 impl SplatChunk {
-    pub fn new(key: u64, splats: Vec<Splat>) -> Self {
-        let mut hasher = DefaultHasher::new();
-        splats.hash(&mut hasher);
-        Self {
-            key,
-            stamp: hasher.finish(),
-            splats,
-        }
+    pub fn new(key: u64, stamp: u64, splats: Vec<Splat>) -> Self {
+        Self { key, stamp, splats }
     }
 
     pub fn key(&self) -> u64 {

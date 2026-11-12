@@ -1,12 +1,12 @@
-use glam::Vec3;
+﻿use glam::Vec3;
 use grana_display::{Camera, Shading};
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, Splats, Style, Versions,
 };
-use grana_scene::{Item, ObjectFrame, Scene, Selection};
+use grana_scene::{Item, ObjectFrame, ObjectSet, Scene, Selection};
 
-const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
-const SELECTED_SCALE: f32 = 1.3;
+use crate::spot::{self, Appearance, Choice};
+
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
 const SEED_PART: u64 = 0;
@@ -18,6 +18,12 @@ const MINIMUM_TARGET: f32 = 512.0;
 pub struct Lens<'a> {
     pub camera: &'a Camera,
     pub height: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Targets {
+    detail: Vec<usize>,
+    splats: Vec<Choice>,
 }
 
 pub struct RenderedScene {
@@ -96,17 +102,19 @@ pub fn key(scene: &Scene) -> u64 {
     key.finish()
 }
 
-pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
-    let mut details = Vec::new();
+pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
+    let mut detail = Vec::new();
+    let mut splats = Vec::new();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
         }
         let Some(frame) = set.frame(scene.time()) else {
-            details.push(0);
+            detail.push(0);
+            splats.push(Choice::Full);
             continue;
         };
-        details.push(match (frame, lens) {
+        detail.push(match (frame, lens) {
             (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
                 surfaces.select_detail(triangle_target(surfaces, lens))
             }
@@ -115,11 +123,25 @@ pub fn detail(scene: &Scene, lens: Option<Lens<'_>>) -> Vec<usize> {
             }
             _ => 0,
         });
+        splats.push(match (frame, lens) {
+            (ObjectFrame::Spots(spots), Some(lens)) => {
+                let pixels = lens
+                    .camera
+                    .world_per_point(lens.height as f32, lens.camera.distance());
+                spot::choose(spots, pixels)
+            }
+            _ => Choice::Full,
+        });
     }
-    details
+    Targets { detail, splats }
 }
 
-pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
+pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> {
+    assert_eq!(
+        targets.detail.len(),
+        targets.splats.len(),
+        "a target names one detail level and one splat level per shown set"
+    );
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut splats = Vec::new();
@@ -129,45 +151,42 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
     let mut objects = Digest::new();
     let mut appearance = Digest::new();
     let mut ordinal = 0usize;
+    let time = scene.time();
+    let world = scene.dataset.world_size();
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
     data.mix(scene.channels.len() as u64);
     data.mix(scene.dataset.channels().len() as u64);
     for set in scene.objects.iter() {
+        let shown = scene.shown(set);
         objects.mix(set.id().raw());
-        objects.flag(scene.shown(set));
-        let Some(wanted) = scene
-            .shown(set)
-            .then(|| detail.get(ordinal).copied())
-            .flatten()
-        else {
+        objects.flag(shown);
+        appearance.mix(set.document().raw());
+        appearance.mix(set.revision().raw());
+        if !shown {
             continue;
+        }
+        let Some(detail) = targets.detail.get(ordinal).copied() else {
+            return Err("the targets leave a shown object set without a detail level".to_string());
         };
+        let choice = targets.splats[ordinal];
         ordinal += 1;
-        objects.mix(
-            set.frame_stamp(scene.time())
-                .map_or(u64::MAX, |stamp| stamp.raw()),
-        );
-        objects.mix(
-            set.tracks()
-                .map_or(u64::MAX, |tracks| tracks.revision().raw()),
-        );
-        objects.mix(wanted as u64);
+        let stamp = splat_stamp(scene, set, choice);
+        objects.mix(detail as u64);
+        objects.mix(choice.digest());
+        objects.mix(stamp);
         let mut seeded = Vec::new();
         for seed in scene.seeds(set.id()) {
-            let [x, y, z] = *seed;
-            objects.real(x);
-            objects.real(y);
-            objects.real(z);
             seeded.push(Splat::point(*seed, seed_radius, SEED_COLOR, 1.0));
             splat_ids.push(None);
         }
         if !seeded.is_empty() {
             splats.push(SplatChunk::new(
                 splat_key(set.id().raw(), SEED_PART),
+                stamp,
                 seeded,
             ));
         }
-        let Some(frame) = set.frame(scene.time()) else {
+        let Some(frame) = set.frame(time) else {
             continue;
         };
         let colors = scene.object_colors(set);
@@ -178,58 +197,44 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 .unwrap_or_else(|| set.color())
         };
         if let Some(spots) = frame.spots() {
-            let mut detected = Vec::new();
-            for (index, spot) in spots.spots().iter().enumerate() {
-                if !set.visible_object(scene.time(), index) {
-                    continue;
-                }
-                let selected = scene.object_selected(set.id(), index);
-                let (radius, tint) = if selected {
-                    (SELECTED_SCALE * spot.radius(), SELECTED_COLOR)
-                } else {
-                    (spot.radius(), color(index))
-                };
-                let [x, y, z] = spot.center();
-                objects.real(x);
-                objects.real(y);
-                objects.real(z);
-                objects.real(radius);
-                let [red, green, blue] = tint;
-                appearance.real(red);
-                appearance.real(green);
-                appearance.real(blue);
-                appearance.real(set.opacity());
-                detected.push(Splat::point(spot.center(), radius, tint, set.opacity()));
-                splat_ids.push(Some(Selection {
-                    set: set.id(),
-                    item: Item::Object(index),
-                }));
-            }
-            if !detected.is_empty() {
+            let style = |index: usize| Appearance {
+                color: color(index),
+                visible: set.visible_object(time, index),
+                selected: scene.object_selected(set.id(), index),
+            };
+            let detections = spot::detections(spots, choice, world, set.opacity(), style);
+            if !detections.splats.is_empty() {
                 splats.push(SplatChunk::new(
                     splat_key(set.id().raw(), DETECTION_PART),
-                    detected,
+                    stamp,
+                    detections.splats,
                 ));
+                for member in detections.members {
+                    splat_ids.push(member.map(|index| Selection {
+                        set: set.id(),
+                        item: Item::Object(index),
+                    }));
+                }
             }
         }
         let (geometry, level) = match frame {
             ObjectFrame::Surfaces(surfaces) => {
                 let (mesh, available) =
-                    surfaces.detail(wanted).map_err(|error| error.to_string())?;
+                    surfaces.detail(detail).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
             ObjectFrame::Cells(cells) => {
-                let (mesh, available) = cells.detail(wanted).map_err(|error| error.to_string())?;
+                let (mesh, available) = cells.detail(detail).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
             _ => (frame.geometry().map_err(|error| error.to_string())?, 0),
         };
-        if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(scene.time()))
+        if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(time))
             && !mesh.is_empty()
         {
             let start = styles.len();
             for index in 0..frame.object_count() {
-                let visible = set.visible_object(scene.time(), index);
+                let visible = set.visible_object(time, index);
                 let selected = scene.object_selected(set.id(), index);
                 let opacity = set.opacity();
                 let [red, green, blue] = color(index);
@@ -249,7 +254,7 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
                 });
             }
             let layer = Layer {
-                key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp.raw(), level as u16),
+                key: LayerKey::at_frame(set.id().raw(), 0, time, stamp.raw(), level as u16),
                 mesh,
                 style_start: start,
                 style_count: frame.object_count(),
@@ -296,6 +301,16 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
             layers.push(layer);
         }
     }
+    for selection in scene.selections() {
+        let item = match selection.item {
+            Item::Object(index) => (index as u64) * 2,
+            Item::Track(index) => (index as u64) * 2 + 1,
+        };
+        objects.mix(selection.set.raw());
+        objects.mix(item);
+        appearance.mix(selection.set.raw());
+        appearance.mix(item);
+    }
     let channels = scene
         .channels
         .iter()
@@ -309,8 +324,8 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
         .collect();
     assert_eq!(
         ordinal,
-        detail.len(),
-        "the detail levels cover every shown set"
+        targets.detail.len(),
+        "the targets cover every shown set"
     );
     Ok(RenderedScene {
         versions: Versions::new(data.finish(), objects.finish(), appearance.finish()),
@@ -323,6 +338,25 @@ pub fn frame(scene: &Scene, detail: &[usize]) -> Result<RenderedScene, String> {
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
+}
+
+fn splat_stamp(scene: &Scene, set: &ObjectSet, choice: Choice) -> u64 {
+    let mut stamp = Digest::new();
+    stamp.mix(set.id().raw());
+    stamp.mix(set.revision().raw());
+    stamp.mix(set.document().raw());
+    stamp.mix(set.frame_stamp(scene.time()).map_or(u64::MAX, |s| s.raw()));
+    stamp.mix(set.tracks().map_or(u64::MAX, |t| t.revision().raw()));
+    stamp.mix(choice.digest());
+    for selection in scene.selections() {
+        if selection.set == set.id() {
+            stamp.mix(match selection.item {
+                Item::Object(index) => (index as u64) * 2,
+                Item::Track(index) => (index as u64) * 2 + 1,
+            });
+        }
+    }
+    stamp.finish()
 }
 
 fn splat_key(set: u64, part: u64) -> u64 {

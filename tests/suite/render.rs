@@ -1936,7 +1936,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         Splat::point([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
         Splat::point([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
-    let chunks = [SplatChunk::new(0, markers.to_vec())];
+    let chunks = [SplatChunk::new(0, revision(), markers.to_vec())];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -1993,8 +1993,8 @@ fn composites_soft_splats_through_the_depth_layers() {
             Splat::point(far, 0.4, [0.1, 0.2, 1.0], alpha),
         ]
     };
-    let solid_chunks = [SplatChunk::new(0, splats(1.0))];
-    let faint_chunks = [SplatChunk::new(0, splats(0.25))];
+    let solid_chunks = [SplatChunk::new(0, revision(), splats(1.0))];
+    let faint_chunks = [SplatChunk::new(0, revision(), splats(0.25))];
     let solid_scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -2164,7 +2164,7 @@ fn converges_the_brightness_of_overlapping_splats() {
         let splats = (0..count)
             .map(|_| Splat::point([0.0, 0.0, 0.0], 0.4, [1.0, 0.0, 0.0], 0.25))
             .collect::<Vec<_>>();
-        let chunks = [SplatChunk::new(0, splats)];
+        let chunks = [SplatChunk::new(0, revision(), splats)];
         let scene = SceneFrame {
             versions: versions(),
             channels: &channels,
@@ -2215,5 +2215,131 @@ fn converges_the_brightness_of_overlapping_splats() {
     assert!(
         eight > single + 80.0,
         "overlapping splats keep the brightness of one: {eight} against {single}"
+    );
+}
+
+fn spot_scene(pyramid: Pyramid, side: usize) -> Scene {
+    let mut scene = Scene::new(Dataset::synthetic("lod", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let spacing = 0.04;
+    let origin = -0.3;
+    let count = side * side * side;
+    let spots = (0..count)
+        .map(|index| {
+            let x = index % side;
+            let y = (index / side) % side;
+            let z = index / (side * side);
+            Spot::new(
+                [
+                    origin + x as f32 * spacing,
+                    origin + y as f32 * spacing,
+                    origin + z as f32 * spacing,
+                ],
+                0.02,
+                1.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            spots,
+            IntensityTable::new(1, vec![statistics; count]),
+        )),
+    );
+    scene
+}
+
+#[test]
+fn aggregates_subpixel_spots_into_addressable_proxies() {
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let side = 16;
+    let scene = spot_scene(pyramid.clone(), side);
+    let mut far = Camera::new(35.0);
+    far.fit(Vec3::splat(6.0), 1.0);
+    let mut near = Camera::new(35.0);
+    near.fit(Vec3::splat(0.2), 1.0);
+    let lens = |camera| grana_engine::Lens {
+        camera,
+        height: SIDE,
+    };
+    let aggregate = grana_engine::plan(&scene, Some(lens(&far)));
+    let exact = grana_engine::plan(&scene, Some(lens(&near)));
+    assert_ne!(aggregate, exact, "the far view aggregates the spots");
+    let mut proxied = grana_engine::frame(&scene, &aggregate).expect("the proxy scene builds");
+    let mut detail = grana_engine::frame(&scene, &exact).expect("the exact scene builds");
+    for row in proxied
+        .channels
+        .iter_mut()
+        .chain(detail.channels.iter_mut())
+    {
+        row.visible = false;
+    }
+    assert_eq!(
+        detail.splat_ids.len(),
+        side * side * side,
+        "the near view keeps every spot"
+    );
+    assert!(
+        proxied.splat_ids.len() < 512,
+        "the far view renders {} proxies",
+        proxied.splat_ids.len()
+    );
+    for id in &proxied.splat_ids {
+        let id = id.expect("a proxy names the spot it stands for");
+        assert!(
+            matches!(id.item, Item::Object(index) if index < side * side * side),
+            "a proxy selects a spot of its set"
+        );
+    }
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let proxied_frame = proxied.frame();
+    let proxied_view = View {
+        target: &view_texture,
+        camera: &far,
+        region: Region::none(),
+        scene: &proxied_frame,
+        viewport: WHOLE,
+        display: grana_render::Display::Still,
+    };
+    let proxied_painted =
+        snapshot(&gpu, &mut renderer, &proxied_view, &target, &volume).painted(WHOLE);
+    let centre = project(&far, [0.0, 0.0, 0.0]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), centre));
+    let picked = match picked(&gpu, &mut renderer) {
+        PickId::Splat(index) => index as usize,
+        other => panic!("a proxy is not addressable: {other:?}"),
+    };
+    assert!(
+        proxied.splat_ids.get(picked).is_some_and(|id| id.is_some()),
+        "the proxy pick names the spot it stands for"
+    );
+    let detail_frame = detail.frame();
+    let detail_view = View {
+        target: &view_texture,
+        camera: &far,
+        region: Region::none(),
+        scene: &detail_frame,
+        viewport: WHOLE,
+        display: grana_render::Display::Still,
+    };
+    let detail_painted =
+        snapshot(&gpu, &mut renderer, &detail_view, &target, &volume).painted(WHOLE);
+    assert!(
+        proxied_painted > 0 && detail_painted > 0,
+        "the spots paint {proxied_painted} against {detail_painted} pixels"
+    );
+    assert!(
+        proxied_painted * 4 >= detail_painted && proxied_painted <= 4 * detail_painted,
+        "the proxies paint {proxied_painted} against {detail_painted} pixels"
     );
 }
