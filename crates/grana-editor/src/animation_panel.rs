@@ -55,20 +55,24 @@ fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         grana_ui::widget::action_button(&theme, symbol, label, Role::Filled)
             .named("animation.preview")
             .press(Message::SetPreviewing(!previewing)),
-        grana_ui::widget::action_button(
-            &theme,
-            Icon::Plus,
-            grana_i18n::animation::keyframe(language),
-            Role::SurfaceHigh,
-        )
-        .named("animation.keyframe")
-        .press(Message::Command(Command::SetKeyframe)),
     ];
-    if !empty {
+    if state.access.author() {
         controls.push(
-            view::button(ctx, grana_i18n::common::clear(language), Role::Standard)
-                .press(Message::Command(Command::ClearKeyframes)),
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Plus,
+                grana_i18n::animation::keyframe(language),
+                Role::SurfaceHigh,
+            )
+            .named("animation.keyframe")
+            .press(Message::Command(Command::SetKeyframe)),
         );
+        if !empty {
+            controls.push(
+                view::button(ctx, grana_i18n::common::clear(language), Role::Standard)
+                    .press(Message::Command(Command::ClearKeyframes)),
+            );
+        }
     }
     controls.push(grana_ui::text(
         format!("{position:.2} / {duration:.2} s · F{current_frame}"),
@@ -91,7 +95,7 @@ fn timeline<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         keyframe_track(ctx, duration, position, &keys, selected),
     ];
     if !keys.is_empty() {
-        children.push(keyframe_list(ctx, &keys, selected));
+        children.push(keyframe_list(ctx, &keys, selected, state.access.author()));
     }
     view::card(ctx, 8.0, children)
 }
@@ -234,6 +238,7 @@ fn keyframe_list<'a>(
     ctx: &mut BuildContext<'_, Message>,
     keys: &[grana_animation::Keyframe],
     selected: Option<usize>,
+    authoring: bool,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -277,21 +282,20 @@ fn keyframe_list<'a>(
             (pointer.phase == grana_ui::Phase::Up)
                 .then_some(Message::SetPlaybackSelected(Some(index)))
         });
-        let delete = view::icon_button(
-            ctx,
-            &format!("animation.key.delete.{index}"),
-            Icon::Trash,
-            22.0,
-            Role::Standard,
-            grana_i18n::animation::delete_keyframe(ctx.language()),
-            Message::Command(Command::DeleteKeyframe(index)),
-        );
-        rows.push(
-            grana_ui::row()
-                .gap(4.0)
-                .align(Align::Center)
-                .children([body, delete]),
-        );
+        let mut row = vec![body];
+        if authoring {
+            let delete = view::icon_button(
+                ctx,
+                &format!("animation.key.delete.{index}"),
+                Icon::Trash,
+                22.0,
+                Role::Standard,
+                grana_i18n::animation::delete_keyframe(ctx.language()),
+                Message::Command(Command::DeleteKeyframe(index)),
+            );
+            row.push(delete);
+        }
+        rows.push(grana_ui::row().gap(4.0).align(Align::Center).children(row));
     }
     Element::new(grana_ui::Layout::column())
         .scroll(Axis::Column, Length::Fixed(88.0), None)
@@ -335,32 +339,52 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             None => Message::Noop,
         },
     );
-    let fps_value = grana_ui::widget::drag_value(&theme, fps as f32, 0)
-        .named("animation.fps")
-        .on_drag_value(0.5, move |value| {
-            Message::Command(Command::SetTimelineFps(
-                (value.round() as u32).clamp(1, grana_animation::Timeline::MAX_FPS),
-            ))
-        });
-    let fps_row = grana_ui::row().gap(6.0).align(Align::Center).children([
-        fps_value,
-        view::caption(
-            ctx,
-            &grana_i18n::animation::fps_frames(language, state.timeline.frames()),
-        ),
-    ]);
-    let duration_value = grana_ui::widget::drag_value(&theme, duration, 2)
-        .named("animation.duration")
-        .on_drag_value(0.1, |value| {
-            Message::Command(Command::SetTimelineDuration(value.clamp(0.5, 600.0)))
-        });
-    let duration_row = grana_ui::row().gap(6.0).align(Align::Center).children([
-        duration_value,
-        view::caption(
-            ctx,
-            &grana_i18n::animation::duration_data(language, frames as f32 * interval),
-        ),
-    ]);
+    let fps_row = if state.access.author() {
+        let fps_value = grana_ui::widget::drag_value(&theme, fps as f32, 0)
+            .named("animation.fps")
+            .on_drag_value(0.5, move |value| {
+                Message::Command(Command::SetTimelineFps(
+                    (value.round() as u32).clamp(1, grana_animation::Timeline::MAX_FPS),
+                ))
+            });
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            fps_value,
+            view::caption(
+                ctx,
+                &grana_i18n::animation::fps_frames(language, state.timeline.frames()),
+            ),
+        ])
+    } else {
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            view::caption(ctx, &format!("{fps} fps")),
+            view::caption(
+                ctx,
+                &grana_i18n::animation::fps_frames(language, state.timeline.frames()),
+            ),
+        ])
+    };
+    let duration_row = if state.access.author() {
+        let duration_value = grana_ui::widget::drag_value(&theme, duration, 2)
+            .named("animation.duration")
+            .on_drag_value(0.1, |value| {
+                Message::Command(Command::SetTimelineDuration(value.clamp(0.5, 600.0)))
+            });
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            duration_value,
+            view::caption(
+                ctx,
+                &grana_i18n::animation::duration_data(language, frames as f32 * interval),
+            ),
+        ])
+    } else {
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            view::caption(ctx, &format!("{duration:.2} s")),
+            view::caption(
+                ctx,
+                &grana_i18n::animation::duration_data(language, frames as f32 * interval),
+            ),
+        ])
+    };
     let mut children = vec![
         view::card_title(
             ctx,

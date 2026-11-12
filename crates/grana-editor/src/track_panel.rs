@@ -221,6 +221,7 @@ fn tracking_controls<'a>(
     });
     let joining = state.workspace.join.is_some();
     let language = ctx.language();
+    let authoring = state.access.author();
     let join = if joining {
         grana_i18n::track::cancel_join(language)
     } else {
@@ -228,32 +229,34 @@ fn tracking_controls<'a>(
     };
     let mut buttons = Vec::new();
     if object.tracks().is_some() {
-        buttons.push(enabled_button(
-            ctx,
-            &format!("{prefix}.cut"),
-            grana_i18n::track::cut(language),
-            Role::SurfaceHigh,
-            cuts.is_some(),
-            cuts.map(|(time, object)| {
-                Message::Command(Command::CutTrack {
-                    set: id,
-                    time,
-                    object,
-                })
-            }),
-        ));
-        buttons.push(enabled_button(
-            ctx,
-            &format!("{prefix}.join"),
-            join,
-            if joining {
-                Role::Tonal
-            } else {
-                Role::SurfaceHigh
-            },
-            joining || joins.is_some(),
-            Some(Message::SetJoin(if joining { None } else { joins })),
-        ));
+        if authoring {
+            buttons.push(enabled_button(
+                ctx,
+                &format!("{prefix}.cut"),
+                grana_i18n::track::cut(language),
+                Role::SurfaceHigh,
+                cuts.is_some(),
+                cuts.map(|(time, object)| {
+                    Message::Command(Command::CutTrack {
+                        set: id,
+                        time,
+                        object,
+                    })
+                }),
+            ));
+            buttons.push(enabled_button(
+                ctx,
+                &format!("{prefix}.join"),
+                join,
+                if joining {
+                    Role::Tonal
+                } else {
+                    Role::SurfaceHigh
+                },
+                joining || joins.is_some(),
+                Some(Message::SetJoin(if joining { None } else { joins })),
+            ));
+        }
         buttons.push(enabled_button(
             ctx,
             &format!("{prefix}.export"),
@@ -262,14 +265,19 @@ fn tracking_controls<'a>(
             !busy,
             Some(Message::ExportLineage(id)),
         ));
-        buttons.push(enabled_button(
-            ctx,
-            &format!("{prefix}.recompute"),
-            grana_i18n::track::recompute(language),
-            Role::SurfaceHigh,
-            !busy,
-            Some(Message::Command(Command::Track(id))),
-        ));
+        if authoring {
+            buttons.push(enabled_button(
+                ctx,
+                &format!("{prefix}.recompute"),
+                grana_i18n::track::recompute(language),
+                Role::SurfaceHigh,
+                !busy,
+                Some(Message::Command(Command::Track(id))),
+            ));
+        }
+    }
+    if !authoring {
+        return buttons;
     }
     match tracking {
         Some(tracking) => {
@@ -879,7 +887,7 @@ fn summary<'a>(
     let parent = if parents.is_empty() {
         grana_i18n::track::root(language).to_string()
     } else {
-        parents.join(" · ")
+        parents.join(" 路 ")
     };
     let children = set.children(index).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
@@ -889,7 +897,7 @@ fn summary<'a>(
             .iter()
             .map(|child| format!("#{}", child + 1))
             .collect::<Vec<_>>()
-            .join(" · ")
+            .join(" 路 ")
     };
     let detail = grana_i18n::track::frame_count(language, statistics.frames());
     let title = view::card_title(
@@ -899,6 +907,7 @@ fn summary<'a>(
         Some(&detail),
     );
     let parented = set.parents(index).next().is_some();
+    let authoring = state.access.author();
     let first = track
         .nodes()
         .first()
@@ -923,7 +932,8 @@ fn summary<'a>(
         grana_i18n::track::merge(language)
     };
     let mut actions = Vec::new();
-    if let Some(first) = first
+    if authoring
+        && let Some(first) = first
         && set.len() >= 3
     {
         actions.push(enabled_button(
@@ -943,7 +953,7 @@ fn summary<'a>(
             }),
         ));
     }
-    if let Some(last) = last {
+    if authoring && let Some(last) = last {
         actions.push(enabled_button(
             ctx,
             "tracks.summary.divide",
@@ -961,7 +971,7 @@ fn summary<'a>(
             }),
         ));
     }
-    if let Some(first) = first {
+    if authoring && let Some(first) = first {
         actions.push(enabled_button(
             ctx,
             "tracks.summary.parent",
@@ -991,7 +1001,7 @@ fn summary<'a>(
         ));
     }
     let actions = grana_ui::row().gap(6.0).children(actions);
-    let rows = vec![
+    let mut rows = vec![
         title,
         view::labelled(ctx, grana_i18n::track::parent(language), &parent),
         view::labelled(ctx, grana_i18n::track::daughters(language), &daughters),
@@ -1003,25 +1013,27 @@ fn summary<'a>(
         view::labelled(
             ctx,
             grana_i18n::track::length(language),
-            &format!("{:.2} µm", statistics.length()),
+            &format!("{:.2} 碌m", statistics.length()),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::displacement(language),
-            &format!("{:.2} µm", statistics.displacement()),
+            &format!("{:.2} 碌m", statistics.displacement()),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::speed(language),
-            &format!("{:.3} µm/s", statistics.speed()),
+            &format!("{:.3} 碌m/s", statistics.speed()),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::straightness(language),
             &format!("{:.3}", statistics.straightness()),
         ),
-        actions,
     ];
+    if authoring {
+        rows.push(actions);
+    }
     view::card(ctx, 3.0, rows)
 }
 
@@ -1077,7 +1089,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::max_step(language)),
             step,
             (voxel..=step_max, true),
-            &format!("{step:.3} µm"),
+            &format!("{step:.3} 碌m"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_max_step(value),
@@ -1114,7 +1126,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::division_range(language)),
             clamped,
             (minimum..=maximum, false),
-            &format!("{clamped:.2} µm"),
+            &format!("{clamped:.2} 碌m"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_events(params.events().with_division_range(value.max(minimum))),
@@ -1141,7 +1153,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::merge_range(language)),
             merge_range,
             (merge_min..=merge_max, false),
-            &format!("{merge_range:.2} µm"),
+            &format!("{merge_range:.2} 碌m"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_events(params.events().with_merge_range(value)),
@@ -1178,7 +1190,7 @@ fn parameter_rows<'a>(
         Some(grana_i18n::track::tube_width(language)),
         thickness,
         (min_thickness..=max_thickness, true),
-        &format!("{thickness:.3} µm"),
+        &format!("{thickness:.3} 碌m"),
         move |value| Command::SetTrackThickness {
             set: id,
             thickness: value,

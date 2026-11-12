@@ -14,14 +14,21 @@ const ROW_HEIGHT: f32 = 34.0;
 const ROW_PAD: f32 = 4.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let mut children = vec![tools_card(ctx, state), list_card(ctx, state)];
-    if let Some(annotation) = selected_card(ctx, state) {
-        children.push(annotation);
+    let authoring = state.access.author();
+    let mut children = Vec::new();
+    if authoring {
+        children.push(tools_card(ctx, state));
     }
-    if let Some(profile) = profile_card(ctx, state) {
-        children.push(profile);
+    children.push(list_card(ctx, state));
+    if authoring {
+        if let Some(annotation) = selected_card(ctx, state) {
+            children.push(annotation);
+        }
+        if let Some(profile) = profile_card(ctx, state) {
+            children.push(profile);
+        }
+        children.push(region_card(ctx, state));
     }
-    children.push(region_card(ctx, state));
     grana_ui::column()
         .gap(8.0)
         .width(Length::Fill)
@@ -116,6 +123,9 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     }
     let group_gap = ctx.theme().metrics.group_gap;
     children.push(grana_ui::column().gap(group_gap).children(rows));
+    if !state.access.author() {
+        return view::card(ctx, 8.0, children);
+    }
     children.push(view::divider(ctx));
     let selected = scene.annotations.selected();
     let inner = ctx.theme().metrics.corner_sm;

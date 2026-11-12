@@ -387,9 +387,13 @@ fn object<'a>(
                 ),
             ));
         }
-        children.extend(classifier(ctx, state, id, width));
+        if state.access.author() {
+            children.extend(classifier(ctx, state, id, width));
+        }
         children.extend(appearance(ctx, state, id, width));
-        children.extend(relations(ctx, state, id));
+        if state.access.author() {
+            children.extend(relations(ctx, state, id));
+        }
         children.extend(children_section(ctx, state, id));
         if state
             .scene
@@ -400,7 +404,7 @@ fn object<'a>(
             children.push(crate::track_panel::entry(ctx, state, id));
         }
         children.extend(measure(ctx, state, id, time));
-        if detected > 0 {
+        if detected > 0 && state.access.author() {
             children.push(view::divider(ctx));
             children.push(
                 view::button_with(

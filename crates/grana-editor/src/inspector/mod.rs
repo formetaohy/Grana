@@ -299,16 +299,20 @@ pub fn objects_body<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    let group_gap = ctx.theme().metrics.group_gap;
-    let roi = region(ctx, state, 0, 4);
-    let drift_card = drift(ctx, state, 1, 4);
-    let registration_card = registration(ctx, state, 2, 4);
-    let mask_card = mask(ctx, state, 3, 4);
-    let prep_group =
-        grana_ui::column()
-            .gap(group_gap)
-            .children([roi, drift_card, registration_card, mask_card]);
-    let mut elements = vec![prep_group];
+    let mut elements = Vec::new();
+    if state.access.author() {
+        let group_gap = ctx.theme().metrics.group_gap;
+        let roi = region(ctx, state, 0, 4);
+        let drift_card = drift(ctx, state, 1, 4);
+        let registration_card = registration(ctx, state, 2, 4);
+        let mask_card = mask(ctx, state, 3, 4);
+        elements.push(grana_ui::column().gap(group_gap).children([
+            roi,
+            drift_card,
+            registration_card,
+            mask_card,
+        ]));
+    }
     elements.extend(crate::object_panel::view(ctx, state));
     elements
 }

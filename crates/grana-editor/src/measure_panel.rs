@@ -561,19 +561,25 @@ fn filters<'a>(
             )
             .key(Key::new("hide.filtered"))
             .on_toggle(|value| Message::Command(Command::SetMeasureVisibility(value))),
-            view::button(
-                ctx,
-                grana_i18n::measure::extract_filtered(language),
-                Role::TertiaryContainer,
-            )
-            .press(Message::Command(Command::ExtractFiltered)),
-            view::button(
-                ctx,
-                grana_i18n::measure::delete_excluded(language),
-                Role::Error,
-            )
-            .press(Message::Command(Command::DeleteFiltered)),
         ];
+        if state.access.author() {
+            items.push(
+                view::button(
+                    ctx,
+                    grana_i18n::measure::extract_filtered(language),
+                    Role::TertiaryContainer,
+                )
+                .press(Message::Command(Command::ExtractFiltered)),
+            );
+            items.push(
+                view::button(
+                    ctx,
+                    grana_i18n::measure::delete_excluded(language),
+                    Role::Error,
+                )
+                .press(Message::Command(Command::DeleteFiltered)),
+            );
+        }
         if !filtered {
             items.remove(0);
         }
