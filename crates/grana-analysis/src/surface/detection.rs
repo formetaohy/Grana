@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, mpsc};
 use std::time::{Duration, SystemTime};
 
-use super::stats::Levels;
 use super::{Gate, Read, SurfaceBuilder};
+use crate::local::BlockLevels;
 
 const BAND: u32 = 32;
 const BAND_BYTES: u64 = 64 << 20;
@@ -82,7 +82,7 @@ pub(super) struct DetectionInput<'a> {
 
 struct Production<'a> {
     gate: Gate<'a>,
-    levels: Levels,
+    levels: BlockLevels,
     kernel: &'a [f32],
     radius: usize,
     workers: usize,
@@ -131,7 +131,13 @@ impl DetectionStore {
         let mut done = 0usize;
         let mut production = Production {
             gate: plan.gate(roi),
-            levels: Levels::new(plan, cover, workers.max(1)),
+            levels: BlockLevels::new(
+                plan.anchor,
+                plan.region.clone(),
+                cover.clone(),
+                plan.intensity,
+                workers.max(1),
+            ),
             kernel: &plan.kernels[2],
             radius: 0,
             workers: workers.max(1),
@@ -229,6 +235,7 @@ impl DetectionStore {
         let kernel = production.kernel;
         let workers = production.workers;
         let gate = &production.gate;
+        let admits = |voxel: [i64; 3]| gate.admits(voxel);
         let levels = &mut production.levels;
         let target = |values: &mut [f32]| {
             depth(window, start, radius, kernel, workers, plane, values);
@@ -238,7 +245,7 @@ impl DetectionStore {
                 let offset = (start - low) as usize * plane;
                 let values = &mut store[offset..offset + planes * plane];
                 target(values);
-                levels.push(gate, start, values, planes);
+                levels.push(&admits, start, values, planes);
             }
             Storage::Spill { file, .. } => {
                 let mut values = vec![0.0f32; planes * plane];
@@ -251,7 +258,7 @@ impl DetectionStore {
                     .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
                 file.write_all(bytemuck::cast_slice(&values))
                     .map_err(|error| format!("failed to write the detection spill: {error}"))?;
-                levels.push(gate, start, &values, planes);
+                levels.push(&admits, start, &values, planes);
             }
         }
         Ok(())

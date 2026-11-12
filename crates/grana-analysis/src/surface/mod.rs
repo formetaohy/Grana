@@ -10,7 +10,6 @@ mod emit;
 mod label;
 mod mask;
 mod prepare;
-mod stats;
 mod tile;
 
 use std::ops::Range;

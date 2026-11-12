@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use grana_analysis::{
     ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan, SurfaceBuilder,
     TrackLinker, coloc_sampling, drift_shift,
+    local::{BlockField, BlockLevels},
 };
 use grana_geometry::GeometryStore;
 use grana_image::Source;
@@ -30,8 +31,12 @@ fn detects_and_localises_bright_spots() {
     let spacing = Spacing::new(0.1, 0.1, 0.1);
     let data = spot_volume(extent, spacing);
     let level = Level::new(extent, spacing);
-    let span = data.range().span();
-    let mut scan = SpotScan::new(level, span, SpotParams::new(0.5, 0.2), Region::none());
+    let mut scan = SpotScan::new(
+        level,
+        data.range(),
+        SpotParams::new(0.5, 0.2),
+        Region::none(),
+    );
     let spots = scan_all(&mut scan, &data, level);
     assert_eq!(spots.len(), 2, "each bright blob is one spot");
     let world = level.world_extent();
@@ -92,6 +97,66 @@ fn spot_volume(extent: Extent, spacing: Spacing) -> VoxelData {
     )
 }
 
+#[test]
+fn keeps_spot_contrast_comparable_across_a_background_gradient() {
+    let extent = Extent::new(64, 64, 16);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let data = gradient_spot_volume(extent, spacing);
+    let level = Level::new(extent, spacing);
+    let mut scan = SpotScan::new(
+        level,
+        data.range(),
+        SpotParams::new(0.5, 0.2),
+        Region::none(),
+    );
+    let spots = scan_all(&mut scan, &data, level);
+    assert_eq!(spots.len(), 2, "both blobs clear the local contrast");
+    let quality = spots
+        .iter()
+        .map(|spot| spot.quality())
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
+            (low.min(value), high.max(value))
+        });
+    assert!(
+        quality.1 - quality.0 < 0.2,
+        "the local contrast of the blobs stays comparable: {quality:?}"
+    );
+}
+
+fn gradient_spot_volume(extent: Extent, spacing: Spacing) -> VoxelData {
+    let sigma = 0.5 / 2.35482;
+    let mut values = vec![0.0f32; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                values[extent.index(x, y, z) as usize] = 600.0 + 15.0 * x as f32;
+            }
+        }
+    }
+    for centre in [[16.0f32, 32.0, 8.0], [48.0, 32.0, 8.0]] {
+        for z in 0..extent.z() {
+            for y in 0..extent.y() {
+                for x in 0..extent.x() {
+                    let offset = [
+                        (x as f32 - centre[0]) * spacing.x(),
+                        (y as f32 - centre[1]) * spacing.y(),
+                        (z as f32 - centre[2]) * spacing.z(),
+                    ];
+                    let squared = offset.iter().map(|value| value * value).sum::<f32>();
+                    let value = 250.0 * (-squared / (2.0 * sigma * sigma)).exp();
+                    values[extent.index(x, y, z) as usize] += value;
+                }
+            }
+        }
+    }
+    VoxelData::U16(
+        values
+            .into_iter()
+            .map(|value| value.min(f32::from(u16::MAX)) as u16)
+            .collect(),
+    )
+}
+
 fn spacing_axis(spacing: Spacing, axis: usize) -> f32 {
     match axis {
         0 => spacing.x(),
@@ -101,6 +166,7 @@ fn spacing_axis(spacing: Spacing, axis: usize) -> f32 {
 }
 
 fn scan_all(scan: &mut SpotScan, data: &VoxelData, level: Level) -> Vec<Spot> {
+    let field = spot_field(data, level);
     let mut spots = Vec::new();
     let mut values = Vec::new();
     for index in 0..scan.block_count() {
@@ -114,9 +180,24 @@ fn scan_all(scan: &mut SpotScan, data: &VoxelData, level: Level) -> Vec<Spot> {
         values.clear();
         values.resize(region.voxel_count(), 0.0);
         region.write_values(&mut values);
-        spots.extend(scan.detect(index, &values, None));
+        spots.extend(scan.detect(index, &values, &field, None));
     }
     spots
+}
+
+fn spot_field(data: &VoxelData, level: Level) -> BlockField {
+    let extent = level.extent();
+    let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
+    let mut levels = BlockLevels::new([0, 0, 0], ranges.clone(), ranges.clone(), data.range(), 1);
+    let mut plane = Vec::new();
+    for z in ranges[2].start..ranges[2].end {
+        let region = data.region(extent, ranges[0].clone(), ranges[1].clone(), z..z + 1);
+        plane.clear();
+        plane.resize(region.voxel_count(), 0.0);
+        region.write_values(&mut plane);
+        levels.push(&|_| true, z, &plane, 1);
+    }
+    levels.finish()
 }
 
 #[test]
@@ -768,6 +849,78 @@ fn links_motion_and_splits_lineages() {
     assert_eq!(set.len(), 3);
     assert_eq!(set.divisions(), 1);
     assert_eq!(set.children(0).count(), 2);
+}
+
+#[test]
+fn rejects_a_division_whose_daughters_do_not_persist() {
+    let set = tracked(
+        &[
+            (&[[0.0, 0.0, 0.0]][..], 1.0),
+            (&[[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]][..], 0.8),
+        ],
+        TrackParams::new(1.5, 0, events(true, 2.5, 2.5, 0.0)),
+        1.0,
+    );
+    assert_eq!(set.divisions(), 0);
+}
+
+#[test]
+fn splits_when_the_daughters_outlive_the_volume_gate() {
+    let frames = [
+        (&[[0.0, 0.0, 0.0]][..], 1.0),
+        (&[[-0.55, 0.0, 0.0], [0.55, 0.0, 0.0]][..], 0.55),
+        (&[[-0.65, 0.0, 0.0], [0.65, 0.0, 0.0]][..], 0.55),
+        (&[[-0.75, 0.0, 0.0], [0.75, 0.0, 0.0]][..], 0.55),
+    ];
+    let set = tracked(
+        &frames,
+        TrackParams::new(1.5, 0, events(true, 2.5, 2.5, 0.0)),
+        1.0,
+    );
+    assert_eq!(set.divisions(), 1);
+    let persistent = tracked(
+        &frames[..2],
+        TrackParams::new(1.5, 0, events(true, 2.5, 2.5, 0.0)),
+        1.0,
+    );
+    assert_eq!(persistent.divisions(), 0);
+}
+
+#[test]
+fn prefers_the_daughters_that_carry_the_sequence() {
+    let set = tracked(
+        &[
+            (&[[0.0, 0.0, 0.0]][..], 1.3),
+            (
+                &[[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0], [1.9, 0.0, 0.0]][..],
+                0.8,
+            ),
+            (&[[-0.6, 0.0, 0.0], [0.6, 0.0, 0.0]][..], 0.8),
+            (&[[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]][..], 0.8),
+        ],
+        TrackParams::new(1.5, 0, events(true, 2.5, 2.5, 0.0)),
+        1.0,
+    );
+    assert_eq!(set.divisions(), 1);
+    let mother = set.track_at(0, 0).expect("the mother is tracked");
+    let started = set
+        .children(mother)
+        .map(|child| set.track(child).expect("a child track exists").nodes()[0].time())
+        .collect::<Vec<_>>();
+    assert_eq!(started, vec![1, 1]);
+    let frames = set
+        .children(mother)
+        .map(|child| {
+            set.track(child)
+                .expect("a child track exists")
+                .nodes()
+                .len()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        frames.iter().all(|frames| *frames >= 3),
+        "the child lengths are {frames:?}"
+    );
 }
 
 #[test]

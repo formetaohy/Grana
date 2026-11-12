@@ -7,9 +7,14 @@ use grana_object::{Link, TrackParams};
 use super::chain::Chains;
 use super::detection::Detections;
 
-const VOLUME_MIN: f32 = 0.6;
-const VOLUME_MAX: f32 = 1.6;
-const SEPARATION: f32 = 1.5;
+const HORIZON: f64 = 4.0;
+const SUPPORT_FLOOR: f64 = 0.25;
+const EVIDENCE_FLOOR: f64 = 0.03;
+const FORK_VOLUME: (f64, f64) = (0.2, 5.0);
+const JOIN_VOLUME: (f64, f64) = (0.6, 1.7);
+const VOLUME_SPREAD: f64 = 0.55;
+const SEPARATION_MEAN: f64 = 1.4;
+const SEPARATION_SPREAD: f64 = 0.85;
 const EPSILON: f64 = 1.0e-9;
 
 struct Fork {
@@ -95,6 +100,7 @@ pub(super) fn attach(
     let frames = detections.frame_count();
     let total = 2 * frames;
     let events = params.events();
+    let mut support = Support::default();
     for frame in 1..frames {
         if cancel.load(Ordering::Relaxed) {
             return None;
@@ -105,6 +111,7 @@ pub(super) fn attach(
             forks(
                 chains,
                 detections,
+                &mut support,
                 frame,
                 events.division_range(),
                 &mut candidates,
@@ -114,6 +121,7 @@ pub(super) fn attach(
             joins(
                 chains,
                 detections,
+                &mut support,
                 frame,
                 events.merge_range(),
                 events.merge_overlap(),
@@ -128,9 +136,130 @@ pub(super) fn attach(
     Some(())
 }
 
+#[derive(Clone, Copy)]
+struct Evidence {
+    stamp: u64,
+    length: usize,
+    continuation: f64,
+}
+
+impl Default for Evidence {
+    fn default() -> Self {
+        Self {
+            stamp: u64::MAX,
+            length: 0,
+            continuation: 0.5,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Support {
+    chains: Vec<Evidence>,
+}
+
+impl Support {
+    fn entry(&mut self, detections: &Detections, chains: &Chains, chain: usize) -> Evidence {
+        if self.chains.len() <= chain {
+            self.chains.resize(chain + 1, Evidence::default());
+        }
+        let stamp = chains.stamp(chain);
+        if self.chains[chain].stamp != stamp {
+            self.chains[chain] = Evidence {
+                stamp,
+                length: chains.points(chain).len(),
+                continuation: continue_score(detections, chains, chain),
+            };
+        }
+        self.chains[chain]
+    }
+
+    fn onward(
+        &mut self,
+        detections: &Detections,
+        chains: &Chains,
+        chain: usize,
+        from: usize,
+    ) -> f64 {
+        let evidence = self.entry(detections, chains, chain);
+        let remaining = evidence.length.saturating_sub(from);
+        (SUPPORT_FLOOR + (1.0 - SUPPORT_FLOOR) * persistence(remaining)) * evidence.continuation
+    }
+
+    fn established(&mut self, detections: &Detections, chains: &Chains, chain: usize) -> f64 {
+        self.onward(detections, chains, chain, 0)
+    }
+}
+
+fn persistence(frames: usize) -> f64 {
+    if frames == 0 {
+        return 0.0;
+    }
+    1.0 - (-(frames as f64) / HORIZON).exp()
+}
+
+fn volume(radius: f32) -> f64 {
+    f64::from(radius).powi(3)
+}
+
+fn conserved(expected: f64, observed: f64) -> f64 {
+    if expected <= 0.0 || observed <= 0.0 {
+        return 0.0;
+    }
+    (-0.5 * ((observed / expected).ln() / VOLUME_SPREAD).powi(2)).exp()
+}
+
+fn within(ratio: f64, bounds: (f64, f64)) -> bool {
+    ratio.is_finite() && (bounds.0..=bounds.1).contains(&ratio)
+}
+
+fn separated(distance: f32, first: f32, second: f32) -> f64 {
+    let reach = f64::from(first + second).max(EPSILON);
+    let ratio = f64::from(distance) / reach;
+    (-0.5 * ((ratio - SEPARATION_MEAN) / SEPARATION_SPREAD).powi(2)).exp()
+}
+
+fn reached(from: Vec3, to: Vec3, range: f32) -> f64 {
+    let ratio = f64::from(from.distance(to)) / f64::from(range.max(f32::EPSILON));
+    (1.0 - ratio).clamp(0.0, 1.0)
+}
+
+fn together(centre: Vec3, mid: Vec3, radius: f32) -> f64 {
+    let ratio = f64::from(centre.distance(mid)) / f64::from(radius.max(f32::EPSILON));
+    (1.0 - ratio).clamp(0.0, 1.0)
+}
+
+fn continue_score(detections: &Detections, chains: &Chains, chain: usize) -> f64 {
+    let points = chains.points(chain);
+    if points.len() < 3 {
+        return 0.5;
+    }
+    let mut speed = 0.0f64;
+    let mut jerk = 0.0f64;
+    let mut previous: Option<Vec3> = None;
+    for pair in points.windows(2) {
+        let from = detections.centroid(pair[0]);
+        let to = detections.centroid(pair[1]);
+        let elapsed = (detections.frame(pair[1]) - detections.frame(pair[0])).max(1) as f32;
+        let velocity = (to - from) / elapsed;
+        speed += f64::from(velocity.length());
+        if let Some(previous) = previous {
+            jerk += f64::from((velocity - previous).length());
+        }
+        previous = Some(velocity);
+    }
+    let segments = (points.len() - 1) as f64;
+    let mean = speed / segments;
+    if mean <= EPSILON {
+        return 0.5;
+    }
+    (1.0 / (1.0 + jerk / speed)).clamp(0.0, 1.0)
+}
+
 fn forks(
     chains: &Chains,
     detections: &Detections,
+    support: &mut Support,
     frame: usize,
     range: f32,
     events: &mut Vec<Event>,
@@ -146,25 +275,45 @@ fn forks(
         let position = (time - chain.start()) as usize;
         let points = chains.points(parent);
         let mother = points[position - 1];
-        let daughters = detections.centroid(points[position]);
+        let carried = points[position];
+        let near = detections.centroid(carried);
         let predicted = predict(detections, chains, parent, position - 1, time);
-        grid.near(daughters, range, |point, _| {
+        let mother_volume = volume(detections.radius(mother));
+        let carried_volume = volume(detections.radius(carried));
+        let mother_support = support.established(detections, chains, parent);
+        grid.near(near, range, |point, _| {
             let Some(&start) = starts.get(&point) else {
                 return;
             };
             let seat = detections.centroid(point);
-            if daughters.distance(seat) > range {
+            let seat_volume = volume(detections.radius(point));
+            if !within((carried_volume + seat_volume) / mother_volume, FORK_VOLUME) {
                 return;
             }
-            if !split(detections, mother, predicted, points[position], point) {
+            let evidence = mother_support
+                * support.onward(detections, chains, parent, position)
+                * support.established(detections, chains, start);
+            if evidence < EVIDENCE_FLOOR {
                 return;
             }
-            let score = 1.0
-                - f64::from(predicted.distance(daughters) + predicted.distance(seat))
-                    / (2.0 * f64::from(range));
-            if score <= 0.0 {
+            let middle = together(
+                detections.centroid(mother),
+                (near + seat) * 0.5,
+                detections.radius(mother),
+            );
+            if middle <= 0.0 {
                 return;
             }
+            let score = reached(predicted, near, range)
+                * reached(predicted, seat, range)
+                * middle
+                * conserved(mother_volume, carried_volume + seat_volume)
+                * separated(
+                    near.distance(seat),
+                    detections.radius(carried),
+                    detections.radius(point),
+                )
+                * evidence;
             events.push(Event::Fork(Fork {
                 frame: time,
                 parent,
@@ -182,6 +331,8 @@ fn forks(
         let points = chains.points(parent);
         let mother = *points.last().expect("a chain holds points");
         let predicted = predict(detections, chains, parent, points.len() - 1, time);
+        let mother_volume = volume(detections.radius(mother));
+        let mother_support = support.established(detections, chains, parent);
         let mut nearby = Vec::new();
         grid.near(predicted, range, |point, distance| {
             if let Some(&start) = starts.get(&point) {
@@ -195,17 +346,34 @@ fn forks(
                 let (second_start, second_point, second_distance) = nearby[second];
                 let first_seat = detections.centroid(first_point);
                 let second_seat = detections.centroid(second_point);
-                if first_seat.distance(second_seat) > range {
+                let mid = (first_seat + second_seat) * 0.5;
+                let volume_gain = volume(detections.radius(first_point))
+                    + volume(detections.radius(second_point));
+                if !within(volume_gain / mother_volume, FORK_VOLUME) {
                     continue;
                 }
-                if !split(detections, mother, predicted, first_point, second_point) {
+                let evidence = mother_support
+                    * support.established(detections, chains, first_start)
+                    * support.established(detections, chains, second_start);
+                if evidence < EVIDENCE_FLOOR {
                     continue;
                 }
-                let score =
-                    1.0 - f64::from(first_distance + second_distance) / (2.0 * f64::from(range));
-                if score <= 0.0 {
+                let middle = together(mid, detections.centroid(mother), detections.radius(mother));
+                if middle <= 0.0 {
                     continue;
                 }
+                let score = reached(predicted, mid, range)
+                    * ((1.0 - f64::from(first_distance) / f64::from(range)).max(0.0)
+                        * (1.0 - f64::from(second_distance) / f64::from(range)).max(0.0))
+                    .sqrt()
+                    * middle
+                    * conserved(mother_volume, volume_gain)
+                    * separated(
+                        first_seat.distance(second_seat),
+                        detections.radius(first_point),
+                        detections.radius(second_point),
+                    )
+                    * evidence;
                 events.push(Event::Fork(Fork {
                     frame: time,
                     parent,
@@ -221,6 +389,7 @@ fn forks(
 fn joins(
     chains: &Chains,
     detections: &Detections,
+    support: &mut Support,
     frame: usize,
     range: f32,
     overlap: f32,
@@ -236,30 +405,46 @@ fn joins(
         }
         let position = (time - chain.start()) as usize;
         let points = chains.points(head);
-        let sources = points[position - 1];
-        let source = detections.centroid(sources);
-        let merged = points[position];
-        let centre = detections.centroid(merged);
-        grid.near(centre, range, |point, _| {
+        let carried = points[position];
+        let source = points[position - 1];
+        let carried_centre = detections.centroid(carried);
+        let carried_volume = volume(detections.radius(carried));
+        let source_established = support.established(detections, chains, head);
+        let merged_support = support.onward(detections, chains, head, position);
+        grid.near(carried_centre, range, |point, _| {
             let Some(&end) = ends.get(&point) else {
                 return;
             };
             let partner = detections.centroid(point);
-            if source.distance(partner) > range {
+            if overlap_of(detections, point, source) < overlap {
                 return;
             }
-            if overlap_of(detections, sources, point) < overlap {
+            let source_volume =
+                volume(detections.radius(source)) + volume(detections.radius(point));
+            if !within(carried_volume / source_volume, JOIN_VOLUME) {
                 return;
             }
-            if !coalesced(detections, merged, centre, sources, point) {
+            let evidence = source_established.min(support.established(detections, chains, end))
+                * merged_support;
+            if evidence < EVIDENCE_FLOOR {
                 return;
             }
-            let score = 1.0
-                - f64::from(source.distance(centre) + partner.distance(centre))
-                    / (2.0 * f64::from(range));
-            if score <= 0.0 {
+            let middle = together(
+                carried_centre,
+                (detections.centroid(source) + partner) * 0.5,
+                detections.radius(carried),
+            );
+            if middle <= 0.0 {
                 return;
             }
+            let score = middle
+                * conserved(source_volume, carried_volume)
+                * separated(
+                    detections.centroid(source).distance(partner),
+                    detections.radius(source),
+                    detections.radius(point),
+                )
+                * evidence;
             events.push(Event::Join(Join {
                 frame: time,
                 head,
@@ -274,6 +459,7 @@ fn joins(
         let points = chains.points(child);
         let merged = points[0];
         let seat = detections.centroid(merged);
+        let merged_support = support.established(detections, chains, child);
         let mut nearby = Vec::new();
         grid.near(seat, range, |point, distance| {
             if let Some(&end) = ends.get(&point) {
@@ -287,20 +473,38 @@ fn joins(
                 let (second_end, second_point, second_distance) = nearby[second];
                 let first_position = detections.centroid(first_point);
                 let second_position = detections.centroid(second_point);
-                if first_position.distance(second_position) > range {
-                    continue;
-                }
                 if overlap_of(detections, first_point, second_point) < overlap {
                     continue;
                 }
-                if !coalesced(detections, merged, seat, first_point, second_point) {
+                let mid = (first_position + second_position) * 0.5;
+                let source_volume = volume(detections.radius(first_point))
+                    + volume(detections.radius(second_point));
+                let merged_volume = volume(detections.radius(merged));
+                if !within(merged_volume / source_volume, JOIN_VOLUME) {
                     continue;
                 }
-                let score =
-                    1.0 - f64::from(first_distance + second_distance) / (2.0 * f64::from(range));
-                if score <= 0.0 {
+                let evidence = merged_support
+                    * support.established(detections, chains, first_end)
+                    * support.established(detections, chains, second_end);
+                if evidence < EVIDENCE_FLOOR {
                     continue;
                 }
+                let middle = together(seat, mid, detections.radius(merged));
+                if middle <= 0.0 {
+                    continue;
+                }
+                let score = reached(seat, mid, range)
+                    * ((1.0 - f64::from(first_distance) / f64::from(range)).max(0.0)
+                        * (1.0 - f64::from(second_distance) / f64::from(range)).max(0.0))
+                    .sqrt()
+                    * middle
+                    * conserved(source_volume, merged_volume)
+                    * separated(
+                        first_position.distance(second_position),
+                        detections.radius(first_point),
+                        detections.radius(second_point),
+                    )
+                    * evidence;
                 events.push(Event::Join(Join {
                     frame: time,
                     head: first_end,
@@ -311,48 +515,6 @@ fn joins(
             }
         }
     }
-}
-
-fn split(
-    detections: &Detections,
-    mother: usize,
-    centre: Vec3,
-    first: usize,
-    second: usize,
-) -> bool {
-    let first_radius = detections.radius(first);
-    let second_radius = detections.radius(second);
-    let ratio = (first_radius.powi(3) + second_radius.powi(3)) / detections.radius(mother).powi(3);
-    if !(VOLUME_MIN..=VOLUME_MAX).contains(&ratio) {
-        return false;
-    }
-    let first_seat = detections.centroid(first);
-    let second_seat = detections.centroid(second);
-    if first_seat.distance(second_seat) > (first_radius + second_radius) * SEPARATION {
-        return false;
-    }
-    centre.distance((first_seat + second_seat) * 0.5) <= detections.radius(mother)
-}
-
-fn coalesced(
-    detections: &Detections,
-    merged: usize,
-    centre: Vec3,
-    first: usize,
-    second: usize,
-) -> bool {
-    let first_radius = detections.radius(first);
-    let second_radius = detections.radius(second);
-    let ratio = detections.radius(merged).powi(3) / (first_radius.powi(3) + second_radius.powi(3));
-    if !(VOLUME_MIN..=VOLUME_MAX).contains(&ratio) {
-        return false;
-    }
-    let first_seat = detections.centroid(first);
-    let second_seat = detections.centroid(second);
-    if first_seat.distance(second_seat) > (first_radius + second_radius) * SEPARATION {
-        return false;
-    }
-    centre.distance((first_seat + second_seat) * 0.5) <= detections.radius(merged)
 }
 
 fn start_chains(chains: &Chains, frame: usize) -> (HashMap<usize, usize>, Vec<usize>) {

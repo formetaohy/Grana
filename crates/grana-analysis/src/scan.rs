@@ -2,9 +2,11 @@ use std::ops::Range;
 use std::sync::atomic::AtomicBool;
 
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_volume::{Level, Pyramid, Region as VolumeRegion, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region as VolumeRegion, VoxelData};
 
 use grana_object::{Mask, SpotParams};
+
+use crate::local::{BlockField, BlockLevels};
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;
@@ -22,6 +24,7 @@ const CORE_VOXELS_PER_SIGMA: f32 = 8.0;
 const MAX_READ_VOXELS: u64 = 16_777_216;
 const PROGRESS_STRIDE: usize = 4;
 const WORKER_BYTES_LIMIT: u64 = 512 << 20;
+const LEVEL_PLANES: u32 = 64;
 
 pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
@@ -55,7 +58,7 @@ impl SpotScanner {
     pub fn new(
         level_index: usize,
         level: Level,
-        span: f32,
+        intensity: Intensity,
         params: SpotParams,
         region: VolumeRegion,
         channels: usize,
@@ -69,7 +72,7 @@ impl SpotScanner {
             level_index,
             channels,
             detection,
-            template: SpotScan::new(level, span, params, region),
+            template: SpotScan::new(level, intensity, params, region),
         }
     }
 
@@ -101,9 +104,19 @@ impl SpotScanner {
         let channels = self.channels;
         let detection = self.detection;
         let total = self.template.block_count();
+        if total == 0 {
+            return Ok(Some(SpotSet::new(
+                self.level_index,
+                Vec::new(),
+                IntensityTable::new(channels, Vec::new()),
+            )));
+        }
         let bytes = self.peak_read_voxels() * 4;
         let workers = crate::schedule::workers(workers)
             .min((WORKER_BYTES_LIMIT / bytes.max(1)).max(1) as usize);
+        let Some(field) = self.template.field(detection, workers, cancel, read)? else {
+            return Ok(None);
+        };
         let mut spots = Vec::new();
         let mut accumulators = Vec::new();
         let completed = crate::schedule::ordered(
@@ -118,7 +131,7 @@ impl SpotScanner {
                 },
             },
             || SpotWorker::new(&self.template),
-            |worker, index| worker.run(index, channels, detection, read, roi),
+            |worker, index| worker.run(index, channels, detection, &field, read, roi),
             |_, block| {
                 spots.extend(block.spots);
                 accumulators.extend(block.accumulators);
@@ -168,6 +181,7 @@ impl SpotWorker {
         index: usize,
         channels: usize,
         detection: usize,
+        field: &BlockField,
         read: &ChannelRead<'_>,
         roi: Option<&Mask>,
     ) -> Result<SpotBlock, String> {
@@ -175,7 +189,7 @@ impl SpotWorker {
         self.load(detection, &range, read)?;
         self.spots.clear();
         self.spots
-            .extend(self.scan.detect(index, &self.values, roi));
+            .extend(self.scan.detect(index, &self.values, field, roi));
         self.accumulators.clear();
         self.accumulators
             .resize(self.spots.len() * channels, SampleAccumulator::new());
@@ -227,6 +241,7 @@ pub struct SpotScan {
     weights: [f32; 3],
     kernels: [Vec<f32>; 3],
     threshold: f32,
+    intensity: Intensity,
     span: f32,
     radius: f32,
     source: Vec<f32>,
@@ -234,7 +249,13 @@ pub struct SpotScan {
 }
 
 impl SpotScan {
-    pub fn new(level: Level, span: f32, params: SpotParams, region: VolumeRegion) -> Self {
+    pub fn new(
+        level: Level,
+        intensity: Intensity,
+        params: SpotParams,
+        region: VolumeRegion,
+    ) -> Self {
+        let span = intensity.span();
         assert!(
             span.is_finite() && span > 0.0,
             "a spot scan needs a positive intensity span"
@@ -286,6 +307,7 @@ impl SpotScan {
             weights,
             kernels,
             threshold: params.threshold(),
+            intensity,
             span,
             radius: 0.5 * params.diameter(),
             source: Vec::new(),
@@ -295,6 +317,46 @@ impl SpotScan {
 
     pub fn block_count(&self) -> usize {
         self.counts[0] as usize * self.counts[1] as usize * self.counts[2] as usize
+    }
+
+    fn field(
+        &self,
+        channel: usize,
+        workers: usize,
+        cancel: &AtomicBool,
+        read: &ChannelRead<'_>,
+    ) -> Result<Option<BlockField>, String> {
+        let ranges = self.ranges.clone();
+        let anchor = [
+            i64::from(ranges[0].start),
+            i64::from(ranges[1].start),
+            i64::from(ranges[2].start),
+        ];
+        let depth = ranges[2].end - ranges[2].start;
+        let stride = depth.div_ceil(LEVEL_PLANES).max(1);
+        let mut levels = BlockLevels::new(
+            anchor,
+            ranges.clone(),
+            ranges.clone(),
+            self.intensity,
+            workers,
+        );
+        let admits = |_: [i64; 3]| true;
+        let mut plane = Vec::new();
+        let mut z = ranges[2].start;
+        while z < ranges[2].end {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Ok(None);
+            }
+            let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
+            let data = read(channel, &slice)?;
+            plane.clear();
+            plane.resize(data.voxel_count(), 0.0);
+            data.write_values(&mut plane);
+            levels.push(&admits, z, &plane, 1);
+            z += stride;
+        }
+        Ok(Some(levels.finish()))
     }
 
     fn worker(&self) -> Self {
@@ -312,11 +374,21 @@ impl SpotScan {
             weights: self.weights,
             kernels: self.kernels.clone(),
             threshold: self.threshold,
+            intensity: self.intensity,
             span: self.span,
             radius: self.radius,
             source: Vec::new(),
             blurred: Vec::new(),
         }
+    }
+
+    fn background(&self, field: &BlockField, voxel: [f32; 3]) -> f32 {
+        let step = crate::local::BLOCK as f32;
+        let block = [0, 1, 2].map(|axis| {
+            let anchor = self.ranges[axis].start as f32;
+            ((voxel[axis] - anchor) / step).floor() as i64
+        });
+        field.at(block).0
     }
 
     pub fn read_range(&self, index: usize) -> [Range<u32>; 3] {
@@ -328,7 +400,13 @@ impl SpotScan {
         })
     }
 
-    pub fn detect(&mut self, index: usize, values: &[f32], roi: Option<&Mask>) -> Vec<Spot> {
+    pub fn detect(
+        &mut self,
+        index: usize,
+        values: &[f32],
+        field: &BlockField,
+        roi: Option<&Mask>,
+    ) -> Vec<Spot> {
         let core = self.core(index);
         let read = self.read_range(index);
         let read_dims = dimensions(&read);
@@ -365,23 +443,6 @@ impl SpotScan {
                 }
             }
         }
-        let mut bucket = Vec::with_capacity(
-            (core[0].end - core[0].start) as usize
-                * (core[1].end - core[1].start) as usize
-                * (core[2].end - core[2].start) as usize,
-        );
-        for z in core[2].clone() {
-            for y in core[1].clone() {
-                for x in core[0].clone() {
-                    let offset = (x as i64 - origin[0]) as usize
-                        + desired[0]
-                            * ((y as i64 - origin[1]) as usize
-                                + desired[1] * (z as i64 - origin[2]) as usize);
-                    bucket.push(self.source[offset]);
-                }
-            }
-        }
-        let (background, _) = crate::local::block_levels(&mut bucket).unwrap_or((0.0, self.span));
         let valid = [0, 1, 2].map(|axis| [0, desired[axis]]);
         let valid_x = shrink(&valid, 0, self.truncate[0]);
         blur_axis(
@@ -432,6 +493,7 @@ impl SpotScan {
         let mut spots = Vec::new();
         for z in core[2].clone() {
             for y in core[1].clone() {
+                let mut field_row = field.row(i64::from(y), i64::from(z));
                 for x in core[0].clone() {
                     let base = x as usize - core[0].start as usize
                         + self.halo[0] as usize
@@ -466,7 +528,7 @@ impl SpotScan {
                     if best_index != base {
                         continue;
                     }
-                    let contrast = (self.blurred[base] - background) / self.span;
+                    let contrast = field_row.contrast(i64::from(x), self.blurred[base]);
                     if contrast < self.threshold {
                         continue;
                     }
@@ -484,7 +546,13 @@ impl SpotScan {
                     if roi.is_some_and(|roi| !roi.contains(center)) {
                         continue;
                     }
-                    let radius = self.fit_radius(&origin, &desired, &response, voxel, background);
+                    let radius = self.fit_radius(
+                        &origin,
+                        &desired,
+                        &response,
+                        voxel,
+                        self.background(field, voxel),
+                    );
                     spots.push(Spot::new(center, radius, contrast.clamp(0.0, 1.0)));
                 }
             }

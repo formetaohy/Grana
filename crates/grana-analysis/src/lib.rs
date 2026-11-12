@@ -4,7 +4,7 @@ mod drift;
 mod filament;
 mod hash;
 mod label;
-mod local;
+pub mod local;
 mod morphology;
 mod object_coloc;
 mod relation;

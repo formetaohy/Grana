@@ -36,6 +36,8 @@ impl Chain {
 pub(super) struct Chains {
     chains: Vec<Chain>,
     links: Vec<(usize, usize, Link)>,
+    stamps: Vec<u64>,
+    epoch: u64,
 }
 
 impl Chains {
@@ -78,7 +80,12 @@ impl Chains {
                 }
             }
         }
-        Self { chains, links }
+        Self {
+            stamps: vec![1; chains.len()],
+            chains,
+            links,
+            epoch: 1,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -95,6 +102,15 @@ impl Chains {
 
     pub fn links(&self) -> &[(usize, usize, Link)] {
         &self.links
+    }
+
+    pub fn stamp(&self, index: usize) -> u64 {
+        self.stamps[index]
+    }
+
+    fn touch(&mut self, index: usize) {
+        self.epoch += 1;
+        self.stamps[index] = self.epoch;
     }
 
     pub fn cut(&mut self, index: usize, frame: u32) -> usize {
@@ -117,6 +133,9 @@ impl Chains {
             outgoing,
         });
         let tail = self.chains.len() - 1;
+        self.touch(index);
+        self.epoch += 1;
+        self.stamps.push(self.epoch);
         for link in &mut self.links {
             if link.0 == index {
                 link.0 = tail;
@@ -129,5 +148,7 @@ impl Chains {
         self.chains[parent].outgoing += 1;
         self.chains[child].incoming += 1;
         self.links.push((parent, child, kind));
+        self.touch(parent);
+        self.touch(child);
     }
 }

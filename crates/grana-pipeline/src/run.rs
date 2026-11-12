@@ -492,14 +492,22 @@ fn spots(
             pyramid.channel_count()
         ));
     }
-    let span = pyramid.channels()[channel].intensity().span();
-    if span <= 0.0 {
+    let intensity = pyramid.channels()[channel].intensity();
+    if intensity.span() <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
     let level_index = spot_level(pyramid, region, params);
     let level = pyramid.level(level_index);
-    let scanner = SpotScanner::new(level_index, level, span, params, region, channels, channel);
+    let scanner = SpotScanner::new(
+        level_index,
+        level,
+        intensity,
+        params,
+        region,
+        channels,
+        channel,
+    );
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
     let window = frame_window(totals, workers, FRAME_WORKERS);
