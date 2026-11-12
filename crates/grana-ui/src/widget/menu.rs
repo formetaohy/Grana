@@ -11,8 +11,8 @@ use crate::theme::{Level, Theme};
 
 use super::PaintInfo;
 
-pub const MENU_ROW: f32 = 32.0;
-pub const SEPARATOR: f32 = 9.0;
+pub const MENU_ROW: f32 = 28.0;
+pub const SEPARATOR: f32 = 7.0;
 
 pub fn menu_row<'a, A>(theme: &Theme, label: &str, checked: bool) -> Element<'a, A> {
     Element::new(Layout {
@@ -61,18 +61,18 @@ pub(super) fn paint_menu_row(
     let palette = info.theme.palette;
     if info.hover > 0.01 {
         painter.rect(
-            info.rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::all(10.0),
-            palette.selected.amplify(0.9 * info.hover),
+            info.rect.shrink2(Vec2::new(1.0, 0.0)),
+            Corners::all(5.0),
+            palette.accent.with_alpha(0.24 * info.hover),
         );
     }
     if row.checked {
         icon::paint(
             Icon::Check,
             painter,
-            Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
-            12.0,
-            palette.text_primary,
+            Vec2::new(info.rect.min.x + 11.0, info.rect.center().y),
+            11.0,
+            palette.accent_hover,
             1.7,
         );
     }
@@ -85,7 +85,7 @@ pub(super) fn paint_menu_row(
     };
     painter.text_in(
         Rect::from_min_max(
-            Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
+            Vec2::new(info.rect.min.x + 24.0, info.rect.min.y),
             info.rect.max,
         ),
         &row.label,
@@ -103,13 +103,13 @@ pub(super) fn paint_action_row(
     let palette = info.theme.palette;
     if info.hover > 0.01 {
         painter.rect(
-            info.rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::all(10.0),
-            palette.selected.amplify(0.9 * info.hover),
+            info.rect.shrink2(Vec2::new(1.0, 0.0)),
+            Corners::all(5.0),
+            palette.accent.with_alpha(0.24 * info.hover),
         );
     }
     let shortcut_width = row.shortcut.as_ref().map_or(8.0, |text| {
-        18.0 + painter
+        16.0 + painter
             .measure(
                 text,
                 TextStyle::new(info.theme.font(Level::Caption), palette.text_tertiary),
@@ -119,8 +119,8 @@ pub(super) fn paint_action_row(
     icon::paint(
         row.symbol,
         painter,
-        Vec2::new(info.rect.min.x + 14.0, info.rect.center().y),
-        14.0,
+        Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
+        13.0,
         palette
             .text_secondary
             .lerp(palette.text_primary, runtime.hover.value),
@@ -128,7 +128,7 @@ pub(super) fn paint_action_row(
     );
     painter.text_in(
         Rect::from_min_max(
-            Vec2::new(info.rect.min.x + 28.0, info.rect.min.y),
+            Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
             Vec2::new(info.rect.max.x - shortcut_width, info.rect.max.y),
         ),
         &row.label,
@@ -137,7 +137,7 @@ pub(super) fn paint_action_row(
     );
     if let Some(shortcut) = &row.shortcut {
         painter.text_in(
-            info.rect.shrink2(Vec2::new(10.0, 0.0)),
+            info.rect.shrink2(Vec2::new(8.0, 0.0)),
             shortcut,
             TextStyle::new(info.theme.font(Level::Caption), palette.text_tertiary)
                 .aligned(Align::End),
@@ -149,8 +149,8 @@ pub(super) fn paint_action_row(
 pub(super) fn paint_separator(painter: &mut Painter, info: &PaintInfo<'_>) {
     painter.rect(
         Rect::from_min_size(
-            Vec2::new(info.rect.min.x + 10.0, info.rect.center().y),
-            Vec2::new(info.rect.width() - 20.0, 1.0),
+            Vec2::new(info.rect.min.x + 6.0, info.rect.center().y),
+            Vec2::new(info.rect.width() - 12.0, 1.0),
         ),
         Corners::ZERO,
         info.theme.palette.separator,

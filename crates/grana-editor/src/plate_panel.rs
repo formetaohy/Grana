@@ -126,7 +126,7 @@ fn cell<'a>(
     let element = grana_ui::canvas(Length::Fixed(side), side, move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
-        let corners = Corners::all(8.0);
+        let corners = Corners::all(6.0);
         let border = if active {
             palette.accent.with_alpha(0.95)
         } else {
@@ -185,7 +185,7 @@ fn cell<'a>(
                 Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
             };
             if lit {
-                painter.rect(pill, Corners::capsule(), Color::black_alpha(0.55));
+                painter.rect(pill, Corners::all(3.5), Color::black_alpha(0.65));
             }
             painter.text_in(pill, &drawn, style, Align::Center);
         }

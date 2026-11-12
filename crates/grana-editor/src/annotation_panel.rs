@@ -75,7 +75,7 @@ fn tool_button<'a>(
         if active {
             painter.outlined(
                 rect,
-                Corners::all(8.0),
+                Corners::all(6.0),
                 grana_ui::Fill::Solid(palette.accent.with_alpha(0.24)),
                 grana_ui::Border {
                     width: 1.0,
@@ -86,7 +86,7 @@ fn tool_button<'a>(
         } else {
             painter.rect(
                 rect,
-                Corners::all(8.0),
+                Corners::all(6.0),
                 palette.material_fill.amplify(0.55 + 0.45 * engaged),
             );
         }
@@ -108,7 +108,7 @@ fn tool_button<'a>(
     } else {
         Some(tool)
     }))
-    .focus_ring(Corners::all(8.0))
+    .focus_ring(Corners::all(6.0))
 }
 
 fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -204,7 +204,7 @@ fn row<'a>(
         if selected {
             painter.outlined(
                 rect,
-                Corners::all(7.0),
+                Corners::all(6.0),
                 grana_ui::Fill::Solid(palette.accent.with_alpha(0.16)),
                 grana_ui::Border {
                     width: 1.0,
@@ -215,7 +215,7 @@ fn row<'a>(
         } else if hovered > 0.01 {
             painter.rect(
                 rect,
-                Corners::all(7.0),
+                Corners::all(6.0),
                 palette.material_hover.amplify(0.5 * hovered),
             );
         }

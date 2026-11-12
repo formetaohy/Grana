@@ -2,7 +2,6 @@ use std::ops::RangeInclusive;
 
 use crate::color::Color;
 use crate::geometry::Corners;
-use crate::glass::GlassStyle;
 use crate::icon::Icon;
 use crate::text::TextStyle;
 use crate::theme::{Role, TypeStyle};
@@ -130,7 +129,6 @@ pub struct ButtonContent {
     pub role: Role,
     pub font: TypeStyle,
     pub symbol: Option<Icon>,
-    pub style: Option<GlassStyle>,
     pub inset: f32,
     pub width: crate::element::Length,
     pub height: f32,
@@ -141,7 +139,6 @@ pub struct IconButtonContent {
     pub symbol: Icon,
     pub size: f32,
     pub role: Role,
-    pub style: Option<GlassStyle>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

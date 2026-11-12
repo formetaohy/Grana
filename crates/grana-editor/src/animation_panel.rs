@@ -181,14 +181,14 @@ fn keyframe_track<'a>(
             accent,
         );
         painter.outlined(
-            Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(14.0, 20.0)),
-            Corners::capsule(),
-            grana_ui::Fill::Solid(Color::white_alpha(0.16)),
+            Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(10.0, 16.0)),
+            Corners::all(3.0),
+            grana_ui::Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
             grana_ui::Border {
                 width: 1.0,
-                color: Color::white_alpha(0.30),
+                color: Color::white_alpha(0.9),
             },
-            grana_ui::Shadow::NONE,
+            grana_ui::Shadow::new(Color::black_alpha(0.45), 3.0, 1.0),
         );
         for (index, fraction) in &markers_paint {
             let x = bar.min.x + bar.width() * fraction;
@@ -263,11 +263,11 @@ fn keyframe_list<'a>(
         );
         let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, move |painter, info| {
             if active {
-                painter.rect(info.rect, Corners::all(8.0), accent.with_alpha(0.16));
+                painter.rect(info.rect, Corners::all(6.0), accent.with_alpha(0.16));
             } else if info.hover > 0.01 {
                 painter.rect(
                     info.rect,
-                    Corners::all(8.0),
+                    Corners::all(6.0),
                     Color::white_alpha(0.05 * info.hover),
                 );
             }
@@ -503,16 +503,13 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         Length::Fill,
         idle,
     )
+    .tooltip(grana_i18n::animation::image_detail(language))
     .named("animation.save.image");
     children.push(if idle {
         save.press(Message::Command(Command::SaveSnapshot))
     } else {
         save
     });
-    children.push(view::caption(
-        ctx,
-        grana_i18n::animation::image_detail(language),
-    ));
     let figure = grana_ui::widget::button_enabled(
         &theme,
         grana_i18n::animation::save_figure(language),
@@ -520,16 +517,13 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         Length::Fill,
         idle,
     )
+    .tooltip(grana_i18n::animation::figure_detail(language))
     .named("animation.save.figure");
     children.push(if idle {
         figure.press(Message::Command(Command::SaveFigure))
     } else {
         figure
     });
-    children.push(view::caption(
-        ctx,
-        grana_i18n::animation::figure_detail(language),
-    ));
     let sequence = grana_ui::widget::button_enabled(
         &theme,
         grana_i18n::animation::export_sequence(language),

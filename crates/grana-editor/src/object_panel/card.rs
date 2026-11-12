@@ -77,13 +77,13 @@ pub(super) fn header_row<'a>(
     let body = grana_ui::canvas(Length::Fixed(40.0), HEADER, move |painter, info| {
         let rect = info.rect;
         let tile = Rect::from_center_size(
-            Vec2::new(rect.min.x + 15.0, rect.center().y),
-            Vec2::splat(30.0),
+            Vec2::new(rect.min.x + 14.0, rect.center().y),
+            Vec2::splat(28.0),
         );
-        painter.rect(tile, Corners::all(9.0), tint.with_alpha(0.15));
+        painter.rect(tile, Corners::all(6.0), tint.with_alpha(0.15));
         painter.outlined(
             tile,
-            Corners::all(9.0),
+            Corners::all(6.0),
             Fill::None,
             Border {
                 width: 1.0,
@@ -173,7 +173,7 @@ pub(super) fn header_row<'a>(
     })
     .key(Key::new(format!("object.{raw}.arrow.anchor")))
     .press(toggle())
-    .focus_ring(Corners::all(8.0))
+    .focus_ring(Corners::all(6.0))
     .cursor(grana_ui::Cursor::Pointing);
     let rows = object_menu(ctx, state, id, position, sets);
     let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 188.0, rows);

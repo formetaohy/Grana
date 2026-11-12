@@ -1,7 +1,5 @@
-use grana_glass::Animated;
-
 use crate::element::Axis;
-use crate::motion::Motion;
+use crate::motion::{Animated, Motion};
 use crate::ui::Ui;
 
 #[derive(Clone, Copy, Debug)]

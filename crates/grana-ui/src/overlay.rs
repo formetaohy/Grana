@@ -3,9 +3,9 @@ use glam::Vec2;
 use crate::element::{Axis, Layer};
 use crate::geometry::{Corners, Rect};
 use crate::paint::{Clip, LayerInstances, Painter};
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill, Shadow, State};
 use crate::text::TextStyle;
-use crate::theme::Level;
+use crate::theme::{Level, Role};
 use crate::ui::{TOOLTIP_DELAY, Ui};
 
 impl<A: Clone> Ui<A> {
@@ -41,7 +41,6 @@ impl<A: Clone> Ui<A> {
         let pointer = self.pointer;
         let size = self.size;
         let mut instances = LayerInstances::default();
-        let mut tooltip_rect = None;
         {
             let clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
             let mut painter =
@@ -63,7 +62,7 @@ impl<A: Clone> Ui<A> {
                 let previous = painter.clip();
                 painter.push_clip(node_clip, Corners::ZERO);
                 painter.outlined(
-                    rect.expand(2.0),
+                    rect.expand(1.5),
                     corners,
                     Fill::None,
                     Border {
@@ -96,7 +95,7 @@ impl<A: Clone> Ui<A> {
                     self.theme
                         .palette
                         .text_quaternary
-                        .with_alpha(0.7 * scroll.bar),
+                        .with_alpha(0.75 * scroll.bar),
                 );
             }
             if let Some((_, text)) = &tooltip {
@@ -105,51 +104,29 @@ impl<A: Clone> Ui<A> {
                     self.theme.palette.text_primary,
                 );
                 let layout = painter.layout(text, style, 0.0);
-                let size = layout.size + Vec2::new(14.0, 10.0);
-                let mut origin = pointer + Vec2::new(14.0, 18.0);
-                if origin.x + size.x > self.size.x - 8.0 {
-                    origin.x = self.size.x - 8.0 - size.x;
+                let box_size = layout.size + Vec2::new(14.0, 8.0);
+                let mut origin = pointer + Vec2::new(12.0, 16.0);
+                if origin.x + box_size.x > self.size.x - 8.0 {
+                    origin.x = self.size.x - 8.0 - box_size.x;
                 }
-                if origin.y + size.y > self.size.y - 8.0 {
-                    origin.y = pointer.y - 14.0 - size.y;
+                if origin.y + box_size.y > self.size.y - 8.0 {
+                    origin.y = pointer.y - 12.0 - box_size.y;
                 }
-                let rect = Rect::from_min_size(origin, size);
+                let rect = Rect::from_min_size(origin, box_size);
+                let surface = self
+                    .theme
+                    .surface(Role::Popover, State::Rest)
+                    .with_corners(Corners::all(self.theme.metrics.radius));
+                painter.surface(rect, surface);
                 painter.text(
                     &layout,
-                    rect.min + Vec2::new(7.0, 5.0),
+                    rect.min + Vec2::new(7.0, 4.0),
                     self.theme.palette.text_primary,
                 );
-                tooltip_rect = Some(rect.expand(2.0));
             }
         }
         let hud = Layer::Hud.index();
         self.layers[hud].material.extend(instances.material);
-        match tooltip_rect {
-            Some(rect) => self.place_tooltip_glass(rect),
-            None => {
-                if let Some(glass) = self.tooltip_glass.take() {
-                    self.scene.remove(glass);
-                }
-            }
-        }
-    }
-
-    fn place_tooltip_glass(&mut self, rect: Rect) {
-        let style = crate::glass::GlassStyle::tooltip();
-        let frame = crate::ui::glass_rect(rect);
-        match self.tooltip_glass {
-            Some(glass) => {
-                self.scene.place(glass, frame);
-                self.scene.set_clip(glass, None);
-            }
-            None => {
-                let glass = grana_glass::Glass::new(frame)
-                    .shape(style.shape)
-                    .material(style.material)
-                    .z(style.layer);
-                self.tooltip_glass = Some(self.scene.add(glass));
-            }
-        }
     }
 }
 
@@ -163,8 +140,8 @@ fn scrollbar_thumb(outer: Rect, axis: Axis, scroll: crate::scroll::ScrollState) 
     match axis {
         Axis::Column => {
             let track = Rect::from_min_size(
-                Vec2::new(outer.max.x - 8.0, outer.min.y + 4.0),
-                Vec2::new(4.0, (outer.height() - 8.0).max(8.0)),
+                Vec2::new(outer.max.x - 6.0, outer.min.y + 4.0),
+                Vec2::new(3.5, (outer.height() - 8.0).max(8.0)),
             );
             let height = (track.height() * ratio).max(24.0).min(track.height());
             let travel = track.height() - height;
@@ -175,8 +152,8 @@ fn scrollbar_thumb(outer: Rect, axis: Axis, scroll: crate::scroll::ScrollState) 
         }
         Axis::Row => {
             let track = Rect::from_min_size(
-                Vec2::new(outer.min.x + 4.0, outer.max.y - 8.0),
-                Vec2::new((outer.width() - 8.0).max(8.0), 4.0),
+                Vec2::new(outer.min.x + 4.0, outer.max.y - 6.0),
+                Vec2::new((outer.width() - 8.0).max(8.0), 3.5),
             );
             let width = (track.width() * ratio).max(24.0).min(track.width());
             let travel = track.width() - width;

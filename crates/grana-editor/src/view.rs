@@ -19,7 +19,7 @@ pub fn card<'a>(
 ) -> View<'a> {
     let surface = ctx.theme().surface(Role::Card, State::Rest);
     grana_ui::column()
-        .padding(Edges::all(12.0))
+        .padding(Edges::all(10.0))
         .gap(gap)
         .background(surface)
         .children(children)
@@ -161,8 +161,8 @@ pub fn disclosure_card<'a>(
     }
     let surface = ctx.theme().surface(Role::Card, State::Rest);
     grana_ui::column()
-        .padding(Edges::all(12.0))
-        .gap(8.0)
+        .padding(Edges::all(10.0))
+        .gap(6.0)
         .background(surface)
         .children(items)
 }
@@ -517,11 +517,11 @@ pub fn empty_state<'a>(
         );
         let art = Rect::from_center_size(
             Vec2::new(rect.center().x, rect.min.y + 24.0 + 24.0),
-            Vec2::splat(48.0),
+            Vec2::splat(44.0),
         );
         painter.outlined(
             art,
-            Corners::all(14.0),
+            Corners::all(8.0),
             grana_ui::Fill::Solid(palette.material_fill.amplify(0.8)),
             grana_ui::Border {
                 width: 1.0,
@@ -530,9 +530,9 @@ pub fn empty_state<'a>(
             grana_ui::Shadow::NONE,
         );
         painter.rect(
-            Rect::from_center_size(art.center(), Vec2::splat(34.0)),
-            Corners::all(10.0),
-            palette.accent.with_alpha(0.12),
+            Rect::from_center_size(art.center(), Vec2::splat(30.0)),
+            Corners::all(6.0),
+            palette.accent.with_alpha(0.14),
         );
         icon::paint(
             symbol,

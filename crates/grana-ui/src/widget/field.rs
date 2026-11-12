@@ -30,7 +30,7 @@ pub fn text_field<'a, A>(
         value: value.to_string(),
         style,
         multiline,
-        radius: 10.0,
+        radius: 6.0,
         editing: false,
     }))
 }
@@ -127,8 +127,11 @@ pub(super) fn paint_field(
     } else {
         State::Rest
     };
-    let look = info.theme.surface(Role::Field, state);
+    let mut look = info.theme.surface(Role::Field, state);
     let palette = info.theme.palette;
+    if runtime.edit.is_some() {
+        look.border.color = palette.accent.with_alpha(0.65);
+    }
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
     painter.outlined(
         rect,

@@ -7,7 +7,7 @@ use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::image::ImageAtlas;
 use crate::record::Mark;
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill, Shadow, Surface};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
@@ -21,6 +21,7 @@ pub const KIND_IMAGE: u32 = 7;
 
 pub const FLAG_GRADIENT: u32 = 1 << 0;
 pub const FLAG_BORDER: u32 = 1 << 1;
+pub const FLAG_BACKDROP: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -108,20 +109,9 @@ pub(crate) struct LayerInstances {
     pub material: Vec<Instance>,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct SubGlass {
-    pub rect: Rect,
-    pub style: crate::glass::GlassStyle,
-    pub engaged: bool,
-}
-
 impl LayerInstances {
     pub fn clear(&mut self) {
         self.material.clear();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.material.is_empty()
     }
 }
 
@@ -180,13 +170,21 @@ impl<'a> Painter<'a> {
     }
 
     pub fn rect(&mut self, rect: Rect, corners: Corners, color: Color) {
-        if rect.is_empty() || color.alpha <= 0.0 {
+        self.rect_backdrop(rect, corners, color, 0.0);
+    }
+
+    fn rect_backdrop(&mut self, rect: Rect, corners: Corners, color: Color, backdrop: f32) {
+        if rect.is_empty() || (color.alpha <= 0.0 && backdrop <= 0.0) {
             return;
         }
         let mut instance = Instance::blank(KIND_SURFACE);
         instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.color = color.to_array();
+        if backdrop > 0.0 {
+            instance.meta[1] |= FLAG_BACKDROP;
+            instance.extra[1] = backdrop;
+        }
         self.push(instance);
         let clip = self.clip.rect;
         self.mark(Mark::Rect {
@@ -198,7 +196,18 @@ impl<'a> Painter<'a> {
     }
 
     pub fn gradient(&mut self, rect: Rect, corners: Corners, top: Color, bottom: Color) {
-        if rect.is_empty() || (top.alpha <= 0.0 && bottom.alpha <= 0.0) {
+        self.gradient_backdrop(rect, corners, top, bottom, 0.0);
+    }
+
+    fn gradient_backdrop(
+        &mut self,
+        rect: Rect,
+        corners: Corners,
+        top: Color,
+        bottom: Color,
+        backdrop: f32,
+    ) {
+        if rect.is_empty() || (top.alpha <= 0.0 && bottom.alpha <= 0.0 && backdrop <= 0.0) {
             return;
         }
         let mut instance = Instance::blank(KIND_SURFACE);
@@ -207,6 +216,10 @@ impl<'a> Painter<'a> {
         instance.color = top.to_array();
         instance.color2 = bottom.to_array();
         instance.meta[1] |= FLAG_GRADIENT;
+        if backdrop > 0.0 {
+            instance.meta[1] |= FLAG_BACKDROP;
+            instance.extra[1] = backdrop;
+        }
         self.push(instance);
         let clip = self.clip.rect;
         self.mark(Mark::Gradient {
@@ -218,6 +231,17 @@ impl<'a> Painter<'a> {
         });
     }
 
+    pub fn surface(&mut self, rect: Rect, surface: Surface) {
+        self.outlined_backdrop(
+            rect,
+            surface.corners,
+            surface.fill,
+            surface.backdrop,
+            surface.border,
+            surface.shadow,
+        );
+    }
+
     pub fn outlined(
         &mut self,
         rect: Rect,
@@ -226,13 +250,31 @@ impl<'a> Painter<'a> {
         border: Border,
         shadow: Shadow,
     ) {
+        self.outlined_backdrop(rect, corners, fill, 0.0, border, shadow);
+    }
+
+    pub fn outlined_backdrop(
+        &mut self,
+        rect: Rect,
+        corners: Corners,
+        fill: Fill,
+        backdrop: f32,
+        border: Border,
+        shadow: Shadow,
+    ) {
         if shadow.color.alpha > 0.0 && shadow.radius > 0.0 {
             self.shadow(rect, corners, shadow);
         }
         match fill {
-            Fill::None => {}
-            Fill::Solid(color) => self.rect(rect, corners, color),
-            Fill::Gradient(top, bottom) => self.gradient(rect, corners, top, bottom),
+            Fill::None => {
+                if backdrop > 0.0 {
+                    self.rect_backdrop(rect, corners, Color::TRANSPARENT, backdrop);
+                }
+            }
+            Fill::Solid(color) => self.rect_backdrop(rect, corners, color, backdrop),
+            Fill::Gradient(top, bottom) => {
+                self.gradient_backdrop(rect, corners, top, bottom, backdrop)
+            }
             Fill::Scene(uv) => self.scene(rect, corners, uv),
         }
         if border.width > 0.0 && border.color.alpha > 0.0 {
@@ -282,6 +324,7 @@ impl<'a> Painter<'a> {
         instance.extra = [sigma, 0.0, 0.0, 0.0];
         self.push(instance);
     }
+
     pub fn scene(&mut self, rect: Rect, corners: Corners, uv: [f32; 4]) {
         if rect.is_empty() {
             return;

@@ -29,9 +29,9 @@ use detail::{attached, curated, detect, importing, origin, params, seeds, summar
 use metrics::{child_metrics, children_section, coloc_metrics, label_metrics, measure};
 use relations::relations;
 
-const HEADER: f32 = 36.0;
+const HEADER: f32 = 34.0;
 
-const PAD: f32 = 11.0;
+const PAD: f32 = 10.0;
 
 fn section_font() -> TypeStyle {
     TypeStyle {

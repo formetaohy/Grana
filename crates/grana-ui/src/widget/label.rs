@@ -38,24 +38,24 @@ fn level<'a, A>(theme: &Theme, level: Level, text: &str) -> Element<'a, A> {
 
 pub fn badge<'a, A>(label: &str, tint: Color) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Auto, Length::Fixed(19.0)),
+        size: Size::new(Length::Auto, Length::Fixed(18.0)),
         ..Layout::row()
     })
     .with_content(Content::Badge(BadgeContent {
         label: label.to_string(),
         tint,
         font: TypeStyle {
-            size: 10.0,
+            size: 9.5,
             weight: 600.0,
-            tracking: 0.4,
-            leading: 13.0,
+            tracking: 0.35,
+            leading: 12.0,
         },
     }))
 }
 
 pub fn labelled<'a, A>(theme: &Theme, label: &str, value: &str) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(22.0)),
+        size: Size::new(Length::Fill, Length::Fixed(20.0)),
         ..Layout::row()
     })
     .with_content(Content::Labelled(LabelledContent {
@@ -87,25 +87,24 @@ pub(super) fn measure_badge(badge: &BadgeContent, text: &mut crate::text::Text) 
         .layout(&badge.label, badge.font, 0.0, false, false, Align::Start)
         .size
         .x;
-    Vec2::new(width + 14.0, 19.0)
+    Vec2::new(width + 12.0, 18.0)
 }
 
 pub(super) fn paint_badge(badge: &BadgeContent, painter: &mut Painter, info: &PaintInfo<'_>) {
-    let palette = info.theme.palette;
     painter.outlined(
         info.rect,
-        Corners::capsule(),
-        Fill::Solid(palette.material_fill.amplify(0.7)),
+        Corners::all(4.0),
+        Fill::Solid(badge.tint.with_alpha(0.14)),
         Border {
             width: 1.0,
-            color: palette.material_border,
+            color: badge.tint.with_alpha(0.36),
         },
         Shadow::NONE,
     );
     painter.text_in(
         info.rect,
         &badge.label,
-        TextStyle::new(badge.font, badge.tint.with_alpha(0.92)),
+        TextStyle::new(badge.font, badge.tint.with_alpha(0.95)),
         Align::Center,
     );
 }
@@ -117,7 +116,7 @@ pub(super) fn paint_labelled(
 ) {
     let palette = info.theme.palette;
     let width = info.rect.width();
-    let label_width = (width * 0.38).clamp(64.0, 128.0);
+    let label_width = (width * 0.38).clamp(60.0, 124.0);
     painter.text_in(
         crate::geometry::Rect::from_min_size(
             info.rect.min,
@@ -162,16 +161,16 @@ pub(super) fn paint_color_swatch(
 ) {
     painter.rect(
         info.rect,
-        Corners::all(5.0),
+        Corners::all(4.0),
         Color::from_rgb_f32(swatch.color),
     );
     painter.outlined(
         info.rect,
-        Corners::all(5.0),
+        Corners::all(4.0),
         Fill::None,
         Border {
             width: 1.0,
-            color: Color::white_alpha(0.22 + 0.35 * info.hover),
+            color: Color::white_alpha(0.24 + 0.36 * info.hover),
         },
         Shadow::NONE,
     );

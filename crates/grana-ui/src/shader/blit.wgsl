@@ -43,3 +43,19 @@ fn fs_present_linear(in: VertexOut) -> @location(0) vec4<f32> {
     let color = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb;
     return vec4<f32>(color, 1.0);
 }
+
+@fragment
+fn fs_downsample(in: VertexOut) -> @location(0) vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(source));
+    let texel = 1.0 / max(dims, vec2<f32>(1.0));
+    let c = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb * 0.25;
+    let nw = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(-texel.x, -texel.y), 0.0).rgb * 0.125;
+    let ne = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(texel.x, -texel.y), 0.0).rgb * 0.125;
+    let sw = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(-texel.x, texel.y), 0.0).rgb * 0.125;
+    let se = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(texel.x, texel.y), 0.0).rgb * 0.125;
+    let n = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(0.0, -2.0 * texel.y), 0.0).rgb * 0.0625;
+    let s = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(0.0, 2.0 * texel.y), 0.0).rgb * 0.0625;
+    let w = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(-2.0 * texel.x, 0.0), 0.0).rgb * 0.0625;
+    let e = textureSampleLevel(source, source_sampler, in.uv + vec2<f32>(2.0 * texel.x, 0.0), 0.0).rgb * 0.0625;
+    return vec4<f32>(c + nw + ne + sw + se + n + s + w + e, 1.0);
+}

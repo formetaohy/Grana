@@ -50,7 +50,6 @@ grana-object = { version = "0.1.1", path = "crates/grana-object" }
 grana-profile = { version = "0.1.1", path = "crates/grana-profile" }
 grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
-grana-glass = { version = "0.1.1", path = "crates/grana-glass" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
 grana-i18n = { version = "0.1.1", path = "crates/grana-i18n" }
 grana-offline = { version = "0.1.1", path = "crates/grana-offline" }

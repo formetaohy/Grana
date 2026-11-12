@@ -9,7 +9,6 @@ use crate::content::{
 };
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::glass::GlassStyle;
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
@@ -17,7 +16,7 @@ use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role, Theme};
 
-use super::{PaintInfo, SubGlass};
+use super::PaintInfo;
 
 const ARROW_STEP: f32 = 0.01;
 const PAGE_STEP: f32 = 0.1;
@@ -66,7 +65,7 @@ pub fn range_slider<'a, A>(
     gradient: &[Color],
 ) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(32.0)),
+        size: Size::new(Length::Fill, Length::Fixed(26.0)),
         ..Layout::row()
     })
     .with_content(Content::RangeSlider(RangeSliderContent {
@@ -81,7 +80,7 @@ pub fn range_slider<'a, A>(
 pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(
-            Length::Fixed(66.0),
+            Length::Fixed(64.0),
             Length::Fixed(theme.metrics.control_height),
         ),
         ..Layout::row()
@@ -90,7 +89,7 @@ pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<
         value,
         decimals,
         font: theme.font(Level::Monospace),
-        width: 66.0,
+        width: 64.0,
     }))
 }
 
@@ -110,7 +109,7 @@ pub fn gradient_bar<'a, A>(colors: &[Color], height: f32) -> Element<'a, A> {
     .with_content(Content::GradientBar(GradientBarContent {
         colors: colors.to_vec(),
         height,
-        radius: Corners::capsule(),
+        radius: Corners::all(4.0),
     }))
 }
 
@@ -131,7 +130,7 @@ pub(super) fn measure_range(range: &RangeSliderContent, available: Vec2) -> Vec2
         Length::Minimum(minimum) => minimum.max(available.x),
         Length::Maximum(maximum) => maximum.min(available.x),
     };
-    Vec2::new(width, 32.0)
+    Vec2::new(width, 26.0)
 }
 
 pub(super) fn measure_drag(drag: &DragValueContent, theme: &Theme) -> Vec2 {
@@ -149,13 +148,13 @@ pub(crate) fn track(
         text.layout(label, style.font, 0.0, false, false, Align::Start)
             .size
             .x
-            .clamp(62.0, 96.0)
-            + 10.0
+            .clamp(58.0, 92.0)
+            + 8.0
     });
-    let readout_width = if slider.readout.is_some() { 58.0 } else { 0.0 };
+    let readout_width = if slider.readout.is_some() { 56.0 } else { 0.0 };
     Rect::from_min_max(
-        Vec2::new(rect.min.x + label_width, rect.center().y - 13.0),
-        Vec2::new(rect.max.x - readout_width, rect.center().y + 13.0),
+        Vec2::new(rect.min.x + label_width, rect.center().y - 12.0),
+        Vec2::new(rect.max.x - readout_width, rect.center().y + 12.0),
     )
 }
 
@@ -208,8 +207,8 @@ pub(crate) fn range_at(range: &RangeSliderContent, rect: Rect, pointer: Vec2) ->
     let (minimum, maximum) = (*range.range.start(), *range.range.end());
     let span = (maximum - minimum).max(1.0e-6);
     let track = Rect::from_min_max(
-        Vec2::new(rect.min.x + 8.0, rect.min.y),
-        Vec2::new(rect.max.x - 8.0, rect.max.y),
+        Vec2::new(rect.min.x + 6.0, rect.min.y),
+        Vec2::new(rect.max.x - 6.0, rect.max.y),
     );
     let value =
         minimum + ((pointer.x - track.min.x) / track.width().max(1.0)).clamp(0.0, 1.0) * span;
@@ -259,9 +258,9 @@ pub(crate) fn value_slider<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, 
         return None;
     };
     let motion = if pressed {
-        Motion::response(0.18, 0.18)
+        Motion::response(0.12, 0.0)
     } else {
-        Motion::response(0.32, 0.2)
+        Motion::snappy()
     };
     let target = if pressed {
         node.runtime.drag_value
@@ -276,9 +275,9 @@ pub(crate) fn value_range<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, (
         return None;
     };
     let motion = if pressed {
-        Motion::response(0.16, 0.12)
+        Motion::response(0.12, 0.0)
     } else {
-        Motion::response(0.32, 0.2)
+        Motion::snappy()
     };
     let target = if pressed {
         (node.runtime.drag_value, node.runtime.drag_extent)
@@ -293,47 +292,33 @@ pub(super) fn paint_slider(
     runtime: &Runtime,
     painter: &mut Painter,
     info: &PaintInfo<'_>,
-    glass: &mut Vec<SubGlass>,
 ) {
     let theme = info.theme;
     let palette = theme.palette;
     let metrics = theme.metrics;
     let caption = TextStyle::new(theme.label_font(), palette.text_tertiary);
     let label_width = slider.label.as_ref().map_or(0.0, |label| {
-        painter.measure(label, caption).x.clamp(62.0, 96.0) + 10.0
+        painter.measure(label, caption).x.clamp(58.0, 92.0) + 8.0
     });
-    let readout_width = if slider.readout.is_some() { 58.0 } else { 0.0 };
+    let readout_width = if slider.readout.is_some() { 56.0 } else { 0.0 };
     let rect = info.rect;
     let hit = Rect::from_min_max(
-        Vec2::new(rect.min.x + label_width, rect.center().y - 13.0),
-        Vec2::new(rect.max.x - readout_width, rect.center().y + 13.0),
+        Vec2::new(rect.min.x + label_width, rect.center().y - 12.0),
+        Vec2::new(rect.max.x - readout_width, rect.center().y + 12.0),
     );
     let bar = Rect::from_center_size(hit.center(), Vec2::new(hit.width(), metrics.track));
-    let knob = metrics.thumb + 4.0;
-    let knob_height = 17.0;
     let position = runtime.value.value.clamp(0.0, 1.0);
     let engaged = info.engaged;
-    let size_w = knob + engaged * 2.0;
-    let size_h = knob_height + engaged * 1.5;
     let center = Vec2::new(bar.min.x + bar.width() * position, bar.center().y);
-    let lag = (runtime.value.target.clamp(0.0, 1.0) - position) * bar.width();
-    let reach = (lag.abs() * 0.48).min(knob * 0.45);
-    let (left, right) = if lag >= 0.0 {
-        (center.x - size_w * 0.5, center.x + size_w * 0.5 + reach)
-    } else {
-        (center.x - size_w * 0.5 - reach, center.x + size_w * 0.5)
-    };
-    let knob_rect = Rect::from_min_max(
-        Vec2::new(left, center.y - size_h * 0.5),
-        Vec2::new(right, center.y + size_h * 0.5),
-    );
+    let knob_size = Vec2::new(11.0 + engaged * 1.5, 15.0 + engaged * 1.5);
+    let knob_rect = Rect::from_center_size(center, knob_size);
     let fill_end = center.x.clamp(bar.min.x, bar.max.x);
     let filled = Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y));
     if let Some(label) = &slider.label {
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(rect.min.x, rect.min.y),
-                Vec2::new(rect.min.x + label_width - 8.0, rect.max.y),
+                Vec2::new(rect.min.x + label_width - 6.0, rect.max.y),
             ),
             label,
             TextStyle::new(caption.font, caption.color).truncating(),
@@ -342,7 +327,7 @@ pub(super) fn paint_slider(
     }
     painter.rect(
         bar,
-        Corners::capsule(),
+        Corners::all(2.0),
         palette
             .track
             .with_alpha(palette.track.alpha * (0.85 + 0.3 * engaged)),
@@ -350,7 +335,7 @@ pub(super) fn paint_slider(
     if filled.width() > 0.0 {
         painter.gradient(
             filled,
-            Corners::capsule(),
+            Corners::all(2.0),
             palette.accent_hover,
             palette.accent,
         );
@@ -358,7 +343,7 @@ pub(super) fn paint_slider(
     if let Some(readout) = &slider.readout {
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.max.x - readout_width + 6.0, rect.min.y),
+                Vec2::new(rect.max.x - readout_width + 4.0, rect.min.y),
                 rect.max,
             ),
             readout,
@@ -367,11 +352,20 @@ pub(super) fn paint_slider(
             Align::Center,
         );
     }
-    glass.push(SubGlass {
-        rect: knob_rect,
-        style: GlassStyle::knob(),
-        engaged: info.press > 0.5,
-    });
+    painter.outlined(
+        knob_rect,
+        Corners::all(3.5),
+        Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
+        Border {
+            width: 1.0,
+            color: if info.press > 0.5 {
+                palette.accent
+            } else {
+                Color::white_alpha(0.9)
+            },
+        },
+        Shadow::new(Color::black_alpha(0.45), 4.0, 1.0),
+    );
 }
 
 pub(super) fn paint_range(
@@ -379,13 +373,12 @@ pub(super) fn paint_range(
     runtime: &Runtime,
     painter: &mut Painter,
     info: &PaintInfo<'_>,
-    glass: &mut Vec<SubGlass>,
 ) {
     let palette = info.theme.palette;
     let rect = info.rect;
     let bar = Rect::from_min_max(
-        Vec2::new(rect.min.x + 8.0, rect.center().y - 4.0),
-        Vec2::new(rect.max.x - 8.0, rect.center().y + 4.0),
+        Vec2::new(rect.min.x + 6.0, rect.center().y - 4.0),
+        Vec2::new(rect.max.x - 6.0, rect.center().y + 4.0),
     );
     let low_t = runtime.value.value.clamp(0.0, 1.0);
     let high_t = runtime.extent.value.clamp(0.0, 1.0);
@@ -394,14 +387,17 @@ pub(super) fn paint_range(
     let engaged = info.engaged;
     painter.outlined(
         bar,
-        Corners::capsule(),
-        Fill::Solid(palette.track),
-        Border::NONE,
+        Corners::all(3.0),
+        Fill::Solid(palette.field),
+        Border {
+            width: 1.0,
+            color: palette.material_border,
+        },
         Shadow::NONE,
     );
     if range.gradient.len() > 1 {
         let clip = painter.clip();
-        painter.push_clip(bar, Corners::capsule());
+        painter.push_clip(bar, Corners::all(3.0));
         let segments = range.gradient.len() - 1;
         for (index, color) in range.gradient.iter().take(segments).enumerate() {
             let left = bar.min.x + bar.width() * index as f32 / segments as f32;
@@ -417,12 +413,12 @@ pub(super) fn paint_range(
         }
         painter.pop_clip(clip);
     }
-    let shade = palette.shade.amplify(0.55);
+    let shade = palette.shade.amplify(0.65);
     painter.rect(
         Rect::from_min_max(bar.min, Vec2::new(low_x, bar.max.y)),
         Corners {
-            top_left: 4.0,
-            bottom_left: 4.0,
+            top_left: 3.0,
+            bottom_left: 3.0,
             ..Corners::ZERO
         },
         shade,
@@ -430,29 +426,34 @@ pub(super) fn paint_range(
     painter.rect(
         Rect::from_min_max(Vec2::new(high_x, bar.min.y), bar.max),
         Corners {
-            top_right: 4.0,
-            bottom_right: 4.0,
+            top_right: 3.0,
+            bottom_right: 3.0,
             ..Corners::ZERO
         },
         shade,
     );
-    let knob_size = Vec2::new(12.0 + engaged * 2.0, 20.0 + engaged * 3.0);
+    let handle_size = Vec2::new(8.0 + engaged * 1.5, 16.0 + engaged * 2.0);
     for x in [low_x, high_x] {
-        let knob = Rect::from_center_size(Vec2::new(x, bar.center().y), knob_size);
-        glass.push(SubGlass {
-            rect: knob,
-            style: GlassStyle::knob(),
-            engaged: info.press > 0.5,
-        });
+        let knob = Rect::from_center_size(Vec2::new(x, bar.center().y), handle_size);
+        painter.outlined(
+            knob,
+            Corners::all(2.5),
+            Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
+            Border {
+                width: 1.0,
+                color: Color::white_alpha(0.9),
+            },
+            Shadow::new(Color::black_alpha(0.45), 3.0, 1.0),
+        );
     }
 }
 
 pub(super) fn paint_drag(drag: &DragValueContent, painter: &mut Painter, info: &PaintInfo<'_>) {
     let look = info.theme.surface(Role::Field, crate::style::State::Rest);
-    painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
+    painter.surface(info.rect, look);
     let text = format!("{:.*}", drag.decimals, drag.value);
     painter.text_in(
-        info.rect.shrink2(Vec2::new(9.0, 0.0)),
+        info.rect.shrink2(Vec2::new(8.0, 0.0)),
         &text,
         TextStyle::new(drag.font, look.text).aligned(Align::End),
         Align::Center,
@@ -466,12 +467,12 @@ pub(super) fn paint_progress(
 ) {
     let palette = info.theme.palette;
     let rect = info.rect;
-    painter.rect(rect, Corners::capsule(), palette.track);
+    painter.rect(rect, Corners::all(2.0), palette.track);
     let filled = rect.width() * progress.fraction.clamp(0.0, 1.0);
     if filled > 1.0 {
         painter.gradient(
             Rect::from_min_size(rect.min, Vec2::new(filled, rect.height())),
-            Corners::capsule(),
+            Corners::all(2.0),
             palette.accent_hover,
             palette.accent,
         );
@@ -503,4 +504,14 @@ pub(super) fn paint_gradient_bar(
         );
     }
     painter.pop_clip(clip);
+    painter.outlined(
+        rect,
+        bar.radius,
+        Fill::None,
+        Border {
+            width: 1.0,
+            color: info.theme.palette.material_border,
+        },
+        Shadow::NONE,
+    );
 }

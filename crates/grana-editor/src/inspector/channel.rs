@@ -1,6 +1,6 @@
 use super::*;
 
-const CHANNEL_ROW: f32 = 34.0;
+const CHANNEL_ROW: f32 = 30.0;
 
 const SWITCH_TRAIL: f32 = 4.0;
 
@@ -66,18 +66,18 @@ pub(super) fn channel_row<'a>(
         if active {
             painter.outlined(
                 full,
-                Corners::all(9.0),
+                Corners::all(6.0),
                 Fill::Solid(palette.accent.with_alpha(0.16)),
                 Border {
                     width: 1.0,
-                    color: palette.accent.with_alpha(0.34),
+                    color: palette.accent.with_alpha(0.36),
                 },
                 Shadow::NONE,
             );
         } else if info.hover > 0.01 {
             painter.rect(
                 full,
-                Corners::all(9.0),
+                Corners::all(6.0),
                 palette.material_hover.amplify(0.50 * info.hover),
             );
         }

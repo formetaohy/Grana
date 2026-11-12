@@ -4,17 +4,17 @@ use crate::color::Color;
 use crate::content::{Content, SegmentContent, TabsContent};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::glass::GlassStyle;
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
+use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Theme};
 
-use super::{PaintInfo, SubGlass};
+use super::PaintInfo;
 
-const TABS_HEIGHT: f32 = 32.0;
-const CELL_PAD: f32 = 24.0;
+const TABS_HEIGHT: f32 = 28.0;
+const CELL_PAD: f32 = 20.0;
 
 pub fn segmented<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
     segmented_core(theme, options, selected, false)
@@ -67,7 +67,7 @@ pub(super) fn measure_segment(
         widths(&segment.options, segment.font, text)
             .iter()
             .sum::<f32>()
-            + 6.0
+            + 4.0
     };
     let _ = &segment.width;
     Vec2::new(total, theme.metrics.control_height)
@@ -96,13 +96,21 @@ fn widths(
 }
 
 fn cells(rect: Rect, widths: &[f32], fill: bool, tabs: bool) -> Vec<Rect> {
-    let mut left = if tabs { rect.min.x } else { rect.min.x + 3.0 };
-    let top = rect.min.y + 3.0;
-    let height = if tabs { 26.0 } else { rect.height() - 6.0 };
+    let mut left = if tabs { rect.min.x } else { rect.min.x + 2.0 };
+    let top = if tabs {
+        rect.min.y + 1.0
+    } else {
+        rect.min.y + 2.0
+    };
+    let height = if tabs {
+        rect.height() - 2.0
+    } else {
+        rect.height() - 4.0
+    };
     let widths = if fill && !widths.is_empty() {
         widths
             .iter()
-            .map(|_| (rect.width() - 6.0) / widths.len() as f32)
+            .map(|_| (rect.width() - 4.0) / widths.len() as f32)
             .collect::<Vec<_>>()
     } else {
         widths.to_vec()
@@ -207,7 +215,7 @@ pub(crate) fn value_segment<A>(
     let motion = if dragging {
         Motion::INSTANT
     } else {
-        Motion::response(0.42, 0.22)
+        Motion::snappy()
     };
     let target = if dragging {
         drag_pill(&node.content, node.rect, pointer, text)
@@ -232,7 +240,7 @@ pub(crate) fn value_tabs<A>(
     let motion = if dragging {
         Motion::INSTANT
     } else {
-        Motion::response(0.42, 0.20)
+        Motion::snappy()
     };
     let target = if dragging {
         drag_pill(&node.content, node.rect, pointer, text)
@@ -284,10 +292,11 @@ pub(super) fn paint_segment(
     runtime: &Runtime,
     painter: &mut Painter,
     info: &PaintInfo<'_>,
-    glass: &mut Vec<SubGlass>,
 ) {
     let rect = info.rect;
     let palette = info.theme.palette;
+    let radius = info.theme.metrics.radius;
+    let inner_radius = (radius - 1.5).max(3.5);
     let style = TextStyle::new(segment.font, Color::WHITE);
     let widths = segment
         .options
@@ -295,20 +304,46 @@ pub(super) fn paint_segment(
         .map(|option| painter.measure(option, style).x + CELL_PAD)
         .collect::<Vec<_>>();
     let cells = cells(rect, &widths, segment.fill, false);
-    painter.rect(
+    painter.outlined(
         rect,
-        Corners::capsule(),
-        palette.material_fill.amplify(0.75),
+        Corners::all(radius),
+        Fill::Solid(palette.field),
+        Border {
+            width: 1.0,
+            color: palette.material_border,
+        },
+        Shadow::NONE,
     );
     for (index, cell) in cells.iter().enumerate() {
-        if index == runtime.thumb as usize && info.hover > 0.01 && info.press < 0.5 {
+        if index != segment.selected
+            && index == runtime.thumb as usize
+            && info.hover > 0.01
+            && info.press < 0.5
+        {
             painter.rect(
                 *cell,
-                Corners::capsule(),
-                palette.material_hover.amplify(0.5 * info.hover),
+                Corners::all(inner_radius),
+                palette.material_hover.amplify(0.45 * info.hover),
             );
         }
     }
+    let pill = Rect::from_min_size(
+        Vec2::new(runtime.value.value, rect.min.y + 2.0),
+        Vec2::new(runtime.extent.value, (rect.height() - 4.0).max(1.0)),
+    );
+    painter.outlined(
+        pill,
+        Corners::all(inner_radius),
+        Fill::Gradient(
+            Color::rgba(0.24, 0.26, 0.31, 1.0),
+            Color::rgba(0.18, 0.20, 0.24, 1.0),
+        ),
+        Border {
+            width: 1.0,
+            color: Color::white_alpha(0.15),
+        },
+        Shadow::new(Color::black_alpha(0.32), 3.0, 1.0),
+    );
     for (index, cell) in cells.iter().enumerate() {
         let active = index == segment.selected;
         let color = if active {
@@ -325,15 +360,6 @@ pub(super) fn paint_segment(
             );
         }
     }
-    let pill = Rect::from_min_size(
-        Vec2::new(runtime.value.value, rect.min.y + 3.0),
-        Vec2::new(runtime.extent.value, rect.height() - 6.0),
-    );
-    glass.push(SubGlass {
-        rect: pill,
-        style: GlassStyle::tab_lens(),
-        engaged: info.press > 0.5,
-    });
 }
 
 pub(super) fn paint_tabs(
@@ -341,10 +367,10 @@ pub(super) fn paint_tabs(
     runtime: &Runtime,
     painter: &mut Painter,
     info: &PaintInfo<'_>,
-    glass: &mut Vec<SubGlass>,
 ) {
     let rect = info.rect;
     let palette = info.theme.palette;
+    let radius = info.theme.metrics.radius;
     let style = TextStyle::new(tabs.font, Color::WHITE);
     let widths = tabs
         .options
@@ -353,14 +379,32 @@ pub(super) fn paint_tabs(
         .collect::<Vec<_>>();
     let cells = cells(rect, &widths, false, true);
     for (index, cell) in cells.iter().enumerate() {
-        if index == runtime.thumb as usize && info.hover > 0.01 && info.press < 0.5 {
+        if index != tabs.selected
+            && index == runtime.thumb as usize
+            && info.hover > 0.01
+            && info.press < 0.5
+        {
             painter.rect(
-                cell.shrink2(Vec2::new(2.0, 0.0)),
-                Corners::capsule(),
+                cell.shrink2(Vec2::new(1.0, 0.0)),
+                Corners::all(radius),
                 palette.material_hover.amplify(0.4 * info.hover),
             );
         }
     }
+    let pill = Rect::from_min_size(
+        Vec2::new(runtime.value.value, rect.min.y + 1.0),
+        Vec2::new(runtime.extent.value, (rect.height() - 2.0).max(1.0)),
+    );
+    painter.outlined(
+        pill,
+        Corners::all(radius),
+        Fill::Solid(palette.accent.with_alpha(0.18)),
+        Border {
+            width: 1.0,
+            color: palette.accent.with_alpha(0.42),
+        },
+        Shadow::NONE,
+    );
     for (index, cell) in cells.iter().enumerate() {
         let active = index == tabs.selected;
         let color = if active {
@@ -377,13 +421,4 @@ pub(super) fn paint_tabs(
             );
         }
     }
-    let pill = Rect::from_min_size(
-        Vec2::new(runtime.value.value, rect.min.y + 3.0),
-        Vec2::new(runtime.extent.value, 26.0),
-    );
-    glass.push(SubGlass {
-        rect: pill,
-        style: GlassStyle::tab_lens(),
-        engaged: info.press > 0.5,
-    });
 }

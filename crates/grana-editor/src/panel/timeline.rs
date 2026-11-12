@@ -1,33 +1,31 @@
 use glam::Vec2;
 use grana_session::Command;
-use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Length, Motion, Pointer, Rect, Role,
-    TextStyle,
+    Align, Border, BuildContext, Color, Corners, Element, Fill, Icon, Key, Length, Motion, Pointer,
+    Rect, Role, Shadow, State, TextStyle,
 };
 
 use crate::message::Message;
 use crate::state::View;
-
-const KNOB: f32 = 20.0;
 
 pub(super) fn transport<'a>(
     ctx: &mut BuildContext<'_, Message>,
     rect: Rect,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
-    let palette = ctx.theme().palette;
+    let theme = *ctx.theme();
+    let palette = theme.palette;
     let center = rect.center().y;
-    let left = rect.min.x + 12.0;
-    let back = Rect::from_center_size(Vec2::new(left + 14.0, center), Vec2::splat(28.0));
-    let play = Rect::from_center_size(Vec2::new(left + 48.0, center), Vec2::splat(30.0));
-    let forward = Rect::from_center_size(Vec2::new(left + 82.0, center), Vec2::splat(28.0));
-    let track_start = forward.max.x + 18.0;
-    let readout_width = 148.0;
-    let track_end = (rect.max.x - 16.0 - readout_width).max(track_start + 80.0);
+    let left = rect.min.x + 8.0;
+    let back = Rect::from_center_size(Vec2::new(left + 13.0, center), Vec2::splat(26.0));
+    let play = Rect::from_center_size(Vec2::new(left + 44.0, center), Vec2::splat(28.0));
+    let forward = Rect::from_center_size(Vec2::new(left + 75.0, center), Vec2::splat(26.0));
+    let track_start = forward.max.x + 14.0;
+    let readout_width = 142.0;
+    let track_end = (rect.max.x - 12.0 - readout_width).max(track_start + 72.0);
     let track = Rect::from_min_max(
-        Vec2::new(track_start, center - 14.0),
-        Vec2::new(track_end, center + 14.0),
+        Vec2::new(track_start, center - 12.0),
+        Vec2::new(track_end, center + 12.0),
     );
     let frame = state.scene.time();
     let frames = state.scene.frame_count();
@@ -37,7 +35,7 @@ pub(super) fn transport<'a>(
         ctx,
         "timeline.back",
         Icon::StepBack,
-        28.0,
+        26.0,
         Role::Quiet,
         grana_i18n::timeline::previous_frame(language),
         Message::Command(Command::SetTime(frame.saturating_sub(1))),
@@ -47,7 +45,7 @@ pub(super) fn transport<'a>(
         ctx,
         "timeline.play",
         if playing { Icon::Pause } else { Icon::Play },
-        30.0,
+        28.0,
         Role::Prominent,
         if playing {
             grana_i18n::timeline::pause(language)
@@ -61,7 +59,7 @@ pub(super) fn transport<'a>(
         ctx,
         "timeline.forward",
         Icon::StepForward,
-        28.0,
+        26.0,
         Role::Quiet,
         grana_i18n::timeline::next_frame(language),
         Message::Command(Command::SetTime((frame + 1) % frames.max(1))),
@@ -71,10 +69,10 @@ pub(super) fn transport<'a>(
     let seconds = frame as f32 * state.scene.dataset.frame_interval();
     let readout = format!("{:02} / {:02}  ·  {seconds:.2} s", frame + 1, frames);
     let readout_rect = Rect::from_min_max(
-        Vec2::new(track_end + 12.0, rect.min.y),
-        Vec2::new(rect.max.x - 16.0, rect.max.y),
+        Vec2::new(track_end + 10.0, rect.min.y),
+        Vec2::new(rect.max.x - 12.0, rect.max.y),
     );
-    let font = ctx.theme().font(grana_ui::Level::Monospace);
+    let font = theme.font(grana_ui::Level::Monospace);
     let readout_element = grana_ui::canvas(
         Length::Fixed(readout_rect.width()),
         readout_rect.height(),
@@ -88,10 +86,11 @@ pub(super) fn transport<'a>(
         },
     )
     .at(readout_rect);
+    let surface = theme.surface(Role::Hud, State::Rest);
     Element::new(grana_ui::Layout::column())
         .named("transport")
         .at(rect)
-        .glass(GlassStyle::transport())
+        .background(surface)
         .children([
             back_element,
             play_element,
@@ -114,27 +113,24 @@ fn scrub_track<'a>(
         ctx.animate(
             Key::new("timeline.spring").id(),
             (frame as f32 / (frames - 1) as f32).clamp(0.0, 1.0),
-            Motion::response(0.3, 0.18),
+            Motion::snappy(),
         )
     } else {
         0.0
     };
     let knob_x = bar.min.x + bar.width() * position;
-    let knob = Rect::from_center_size(
-        Vec2::new(knob_x, bar.center().y),
-        Vec2::new(KNOB * 0.72, KNOB * 0.82),
-    );
     let fill_end = knob_x.clamp(bar.min.x, bar.max.x);
     let ticks = frames > 1 && frames <= 40 && bar.width() / (frames - 1) as f32 >= 9.0;
-    let track = grana_ui::canvas(
+    grana_ui::canvas(
         Length::Fixed(rect.width()),
         rect.height(),
-        move |painter, _info| {
-            painter.rect(bar, Corners::capsule(), palette.material_fill.amplify(0.9));
+        move |painter, info| {
+            let engaged = info.hover.max(info.press);
+            painter.rect(bar, Corners::all(2.0), palette.track);
             if fill_end > bar.min.x {
                 painter.gradient(
                     Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y)),
-                    Corners::capsule(),
+                    Corners::all(2.0),
                     palette.accent_hover,
                     palette.accent,
                 );
@@ -145,10 +141,10 @@ fn scrub_track<'a>(
                     let x = bar.min.x + spacing * index as f32;
                     painter.rect(
                         Rect::from_center_size(
-                            Vec2::new(x, rect.center().y + 10.0),
+                            Vec2::new(x, rect.center().y + 8.5),
                             Vec2::new(1.0, 2.5),
                         ),
-                        Corners::capsule(),
+                        Corners::all(0.5),
                         if index == frame {
                             palette.text_secondary
                         } else {
@@ -157,16 +153,29 @@ fn scrub_track<'a>(
                     );
                 }
             }
+            let knob = Rect::from_center_size(
+                Vec2::new(knob_x, bar.center().y),
+                Vec2::new(11.0 + engaged * 1.5, 15.0 + engaged * 1.5),
+            );
+            painter.outlined(
+                knob,
+                Corners::all(3.5),
+                Fill::Gradient(Color::bytes(245, 247, 250), Color::bytes(210, 214, 222)),
+                Border {
+                    width: 1.0,
+                    color: if info.press > 0.5 {
+                        palette.accent
+                    } else {
+                        Color::white_alpha(0.9)
+                    },
+                },
+                Shadow::new(Color::black_alpha(0.45), 4.0, 1.0),
+            );
         },
     )
+    .named("timeline.scrub")
     .at(rect)
-    .on_pointer(seek(bar, frames, frame));
-    let knob_element = grana_ui::canvas(Length::Fixed(knob.width()), knob.height(), |_, _| {})
-        .named("timeline.knob")
-        .at(knob)
-        .glass(GlassStyle::knob())
-        .on_pointer(seek(bar, frames, frame));
-    grana_ui::place(rect, [track, knob_element]).named("timeline.scrub")
+    .on_pointer(seek(bar, frames, frame))
 }
 
 fn seek(bar: Rect, frames: u32, frame: u32) -> impl Fn(Pointer) -> Option<Message> + 'static {

@@ -24,6 +24,7 @@ struct Instance {
 @group(0) @binding(5) var atlas_sampler: sampler;
 @group(0) @binding(6) var images: texture_2d<f32>;
 @group(0) @binding(7) var images_sampler: sampler;
+@group(0) @binding(8) var backdrop: texture_2d<f32>;
 
 const KIND_SURFACE: u32 = 0u;
 const KIND_SHADOW: u32 = 1u;
@@ -36,6 +37,7 @@ const KIND_IMAGE: u32 = 7u;
 
 const FLAG_GRADIENT: u32 = 1u;
 const FLAG_BORDER: u32 = 2u;
+const FLAG_BACKDROP: u32 = 4u;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -114,7 +116,7 @@ fn squircle(p: vec2<f32>, half: vec2<f32>, radius: vec4<f32>) -> f32 {
         return max(q.x, q.y) - r;
     }
     let ratio = clamp(r / max(min(half.x, half.y), 0.001), 0.0, 1.0);
-    let exponent = mix(2.0, 4.0, clamp((1.0 - ratio) * 2.0, 0.0, 1.0));
+    let exponent = mix(2.0, 2.8, clamp((1.0 - ratio) * 2.0, 0.0, 1.0));
     let norm = pow(pow(q.x, exponent) + pow(q.y, exponent), 1.0 / exponent);
     return norm - r;
 }
@@ -256,6 +258,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if ((flags & FLAG_GRADIENT) != 0u) {
         let t = clamp((in.position_px.y - (instance.rect.y * scale)) / max(size.y, 1.0), 0.0, 1.0);
         color = mix(color, instance.color2, t);
+    }
+    if ((flags & FLAG_BACKDROP) != 0u) {
+        let screen_uv = clamp(
+            in.position_px / max(uniforms.viewport, vec2<f32>(1.0)),
+            vec2<f32>(0.0),
+            vec2<f32>(1.0),
+        );
+        let lod = clamp(log2(max(instance.extra.y * scale * 0.25, 1.0)), 0.0, 4.0);
+        let blurred = textureSampleLevel(backdrop, scene_sampler, screen_uv, lod).rgb;
+        let rgb = mix(blurred, color.rgb, color.a);
+        return premultiplied(vec4<f32>(rgb, 1.0), mask);
     }
     let rgb = color.rgb;
     let alpha = color.a;

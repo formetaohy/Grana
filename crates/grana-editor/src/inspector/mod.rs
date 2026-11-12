@@ -28,7 +28,7 @@ pub(crate) fn panel_width() -> f32 {
 }
 
 pub(crate) fn card_width() -> f32 {
-    panel_width() - 24.0
+    panel_width() - 20.0
 }
 
 pub fn source<'a>(
@@ -343,12 +343,12 @@ pub(crate) fn disclosure<'a>(
         Motion::response(0.32, 0.18),
     );
     let label = title.to_string();
-    let header = grana_ui::canvas(Length::Fill, 26.0, move |painter, info| {
+    let header = grana_ui::canvas(Length::Fill, 24.0, move |painter, info| {
         let rect = info.rect;
         if info.hover > 0.01 {
             painter.rect(
                 rect.expand(2.0),
-                Corners::all(8.0),
+                Corners::all(6.0),
                 palette.material_hover.amplify(0.45 * info.hover),
             );
         }
@@ -376,7 +376,7 @@ pub(crate) fn disclosure<'a>(
     })
     .key(token)
     .press(Message::ToggleOpen(token))
-    .focus_ring(Corners::all(8.0))
+    .focus_ring(Corners::all(6.0))
     .cursor(grana_ui::Cursor::Pointing);
     let mut items = vec![header];
     if open {
@@ -449,7 +449,7 @@ fn combo_anchor<'a>(
     })
     .key(key)
     .press(Message::Noop)
-    .focus_ring(Corners::all(10.0))
+    .focus_ring(Corners::all(6.0))
     .cursor(grana_ui::Cursor::Pointing)
 }
 

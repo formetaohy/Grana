@@ -2,7 +2,6 @@ use glam::Vec2;
 
 pub(crate) use crate::content::{Content, ContentKind};
 use crate::geometry::{Corners, Edges, Rect};
-use crate::glass::GlassStyle;
 use crate::input::{Button, Cursor, Modifiers};
 use crate::paint::Painter;
 use crate::style::Surface;
@@ -143,12 +142,6 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Glass {
-    pub style: GlassStyle,
-    pub group: Option<Key>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scroll {
     pub axis: Axis,
     pub length: Length,
@@ -181,7 +174,6 @@ pub struct Pointer {
 
 pub struct CanvasInfo<'a> {
     pub rect: Rect,
-    pub glass: Option<Rect>,
     pub theme: &'a Theme,
     pub hover: f32,
     pub press: f32,
@@ -195,27 +187,19 @@ pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
 pub enum Layer {
     Content,
     Chrome,
-    Labels,
     Popup,
     Hud,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 5] = [
-        Self::Content,
-        Self::Chrome,
-        Self::Labels,
-        Self::Popup,
-        Self::Hud,
-    ];
+    pub const ALL: [Layer; 4] = [Self::Content, Self::Chrome, Self::Popup, Self::Hud];
 
     pub(crate) fn index(self) -> usize {
         match self {
             Self::Content => 0,
             Self::Chrome => 1,
-            Self::Labels => 2,
-            Self::Popup => 3,
-            Self::Hud => 4,
+            Self::Popup => 2,
+            Self::Hud => 3,
         }
     }
 }
@@ -228,7 +212,6 @@ pub struct Element<'a, A> {
     pub(crate) canvas: Option<CanvasPaint<'a>>,
     pub(crate) children: Vec<Element<'a, A>>,
     pub(crate) background: Option<Surface>,
-    pub(crate) glass: Option<Glass>,
     pub(crate) layer: Option<Layer>,
     pub(crate) position: Option<Rect>,
     pub(crate) scroll: Option<Scroll>,
@@ -249,7 +232,6 @@ impl<'a, A> Element<'a, A> {
             canvas: None,
             children: Vec::new(),
             background: None,
-            glass: None,
             layer: None,
             position: None,
             scroll: None,
@@ -320,18 +302,6 @@ impl<'a, A> Element<'a, A> {
 
     pub fn background(mut self, surface: Surface) -> Self {
         self.background = Some(surface);
-        self
-    }
-
-    pub fn glass(mut self, style: GlassStyle) -> Self {
-        self.glass = Some(Glass { style, group: None });
-        self
-    }
-
-    pub fn glass_group(mut self, group: Key) -> Self {
-        if let Some(glass) = self.glass.as_mut() {
-            glass.group = Some(group);
-        }
         self
     }
 
@@ -492,7 +462,6 @@ impl<'a, A> Element<'a, A> {
             self.interaction,
         );
         node.background = self.background;
-        node.glass_spec = self.glass;
         node.layer = self.layer.unwrap_or(layer);
         node.layer_explicit = self.layer.is_some();
         node.position = self.position;
@@ -530,7 +499,6 @@ impl<'a, A> Element<'a, A> {
         }
         node.interaction = std::mem::replace(&mut self.interaction, Interaction::None);
         node.background = self.background;
-        node.glass_spec = self.glass;
         node.tooltip = self.tooltip.take();
         node.cursor = self.cursor;
         node.focus_ring = self.focus_ring;
@@ -621,6 +589,7 @@ pub fn spacer<'a, A>(size: f32) -> Element<'a, A> {
         size: Size::new(Length::Fixed(0.0), Length::Fixed(size)),
         ..Layout::column()
     })
+    .with_content(Content::Empty)
 }
 
 pub fn place<'a, A>(

@@ -1,23 +1,22 @@
 use glam::Vec2;
 use grana_session::{RecentKind, SessionView};
-use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, TextStyle,
-    Ui,
+    Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
+    State, TextStyle, Ui,
 };
 
 use crate::command::{Action, Group, Scope, Shortcut};
 use crate::message::Message;
 use crate::state::Workspace;
 
-const WIDTH: f32 = 560.0;
-const TOP: f32 = 92.0;
+const WIDTH: f32 = 540.0;
+const TOP: f32 = 84.0;
 const PADDING: f32 = 8.0;
-const FIELD: f32 = 42.0;
-const ROW: f32 = 32.0;
-const HEADER: f32 = 20.0;
-const FOOTER: f32 = 20.0;
-const DIVIDER: f32 = 9.0;
+const FIELD: f32 = 36.0;
+const ROW: f32 = 28.0;
+const HEADER: f32 = 18.0;
+const FOOTER: f32 = 18.0;
+const DIVIDER: f32 = 7.0;
 pub(crate) const VISIBLE: usize = 9;
 
 pub struct Entry {
@@ -234,7 +233,7 @@ pub(crate) fn view<'a>(
         Vec2::new(full.center().x - 0.5 * width, full.min.y + TOP),
         Vec2::new(width, height),
     );
-    let backdrop = palette_colors.scene_backdrop.with_alpha(0.42);
+    let backdrop = palette_colors.scene_backdrop.with_alpha(0.45);
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
             painter.rect(info.rect, Corners::ZERO, backdrop);
@@ -246,29 +245,29 @@ pub(crate) fn view<'a>(
     ];
     let theme = *ctx.theme();
     let field_style = TextStyle::new(theme.font(Level::Callout), theme.palette.text_primary);
-    let field = grana_ui::widget::text_field("", field_style, width - 2.0 * PADDING - 34.0, false)
+    let field = grana_ui::widget::text_field("", field_style, width - 2.0 * PADDING - 32.0, false)
         .key(Key::new("palette.field"))
         .editing(true)
         .on_commit(|_| Message::RunSelected)
         .on_cancel(|| Message::ClosePalette);
-    let search = grana_ui::canvas(Length::Fixed(24.0), 24.0, move |painter, info| {
+    let search = grana_ui::canvas(Length::Fixed(22.0), 22.0, move |painter, info| {
         grana_ui::icon::paint(
             Icon::Search,
             painter,
             info.rect.center(),
-            14.0,
+            13.5,
             theme.palette.text_tertiary,
             1.5,
         );
     });
     let mut children = vec![
         grana_ui::row()
-            .gap(8.0)
+            .gap(6.0)
             .align(Align::Center)
             .height(Length::Fixed(FIELD))
             .padding(Edges {
-                left: 6.0,
-                right: 6.0,
+                left: 4.0,
+                right: 4.0,
                 top: 0.0,
                 bottom: 0.0,
             })
@@ -302,13 +301,14 @@ pub(crate) fn view<'a>(
         );
     }
     children.push(footer(ctx));
+    let surface = theme.surface(Role::Popover, State::Rest);
     elements.push(
         grana_ui::column()
             .at(rect)
             .named("palette")
             .padding(Edges::all(PADDING))
             .gap(0.0)
-            .glass(GlassStyle::popover())
+            .background(surface)
             .layer(Layer::Popup)
             .children(children),
     );
@@ -332,8 +332,8 @@ fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
 fn group_header<'a>(ctx: &mut BuildContext<'_, Message>, group: Group) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
     let font = grana_ui::TypeStyle {
-        tracking: 0.7,
-        ..grana_ui::TypeStyle::new(10.0, 600.0, 14.0)
+        tracking: 0.6,
+        ..grana_ui::TypeStyle::new(9.5, 600.0, 13.0)
     };
     let title = group.title(ctx.language()).to_uppercase();
     grana_ui::canvas(Length::Fill, HEADER, move |painter, info| {
@@ -355,8 +355,9 @@ fn row<'a>(
     index: usize,
     selected: bool,
 ) -> Element<'a, Message> {
-    let palette = ctx.theme().palette;
     let theme = *ctx.theme();
+    let palette = theme.palette;
+    let radius = theme.metrics.radius;
     let symbol = entry.symbol;
     let title = entry.title.clone();
     let shortcut = entry.shortcut.map(Shortcut::label);
@@ -368,15 +369,19 @@ fn row<'a>(
         if engaged > 0.01 {
             painter.rect(
                 rect,
-                Corners::all(8.0),
-                palette.selected.amplify(0.9 * engaged),
+                Corners::all(radius),
+                if selected {
+                    palette.accent.with_alpha(0.22)
+                } else {
+                    palette.selected.amplify(0.8 * engaged)
+                },
             );
         }
         grana_ui::icon::paint(
             symbol,
             painter,
-            Vec2::new(rect.min.x + 16.0, rect.center().y),
-            13.0,
+            Vec2::new(rect.min.x + 14.0, rect.center().y),
+            12.5,
             palette.text_secondary.lerp(palette.text_primary, engaged),
             1.5,
         );
@@ -385,7 +390,7 @@ fn row<'a>(
         });
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.min.x + 30.0, rect.min.y),
+                Vec2::new(rect.min.x + 28.0, rect.min.y),
                 Vec2::new(rect.max.x - shortcut_width, rect.max.y),
             ),
             &title,
@@ -394,7 +399,7 @@ fn row<'a>(
         );
         if let Some(label) = &shortcut {
             painter.text_in(
-                rect.shrink2(Vec2::new(10.0, 0.0)),
+                rect.shrink2(Vec2::new(8.0, 0.0)),
                 label,
                 shortcut_style.aligned(Align::End),
                 Align::Center,
@@ -403,7 +408,7 @@ fn row<'a>(
     })
     .key(Key::index("palette.row", index))
     .press(Message::RunPaletteIndex(index))
-    .focus_ring(Corners::all(8.0))
+    .focus_ring(Corners::all(radius))
 }
 
 fn footer<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {

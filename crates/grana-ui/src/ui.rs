@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 
 use glam::Vec2;
-use grana_glass::{Animated, ContainerId, GlassId, Scene as GlassScene};
 use grana_i18n::Language;
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
-use crate::geometry::{Corners, Rect};
+use crate::geometry::Rect;
 use crate::image::ImageAtlas;
 use crate::input::{Cursor, Input, Key as InputKey};
 use crate::layout::LayoutEngine;
-use crate::motion::Motion;
+use crate::motion::{Animated, Motion};
 use crate::node::NodeId;
 use crate::paint::{Clip, Instance, LayerInstances, Painter};
 use crate::render::{PaintFrame, Renderer};
@@ -20,13 +19,6 @@ use crate::tree::Tree;
 
 pub(crate) const CLICK_SLOP: f32 = 3.0;
 pub(crate) const TOOLTIP_DELAY: f32 = 0.55;
-
-#[derive(Clone, Copy)]
-pub(crate) struct PopupTransition {
-    pub glass: GlassId,
-    pub anchor: GlassId,
-    pub body: Rect,
-}
 
 #[derive(Default)]
 pub(crate) struct LayerChange {
@@ -55,15 +47,6 @@ pub struct Ui<A = ()> {
     pub(crate) input: Input,
     pub(crate) tree: Tree<A>,
     pub(crate) animations: HashMap<u64, Animated>,
-    pub(crate) scene: GlassScene,
-    pub(crate) glass_nodes: HashMap<NodeId, GlassId>,
-    pub(crate) glass_groups: HashMap<Key, ContainerId>,
-    pub(crate) tooltip_glass: Option<GlassId>,
-    pub(crate) sub_glass: HashMap<NodeId, Vec<GlassId>>,
-    pub(crate) popup_glass: HashMap<NodeId, PopupTransition>,
-    pub(crate) popup_windows: HashMap<NodeId, (Rect, Corners)>,
-    pub(crate) popup_retire: Vec<(GlassId, GlassId)>,
-    pub(crate) floating: Option<ContainerId>,
     pub(crate) layers: [LayerInstances; Layer::ALL.len()],
     pub(crate) change: LayerChange,
     pub(crate) scale: f32,
@@ -108,15 +91,6 @@ impl<A: Clone> Ui<A> {
             input: Input::new(),
             tree: Tree::new(),
             animations: HashMap::new(),
-            scene: GlassScene::new(),
-            glass_nodes: HashMap::new(),
-            glass_groups: HashMap::new(),
-            tooltip_glass: None,
-            sub_glass: HashMap::new(),
-            popup_glass: HashMap::new(),
-            popup_windows: HashMap::new(),
-            popup_retire: Vec::new(),
-            floating: None,
             layers: std::array::from_fn(|_| LayerInstances::default()),
             change: LayerChange::default(),
             scale: 1.0,
@@ -196,7 +170,13 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn set_accessibility(&mut self, accessibility: Accessibility) {
+        if self.accessibility == accessibility {
+            return;
+        }
         self.accessibility = accessibility;
+        self.theme = Theme::dark()
+            .with_contrast(accessibility.increase_contrast)
+            .with_transparency(accessibility.reduce_transparency);
     }
 
     pub fn copy(&mut self, text: &str) {
@@ -344,16 +324,11 @@ impl<A: Clone> Ui<A> {
         }
         self.text.begin(scale);
         self.actions.clear();
-        self.occluders.clear();
         self.cursor = Cursor::Arrow;
         self.animating = false;
         self.edit_caret = None;
         self.inside = self.input.inside();
         self.pointer = self.input.position();
-        self.scene.appearance.dark = true;
-        self.scene.appearance.transparency = 0.5;
-        self.scene.appearance.reduce_transparency = self.accessibility.reduce_transparency;
-        self.scene.appearance.increase_contrast = self.accessibility.increase_contrast;
         if resized || rescaled {
             self.tree.mark_dirty();
             self.change.reset = true;
@@ -379,17 +354,10 @@ impl<A: Clone> Ui<A> {
         self.prune(&removed);
         self.sync_fields();
         self.rebuild_popup_anchors();
-        self.collect_popup_windows();
         if self.tree.layout_dirty {
             self.run_layout();
         }
-        if self.ensure_popups() {
-            self.collect_popup_windows();
-            self.run_layout();
-            self.change.restructured = true;
-        }
         self.paint_layers(&canvases);
-        self.sync_glass();
         self.update_tooltip();
         self.paint_overlays();
         self.change.touched[Layer::Hud.index()] = true;
@@ -399,7 +367,6 @@ impl<A: Clone> Ui<A> {
         let mut engine = LayoutEngine {
             text: &mut self.text,
             theme: &self.theme,
-            windows: &self.popup_windows,
             screen: self.size,
         };
         engine.run(&mut self.tree);
@@ -408,14 +375,11 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn finish(&mut self) -> bool {
-        let animating_glass = self.scene.update(self.elapsed);
-        let glass_changed = self.scene.take_dirty();
-        self.retire_popup_anchors();
         self.text.flush(self.renderer.queue());
         self.images.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
-        self.measure_layers(glass_changed);
-        self.animating || animating_glass || !self.popup_retire.is_empty()
+        self.measure_layers();
+        self.animating
     }
 
     pub fn render(
@@ -424,15 +388,12 @@ impl<A: Clone> Ui<A> {
         target: &wgpu::TextureView,
         scene: Option<&wgpu::TextureView>,
     ) {
-        let base_changed = self.change.base || self.change.reset;
-        let interface_changed = self.change.interface || base_changed;
         {
             let Self {
                 renderer,
                 text,
                 images,
                 layers,
-                scene: glass,
                 ..
             } = self;
             renderer.paint(
@@ -446,12 +407,8 @@ impl<A: Clone> Ui<A> {
                     },
                     content: &layers[Layer::Content.index()].material,
                     chrome: &layers[Layer::Chrome.index()],
-                    labels: &layers[Layer::Labels.index()],
                     popup: &layers[Layer::Popup.index()],
                     hud: &layers[Layer::Hud.index()],
-                    glass,
-                    base_changed,
-                    interface_changed,
                 },
             );
         }
@@ -632,8 +589,4 @@ impl<A> BuildContext<'_, A> {
     pub fn pointer(&self) -> Vec2 {
         self.pointer
     }
-}
-
-pub(crate) fn glass_rect(rect: Rect) -> grana_glass::Rect {
-    grana_glass::Rect::new(rect.min.x, rect.min.y, rect.width(), rect.height())
 }

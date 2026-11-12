@@ -4,6 +4,9 @@ use crate::style::{Border, Fill, Shadow, State, Surface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
+    Panel,
+    Hud,
+    Popover,
     Card,
     Control,
     Prominent,
@@ -74,6 +77,7 @@ pub struct Palette {
     pub separator: Color,
     pub border: Color,
     pub selected: Color,
+    pub panel: Color,
     pub card: Color,
     pub field: Color,
     pub focus: Color,
@@ -85,6 +89,7 @@ pub struct Palette {
     pub material_border: Color,
     pub hud_fill: Color,
     pub hud_border: Color,
+    pub popover_fill: Color,
     pub track: Color,
     pub shade: Color,
 }
@@ -92,33 +97,35 @@ pub struct Palette {
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text_primary: Color::white_alpha(0.95),
-            text_secondary: Color::white_alpha(0.74),
-            text_tertiary: Color::white_alpha(0.52),
-            text_quaternary: Color::white_alpha(0.30),
+            text_primary: Color::white_alpha(0.94),
+            text_secondary: Color::white_alpha(0.72),
+            text_tertiary: Color::white_alpha(0.50),
+            text_quaternary: Color::white_alpha(0.28),
             text_on_accent: Color::bytes(255, 255, 255),
             accent: Color::bytes(10, 132, 255),
-            accent_hover: Color::bytes(64, 156, 255),
-            accent_press: Color::bytes(0, 112, 224),
+            accent_hover: Color::bytes(56, 152, 255),
+            accent_press: Color::bytes(0, 110, 224),
             danger: Color::bytes(255, 69, 58),
             warning: Color::bytes(255, 159, 10),
             success: Color::bytes(48, 209, 88),
-            separator: Color::white_alpha(0.09),
-            border: Color::white_alpha(0.14),
-            selected: Color::white_alpha(0.17),
-            card: Color::white_alpha(0.055),
-            field: Color::black_alpha(0.24),
+            separator: Color::white_alpha(0.08),
+            border: Color::white_alpha(0.12),
+            selected: Color::white_alpha(0.14),
+            panel: Color::rgba(0.075, 0.082, 0.098, 0.98),
+            card: Color::rgba(0.110, 0.118, 0.141, 0.96),
+            field: Color::rgba(0.047, 0.051, 0.063, 0.96),
             focus: Color::bytes(10, 132, 255),
-            scrim: Color::rgba(0.0, 0.0, 0.0, 0.55),
-            scene_backdrop: Color::bytes(6, 6, 8),
-            material_fill: Color::white_alpha(0.10),
-            material_hover: Color::white_alpha(0.16),
-            material_press: Color::white_alpha(0.24),
-            material_border: Color::white_alpha(0.13),
-            hud_fill: Color::rgba(0.03, 0.03, 0.04, 0.66),
+            scrim: Color::rgba(0.0, 0.0, 0.0, 0.58),
+            scene_backdrop: Color::bytes(7, 8, 10),
+            material_fill: Color::white_alpha(0.09),
+            material_hover: Color::white_alpha(0.15),
+            material_press: Color::white_alpha(0.22),
+            material_border: Color::white_alpha(0.10),
+            hud_fill: Color::rgba(0.082, 0.090, 0.110, 0.78),
             hud_border: Color::white_alpha(0.14),
-            track: Color::white_alpha(0.18),
-            shade: Color::black_alpha(0.30),
+            popover_fill: Color::rgba(0.094, 0.102, 0.125, 0.90),
+            track: Color::white_alpha(0.16),
+            shade: Color::black_alpha(0.42),
         }
     }
 
@@ -134,6 +141,17 @@ impl Palette {
             material_border: lift(self.material_border),
             hud_border: lift(self.hud_border),
             track: lift(self.track),
+            ..self
+        }
+    }
+
+    pub fn opaque(self) -> Self {
+        Self {
+            panel: self.panel.with_alpha(1.0),
+            card: self.card.with_alpha(1.0),
+            field: self.field.with_alpha(1.0),
+            hud_fill: self.hud_fill.with_alpha(0.98),
+            popover_fill: self.popover_fill.with_alpha(0.99),
             ..self
         }
     }
@@ -157,6 +175,7 @@ pub struct Metrics {
     pub gap: f32,
     pub radius: f32,
     pub card_radius: f32,
+    pub panel_radius: f32,
     pub hairline: f32,
     pub track: f32,
     pub thumb: f32,
@@ -167,16 +186,17 @@ pub struct Metrics {
 impl Metrics {
     pub const fn standard() -> Self {
         Self {
-            control_height: 28.0,
-            row_height: 30.0,
-            gap: 8.0,
-            radius: 12.0,
-            card_radius: 16.0,
+            control_height: 26.0,
+            row_height: 28.0,
+            gap: 6.0,
+            radius: 6.0,
+            card_radius: 8.0,
+            panel_radius: 10.0,
             hairline: 1.0,
             track: 4.0,
-            thumb: 20.0,
-            switch_width: 46.0,
-            switch_height: 26.0,
+            thumb: 14.0,
+            switch_width: 34.0,
+            switch_height: 18.0,
         }
     }
 }
@@ -196,19 +216,19 @@ pub struct Typography {
 impl Typography {
     pub const fn standard() -> Self {
         Self {
-            large_title: TypeStyle::new(24.0, 700.0, 30.0),
-            title: TypeStyle::new(17.0, 600.0, 22.0),
-            headline: TypeStyle::new(15.0, 600.0, 20.0),
-            body: TypeStyle::new(13.0, 400.0, 18.0),
-            callout: TypeStyle::new(12.0, 400.0, 16.0),
-            caption: TypeStyle::new(11.0, 400.0, 14.0),
+            large_title: TypeStyle::new(22.0, 700.0, 28.0),
+            title: TypeStyle::new(16.0, 600.0, 21.0),
+            headline: TypeStyle::new(14.0, 600.0, 18.0),
+            body: TypeStyle::new(12.5, 400.0, 17.0),
+            callout: TypeStyle::new(11.5, 400.0, 15.0),
+            caption: TypeStyle::new(10.5, 400.0, 14.0),
             micro: TypeStyle {
-                size: 10.0,
+                size: 9.5,
                 weight: 500.0,
-                tracking: 0.2,
-                leading: 13.0,
+                tracking: 0.25,
+                leading: 12.0,
             },
-            monospace: TypeStyle::new(11.0, 400.0, 15.0),
+            monospace: TypeStyle::new(11.0, 400.0, 14.0),
         }
     }
 
@@ -231,6 +251,7 @@ pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
     pub metrics: Metrics,
+    pub reduce_transparency: bool,
 }
 
 impl Theme {
@@ -239,6 +260,7 @@ impl Theme {
             palette: Palette::dark(),
             typography: Typography::standard(),
             metrics: Metrics::standard(),
+            reduce_transparency: false,
         }
     }
 
@@ -246,6 +268,18 @@ impl Theme {
         if contrast {
             Self {
                 palette: self.palette.contrasted(),
+                ..self
+            }
+        } else {
+            self
+        }
+    }
+
+    pub fn with_transparency(self, reduce_transparency: bool) -> Self {
+        if reduce_transparency {
+            Self {
+                palette: self.palette.opaque(),
+                reduce_transparency: true,
                 ..self
             }
         } else {
@@ -268,7 +302,7 @@ impl Theme {
     }
 
     pub fn button_font(&self) -> TypeStyle {
-        self.typography.body.medium()
+        self.typography.callout.medium()
     }
 
     pub fn label_font(&self) -> TypeStyle {
@@ -281,12 +315,13 @@ impl Theme {
         let disabled = state == State::Disabled;
         let hovered = state == State::Hover;
         let pressed = state == State::Pressed;
-        let interactive = hovered || pressed;
+        let selected = state == State::Selected;
+        let interactive = hovered || pressed || selected;
         let tint = if disabled {
-            Color::TRANSPARENT
+            palette.material_fill.with_alpha(0.04)
         } else if pressed {
             palette.material_press
-        } else if hovered {
+        } else if hovered || selected {
             palette.material_hover
         } else {
             palette.material_fill
@@ -296,9 +331,50 @@ impl Theme {
         } else {
             palette.text_primary
         };
+        let blur = |radius: f32| {
+            if self.reduce_transparency {
+                0.0
+            } else {
+                radius
+            }
+        };
         match role {
+            Role::Panel => Surface {
+                fill: Fill::Solid(palette.panel),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.panel_radius),
+                border: Border {
+                    width: metrics.hairline,
+                    color: palette.border,
+                },
+                shadow: Shadow::new(Color::black_alpha(0.46), 18.0, 5.0),
+                text,
+            },
+            Role::Hud => Surface {
+                fill: Fill::Solid(palette.hud_fill),
+                backdrop: blur(16.0),
+                corners: Corners::all(metrics.panel_radius),
+                border: Border {
+                    width: metrics.hairline,
+                    color: palette.hud_border,
+                },
+                shadow: Shadow::new(Color::black_alpha(0.38), 14.0, 4.0),
+                text,
+            },
+            Role::Popover => Surface {
+                fill: Fill::Solid(palette.popover_fill),
+                backdrop: blur(22.0),
+                corners: Corners::all(metrics.panel_radius),
+                border: Border {
+                    width: metrics.hairline,
+                    color: palette.hud_border,
+                },
+                shadow: Shadow::new(Color::black_alpha(0.54), 22.0, 7.0),
+                text,
+            },
             Role::Card => Surface {
                 fill: Fill::Solid(palette.card),
+                backdrop: 0.0,
                 corners: Corners::all(metrics.card_radius),
                 border: Border {
                     width: metrics.hairline,
@@ -308,30 +384,30 @@ impl Theme {
                 text,
             },
             Role::Control => Surface {
-                fill: Fill::Gradient(
-                    if disabled { Color::TRANSPARENT } else { tint },
-                    if disabled {
-                        Color::TRANSPARENT
-                    } else {
-                        tint.with_alpha(tint.alpha * 0.72)
-                    },
-                ),
-                corners: Corners::capsule(),
+                fill: Fill::Gradient(tint, tint.with_alpha(tint.alpha * 0.82)),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border {
                     width: metrics.hairline,
                     color: if disabled {
-                        Color::TRANSPARENT
+                        palette.material_border.with_alpha(0.04)
+                    } else if interactive {
+                        palette.border
                     } else {
                         palette.material_border
                     },
                 },
-                shadow: Shadow::NONE,
+                shadow: if disabled {
+                    Shadow::NONE
+                } else {
+                    Shadow::new(Color::black_alpha(0.18), 3.0, 1.0)
+                },
                 text,
             },
             Role::Prominent => Surface {
                 fill: Fill::Gradient(
                     if disabled {
-                        palette.accent.with_alpha(0.3)
+                        palette.accent.with_alpha(0.28)
                     } else if pressed {
                         palette.accent_press
                     } else if hovered {
@@ -340,21 +416,26 @@ impl Theme {
                         palette.accent
                     },
                     if disabled {
-                        palette.accent.with_alpha(0.24)
+                        palette.accent.with_alpha(0.22)
                     } else if pressed {
                         palette.accent_press
                     } else {
-                        palette.accent.with_alpha(0.88)
+                        palette.accent.with_alpha(0.90)
                     },
                 ),
-                corners: Corners::capsule(),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border {
                     width: metrics.hairline,
-                    color: Color::white_alpha(0.22),
+                    color: Color::white_alpha(if disabled { 0.08 } else { 0.22 }),
                 },
-                shadow: Shadow::new(Color::black_alpha(0.22), 10.0, 3.0),
+                shadow: if disabled {
+                    Shadow::NONE
+                } else {
+                    Shadow::new(Color::black_alpha(0.28), 6.0, 2.0)
+                },
                 text: if disabled {
-                    palette.text_on_accent.with_alpha(0.5)
+                    palette.text_on_accent.with_alpha(0.45)
                 } else {
                     palette.text_on_accent
                 },
@@ -365,7 +446,8 @@ impl Theme {
                 } else {
                     tint
                 }),
-                corners: Corners::capsule(),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: if disabled {
@@ -373,13 +455,13 @@ impl Theme {
                 } else {
                     palette
                         .text_secondary
-                        .lerp(palette.text_primary, f32::from(hovered || pressed))
+                        .lerp(palette.text_primary, f32::from(interactive))
                 },
             },
             Role::Tinted => Surface {
                 fill: Fill::Gradient(
                     if disabled {
-                        palette.accent.with_alpha(0.12)
+                        palette.accent.with_alpha(0.10)
                     } else if pressed {
                         palette.accent.with_alpha(0.36)
                     } else if hovered {
@@ -388,37 +470,32 @@ impl Theme {
                         palette.accent.with_alpha(0.20)
                     },
                     if disabled {
-                        palette.accent.with_alpha(0.10)
+                        palette.accent.with_alpha(0.08)
                     } else {
-                        palette.accent.with_alpha(0.14)
+                        palette.accent.with_alpha(0.15)
                     },
                 ),
-                corners: Corners::capsule(),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border {
                     width: metrics.hairline,
-                    color: palette.accent.with_alpha(if pressed { 0.5 } else { 0.28 }),
+                    color: palette.accent.with_alpha(if pressed { 0.55 } else { 0.36 }),
                 },
                 shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Field => Surface {
-                fill: Fill::Gradient(
-                    if disabled {
-                        palette.field.with_alpha(0.4)
-                    } else {
-                        palette.field
-                    },
-                    if disabled {
-                        palette.field.with_alpha(0.3)
-                    } else {
-                        palette.field.with_alpha(palette.field.alpha * 0.86)
-                    },
-                ),
-                corners: Corners::all(10.0),
+                fill: Fill::Solid(if disabled {
+                    palette.field.with_alpha(0.5)
+                } else {
+                    palette.field
+                }),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border {
                     width: metrics.hairline,
                     color: if interactive && !disabled {
-                        palette.border.with_alpha(0.26)
+                        palette.border.with_alpha(0.24)
                     } else {
                         palette.material_border
                     },
@@ -434,7 +511,8 @@ impl Theme {
                 } else {
                     Color::TRANSPARENT
                 }),
-                corners: Corners::capsule(),
+                backdrop: 0.0,
+                corners: Corners::all(metrics.radius),
                 border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: if disabled {

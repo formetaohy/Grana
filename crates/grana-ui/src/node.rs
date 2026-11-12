@@ -1,20 +1,17 @@
 use glam::Vec2;
-use grana_glass::{Animated, Spring};
 use slotmap::DefaultKey;
 
 use crate::edit::Edit;
-use crate::element::{
-    Axis, Content, ContentKind, Glass, Interaction, Key, Layer, Layout, Popup, Scroll,
-};
+use crate::element::{Axis, Content, ContentKind, Interaction, Key, Layer, Layout, Popup, Scroll};
 use crate::geometry::{Corners, Rect};
-use crate::glass::GlassStyle;
 use crate::input::Cursor;
-use crate::paint::{LayerInstances, SubGlass};
+use crate::motion::{Animated, Spring};
+use crate::paint::LayerInstances;
 use crate::style::Surface;
 
 pub type NodeId = DefaultKey;
 
-pub const SPRING: Spring = Spring::new(0.18, 0.0);
+pub const SPRING: Spring = Spring::new(0.16, 0.0);
 
 pub(crate) struct Runtime {
     pub hover: Animated,
@@ -95,9 +92,6 @@ pub(crate) struct Node<A> {
     pub content: Content,
     pub interaction: Interaction<A>,
     pub background: Option<Surface>,
-    pub glass_spec: Option<Glass>,
-    pub glass_style: Option<GlassStyle>,
-    pub glass_rect: Option<Rect>,
     pub layer: Layer,
     pub layer_explicit: bool,
     pub position: Option<Rect>,
@@ -122,7 +116,6 @@ pub(crate) struct Node<A> {
     pub clip: Rect,
     pub clip_corners: Corners,
     pub paint: LayerInstances,
-    pub sub_glass: Vec<SubGlass>,
     pub paint_dirty: bool,
     pub visible: bool,
 }
@@ -145,9 +138,6 @@ impl<A> Node<A> {
             content,
             interaction,
             background: None,
-            glass_spec: None,
-            glass_style: None,
-            glass_rect: None,
             layer: Layer::Chrome,
             layer_explicit: false,
             position: None,
@@ -172,7 +162,6 @@ impl<A> Node<A> {
             clip: Rect::ZERO,
             clip_corners: Corners::ZERO,
             paint: LayerInstances::default(),
-            sub_glass: Vec::new(),
             paint_dirty: true,
             visible: true,
         }
@@ -183,6 +172,6 @@ impl<A> Node<A> {
     }
 
     pub fn scroll_axis(&self) -> Axis {
-        self.scroll_spec.map_or(Axis::Column, |spec| spec.axis)
+        self.scroll_spec.map_or(Axis::Column, |scroll| scroll.axis)
     }
 }

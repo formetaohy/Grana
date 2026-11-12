@@ -4,7 +4,7 @@ use crate::content::Content;
 use crate::element::Layout;
 use crate::geometry::{Corners, Rect};
 use crate::input::Cursor;
-use crate::motion::Motion;
+use crate::motion::{Animated, Motion};
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::text::Text;
@@ -19,10 +19,7 @@ pub(crate) mod segment;
 pub(crate) mod slider;
 pub(crate) mod toggle;
 
-pub use button::{
-    action_button, button, button_enabled, button_width, glass_icon_button,
-    glass_icon_button_disabled, icon_button,
-};
+pub use button::{action_button, button, button_enabled, button_width, icon_button};
 pub use color::color_picker;
 pub use field::text_field;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
@@ -31,12 +28,9 @@ pub use segment::{segmented, segmented_fill, tabs};
 pub use slider::{drag_value, gradient_bar, progress, range_slider, slider_readout, slider_sized};
 pub use toggle::{checkbox, toggle, toggle_row};
 
-pub(crate) use crate::paint::SubGlass;
-
 pub struct PaintInfo<'a> {
     pub theme: &'a Theme,
     pub rect: Rect,
-    pub glass: Option<Rect>,
     pub hover: f32,
     pub press: f32,
     pub engaged: f32,
@@ -80,7 +74,7 @@ pub(crate) fn measure(
         Content::Spinner(spinner) => (Vec2::splat(spinner.size), None),
         Content::Progress(progress) => (Vec2::new(progress.width, 4.0), None),
         Content::GradientBar(bar) => (Vec2::new(available.x, bar.height), None),
-        Content::Labelled(_) => (Vec2::new(available.x, 22.0), None),
+        Content::Labelled(_) => (Vec2::new(available.x, 20.0), None),
         Content::ColorSwatch(swatch) => (Vec2::splat(swatch.size), None),
         Content::ColorPicker(_) => (color::measure(), None),
         Content::Separator => (Vec2::new(available.x, menu::SEPARATOR), None),
@@ -99,7 +93,6 @@ pub(crate) fn paint(
     runtime: &Runtime,
     painter: &mut Painter,
     info: &PaintInfo<'_>,
-    glass: &mut Vec<SubGlass>,
 ) -> Option<Rect> {
     match content {
         Content::Empty | Content::Canvas => None,
@@ -122,7 +115,7 @@ pub(crate) fn paint(
             None
         }
         Content::Toggle(toggle) => {
-            toggle::paint_toggle(toggle, runtime, painter, info, glass);
+            toggle::paint_toggle(toggle, runtime, painter, info);
             None
         }
         Content::Checkbox(checkbox) => {
@@ -130,19 +123,19 @@ pub(crate) fn paint(
             None
         }
         Content::Slider(slider) => {
-            slider::paint_slider(slider, runtime, painter, info, glass);
+            slider::paint_slider(slider, runtime, painter, info);
             None
         }
         Content::RangeSlider(range) => {
-            slider::paint_range(range, runtime, painter, info, glass);
+            slider::paint_range(range, runtime, painter, info);
             None
         }
         Content::Segment(segment) => {
-            segment::paint_segment(segment, runtime, painter, info, glass);
+            segment::paint_segment(segment, runtime, painter, info);
             None
         }
         Content::Tabs(tabs) => {
-            segment::paint_tabs(tabs, runtime, painter, info, glass);
+            segment::paint_tabs(tabs, runtime, painter, info);
             None
         }
         Content::DragValue(drag) => {
@@ -203,9 +196,9 @@ pub(crate) fn animate<A>(
     let hovered = frame.hovered && interactive;
     let active = frame.pressed && interactive;
     let press = if active {
-        Motion::response(0.22, 0.0)
+        Motion::response(0.14, 0.0)
     } else {
-        Motion::bouncy()
+        Motion::snappy()
     };
     node.runtime
         .hover
@@ -230,8 +223,8 @@ pub(crate) fn animate<A>(
                 node.runtime.extent.animate_to(target.1, motion.spring());
             }
         } else {
-            node.runtime.value = grana_glass::Animated::new(target.0, motion.spring());
-            node.runtime.extent = grana_glass::Animated::new(target.1, motion.spring());
+            node.runtime.value = Animated::new(target.0, motion.spring());
+            node.runtime.extent = Animated::new(target.1, motion.spring());
             node.runtime.seeded = true;
             node.paint_dirty = true;
         }
@@ -289,20 +282,19 @@ pub(crate) fn hit_rect<A>(node: &Node<A>, text: &mut Text, theme: &Theme) -> Rec
 
 pub(crate) fn focus_corners(content: &Content, theme: &Theme) -> Corners {
     match content {
+        Content::Toggle(_) => Corners::capsule(),
+        Content::Checkbox(_) | Content::ColorSwatch(_) => Corners::all(4.0),
         Content::Button(_)
         | Content::IconButton(_)
-        | Content::Toggle(_)
-        | Content::Checkbox(_)
         | Content::Segment(_)
         | Content::Tabs(_)
-        | Content::RangeSlider(_) => Corners::capsule(),
-        Content::Slider(_) => Corners::all(theme.metrics.radius),
-        Content::DragValue(_)
+        | Content::Slider(_)
+        | Content::RangeSlider(_)
+        | Content::DragValue(_)
         | Content::Field(_)
         | Content::MenuRow(_)
         | Content::ActionRow(_)
-        | Content::ColorPicker(_) => Corners::all(10.0),
-        Content::ColorSwatch(_) => Corners::all(5.0),
+        | Content::ColorPicker(_) => Corners::all(theme.metrics.radius),
         _ => Corners::ZERO,
     }
 }
@@ -328,9 +320,5 @@ pub(crate) fn cursor(content: &Content) -> Option<Cursor> {
 }
 
 pub(crate) fn padding(theme: &Theme) -> f32 {
-    (theme.metrics.control_height * 0.5).round() - 3.0
-}
-
-pub(crate) fn press_grow(press: f32) -> f32 {
-    1.4 * press
+    (theme.metrics.control_height * 0.42).round()
 }

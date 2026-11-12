@@ -1,9 +1,8 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Handle, Label, Legend, Viewport};
-use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    BuildContext, Color, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, TextStyle,
-    TypeStyle, icon,
+    BuildContext, Color, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
+    State, TextStyle, TypeStyle, icon,
 };
 
 use crate::message::Message;
@@ -109,18 +108,19 @@ fn mask_bar<'a>(
             .press(Message::DisarmMask),
         ]),
     );
-    let width = 240.0;
-    let height = 34.0 + 30.0 + 34.0 + 6.0 + 30.0 + 12.0;
+    let width = 236.0;
+    let height = 136.0;
     let safe = layout.content().shrink(STAGE_INSET);
     let rect = Rect::from_min_size(
         Vec2::new(safe.min.x, (safe.max.y - height).max(safe.min.y)),
         Vec2::new(width, height),
     );
+    let surface = ctx.theme().surface(Role::Popover, State::Rest);
     vec![
         grana_ui::column()
-            .padding(Edges::all(12.0))
+            .padding(Edges::all(10.0))
             .gap(6.0)
-            .glass(GlassStyle::sheet())
+            .background(surface)
             .children(rows)
             .at(rect)
             .layer(Layer::Popup),
@@ -137,7 +137,7 @@ pub(crate) fn remote<'a>(
     }
     let palette = ctx.theme().palette;
     let language = ctx.language();
-    let width = (stage.width() - 40.0).min(520.0);
+    let width = (stage.width() - 40.0).min(500.0);
     let title = crate::view::card_title(
         ctx,
         Icon::Globe,
@@ -148,7 +148,7 @@ pub(crate) fn remote<'a>(
     let field = grana_ui::widget::text_field(
         "",
         TextStyle::new(ctx.theme().font(Level::Body), palette.text_primary),
-        width - 36.0,
+        width - 32.0,
         false,
     )
     .named("remote.url")
@@ -156,14 +156,15 @@ pub(crate) fn remote<'a>(
     .on_commit(|text: &str| Message::OpenRemote(text.to_string()))
     .on_cancel(|| Message::CancelRemote);
     let hint = crate::view::caption(ctx, grana_i18n::annotation::remote_hint(language));
+    let surface = ctx.theme().surface(Role::Popover, State::Rest);
     let sheet = grana_ui::column()
-        .padding(Edges::all(18.0))
+        .padding(Edges::all(16.0))
         .gap(8.0)
-        .glass(GlassStyle::sheet())
+        .background(surface)
         .children([title, tip, field, hint]);
     let rect = Rect::from_min_size(
-        Vec2::new(stage.center().x - width * 0.5, stage.min.y + 96.0),
-        Vec2::new(width, 158.0),
+        Vec2::new(stage.center().x - width * 0.5, stage.min.y + 92.0),
+        Vec2::new(width, 148.0),
     );
     vec![sheet.at(rect).layer(Layer::Popup)]
 }
@@ -247,7 +248,7 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
             let active = info.hover.max(info.press);
             painter.rect(
                 info.rect,
-                Corners::all(2.5),
+                Corners::all(2.0),
                 REGION.lerp(REGION_ACTIVE, active),
             );
         },
@@ -294,29 +295,33 @@ fn chip<'a>(
     title: &str,
     tint: Color,
 ) -> Element<'a, Message> {
-    let style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
+    let style = TextStyle::new(TypeStyle::new(11.0, 500.0, 14.0), tint);
     let maximum = (pane.width() - 64.0).max(96.0);
     let layout = ctx.layout_text(title, style, maximum);
-    let width = (layout.size.x + 42.0).min(maximum + 24.0);
-    grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
+    let width = (layout.size.x + 38.0).min(maximum + 24.0);
+    let surface = ctx
+        .theme()
+        .surface(Role::Hud, State::Rest)
+        .with_corners(Corners::all(6.0));
+    grana_ui::canvas(Length::Fixed(width), 24.0, move |painter, info| {
         let rect = info.rect;
         icon::paint(
             symbol,
             painter,
-            Vec2::new(rect.min.x + 15.0, rect.center().y),
-            13.0,
+            Vec2::new(rect.min.x + 13.0, rect.center().y),
+            12.0,
             tint,
             1.5,
         );
         painter.text(
             &layout,
-            Vec2::new(rect.min.x + 25.0, rect.min.y + 5.5),
+            Vec2::new(rect.min.x + 23.0, rect.min.y + 5.0),
             tint,
         );
     })
     .named(key)
-    .at(Rect::from_min_size(origin, Vec2::new(width, 26.0)))
-    .glass(GlassStyle::hud_chip())
+    .at(Rect::from_min_size(origin, Vec2::new(width, 24.0)))
+    .background(surface)
 }
 
 pub(super) fn toast<'a>(
@@ -330,14 +335,14 @@ pub(super) fn toast<'a>(
     let palette = ctx.theme().palette;
     let stage = layout.content().shrink(STAGE_INSET);
     let ceiling = stage.max.y;
-    let width = (stage.width() - 32.0).min(420.0);
+    let width = (stage.width() - 32.0).min(400.0);
     let style = TextStyle::new(
         ctx.theme().font(grana_ui::Level::Callout),
         palette.text_primary,
     )
     .wrapping();
-    let layout_text = ctx.layout_text(message.text(), style, width - 56.0);
-    let height = (layout_text.size.y + 22.0).max(42.0);
+    let layout_text = ctx.layout_text(message.text(), style, width - 52.0);
+    let height = (layout_text.size.y + 18.0).max(36.0);
     let rect = Rect::from_min_size(
         Vec2::new(stage.center().x - width * 0.5, ceiling - height),
         Vec2::new(width, height),
@@ -349,22 +354,23 @@ pub(super) fn toast<'a>(
     let appear = ctx.animate(
         Key::new(message.text()).id(),
         1.0,
-        grana_ui::Motion::response(0.25, 0.0),
+        grana_ui::Motion::response(0.2, 0.0),
     );
+    let surface = ctx.theme().surface(Role::Hud, State::Rest);
     vec![
         grana_ui::canvas(Length::Fill, height, move |painter, info| {
             let rect = info.rect;
             icon::paint(
                 mark,
                 painter,
-                Vec2::new(rect.min.x + 20.0, rect.center().y),
-                15.0,
+                Vec2::new(rect.min.x + 16.0, rect.center().y),
+                14.0,
                 tint.with_alpha(tint.alpha * appear),
-                1.6,
+                1.5,
             );
             painter.text(
                 &layout_text,
-                Vec2::new(rect.min.x + 38.0, rect.min.y + 11.0),
+                Vec2::new(rect.min.x + 32.0, rect.min.y + 9.0),
                 palette
                     .text_primary
                     .with_alpha(palette.text_primary.alpha * appear),
@@ -372,7 +378,7 @@ pub(super) fn toast<'a>(
         })
         .named("stage.toast")
         .at(rect)
-        .glass(GlassStyle::toast())
+        .background(surface)
         .layer(Layer::Hud),
     ]
 }

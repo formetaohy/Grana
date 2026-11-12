@@ -139,7 +139,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 if info.hover > 0.01 {
                     painter.rect(
                         info.rect,
-                        Corners::all(8.0),
+                        Corners::all(6.0),
                         Color::white_alpha(0.04 * info.hover),
                     );
                 }
@@ -164,7 +164,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                     Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 9.0),
                     Vec2::new(92.0, 18.0),
                 );
-                painter.rect(badge, Corners::capsule(), tint.with_alpha(0.16));
+                painter.rect(badge, Corners::all(4.0), tint.with_alpha(0.16));
                 painter.text_in(
                     badge,
                     &label,

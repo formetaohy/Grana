@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::element::Content;
+use crate::element::{Content, Layer};
 use crate::node::NodeId;
 use crate::ui::Ui;
 use crate::widget::FrameAnimation;
@@ -77,6 +77,20 @@ impl<A: Clone> Ui<A> {
             &self.theme,
         );
         self.hits = hits;
+        self.occluders.clear();
+        for &id in &self.tree.ids {
+            let node = &self.tree.nodes[id];
+            if !node.visible || node.rect.is_empty() || node.layer == Layer::Content {
+                continue;
+            }
+            let surface_visible = node
+                .background
+                .is_some_and(|surface| surface.fill.is_visible() || surface.backdrop > 0.0);
+            let popup_open = node.popup_spec.is_some() && node.runtime.open;
+            if surface_visible || popup_open {
+                self.occluders.push(node.rect);
+            }
+        }
     }
 
     pub(crate) fn rebuild_popup_anchors(&mut self) {
@@ -110,21 +124,6 @@ impl<A: Clone> Ui<A> {
         if self.hovered_since.is_some_and(|(id, _)| gone.contains(&id)) {
             self.hovered_since = None;
             self.tooltip = None;
-        }
-        for node in removed {
-            if let Some(transition) = self.popup_glass.remove(node) {
-                self.scene.remove(transition.glass);
-                self.popup_retire
-                    .push((transition.anchor, transition.glass));
-            }
-            if let Some(glass) = self.glass_nodes.remove(node) {
-                self.scene.remove(glass);
-            }
-            if let Some(ids) = self.sub_glass.remove(node) {
-                for glass in ids {
-                    self.scene.remove(glass);
-                }
-            }
         }
     }
 }

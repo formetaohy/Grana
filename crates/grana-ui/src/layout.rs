@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use glam::Vec2;
 
 use crate::element::{Axis, Content, Flow, Length, align_factor};
@@ -7,6 +5,7 @@ use crate::geometry::{Corners, Rect};
 use crate::node::NodeId;
 use crate::paint::Clip;
 use crate::text::{Align, Text};
+use crate::tree::Tree;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Loose {
@@ -18,12 +17,10 @@ impl Loose {
     pub const TIGHT: Self = Self { x: false, y: false };
     pub const LOOSE: Self = Self { x: true, y: true };
 }
-use crate::tree::Tree;
 
 pub struct LayoutEngine<'a> {
     pub text: &'a mut Text,
     pub theme: &'a crate::theme::Theme,
-    pub windows: &'a HashMap<NodeId, (Rect, Corners)>,
     pub screen: Vec2,
 }
 
@@ -54,18 +51,25 @@ impl<'a> LayoutEngine<'a> {
                 .popup_spec
                 .expect("the popup is present")
                 .width;
+            let padding = tree.nodes[id].layout.padding;
+            let gap = tree.nodes[id].layout.gap;
+            let inner_width = (width - padding.left - padding.right).max(0.0);
             tree.nodes[id].measured = Vec2::ZERO;
             tree.nodes[id].provisional = Vec2::ZERO;
             let mut height = 0.0f32;
-            for index in 0..tree.nodes[id].children.len() {
+            let count = tree.nodes[id].children.len();
+            for index in 0..count {
                 let child = tree.nodes[id].children[index];
-                let remaining = Vec2::new((width - 16.0).max(0.0), self.screen.y);
+                let remaining = Vec2::new(inner_width, self.screen.y);
                 self.measure(tree, child, remaining, Loose::LOOSE);
                 height += tree.nodes[child].measured.y;
+                if index + 1 < count {
+                    height += gap;
+                }
             }
-            tree.nodes[id].popup_height = height;
+            tree.nodes[id].popup_height = height + padding.top + padding.bottom;
             tree.nodes[id].content_main = height;
-            tree.nodes[id].content_cross = (width - 16.0).max(0.0);
+            tree.nodes[id].content_cross = inner_width;
             return;
         }
         if tree.nodes[id].scroll_spec.is_some() {
@@ -95,6 +99,7 @@ impl<'a> LayoutEngine<'a> {
         node.auto_cross = false;
         node.auto_main = false;
     }
+
     fn measure_scroll<A>(&mut self, tree: &mut Tree<A>, id: NodeId, available: Vec2, loose: Loose) {
         let spec = tree.nodes[id].scroll_spec.expect("the scroll is present");
         let inner = Vec2::new(
@@ -171,7 +176,8 @@ impl<'a> LayoutEngine<'a> {
             (false, false)
         } else {
             (
-                layout.size.width == Length::Auto
+                layout.flow == Flow::Row
+                    || layout.size.width == Length::Auto
                     || (loose.x && matches!(layout.size.width, Length::Fill | Length::Maximum(_))),
                 layout.size.height == Length::Auto
                     || (loose.y && matches!(layout.size.height, Length::Fill | Length::Maximum(_))),
@@ -196,6 +202,7 @@ impl<'a> LayoutEngine<'a> {
                 Flow::Column | Flow::Stack => {
                     Vec2::new(inner.width(), (inner.max.y - cursor.y).max(0.0))
                 }
+                Flow::Row if layout.wrap => Vec2::new(inner.width(), inner.height()),
                 Flow::Row => Vec2::new((inner.max.x - cursor.x).max(0.0), inner.height()),
             };
             let mut size = measure_and_layout(self, tree, child, remaining, child_loose);
@@ -425,6 +432,8 @@ impl<'a> LayoutEngine<'a> {
                         inner_min.y
                             + line
                             + tree.nodes[child].baseline.map_or(0.0, |own| baseline - own)
+                    } else if layout.wrap {
+                        inner_min.y + line + (line_height.max(size.y) - size.y) * align
                     } else {
                         inner_min.y + line + (cross_base - line_height.max(size.y)) * align
                     };
@@ -473,26 +482,30 @@ impl<'a> LayoutEngine<'a> {
             return;
         };
         let anchor_rect = tree.nodes[anchor].rect;
-        let margin = 12.0;
-        let gap = 16.0;
+        let padding = tree.nodes[id].layout.padding;
+        let gap = tree.nodes[id].layout.gap;
+        let margin = 10.0;
+        let offset = 6.0;
         let width = spec.width;
         let x = anchor_rect
             .min
             .x
             .min(self.screen.x - width - margin)
             .max(margin);
-        let room = (self.screen.y - anchor_rect.max.y - gap - margin).max(160.0);
-        let content = tree.nodes[id].popup_height;
-        let height = (content + 16.0).min(room + 16.0).max(16.0);
-        let rect = Rect::from_min_size(
-            Vec2::new(x, anchor_rect.max.y + gap),
-            Vec2::new(width, height),
-        );
+        let content = tree.nodes[id].popup_height.max(16.0);
+        let below_room = self.screen.y - anchor_rect.max.y - offset - margin;
+        let above_room = anchor_rect.min.y - offset - margin;
+        let (y, height) = if content <= below_room || below_room >= above_room {
+            let h = content.min(below_room.max(120.0));
+            (anchor_rect.max.y + offset, h)
+        } else {
+            let h = content.min(above_room.max(120.0));
+            ((anchor_rect.min.y - offset - h).max(margin), h)
+        };
+        let rect = Rect::from_min_size(Vec2::new(x, y), Vec2::new(width, height));
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
-        let mut clip = Clip::new(screen, Corners::ZERO).intersect(rect, Corners::all(24.0));
-        if let Some((window, corners)) = self.windows.get(&id) {
-            clip = clip.intersect(*window, *corners);
-        }
+        let corners = Corners::all(self.theme.metrics.panel_radius);
+        let clip = Clip::new(screen, Corners::ZERO).intersect(rect, corners);
         {
             let node = &mut tree.nodes[id];
             if node.rect != rect {
@@ -504,12 +517,12 @@ impl<'a> LayoutEngine<'a> {
             node.visible = true;
             node.measured = rect.size();
         }
-        let mut cursor = rect.min + Vec2::splat(8.0);
+        let mut cursor = rect.min + Vec2::new(padding.left, padding.top);
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
             self.arrange(tree, child, Rect::from_min_size(cursor, size), clip);
-            cursor.y += size.y;
+            cursor.y += size.y + gap;
         }
     }
 }

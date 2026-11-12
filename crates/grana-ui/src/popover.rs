@@ -1,4 +1,5 @@
 use crate::element::{Element, Key};
+use crate::geometry::Edges;
 
 pub fn popup<'a, A>(
     anchor: Key,
@@ -8,11 +9,12 @@ pub fn popup<'a, A>(
     Element::new(crate::element::Layout {
         flow: crate::element::Flow::Column,
         size: crate::element::Size::new(crate::element::Length::Fill, crate::element::Length::Auto),
+        padding: Edges::all(5.0),
+        gap: 2.0,
         ..crate::element::Layout::column()
     })
     .popup(anchor, width)
     .layer(crate::element::Layer::Popup)
-    .glass(crate::glass::GlassStyle::popover())
     .children(children)
 }
 

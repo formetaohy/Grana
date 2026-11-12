@@ -1,22 +1,22 @@
 use glam::Vec2;
 use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
-    Align, BuildContext, Corners, Edges, Element, GlassStyle, Icon, Key, Layer, Length, Level,
-    Rect, Role, TextStyle, TypeStyle,
+    Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
+    State, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
 use crate::state::Workspace;
 
-const CARD_WIDTH: f32 = 468.0;
-const CARD_PADDING: f32 = 24.0;
-const CARD_GAP: f32 = 14.0;
-const BRAND_HEIGHT: f32 = 72.0;
-const STATE_HEIGHT: f32 = 24.0;
-const RECENT_HEADER: f32 = 22.0;
-const RECENT_ROW: f32 = 38.0;
-const RECOVERY_HEIGHT: f32 = 76.0;
-const LANGUAGE_HEIGHT: f32 = 28.0;
+const CARD_WIDTH: f32 = 456.0;
+const CARD_PADDING: f32 = 20.0;
+const CARD_GAP: f32 = 12.0;
+const BRAND_HEIGHT: f32 = 60.0;
+const STATE_HEIGHT: f32 = 22.0;
+const RECENT_HEADER: f32 = 20.0;
+const RECENT_ROW: f32 = 34.0;
+const RECOVERY_HEIGHT: f32 = 82.0;
+const LANGUAGE_HEIGHT: f32 = 26.0;
 
 struct Status {
     text: String,
@@ -49,7 +49,7 @@ pub(crate) fn view<'a>(
         detail_style,
         CARD_WIDTH - 2.0 * CARD_PADDING,
     );
-    let detail_height = detail.size.y.max(18.0);
+    let detail_height = detail.size.y.max(16.0);
     let button = ctx.theme().metrics.control_height;
     let shown = view.recent.len().min(crate::RECENT_LIMIT);
     let recents = if shown > 0 {
@@ -79,16 +79,16 @@ pub(crate) fn view<'a>(
     let rect = Rect::from_min_size(
         Vec2::new(
             full.center().x - 0.5 * CARD_WIDTH,
-            full.center().y - 0.54 * height,
+            full.center().y - 0.52 * height,
         ),
         Vec2::new(CARD_WIDTH, height),
     );
-    let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.62 * full.height()));
+    let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.55 * full.height()));
     let accent = palette.accent;
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
             painter.rect(info.rect, Corners::ZERO, backdrop);
-            painter.gradient(glow, Corners::ZERO, backdrop.lerp(accent, 0.16), backdrop);
+            painter.gradient(glow, Corners::ZERO, backdrop.lerp(accent, 0.08), backdrop);
         })
         .named("shell.backdrop")
         .at(full)
@@ -104,7 +104,7 @@ pub(crate) fn view<'a>(
         children.push(recovery_block(ctx, recovery));
     }
     children.push(
-        grana_ui::row().gap(8.0).children([
+        grana_ui::row().gap(6.0).children([
             grana_ui::widget::action_button(
                 ctx.theme(),
                 Icon::Folder,
@@ -133,12 +133,13 @@ pub(crate) fn view<'a>(
     );
     children.push(language_switch(ctx));
     children.push(recent_block(ctx, view));
+    let surface = ctx.theme().surface(Role::Panel, State::Rest);
     let card = grana_ui::column()
         .padding(Edges::all(CARD_PADDING))
         .gap(CARD_GAP)
+        .background(surface)
         .children(children)
         .at(rect)
-        .glass(GlassStyle::surface())
         .named("shell.card");
     elements.push(card);
     elements.extend(crate::panel::remote(ctx, full, workspace.remote_open));
@@ -191,7 +192,7 @@ fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
 
 fn brand<'a>() -> Element<'a, Message> {
     grana_ui::canvas(Length::Fill, BRAND_HEIGHT, |painter, info| {
-        let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(64.0));
+        let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(54.0));
         grana_brand::paint(painter, badge);
     })
     .named("shell.brand")
@@ -203,18 +204,18 @@ fn state<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a
     let color = if status.error {
         palette.warning
     } else {
-        palette.text_secondary
+        palette.text_primary
     };
     let mut children = Vec::new();
     if status.busy {
-        children.push(crate::view::spinner(ctx, 16.0));
+        children.push(crate::view::spinner(ctx, 15.0));
     }
     children.push(grana_ui::text(
         status.text.clone(),
         TextStyle::new(font, color).truncating(),
     ));
     grana_ui::row()
-        .gap(10.0)
+        .gap(8.0)
         .align(Align::Center)
         .height(Length::Fixed(STATE_HEIGHT))
         .children(children)
@@ -267,9 +268,12 @@ fn recovery_block<'a>(
     let headline = grana_i18n::shell::unsaved_analysis(language, recovery.name);
     let saved = ago(language, recovery.age);
     let detail = grana_i18n::shell::saved_detail(language, &recovery.detail, &saved);
+    let surface = theme.surface(Role::Card, State::Rest);
     grana_ui::column()
-        .gap(6.0)
+        .padding(Edges::all(10.0))
+        .gap(5.0)
         .height(Length::Fixed(RECOVERY_HEIGHT))
+        .background(surface)
         .children([
             grana_ui::text(
                 headline,
@@ -279,7 +283,7 @@ fn recovery_block<'a>(
                 detail,
                 TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating(),
             ),
-            grana_ui::row().gap(8.0).children([
+            grana_ui::row().gap(6.0).children([
                 grana_ui::widget::action_button(
                     &theme,
                     Icon::Undo,
@@ -323,8 +327,8 @@ fn recent_block<'a>(
     let palette = ctx.theme().palette;
     let header_style = TextStyle::new(
         TypeStyle {
-            tracking: 0.7,
-            ..TypeStyle::new(10.0, 600.0, 14.0)
+            tracking: 0.6,
+            ..TypeStyle::new(9.5, 600.0, 13.0)
         },
         palette.text_tertiary,
     );
@@ -356,6 +360,7 @@ fn recent_row<'a>(
 ) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
     let theme = *ctx.theme();
+    let radius = theme.metrics.radius;
     let symbol = match entry.kind() {
         RecentKind::Image => Icon::Cube,
         RecentKind::Project => Icon::Folder,
@@ -375,15 +380,15 @@ fn recent_row<'a>(
         if info.hover > 0.01 {
             painter.rect(
                 rect,
-                Corners::all(9.0),
+                Corners::all(radius),
                 palette.selected.amplify(0.8 * info.hover),
             );
         }
         grana_ui::icon::paint(
             symbol,
             painter,
-            Vec2::new(rect.min.x + 14.0, rect.center().y),
-            14.0,
+            Vec2::new(rect.min.x + 12.0, rect.center().y),
+            13.0,
             palette
                 .text_secondary
                 .lerp(palette.text_primary, info.hover),
@@ -391,8 +396,8 @@ fn recent_row<'a>(
         );
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.min.x + 30.0, rect.min.y + 2.0),
-                Vec2::new(rect.max.x - 22.0, rect.min.y + 21.0),
+                Vec2::new(rect.min.x + 28.0, rect.min.y + 2.0),
+                Vec2::new(rect.max.x - 20.0, rect.min.y + 18.0),
             ),
             &title,
             title_style,
@@ -400,8 +405,8 @@ fn recent_row<'a>(
         );
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.min.x + 30.0, rect.min.y + 19.0),
-                Vec2::new(rect.max.x - 22.0, rect.max.y - 2.0),
+                Vec2::new(rect.min.x + 28.0, rect.min.y + 17.0),
+                Vec2::new(rect.max.x - 20.0, rect.max.y - 2.0),
             ),
             &detail,
             detail_style,
@@ -410,8 +415,8 @@ fn recent_row<'a>(
         grana_ui::icon::paint(
             Icon::ChevronRight,
             painter,
-            Vec2::new(rect.max.x - 12.0, rect.center().y),
-            9.0,
+            Vec2::new(rect.max.x - 10.0, rect.center().y),
+            8.5,
             palette.text_tertiary.with_alpha(0.8 * info.hover),
             1.5,
         );
@@ -420,5 +425,5 @@ fn recent_row<'a>(
     .tooltip(&tooltip)
     .press(Message::Command(Command::OpenRecent(index)))
     .cursor(grana_ui::Cursor::Pointing)
-    .focus_ring(Corners::all(9.0))
+    .focus_ring(Corners::all(radius))
 }
