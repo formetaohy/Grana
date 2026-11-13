@@ -12,6 +12,13 @@ pub(crate) const PICK_ROW: u64 = 256;
 pub enum PickId {
     None,
     Style(u32),
+    Splat { key: u64, level: u8, index: u32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Raw {
+    None,
+    Style(u32),
     Splat(u32),
 }
 
@@ -71,16 +78,16 @@ impl PickTarget {
     }
 }
 
-pub(crate) fn decode(bytes: &[u8]) -> PickId {
+pub(crate) fn decode(bytes: &[u8]) -> Raw {
     let (words, _) = bytes.as_chunks::<4>();
     if words.len() < 2 {
-        return PickId::None;
+        return Raw::None;
     }
     let kind = u32::from_ne_bytes(words[0]);
     let value = u32::from_ne_bytes(words[1]);
     match (kind, value) {
-        (1, 1..) => PickId::Style(value - 1),
-        (2, 1..) => PickId::Splat(value - 1),
-        _ => PickId::None,
+        (1, 1..) => Raw::Style(value - 1),
+        (2, 1..) => Raw::Splat(value - 1),
+        _ => Raw::None,
     }
 }

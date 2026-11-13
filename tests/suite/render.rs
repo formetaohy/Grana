@@ -1936,7 +1936,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         Splat::point([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
         Splat::point([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
-    let chunks = [SplatChunk::new(0, revision(), markers.to_vec())];
+    let chunks = [SplatChunk::single(0, revision(), markers.to_vec())];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -1961,7 +1961,14 @@ fn picks_only_the_objects_of_the_slice_plane() {
     settle(&gpu, &mut renderer, &view, &volume);
     let on_plane = project(&camera, [0.0, 0.0, 0.1]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), on_plane));
-    assert_eq!(picked(&gpu, &mut renderer), PickId::Splat(0));
+    assert!(matches!(
+        picked(&gpu, &mut renderer),
+        PickId::Splat {
+            level: 0,
+            index: 0,
+            ..
+        }
+    ));
     let off_plane = project(&camera, [-1.0, 0.0, -1.0]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), off_plane));
     assert_eq!(picked(&gpu, &mut renderer), PickId::None);
@@ -1993,8 +2000,8 @@ fn composites_soft_splats_through_the_depth_layers() {
             Splat::point(far, 0.4, [0.1, 0.2, 1.0], alpha),
         ]
     };
-    let solid_chunks = [SplatChunk::new(0, revision(), splats(1.0))];
-    let faint_chunks = [SplatChunk::new(0, revision(), splats(0.25))];
+    let solid_chunks = [SplatChunk::single(0, revision(), splats(1.0))];
+    let faint_chunks = [SplatChunk::single(0, revision(), splats(0.25))];
     let solid_scene = SceneFrame {
         versions: versions(),
         channels: &channels,
@@ -2164,7 +2171,7 @@ fn converges_the_brightness_of_overlapping_splats() {
         let splats = (0..count)
             .map(|_| Splat::point([0.0, 0.0, 0.0], 0.4, [1.0, 0.0, 0.0], 0.25))
             .collect::<Vec<_>>();
-        let chunks = [SplatChunk::new(0, revision(), splats)];
+        let chunks = [SplatChunk::single(0, revision(), splats)];
         let scene = SceneFrame {
             versions: versions(),
             channels: &channels,
@@ -2270,8 +2277,11 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
     let aggregate = grana_engine::plan(&scene, Some(lens(&far)));
     let exact = grana_engine::plan(&scene, Some(lens(&near)));
     assert_ne!(aggregate, exact, "the far view aggregates the spots");
-    let mut proxied = grana_engine::frame(&scene, &aggregate).expect("the proxy scene builds");
-    let mut detail = grana_engine::frame(&scene, &exact).expect("the exact scene builds");
+    let mut cache = grana_engine::SplatCache::new();
+    let mut proxied =
+        grana_engine::frame(&scene, &aggregate, &mut cache).expect("the proxy scene builds");
+    let mut detail =
+        grana_engine::frame(&scene, &exact, &mut cache).expect("the exact scene builds");
     for row in proxied
         .channels
         .iter_mut()
@@ -2280,21 +2290,30 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
         row.visible = false;
     }
     assert_eq!(
-        detail.splat_ids.len(),
+        detail.splat_count(),
         side * side * side,
         "the near view keeps every spot"
     );
     assert!(
-        proxied.splat_ids.len() < 512,
+        proxied.splat_count() < 512,
         "the far view renders {} proxies",
-        proxied.splat_ids.len()
+        proxied.splat_count()
     );
-    for id in &proxied.splat_ids {
-        let id = id.expect("a proxy names the spot it stands for");
-        assert!(
-            matches!(id.item, Item::Object(index) if index < side * side * side),
-            "a proxy selects a spot of its set"
-        );
+    for chunk in proxied.splats.iter().filter(|chunk| chunk.active()) {
+        let members = proxied
+            .members
+            .iter()
+            .find(|members| members.key() == chunk.key())
+            .expect("a rendered chunk names its members");
+        for index in 0..chunk.len() as u32 {
+            let (_, member) = members
+                .resolve(chunk.level(), index)
+                .expect("every proxy names the spot it stands for");
+            assert!(
+                (member as usize) < side * side * side,
+                "a proxy selects a spot of its set"
+            );
+        }
     }
     let Some(gpu) = gpu() else {
         return;
@@ -2315,13 +2334,21 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
         snapshot(&gpu, &mut renderer, &proxied_view, &target, &volume).painted(WHOLE);
     let centre = project(&far, [0.0, 0.0, 0.0]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), centre));
-    let picked = match picked(&gpu, &mut renderer) {
-        PickId::Splat(index) => index as usize,
+    let (key, level, index) = match picked(&gpu, &mut renderer) {
+        PickId::Splat { key, level, index } => (key, level, index),
         other => panic!("a proxy is not addressable: {other:?}"),
     };
+    let members = proxied
+        .members
+        .iter()
+        .find(|members| members.key() == key)
+        .expect("the picked chunk names its members");
+    let (_, member) = members
+        .resolve(level, index)
+        .expect("the proxy pick names the spot it stands for");
     assert!(
-        proxied.splat_ids.get(picked).is_some_and(|id| id.is_some()),
-        "the proxy pick names the spot it stands for"
+        (member as usize) < side * side * side,
+        "the proxy pick names a spot of its set"
     );
     let detail_frame = detail.frame();
     let detail_view = View {
@@ -2341,5 +2368,132 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
     assert!(
         proxied_painted * 4 >= detail_painted && proxied_painted <= 4 * detail_painted,
         "the proxies paint {proxied_painted} against {detail_painted} pixels"
+    );
+}
+
+#[test]
+fn keeps_the_spot_geometry_while_a_selection_changes() {
+    let volume = sphere_volume();
+    let mut scene = spot_scene(volume.pyramid(), 8);
+    let set = scene
+        .objects
+        .iter()
+        .next()
+        .expect("the spot set exists")
+        .id();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::splat(0.2), 1.0);
+    let lens = |camera| grana_engine::Lens {
+        camera,
+        height: SIDE,
+    };
+    let targets = grana_engine::plan(&scene, Some(lens(&camera)));
+    let mut cache = grana_engine::SplatCache::new();
+    let plain = grana_engine::frame(&scene, &targets, &mut cache).expect("the spot scene builds");
+    scene.select(Some(Selection {
+        set,
+        item: Item::Object(3),
+    }));
+    let targets = grana_engine::plan(&scene, Some(lens(&camera)));
+    let marked =
+        grana_engine::frame(&scene, &targets, &mut cache).expect("the selected scene builds");
+    let key = plain.splats.first().expect("the spots draw").key();
+    let geometry = |rendered: &grana_engine::RenderedScene| {
+        rendered
+            .splats
+            .iter()
+            .find(|chunk| chunk.key() == key)
+            .expect("the detection level stays")
+            .data()
+            .geometry()
+            .as_ptr()
+    };
+    assert_eq!(
+        geometry(&plain),
+        geometry(&marked),
+        "a selection rebuilt the spot geometry"
+    );
+    assert_eq!(
+        marked.splat_count(),
+        plain.splat_count() + 1,
+        "the selection adds one highlight splat"
+    );
+    let highlight = marked
+        .splats
+        .iter()
+        .find(|chunk| chunk.key() != key)
+        .expect("the highlight draws");
+    let (_, member) = marked
+        .members
+        .iter()
+        .find(|members| members.key() == highlight.key())
+        .expect("the highlight names its members")
+        .resolve(0, 0)
+        .expect("the highlight names the selected spot");
+    assert_eq!(member, 3, "the highlight names the selected spot");
+}
+
+#[test]
+fn keeps_both_spot_levels_resident_across_magnification() {
+    let volume = sphere_volume();
+    let scene = spot_scene(volume.pyramid(), 16);
+    let mut far = Camera::new(35.0);
+    far.fit(Vec3::splat(6.0), 1.0);
+    let mut near = Camera::new(35.0);
+    near.fit(Vec3::splat(0.2), 1.0);
+    let mut cache = grana_engine::SplatCache::new();
+    let mut view = |camera: &Camera| {
+        let lens = grana_engine::Lens {
+            camera,
+            height: SIDE,
+        };
+        let targets = grana_engine::plan(&scene, Some(lens));
+        grana_engine::frame(&scene, &targets, &mut cache).expect("the spot scene builds")
+    };
+    let exact = view(&near);
+    assert_eq!(exact.splats.len(), 1, "a near view holds its exact level");
+    assert_eq!(exact.splat_count(), 16 * 16 * 16);
+    let proxied = view(&far);
+    assert_eq!(proxied.splats.len(), 2, "the far view adds the proxy level");
+    assert!(
+        proxied
+            .splats
+            .iter()
+            .any(|chunk| chunk.level() == 0 && !chunk.active()),
+        "the exact level stays resident while the proxy draws"
+    );
+    assert!(
+        proxied
+            .splats
+            .iter()
+            .filter(|chunk| chunk.active())
+            .all(|chunk| chunk.level() == 1),
+        "the far view draws the proxy level"
+    );
+    assert!(proxied.splat_count() < exact.splat_count());
+    let again = view(&near);
+    assert_eq!(again.splats.len(), 2, "the proxy level stays resident");
+    assert!(
+        again
+            .splats
+            .iter()
+            .filter(|chunk| chunk.active())
+            .all(|chunk| chunk.level() == 0),
+        "returning to the near view draws the exact level"
+    );
+    let exact_geometry = |scene: &grana_engine::RenderedScene| {
+        scene
+            .splats
+            .iter()
+            .find(|chunk| chunk.level() == 0 && chunk.active())
+            .expect("the exact level is drawn")
+            .data()
+            .geometry()
+            .as_ptr()
+    };
+    assert_eq!(
+        exact_geometry(&exact),
+        exact_geometry(&again),
+        "returning to the near view reuses the resident exact geometry"
     );
 }

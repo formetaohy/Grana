@@ -2,13 +2,14 @@ use std::time::{Duration, Instant};
 
 use grana_display::CameraState;
 use grana_render::{FrameInfo, PickId, Renderer, Requests};
-use grana_scene::Selection;
+use grana_scene::{Item, Selection};
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::display::View;
 use crate::frame;
 use crate::image::ViewportImage;
+use crate::splat::{SplatCache, SplatMembers};
 use crate::view::{self, RenderedScene};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
@@ -47,7 +48,7 @@ pub enum Picked {
 #[derive(Clone, Default)]
 struct Identities {
     styles: Vec<Selection>,
-    splats: Vec<Option<Selection>>,
+    members: Vec<SplatMembers>,
 }
 
 struct Prepared {
@@ -60,6 +61,7 @@ pub struct Engine {
     renderer: Renderer,
     pending_pick: Option<Identities>,
     prepared: Option<Prepared>,
+    splats: SplatCache,
     image: Option<ViewportImage>,
     request: Option<Request>,
     display: [u32; 2],
@@ -79,6 +81,7 @@ impl Engine {
             renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET),
             pending_pick: None,
             prepared: None,
+            splats: SplatCache::new(),
             image: None,
             request: None,
             display: [0, 0],
@@ -98,6 +101,7 @@ impl Engine {
         self.renderer.set_dataset(device, pyramid);
         self.pending_pick = None;
         self.prepared = None;
+        self.splats.clear();
         self.request = None;
         self.phase = Phase::Ready;
         self.drawn_at = None;
@@ -189,9 +193,10 @@ impl Engine {
             .as_ref()
             .is_none_or(|prepared| prepared.scene_key != scene_key || prepared.targets != detail)
         {
+            let scene = view::frame(view.scene, &detail, &mut self.splats)?;
             self.prepared = Some(Prepared {
                 scene_key,
-                scene: view::frame(view.scene, &detail)?,
+                scene,
                 targets: detail,
             });
         }
@@ -298,7 +303,7 @@ impl Engine {
         }
         *pending_pick = Some(Identities {
             styles: prepared.scene.style_ids.clone(),
-            splats: prepared.scene.splat_ids.clone(),
+            members: prepared.scene.members.clone(),
         });
         true
     }
@@ -313,11 +318,20 @@ impl Engine {
                 Some(selection) => Picked::Hit(selection),
                 None => Picked::Miss,
             },
-            PickId::Splat(index) => match identities.splats.get(index as usize) {
-                Some(Some(selection)) => Picked::Hit(*selection),
-                Some(None) => Picked::Seed,
-                None => Picked::Miss,
-            },
+            PickId::Splat { key, level, index } => {
+                let members = identities
+                    .members
+                    .iter()
+                    .find(|members| members.key() == key);
+                match members.and_then(|members| members.resolve(level, index)) {
+                    Some((_, crate::spot::STANDALONE)) => Picked::Seed,
+                    Some((set, member)) => Picked::Hit(Selection {
+                        set,
+                        item: Item::Object(member as usize),
+                    }),
+                    None => Picked::Miss,
+                }
+            }
         };
         Some(picked)
     }

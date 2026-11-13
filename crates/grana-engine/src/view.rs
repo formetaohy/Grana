@@ -1,16 +1,21 @@
+use std::sync::Arc;
+
 use glam::Vec3;
 use grana_display::{Camera, Shading};
 use grana_render::{
-    ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, Splats, Style, Versions,
+    ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, SplatLevel, Splats, Style,
+    Versions,
 };
 use grana_scene::{Item, ObjectFrame, ObjectSet, Scene, Selection};
 
-use crate::spot::{self, Appearance, Choice};
+use crate::splat::{SplatCache, SplatMembers};
+use crate::spot::{self, Choice};
 
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
 const SEED_PART: u64 = 0;
 const DETECTION_PART: u64 = 1;
+const HIGHLIGHT_PART: u64 = 2;
 const PIXEL_TRIANGLE_AREA: f32 = 4.0;
 const MINIMUM_TARGET: f32 = 512.0;
 
@@ -32,8 +37,8 @@ pub struct RenderedScene {
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
     pub splats: Vec<SplatChunk>,
+    pub members: Vec<SplatMembers>,
     pub style_ids: Vec<Selection>,
-    pub splat_ids: Vec<Option<Selection>>,
     pub shading: Shading,
     pub step_scale: f32,
 }
@@ -49,6 +54,21 @@ impl RenderedScene {
             layers: &self.layers,
             splats: Splats::new(&self.splats),
         }
+    }
+
+    pub fn splat_count(&self) -> usize {
+        self.splats
+            .iter()
+            .filter(|chunk| chunk.active())
+            .map(SplatChunk::len)
+            .sum()
+    }
+
+    pub fn splat_members(&self, key: u64, level: u8) -> Option<&[u32]> {
+        self.members
+            .iter()
+            .find(|members| members.key() == key)?
+            .members(level)
     }
 }
 
@@ -136,7 +156,11 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
     Targets { detail, splats }
 }
 
-pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> {
+pub fn frame(
+    scene: &Scene,
+    targets: &Targets,
+    cache: &mut SplatCache,
+) -> Result<RenderedScene, String> {
     assert_eq!(
         targets.detail.len(),
         targets.splats.len(),
@@ -145,8 +169,8 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut splats = Vec::new();
+    let mut members = Vec::new();
     let mut style_ids = Vec::new();
-    let mut splat_ids = Vec::new();
     let mut data = Digest::new();
     let mut objects = Digest::new();
     let mut appearance = Digest::new();
@@ -170,23 +194,18 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
         };
         let choice = targets.splats[ordinal];
         ordinal += 1;
-        let stamps = splat_stamps(scene, set, choice);
         objects.mix(detail as u64);
         objects.mix(choice.digest());
-        objects.mix(stamps.geometry);
-        objects.mix(stamps.style);
         let mut seeded = Vec::new();
         for seed in scene.seeds(set.id()) {
             seeded.push(Splat::point(*seed, seed_radius, SEED_COLOR, 1.0));
-            splat_ids.push(None);
         }
         if !seeded.is_empty() {
-            let seed_stamp = seed_stamp(scene, set);
-            splats.push(SplatChunk::new(
-                splat_key(set.id().raw(), SEED_PART),
-                seed_stamp,
-                seeded,
-            ));
+            let key = splat_key(set.id().raw(), SEED_PART);
+            let stamp = seed_stamp(scene, set);
+            let count = seeded.len();
+            splats.push(SplatChunk::single(key, stamp, seeded));
+            members.push(SplatMembers::standalone(key, set.id(), count));
         }
         let Some(frame) = set.frame(time) else {
             continue;
@@ -198,27 +217,52 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
                 .and_then(|colors| colors.get(index).copied())
                 .unwrap_or_else(|| set.color())
         };
-        if let Some(spots) = frame.spots() {
-            let style = |index: usize| Appearance {
-                color: color(index),
-                visible: set.visible_object(time, index),
-                selected: scene.object_selected(set.id(), index),
-            };
-            let detections = spot::detections(spots, choice, world, set.opacity(), style);
-            if !detections.geometry.is_empty() {
-                splats.push(SplatChunk::split(
-                    splat_key(set.id().raw(), DETECTION_PART),
-                    stamps.geometry,
-                    stamps.style,
-                    detections.geometry,
-                    detections.style,
+        if frame.spots().is_some() {
+            let prepared = cache.prepare(
+                scene,
+                set,
+                splat_key(set.id().raw(), DETECTION_PART),
+                choice,
+                world,
+            );
+            for chunk in &prepared.chunks {
+                objects.mix(chunk.key());
+                objects.mix(u64::from(chunk.level()));
+                objects.flag(chunk.active());
+                objects.mix(chunk.data().geometry_stamp());
+                objects.mix(chunk.data().style_stamp());
+            }
+            splats.extend(prepared.chunks);
+            members.push(prepared.members);
+            let spots = frame.spots().expect("the frame carries spots");
+            let selected = scene
+                .selections()
+                .iter()
+                .filter(|held| held.set == set.id())
+                .filter_map(|held| match held.item {
+                    Item::Object(index) => Some(index as u32),
+                    Item::Track(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let visible = |index: usize| set.visible_object(time, index);
+            let highlight = spot::highlights(spots, &selected, set.opacity(), visible);
+            if !highlight.geometry.is_empty() {
+                let key = splat_key(set.id().raw(), HIGHLIGHT_PART);
+                let stamp = highlight_stamp(scene, set);
+                objects.mix(key);
+                objects.mix(stamp);
+                splats.push(SplatChunk::new(
+                    key,
+                    0,
+                    true,
+                    SplatLevel::new(
+                        stamp,
+                        stamp,
+                        Arc::new(highlight.geometry),
+                        Arc::new(highlight.style),
+                    ),
                 ));
-                for member in detections.members {
-                    splat_ids.push(member.map(|index| Selection {
-                        set: set.id(),
-                        item: Item::Object(index),
-                    }));
-                }
+                members.push(SplatMembers::new(key, set.id(), highlight.members));
             }
         }
         let (geometry, level) = match frame {
@@ -331,57 +375,23 @@ pub fn frame(scene: &Scene, targets: &Targets) -> Result<RenderedScene, String> 
         targets.detail.len(),
         "the targets cover every shown set"
     );
+    let present = scene
+        .objects
+        .iter()
+        .map(|set| set.id().raw())
+        .collect::<Vec<_>>();
+    cache.retain(&present);
     Ok(RenderedScene {
         versions: Versions::new(data.finish(), objects.finish(), appearance.finish()),
         channels,
         styles,
         layers,
         splats,
+        members,
         style_ids,
-        splat_ids,
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
-}
-
-#[derive(Clone, Copy)]
-struct SplatStamps {
-    geometry: u64,
-    style: u64,
-}
-
-fn splat_stamps(scene: &Scene, set: &ObjectSet, choice: Choice) -> SplatStamps {
-    let mut selection = Digest::new();
-    for held in scene.selections() {
-        if held.set == set.id() {
-            selection.mix(match held.item {
-                Item::Object(index) => (index as u64) * 2,
-                Item::Track(index) => (index as u64) * 2 + 1,
-            });
-        }
-    }
-    let selection = selection.finish();
-    let mut style = Digest::new();
-    style.mix(set.id().raw());
-    style.mix(set.document().raw());
-    style.real(set.opacity());
-    style.mix(choice.digest());
-    style.mix(u64::from(scene.time()));
-    style.mix(selection);
-    let style = style.finish();
-    let mut geometry = Digest::new();
-    geometry.mix(set.id().raw());
-    geometry.mix(set.frame_stamp(scene.time()).map_or(u64::MAX, |s| s.raw()));
-    geometry.mix(u64::from(scene.time()));
-    geometry.mix(choice.digest());
-    geometry.mix(selection);
-    if matches!(choice, Choice::Grid(_)) {
-        geometry.mix(style);
-    }
-    SplatStamps {
-        geometry: geometry.finish(),
-        style,
-    }
 }
 
 fn seed_stamp(scene: &Scene, set: &ObjectSet) -> u64 {
@@ -390,6 +400,20 @@ fn seed_stamp(scene: &Scene, set: &ObjectSet) -> u64 {
     stamp.mix(set.revision().raw());
     stamp.mix(set.document().raw());
     stamp.mix(u64::from(scene.time()));
+    stamp.finish()
+}
+
+fn highlight_stamp(scene: &Scene, set: &ObjectSet) -> u64 {
+    let mut stamp = Digest::new();
+    stamp.mix(set.id().raw());
+    stamp.mix(
+        set.frame_stamp(scene.time())
+            .map_or(u64::MAX, |held| held.raw()),
+    );
+    stamp.mix(u64::from(scene.time()));
+    stamp.mix(set.document().raw());
+    stamp.mix(u64::from(set.opacity().to_bits()));
+    stamp.mix(crate::splat::selection_digest(scene, set));
     stamp.finish()
 }
 

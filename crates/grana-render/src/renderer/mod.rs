@@ -687,7 +687,14 @@ impl Renderer {
         let readback = self.pick_readback.as_mut()?;
         let (_, bytes) = readback.take(device)?;
         self.pick_pending = false;
-        Some(pick::decode(&bytes))
+        Some(match pick::decode(&bytes) {
+            pick::Raw::None => PickId::None,
+            pick::Raw::Style(index) => PickId::Style(index),
+            pick::Raw::Splat(index) => match self.splats.resolve(index) {
+                Some((key, level, index)) => PickId::Splat { key, level, index },
+                None => PickId::None,
+            },
+        })
     }
 
     pub fn pick_pending(&self) -> bool {

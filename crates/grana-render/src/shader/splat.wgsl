@@ -7,9 +7,14 @@ struct SplatAppearance {
     color: vec4<f32>,
 }
 
+struct SplatSlot {
+    base: vec4<u32>,
+}
+
 @group(1) @binding(0) var<storage, read> splats: array<SplatInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
 @group(1) @binding(2) var<storage, read> appearances: array<SplatAppearance>;
+@group(2) @binding(0) var<uniform> slot: SplatSlot;
 
 const SPLAT_REACH: f32 = 3.0;
 const SPLAT_MINIMUM_SIGMA: f32 = 0.5;
@@ -227,7 +232,7 @@ fn fs_pick(input: SplatVertex) -> PickFragment {
         discard;
     }
     var output: PickFragment;
-    output.id = vec2<u32>(2u, input.index + 1u);
+    output.id = vec2<u32>(2u, slot.base.x + input.index + 1u);
     output.depth = input.depth;
     return output;
 }
@@ -239,7 +244,7 @@ fn fs_pick_slice(input: SplatVertex) -> PickFragment {
         discard;
     }
     var output: PickFragment;
-    output.id = vec2<u32>(2u, input.index + 1u);
+    output.id = vec2<u32>(2u, slot.base.x + input.index + 1u);
     output.depth = shaded.depth;
     return output;
 }

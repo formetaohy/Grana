@@ -61,7 +61,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             1.0,
         ),
     ];
-    let chunks = [SplatChunk::new(0, crate::support::revision(), markers)];
+    let chunks = [SplatChunk::single(0, crate::support::revision(), markers)];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,

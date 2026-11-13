@@ -15,6 +15,8 @@ const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
 const EMPTY: u32 = u32::MAX;
 
+pub(crate) const STANDALONE: u32 = u32::MAX;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     Full,
@@ -30,24 +32,27 @@ impl Choice {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Appearance {
     pub(crate) color: [f32; 3],
     pub(crate) visible: bool,
-    pub(crate) selected: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct Detections {
     pub(crate) geometry: Vec<SplatGeometry>,
     pub(crate) style: Vec<SplatStyle>,
-    pub(crate) members: Vec<Option<usize>>,
+    pub(crate) members: Vec<u32>,
 }
 
 impl Detections {
     fn push(&mut self, geometry: SplatGeometry, style: SplatStyle, member: Option<usize>) {
         self.geometry.push(geometry);
         self.style.push(style);
-        self.members.push(member);
+        self.members.push(match member {
+            Some(index) => index as u32,
+            None => STANDALONE,
+        });
     }
 }
 
@@ -91,28 +96,48 @@ where
         return raw(entries, opacity, &style);
     };
     let mut palette = Palette::default();
-    let mut selected = Vec::new();
     for (index, spot) in entries.iter().enumerate() {
         let look = style(index);
         if !look.visible {
             continue;
         }
-        if look.selected {
-            selected.push((index, spot.center(), spot.radius()));
-            continue;
-        }
         grid.add(index, spot, palette.radiance(look.color));
     }
     let mut detections = Detections {
-        geometry: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
-        style: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
-        members: Vec::with_capacity(grid.len().min(entries.len()) + selected.len()),
+        geometry: Vec::with_capacity(grid.len().min(entries.len())),
+        style: Vec::with_capacity(grid.len().min(entries.len())),
+        members: Vec::with_capacity(grid.len().min(entries.len())),
     };
     grid.finish(opacity, &mut detections);
+    detections
+}
+
+pub(crate) fn highlights<F>(
+    spots: &SpotSet,
+    selected: &[u32],
+    opacity: f32,
+    visible: F,
+) -> Detections
+where
+    F: Fn(usize) -> bool,
+{
+    let entries = spots.spots();
+    let mut palette = Palette::default();
+    let mut detections = Detections::default();
     let highlight = palette.radiance(SELECTED_COLOR);
-    for (index, center, radius) in selected {
+    for index in selected {
+        let index = *index as usize;
+        let Some(spot) = entries.get(index) else {
+            continue;
+        };
+        if !visible(index) {
+            continue;
+        }
         detections.push(
-            SplatGeometry::gaussian(center, [SELECTED_SCALE * radius * SIGMA_PER_RADIUS; 3]),
+            SplatGeometry::gaussian(
+                spot.center(),
+                [SELECTED_SCALE * spot.radius() * SIGMA_PER_RADIUS; 3],
+            ),
             SplatStyle::new(highlight, opacity),
             Some(index),
         );
@@ -132,15 +157,10 @@ where
     };
     for (index, spot) in entries.iter().enumerate() {
         let look = style(index);
-        let (radius, color) = if look.selected {
-            (SELECTED_SCALE * spot.radius(), SELECTED_COLOR)
-        } else {
-            (spot.radius(), look.color)
-        };
         detections.push(
-            SplatGeometry::gaussian(spot.center(), [radius * SIGMA_PER_RADIUS; 3]),
+            SplatGeometry::gaussian(spot.center(), [spot.radius() * SIGMA_PER_RADIUS; 3]),
             SplatStyle::new(
-                palette.radiance(color),
+                palette.radiance(look.color),
                 if look.visible { opacity } else { 0.0 },
             ),
             Some(index),

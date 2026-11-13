@@ -25,6 +25,7 @@ pub(crate) struct Layouts {
     pub commands: BindGroupLayout,
     pub splat_cull: BindGroupLayout,
     pub splat_rows: BindGroupLayout,
+    pub splat_pick_slot: BindGroupLayout,
     pub oit_write: BindGroupLayout,
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
@@ -239,6 +240,10 @@ impl Layouts {
                 storage(2, ShaderStages::VERTEX, true),
             ],
         });
+        let splat_pick_slot = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.splat.pick.slot.layout"),
+            entries: &[uniform(0, ShaderStages::FRAGMENT)],
+        });
         let oit_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.oit.write.layout"),
             entries: &[
@@ -366,7 +371,11 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
-        let splat_pick = pipeline_layout(device, "grana.splat.pick.layout", &[&scene, &splat_rows]);
+        let splat_pick = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.splat.pick.layout"),
+            bind_group_layouts: &[Some(&scene), Some(&splat_rows), Some(&splat_pick_slot)],
+            immediate_size: 0,
+        });
         let splat_cull_pipeline = pipeline_layout(
             device,
             "grana.splat.cull.pipeline.layout",
@@ -411,6 +420,7 @@ impl Layouts {
             commands,
             splat_cull,
             splat_rows,
+            splat_pick_slot,
             oit_write,
             oit_read,
             ao_read,
