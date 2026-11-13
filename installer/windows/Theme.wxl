@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="en-us" Language="1033" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Title" Value="Grana" />
+  <String Id="Tagline" Value="Microscopy image visualization and analysis" />
+  <String Id="CloseTooltip" Value="Close setup" />
+  <String Id="LoadingText" Value="Preparing setup" />
+  <String Id="InstallHeadline" Value="Set up Grana" />
+  <String Id="InstallBody" Value="Installs for all users on this PC." />
+  <String Id="InstallVersion" Value="Version [WixBundleVersion] for Windows 11 (64-bit)" />
+  <String Id="InstallInstallButton" Value="Install" />
+  <String Id="InstallCancelButton" Value="Cancel" />
+  <String Id="ProgressHeadline" Value="Installing Grana" />
+  <String Id="OverallProgressPackageText" Value="Preparing files" />
+  <String Id="ProgressCancelButton" Value="Cancel" />
+  <String Id="ModifyHeadline" Value="Grana is already installed" />
+  <String Id="ModifyBody" Value="Repair the installation or remove it from this PC." />
+  <String Id="ModifyRepairButton" Value="Repair" />
+  <String Id="ModifyUninstallButton" Value="Uninstall" />
+  <String Id="ModifyCancelButton" Value="Cancel" />
+  <String Id="SuccessHeadline" Value="Grana is ready" />
+  <String Id="SuccessBody" Value="Launch it from the Start menu at any time." />
+  <String Id="SuccessLaunchButton" Value="Launch" />
+  <String Id="SuccessCloseButton" Value="Close" />
+  <String Id="SuccessRestartText" Value="Restart this PC to finish setting up Grana." />
+  <String Id="FailureHeadline" Value="Setup failed" />
+  <String Id="FailureHyperlinkLogText" Value="See the &lt;a href=&quot;#&quot;&gt;setup log&lt;/a&gt; for details." />
+  <String Id="FailureCloseButton" Value="Close" />
+  <String Id="HelpHeadline" Value="Setup help" />
+  <String Id="HelpText" Value="/install | /repair | /uninstall | /layout &lt;dir&gt; | /passive | /quiet | /log &lt;file&gt;" />
+  <String Id="HelpCloseButton" Value="Close" />
+  <String Id="ConfirmCancelMessage" Value="Cancel the setup?" />
+  <String Id="ExecuteUpgradeRelatedBundleMessage" Value="Previous version" />
+  <String Id="ExecutePatchRelatedBundleMessage" Value="Previous update" />
+  <String Id="ExecuteAddonRelatedBundleMessage" Value="Add-on" />
+  <String Id="PauseAutomaticUpdatesMessage" Value="Pausing automatic updates" />
+  <String Id="SystemRestorePointMessage" Value="Creating a restore point" />
+  <String Id="FilesInUseTitle" Value="Grana is running" />
+  <String Id="FilesInUseLabel" Value="Close Grana to continue setup." />
+  <String Id="FilesInUseCloseRadioButton" Value="Close Grana and restart it after setup." />
+  <String Id="FilesInUseDontCloseRadioButton" Value="Do not close Grana. Restart this PC after setup." />
+  <String Id="FilesInUseRetryButton" Value="Retry" />
+  <String Id="FilesInUseIgnoreButton" Value="Ignore" />
+  <String Id="FilesInUseExitButton" Value="Exit" />
+</WixLocalization>

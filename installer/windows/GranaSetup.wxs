@@ -1,0 +1,68 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="Grana" Version="$(var.Version)" Manufacturer="Grana"
+          UpgradeCode="6AD88E17-54F5-4212-A994-693B9EE1627D"
+          IconSourceFile="$(var.Art)\grana.ico" Compressed="yes">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                             ThemeFile="Theme.xml"
+                                             LocalizationFile="Theme.wxl"
+                                             LicenseUrl=""
+                                             LogoFile="$(var.Art)\mark.png"
+                                             SuppressOptionsUI="yes"
+                                             LaunchTarget="[ProgramFiles64Folder]Grana\grana.exe" />
+      <PayloadGroupRef Id="ThemeArt" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="$(var.Msi)" Visible="no" />
+    </Chain>
+  </Bundle>
+
+  <Fragment>
+    <PayloadGroup Id="ThemeArt">
+      <Payload Name="surface.png" SourceFile="$(var.Art)\surface.png" Compressed="yes" />
+      <Payload Name="surface@2x.png" SourceFile="$(var.Art)\surface@2x.png" Compressed="yes" />
+      <Payload Name="surface@3x.png" SourceFile="$(var.Art)\surface@3x.png" Compressed="yes" />
+      <Payload Name="mark.png" SourceFile="$(var.Art)\mark.png" Compressed="yes" />
+      <Payload Name="mark@2x.png" SourceFile="$(var.Art)\mark@2x.png" Compressed="yes" />
+      <Payload Name="mark@3x.png" SourceFile="$(var.Art)\mark@3x.png" Compressed="yes" />
+      <Payload Name="primary.png" SourceFile="$(var.Art)\primary.png" Compressed="yes" />
+      <Payload Name="primary@2x.png" SourceFile="$(var.Art)\primary@2x.png" Compressed="yes" />
+      <Payload Name="primary@3x.png" SourceFile="$(var.Art)\primary@3x.png" Compressed="yes" />
+      <Payload Name="primary-hover.png" SourceFile="$(var.Art)\primary-hover.png" Compressed="yes" />
+      <Payload Name="primary-hover@2x.png" SourceFile="$(var.Art)\primary-hover@2x.png" Compressed="yes" />
+      <Payload Name="primary-hover@3x.png" SourceFile="$(var.Art)\primary-hover@3x.png" Compressed="yes" />
+      <Payload Name="primary-pressed.png" SourceFile="$(var.Art)\primary-pressed.png" Compressed="yes" />
+      <Payload Name="primary-pressed@2x.png" SourceFile="$(var.Art)\primary-pressed@2x.png" Compressed="yes" />
+      <Payload Name="primary-pressed@3x.png" SourceFile="$(var.Art)\primary-pressed@3x.png" Compressed="yes" />
+      <Payload Name="primary-focus.png" SourceFile="$(var.Art)\primary-focus.png" Compressed="yes" />
+      <Payload Name="primary-focus@2x.png" SourceFile="$(var.Art)\primary-focus@2x.png" Compressed="yes" />
+      <Payload Name="primary-focus@3x.png" SourceFile="$(var.Art)\primary-focus@3x.png" Compressed="yes" />
+      <Payload Name="ghost.png" SourceFile="$(var.Art)\ghost.png" Compressed="yes" />
+      <Payload Name="ghost@2x.png" SourceFile="$(var.Art)\ghost@2x.png" Compressed="yes" />
+      <Payload Name="ghost@3x.png" SourceFile="$(var.Art)\ghost@3x.png" Compressed="yes" />
+      <Payload Name="ghost-hover.png" SourceFile="$(var.Art)\ghost-hover.png" Compressed="yes" />
+      <Payload Name="ghost-hover@2x.png" SourceFile="$(var.Art)\ghost-hover@2x.png" Compressed="yes" />
+      <Payload Name="ghost-hover@3x.png" SourceFile="$(var.Art)\ghost-hover@3x.png" Compressed="yes" />
+      <Payload Name="ghost-pressed.png" SourceFile="$(var.Art)\ghost-pressed.png" Compressed="yes" />
+      <Payload Name="ghost-pressed@2x.png" SourceFile="$(var.Art)\ghost-pressed@2x.png" Compressed="yes" />
+      <Payload Name="ghost-pressed@3x.png" SourceFile="$(var.Art)\ghost-pressed@3x.png" Compressed="yes" />
+      <Payload Name="ghost-focus.png" SourceFile="$(var.Art)\ghost-focus.png" Compressed="yes" />
+      <Payload Name="ghost-focus@2x.png" SourceFile="$(var.Art)\ghost-focus@2x.png" Compressed="yes" />
+      <Payload Name="ghost-focus@3x.png" SourceFile="$(var.Art)\ghost-focus@3x.png" Compressed="yes" />
+      <Payload Name="close.png" SourceFile="$(var.Art)\close.png" Compressed="yes" />
+      <Payload Name="close@2x.png" SourceFile="$(var.Art)\close@2x.png" Compressed="yes" />
+      <Payload Name="close@3x.png" SourceFile="$(var.Art)\close@3x.png" Compressed="yes" />
+      <Payload Name="close-hover.png" SourceFile="$(var.Art)\close-hover.png" Compressed="yes" />
+      <Payload Name="close-hover@2x.png" SourceFile="$(var.Art)\close-hover@2x.png" Compressed="yes" />
+      <Payload Name="close-hover@3x.png" SourceFile="$(var.Art)\close-hover@3x.png" Compressed="yes" />
+      <Payload Name="close-pressed.png" SourceFile="$(var.Art)\close-pressed.png" Compressed="yes" />
+      <Payload Name="close-pressed@2x.png" SourceFile="$(var.Art)\close-pressed@2x.png" Compressed="yes" />
+      <Payload Name="close-pressed@3x.png" SourceFile="$(var.Art)\close-pressed@3x.png" Compressed="yes" />
+      <Payload Name="track.png" SourceFile="$(var.Art)\track.png" Compressed="yes" />
+      <Payload Name="track@2x.png" SourceFile="$(var.Art)\track@2x.png" Compressed="yes" />
+      <Payload Name="track@3x.png" SourceFile="$(var.Art)\track@3x.png" Compressed="yes" />
+      <Payload Name="fill.png" SourceFile="$(var.Art)\fill.png" Compressed="yes" />
+      <Payload Name="grana.ico" SourceFile="$(var.Art)\grana.ico" Compressed="yes" />
+    </PayloadGroup>
+  </Fragment>
+</Wix>

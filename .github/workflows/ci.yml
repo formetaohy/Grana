@@ -17,6 +17,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  MACOSX_DEPLOYMENT_TARGET: 14.0
 
 jobs:
   quality:
@@ -61,7 +62,7 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.platform }}
+          key: test-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
@@ -86,9 +87,72 @@ jobs:
       - name: Build release binary
         run: cargo build --workspace --all-features --release --locked
 
+  installer:
+    name: ${{ matrix.platform }} Installer
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            runner: windows-latest
+          - platform: macOS
+            runner: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Apple silicon target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: installer-${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build release binary
+        if: runner.os == 'Windows'
+        run: cargo build -p grana --all-features --release --locked
+
+      - name: Build release binary
+        if: runner.os == 'macOS'
+        run: cargo build -p grana --all-features --release --locked --target aarch64-apple-darwin
+
+      - name: Regenerate installer artwork
+        run: cargo run -p grana-package --release --locked -- installer
+
+      - name: Verify installer artwork
+        run: git diff --exit-code -- installer
+
+      - name: Build installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./installer/windows/build.ps1 -Output dist
+
+      - name: Build installer
+        if: runner.os == 'macOS'
+        run: ./installer/macos/build.sh --output dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: |
+            dist/*.msi
+            dist/*.exe
+            dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
   check:
     name: Check & Test
-    needs: [quality, test, build]
+    needs: [quality, test, build, installer]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -98,3 +162,5 @@ jobs:
           test "${{ needs.quality.result }}" = success
           test "${{ needs.test.result }}" = success
           test "${{ needs.build.result }}" = success
+          test "${{ needs.installer.result }}" = success
+

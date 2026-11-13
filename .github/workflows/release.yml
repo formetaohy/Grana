@@ -10,6 +10,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  MACOSX_DEPLOYMENT_TARGET: 14.0
 
 jobs:
   version:
@@ -36,24 +37,14 @@ jobs:
     uses: ./.github/workflows/ci.yml
     needs: version
 
-  build:
-    name: ${{ matrix.platform }} Binary
+  windows:
+    name: Windows Installer
     needs: check
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: Windows
-            runner: windows-latest
-            archive: grana-windows-x86_64.zip
-          - platform: macOS
-            runner: macos-latest
-            archive: grana-macos-aarch64.tar.gz
-          - platform: Linux
-            runner: ubuntu-latest
-            archive: grana-linux-x86_64.tar.gz
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,37 +52,100 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release binary
-        run: cargo build --workspace --all-features --release --locked
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
 
-      - name: Package Windows archive
-        if: runner.os == 'Windows'
+      - name: Build release binary
+        run: cargo build -p grana --all-features --release --locked
+
+      - name: Import signing certificate
+        if: env.WINDOWS_CERTIFICATE != ''
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path stage, dist -Force | Out-Null
-          Copy-Item target/release/grana.exe stage
-          Copy-Item LICENSE stage
-          Compress-Archive -Path stage/* -DestinationPath dist/${{ matrix.archive }}
+          $path = Join-Path $env:RUNNER_TEMP 'grana.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          "GRANA_SIGN_CERTIFICATE=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "GRANA_SIGN_PASSWORD=$env:WINDOWS_CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Package Unix archive
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p stage dist
-          cp target/release/grana stage
-          cp LICENSE stage
-          tar -czf "dist/${{ matrix.archive }}" -C stage .
+      - name: Build installer
+        shell: pwsh
+        run: ./installer/windows/build.ps1 -Output dist
 
-      - name: Upload archive
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive }}
-          path: dist/${{ matrix.archive }}
+          name: windows-installer
+          path: |
+            dist/*.msi
+            dist/*.exe
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
+
+  macos:
+    name: macOS Installer
+    needs: check
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Apple silicon target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build -p grana --all-features --release --locked --target aarch64-apple-darwin
+
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/grana.keychain-db"
+          password="actions"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security default-keychain -s "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 -D > "$RUNNER_TEMP/grana.p12"
+          security import "$RUNNER_TEMP/grana.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+          echo "GRANA_SIGN_IDENTITY=${MACOS_SIGN_IDENTITY:?}" >> "$GITHUB_ENV"
+          if [[ -n "$MACOS_NOTARY_KEY" ]]; then
+            echo "$MACOS_NOTARY_KEY" | base64 -D > "$RUNNER_TEMP/AuthKey.p8"
+            {
+              echo "GRANA_NOTARY_KEY=$RUNNER_TEMP/AuthKey.p8"
+              echo "GRANA_NOTARY_KEY_ID=${MACOS_NOTARY_KEY_ID:?}"
+              echo "GRANA_NOTARY_ISSUER=${MACOS_NOTARY_ISSUER:?}"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Build installer
+        run: ./installer/macos/build.sh --output dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -102,7 +156,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download archives
+      - name: Download installers
         uses: actions/download-artifact@v4
         with:
           path: dist
@@ -110,7 +164,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          (cd dist && sha256sum grana-* > SHA256SUMS.txt)
+          (cd dist && sha256sum Grana-* > SHA256SUMS.txt)
 
       - name: Generate notes
         run: |
@@ -122,10 +176,12 @@ jobs:
           {
             echo "**Full Changelog**: $compare"
             echo
+            echo "Windows 11 (64-bit) and macOS 14 or newer on Apple silicon."
+            echo
             echo "### Downloads"
             echo
-            for archive in dist/grana-*; do
-              printf -- '- %s\n' "$(basename "$archive")"
+            for installer in dist/Grana-*; do
+              printf -- '- %s\n' "$(basename "$installer")"
             done
             echo
             echo "Checksums are listed in SHA256SUMS.txt."
@@ -140,3 +196,4 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag dist/*
           fi
+

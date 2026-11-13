@@ -1,0 +1,33 @@
+#include <windows.h>
+
+1 ICON "@ICON@"
+1 24 "@MANIFEST@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @VERSION_COMMA@,0
+ PRODUCTVERSION @VERSION_COMMA@,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Grana"
+            VALUE "FileDescription", "Grana"
+            VALUE "FileVersion", "@VERSION@"
+            VALUE "InternalName", "grana"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Grana"
+            VALUE "OriginalFilename", "grana.exe"
+            VALUE "ProductName", "Grana"
+            VALUE "ProductVersion", "@VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

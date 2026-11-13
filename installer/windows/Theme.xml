@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil">
+  <Font Id="Window" Height="-14" Weight="400" Foreground="ece4e2" Background="18120f">Segoe UI Variable Text</Font>
+  <Font Id="Body" Height="-14" Weight="400" Foreground="ece4e2">Segoe UI Variable Text</Font>
+  <Font Id="BodyVariant" Height="-14" Weight="400" Foreground="d4c6c2">Segoe UI Variable Text</Font>
+  <Font Id="Caption" Height="-12" Weight="400" Foreground="9f908c">Segoe UI Variable Text</Font>
+  <Font Id="Display" Height="-28" Weight="600" Foreground="ece4e2">Segoe UI Variable Display</Font>
+  <Font Id="Headline" Height="-21" Weight="600" Foreground="ece4e2">Segoe UI Variable Display</Font>
+  <Font Id="ErrorHeadline" Height="-21" Weight="600" Foreground="b5b8f2">Segoe UI Variable Display</Font>
+  <Font Id="PrimaryButton" Height="-14" Weight="600" Foreground="6f2e06">Segoe UI Variable Text</Font>
+  <Font Id="GhostButton" Height="-14" Weight="500" Foreground="d4c6c2">Segoe UI Variable Text</Font>
+
+  <Image Id="surface" ImageFile="surface.png">
+    <AlternateResolution ImageFile="surface@2x.png" />
+    <AlternateResolution ImageFile="surface@3x.png" />
+  </Image>
+  <Image Id="mark" ImageFile="mark.png">
+    <AlternateResolution ImageFile="mark@2x.png" />
+    <AlternateResolution ImageFile="mark@3x.png" />
+  </Image>
+  <Image Id="primary" ImageFile="primary.png">
+    <AlternateResolution ImageFile="primary@2x.png" />
+    <AlternateResolution ImageFile="primary@3x.png" />
+  </Image>
+  <Image Id="primaryHover" ImageFile="primary-hover.png">
+    <AlternateResolution ImageFile="primary-hover@2x.png" />
+    <AlternateResolution ImageFile="primary-hover@3x.png" />
+  </Image>
+  <Image Id="primaryPressed" ImageFile="primary-pressed.png">
+    <AlternateResolution ImageFile="primary-pressed@2x.png" />
+    <AlternateResolution ImageFile="primary-pressed@3x.png" />
+  </Image>
+  <Image Id="primaryFocus" ImageFile="primary-focus.png">
+    <AlternateResolution ImageFile="primary-focus@2x.png" />
+    <AlternateResolution ImageFile="primary-focus@3x.png" />
+  </Image>
+  <Image Id="ghost" ImageFile="ghost.png">
+    <AlternateResolution ImageFile="ghost@2x.png" />
+    <AlternateResolution ImageFile="ghost@3x.png" />
+  </Image>
+  <Image Id="ghostHover" ImageFile="ghost-hover.png">
+    <AlternateResolution ImageFile="ghost-hover@2x.png" />
+    <AlternateResolution ImageFile="ghost-hover@3x.png" />
+  </Image>
+  <Image Id="ghostPressed" ImageFile="ghost-pressed.png">
+    <AlternateResolution ImageFile="ghost-pressed@2x.png" />
+    <AlternateResolution ImageFile="ghost-pressed@3x.png" />
+  </Image>
+  <Image Id="ghostFocus" ImageFile="ghost-focus.png">
+    <AlternateResolution ImageFile="ghost-focus@2x.png" />
+    <AlternateResolution ImageFile="ghost-focus@3x.png" />
+  </Image>
+  <Image Id="close" ImageFile="close.png">
+    <AlternateResolution ImageFile="close@2x.png" />
+    <AlternateResolution ImageFile="close@3x.png" />
+  </Image>
+  <Image Id="closeHover" ImageFile="close-hover.png">
+    <AlternateResolution ImageFile="close-hover@2x.png" />
+    <AlternateResolution ImageFile="close-hover@3x.png" />
+  </Image>
+  <Image Id="closePressed" ImageFile="close-pressed.png">
+    <AlternateResolution ImageFile="close-pressed@2x.png" />
+    <AlternateResolution ImageFile="close-pressed@3x.png" />
+  </Image>
+  <Image Id="track" ImageFile="track.png">
+    <AlternateResolution ImageFile="track@2x.png" />
+    <AlternateResolution ImageFile="track@3x.png" />
+  </Image>
+  <Image Id="fill" ImageFile="fill.png" />
+
+  <Window Width="720" Height="460" HexStyle="90000000" FontId="Window" Caption="Grana Setup" IconFile="grana.ico">
+    <ImageControl X="48" Y="44" Width="52" Height="52" ImageId="mark" />
+    <Label X="116" Y="48" Width="440" Height="36" FontId="Display" DisablePrefix="yes">#(loc.Title)</Label>
+    <Label X="116" Y="92" Width="440" Height="20" FontId="BodyVariant" DisablePrefix="yes">#(loc.Tagline)</Label>
+    <Button Name="CloseButton" X="-20" Y="24" Width="32" Height="32" TabStop="yes" FontId="GhostButton">
+      <ButtonImage ImageId="close" />
+      <ButtonHoverImage ImageId="closeHover" />
+      <ButtonSelectedImage ImageId="closePressed" />
+      <Tooltip>#(loc.CloseTooltip)</Tooltip>
+      <CloseWindowAction />
+    </Button>
+
+    <Page Name="Loading">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="24" FontId="Caption" DisablePrefix="yes">#(loc.LoadingText)</Label>
+    </Page>
+
+    <Page Name="Install">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="Headline" DisablePrefix="yes">#(loc.InstallHeadline)</Label>
+      <Label X="48" Y="236" Width="560" Height="20" FontId="BodyVariant" DisablePrefix="yes">#(loc.InstallBody)</Label>
+      <Label X="48" Y="264" Width="560" Height="18" FontId="Caption" DisablePrefix="yes">#(loc.InstallVersion)</Label>
+      <Button Name="InstallButton" X="48" Y="372" Width="132" Height="44" TabStop="yes" FontId="PrimaryButton">
+        <ButtonImage ImageId="primary" />
+        <ButtonFocusImage ImageId="primaryFocus" />
+        <ButtonHoverImage ImageId="primaryHover" />
+        <ButtonSelectedImage ImageId="primaryPressed" />
+        <Text>#(loc.InstallInstallButton)</Text>
+      </Button>
+      <Button Name="InstallCancelButton" X="192" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.InstallCancelButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Progress">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="Headline" DisablePrefix="yes">#(loc.ProgressHeadline)</Label>
+      <Label Name="OverallProgressPackageText" X="48" Y="236" Width="600" Height="20" FontId="BodyVariant" DisablePrefix="yes">#(loc.OverallProgressPackageText)</Label>
+      <ImageControl X="48" Y="288" Width="624" Height="10" ImageId="track" />
+      <Progressbar Name="OverallCalculatedProgressbar" X="50" Y="290" Width="620" Height="6" FontId="GhostButton">
+        <ProgressbarImage ImageId="fill" />
+      </Progressbar>
+      <Button Name="ProgressCancelButton" X="48" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.ProgressCancelButton)</Text>
+      </Button>
+    </Page>
+
+    <Page Name="Modify">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="Headline" DisablePrefix="yes">#(loc.ModifyHeadline)</Label>
+      <Label X="48" Y="236" Width="560" Height="20" FontId="BodyVariant" DisablePrefix="yes">#(loc.ModifyBody)</Label>
+      <Button Name="RepairButton" X="48" Y="372" Width="132" Height="44" TabStop="yes" FontId="PrimaryButton">
+        <ButtonImage ImageId="primary" />
+        <ButtonFocusImage ImageId="primaryFocus" />
+        <ButtonHoverImage ImageId="primaryHover" />
+        <ButtonSelectedImage ImageId="primaryPressed" />
+        <Text>#(loc.ModifyRepairButton)</Text>
+      </Button>
+      <Button Name="UninstallButton" X="192" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.ModifyUninstallButton)</Text>
+      </Button>
+      <Button Name="ModifyCancelButton" X="314" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.ModifyCancelButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Success">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="Headline" DisablePrefix="yes">#(loc.SuccessHeadline)</Label>
+      <Label X="48" Y="236" Width="560" Height="20" FontId="BodyVariant" DisablePrefix="yes">#(loc.SuccessBody)</Label>
+      <Label X="48" Y="330" Width="600" Height="18" FontId="Caption" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.SuccessRestartText)</Label>
+      <Button Name="LaunchButton" X="48" Y="372" Width="132" Height="44" TabStop="yes" FontId="PrimaryButton">
+        <ButtonImage ImageId="primary" />
+        <ButtonFocusImage ImageId="primaryFocus" />
+        <ButtonHoverImage ImageId="primaryHover" />
+        <ButtonSelectedImage ImageId="primaryPressed" />
+        <Text>#(loc.SuccessLaunchButton)</Text>
+      </Button>
+      <Button Name="SuccessCloseButton" X="192" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.SuccessCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Failure">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="ErrorHeadline" DisablePrefix="yes">#(loc.FailureHeadline)</Label>
+      <Hypertext Name="FailureLogFileLink" X="48" Y="236" Width="520" Height="20" FontId="Window" TabStop="yes" HideWhenDisabled="yes">#(loc.FailureHyperlinkLogText)</Hypertext>
+      <Hypertext Name="FailureMessageText" X="48" Y="266" Width="520" Height="64" FontId="Window" TabStop="yes" HideWhenDisabled="yes" />
+      <Button Name="FailureCloseButton" X="48" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.FailureCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Help">
+      <ImageControl X="0" Y="0" Width="0" Height="0" ImageId="surface" />
+      <Label X="48" Y="196" Width="600" Height="30" FontId="Headline" DisablePrefix="yes">#(loc.HelpHeadline)</Label>
+      <Label X="48" Y="236" Width="600" Height="18" FontId="Caption" DisablePrefix="yes">#(loc.HelpText)</Label>
+      <Button Name="HelpCloseButton" X="48" Y="372" Width="110" Height="44" TabStop="yes" FontId="GhostButton">
+        <ButtonImage ImageId="ghost" />
+        <ButtonFocusImage ImageId="ghostFocus" />
+        <ButtonHoverImage ImageId="ghostHover" />
+        <ButtonSelectedImage ImageId="ghostPressed" />
+        <Text>#(loc.HelpCloseButton)</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+  </Window>
+</Theme>
+
+

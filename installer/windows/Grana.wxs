@@ -1,0 +1,36 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Grana" Manufacturer="Grana" Version="$(var.Version)"
+           UpgradeCode="BDD23C45-381A-4E8B-8177-B95B1424337A"
+           Scope="perMachine" Compressed="yes" Language="1033">
+    <SummaryInformation Description="Grana" Manufacturer="Grana" />
+    <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer version of Grana is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="GranaIcon" SourceFile="$(var.Art)\grana.ico" />
+    <Property Id="ARPPRODUCTICON" Value="GranaIcon" />
+    <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
+    <Property Id="WINDOWSBUILD">
+      <RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILD &gt;= 22000)" Message="Grana requires Windows 11 (64-bit)." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Grana">
+        <Component Id="Application" Guid="*">
+          <File Id="GranaExe" Source="$(var.Binary)" KeyPath="yes">
+            <Shortcut Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Name="Grana" WorkingDirectory="INSTALLFOLDER" Icon="GranaIcon" IconIndex="0" Advertise="no" />
+          </File>
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Grana" />
+    </StandardDirectory>
+
+    <Feature Id="Complete" Title="Grana" Level="1">
+      <ComponentRef Id="Application" />
+    </Feature>
+  </Package>
+</Wix>

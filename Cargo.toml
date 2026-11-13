@@ -12,6 +12,7 @@ repository = "https://github.com/formetaohy/Grana"
 [workspace.dependencies]
 arboard = { version = "3", default-features = false }
 bytemuck = { version = "1", features = ["derive", "extern_crate_alloc"] }
+embed-resource = "3"
 glam = { version = "0.30", features = ["bytemuck"] }
 half = "2"
 wgpu = "30"
@@ -54,6 +55,7 @@ grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
 grana-i18n = { version = "0.1.1", path = "crates/grana-i18n" }
 grana-offline = { version = "0.1.1", path = "crates/grana-offline" }
+grana-package = { version = "0.1.1", path = "crates/grana-package" }
 grana-page = { version = "0.1.1", path = "crates/grana-page" }
 grana-report = { version = "0.1.1", path = "crates/grana-report" }
 grana-app = { version = "0.1.1", path = "crates/grana-app" }
@@ -119,6 +121,9 @@ path = "tests/suite/main.rs"
 
 [dependencies]
 grana-app = { workspace = true }
+
+[build-dependencies]
+embed-resource = { workspace = true }
 
 [dev-dependencies]
 glam = { workspace = true }
