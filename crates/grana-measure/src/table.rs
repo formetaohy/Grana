@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use grana_object::{CellSet, FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
@@ -430,7 +431,7 @@ pub struct Table {
     columns: Vec<Column>,
     identity: usize,
     observations: Vec<Observation>,
-    values: Vec<f32>,
+    data: Vec<Vec<f32>>,
     group: Group,
     aggregate: Aggregate,
     basis: Option<Arc<Table>>,
@@ -512,14 +513,18 @@ impl Table {
         columns: Vec<Column>,
         identity: usize,
         observations: Vec<Observation>,
-        values: Vec<f32>,
+        data: Vec<Vec<f32>>,
         group: Group,
         aggregate: Aggregate,
     ) -> Self {
         assert_eq!(
-            values.len(),
-            observations.len() * columns.len(),
-            "every observation carries every column"
+            data.len(),
+            columns.len(),
+            "every column of a table holds its values"
+        );
+        assert!(
+            data.iter().all(|column| column.len() == observations.len()),
+            "every column covers every observation"
         );
         assert!(!columns.is_empty(), "a table has at least one column");
         assert!(identity < columns.len(), "a table keeps an identity column");
@@ -528,7 +533,7 @@ impl Table {
             columns,
             identity,
             observations,
-            values,
+            data,
             group,
             aggregate,
             basis: None,
@@ -554,15 +559,9 @@ impl Table {
                 .all(|existing| existing.key() != column.key()),
             "a table names each column once"
         );
-        let width = self.columns.len();
-        let mut appended = Vec::with_capacity(rows * (width + 1));
-        for (row, value) in values.into_iter().enumerate() {
-            appended.extend_from_slice(&self.values[row * width..(row + 1) * width]);
-            appended.push(value);
-        }
         self.columns.push(column);
         self.sources.push(source);
-        self.values = appended;
+        self.data.push(values);
     }
 
     fn attach_neighbours(&mut self, bucket: impl Fn(Observation) -> Option<u32>) {
@@ -684,7 +683,7 @@ impl Table {
             row < self.rows() && column < self.columns.len(),
             "the cell lies inside the table"
         );
-        self.values[row * self.columns.len() + column]
+        self.data[column][row]
     }
 
     pub fn observation(&self, row: usize) -> Observation {
@@ -893,10 +892,33 @@ impl Table {
         })
     }
 
-    pub fn csv(&self, rows: &[usize]) -> String {
-        csv::write(&self.columns, rows.len(), |row, column| {
-            self.value(rows[row], column)
-        })
+    pub fn write_csv(
+        &self,
+        writer: &mut impl Write,
+        report: &mut dyn FnMut(usize, usize),
+    ) -> io::Result<()> {
+        csv::write(
+            writer,
+            &self.columns,
+            self.rows(),
+            |row, column| self.data[column][row],
+            report,
+        )
+    }
+
+    pub fn write_csv_rows(
+        &self,
+        writer: &mut impl Write,
+        rows: &[usize],
+        report: &mut dyn FnMut(usize, usize),
+    ) -> io::Result<()> {
+        csv::write(
+            writer,
+            &self.columns,
+            rows.len(),
+            |row, column| self.value(rows[row], column),
+            report,
+        )
     }
 }
 
@@ -1038,16 +1060,17 @@ fn molecule_table(
         let held = *offsets.last().expect("a molecule table starts at zero");
         offsets.push(held + molecule.localizations as usize);
     }
-    let mut values = vec![f32::NAN; molecules.len() * width];
+    let mut data = (0..width)
+        .map(|_| vec![f32::NAN; molecules.len()])
+        .collect::<Vec<_>>();
     for (row, molecule) in molecules.iter().enumerate() {
-        let at = row * width;
-        values[at] = molecule.group as f32;
-        values[at + 1] = molecule.localizations as f32;
-        values[at + 2] = (molecule.first + 1) as f32;
-        values[at + 3] = (molecule.last + 1) as f32;
+        data[0][row] = molecule.group as f32;
+        data[1][row] = molecule.localizations as f32;
+        data[2][row] = (molecule.first + 1) as f32;
+        data[3][row] = (molecule.last + 1) as f32;
         for axis in 0..3 {
-            values[at + 4 + axis] = molecule.centroid(axis);
-            values[at + 7 + axis] = molecule.spread(axis);
+            data[4 + axis][row] = molecule.centroid(axis);
+            data[7 + axis][row] = molecule.spread(axis);
         }
     }
     let total = *offsets.last().expect("a molecule table starts at zero");
@@ -1078,8 +1101,7 @@ fn molecule_table(
             }
         }
         for row in 0..molecules.len() {
-            values[row * width + identity + slot] =
-                aggregate.apply(&gathered[offsets[row]..offsets[row + 1]]);
+            data[identity + slot][row] = aggregate.apply(&gathered[offsets[row]..offsets[row + 1]]);
         }
     }
     let observations = molecules
@@ -1095,7 +1117,7 @@ fn molecule_table(
         columns,
         identity,
         observations,
-        values,
+        data,
         Group::Molecule,
         aggregate,
     )
@@ -1133,8 +1155,14 @@ fn object_table(
         .iter()
         .map(|cell| cell.column(channels, keys, frames[0].relations, frames[0].children))
         .collect::<Vec<_>>();
-    let mut observations = Vec::new();
-    let mut values = Vec::new();
+    let rows = frames
+        .iter()
+        .map(|frame| frame.objects.count())
+        .sum::<usize>();
+    let mut observations = Vec::with_capacity(rows);
+    let mut data = (0..cells.len())
+        .map(|_| Vec::with_capacity(rows))
+        .collect::<Vec<_>>();
     for frame in frames {
         let parents = frame.objects.count();
         let children = frame
@@ -1150,8 +1178,8 @@ fn object_table(
                 track,
                 molecule: None,
             });
-            for cell in &cells {
-                values.push(cell.value(frame, object, tracks, frame_interval, &children));
+            for (index, cell) in cells.iter().enumerate() {
+                data[index].push(cell.value(frame, object, tracks, frame_interval, &children));
             }
         }
     }
@@ -1159,7 +1187,7 @@ fn object_table(
         columns,
         4,
         observations,
-        values,
+        data,
         Group::Object,
         Aggregate::MEAN,
     )
@@ -1197,6 +1225,7 @@ fn track_table(
         );
     };
     let rows = set.len();
+    let identity = TrackMeasurement::ALL.len();
     let slots = measurements.len() + relations.len();
     let mut collected = vec![Vec::<f32>::new(); rows * slots];
     for frame in frames {
@@ -1214,7 +1243,9 @@ fn track_table(
         }
     }
     let mut observations = Vec::with_capacity(rows);
-    let mut values = Vec::with_capacity(rows * columns.len());
+    let mut data = (0..columns.len())
+        .map(|_| Vec::with_capacity(rows))
+        .collect::<Vec<_>>();
     for track in 0..rows {
         observations.push(Observation {
             time: None,
@@ -1222,18 +1253,18 @@ fn track_table(
             track: Some(track),
             molecule: None,
         });
-        for field in &TrackMeasurement::ALL {
-            values.push(field.value(track, set));
+        for (index, field) in TrackMeasurement::ALL.iter().enumerate() {
+            data[index].push(field.value(track, set));
         }
         for cell in 0..slots {
-            values.push(aggregate.apply(&collected[track * slots + cell]));
+            data[identity + cell].push(aggregate.apply(&collected[track * slots + cell]));
         }
     }
     Table::new(
         columns,
-        TrackMeasurement::ALL.len(),
+        identity,
         observations,
-        values,
+        data,
         Group::Track,
         aggregate,
     )
@@ -1260,8 +1291,11 @@ fn timepoint_table(
     columns.extend(relations.iter().map(|(index, field)| {
         aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
     }));
-    let mut observations = Vec::with_capacity(frames.len());
-    let mut values = Vec::with_capacity(frames.len() * columns.len());
+    let rows = frames.len();
+    let mut observations = Vec::with_capacity(rows);
+    let mut data = (0..columns.len())
+        .map(|_| Vec::with_capacity(rows))
+        .collect::<Vec<_>>();
     for frame in frames {
         observations.push(Observation {
             time: Some(frame.time),
@@ -1269,29 +1303,30 @@ fn timepoint_table(
             track: None,
             molecule: None,
         });
-        for field in &TimeField::ALL {
-            values.push(field.value(frame, frame_interval));
+        for (index, field) in TimeField::ALL.iter().enumerate() {
+            data[index].push(field.value(frame, frame_interval));
         }
-        for measurement in &measurements {
+        for (slot, measurement) in measurements.iter().enumerate() {
             let mut collected = Vec::with_capacity(frame.objects.count());
             for object in 0..frame.objects.count() {
                 collected.push(measurement.value(frame.objects, object));
             }
-            values.push(aggregate.apply(&collected));
+            data[TimeField::ALL.len() + slot].push(aggregate.apply(&collected));
         }
-        for (index, field) in &relations {
+        for (slot, (index, field)) in relations.iter().enumerate() {
             let mut collected = Vec::with_capacity(frame.objects.count());
             for object in 0..frame.objects.count() {
                 collected.push(field.value(frame.relations[*index], object));
             }
-            values.push(aggregate.apply(&collected));
+            data[TimeField::ALL.len() + measurements.len() + slot]
+                .push(aggregate.apply(&collected));
         }
     }
     Table::new(
         columns,
         TimeField::ALL.len(),
         observations,
-        values,
+        data,
         Group::Timepoint,
         aggregate,
     )

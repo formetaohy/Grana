@@ -67,7 +67,7 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
     assert_eq!(value(&per_frame, 0, "diameter_um_sum"), 2.0);
 
-    let csv = per_frame.csv(&[0, 1]);
+    let csv = csv_of(&per_frame, &[0, 1]);
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3);
     assert!(lines[0].starts_with("frame,time_s,objects"));
@@ -101,7 +101,7 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(molecules.observation(0).molecule(), Some(1));
     assert!((value(&molecules, 0, "nearest_distance_um") - 27.0f32.sqrt()).abs() < 1.0e-5);
     assert!(
-        molecules.csv(&[0]).starts_with(
+        csv_of(&molecules, &[0]).starts_with(
             "molecule,localizations,first_frame,last_frame,x_um,y_um,z_um,spread_x_um"
         )
     );
@@ -444,6 +444,14 @@ fn value(table: &Table, row: usize, key: &str) -> f32 {
         .position(|column| column.key() == key)
         .unwrap_or_else(|| panic!("the {key} column exists"));
     table.value(row, column)
+}
+
+fn csv_of(table: &Table, rows: &[usize]) -> String {
+    let mut text = Vec::new();
+    table
+        .write_csv_rows(&mut text, rows, &mut |_, _| {})
+        .expect("the statistics write as CSV");
+    String::from_utf8(text).expect("the statistics are text")
 }
 
 fn spots() -> SpotSet {

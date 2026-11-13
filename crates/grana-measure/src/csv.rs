@@ -1,6 +1,14 @@
 use std::borrow::Cow;
+use std::fmt::Write as _;
+use std::io::{self, Write};
 
 use crate::Column;
+
+const BLOCK: usize = 4096;
+
+const FIELD: usize = 16;
+
+const STEPS: usize = 256;
 
 pub fn line(fields: &[&str]) -> String {
     let mut text = String::new();
@@ -26,11 +34,13 @@ pub fn scientific(value: f64) -> String {
 }
 
 pub(crate) fn write(
+    writer: &mut impl Write,
     columns: &[Column],
     rows: usize,
     value: impl Fn(usize, usize) -> f32,
-) -> String {
-    let mut text = String::new();
+    report: &mut dyn FnMut(usize, usize),
+) -> io::Result<()> {
+    let mut text = String::with_capacity(BLOCK * columns.len() * FIELD);
     for (index, column) in columns.iter().enumerate() {
         if index > 0 {
             text.push(',');
@@ -38,16 +48,32 @@ pub(crate) fn write(
         text.push_str(&escape(column.key()));
     }
     text.push('\n');
-    for row in 0..rows {
-        for (index, column) in columns.iter().enumerate() {
-            if index > 0 {
-                text.push(',');
+    writer.write_all(text.as_bytes())?;
+    report(0, rows);
+    let stride = rows.div_ceil(STEPS).max(BLOCK);
+    let mut reported = 0;
+    let mut start = 0;
+    while start < rows {
+        let end = (start + BLOCK).min(rows);
+        text.clear();
+        for row in start..end {
+            for (index, column) in columns.iter().enumerate() {
+                if index > 0 {
+                    text.push(',');
+                }
+                write!(text, "{:.*}", column.decimals() as usize, value(row, index))
+                    .expect("a csv field writes into a string");
             }
-            text.push_str(&escape(&column.format(value(row, index))));
+            text.push('\n');
         }
-        text.push('\n');
+        writer.write_all(text.as_bytes())?;
+        start = end;
+        if end - reported >= stride || end == rows {
+            report(end, rows);
+            reported = end;
+        }
     }
-    text
+    Ok(())
 }
 
 fn escape(value: &str) -> Cow<'_, str> {

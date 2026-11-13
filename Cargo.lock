@@ -3856,6 +3856,7 @@ dependencies = [
 name = "grana-readout"
 version = "0.1.1"
 dependencies = [
+ "grana-file",
  "grana-volume",
  "hdf5-pure",
  "openreadout-core",

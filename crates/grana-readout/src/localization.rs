@@ -8,7 +8,7 @@ mod picasso;
 mod text;
 mod write;
 
-pub use write::{Metadata, write};
+pub use write::{Metadata, Table};
 
 const BLOCK: usize = 1 << 16;
 const FRAME_TOLERANCE: f64 = 1.0e-6;
@@ -23,22 +23,6 @@ pub struct Localization {
 }
 
 impl Localization {
-    pub fn new(
-        time: u32,
-        center: [f32; 3],
-        sigma: [f32; 3],
-        quality: f32,
-        group: Option<u32>,
-    ) -> Self {
-        Self {
-            time,
-            center,
-            sigma,
-            quality,
-            group,
-        }
-    }
-
     pub fn time(&self) -> u32 {
         self.time
     }

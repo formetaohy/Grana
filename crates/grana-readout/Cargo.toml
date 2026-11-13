@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-file = { workspace = true }
 grana-volume = { workspace = true }
 hdf5-pure = { workspace = true }
 openreadout-core = { workspace = true }

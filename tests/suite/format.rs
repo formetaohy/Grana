@@ -1082,33 +1082,21 @@ fn reads_picasso_localization_tables() {
 fn writes_picasso_localization_tables() {
     let temp = Temp::new("suite-picasso-write");
     let path = temp.path().join("localizations.hdf5");
-    let entries = vec![
-        grana_readout::localization::Localization::new(
-            0,
-            [2.0, 1.0, -0.5],
-            [0.02, 0.022, 0.045],
-            3200.0,
-            Some(4),
-        ),
-        grana_readout::localization::Localization::new(
-            1,
-            [2.5, 1.5, -0.6],
-            [0.03, 0.03, 0.05],
-            2800.0,
-            Some(4),
-        ),
-        grana_readout::localization::Localization::new(
-            1,
-            [4.0, 2.0, -0.4],
-            [0.03, 0.03, 0.05],
-            1800.0,
-            None,
-        ),
-    ];
     let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
     let metadata =
         grana_readout::localization::Metadata::new(2, 64, 32, 100.0, true, level.origin());
-    grana_readout::localization::write(&path, &metadata, &entries).expect("the table writes");
+    let mut written =
+        grana_readout::localization::Table::new(&path, metadata).expect("the table opens");
+    for (time, center, sigma, photons, group) in [
+        (0, [2.0, 1.0, -0.5], [0.02, 0.022, 0.045], 3200.0, Some(4)),
+        (1, [2.5, 1.5, -0.6], [0.03, 0.03, 0.05], 2800.0, Some(4)),
+        (1, [4.0, 2.0, -0.4], [0.03, 0.03, 0.05], 1800.0, None),
+    ] {
+        written
+            .push(time, center, sigma, photons, group)
+            .expect("the localization appends");
+    }
+    written.write().expect("the table writes");
     let mut found = support::localization_reader(&path, level, 2);
     assert_eq!(
         (found.pixel(), found.width(), found.height(), found.volume()),

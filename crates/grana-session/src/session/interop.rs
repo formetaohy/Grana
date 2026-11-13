@@ -103,7 +103,8 @@ impl Session {
             source.map_or(extent.z() > 1, grana_scene::LocalizationSource::volume),
             level.origin(),
         );
-        let mut entries = Vec::new();
+        let mut table = grana_readout::localization::Table::new(path, metadata)
+            .map_err(|error| error.to_string())?;
         for time in 0..scene.frame_count() {
             let Some(frame) = object.frame(time) else {
                 continue;
@@ -112,19 +113,18 @@ impl Session {
                 if !object.visible_object(time, index) {
                     continue;
                 }
-                entries.push(grana_readout::localization::Localization::new(
-                    time,
-                    spot.center(),
-                    spot.sigma(),
-                    spot.quality(),
-                    spot.group(),
-                ));
+                table
+                    .push(
+                        time,
+                        spot.center(),
+                        spot.sigma(),
+                        spot.quality(),
+                        spot.group(),
+                    )
+                    .map_err(|error| error.to_string())?;
             }
         }
-        let file = grana_file::Atomic::file(path).map_err(|error| error.to_string())?;
-        grana_readout::localization::write(file.staging(), &metadata, &entries)
-            .map_err(|error| error.to_string())?;
-        file.commit().map_err(|error| error.to_string())
+        table.write().map_err(|error| error.to_string())
     }
 
     pub(super) fn choose_import_tracks(&mut self) {

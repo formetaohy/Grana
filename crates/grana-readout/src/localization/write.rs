@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use hdf5_pure::{CompoundTypeBuilder, FileBuilder};
+use hdf5_pure::{CompoundTypeBuilder, Datatype, FileBuilder};
 
-use super::Localization;
 use crate::error::Error;
 
 const NANOMETER: f32 = 0.001;
+
 const UNGROUPED: i64 = -1;
 
 pub struct Metadata {
@@ -51,21 +51,64 @@ impl Metadata {
     }
 }
 
-struct Record {
-    frame: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    photons: f32,
-    sx: f32,
-    sy: f32,
-    lpx: f32,
-    lpy: f32,
-    lpz: f32,
-    group: i64,
+struct Group {
+    localizations: u64,
+    events: u64,
+    length: f64,
+    square: f64,
+    run: f64,
+    last: Option<u32>,
 }
 
-struct GroupRecord {
+impl Group {
+    fn new() -> Self {
+        Self {
+            localizations: 0,
+            events: 0,
+            length: 0.0,
+            square: 0.0,
+            run: 0.0,
+            last: None,
+        }
+    }
+
+    fn push(&mut self, time: u32) {
+        self.localizations += 1;
+        match self.last {
+            Some(last) if time == last + 1 => self.run += 1.0,
+            Some(_) => {
+                self.close();
+                self.run = 1.0;
+            }
+            None => self.run = 1.0,
+        }
+        self.last = Some(time);
+    }
+
+    fn close(&mut self) {
+        self.events += 1;
+        self.length += self.run;
+        self.square += self.run * self.run;
+    }
+
+    fn summary(&self, path: &Path, id: i64) -> Result<Summary, Error> {
+        let count = self.events as f64;
+        let length = self.length / count;
+        let spread = (self.square / count - length * length).sqrt();
+        if !length.is_finite() || !spread.is_finite() {
+            return Err(Error::write(path, "a group carries no finite length"));
+        }
+        Ok(Summary {
+            group: id,
+            locs: self.localizations,
+            events: self.events,
+            length,
+            spread,
+        })
+    }
+}
+
+struct Summary {
     group: i64,
     locs: u64,
     events: u64,
@@ -73,171 +116,136 @@ struct GroupRecord {
     spread: f64,
 }
 
-pub fn write(
-    path: &Path,
-    metadata: &Metadata,
-    localizations: &[Localization],
-) -> Result<(), Error> {
-    if localizations.is_empty() {
-        return Err(Error::write(path, "the object set holds no localization"));
-    }
-    let pixel = metadata.pixel * NANOMETER;
-    let records = localizations
-        .iter()
-        .map(|entry| record(path, entry, pixel, metadata.origin))
-        .collect::<Result<Vec<_>, Error>>()?;
-    let groups = groups(path, &records)?;
-    let mut builder = FileBuilder::new();
-    if metadata.volume {
-        write_volume(&mut builder, path, &records)?;
-    } else {
-        write_plane(&mut builder, path, &records)?;
-    }
-    if !groups.is_empty() {
-        write_groups(&mut builder, path, &groups)?;
-    }
-    let width = reach(&records, metadata.width, |record| record.x);
-    let height = reach(&records, metadata.height, |record| record.y);
-    write_metadata(&mut builder, metadata, width, height)?;
-    builder
-        .write(path)
-        .map_err(|error| Error::write(path, error.to_string()))
+pub struct Table {
+    path: PathBuf,
+    metadata: Metadata,
+    datatype: Datatype,
+    encoded: Vec<u8>,
+    groups: BTreeMap<i64, Group>,
+    reach: [f32; 2],
+    rows: u64,
 }
 
-fn record(
-    path: &Path,
-    entry: &Localization,
-    pixel: f32,
-    origin: [f32; 3],
-) -> Result<Record, Error> {
-    let center = entry.center();
-    let sigma = entry.sigma();
-    if !center.iter().all(|value| value.is_finite()) {
-        return Err(Error::write(
+impl Table {
+    pub fn new(path: &Path, metadata: Metadata) -> Result<Self, Error> {
+        let datatype = if metadata.volume {
+            volume_datatype()
+        } else {
+            plane_datatype()
+        }
+        .map_err(|error| Error::write(path, error.to_string()))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            metadata,
+            datatype,
+            encoded: Vec::new(),
+            groups: BTreeMap::new(),
+            reach: [f32::NEG_INFINITY; 2],
+            rows: 0,
+        })
+    }
+
+    pub fn push(
+        &mut self,
+        time: u32,
+        center: [f32; 3],
+        sigma: [f32; 3],
+        quality: f32,
+        group: Option<u32>,
+    ) -> Result<(), Error> {
+        if !center.iter().all(|value| value.is_finite()) {
+            return Err(Error::write(
+                &self.path,
+                "a localization lies at an infinite center",
+            ));
+        }
+        if !sigma.iter().all(|value| value.is_finite() && *value > 0.0) {
+            return Err(Error::write(
+                &self.path,
+                "a localization carries a non-positive precision",
+            ));
+        }
+        let pixel = self.metadata.pixel * NANOMETER;
+        let origin = self.metadata.origin;
+        let x = (center[0] - origin[0]) / pixel;
+        let y = (center[1] - origin[1]) / pixel;
+        let z = (center[2] - origin[2]) / NANOMETER;
+        let sx = sigma[0] / pixel;
+        let sy = sigma[1] / pixel;
+        let sz = sigma[2] / NANOMETER;
+        self.reach[0] = self.reach[0].max(x);
+        self.reach[1] = self.reach[1].max(y);
+        self.encoded.extend_from_slice(&time.to_le_bytes());
+        self.encoded.extend_from_slice(&x.to_le_bytes());
+        self.encoded.extend_from_slice(&y.to_le_bytes());
+        if self.metadata.volume {
+            self.encoded.extend_from_slice(&z.to_le_bytes());
+        }
+        for value in [quality, sx, sy, sx, sy] {
+            self.encoded.extend_from_slice(&value.to_le_bytes());
+        }
+        if self.metadata.volume {
+            self.encoded.extend_from_slice(&sz.to_le_bytes());
+        }
+        let named = group.map_or(UNGROUPED, i64::from);
+        self.encoded.extend_from_slice(&named.to_le_bytes());
+        self.rows += 1;
+        if group.is_some() {
+            self.groups
+                .entry(named)
+                .or_insert_with(Group::new)
+                .push(time);
+        }
+        Ok(())
+    }
+
+    pub fn write(mut self) -> Result<(), Error> {
+        if self.rows == 0 {
+            return Err(Error::write(
+                &self.path,
+                "the localization table holds no localization",
+            ));
+        }
+        let groups = self.summaries()?;
+        let width = reach(self.reach[0], self.metadata.width);
+        let height = reach(self.reach[1], self.metadata.height);
+        let Table {
             path,
-            "a localization lies at an infinite center",
-        ));
+            metadata,
+            datatype,
+            encoded,
+            rows,
+            ..
+        } = self;
+        let mut builder = FileBuilder::new();
+        builder
+            .create_dataset("locs")
+            .with_compound_data(datatype, encoded, rows);
+        if !groups.is_empty() {
+            write_groups(&mut builder, &path, &groups)?;
+        }
+        write_metadata(&mut builder, &metadata, width, height)?;
+        let file = grana_file::Atomic::file(&path)
+            .map_err(|error| Error::write(&path, error.to_string()))?;
+        builder
+            .write(file.staging())
+            .map_err(|error| Error::write(&path, error.to_string()))?;
+        file.commit()
+            .map_err(|error| Error::write(&path, error.to_string()))
     }
-    if !sigma.iter().all(|value| value.is_finite() && *value > 0.0) {
-        return Err(Error::write(
-            path,
-            "a localization carries a non-positive precision",
-        ));
+
+    fn summaries(&mut self) -> Result<Vec<Summary>, Error> {
+        let path = self.path.clone();
+        let mut summaries = Vec::with_capacity(self.groups.len());
+        for (id, group) in &mut self.groups {
+            group.close();
+            summaries.push(group.summary(&path, *id)?);
+        }
+        Ok(summaries)
     }
-    let lateral = |value: f32| value / pixel;
-    Ok(Record {
-        frame: entry.time(),
-        x: lateral(center[0] - origin[0]),
-        y: lateral(center[1] - origin[1]),
-        z: (center[2] - origin[2]) / NANOMETER,
-        photons: entry.quality(),
-        sx: lateral(sigma[0]),
-        sy: lateral(sigma[1]),
-        lpx: lateral(sigma[0]),
-        lpy: lateral(sigma[1]),
-        lpz: sigma[2] / NANOMETER,
-        group: entry.group().map_or(UNGROUPED, i64::from),
-    })
 }
 
-fn groups(path: &Path, records: &[Record]) -> Result<Vec<GroupRecord>, Error> {
-    let mut held = BTreeMap::<i64, Vec<u32>>::new();
-    for record in records {
-        if record.group >= 0 {
-            held.entry(record.group).or_default().push(record.frame);
-        }
-    }
-    let mut groups = Vec::with_capacity(held.len());
-    for (group, mut frames) in held {
-        frames.sort_unstable();
-        let mut events = 0u64;
-        let mut lengths = Vec::new();
-        let mut start = 0usize;
-        for index in 1..=frames.len() {
-            let broken = index == frames.len() || frames[index] != frames[index - 1] + 1;
-            if broken {
-                events += 1;
-                lengths.push((index - start) as f64);
-                start = index;
-            }
-        }
-        let count = lengths.len() as f64;
-        let length = lengths.iter().sum::<f64>() / count;
-        let spread = (lengths
-            .iter()
-            .map(|value| (value - length) * (value - length))
-            .sum::<f64>()
-            / count)
-            .sqrt();
-        if !length.is_finite() || !spread.is_finite() {
-            return Err(Error::write(path, "a group carries no finite length"));
-        }
-        groups.push(GroupRecord {
-            group,
-            locs: frames.len() as u64,
-            events,
-            length,
-            spread,
-        });
-    }
-    Ok(groups)
-}
-
-fn write_plane(builder: &mut FileBuilder, path: &Path, records: &[Record]) -> Result<(), Error> {
-    let datatype = plane_datatype().map_err(|error| Error::write(path, error.to_string()))?;
-    let mut raw = Vec::with_capacity(records.len() * 40);
-    for record in records {
-        raw.extend_from_slice(&record.frame.to_le_bytes());
-        for value in [
-            record.x,
-            record.y,
-            record.photons,
-            record.sx,
-            record.sy,
-            record.lpx,
-            record.lpy,
-        ] {
-            raw.extend_from_slice(&value.to_le_bytes());
-        }
-        raw.extend_from_slice(&record.group.to_le_bytes());
-    }
-    builder
-        .create_dataset("locs")
-        .with_compound_data(datatype, raw, records.len() as u64);
-    Ok(())
-}
-
-fn write_volume(builder: &mut FileBuilder, path: &Path, records: &[Record]) -> Result<(), Error> {
-    let datatype = volume_datatype().map_err(|error| Error::write(path, error.to_string()))?;
-    let mut raw = Vec::with_capacity(records.len() * 48);
-    for record in records {
-        raw.extend_from_slice(&record.frame.to_le_bytes());
-        for value in [
-            record.x,
-            record.y,
-            record.z,
-            record.photons,
-            record.sx,
-            record.sy,
-            record.lpx,
-            record.lpy,
-            record.lpz,
-        ] {
-            raw.extend_from_slice(&value.to_le_bytes());
-        }
-        raw.extend_from_slice(&record.group.to_le_bytes());
-    }
-    builder
-        .create_dataset("locs")
-        .with_compound_data(datatype, raw, records.len() as u64);
-    Ok(())
-}
-
-fn write_groups(
-    builder: &mut FileBuilder,
-    path: &Path,
-    groups: &[GroupRecord],
-) -> Result<(), Error> {
+fn write_groups(builder: &mut FileBuilder, path: &Path, groups: &[Summary]) -> Result<(), Error> {
     let datatype = CompoundTypeBuilder::new()
         .i64_field("group")
         .u64_field("locs")
@@ -260,13 +268,8 @@ fn write_groups(
     Ok(())
 }
 
-fn reach(records: &[Record], held: u32, axis: impl Fn(&Record) -> f32) -> u32 {
-    let highest = records
-        .iter()
-        .map(axis)
-        .filter(|value| value.is_finite())
-        .fold(0.0f32, f32::max)
-        .floor();
+fn reach(highest: f32, held: u32) -> u32 {
+    let highest = highest.max(0.0).floor();
     if highest < held as f32 {
         return held;
     }
@@ -297,7 +300,7 @@ fn write_metadata(
     Ok(())
 }
 
-fn plane_datatype() -> Result<hdf5_pure::Datatype, hdf5_pure::FormatError> {
+fn plane_datatype() -> Result<Datatype, hdf5_pure::FormatError> {
     CompoundTypeBuilder::new()
         .u32_field("frame")
         .f32_field("x")
@@ -311,7 +314,7 @@ fn plane_datatype() -> Result<hdf5_pure::Datatype, hdf5_pure::FormatError> {
         .build()
 }
 
-fn volume_datatype() -> Result<hdf5_pure::Datatype, hdf5_pure::FormatError> {
+fn volume_datatype() -> Result<Datatype, hdf5_pure::FormatError> {
     CompoundTypeBuilder::new()
         .u32_field("frame")
         .f32_field("x")

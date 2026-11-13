@@ -208,9 +208,7 @@ fn assemble(
             std::fs::create_dir_all(folder)
                 .map_err(|error| format!("failed to create {}: {error}", folder.display()))?;
         }
-        let rows = (0..table.rows()).collect::<Vec<_>>();
-        std::fs::write(&path, table.csv(&rows))
-            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+        super::export::write_whole(&path, &table)?;
         record.part(
             &file,
             &format!("{key}-objects.csv"),

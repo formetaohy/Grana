@@ -259,7 +259,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             table.sort(&mut rows, column, sort.descending);
         }
         let file = format!("{}-{}.csv", spec.key(), spec.group().key());
-        write(&folder.join(&file), &table.csv(&rows))?;
+        stream(&folder.join(&file), &table, &rows)?;
         objects += rows.len();
         let curation = scene
             .objects
@@ -1863,4 +1863,13 @@ fn number(value: Option<f64>) -> String {
 fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text)
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn stream(path: &Path, table: &grana_measure::Table, rows: &[usize]) -> Result<(), String> {
+    let fault = |error: std::io::Error| format!("failed to write {}: {error}", path.display());
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(path).map_err(fault)?);
+    table
+        .write_csv_rows(&mut writer, rows, &mut |_, _| {})
+        .map_err(fault)?;
+    std::io::Write::flush(&mut writer).map_err(fault)
 }

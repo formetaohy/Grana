@@ -9,6 +9,37 @@ use super::*;
 
 use crate::task::Progress;
 
+fn write(
+    path: &Path,
+    table: &Table,
+    rows: &[usize],
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PathBuf, String> {
+    let fault = |error: std::io::Error| {
+        format!("failed to export statistics to {}: {error}", path.display())
+    };
+    stream(path, |writer| table.write_csv_rows(writer, rows, progress)).map_err(fault)?;
+    Ok(path.to_path_buf())
+}
+
+pub(super) fn write_whole(path: &Path, table: &Table) -> Result<(), String> {
+    let fault = |error: std::io::Error| format!("failed to write {}: {error}", path.display());
+    stream(path, |writer| table.write_csv(writer, &mut |_, _| {})).map_err(fault)
+}
+
+fn stream(
+    path: &Path,
+    fill: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let file = grana_file::Atomic::file(path)?;
+    {
+        let mut writer = std::io::BufWriter::new(std::fs::File::create(file.staging())?);
+        fill(&mut writer)?;
+        std::io::Write::flush(&mut writer)?;
+    }
+    file.commit()
+}
+
 pub(super) struct Csv {
     task: Progress<Result<PathBuf, String>>,
     label: String,
@@ -17,11 +48,8 @@ pub(super) struct Csv {
 impl Csv {
     fn start(table: Arc<Table>, rows: Vec<usize>, path: PathBuf, name: &str) -> Self {
         let label = format!("Exporting {name} statistics");
-        let task = Progress::spawn(grana_exec::Role::Write, move |_, _| {
-            std::fs::write(&path, table.csv(&rows)).map_err(|error| {
-                format!("failed to export statistics to {}: {error}", path.display())
-            })?;
-            Ok(path)
+        let task = Progress::spawn(grana_exec::Role::Write, move |_, progress| {
+            write(&path, &table, &rows, progress)
         });
         Self { task, label }
     }
