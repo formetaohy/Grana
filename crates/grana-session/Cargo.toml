@@ -34,6 +34,7 @@ grana-report = { workspace = true }
 grana-scene = { workspace = true }
 grana-stitch = { workspace = true }
 grana-text = { workspace = true }
+grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 rfd = { workspace = true }

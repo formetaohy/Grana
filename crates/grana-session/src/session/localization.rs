@@ -327,32 +327,42 @@ impl Session {
             ));
             return;
         };
-        let suggested = self
+        let name = self
             .scene
             .as_ref()
             .and_then(|scene| scene.objects.get(set))
             .map_or_else(
-                || "localizations.png".to_string(),
-                |object| format!("{}.png", crate::slug(object.name())),
+                || "localizations".to_string(),
+                |object| object.name().to_string(),
             );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export a super-resolution image")
-            .set_file_name(suggested)
+            .set_file_name(format!("{}.ome.tif", crate::slug(&name)))
+            .add_filter("OME-TIFF", &["tif", "tiff"])
             .add_filter("PNG", &["png"])
             .save_file()
         else {
             return;
         };
+        let raster = match ImageFile::of(&path) {
+            Ok(raster) => raster,
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                return;
+            }
+        };
         self.message = None;
-        self.tasks.superres = Some(Superres::start(
+        self.tasks.superres = Some(Superres::start(Request {
             frames,
             visible,
             geometry,
-            report.density(),
-            report.filter(),
-            report.groups().clone(),
+            density: report.density(),
+            filter: report.filter(),
+            groups: report.groups().clone(),
+            raster,
+            name,
             path,
-        ));
+        }));
     }
 
     pub(super) fn estimate_clusters(&mut self, set: ObjectSetId) {
@@ -396,20 +406,58 @@ impl Session {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ImageFile {
+    Png,
+    Tiff,
+}
+
+impl ImageFile {
+    fn of(path: &Path) -> Result<Self, String> {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        match extension.as_deref() {
+            Some("png") => Ok(Self::Png),
+            Some("tif" | "tiff") => Ok(Self::Tiff),
+            Some(other) => Err(format!(
+                "a super-resolution image writes a PNG or an OME-TIFF, not `.{other}`"
+            )),
+            None => Err("a super-resolution image names a file extension to write".to_string()),
+        }
+    }
+}
+
+pub(super) struct Request {
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    visible: Vec<Option<Vec<bool>>>,
+    geometry: LocalizationGeometry,
+    density: f32,
+    filter: LocalizationFilter,
+    groups: grana_analysis::localization::Groups,
+    raster: ImageFile,
+    name: String,
+    path: PathBuf,
+}
+
 pub(super) struct Superres {
     task: ExportProgress<Result<PathBuf, String>>,
 }
 
 impl Superres {
-    fn start(
-        frames: Vec<Option<Arc<ObjectFrame>>>,
-        visible: Vec<Option<Vec<bool>>>,
-        geometry: LocalizationGeometry,
-        density: f32,
-        filter: LocalizationFilter,
-        groups: grana_analysis::localization::Groups,
-        path: PathBuf,
-    ) -> Self {
+    fn start(request: Request) -> Self {
+        let Request {
+            frames,
+            visible,
+            geometry,
+            density,
+            filter,
+            groups,
+            raster,
+            name,
+            path,
+        } = request;
         let task = ExportProgress::spawn(grana_exec::Role::Write, move |cancel, progress| {
             let held = frames
                 .iter()
@@ -432,8 +480,26 @@ impl Superres {
             };
             let mut renderer =
                 LocalizationRenderer::new(&held, geometry, density, groups, &mut report)?;
-            grana_raster::write_stream(&path, geometry.size(), &mut |_, row| renderer.row(row))
-                .map_err(|error| error.to_string())?;
+            match raster {
+                ImageFile::Png => {
+                    grana_raster::write_stream(&path, geometry.size(), &mut |_, row| {
+                        renderer.row(row)
+                    })
+                    .map_err(|error| error.to_string())?
+                }
+                ImageFile::Tiff => {
+                    let pixel = geometry.pixel();
+                    let stream = grana_tiff::Stream {
+                        size: geometry.size(),
+                        samples: 3,
+                        name: &name,
+                        physical: Some([pixel, pixel]),
+                        interval: None,
+                    };
+                    grana_tiff::write_stream(&path, &stream, &mut |_, row| renderer.row_rgb(row))
+                        .map_err(|error| error.to_string())?;
+                }
+            }
             Ok(path)
         });
         Self { task }

@@ -45,16 +45,9 @@ pub fn localization(
     let level = pyramid.level(SAMPLE_LEVEL);
     let frames = pyramid.frame_count();
     let path = Path::new(&request.file);
-    let mut report = |done: u64, total: u64| {
-        sink(Event::Progress {
-            time: 0,
-            done: done.min(usize::MAX as u64) as usize,
-            total: total.min(usize::MAX as u64) as usize,
-        });
-        !cancel.load(Ordering::Relaxed)
-    };
-    let Some(table) =
-        localization::read(path, level, frames, &mut report).map_err(|error| error.to_string())?
+    let mut carry_on = |_done: u64, _total: u64| !cancel.load(Ordering::Relaxed);
+    let Some(mut table) = localization::open(path, level, frames, &mut carry_on)
+        .map_err(|error| error.to_string())?
     else {
         return Ok(());
     };
@@ -66,26 +59,31 @@ pub fn localization(
         photons: table.photons(),
         drift: request.drift.clone(),
     });
-    let mut slots = (0..frames).map(|_| Vec::new()).collect::<Vec<_>>();
-    for entry in table.localizations() {
-        slots[entry.time() as usize].push(*entry);
-    }
-    for (time, entries) in slots.into_iter().enumerate() {
+    let total = table.rows();
+    let mut done = 0u64;
+    loop {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let time = time as u32;
-        let Some(set) = frame(reader, time, &entries, request.drift.warp(time))? else {
-            continue;
+        let Some(frame) = table
+            .next(&mut carry_on)
+            .map_err(|error| error.to_string())?
+        else {
+            break;
         };
-        sink(Event::Frame {
-            time,
-            frame: ObjectFrame::Spots(set),
-        });
+        let time = frame.time();
+        let rows = frame.rows();
+        done += rows.len() as u64;
+        if let Some(set) = spots(reader, time, rows, request.drift.warp(time))? {
+            sink(Event::Frame {
+                time,
+                frame: ObjectFrame::Spots(set),
+            });
+        }
         sink(Event::Progress {
             time,
-            done: time as usize + 1,
-            total: frames as usize,
+            done: done.min(usize::MAX as u64) as usize,
+            total: total.min(usize::MAX as u64) as usize,
         });
     }
     if cancel.load(Ordering::Relaxed) {
@@ -95,7 +93,7 @@ pub fn localization(
     Ok(())
 }
 
-fn frame(
+fn spots(
     reader: &Channels,
     time: u32,
     entries: &[Localization],

@@ -155,6 +155,32 @@ pub fn picasso(path: &Path, pixelsize: f32, rows: &[Localization]) {
     builder.write(path).expect("the Picasso fixture writes");
 }
 
+pub fn localization_reader(
+    path: &Path,
+    level: grana_volume::Level,
+    frames: u32,
+) -> grana_readout::localization::Reader {
+    grana_readout::localization::open(path, level, frames, &mut |_, _| true)
+        .expect("the localization table reads")
+        .expect("the localization table finishes")
+}
+
+pub fn read_localizations(
+    path: &Path,
+    level: grana_volume::Level,
+    frames: u32,
+) -> Vec<grana_readout::localization::Localization> {
+    let mut reader = localization_reader(path, level, frames);
+    let mut rows = Vec::new();
+    while let Some(frame) = reader
+        .next(&mut |_, _| true)
+        .expect("a localization frame reads")
+    {
+        rows.extend_from_slice(frame.rows());
+    }
+    rows
+}
+
 pub fn versions() -> grana_render::Versions {
     let stamp = revision();
     grana_render::Versions::new(stamp, stamp, stamp)

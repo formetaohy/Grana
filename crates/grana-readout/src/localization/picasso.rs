@@ -1,16 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use grana_volume::Level;
-use hdf5_pure::{Datatype, File};
+use hdf5_pure::{Dataset, Datatype, File};
 
-use super::{Localization, Table, frame, narrow, normalize};
+use super::{BLOCK, Header, Localization, Place, Row, frame, narrow, normalize};
 use crate::error::Error;
 use crate::number;
 
 const TABLE: [&str; 2] = ["locs", "locs/table"];
 const METADATA: &str = "metadata";
 const NANOMETER: f64 = 0.001;
-const PROGRESS_STRIDE: usize = 65536;
 
 pub(super) fn has_extension(path: &Path) -> bool {
     path.extension()
@@ -22,103 +21,208 @@ pub(super) fn has_extension(path: &Path) -> bool {
         })
 }
 
-pub(super) fn read(
-    path: &Path,
-    level: Level,
-    frames: u32,
-    report: &mut dyn FnMut(u64, u64) -> bool,
-) -> Result<Option<Table>, Error> {
+pub(super) fn open(path: &Path, level: Level, frames: u32) -> Result<(Blocks, Header), Error> {
     let file = File::open_streaming(path).map_err(|error| Error::table(path, error.to_string()))?;
-    let table = Records::load(&file, path)?;
-    let columns = Columns::new(&table, path, frames)?;
+    let dataset = TABLE
+        .iter()
+        .find_map(|name| file.dataset(name).ok())
+        .ok_or_else(|| Error::table(path, "the file holds no localization table"))?;
+    let shape = dataset
+        .shape()
+        .map_err(|error| Error::table(path, error.to_string()))?;
+    let rows = shape.first().copied().unwrap_or(0);
+    if rows == 0 {
+        return Err(Error::table(path, "the table holds no localization"));
+    }
+    let datatype = dataset
+        .datatype()
+        .map_err(|error| Error::table(path, error.to_string()))?;
+    let Datatype::Compound { size, members } = datatype else {
+        return Err(Error::table(
+            path,
+            "the localization table carries no named columns",
+        ));
+    };
+    let record = size as usize;
+    if record == 0 {
+        return Err(Error::table(
+            path,
+            "the localization table carries empty records",
+        ));
+    }
+    let members = members
+        .into_iter()
+        .filter(|member| number::size(&member.datatype).is_some())
+        .map(|member| Member {
+            name: normalize(&member.name),
+            offset: member.byte_offset as usize,
+            datatype: member.datatype,
+        })
+        .collect::<Vec<_>>();
+    let decoder = Decoder { members, record };
+    let columns = Columns::new(&decoder, path, frames)?;
     let pixel = pixel_size(&file, path, level);
     let [width, height] = field(&file, path, level);
+    let [first, last] = match columns.frame {
+        Some(column) => [
+            probe(&dataset, &decoder, column, 0, path)?,
+            probe(&dataset, &decoder, column, rows - 1, path)?,
+        ],
+        None => [0, 0],
+    };
     let voxel = level.voxel();
-    let fallback = [0, 1, 2].map(|axis| 0.5 * voxel[axis].max(f32::MIN_POSITIVE));
-    let total = table.rows as u64;
-    if !report(0, total) {
-        return Ok(None);
-    }
-    let mut localizations = Vec::with_capacity(table.rows);
-    for row in 0..table.rows {
-        if row.is_multiple_of(PROGRESS_STRIDE) && !report(row as u64, total) {
-            return Ok(None);
-        }
-        let center = [
-            narrow(path, table.read(columns.x, row, path)? * pixel, row)?,
-            narrow(path, table.read(columns.y, row, path)? * pixel, row)?,
-            match columns.z {
-                Some(column) => narrow(path, table.read(column, row, path)? * NANOMETER, row)?,
-                None => 0.0,
-            },
-        ];
-        let mut lateral = [0.0f32; 2];
-        for axis in 0..2 {
-            lateral[axis] = match first(
-                &table,
-                [columns.lateral[axis], columns.psf[axis]],
-                row,
-                path,
-            )? {
-                Some(value) => narrow(path, value * pixel, row)?,
-                None => fallback[axis],
-            };
-        }
-        let sigma = [
-            lateral[0],
-            lateral[1],
-            match first(
-                &table,
-                [columns.axial_precision, columns.axial_psf],
-                row,
-                path,
-            )? {
-                Some(value) => narrow(path, value * NANOMETER, row)?,
-                None if columns.z.is_some() => fallback[2],
-                None => 0.5 * (lateral[0] + lateral[1]),
-            },
-        ];
-        let quality = match columns.photons {
-            Some(column) => narrow(path, table.read(column, row, path)?, row)?,
-            None => 0.0,
-        };
-        let time = match columns.frame {
-            Some(column) => frame(path, table.read(column, row, path)?, row)?,
-            None => 0,
-        };
-        let group = match columns.group {
-            Some(column) => group(path, table.read(column, row, path)?, row)?,
-            None => None,
-        };
-        localizations.push(Localization::new(time, center, sigma, quality, group));
-    }
-    report(total, total);
-    Ok(Some(super::Table::new(
-        localizations,
-        (pixel * 1000.0) as f32,
+    let header = Header {
+        rows,
+        first,
+        last,
+        pixel: (pixel * 1000.0) as f32,
         width,
         height,
-        columns.z.is_some(),
-        columns.photons.is_some(),
-    )))
+        volume: columns.z.is_some(),
+        photons: columns.photons.is_some(),
+    };
+    let blocks = Blocks {
+        dataset,
+        decoder,
+        columns,
+        pixel,
+        fallback: [0, 1, 2].map(|axis| 0.5 * voxel[axis].max(f32::MIN_POSITIVE)),
+        next: 0,
+        total: rows,
+        path: path.to_path_buf(),
+    };
+    Ok((blocks, header))
 }
 
-fn first(
-    table: &Records,
-    columns: [Option<usize>; 2],
-    row: usize,
+fn probe(
+    dataset: &Dataset,
+    decoder: &Decoder,
+    column: usize,
+    at: u64,
     path: &Path,
-) -> Result<Option<f64>, Error> {
-    for column in columns.into_iter().flatten() {
-        let value = table.read(column, row, path)?;
-        if value > 0.0 {
-            return Ok(Some(value));
-        }
+) -> Result<u32, Error> {
+    let raw = dataset
+        .read_raw_rows(at, 1)
+        .map_err(|error| Error::table(path, error.to_string()))?;
+    if raw.len() < decoder.record {
+        return Err(Error::table(
+            path,
+            format!("the row {at} is missing from the table"),
+        ));
     }
-    Ok(None)
+    let value = decoder.value(&raw, 0, column).ok_or_else(|| {
+        Error::table(
+            path,
+            format!("the row {at} carries no readable {}", decoder.name(column)),
+        )
+    })?;
+    frame(path, value, at)
 }
 
-fn group(path: &Path, value: f64, row: usize) -> Result<Option<u32>, Error> {
+pub(super) struct Blocks {
+    dataset: Dataset,
+    decoder: Decoder,
+    columns: Columns,
+    pixel: f64,
+    fallback: [f32; 3],
+    next: u64,
+    total: u64,
+    path: PathBuf,
+}
+
+impl Blocks {
+    pub(super) fn read(
+        &mut self,
+        place: &Place,
+        out: &mut Vec<Localization>,
+    ) -> Result<usize, Error> {
+        if self.next >= self.total {
+            return Ok(0);
+        }
+        let count = BLOCK.min((self.total - self.next) as usize);
+        let raw = self
+            .dataset
+            .read_raw_rows(self.next, count as u64)
+            .map_err(|error| Error::table(&self.path, error.to_string()))?;
+        if raw.len() < count * self.decoder.record {
+            return Err(Error::table(
+                &self.path,
+                "the localization table holds fewer rows than it declares",
+            ));
+        }
+        for index in 0..count {
+            let at = self.next + index as u64;
+            let value = |column: usize| {
+                self.decoder.value(&raw, index, column).ok_or_else(|| {
+                    Error::table(
+                        &self.path,
+                        format!(
+                            "the row {at} carries no readable {}",
+                            self.decoder.name(column)
+                        ),
+                    )
+                })
+            };
+            let center = [
+                narrow(&self.path, value(self.columns.x)? * self.pixel, at)?,
+                narrow(&self.path, value(self.columns.y)? * self.pixel, at)?,
+                match self.columns.z {
+                    Some(column) => narrow(&self.path, value(column)? * NANOMETER, at)?,
+                    None => 0.0,
+                },
+            ];
+            let mut sigma = [0.0f32; 3];
+            for (axis, value) in sigma.iter_mut().take(2).enumerate() {
+                let columns = [self.columns.lateral[axis], self.columns.psf[axis]];
+                *value = match positive(&self.decoder, columns, &raw, index) {
+                    Some(found) => narrow(&self.path, found * self.pixel, at)?,
+                    None => self.fallback[axis],
+                };
+            }
+            let columns = [self.columns.axial_precision, self.columns.axial_psf];
+            sigma[2] = match positive(&self.decoder, columns, &raw, index) {
+                Some(value) => narrow(&self.path, value * NANOMETER, at)?,
+                None if self.columns.z.is_some() => self.fallback[2],
+                None => 0.5 * (sigma[0] + sigma[1]),
+            };
+            let quality = match self.columns.photons {
+                Some(column) => narrow(&self.path, value(column)?, at)?,
+                None => 0.0,
+            };
+            let time = match self.columns.frame {
+                Some(column) => frame(&self.path, value(column)?, at)?,
+                None => 0,
+            };
+            let group = match self.columns.group {
+                Some(column) => group(&self.path, value(column)?, at)?,
+                None => None,
+            };
+            out.push(place.row(
+                &self.path,
+                at,
+                Row {
+                    time,
+                    center,
+                    sigma,
+                    quality,
+                    group,
+                },
+            )?);
+        }
+        self.next += count as u64;
+        Ok(count)
+    }
+}
+
+fn positive(decoder: &Decoder, columns: [Option<usize>; 2], raw: &[u8], row: usize) -> Option<f64> {
+    columns
+        .into_iter()
+        .flatten()
+        .filter_map(|column| decoder.value(raw, row, column))
+        .find(|value| *value > 0.0)
+}
+
+fn group(path: &Path, value: f64, row: u64) -> Result<Option<u32>, Error> {
     if !value.is_finite() || value < 0.0 {
         return Ok(None);
     }
@@ -145,14 +249,14 @@ struct Columns {
 }
 
 impl Columns {
-    fn new(table: &Records, path: &Path, frames: u32) -> Result<Self, Error> {
-        let x = table
+    fn new(decoder: &Decoder, path: &Path, frames: u32) -> Result<Self, Error> {
+        let x = decoder
             .find(&["x"])
             .ok_or_else(|| Error::table(path, "the table carries no x column"))?;
-        let y = table
+        let y = decoder
             .find(&["y"])
             .ok_or_else(|| Error::table(path, "the table carries no y column"))?;
-        let frame = table.find(&["frame"]);
+        let frame = decoder.find(&["frame"]);
         if frame.is_none() && frames > 1 {
             return Err(Error::table(
                 path,
@@ -163,13 +267,13 @@ impl Columns {
             x,
             y,
             frame,
-            z: table.find(&["z"]),
-            lateral: [table.find(&["lpx"]), table.find(&["lpy"])],
-            psf: [table.find(&["sx"]), table.find(&["sy"])],
-            axial_precision: table.find(&["lpz"]),
-            axial_psf: table.find(&["sz"]),
-            photons: table.find(&["photons", "photon"]),
-            group: table.find(&["group"]),
+            z: decoder.find(&["z"]),
+            lateral: [decoder.find(&["lpx"]), decoder.find(&["lpy"])],
+            psf: [decoder.find(&["sx"]), decoder.find(&["sy"])],
+            axial_precision: decoder.find(&["lpz"]),
+            axial_psf: decoder.find(&["sz"]),
+            photons: decoder.find(&["photons", "photon"]),
+            group: decoder.find(&["group"]),
         })
     }
 }
@@ -235,88 +339,27 @@ struct Member {
     datatype: Datatype,
 }
 
-struct Records {
-    rows: usize,
-    record: usize,
+struct Decoder {
     members: Vec<Member>,
-    raw: Vec<u8>,
+    record: usize,
 }
 
-impl Records {
-    fn load(file: &File, path: &Path) -> Result<Self, Error> {
-        let dataset = TABLE
-            .iter()
-            .find_map(|name| file.dataset(name).ok())
-            .ok_or_else(|| Error::table(path, "the file holds no localization table"))?;
-        let shape = dataset
-            .shape()
-            .map_err(|error| Error::table(path, error.to_string()))?;
-        let rows = shape.first().copied().unwrap_or(0) as usize;
-        if rows == 0 {
-            return Err(Error::table(path, "the table holds no localization"));
-        }
-        let datatype = dataset
-            .datatype()
-            .map_err(|error| Error::table(path, error.to_string()))?;
-        let Datatype::Compound { size, members } = datatype else {
-            return Err(Error::table(
-                path,
-                "the localization table carries no named columns",
-            ));
-        };
-        let record = size as usize;
-        if record == 0 {
-            return Err(Error::table(
-                path,
-                "the localization table carries empty records",
-            ));
-        }
-        let members = members
-            .into_iter()
-            .filter(|member| number::size(&member.datatype).is_some())
-            .map(|member| Member {
-                name: normalize(&member.name),
-                offset: member.byte_offset as usize,
-                datatype: member.datatype,
-            })
-            .collect::<Vec<_>>();
-        let raw = dataset
-            .read_raw()
-            .map_err(|error| Error::table(path, error.to_string()))?;
-        if raw.len() < rows * record {
-            return Err(Error::table(
-                path,
-                "the localization table holds fewer rows than it declares",
-            ));
-        }
-        Ok(Self {
-            rows,
-            record,
-            members,
-            raw,
-        })
-    }
-
+impl Decoder {
     fn find(&self, names: &[&str]) -> Option<usize> {
         self.members
             .iter()
             .position(|member| names.contains(&member.name.as_str()))
     }
 
-    fn read(&self, column: usize, row: usize, path: &Path) -> Result<f64, Error> {
-        let Some(member) = self.members.get(column) else {
-            return Err(Error::table(path, format!("the row {row} reads no column")));
-        };
-        let width = number::size(&member.datatype).expect("a member holds a numeric width");
+    fn name(&self, column: usize) -> &str {
+        &self.members[column].name
+    }
+
+    fn value(&self, raw: &[u8], row: usize, column: usize) -> Option<f64> {
+        let member = &self.members[column];
+        let width = number::size(&member.datatype)?;
         let start = row * self.record + member.offset;
-        self.raw
-            .get(start..start + width)
+        raw.get(start..start + width)
             .and_then(|bytes| number::decode(&member.datatype, bytes))
-            .ok_or_else(|| {
-                Error::table(
-                    path,
-                    format!("the row {row} carries no readable {}", member.name),
-                )
-            })
     }
 }

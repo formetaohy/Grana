@@ -240,6 +240,7 @@ fn media_of(file: &str) -> &'static str {
         Some("csv") => "text/csv",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("tif") | Some("tiff") => "image/tiff",
         Some("mp4") => "video/mp4",
         Some("ome") => "application/octet-stream",
         Some("zarr") | Some("grana") => "application/octet-stream",

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use grana_volume::Level;
 
@@ -10,6 +10,7 @@ mod write;
 
 pub use write::{Metadata, write};
 
+const BLOCK: usize = 1 << 16;
 const FRAME_TOLERANCE: f64 = 1.0e-6;
 
 #[derive(Clone, Copy)]
@@ -59,46 +60,163 @@ impl Localization {
     }
 }
 
-pub struct Table {
-    localizations: Vec<Localization>,
+pub struct Frame<'a> {
+    time: u32,
+    rows: &'a [Localization],
+}
+
+impl<'a> Frame<'a> {
+    pub fn time(&self) -> u32 {
+        self.time
+    }
+
+    pub fn rows(&self) -> &'a [Localization] {
+        self.rows
+    }
+}
+
+pub struct Reader {
+    path: PathBuf,
+    blocks: Blocks,
+    place: Place,
     pixel: f32,
     width: u32,
     height: u32,
     volume: bool,
     photons: bool,
+    total: u64,
+    read: u64,
+    buffer: Vec<Localization>,
+    start: usize,
+    last: Option<u32>,
+    eof: bool,
 }
 
-impl Table {
-    fn new(
-        localizations: Vec<Localization>,
-        pixel: f32,
-        width: u32,
-        height: u32,
-        volume: bool,
-        photons: bool,
-    ) -> Self {
-        assert!(
-            pixel.is_finite() && pixel > 0.0,
-            "a localization table carries a positive camera pixel"
-        );
-        assert!(
-            width > 0 && height > 0,
-            "a localization table covers a positive camera field"
-        );
-        Self {
-            localizations,
-            pixel,
-            width,
-            height,
-            volume,
-            photons,
+enum Blocks {
+    Picasso(picasso::Blocks),
+    Text(text::Blocks),
+}
+
+impl Blocks {
+    fn read(&mut self, place: &Place, out: &mut Vec<Localization>) -> Result<usize, Error> {
+        match self {
+            Self::Picasso(blocks) => blocks.read(place, out),
+            Self::Text(blocks) => blocks.read(place, out),
         }
     }
+}
 
-    pub fn localizations(&self) -> &[Localization] {
-        &self.localizations
+pub(super) struct Header {
+    pub(super) rows: u64,
+    pub(super) first: u32,
+    pub(super) last: u32,
+    pub(super) pixel: f32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) volume: bool,
+    pub(super) photons: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Place {
+    level: Level,
+    shift: u32,
+}
+
+pub(super) struct Row {
+    pub(super) time: u32,
+    pub(super) center: [f32; 3],
+    pub(super) sigma: [f32; 3],
+    pub(super) quality: f32,
+    pub(super) group: Option<u32>,
+}
+
+impl Place {
+    fn row(&self, path: &Path, at: u64, row: Row) -> Result<Localization, Error> {
+        if !row.center.iter().all(|value| value.is_finite()) {
+            return Err(Error::table(
+                path,
+                format!("the row {at} lies at an infinite center"),
+            ));
+        }
+        if !row.quality.is_finite() {
+            return Err(Error::table(
+                path,
+                format!("the row {at} carries an infinite quality"),
+            ));
+        }
+        if !row
+            .sigma
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0)
+        {
+            return Err(Error::table(
+                path,
+                format!("the row {at} carries a localization without a finite sigma"),
+            ));
+        }
+        let Some(time) = row.time.checked_sub(self.shift) else {
+            return Err(Error::table(
+                path,
+                format!("the row {at} carries the frame {}", row.time),
+            ));
+        };
+        let voxel = self.level.voxel();
+        let index = [0, 1, 2].map(|axis| row.center[axis] / voxel[axis]);
+        Ok(Localization {
+            time,
+            center: self.level.corner(index),
+            sigma: row.sigma,
+            quality: row.quality,
+            group: row.group,
+        })
     }
+}
 
+pub fn has_extension(path: &Path) -> bool {
+    text::has_extension(path) || picasso::has_extension(path)
+}
+
+pub fn open(
+    path: &Path,
+    level: Level,
+    frames: u32,
+    report: &mut dyn FnMut(u64, u64) -> bool,
+) -> Result<Option<Reader>, Error> {
+    assert!(frames > 0, "a localization table names a time series");
+    let opened = if picasso::has_extension(path) {
+        let (blocks, header) = picasso::open(path, level, frames)?;
+        Some((Blocks::Picasso(blocks), header))
+    } else {
+        text::open(path, level, frames, report)?
+            .map(|(blocks, header)| (Blocks::Text(blocks), header))
+    };
+    let Some((blocks, header)) = opened else {
+        return Ok(None);
+    };
+    if header.rows == 0 {
+        return Err(Error::table(path, "the table holds no localization"));
+    }
+    let shift = shift_of(path, &header, frames)?;
+    Ok(Some(Reader {
+        path: path.to_path_buf(),
+        blocks,
+        place: Place { level, shift },
+        pixel: header.pixel,
+        width: header.width,
+        height: header.height,
+        volume: header.volume,
+        photons: header.photons,
+        total: header.rows,
+        read: 0,
+        buffer: Vec::with_capacity(BLOCK),
+        start: 0,
+        last: None,
+        eof: false,
+    }))
+}
+
+impl Reader {
     pub fn pixel(&self) -> f32 {
         self.pixel
     }
@@ -118,73 +236,87 @@ impl Table {
     pub fn photons(&self) -> bool {
         self.photons
     }
-}
 
-pub fn has_extension(path: &Path) -> bool {
-    text::has_extension(path) || picasso::has_extension(path)
-}
-
-pub fn read(
-    path: &Path,
-    level: Level,
-    frames: u32,
-    report: &mut dyn FnMut(u64, u64) -> bool,
-) -> Result<Option<Table>, Error> {
-    assert!(frames > 0, "a localization table names a time series");
-    let found = if picasso::has_extension(path) {
-        picasso::read(path, level, frames, report)?
-    } else {
-        text::read(path, level, frames, report)?
-    };
-    let Some(mut table) = found else {
-        return Ok(None);
-    };
-    if table.localizations.is_empty() {
-        return Err(Error::table(path, "the table holds no localization"));
+    pub fn rows(&self) -> u64 {
+        self.total
     }
-    place(path, &mut table.localizations, level, frames)?;
-    Ok(Some(table))
-}
 
-fn place(
-    path: &Path,
-    localizations: &mut [Localization],
-    level: Level,
-    frames: u32,
-) -> Result<(), Error> {
-    let mut low = u32::MAX;
-    let mut high = 0;
-    for localization in localizations.iter() {
-        low = low.min(localization.time);
-        high = high.max(localization.time);
-    }
-    let shift = if high < frames {
-        0
-    } else if low >= 1 && high - 1 < frames {
-        1
-    } else {
-        return Err(Error::table(
-            path,
-            format!("the table carries the frames {low} to {high} and the dataset holds {frames}"),
-        ));
-    };
-    let voxel = level.voxel();
-    for localization in localizations.iter_mut() {
-        localization.time -= shift;
-        if !localization
-            .sigma
-            .iter()
-            .all(|value| value.is_finite() && *value > 0.0)
-        {
-            return Err(Error::table(
-                path,
-                "the table carries a localization without a finite sigma",
-            ));
+    pub fn next(
+        &mut self,
+        report: &mut dyn FnMut(u64, u64) -> bool,
+    ) -> Result<Option<Frame<'_>>, Error> {
+        loop {
+            if self.start == self.buffer.len() {
+                if self.eof {
+                    return Ok(None);
+                }
+                if !self.fill(report)? {
+                    return Ok(None);
+                }
+                continue;
+            }
+            let time = self.buffer[self.start].time;
+            let mut end = self.start;
+            while end < self.buffer.len() && self.buffer[end].time == time {
+                end += 1;
+            }
+            if end == self.buffer.len() && !self.eof {
+                if !self.fill(report)? {
+                    return Ok(None);
+                }
+                continue;
+            }
+            let rows = &self.buffer[self.start..end];
+            self.start = end;
+            return Ok(Some(Frame { time, rows }));
         }
-        let index = [0, 1, 2].map(|axis| localization.center[axis] / voxel[axis]);
-        localization.center = level.corner(index);
     }
-    Ok(())
+
+    fn fill(&mut self, report: &mut dyn FnMut(u64, u64) -> bool) -> Result<bool, Error> {
+        if self.start > 0 {
+            self.buffer.drain(..self.start);
+            self.start = 0;
+        }
+        let before = self.buffer.len();
+        let place = self.place;
+        let read = self.blocks.read(&place, &mut self.buffer)?;
+        for (offset, row) in self.buffer[before..].iter().enumerate() {
+            if let Some(last) = self.last
+                && row.time < last
+            {
+                return Err(Error::table(
+                    &self.path,
+                    format!(
+                        "the row {} carries the frame {} after the frame {last}; a localization table orders its rows by frame",
+                        self.read + offset as u64,
+                        row.time
+                    ),
+                ));
+            }
+            self.last = Some(row.time);
+        }
+        self.read += read as u64;
+        if read == 0 {
+            self.eof = true;
+        }
+        Ok(report(self.read, self.total))
+    }
+}
+
+fn shift_of(path: &Path, header: &Header, frames: u32) -> Result<u32, Error> {
+    if header.last < frames {
+        return Ok(0);
+    }
+    if header.first >= 1 && header.last - 1 < frames {
+        return Ok(1);
+    }
+    Err(Error::table(
+        path,
+        format!(
+            "the table carries the frames {} to {} and the dataset holds {frames}",
+            header.first, header.last
+        ),
+    ))
 }
 
 pub(super) fn normalize(name: &str) -> String {
@@ -194,7 +326,7 @@ pub(super) fn normalize(name: &str) -> String {
         .collect()
 }
 
-pub(super) fn frame(path: &Path, value: f64, at: usize) -> Result<u32, Error> {
+pub(super) fn frame(path: &Path, value: f64, at: u64) -> Result<u32, Error> {
     if !(0.0..=f64::from(u32::MAX)).contains(&value)
         || (value - value.round()).abs() > FRAME_TOLERANCE
     {
@@ -206,7 +338,7 @@ pub(super) fn frame(path: &Path, value: f64, at: usize) -> Result<u32, Error> {
     Ok(value.round() as u32)
 }
 
-pub(super) fn narrow(path: &Path, value: f64, at: usize) -> Result<f32, Error> {
+pub(super) fn narrow(path: &Path, value: f64, at: u64) -> Result<f32, Error> {
     let narrowed = value as f32;
     if !narrowed.is_finite() {
         return Err(Error::table(

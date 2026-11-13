@@ -119,6 +119,56 @@ fn writes_an_alpha_channel_plane() {
     }
 }
 
+#[test]
+fn streams_an_eight_bit_ome_tiff() {
+    let temp = Temp::new("suite-tiff-stream");
+    let path = temp.path().join("super-resolution.ome.tif");
+    let size = [4u32, 3];
+    let pixels = (0..size[0] as usize * size[1] as usize * 3)
+        .map(|index| (index * 7 % 251) as u8)
+        .collect::<Vec<_>>();
+    grana_tiff::write_stream(
+        &path,
+        &grana_tiff::Stream {
+            size,
+            samples: 3,
+            name: "super resolution",
+            physical: Some([0.01, 0.01]),
+            interval: None,
+        },
+        &mut |row, buffer| {
+            let start = row as usize * size[0] as usize * 3;
+            buffer.copy_from_slice(&pixels[start..start + buffer.len()]);
+            Ok(())
+        },
+    )
+    .expect("the streamed picture writes");
+    let bytes = std::fs::read(&path).expect("the picture reads as bytes");
+    let description = String::from_utf8_lossy(&bytes);
+    assert!(
+        description.contains("PhysicalSizeX=\"0.01\"")
+            && description.contains("Interleaved=\"true\""),
+        "the streamed picture records its physical pixel size"
+    );
+    let image = grana_tiff::Image::open(&path).expect("the streamed picture opens");
+    assert_eq!(image.name(), "super resolution");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 3);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(4, 3, 1));
+    assert!((pyramid.level(0).voxel()[0] - 0.01).abs() < 1.0e-6);
+    for channel in 0..3 {
+        let data = image
+            .read_region(0, 0, channel, 0..4, 0..3, 0..1)
+            .expect("the streamed plane reads");
+        let VoxelData::U8(values) = data else {
+            panic!("the streamed picture stores eight bit voxels");
+        };
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(*value, pixels[index * 3 + channel], "texel {index}");
+        }
+    }
+}
+
 fn write_zarr(root: &std::path::Path) {
     let levels = [
         Level::new(Extent::new(24, 16, 8), Spacing::new(0.5, 0.5, 1.0)),
@@ -1007,11 +1057,8 @@ fn reads_picasso_localization_tables() {
         ],
     );
     let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
-    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
-        .expect("the table reads")
-        .expect("the table finishes");
-    assert_eq!(found.localizations().len(), 2);
-    let found = found.localizations();
+    let found = support::read_localizations(&path, level, 2);
+    assert_eq!(found.len(), 2);
     assert_eq!(found[0].time(), 0);
     assert_eq!(found[1].time(), 1);
     assert_eq!(
@@ -1062,15 +1109,17 @@ fn writes_picasso_localization_tables() {
     let metadata =
         grana_readout::localization::Metadata::new(2, 64, 32, 100.0, true, level.origin());
     grana_readout::localization::write(&path, &metadata, &entries).expect("the table writes");
-    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
-        .expect("the table reads")
-        .expect("the table finishes");
+    let mut found = support::localization_reader(&path, level, 2);
     assert_eq!(
         (found.pixel(), found.width(), found.height(), found.volume()),
         (100.0, 73, 37, true)
     );
-    assert_eq!(found.localizations().len(), 3);
-    let first = found.localizations()[0];
+    assert_eq!(found.rows(), 3);
+    let frame = found
+        .next(&mut |_, _| true)
+        .expect("the first frame reads")
+        .expect("the first frame exists");
+    let first = frame.rows()[0];
     assert_eq!(first.time(), 0);
     assert_eq!(first.group(), Some(4));
     assert!((first.center()[0] - 2.0).abs() < 1.0e-5);
@@ -1104,11 +1153,8 @@ fn reads_one_based_localization_tables() {
     )
     .expect("the localization table writes");
     let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
-    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
-        .expect("the table reads")
-        .expect("the table finishes");
-    assert_eq!(found.localizations().len(), 2);
-    let found = found.localizations();
+    let found = support::read_localizations(&path, level, 2);
+    assert_eq!(found.len(), 2);
     assert_eq!(found[0].time(), 0, "a one based table starts on frame one");
     assert_eq!(found[1].time(), 1);
     assert!((found[0].center()[0] + 2.2).abs() < 1.0e-4);

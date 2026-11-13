@@ -903,10 +903,17 @@ impl Run<'_, '_> {
             report.groups().clone(),
             &mut progress,
         )?;
-        grana_raster::write_stream(
-            &self.folder.join(format!("{key}-superres.png")),
-            geometry.size(),
-            &mut |_, row| renderer.row(row),
+        let step = geometry.pixel();
+        grana_tiff::write_stream(
+            &self.folder.join(format!("{key}-superres.ome.tif")),
+            &grana_tiff::Stream {
+                size: geometry.size(),
+                samples: 3,
+                name: &name,
+                physical: Some([step, step]),
+                interval: None,
+            },
+            &mut |_, row| renderer.row_rgb(row),
         )
         .map_err(|error| error.to_string())
     }
@@ -1568,7 +1575,7 @@ pub(super) fn artifacts(
         .collect::<Vec<_>>();
     for set in protocol.sets() {
         if matches!(set.source, SourceSpec::Localizations { .. }) {
-            artifacts.push(format!("{}-superres.png", set.key()));
+            artifacts.push(format!("{}-superres.ome.tif", set.key()));
         }
     }
     for relation in protocol.relations() {

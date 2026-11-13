@@ -717,16 +717,27 @@ fn batches_localizations_into_a_super_resolution_image() {
         }
     }
     assert!(done, "the batch stopped before it finished");
-    let image = find(&output, "localizations-superres.png")
+    let image = find(&output, "localizations-superres.ome.tif")
         .expect("the batch renders the super-resolution image");
-    let raster = grana_raster::read(&image).expect("the super-resolution image reads");
+    let picture = grana_tiff::Image::open(&image).expect("the super-resolution image reads");
+    let level = picture.pyramid().level(0);
     assert!(
-        raster.size()[0] > 100 && raster.size()[1] > 100,
+        level.extent().x() > 100 && level.extent().y() > 100,
         "the image keeps its native size of {:?}",
-        raster.size()
+        level.extent()
     );
     assert!(
-        raster.pixels().iter().any(|sample| *sample > 0),
+        level.voxel()[0].is_finite() && level.voxel()[0] > 0.0,
+        "the image carries its physical pixel size"
+    );
+    let data = picture
+        .read_region(0, 0, 0, 0..level.extent().x(), 0..level.extent().y(), 0..1)
+        .expect("the super-resolution plane reads");
+    let grana_volume::VoxelData::U8(pixels) = data else {
+        panic!("the super-resolution image stores eight bit voxels");
+    };
+    assert!(
+        pixels.iter().any(|sample| *sample > 0),
         "the image paints the localizations"
     );
     let table = find(&output, "localizations-objects.csv")

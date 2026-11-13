@@ -1013,6 +1013,8 @@ fn molecule_table(
     columns.extend(relations.iter().map(|(index, field)| {
         aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
     }));
+    let width = columns.len();
+    let identity = MoleculeField::ALL.len() + 6;
     let mut molecules = Vec::<Molecule>::new();
     let mut index = HashMap::<u32, usize>::new();
     for frame in frames {
@@ -1031,62 +1033,64 @@ fn molecule_table(
         }
     }
     let mut offsets = Vec::with_capacity(molecules.len() + 1);
-    let mut offsets_total = 0usize;
-    offsets.push(0);
+    offsets.push(0usize);
     for molecule in &molecules {
-        offsets_total += molecule.localizations as usize;
-        offsets.push(offsets_total);
+        let held = *offsets.last().expect("a molecule table starts at zero");
+        offsets.push(held + molecule.localizations as usize);
     }
-    let slots = measurements.len() + relations.len();
-    let mut collected = vec![vec![f32::NAN; offsets_total]; slots];
-    let mut cursors = offsets.clone();
-    for frame in frames {
-        let Objects::Spots(set) = frame.objects else {
-            continue;
-        };
-        for (object, spot) in set.spots().iter().enumerate() {
-            let Some(group) = spot.group() else {
-                continue;
-            };
-            let Some(row) = index.get(&group).copied() else {
-                continue;
-            };
-            let at = cursors[row];
-            cursors[row] += 1;
-            for (slot, measurement) in measurements.iter().enumerate() {
-                collected[slot][at] = measurement.value(frame.objects, object);
-            }
-            for (slot, (relation, field)) in relations.iter().enumerate() {
-                collected[measurements.len() + slot][at] =
-                    field.value(frame.relations[*relation], object);
-            }
+    let mut values = vec![f32::NAN; molecules.len() * width];
+    for (row, molecule) in molecules.iter().enumerate() {
+        let at = row * width;
+        values[at] = molecule.group as f32;
+        values[at + 1] = molecule.localizations as f32;
+        values[at + 2] = (molecule.first + 1) as f32;
+        values[at + 3] = (molecule.last + 1) as f32;
+        for axis in 0..3 {
+            values[at + 4 + axis] = molecule.centroid(axis);
+            values[at + 7 + axis] = molecule.spread(axis);
         }
     }
-    let identity = MoleculeField::ALL.len() + 6;
-    let mut observations = Vec::with_capacity(molecules.len());
-    let mut values = Vec::with_capacity(molecules.len() * columns.len());
-    for (row, molecule) in molecules.iter().enumerate() {
-        observations.push(Observation {
+    let total = *offsets.last().expect("a molecule table starts at zero");
+    let mut gathered = vec![f32::NAN; total];
+    let mut cursors = vec![0usize; molecules.len()];
+    let slots = measurements.len() + relations.len();
+    for slot in 0..slots {
+        gathered.fill(f32::NAN);
+        cursors.copy_from_slice(&offsets[..molecules.len()]);
+        for frame in frames {
+            let Objects::Spots(set) = frame.objects else {
+                continue;
+            };
+            for (object, spot) in set.spots().iter().enumerate() {
+                let Some(group) = spot.group() else {
+                    continue;
+                };
+                let Some(row) = index.get(&group).copied() else {
+                    continue;
+                };
+                gathered[cursors[row]] = if slot < measurements.len() {
+                    measurements[slot].value(frame.objects, object)
+                } else {
+                    let (relation, field) = relations[slot - measurements.len()];
+                    field.value(frame.relations[relation], object)
+                };
+                cursors[row] += 1;
+            }
+        }
+        for row in 0..molecules.len() {
+            values[row * width + identity + slot] =
+                aggregate.apply(&gathered[offsets[row]..offsets[row + 1]]);
+        }
+    }
+    let observations = molecules
+        .iter()
+        .map(|molecule| Observation {
             time: Some(molecule.first),
             object: None,
             track: None,
             molecule: Some(molecule.group),
-        });
-        values.push(molecule.group as f32);
-        values.push(molecule.localizations as f32);
-        values.push((molecule.first + 1) as f32);
-        values.push((molecule.last + 1) as f32);
-        for axis in 0..3 {
-            values.push(molecule.centroid(axis));
-        }
-        for axis in 0..3 {
-            values.push(molecule.spread(axis));
-        }
-        let span = offsets[row]..offsets[row + 1];
-        for collected in &collected {
-            values.push(aggregate.apply(&collected[span.clone()]));
-        }
-    }
+        })
+        .collect::<Vec<_>>();
     Table::new(
         columns,
         identity,

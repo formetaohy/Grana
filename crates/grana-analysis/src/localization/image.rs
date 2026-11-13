@@ -63,11 +63,34 @@ impl<'a> LocalizationRenderer<'a> {
             self.width() as usize * 4,
             "a rendered localization row holds four bytes per pixel"
         );
-        if self.row * row.len() >= self.buffer.len() {
+        let width = self.width() as usize;
+        if self.row * width * 4 >= self.buffer.len() {
             self.render()?;
         }
-        let start = self.row * row.len();
+        let start = self.row * width * 4;
         row.copy_from_slice(&self.buffer[start..start + row.len()]);
+        self.row += 1;
+        Ok(())
+    }
+
+    pub fn row_rgb(&mut self, row: &mut [u8]) -> Result<(), String> {
+        assert_eq!(
+            row.len(),
+            self.width() as usize * 3,
+            "an opaque localization row holds three bytes per pixel"
+        );
+        let width = self.width() as usize;
+        if self.row * width * 4 >= self.buffer.len() {
+            self.render()?;
+        }
+        let start = self.row * width * 4;
+        let (pixels, remainder) = self.buffer[start..start + width * 4].as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
+        let (targets, waste) = row.as_chunks_mut::<3>();
+        debug_assert!(waste.is_empty());
+        for (target, pixel) in targets.iter_mut().zip(pixels) {
+            target.copy_from_slice(&pixel[..3]);
+        }
         self.row += 1;
         Ok(())
     }

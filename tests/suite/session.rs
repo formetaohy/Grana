@@ -2698,11 +2698,13 @@ fn clusters_imported_localizations_into_molecules() {
     let mut rows = Vec::new();
     for frame in 0..4 {
         rows.push(row(frame, 30.0, 10.0));
+        if frame < 2 {
+            rows.push(row(frame, 5.0, 25.0));
+        }
+        if frame == 3 {
+            rows.push(row(frame, 50.0, 5.0));
+        }
     }
-    for frame in 0..2 {
-        rows.push(row(frame, 5.0, 25.0));
-    }
-    rows.push(row(3, 50.0, 5.0));
     support::picasso(&path, 100.0, &rows);
     let volume = support::spheres(
         Extent::new(64, 32, 4),
@@ -2773,14 +2775,8 @@ fn clusters_imported_localizations_into_molecules() {
         .dataset
         .pyramid()
         .level(0);
-    let found = grana_readout::localization::read(&exported, level, 5, &mut |_, _| true)
-        .expect("the exported table reads")
-        .expect("the exported table exists");
-    let grouped = found
-        .localizations()
-        .iter()
-        .filter(|entry| entry.group().is_some())
-        .count();
+    let found = support::read_localizations(&exported, level, 5);
+    let grouped = found.iter().filter(|entry| entry.group().is_some()).count();
     assert_eq!(grouped, 6, "the group column survives the export");
     let scene = session.scene().expect("the series stays open");
     let project = Project::capture(
@@ -2906,11 +2902,13 @@ fn replays_a_localization_protocol() {
     let mut rows = Vec::new();
     for frame in 0..4 {
         rows.push(row(frame, 30.0, 10.0));
+        if frame < 2 {
+            rows.push(row(frame, 5.0, 25.0));
+        }
+        if frame == 3 {
+            rows.push(row(frame, 50.0, 5.0));
+        }
     }
-    for frame in 0..2 {
-        rows.push(row(frame, 5.0, 25.0));
-    }
-    rows.push(row(3, 50.0, 5.0));
     support::picasso(&path, 100.0, &rows);
     let volume = support::spheres(
         Extent::new(64, 32, 4),
