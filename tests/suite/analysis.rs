@@ -639,6 +639,59 @@ fn estimates_localization_drift_from_density() {
 }
 
 #[test]
+fn aligns_a_sparse_reference_against_the_resampled_localizations() {
+    let frames = 600usize;
+    let reference = 0u32;
+    let rate = 0.002f32;
+    let mut source = 0x2468_ace1u32;
+    let mut value = || {
+        source = source.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (source >> 8) as f32 / 16_777_216.0
+    };
+    let mut molecules = Vec::new();
+    for _ in 0..200 {
+        let center = [8.0 * value(), 8.0 * value()];
+        for _ in 0..12 {
+            molecules.push([
+                center[0] + 0.03 * (value() - 0.5),
+                center[1] + 0.03 * (value() - 0.5),
+            ]);
+        }
+    }
+    let series = (0..frames)
+        .map(|time| {
+            let drift = rate * time as f32;
+            let count = if time < 25 { 3 } else { 100 };
+            (0..count)
+                .map(|_| {
+                    let at = (value() * molecules.len() as f32) as usize;
+                    let molecule = molecules[at.min(molecules.len() - 1)];
+                    grana_analysis::LocalizationPoint::new(
+                        [
+                            molecule[0] + 0.01 * (value() - 0.5) + drift,
+                            molecule[1] + 0.01 * (value() - 0.5),
+                            0.0,
+                        ],
+                        [0.012; 3],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let offsets = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
+        .expect("the sparse reference aligns")
+        .expect("the alignment finishes");
+    for time in (25..frames).step_by(25) {
+        let expected = rate * time as f32;
+        assert!(
+            (offsets[time][0] - expected).abs() < 0.08,
+            "the frame {time} drifts {:?} against {expected}",
+            offsets[time]
+        );
+    }
+}
+
+#[test]
 fn realigns_localizations_when_drift_changes() {
     let extent = Extent::new(16, 16, 4);
     let data = VoxelData::F32(vec![0.0; extent.voxel_count() as usize]);
@@ -2575,6 +2628,45 @@ fn clusters_localizations_into_molecules() {
     assert_eq!(clusters.molecules(), 1);
     assert_eq!(clusters.localizations(), 3);
     assert_eq!(clusters.groups()[3], vec![None]);
+}
+
+#[test]
+fn normalizes_the_cluster_reach_by_the_localization_precision() {
+    let molecules = |sigma: [f32; 3], gap: f32| {
+        let frames = [
+            vec![Spot::gaussian([0.0, 0.0, 0.0], sigma, 500.0)],
+            vec![Spot::gaussian([0.0, 0.0, gap], sigma, 500.0)],
+        ];
+        let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let held = slices
+            .iter()
+            .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
+            .collect::<Vec<_>>();
+        grana_analysis::localization::cluster(
+            &held,
+            grana_object::ClusterSpec::new(0.05, 1, 2),
+            false,
+            &mut |_, _| true,
+        )
+        .expect("the pair clusters")
+        .expect("the pair completes")
+        .molecules()
+    };
+    assert_eq!(
+        molecules([0.012; 3], 0.04),
+        1,
+        "an even pair inside the reach links"
+    );
+    assert_eq!(
+        molecules([0.012; 3], 0.06),
+        0,
+        "an even pair beyond the reach splits"
+    );
+    assert_eq!(
+        molecules([0.012, 0.012, 0.06], 0.06),
+        1,
+        "the axial precision stretches the reach onto z"
+    );
 }
 
 #[test]

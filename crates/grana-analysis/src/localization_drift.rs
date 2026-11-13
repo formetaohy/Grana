@@ -16,6 +16,7 @@ const MINIMUM_PAIRS: usize = 24;
 const PAIR_SHARE: usize = 100;
 const MINIMUM_SPAN: f32 = 1.0e-3;
 const SAMPLE: usize = 65_536;
+const RESAMPLE: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalizationPoint {
@@ -71,9 +72,10 @@ pub fn localization_drift(
     };
     let cloud = Cloud::new(&reference_cloud, reach);
     let segments = segmentation.len();
+    let total_steps = 2 * segments + 1;
     let mut drift = vec![None; segments];
     drift[segmentation.reference] = Some([0.0; 3]);
-    let mut ring = 0usize;
+    let mut done = 0usize;
     for distance in 1..segments {
         for segment in segmentation.ring(distance) {
             let Some(points) = segmentation.centers(frames, segment) else {
@@ -83,7 +85,7 @@ pub fn localization_drift(
                 continue;
             }
             let start = extrapolate(&drift, &segmentation, segment);
-            let Some(shift) = cloud.estimate(&points, reach, start) else {
+            let Some(shift) = cloud.estimate(&points, reach, start, None) else {
                 return Err(format!(
                     "the frames {} to {} pair too few localizations to measure drift",
                     segmentation.bounds(segment)[0],
@@ -92,15 +94,48 @@ pub fn localization_drift(
             };
             drift[segment] = Some(shift);
         }
-        ring = distance;
-        if !report(distance, segments) {
+        done += 1;
+        if !report(done, total_steps) {
+            return Ok(None);
+        }
+    }
+    let Some(first) = interpolate(&drift, &segmentation, frames.len()) else {
+        return Err("the localizations fill fewer than two segments to align".to_string());
+    };
+    let Some((resampled, sampled)) = segmentation.resampled(frames, &first) else {
+        return Err("the drift correction resamples no localization".to_string());
+    };
+    let cloud = Cloud::resampled(&resampled, sampled, reach);
+    done += 1;
+    if !report(done, total_steps) {
+        return Ok(None);
+    }
+    for segment in 0..segments {
+        let Some(points) = segmentation.centers(frames, segment) else {
+            continue;
+        };
+        if points.len() < MINIMUM_PAIRS {
+            continue;
+        }
+        let start = first[segmentation.center_frame(segment)];
+        let excluded = {
+            let [low, high] = segmentation.bounds(segment);
+            [low as u32, (high - 1) as u32]
+        };
+        if let Some(shift) = cloud.estimate(&points, reach, start, Some(excluded))
+            && (0..3).all(|axis| (shift[axis] - start[axis]).abs() <= reach.spacing()[axis])
+        {
+            drift[segment] = Some(shift);
+        }
+        done += 1;
+        if !report(done, total_steps) {
             return Ok(None);
         }
     }
     let Some(offsets) = interpolate(&drift, &segmentation, frames.len()) else {
         return Err("the localizations fill fewer than two segments to align".to_string());
     };
-    if !report(ring + 1, ring + 1) {
+    if !report(total_steps, total_steps) {
         return Ok(None);
     }
     let anchor = offsets[reference as usize];
@@ -210,6 +245,11 @@ impl Segmentation {
         start as f32 + (end - start - 1) as f32 * 0.5
     }
 
+    fn center_frame(&self, segment: usize) -> usize {
+        let [start, end] = self.bounds(segment);
+        start + (end - start - 1) / 2
+    }
+
     fn ring(&self, distance: usize) -> impl Iterator<Item = usize> {
         let below = self.reference.checked_sub(distance);
         let above = {
@@ -226,6 +266,30 @@ impl Segmentation {
             points.extend(frame.iter().map(LocalizationPoint::center));
         }
         (!points.is_empty()).then_some(points)
+    }
+
+    fn resampled(
+        &self,
+        frames: &[Vec<LocalizationPoint>],
+        offsets: &[[f32; 3]],
+    ) -> Option<(Vec<[f32; 3]>, Vec<u32>)> {
+        let total = frames.iter().map(Vec::len).sum::<usize>();
+        let stride = total.div_ceil(RESAMPLE).max(1);
+        let mut points = Vec::with_capacity(total.div_ceil(stride).min(RESAMPLE) + 1);
+        let mut sampled = Vec::with_capacity(total.div_ceil(stride).min(RESAMPLE) + 1);
+        let mut seen = 0usize;
+        for (time, frame) in frames.iter().enumerate() {
+            let offset = offsets[time];
+            for point in frame {
+                if seen.is_multiple_of(stride) {
+                    let center = point.center();
+                    points.push([0, 1, 2].map(|axis| center[axis] - offset[axis]));
+                    sampled.push(time as u32);
+                }
+                seen += 1;
+            }
+        }
+        (!points.is_empty()).then_some((points, sampled))
     }
 }
 
@@ -314,10 +378,19 @@ struct Cloud {
     reach: [f32; 3],
     cells: Map<[i64; 3], Vec<u32>>,
     centers: Vec<[f32; 3]>,
+    frames: Vec<u32>,
 }
 
 impl Cloud {
     fn new(points: &[[f32; 3]], reach: Reach) -> Self {
+        Self::collected(points, Vec::new(), reach)
+    }
+
+    fn resampled(points: &[[f32; 3]], frames: Vec<u32>, reach: Reach) -> Self {
+        Self::collected(points, frames, reach)
+    }
+
+    fn collected(points: &[[f32; 3]], frames: Vec<u32>, reach: Reach) -> Self {
         let spacing = reach.spacing();
         let mut cells = Map::<[i64; 3], Vec<u32>>::default();
         for (index, center) in points.iter().enumerate() {
@@ -330,10 +403,21 @@ impl Cloud {
             reach: spacing,
             cells,
             centers: points.to_vec(),
+            frames,
         }
     }
 
-    fn estimate(&self, points: &[[f32; 3]], reach: Reach, start: [f32; 3]) -> Option<[f32; 3]> {
+    fn scaled(&self, reach: Reach) -> Self {
+        Self::collected(&self.centers, self.frames.clone(), reach)
+    }
+
+    fn estimate(
+        &self,
+        points: &[[f32; 3]],
+        reach: Reach,
+        start: [f32; 3],
+        excluded: Option<[u32; 2]>,
+    ) -> Option<[f32; 3]> {
         let minimum = (points.len() / PAIR_SHARE)
             .max(MINIMUM_PAIRS)
             .min(points.len());
@@ -344,12 +428,12 @@ impl Cloud {
             let cloud = if widen == 1 {
                 self
             } else {
-                held = Cloud::new(&self.centers, reach.scaled(widen));
+                held = self.scaled(reach.scaled(widen));
                 &held
             };
-            if cloud.refine(points, &mut shift, minimum) {
+            if cloud.refine(points, &mut shift, minimum, excluded) {
                 if widen > 1 {
-                    self.refine(points, &mut shift, minimum);
+                    self.refine(points, &mut shift, minimum, excluded);
                 }
                 return shift.iter().all(|value| value.is_finite()).then_some(shift);
             }
@@ -358,14 +442,20 @@ impl Cloud {
         None
     }
 
-    fn refine(&self, points: &[[f32; 3]], shift: &mut [f32; 3], minimum: usize) -> bool {
+    fn refine(
+        &self,
+        points: &[[f32; 3]],
+        shift: &mut [f32; 3],
+        minimum: usize,
+        excluded: Option<[u32; 2]>,
+    ) -> bool {
         let mut previous = f32::INFINITY;
         for _ in 0..ITERATIONS {
             let mut sum = [0.0f64; 3];
             let mut pairs = 0usize;
             for point in points {
                 let moved = [0, 1, 2].map(|axis| point[axis] - shift[axis]);
-                let Some(found) = self.nearest(moved) else {
+                let Some(found) = self.nearest(moved, excluded) else {
                     continue;
                 };
                 for axis in 0..3 {
@@ -392,7 +482,7 @@ impl Cloud {
         true
     }
 
-    fn nearest(&self, point: [f32; 3]) -> Option<[f32; 3]> {
+    fn nearest(&self, point: [f32; 3], excluded: Option<[u32; 2]>) -> Option<[f32; 3]> {
         let at = cell(point, self.reach);
         let mut best = None;
         let mut nearest = f32::INFINITY;
@@ -403,7 +493,15 @@ impl Cloud {
                         continue;
                     };
                     for index in held {
-                        let center = self.centers[*index as usize];
+                        let held = *index as usize;
+                        if excluded.is_some_and(|[low, high]| {
+                            self.frames
+                                .get(held)
+                                .is_some_and(|frame| (low..=high).contains(frame))
+                        }) {
+                            continue;
+                        }
+                        let center = self.centers[held];
                         let mut distance = 0.0f32;
                         for axis in 0..3 {
                             let delta = (center[axis] - point[axis]) / self.reach[axis];

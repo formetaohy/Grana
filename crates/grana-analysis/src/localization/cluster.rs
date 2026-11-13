@@ -18,6 +18,8 @@ const GAP_SHARE: u32 = 20;
 
 const UNGROUPED: u32 = u32::MAX;
 
+const STRETCH_LIMIT: f32 = 12.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clusters {
     groups: Vec<Vec<Option<u32>>>,
@@ -49,6 +51,7 @@ pub fn cluster(
         return Err("the frame range holds no frame".to_string());
     }
     let total = frames.len();
+    let reach = Precision::measured(frames).reach(spec.radius());
     let mut points = Vec::new();
     let mut groups = Vec::with_capacity(total);
     for (time, frame) in frames.iter().enumerate() {
@@ -75,8 +78,7 @@ pub fn cluster(
             localizations: 0,
         }));
     }
-    let cell = f64::from(spec.radius());
-    let reach = cell * cell;
+    let cell = reach.map(f64::from);
     let mut grid = HashMap::<[i64; 3], Vec<u32>>::new();
     for (index, point) in points.iter().enumerate() {
         grid.entry(key(&point.center, cell))
@@ -108,12 +110,12 @@ pub fn cluster(
             }
             let distance = [0, 1, 2]
                 .map(|axis| {
-                    let delta = f64::from(candidate.center[axis]) - f64::from(point.center[axis]);
-                    delta * delta
+                    let delta = (candidate.center[axis] - point.center[axis]) / reach[axis];
+                    f64::from(delta) * f64::from(delta)
                 })
                 .into_iter()
                 .sum::<f64>();
-            if distance <= reach {
+            if distance <= 1.0 {
                 forest.union(index as u32, other);
             }
         }
@@ -160,6 +162,7 @@ pub(super) fn estimate(frames: &[LocalizationFrame<'_>], precision: f32) -> Clus
 
 fn dark_frames(frames: &[LocalizationFrame<'_>], radius: f32) -> u32 {
     let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
+    let reach = Precision::measured(frames).reach(radius);
     let stride = (total / ESTIMATE).max(1);
     let mut points = Vec::with_capacity(total.div_ceil(stride).min(ESTIMATE) + 1);
     let mut seen = 0usize;
@@ -181,8 +184,7 @@ fn dark_frames(frames: &[LocalizationFrame<'_>], radius: f32) -> u32 {
     if points.len() < 2 {
         return ClusterSpec::DEFAULT_DARK;
     }
-    let cell = f64::from(radius);
-    let reach = cell * cell;
+    let cell = [f64::from(reach[0]), f64::from(reach[1])];
     let mut grid = HashMap::<[i64; 2], Vec<u32>>::new();
     for (index, point) in points.iter().enumerate() {
         grid.entry(planar(&point.center, cell))
@@ -204,11 +206,14 @@ fn dark_frames(frames: &[LocalizationFrame<'_>], radius: f32) -> u32 {
         }
         for other in neighbours.iter().copied() {
             let candidate = &points[other as usize];
-            let distance = [0, 1].map(|axis| {
-                let delta = f64::from(candidate.center[axis]) - f64::from(point.center[axis]);
-                delta * delta
-            });
-            if distance[0] + distance[1] <= reach {
+            let distance = [0, 1]
+                .map(|axis| {
+                    let delta = (candidate.center[axis] - point.center[axis]) / reach[axis];
+                    f64::from(delta) * f64::from(delta)
+                })
+                .into_iter()
+                .sum::<f64>();
+            if distance <= 1.0 {
                 forest.union(index as u32, other);
             }
         }
@@ -254,6 +259,53 @@ struct Sample {
     time: u32,
 }
 
+#[derive(Clone, Copy)]
+struct Precision {
+    axis: [f32; 3],
+}
+
+impl Precision {
+    fn measured(frames: &[LocalizationFrame<'_>]) -> Self {
+        let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
+        let stride = (total / ESTIMATE).max(1);
+        let mut sigmas = Vec::with_capacity(total.div_ceil(stride).min(ESTIMATE) + 1);
+        let mut seen = 0usize;
+        for frame in frames {
+            for (index, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(index) {
+                    continue;
+                }
+                if seen.is_multiple_of(stride) {
+                    sigmas.push(spot.sigma());
+                }
+                seen += 1;
+            }
+        }
+        Self {
+            axis: [0, 1, 2].map(|axis| median(&mut sigmas, axis)),
+        }
+    }
+
+    fn reach(&self, radius: f32) -> [f32; 3] {
+        let lateral = 0.5 * (self.axis[0] + self.axis[1]);
+        let stretch = 1.0 / STRETCH_LIMIT;
+        [0, 1, 2].map(|axis| {
+            let scale = if lateral > 0.0 {
+                self.axis[axis] / lateral
+            } else {
+                1.0
+            };
+            radius * scale.clamp(stretch, STRETCH_LIMIT)
+        })
+    }
+}
+
+fn median(sigmas: &mut [[f32; 3]], axis: usize) -> f32 {
+    let mut values = sigmas.iter().map(|sigma| sigma[axis]).collect::<Vec<_>>();
+    values.sort_by(f32::total_cmp);
+    values.get(values.len() / 2).copied().unwrap_or(0.0)
+}
+
 const OFFSETS: [[i8; 3]; CELL_LIMIT] = offsets();
 
 const PLANAR: [[i8; 2]; PLANAR_LIMIT] = planar_offsets();
@@ -294,12 +346,12 @@ const fn planar_offsets() -> [[i8; 2]; PLANAR_LIMIT] {
     held
 }
 
-fn key(center: &[f32; 3], cell: f64) -> [i64; 3] {
-    center.map(|value| (f64::from(value) / cell).floor() as i64)
+fn key(center: &[f32; 3], cell: [f64; 3]) -> [i64; 3] {
+    [0, 1, 2].map(|axis| (f64::from(center[axis]) / cell[axis]).floor() as i64)
 }
 
-fn planar(center: &[f32; 2], cell: f64) -> [i64; 2] {
-    center.map(|value| (f64::from(value) / cell).floor() as i64)
+fn planar(center: &[f32; 2], cell: [f64; 2]) -> [i64; 2] {
+    [0, 1].map(|axis| (f64::from(center[axis]) / cell[axis]).floor() as i64)
 }
 
 struct Forest {

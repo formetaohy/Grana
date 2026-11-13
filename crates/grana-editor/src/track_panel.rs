@@ -1010,17 +1010,17 @@ fn summary<'a>(
         view::labelled(
             ctx,
             grana_i18n::track::length(language),
-            &format!("{:.2} 碌m", statistics.length()),
+            &format!("{:.2} µm", statistics.length()),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::displacement(language),
-            &format!("{:.2} 碌m", statistics.displacement()),
+            &format!("{:.2} µm", statistics.displacement()),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::speed(language),
-            &format!("{:.3} 碌m/s", statistics.speed()),
+            &format!("{:.3} µm/s", statistics.speed()),
         ),
         view::labelled(
             ctx,
@@ -1086,7 +1086,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::max_step(language)),
             step,
             (voxel..=step_max, true),
-            &format!("{step:.3} 碌m"),
+            &format!("{step:.3} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_max_step(value),
@@ -1123,7 +1123,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::division_range(language)),
             clamped,
             (minimum..=maximum, false),
-            &format!("{clamped:.2} 碌m"),
+            &format!("{clamped:.2} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_events(params.events().with_division_range(value.max(minimum))),
@@ -1150,7 +1150,7 @@ fn parameter_rows<'a>(
             Some(grana_i18n::track::merge_range(language)),
             merge_range,
             (merge_min..=merge_max, false),
-            &format!("{merge_range:.2} 碌m"),
+            &format!("{merge_range:.2} µm"),
             move |value| Command::SetTrackParams {
                 set: id,
                 params: params.with_events(params.events().with_merge_range(value)),
@@ -1187,7 +1187,7 @@ fn parameter_rows<'a>(
         Some(grana_i18n::track::tube_width(language)),
         thickness,
         (min_thickness..=max_thickness, true),
-        &format!("{thickness:.3} 碌m"),
+        &format!("{thickness:.3} µm"),
         move |value| Command::SetTrackThickness {
             set: id,
             thickness: value,
