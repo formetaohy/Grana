@@ -77,6 +77,56 @@ impl Session {
         geff::write_objects(path, &lineage, &axes, &objects).map_err(|error| error.to_string())
     }
 
+    pub fn export_localizations(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
+        let scene = self
+            .scene
+            .as_ref()
+            .ok_or_else(|| "no dataset is open".to_string())?;
+        let object = scene
+            .objects
+            .get(set)
+            .ok_or_else(|| "the object set left the scene".to_string())?;
+        if object.kind() != ObjectKind::Spots {
+            return Err("only a spot object set exports localizations".to_string());
+        }
+        let extent = scene.dataset.extent();
+        let level = scene.dataset.pyramid().level(0);
+        let source = object.localization();
+        let metadata = grana_readout::localization::Metadata::new(
+            scene.frame_count(),
+            source.map_or(extent.x(), grana_scene::LocalizationSource::width),
+            source.map_or(extent.y(), grana_scene::LocalizationSource::height),
+            source.map_or(
+                scene.dataset.voxel_size().x * 1000.0,
+                grana_scene::LocalizationSource::pixel,
+            ),
+            source.map_or(extent.z() > 1, grana_scene::LocalizationSource::volume),
+            level.origin(),
+        );
+        let mut entries = Vec::new();
+        for time in 0..scene.frame_count() {
+            let Some(frame) = object.frame(time) else {
+                continue;
+            };
+            for (index, spot) in frame.spots_of().iter().enumerate() {
+                if !object.visible_object(time, index) {
+                    continue;
+                }
+                entries.push(grana_readout::localization::Localization::new(
+                    time,
+                    spot.center(),
+                    spot.sigma(),
+                    spot.quality(),
+                    spot.group(),
+                ));
+            }
+        }
+        let file = grana_file::Atomic::file(path).map_err(|error| error.to_string())?;
+        grana_readout::localization::write(file.staging(), &metadata, &entries)
+            .map_err(|error| error.to_string())?;
+        file.commit().map_err(|error| error.to_string())
+    }
+
     pub(super) fn choose_import_tracks(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Open a GEFF tracking graph")
@@ -110,6 +160,30 @@ impl Session {
             Err(detail) => {
                 self.message = Some(Message::error(format!(
                     "failed to export the graph to {}: {detail}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    pub(super) fn choose_export_localizations(&mut self, set: ObjectSetId) {
+        let Some(path) = self.track_path(
+            set,
+            "localizations.hdf5",
+            "Export a Picasso localization table",
+        ) else {
+            return;
+        };
+        match self.export_localizations(set, &path) {
+            Ok(()) => {
+                self.message = Some(Message::info(format!(
+                    "exported the localizations to {}",
+                    path.display()
+                )));
+            }
+            Err(detail) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export the localizations to {}: {detail}",
                     path.display()
                 )));
             }

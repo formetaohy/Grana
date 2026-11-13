@@ -59,6 +59,13 @@ impl Session {
         enum Update {
             Progress(u32, usize, usize),
             Frame(u32, ObjectFrame),
+            Localization {
+                pixel: f32,
+                width: u32,
+                height: u32,
+                volume: bool,
+                drift: grana_scene::Drift,
+            },
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
@@ -85,6 +92,25 @@ impl Session {
                     }
                     Poll::Event(Event::Frame { time, frame }) => {
                         updates.push((index, job, Update::Frame(time, frame)));
+                    }
+                    Poll::Event(Event::Localization {
+                        pixel,
+                        width,
+                        height,
+                        volume,
+                        drift,
+                    }) => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::Localization {
+                                pixel,
+                                width,
+                                height,
+                                volume,
+                                drift,
+                            },
+                        ));
                     }
                     Poll::Event(Event::Tracks(set)) => {
                         updates.push((index, job, Update::Tracks(set)));
@@ -160,6 +186,22 @@ impl Session {
                         scene.install(set, time, frame);
                     }
                 }
+                Update::Localization {
+                    pixel,
+                    width,
+                    height,
+                    volume,
+                    drift,
+                } => {
+                    if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.set_localization(
+                            set,
+                            grana_scene::LocalizationSource::new(
+                                pixel, width, height, volume, drift,
+                            ),
+                        );
+                    }
+                }
                 Update::Tracks(tracks) => {
                     if let (Job::Track(set) | Job::Import(set), Some(scene)) =
                         (job, self.scene.as_mut())
@@ -232,6 +274,9 @@ impl Session {
                 }
                 Update::Done => {
                     self.progress.retain(|progress| progress.job != job);
+                    if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.realign_localization(set);
+                    }
                     removed.push(index);
                     finished.push(job);
                     match job {
@@ -1199,6 +1244,67 @@ impl Session {
         let reference = scene.drift().reference();
         let channel = scene.selected;
         self.align_drift(channel, reference);
+    }
+
+    pub(super) fn start_localization_drift(&mut self, set: ObjectSetId) {
+        if !self.analysable() {
+            return;
+        }
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Drift)
+        {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        if object.kind() != grana_scene::ObjectKind::Spots {
+            self.message = Some(Message::error(
+                "localization drift aligns a spot object set",
+            ));
+            return;
+        }
+        if object.localization().is_none() {
+            self.message = Some(Message::error(
+                "the object set carries no localization table to align",
+            ));
+            return;
+        }
+        if scene.frame_count() < 2 {
+            self.message = Some(Message::error("the dataset holds one frame to align"));
+            return;
+        }
+        let base = scene.drift().clone();
+        let reference = base.reference();
+        let channel = if base.is_empty() {
+            object.channel()
+        } else {
+            base.channel()
+        };
+        let mut frames = Vec::with_capacity(scene.frame_count() as usize);
+        for time in 0..scene.frame_count() {
+            let mut centers = Vec::new();
+            if let Some(frame) = object.frame(time) {
+                for (index, spot) in frame.spots_of().iter().enumerate() {
+                    if object.visible_object(time, index) {
+                        centers.push(spot.center());
+                    }
+                }
+            }
+            frames.push(centers);
+        }
+        self.message = None;
+        self.record_progress(Job::Drift, 0, 0, 0);
+        self.analysis.push(crate::localization_drift(
+            Job::Drift,
+            grana_pipeline::run::LocalizationDriftRequest::new(frames, reference, channel, base),
+        ));
     }
 
     pub(super) fn align_drift(&mut self, channel: usize, reference: u32) {

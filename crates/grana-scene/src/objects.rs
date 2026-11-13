@@ -8,7 +8,9 @@ use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
+use crate::drift::Drift;
 use crate::key::ObjectSetKey;
+use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::provenance::{Criteria, Provenance};
@@ -746,6 +748,41 @@ impl Objects {
         };
         set.install_tracks(tracks, stamp);
         true
+    }
+
+    pub fn set_localization(&mut self, id: ObjectSetId, source: LocalizationSource) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization(source))
+    }
+
+    pub fn realign_localization(&mut self, id: ObjectSetId, next: &Drift) {
+        let mut frames = 0;
+        if let Some(set) = self.sets.iter_mut().find(|set| set.id() == id) {
+            let count = set.frame_count();
+            if set.realign(next, &mut self.revisions) {
+                frames = count;
+            }
+        }
+        for time in 0..frames {
+            self.invalidate_relations(id, time);
+        }
+    }
+
+    pub fn realign_localizations(&mut self, next: &Drift) {
+        let mut aligned = Vec::new();
+        for set in &mut self.sets {
+            if set.localization().is_none() {
+                continue;
+            }
+            if set.realign(next, &mut self.revisions) {
+                aligned.push((set.id(), set.frame_count()));
+            }
+        }
+        for (id, frames) in aligned {
+            for time in 0..frames {
+                self.invalidate_relations(id, time);
+            }
+        }
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {

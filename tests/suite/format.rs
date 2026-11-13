@@ -1010,7 +1010,8 @@ fn reads_picasso_localization_tables() {
     let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
         .expect("the table reads")
         .expect("the table finishes");
-    assert_eq!(found.len(), 2);
+    assert_eq!(found.localizations().len(), 2);
+    let found = found.localizations();
     assert_eq!(found[0].time(), 0);
     assert_eq!(found[1].time(), 1);
     assert_eq!(
@@ -1031,6 +1032,67 @@ fn reads_picasso_localization_tables() {
 }
 
 #[test]
+fn writes_picasso_localization_tables() {
+    let temp = Temp::new("suite-picasso-write");
+    let path = temp.path().join("localizations.hdf5");
+    let entries = vec![
+        grana_readout::localization::Localization::new(
+            0,
+            [2.0, 1.0, -0.5],
+            [0.02, 0.022, 0.045],
+            3200.0,
+            Some(4),
+        ),
+        grana_readout::localization::Localization::new(
+            1,
+            [2.5, 1.5, -0.6],
+            [0.03, 0.03, 0.05],
+            2800.0,
+            Some(4),
+        ),
+        grana_readout::localization::Localization::new(
+            1,
+            [4.0, 2.0, -0.4],
+            [0.03, 0.03, 0.05],
+            1800.0,
+            None,
+        ),
+    ];
+    let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
+    let metadata =
+        grana_readout::localization::Metadata::new(2, 64, 32, 100.0, true, level.origin());
+    grana_readout::localization::write(&path, &metadata, &entries).expect("the table writes");
+    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
+        .expect("the table reads")
+        .expect("the table finishes");
+    assert_eq!(
+        (found.pixel(), found.width(), found.height(), found.volume()),
+        (100.0, 73, 37, true)
+    );
+    assert_eq!(found.localizations().len(), 3);
+    let first = found.localizations()[0];
+    assert_eq!(first.time(), 0);
+    assert_eq!(first.group(), Some(4));
+    assert!((first.center()[0] - 2.0).abs() < 1.0e-5);
+    assert!((first.center()[1] - 1.0).abs() < 1.0e-5);
+    assert!((first.center()[2] + 0.5).abs() < 1.0e-5);
+    assert!((first.sigma()[0] - 0.02).abs() < 1.0e-6);
+    assert!((first.sigma()[2] - 0.045).abs() < 1.0e-6);
+    let file = hdf5_pure::File::open(&path).expect("the table opens");
+    let groups = file.dataset("groups").expect("the groups table exists");
+    assert_eq!(groups.shape().expect("the groups table has a shape"), [1]);
+    let metadata = file
+        .dataset("metadata")
+        .expect("the metadata exists")
+        .read_string()
+        .expect("the metadata reads");
+    assert!(
+        metadata[0].contains("Grana"),
+        "the metadata names its writer"
+    );
+}
+
+#[test]
 fn reads_one_based_localization_tables() {
     let temp = Temp::new("suite-localization-table");
     let path = temp.path().join("localizations.txt");
@@ -1045,7 +1107,8 @@ fn reads_one_based_localization_tables() {
     let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
         .expect("the table reads")
         .expect("the table finishes");
-    assert_eq!(found.len(), 2);
+    assert_eq!(found.localizations().len(), 2);
+    let found = found.localizations();
     assert_eq!(found[0].time(), 0, "a one based table starts on frame one");
     assert_eq!(found[1].time(), 1);
     assert!((found[0].center()[0] + 2.2).abs() < 1.0e-4);

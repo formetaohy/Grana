@@ -274,6 +274,16 @@ impl SceneState {
                 "the object colocalization covers another set of frames",
             ));
         }
+        if let Some(localization) = &set.localization
+            && (set.kind != ObjectKind::Spots
+                || !localization.applied().is_empty()
+                    && (localization.applied().frames() as usize != set.frames.len()
+                        || localization.applied().reference() as usize >= set.frames.len()))
+        {
+            return Err(fault(
+                "the localization source covers another set of frames",
+            ));
+        }
         Ok(())
     }
 

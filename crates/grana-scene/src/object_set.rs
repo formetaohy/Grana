@@ -5,13 +5,15 @@ use grana_measure::{
 };
 use grana_object::TrackParams;
 use grana_object::match_anchor;
-use grana_object::{RelationFrame, TrackSet};
+use grana_object::{RelationFrame, SpotSet, TrackSet};
 
 use crate::color::ObjectColor;
 use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
+use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
+use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
@@ -94,6 +96,7 @@ pub struct ObjectSet {
     classifier: Option<Classifier>,
     object_coloc: Option<ObjectColoc>,
     label_export: Option<LabelExport>,
+    localization: Option<LocalizationSource>,
     track_bounds: Mutex<Option<TrackBounds>>,
     revision: Revision,
     document: Revision,
@@ -145,6 +148,7 @@ impl ObjectSet {
             classifier: None,
             object_coloc: None,
             label_export: None,
+            localization: None,
             track_bounds: Mutex::new(None),
             revision: Revision::FIRST,
             document: Revision::FIRST,
@@ -321,6 +325,22 @@ impl ObjectSet {
 
     pub fn label_export(&self) -> Option<&LabelExport> {
         self.label_export.as_ref()
+    }
+
+    pub fn localization(&self) -> Option<&LocalizationSource> {
+        self.localization.as_ref()
+    }
+
+    pub(crate) fn set_localization(&mut self, source: LocalizationSource) -> bool {
+        if self.kind != ObjectKind::Spots {
+            return false;
+        }
+        if self.localization.as_ref() == Some(&source) {
+            return false;
+        }
+        self.localization = Some(source);
+        self.document = self.document.next();
+        true
     }
 
     pub(crate) fn set_label_export(&mut self, export: Option<LabelExport>) -> bool {
@@ -967,6 +987,7 @@ impl ObjectSet {
             classifier: self.classifier.as_ref().map(Classifier::state),
             object_coloc: self.object_coloc.clone(),
             label_export: self.label_export.clone(),
+            localization: self.localization.clone(),
             seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
             relations: self
@@ -1008,6 +1029,7 @@ impl ObjectSet {
             classifier,
             object_coloc,
             label_export,
+            localization,
             seeds,
             frames,
             relations,
@@ -1057,6 +1079,7 @@ impl ObjectSet {
                 .expect("a restored classifier keeps its coefficients"),
             object_coloc: None,
             label_export,
+            localization,
             track_bounds: Mutex::new(None),
             revision: stamps.mint(),
             document: Revision::FIRST,
@@ -1759,6 +1782,7 @@ impl ObjectSet {
             classifier: self.classifier.clone(),
             object_coloc: None,
             label_export: None,
+            localization: self.localization.clone(),
             track_bounds: Mutex::new(None),
             revision: Revision::FIRST,
             document: Revision::FIRST,
@@ -1902,6 +1926,7 @@ impl ObjectSet {
             classifier: self.classifier.clone(),
             object_coloc: None,
             label_export: None,
+            localization: None,
             track_bounds: Mutex::new(None),
             revision: stamp,
             document: self.document.next(),
@@ -1992,10 +2017,86 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn realign(&mut self, next: &Drift, stamps: &mut Revisions) -> bool {
+        let Some(applied) = self
+            .localization
+            .as_ref()
+            .map(|source| source.applied().clone())
+        else {
+            return false;
+        };
+        if self.kind != ObjectKind::Spots || &applied == next {
+            return false;
+        }
+        let mut changed = false;
+        for (time, slot) in self.frames.iter_mut().enumerate() {
+            let time = time as u32;
+            let previous = applied.warp(time);
+            let next = next.warp(time);
+            if previous == next {
+                continue;
+            }
+            let Some(frame) = slot.data.as_deref() else {
+                continue;
+            };
+            let ObjectFrame::Spots(spots) = frame else {
+                return false;
+            };
+            let aligned = spots
+                .spots()
+                .iter()
+                .map(|spot| {
+                    let center = spot.center();
+                    let offset = previous.sample(center);
+                    let raw = [0, 1, 2].map(|axis| center[axis] + offset[axis]);
+                    let offset = next.sample(raw);
+                    spot.moved([0, 1, 2].map(|axis| raw[axis] - offset[axis]))
+                })
+                .collect::<Vec<_>>();
+            let stamp = stamps.mint();
+            slot.data = Some(Arc::new(ObjectFrame::Spots(SpotSet::new(
+                spots.level(),
+                aligned,
+                spots.intensities().clone(),
+            ))));
+            slot.stamp = stamp;
+            self.revision = stamp;
+            self.document = self.document.next();
+            changed = true;
+        }
+        if !changed {
+            return false;
+        }
+        if let Some(source) = self.localization.as_mut() {
+            source.set_applied(next.clone());
+        }
+        self.move_tracks(stamps);
+        true
+    }
+
+    fn move_tracks(&mut self, stamps: &mut Revisions) {
+        let Some(thickness) = self.track_thickness() else {
+            return;
+        };
+        let Some(layer) = self.tracks.take() else {
+            return;
+        };
+        let frames = &self.frames;
+        let remapped = layer.set().remapped(|time, object, centroid| {
+            frames
+                .get(time as usize)
+                .and_then(|slot| slot.data.as_deref())
+                .and_then(|frame| frame.spots_of().get(object))
+                .map_or(centroid, |spot| spot.center())
+        });
+        let stamp = stamps.mint();
+        self.tracks = Some(TrackLayer::new(remapped, thickness, stamp));
+        self.revision = stamp;
+    }
+
     pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: Revision) {
         self.install_shared(time, Arc::new(frame), stamp);
     }
-
     pub(crate) fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: Revision) {
         assert_eq!(
             frame.kind(),

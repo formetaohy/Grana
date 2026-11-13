@@ -14,8 +14,11 @@ use grana_object::{
     CellParams, FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams,
     SurfaceSet, Track, TrackDetection, TrackEvents, TrackNode, TrackParams, TrackSet,
 };
+use grana_object::{IntensityTable, SampleStatistics};
 use grana_pipeline::Channels;
-use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
+use grana_scene::{
+    Dataset, Drift, LocalizationSource, ObjectFrame, ObjectKind, ObjectParams, Scene,
+};
 use grana_volume::{
     Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
     VolumeSeries, VoxelData, VoxelFormat,
@@ -584,6 +587,126 @@ fn recovers_a_translation_and_reports_a_still_volume() {
     }
     let still = vec![4.0f32; dims.iter().product()];
     assert_eq!(drift_shift(&still, &still, dims), [0.0; 3]);
+}
+
+#[test]
+fn estimates_localization_drift_from_density() {
+    let frames = 600usize;
+    let rate = 0.002f32;
+    let reference = 300u32;
+    let mut source = 0x1234_5678u32;
+    let mut value = || {
+        source = source.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (source >> 8) as f32 / 16_777_216.0
+    };
+    let base = (0..300)
+        .map(|_| [8.0 * value(), 8.0 * value(), 0.0])
+        .collect::<Vec<_>>();
+    let series = (0..frames)
+        .map(|time| {
+            let shift = rate * time as f32;
+            base.iter()
+                .map(|point| [point[0] + shift, point[1], 0.0])
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let offsets = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
+        .expect("the drift estimates")
+        .expect("the drift finishes");
+    assert_eq!(offsets.len(), frames);
+    for (time, offset) in offsets.iter().enumerate() {
+        let expected = rate * (time as f32 - reference as f32);
+        assert!(
+            (offset[0] - expected).abs() < 0.15,
+            "the frame {time} drifts {offset:?} against {expected}"
+        );
+        assert!(offset[1].abs() < 0.15, "the frame {time} stays on y");
+        assert_eq!(offset[2], 0.0);
+    }
+}
+
+#[test]
+fn realigns_localizations_when_drift_changes() {
+    let extent = Extent::new(16, 16, 4);
+    let data = VoxelData::F32(vec![0.0; extent.voxel_count() as usize]);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![Channel::new("spots", [1.0, 1.0, 1.0], data)],
+    );
+    let pyramid = VolumeSeries::new(vec![volume.clone(), volume], 1.0)
+        .pyramid()
+        .clone();
+    let mut scene = Scene::new(Dataset::synthetic("drift", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
+    let spots = vec![Spot::grouped([0.4, -0.2, 0.1], [0.02; 3], 1.0, Some(3))];
+    for time in 0..2 {
+        scene.install(
+            set,
+            time,
+            ObjectFrame::Spots(grana_object::SpotSet::new(
+                0,
+                spots.clone(),
+                IntensityTable::new(1, vec![statistics; 1]),
+            )),
+        );
+    }
+    scene.install_tracks(
+        set,
+        TrackSet::new(
+            1.0,
+            vec![Track::new(vec![
+                TrackNode::new(0, 0, spots[0].center()),
+                TrackNode::new(1, 0, spots[0].center()),
+            ])],
+        ),
+    );
+    scene.set_localization(
+        set,
+        LocalizationSource::new(100.0, 16, 16, false, Drift::default()),
+    );
+    let drift = Drift::new(
+        0,
+        0,
+        vec![
+            grana_warp::Warp::IDENTITY,
+            grana_warp::Warp::shift([0.5, 0.0, 0.0]),
+        ],
+    );
+    assert!(scene.set_drift(drift));
+    let aligned = scene
+        .objects
+        .get(set)
+        .expect("the spot set stays")
+        .frame(1)
+        .expect("the frame stays")
+        .spots()
+        .expect("the frame carries spots")
+        .spots()[0];
+    assert!((aligned.center()[0] - (spots[0].center()[0] - 0.5)).abs() < 1.0e-6);
+    let node = scene
+        .objects
+        .get(set)
+        .and_then(|set| set.tracks())
+        .and_then(|tracks| tracks.set().track(0))
+        .expect("the group track stays")
+        .nodes()[1];
+    assert!(
+        (node.centroid()[0] - aligned.center()[0]).abs() < 1.0e-6,
+        "the group track follows its spots"
+    );
+    assert!(scene.set_drift(Drift::default()));
+    let restored = scene
+        .objects
+        .get(set)
+        .expect("the spot set stays")
+        .frame(1)
+        .expect("the frame stays")
+        .spots()
+        .expect("the frame carries spots")
+        .spots()[0];
+    assert!((restored.center()[0] - spots[0].center()[0]).abs() < 1.0e-6);
 }
 
 fn texture(dims: [usize; 3]) -> Vec<f32> {

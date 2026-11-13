@@ -7,6 +7,7 @@ pub struct Spot {
     center: [f32; 3],
     sigma: [f32; 3],
     quality: f32,
+    group: Option<u32>,
 }
 
 impl Spot {
@@ -20,6 +21,10 @@ impl Spot {
     }
 
     pub fn gaussian(center: [f32; 3], sigma: [f32; 3], quality: f32) -> Self {
+        Self::grouped(center, sigma, quality, None)
+    }
+
+    pub fn grouped(center: [f32; 3], sigma: [f32; 3], quality: f32, group: Option<u32>) -> Self {
         assert!(
             center.iter().all(|value| value.is_finite()),
             "a spot center must be finite"
@@ -36,6 +41,7 @@ impl Spot {
             center,
             sigma,
             quality,
+            group,
         }
     }
 
@@ -57,6 +63,14 @@ impl Spot {
 
     pub fn quality(self) -> f32 {
         self.quality
+    }
+
+    pub fn group(self) -> Option<u32> {
+        self.group
+    }
+
+    pub fn moved(self, center: [f32; 3]) -> Self {
+        Self::grouped(center, self.sigma, self.quality, self.group)
     }
 }
 

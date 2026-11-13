@@ -13,6 +13,7 @@ use crate::derived::{DerivedSpec, Operation};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
+use crate::localization::LocalizationSource;
 use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::ObjectSetId;
@@ -101,6 +102,7 @@ pub struct SetState {
     pub classifier: Option<grana_measure::ClassifierState>,
     pub object_coloc: Option<ObjectColoc>,
     pub label_export: Option<LabelExport>,
+    pub localization: Option<LocalizationSource>,
     pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,

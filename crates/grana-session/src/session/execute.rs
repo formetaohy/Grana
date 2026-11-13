@@ -691,6 +691,7 @@ impl Session {
                 }
             }
             Command::ComputeDrift => self.start_drift(),
+            Command::ComputeLocalizationDrift(set) => self.start_localization_drift(set),
             Command::CancelDrift => self.cancel(Job::Drift),
             Command::ClearDrift => self.clear_drift(),
             Command::SetDriftReference(reference) => self.set_drift_reference(reference),
@@ -713,6 +714,7 @@ impl Session {
             Command::ExportDataset => self.export_dataset(),
             Command::ExportPlate => self.export_plate(),
             Command::ExportGeff(set) => self.choose_export_geff(set),
+            Command::ExportLocalizations(set) => self.choose_export_localizations(set),
             Command::CaptureProtocol => self.capture_protocol(),
             Command::ApplyProtocol => self.apply_protocol(),
             Command::LoadProtocol => self.load_protocol(),

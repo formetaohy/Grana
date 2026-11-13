@@ -1082,8 +1082,21 @@ impl Scene {
             return false;
         }
         self.drift = drift;
+        self.objects.realign_localizations(&self.drift);
         self.clear_object_coloc_all();
         true
+    }
+
+    pub fn set_localization(
+        &mut self,
+        id: ObjectSetId,
+        source: crate::localization::LocalizationSource,
+    ) -> bool {
+        self.objects.set_localization(id, source)
+    }
+
+    pub fn realign_localization(&mut self, id: ObjectSetId) {
+        self.objects.realign_localization(id, &self.drift);
     }
 
     pub fn registration(&self) -> &Registration {

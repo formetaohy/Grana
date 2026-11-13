@@ -142,6 +142,7 @@ pub enum Command {
     ImportTracks,
     ImportLocalizations,
     ExportGeff(ObjectSetId),
+    ExportLocalizations(ObjectSetId),
     RemoveObject(ObjectSetId),
     AddSeed {
         set: ObjectSetId,
@@ -375,6 +376,7 @@ pub enum Command {
     CancelObjectColoc(ObjectSetId),
     ClearObjectColoc(ObjectSetId),
     ComputeDrift,
+    ComputeLocalizationDrift(ObjectSetId),
     CancelDrift,
     ClearDrift,
     SetDriftReference(u32),
@@ -685,6 +687,7 @@ impl Command {
                 | Self::SetGate { .. }
                 | Self::SetExport(_)
                 | Self::ExportGeff(_)
+                | Self::ExportLocalizations(_)
                 | Self::ExportColoc
                 | Self::ExportMeasure
                 | Self::ExportProvenance

@@ -20,8 +20,8 @@ pub use grana_object::{MaskMode, MaskTool, ObjectAnchor, match_anchor};
 pub use grana_project::{EXTENSION as PROJECT_EXTENSION, Export, NamedView, is_project};
 pub use grana_scene::slug;
 pub use job::{
-    Analysis, calibration, coloc, detect, drift, grow, import, interop, localize, object_coloc,
-    recut, register, relation, segment, track,
+    Analysis, calibration, coloc, detect, drift, grow, import, interop, localization_drift,
+    localize, object_coloc, recut, register, relation, segment, track,
 };
 pub use loader::Loader;
 pub use recent::{Entry as RecentEntry, Kind as RecentKind, Recent};

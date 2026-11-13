@@ -14,6 +14,13 @@ pub enum Event {
         time: u32,
         frame: ObjectFrame,
     },
+    Localization {
+        pixel: f32,
+        width: u32,
+        height: u32,
+        volume: bool,
+        drift: Drift,
+    },
     Tracks(TrackSet),
     Relation {
         time: u32,

@@ -25,10 +25,11 @@ use grana_profile::{Line, Profile, Sample};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
     ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
-    LabelExport, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
-    Registration, RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState,
-    SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    LabelExport, LassoPath, LocalizationSource, MaskFilter, MeasureState, ObjectAnchor,
+    ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation,
+    Provenance, RatioSpec, Recipe, Registration, RelationState, RestoreSpec, SceneState, Seeds,
+    SelectionState, SetState, SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor,
+    TrackEdit, TrackStyle,
 };
 use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
@@ -662,6 +663,7 @@ impl Decode for SetState {
         let classifier = Option::<ClassifierState>::decode(reader)?;
         let object_coloc = Option::<ObjectColoc>::decode(reader)?;
         let label_export = Option::<LabelExport>::decode(reader)?;
+        let localization = Option::<LocalizationSource>::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
         let state = Self {
@@ -685,6 +687,7 @@ impl Decode for SetState {
             classifier,
             object_coloc,
             label_export,
+            localization,
             seeds,
             frames,
             relations: Vec::<RelationState>::decode(reader)?,
@@ -1016,6 +1019,25 @@ impl Decode for LabelExport {
             return Err(FAULT_VALUE);
         }
         Ok(Self::new(path, frames, labels))
+    }
+}
+
+impl Decode for LocalizationSource {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let pixel = finite(reader.f32()?)?;
+        let width = reader.u32()?;
+        let height = reader.u32()?;
+        let volume = reader.bool()?;
+        if !pixel.is_finite() || pixel <= 0.0 || width == 0 || height == 0 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(
+            pixel,
+            width,
+            height,
+            volume,
+            Drift::decode(reader)?,
+        ))
     }
 }
 
@@ -1525,7 +1547,13 @@ impl Decode for Spot {
         for value in &mut sigma {
             *value = positive(reader.f32()?)?;
         }
-        Ok(Self::gaussian(center, sigma, finite(reader.f32()?)?))
+        let quality = finite(reader.f32()?)?;
+        let group = match reader.u8()? {
+            0 => None,
+            1 => Some(reader.u32()?),
+            _ => return Err(FAULT_TAG),
+        };
+        Ok(Self::grouped(center, sigma, quality, group))
     }
 }
 

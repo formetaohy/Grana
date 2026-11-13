@@ -340,6 +340,24 @@ pub(super) fn object_menu<'a>(
             Message::Command(Command::ExportGeff(id)),
         ));
     }
+    if kind == ObjectKind::Spots {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.localizations", id.raw()),
+            Icon::Export,
+            grana_i18n::object::export_localizations(language),
+            Message::Command(Command::ExportLocalizations(id)),
+        ));
+        if set.localization().is_some() {
+            rows.push(action_row(
+                ctx,
+                &format!("object.{}.menu.localization.drift", id.raw()),
+                Icon::Target,
+                grana_i18n::object::correct_localization_drift(language),
+                Message::Command(Command::ComputeLocalizationDrift(id)),
+            ));
+        }
+    }
     if authoring && !merges.is_empty() {
         rows.push(view::menu_separator(ctx));
         rows.push(view::caption(ctx, grana_i18n::object::merge_into(language)));

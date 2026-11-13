@@ -17,9 +17,9 @@ use grana_object::{
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
-    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, Registration,
-    RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
-    TrackStyle,
+    LocalizationSource, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
+    Registration, RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor,
+    TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 use grana_warp::Warp;
@@ -495,6 +495,7 @@ impl Encode for SetState {
         self.classifier.encode(writer);
         self.object_coloc.encode(writer);
         self.label_export.encode(writer);
+        self.localization.encode(writer);
         self.seeds.encode(writer);
         self.frames.encode(writer);
         self.relations.encode(writer);
@@ -510,6 +511,16 @@ impl Encode for LabelExport {
         writer.string(self.path());
         writer.u32(self.frames());
         writer.u32(self.labels());
+    }
+}
+
+impl Encode for LocalizationSource {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.f32(self.pixel());
+        writer.u32(self.width());
+        writer.u32(self.height());
+        writer.bool(self.volume());
+        self.applied().encode(writer);
     }
 }
 
@@ -1049,6 +1060,13 @@ impl Encode for Spot {
             writer.f32(value);
         }
         writer.f32(self.quality());
+        match self.group() {
+            None => writer.u8(0),
+            Some(group) => {
+                writer.u8(1);
+                writer.u32(group);
+            }
+        }
     }
 }
 

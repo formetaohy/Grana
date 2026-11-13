@@ -60,8 +60,15 @@ pub fn localization(
     else {
         return Ok(());
     };
+    sink(Event::Localization {
+        pixel: table.pixel(),
+        width: table.width(),
+        height: table.height(),
+        volume: table.volume(),
+        drift: request.drift.clone(),
+    });
     let mut slots = (0..frames).map(|_| Vec::new()).collect::<Vec<_>>();
-    for entry in &table {
+    for entry in table.localizations() {
         slots[entry.time() as usize].push(*entry);
     }
     let mut grouped = BTreeMap::<u32, Vec<TrackNode>>::new();
@@ -140,10 +147,11 @@ fn frame(
         .map(|entry| {
             let center = entry.center();
             let offset = warp.sample(center);
-            Spot::gaussian(
+            Spot::grouped(
                 [0, 1, 2].map(|axis| center[axis] - offset[axis]),
                 entry.sigma(),
                 entry.quality(),
+                entry.group(),
             )
         })
         .collect::<Vec<_>>();

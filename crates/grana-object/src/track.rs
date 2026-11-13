@@ -365,6 +365,30 @@ impl TrackSet {
         self.tracks.get(index)
     }
 
+    pub fn remapped(&self, mut centroid: impl FnMut(u32, usize, [f32; 3]) -> [f32; 3]) -> Self {
+        let tracks = self
+            .tracks
+            .iter()
+            .map(|track| {
+                Track::new(
+                    track
+                        .nodes()
+                        .iter()
+                        .map(|node| {
+                            TrackNode::new(
+                                node.time(),
+                                node.object(),
+                                centroid(node.time(), node.object(), node.centroid()),
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        Self::try_with_links(self.frame_interval, tracks, self.links.clone())
+            .expect("a remapped track set keeps its links")
+    }
+
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.detections
             .binary_search_by_key(&(time, object), |detection| (detection.0, detection.1))

@@ -14,6 +14,8 @@ pub enum Error {
     Read { path: PathBuf, detail: String },
     #[error("failed to read the localization table `{path}`: {detail}")]
     Table { path: PathBuf, detail: String },
+    #[error("failed to write the localization table `{path}`: {detail}")]
+    Write { path: PathBuf, detail: String },
 }
 
 impl Error {
@@ -47,6 +49,13 @@ impl Error {
 
     pub(crate) fn table(path: &Path, detail: impl Into<String>) -> Self {
         Self::Table {
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn write(path: &Path, detail: impl Into<String>) -> Self {
+        Self::Write {
             path: path.to_path_buf(),
             detail: detail.into(),
         }

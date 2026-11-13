@@ -3,7 +3,7 @@ use std::path::Path;
 use grana_volume::Level;
 use hdf5_pure::{Datatype, File};
 
-use super::{Localization, frame, narrow, normalize};
+use super::{Localization, Table, frame, narrow, normalize};
 use crate::error::Error;
 use crate::number;
 
@@ -27,11 +27,12 @@ pub(super) fn read(
     level: Level,
     frames: u32,
     report: &mut dyn FnMut(u64, u64) -> bool,
-) -> Result<Option<Vec<Localization>>, Error> {
+) -> Result<Option<Table>, Error> {
     let file = File::open_streaming(path).map_err(|error| Error::table(path, error.to_string()))?;
-    let table = Table::load(&file, path)?;
+    let table = Records::load(&file, path)?;
     let columns = Columns::new(&table, path, frames)?;
     let pixel = pixel_size(&file, path, level);
+    let [width, height] = field(&file, path, level);
     let voxel = level.voxel();
     let fallback = [0, 1, 2].map(|axis| 0.5 * voxel[axis].max(f32::MIN_POSITIVE));
     let total = table.rows as u64;
@@ -89,20 +90,20 @@ pub(super) fn read(
             Some(column) => group(path, table.read(column, row, path)?, row)?,
             None => None,
         };
-        localizations.push(Localization {
-            time,
-            center,
-            sigma,
-            quality,
-            group,
-        });
+        localizations.push(Localization::new(time, center, sigma, quality, group));
     }
     report(total, total);
-    Ok(Some(localizations))
+    Ok(Some(super::Table::new(
+        localizations,
+        (pixel * 1000.0) as f32,
+        width,
+        height,
+        columns.z.is_some(),
+    )))
 }
 
 fn first(
-    table: &Table,
+    table: &Records,
     columns: [Option<usize>; 2],
     row: usize,
     path: &Path,
@@ -143,7 +144,7 @@ struct Columns {
 }
 
 impl Columns {
-    fn new(table: &Table, path: &Path, frames: u32) -> Result<Self, Error> {
+    fn new(table: &Records, path: &Path, frames: u32) -> Result<Self, Error> {
         let x = table
             .find(&["x"])
             .ok_or_else(|| Error::table(path, "the table carries no x column"))?;
@@ -178,6 +179,20 @@ fn pixel_size(file: &File, path: &Path, level: Level) -> f64 {
         .map_or(f64::from(level.voxel()[0]), |nanometers| {
             nanometers * NANOMETER
         })
+}
+
+fn field(file: &File, path: &Path, level: Level) -> [u32; 2] {
+    let extent = level.extent();
+    let metadata = metadata(file, path);
+    let axis = |key: &str, fallback: u32| {
+        metadata
+            .as_deref()
+            .and_then(|text| scalar(text, key))
+            .and_then(|value| u32::try_from(value.round() as u64).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(fallback)
+    };
+    [axis("Width", extent.x()), axis("Height", extent.y())]
 }
 
 fn metadata(file: &File, path: &Path) -> Option<String> {
@@ -219,14 +234,14 @@ struct Member {
     datatype: Datatype,
 }
 
-struct Table {
+struct Records {
     rows: usize,
     record: usize,
     members: Vec<Member>,
     raw: Vec<u8>,
 }
 
-impl Table {
+impl Records {
     fn load(file: &File, path: &Path) -> Result<Self, Error> {
         let dataset = TABLE
             .iter()

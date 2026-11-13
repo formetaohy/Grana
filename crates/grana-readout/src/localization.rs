@@ -6,6 +6,9 @@ use crate::error::Error;
 
 mod picasso;
 mod text;
+mod write;
+
+pub use write::{Metadata, write};
 
 const FRAME_TOLERANCE: f64 = 1.0e-6;
 
@@ -19,6 +22,22 @@ pub struct Localization {
 }
 
 impl Localization {
+    pub fn new(
+        time: u32,
+        center: [f32; 3],
+        sigma: [f32; 3],
+        quality: f32,
+        group: Option<u32>,
+    ) -> Self {
+        Self {
+            time,
+            center,
+            sigma,
+            quality,
+            group,
+        }
+    }
+
     pub fn time(&self) -> u32 {
         self.time
     }
@@ -40,6 +59,60 @@ impl Localization {
     }
 }
 
+pub struct Table {
+    localizations: Vec<Localization>,
+    pixel: f32,
+    width: u32,
+    height: u32,
+    volume: bool,
+}
+
+impl Table {
+    fn new(
+        localizations: Vec<Localization>,
+        pixel: f32,
+        width: u32,
+        height: u32,
+        volume: bool,
+    ) -> Self {
+        assert!(
+            pixel.is_finite() && pixel > 0.0,
+            "a localization table carries a positive camera pixel"
+        );
+        assert!(
+            width > 0 && height > 0,
+            "a localization table covers a positive camera field"
+        );
+        Self {
+            localizations,
+            pixel,
+            width,
+            height,
+            volume,
+        }
+    }
+
+    pub fn localizations(&self) -> &[Localization] {
+        &self.localizations
+    }
+
+    pub fn pixel(&self) -> f32 {
+        self.pixel
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn volume(&self) -> bool {
+        self.volume
+    }
+}
+
 pub fn has_extension(path: &Path) -> bool {
     text::has_extension(path) || picasso::has_extension(path)
 }
@@ -49,21 +122,21 @@ pub fn read(
     level: Level,
     frames: u32,
     report: &mut dyn FnMut(u64, u64) -> bool,
-) -> Result<Option<Vec<Localization>>, Error> {
+) -> Result<Option<Table>, Error> {
     assert!(frames > 0, "a localization table names a time series");
     let found = if picasso::has_extension(path) {
         picasso::read(path, level, frames, report)?
     } else {
         text::read(path, level, frames, report)?
     };
-    let Some(mut localizations) = found else {
+    let Some(mut table) = found else {
         return Ok(None);
     };
-    if localizations.is_empty() {
+    if table.localizations.is_empty() {
         return Err(Error::table(path, "the table holds no localization"));
     }
-    place(path, &mut localizations, level, frames)?;
-    Ok(Some(localizations))
+    place(path, &mut table.localizations, level, frames)?;
+    Ok(Some(table))
 }
 
 fn place(

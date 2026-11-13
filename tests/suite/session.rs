@@ -501,6 +501,11 @@ fn imports_picasso_group_trajectories_as_tracks() {
     }
     let spot = object.frame(0).expect("the first frame lands").spots_of()[0];
     assert_eq!(spot.quality(), 2000.0);
+    assert_eq!(spot.group(), Some(7), "the spot keeps its group");
+    assert!(
+        object.localization().is_some(),
+        "the set remembers its localization table"
+    );
 }
 
 #[test]

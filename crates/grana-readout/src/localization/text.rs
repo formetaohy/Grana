@@ -4,7 +4,7 @@ use std::path::Path;
 
 use grana_volume::Level;
 
-use super::{FRAME_TOLERANCE, Localization, frame, narrow, normalize};
+use super::{FRAME_TOLERANCE, Localization, Table, frame, narrow, normalize};
 use crate::error::Error;
 
 const PROGRESS_STRIDE: usize = 8192;
@@ -107,7 +107,7 @@ pub(super) fn read(
     level: Level,
     frames: u32,
     report: &mut dyn FnMut(u64, u64) -> bool,
-) -> Result<Option<Vec<Localization>>, Error> {
+) -> Result<Option<Table>, Error> {
     let total = std::fs::metadata(path)
         .map_err(|error| Error::table(path, error.to_string()))?
         .len();
@@ -131,7 +131,15 @@ pub(super) fn read(
     else {
         return Ok(None);
     };
-    Ok(Some(localizations))
+    let extent = level.extent();
+    let pixel = (level.voxel()[0] * 1000.0).max(f32::MIN_POSITIVE);
+    Ok(Some(Table::new(
+        localizations,
+        pixel,
+        extent.x(),
+        extent.y(),
+        columns.z.is_some(),
+    )))
 }
 
 fn open(path: &Path) -> Result<BufReader<File>, Error> {

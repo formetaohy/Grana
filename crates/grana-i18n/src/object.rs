@@ -42,6 +42,8 @@ labels! {
     export_mesh_glb => "Export Mesh GLB…" / "导出网格 GLB…";
     export_labels => "Export Labels…" / "导出标签…";
     export_geff => "Export GEFF…" / "导出 GEFF…";
+    export_localizations => "Export Localizations…" / "导出定位表…";
+    correct_localization_drift => "Correct Drift from Localizations" / "按定位表校正漂移";
     merge_into => "Merge Into" / "合并到";
     move_up => "Move Up" / "上移";
     move_down => "Move Down" / "下移";
