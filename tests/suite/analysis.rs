@@ -595,6 +595,7 @@ fn recovers_a_translation_and_reports_a_still_volume() {
 fn estimates_localization_drift_from_density() {
     let frames = 600usize;
     let rate = 0.002f32;
+    let axial_rate = 0.001f32;
     let reference = 300u32;
     let mut source = 0x1234_5678u32;
     let mut value = || {
@@ -602,13 +603,19 @@ fn estimates_localization_drift_from_density() {
         (source >> 8) as f32 / 16_777_216.0
     };
     let base = (0..300)
-        .map(|_| [8.0 * value(), 8.0 * value(), 0.0])
+        .map(|_| [8.0 * value(), 8.0 * value(), 0.8 * value() - 0.4])
         .collect::<Vec<_>>();
     let series = (0..frames)
         .map(|time| {
             let shift = rate * time as f32;
+            let axial = axial_rate * time as f32;
             base.iter()
-                .map(|point| [point[0] + shift, point[1], 0.0])
+                .map(|point| {
+                    grana_analysis::LocalizationPoint::new(
+                        [point[0] + shift, point[1], point[2] + axial],
+                        [0.012; 3],
+                    )
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -618,12 +625,16 @@ fn estimates_localization_drift_from_density() {
     assert_eq!(offsets.len(), frames);
     for (time, offset) in offsets.iter().enumerate() {
         let expected = rate * (time as f32 - reference as f32);
+        let axial = axial_rate * (time as f32 - reference as f32);
         assert!(
             (offset[0] - expected).abs() < 0.15,
             "the frame {time} drifts {offset:?} against {expected}"
         );
         assert!(offset[1].abs() < 0.15, "the frame {time} stays on y");
-        assert_eq!(offset[2], 0.0);
+        assert!(
+            (offset[2] - axial).abs() < 0.1,
+            "the frame {time} rises {offset:?} against {axial}"
+        );
     }
 }
 
@@ -2246,6 +2257,7 @@ fn renders_localizations_past_the_preview_resolution() {
         geometry,
         report.depth(),
         report.groups().clone(),
+        grana_analysis::localization::localization_weight(&held),
         &progress,
     )
     .expect("the renderer accepts the geometry");
@@ -2259,6 +2271,69 @@ fn renders_localizations_past_the_preview_resolution() {
         painted |= row.iter().any(|sample| *sample > 0);
     }
     assert!(painted, "the export paints the localizations");
+}
+
+#[test]
+fn weights_localizations_by_photons_and_precision() {
+    let precision = 0.01f32;
+    let spots = [
+        Spot::gaussian([1.0, 1.0, 0.0], [precision; 3], 40_000.0),
+        Spot::gaussian([6.0, 1.0, 0.0], [4.0 * precision; 3], 1_000.0),
+    ];
+    let held = [LocalizationFrame::new(
+        &spots,
+        None,
+        LocalizationFilter::NONE,
+    )];
+    let spec = LocalizationSpec::new([0, 0], 10.0, 10.0);
+    let layout = grana_analysis::localization::LocalizationLayout::new(&held, spec, 0.1)
+        .expect("the layout measures")
+        .expect("the layout holds the localizations");
+    let geometry = layout.geometry();
+    let progress = |_: usize, _: usize| true;
+    let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
+        &held,
+        geometry,
+        layout.depth(),
+        layout.groups().clone(),
+        layout.weight(),
+        &progress,
+    )
+    .expect("the renderer accepts the geometry");
+    renderer
+        .survey()
+        .expect("the renderer normalizes its density");
+    renderer.begin(0).expect("the slice begins");
+    let width = geometry.size()[0] as usize;
+    let height = geometry.size()[1] as usize;
+    let mut image = vec![0u8; width * height * 4];
+    for row in 0..height {
+        renderer
+            .row(&mut image[row * width * 4..(row + 1) * width * 4])
+            .expect("the row renders");
+    }
+    let peak = |center: [f32; 2]| {
+        let pixel = geometry.pixel();
+        let origin = geometry.origin();
+        let column = ((center[0] - origin[0]) / pixel) as usize;
+        let row = ((center[1] - origin[1]) / pixel) as usize;
+        let mut brightest = 0u32;
+        for row in row.saturating_sub(4)..(row + 4).min(height) {
+            for column in column.saturating_sub(4)..(column + 4).min(width) {
+                let at = (row * width + column) * 4;
+                let light =
+                    u32::from(image[at]) + u32::from(image[at + 1]) + u32::from(image[at + 2]);
+                brightest = brightest.max(light);
+            }
+        }
+        brightest
+    };
+    let strong = peak([1.0, 1.0]);
+    let weak = peak([6.0, 1.0]);
+    assert!(
+        strong > 3 * weak,
+        "the strong localization paints {strong} against {weak}"
+    );
 }
 
 #[test]
@@ -2444,6 +2519,7 @@ fn slices_localizations_into_a_stack() {
         report.geometry(),
         depth,
         report.groups().clone(),
+        grana_analysis::localization::localization_weight(&held),
         &progress,
     )
     .expect("the renderer accepts the stack");
@@ -2694,6 +2770,7 @@ fn exports_tiles_that_match_the_preview() {
         geometry,
         report.depth(),
         report.groups().clone(),
+        grana_analysis::localization::localization_weight(&held),
         &progress,
     )
     .expect("the renderer accepts the geometry");

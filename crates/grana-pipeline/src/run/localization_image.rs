@@ -1,4 +1,4 @@
-﻿use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::localization::{
@@ -107,8 +107,14 @@ pub fn localization_image(
     };
     let geometry = layout.geometry();
     let depth = layout.depth();
-    let mut renderer =
-        LocalizationRenderer::new(&held, geometry, depth, layout.groups().clone(), &tick)?;
+    let mut renderer = LocalizationRenderer::new(
+        &held,
+        geometry,
+        depth,
+        layout.groups().clone(),
+        layout.weight(),
+        &tick,
+    )?;
     renderer.survey()?;
     if cancel.load(Ordering::Relaxed) {
         sink(Event::Done);

@@ -15,6 +15,7 @@ mod shape;
 mod spot;
 mod surface;
 mod track;
+mod weight;
 
 pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
@@ -40,3 +41,4 @@ pub use surface::{
 pub use track::{
     Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics, grouped_tracks,
 };
+pub use weight::SpotWeight;

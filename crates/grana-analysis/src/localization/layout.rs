@@ -1,7 +1,8 @@
-use grana_object::LocalizationSpec;
+use grana_object::{LocalizationSpec, SpotWeight};
 
 use super::{
-    FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry, Survey, rasterize,
+    FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry, Survey,
+    localization_weight, rasterize,
 };
 
 pub struct LocalizationLayout {
@@ -11,6 +12,7 @@ pub struct LocalizationLayout {
     blur: f32,
     geometry: LocalizationGeometry,
     depth: LocalizationDepth,
+    weight: SpotWeight,
 }
 
 impl LocalizationLayout {
@@ -35,6 +37,7 @@ impl LocalizationLayout {
         let pixel = spec.pixel() * 0.001;
         let geometry = rasterize(&spec, low, span, pixel, blur)?;
         let depth = survey.depth(spec.depth() * 0.001)?;
+        let weight = localization_weight(frames);
         Ok(Some(Self {
             survey,
             low,
@@ -42,6 +45,7 @@ impl LocalizationLayout {
             blur,
             geometry,
             depth,
+            weight,
         }))
     }
 
@@ -55,6 +59,10 @@ impl LocalizationLayout {
 
     pub fn groups(&self) -> &Groups {
         &self.survey.groups
+    }
+
+    pub fn weight(&self) -> SpotWeight {
+        self.weight
     }
 
     pub fn localizations(&self) -> u64 {

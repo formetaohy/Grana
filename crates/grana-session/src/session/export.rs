@@ -290,7 +290,7 @@ impl Session {
     }
 
     pub(super) fn finish_measure(&mut self, key: MeasureKey, table: Option<Table>) {
-        self.measure.install(key, table);
+        self.measure.install(key, table.map(std::sync::Arc::new));
         let Some(path) = self.tasks.take_csv() else {
             return;
         };

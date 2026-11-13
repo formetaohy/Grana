@@ -1,19 +1,25 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use grana_analysis::LocalizationPoint;
 use grana_scene::Drift;
 use grana_warp::Warp;
 
 use crate::event::Event;
 
 pub struct LocalizationDriftRequest {
-    frames: Vec<Vec<[f32; 3]>>,
+    frames: Vec<Vec<LocalizationPoint>>,
     reference: u32,
     channel: usize,
     base: Drift,
 }
 
 impl LocalizationDriftRequest {
-    pub fn new(frames: Vec<Vec<[f32; 3]>>, reference: u32, channel: usize, base: Drift) -> Self {
+    pub fn new(
+        frames: Vec<Vec<LocalizationPoint>>,
+        reference: u32,
+        channel: usize,
+        base: Drift,
+    ) -> Self {
         assert!(
             !frames.is_empty(),
             "a localization drift names the frames of its object set"

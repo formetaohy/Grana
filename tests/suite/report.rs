@@ -39,6 +39,7 @@ fn writes_a_self_contained_report() {
         1.0,
         Group::Object,
         Aggregate::MEAN,
+        None,
     );
     let facts = vec![
         ("dimensions".to_string(), "64 × 32 × 32 voxels".to_string()),

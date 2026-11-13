@@ -27,6 +27,7 @@ fn summarises_spots_and_exports_a_csv() {
         2.0,
         Group::Object,
         Aggregate::MEAN,
+        None,
     );
     assert_eq!(table.rows(), 4);
     assert_eq!(value(&table, 0, "frame"), 1.0);
@@ -48,6 +49,7 @@ fn summarises_spots_and_exports_a_csv() {
         2.0,
         Group::Track,
         Aggregate::MEAN,
+        None,
     );
     assert_eq!(per_track.rows(), 2);
     assert_eq!(value(&per_track, 0, "nodes"), 2.0);
@@ -62,10 +64,39 @@ fn summarises_spots_and_exports_a_csv() {
         2.0,
         Group::Timepoint,
         Aggregate::SUM,
+        None,
     );
     assert_eq!(per_frame.rows(), 2);
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
     assert_eq!(value(&per_frame, 0, "diameter_um_sum"), 2.0);
+    let basis = std::sync::Arc::new(Table::build(
+        &frames,
+        Some(&tracks),
+        &channels,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    ));
+    let reused = Table::build(
+        &frames,
+        Some(&tracks),
+        &channels,
+        2.0,
+        Group::Timepoint,
+        Aggregate::SUM,
+        Some(std::sync::Arc::clone(&basis)),
+    );
+    assert_eq!(reused.rows(), per_frame.rows());
+    for row in 0..reused.rows() {
+        for column in 0..reused.columns().len() {
+            assert_eq!(
+                reused.value(row, column),
+                per_frame.value(row, column),
+                "the reused basis keeps the cell ({row}, {column})"
+            );
+        }
+    }
 
     let csv = csv_of(&per_frame, &[0, 1]);
     let lines = csv.lines().collect::<Vec<_>>();
@@ -85,6 +116,7 @@ fn summarises_spots_and_exports_a_csv() {
         2.0,
         Group::Molecule,
         Aggregate::MEAN,
+        None,
     );
     assert_eq!(
         molecules.rows(),
@@ -124,6 +156,7 @@ fn trends_raw_frames_of_every_grouping() {
         2.0,
         Group::Timepoint,
         Aggregate::MEAN,
+        None,
     );
     let column = per_frame
         .column("egfp_488_intensity_mean_mean")
@@ -143,6 +176,7 @@ fn trends_raw_frames_of_every_grouping() {
         2.0,
         Group::Track,
         Aggregate::MEAN,
+        None,
     );
     let column = per_track
         .column("egfp_488_intensity_mean_mean")
@@ -178,6 +212,7 @@ fn estimates_spatial_point_patterns() {
         2.0,
         Group::Object,
         Aggregate::MEAN,
+        None,
     );
     let rows = Mask::all(table.rows());
     let plot = table
@@ -262,6 +297,7 @@ fn groups_measurements_by_frame_for_distributions() {
         2.0,
         Group::Object,
         Aggregate::MEAN,
+        None,
     );
     let column = table
         .column("egfp_488_intensity_mean")

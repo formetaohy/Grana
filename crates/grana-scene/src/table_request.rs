@@ -18,6 +18,12 @@ pub struct MeasureKey {
     aggregate: Aggregate,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BasisKey {
+    set: ObjectSetId,
+    revision: u64,
+}
+
 impl MeasureKey {
     pub fn of(scene: &Scene, set: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Self> {
         Some(Self {
@@ -26,6 +32,17 @@ impl MeasureKey {
             group,
             aggregate,
         })
+    }
+
+    pub fn basis(self) -> BasisKey {
+        BasisKey {
+            set: self.set,
+            revision: self.revision,
+        }
+    }
+
+    pub fn group(self) -> Group {
+        self.group
     }
 }
 
@@ -61,6 +78,7 @@ pub struct TableRequest {
     frame_interval: f32,
     classifier: Option<grana_measure::Classifier>,
     coloc: Option<ObjectColoc>,
+    basis: Option<Arc<Table>>,
 }
 
 impl TableRequest {
@@ -114,7 +132,13 @@ impl TableRequest {
             frame_interval: scene.dataset.frame_interval(),
             classifier: set.classifier().cloned(),
             coloc: set.object_coloc().cloned(),
+            basis: None,
         })
+    }
+
+    pub fn with_basis(mut self, basis: Arc<Table>) -> Self {
+        self.basis = Some(basis);
+        self
     }
 
     pub fn key(&self) -> MeasureKey {
@@ -169,6 +193,7 @@ impl TableRequest {
             self.frame_interval,
             self.key.group,
             self.key.aggregate,
+            self.basis.clone(),
         );
         let keys = grana_measure::channel_keys(&self.channels);
         if let Some(classifier) = &self.classifier {

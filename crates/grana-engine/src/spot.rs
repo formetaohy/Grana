@@ -54,6 +54,7 @@ pub(crate) struct Appearance {
     pub(crate) color: [f32; 3],
     pub(crate) visible: bool,
     pub(crate) categorical: bool,
+    pub(crate) weight: f32,
 }
 
 #[derive(Default)]
@@ -231,7 +232,11 @@ where
             SplatGeometry::gaussian(spot.center(), spot.sigma()),
             SplatStyle::new(
                 palette.radiance(look.color),
-                if look.visible { opacity } else { 0.0 },
+                if look.visible {
+                    (opacity * look.weight).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
             ),
             Some(index),
         );
@@ -255,7 +260,13 @@ where
                 continue;
             }
             let member = pickable.then_some(index);
-            grid.add(member, spot, palette.radiance(look.color), look.categorical);
+            grid.add(
+                member,
+                spot,
+                palette.radiance(look.color),
+                look.categorical,
+                look.weight,
+            );
         }
     }
     let count = grid.len();
@@ -293,6 +304,7 @@ struct Cell {
     square: [f64; 3],
     sigma: [f64; 3],
     radiance: [f64; 3],
+    weight: f64,
     nearest: [f64; 3],
     member: u32,
     reach: f64,
@@ -306,6 +318,7 @@ impl Cell {
         square: [0.0; 3],
         sigma: [0.0; 3],
         radiance: [0.0; 3],
+        weight: 0.0,
         nearest: [0.0; 3],
         member: EMPTY,
         reach: f64::INFINITY,
@@ -338,7 +351,14 @@ impl Grid {
         point.map(|value| (value / self.cell).floor() as i64)
     }
 
-    fn add(&mut self, member: Option<usize>, spot: &Spot, radiance: [f32; 3], categorical: bool) {
+    fn add(
+        &mut self,
+        member: Option<usize>,
+        spot: &Spot,
+        radiance: [f32; 3],
+        categorical: bool,
+        weight: f32,
+    ) {
         let center = spot.center();
         let at = self.slot(center);
         let sigma = spot.sigma();
@@ -362,6 +382,7 @@ impl Grid {
             }
         }
         cell.count += 1;
+        cell.weight += f64::from(weight);
         for axis in 0..3 {
             let value = f64::from(center[axis]);
             cell.sum[axis] += value;
@@ -385,7 +406,8 @@ impl Grid {
             } else {
                 cell.radiance.map(|sum| (sum / count) as f32)
             };
-            let alpha = (1.0 - (1.0 - opacity).powi(cell.count as i32)).clamp(0.0, 1.0);
+            let weight = ((cell.weight / count) as f32).clamp(0.0, 1.0);
+            let alpha = (1.0 - (1.0 - opacity * weight).powi(cell.count as i32)).clamp(0.0, 1.0);
             detections.push(
                 SplatGeometry::gaussian(center, sigma),
                 SplatStyle::new(radiance, alpha),

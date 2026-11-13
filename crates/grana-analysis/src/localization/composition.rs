@@ -2,7 +2,7 @@ use grana_object::LocalizationSpec;
 
 use super::{
     FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry,
-    LocalizationRenderer, Survey, margin_pixels, preview_geometry,
+    LocalizationRenderer, Survey, localization_weight, margin_pixels, preview_geometry,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -157,6 +157,7 @@ impl<'a> LocalizationComposition<'a> {
                 geometry,
                 depth,
                 Groups::default(),
+                localization_weight(entry.frames()),
                 progress,
             )?;
             let density = renderer.survey()?;

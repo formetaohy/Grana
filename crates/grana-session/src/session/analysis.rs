@@ -1409,15 +1409,18 @@ impl Session {
         let reference = base.reference();
         let mut frames = Vec::with_capacity(scene.frame_count() as usize);
         for time in 0..scene.frame_count() {
-            let mut centers = Vec::new();
+            let mut points = Vec::new();
             if let Some(frame) = object.frame(time) {
                 for (index, spot) in frame.spots_of().iter().enumerate() {
                     if object.visible_object(time, index) {
-                        centers.push(spot.center());
+                        points.push(grana_analysis::LocalizationPoint::new(
+                            spot.center(),
+                            spot.sigma(),
+                        ));
                     }
                 }
             }
-            frames.push(centers);
+            frames.push(points);
         }
         self.message = None;
         self.record_progress(Job::Drift, 0, 0, 0);

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use grana_object::{SpotSet, SpotWeight};
 use grana_render::{Digest, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
 use grana_scene::{Item, ObjectSet, ObjectSetId, Scene};
 
@@ -50,6 +51,7 @@ impl SplatCache {
             None => {
                 self.sets.push(SetLevels {
                     set: set.id().raw(),
+                    weight: None,
                     levels: std::array::from_fn(|_| None),
                 });
                 self.sets.len() - 1
@@ -67,6 +69,11 @@ impl SplatCache {
                 },
             };
         }
+        let stamp = set.revision().raw();
+        if entry.weight.as_ref().is_none_or(|(held, _)| *held != stamp) {
+            entry.weight = Some((stamp, measure_weight(set)));
+        }
+        let weight = entry.weight.as_ref().and_then(|(_, weight)| *weight);
         let projected = held.len() > 1;
         let choice = if projected {
             Choice::Level(choice.level().max(1))
@@ -95,7 +102,7 @@ impl SplatCache {
         for slot in wanted {
             let level = &mut entry.levels[slot as usize];
             if level.is_none() {
-                *level = Some(build(scene, set, slot, &held, range));
+                *level = Some(build(scene, set, slot, &held, range, weight));
             }
         }
         let levels = &entry.levels;
@@ -150,6 +157,21 @@ pub(crate) fn frames<'a>(scene: &'a Scene, set: &'a ObjectSet) -> Vec<Frame<'a>>
         .collect()
 }
 
+fn measure_weight(set: &ObjectSet) -> Option<SpotWeight> {
+    set.localization()?;
+    let total = set
+        .frames()
+        .map(|(_, frame)| frame.spots().map_or(0, SpotSet::len))
+        .sum::<usize>();
+    (total > 0).then(|| {
+        SpotWeight::measure(
+            total,
+            set.frames()
+                .flat_map(|(_, frame)| frame.spots().map_or(&[][..], SpotSet::spots)),
+        )
+    })
+}
+
 pub(crate) struct Prepared {
     pub(crate) chunks: Vec<SplatChunk>,
     pub(crate) members: SplatMembers,
@@ -194,6 +216,7 @@ impl SplatMembers {
 
 struct SetLevels {
     set: u64,
+    weight: Option<(u64, Option<SpotWeight>)>,
     levels: [Option<Level>; LEVEL_COUNT as usize],
 }
 
@@ -217,6 +240,7 @@ fn build(
     level: u8,
     frames: &[Frame<'_>],
     range: [u32; 2],
+    weight: Option<SpotWeight>,
 ) -> Level {
     let mut choice = match level {
         0 => Choice::Full,
@@ -243,6 +267,7 @@ fn build(
         },
         visible: set.visible_object(time, index),
         categorical: group_colored,
+        weight: weight.map_or(1.0, |scale| scale.of(spot)),
     };
     let mut detections = spot::detections(frames, choice, set.opacity(), appearance);
     let mut rung = choice.level();

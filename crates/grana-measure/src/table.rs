@@ -249,27 +249,48 @@ impl Aggregate {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Observation {
-    time: Option<u32>,
-    object: Option<usize>,
-    track: Option<usize>,
-    molecule: Option<u32>,
+    time: u32,
+    object: u32,
+    track: u32,
+    molecule: u32,
 }
 
+const ABSENT: u32 = u32::MAX;
+
 impl Observation {
+    fn new(
+        time: Option<u32>,
+        object: Option<usize>,
+        track: Option<usize>,
+        molecule: Option<u32>,
+    ) -> Self {
+        let index = |value: Option<usize>| {
+            value.map_or(ABSENT, |index| {
+                u32::try_from(index).expect("a table row names an index a word addresses")
+            })
+        };
+        Self {
+            time: time.unwrap_or(ABSENT),
+            object: index(object),
+            track: index(track),
+            molecule: molecule.unwrap_or(ABSENT),
+        }
+    }
+
     pub fn time(self) -> Option<u32> {
-        self.time
+        (self.time != ABSENT).then_some(self.time)
     }
 
     pub fn object(self) -> Option<usize> {
-        self.object
+        (self.object != ABSENT).then_some(self.object as usize)
     }
 
     pub fn track(self) -> Option<usize> {
-        self.track
+        (self.track != ABSENT).then_some(self.track as usize)
     }
 
     pub fn molecule(self) -> Option<u32> {
-        self.molecule
+        (self.molecule != ABSENT).then_some(self.molecule)
     }
 }
 
@@ -446,6 +467,7 @@ impl Table {
         frame_interval: f32,
         group: Group,
         aggregate: Aggregate,
+        basis: Option<Arc<Table>>,
     ) -> Self {
         assert!(!frames.is_empty(), "a table covers at least one frame");
         assert!(!channels.is_empty(), "a table names at least one channel");
@@ -481,6 +503,11 @@ impl Table {
             );
         }
         let keys = channel_keys(channels);
+        let measured = || {
+            let mut table = object_table(frames, tracks, channels, &keys, frame_interval);
+            table.attach_neighbours(Observation::time);
+            Arc::new(table)
+        };
         match group {
             Group::Object => {
                 let mut table = object_table(frames, tracks, channels, &keys, frame_interval);
@@ -488,17 +515,15 @@ impl Table {
                 table
             }
             Group::Track => {
-                let mut basis = object_table(frames, tracks, channels, &keys, frame_interval);
-                basis.attach_neighbours(Observation::time);
+                let basis = basis.unwrap_or_else(measured);
                 let mut table = track_table(frames, tracks, channels, &keys, aggregate);
-                table.attach(Arc::new(basis));
+                table.attach(basis);
                 table
             }
             Group::Timepoint => {
-                let mut basis = object_table(frames, tracks, channels, &keys, frame_interval);
-                basis.attach_neighbours(Observation::time);
+                let basis = basis.unwrap_or_else(measured);
                 let mut table = timepoint_table(frames, channels, &keys, frame_interval, aggregate);
-                table.attach(Arc::new(basis));
+                table.attach(basis);
                 table
             }
             Group::Molecule => {
@@ -656,6 +681,10 @@ impl Table {
 
     pub(crate) fn basis(&self) -> Option<&Table> {
         self.basis.as_deref()
+    }
+
+    pub fn basis_shared(&self) -> Option<Arc<Table>> {
+        self.basis.clone()
     }
 
     pub(crate) fn source(&self, column: usize) -> Option<usize> {
@@ -1106,12 +1135,7 @@ fn molecule_table(
     }
     let observations = molecules
         .iter()
-        .map(|molecule| Observation {
-            time: Some(molecule.first),
-            object: None,
-            track: None,
-            molecule: Some(molecule.group),
-        })
+        .map(|molecule| Observation::new(Some(molecule.first), None, None, Some(molecule.group)))
         .collect::<Vec<_>>();
     Table::new(
         columns,
@@ -1172,12 +1196,12 @@ fn object_table(
             .collect::<Vec<_>>();
         for object in 0..parents {
             let track = tracks.and_then(|set| set.track_at(frame.time, object));
-            observations.push(Observation {
-                time: Some(frame.time),
-                object: Some(object),
+            observations.push(Observation::new(
+                Some(frame.time),
+                Some(object),
                 track,
-                molecule: None,
-            });
+                None,
+            ));
             for (index, cell) in cells.iter().enumerate() {
                 data[index].push(cell.value(frame, object, tracks, frame_interval, &children));
             }
@@ -1247,12 +1271,7 @@ fn track_table(
         .map(|_| Vec::with_capacity(rows))
         .collect::<Vec<_>>();
     for track in 0..rows {
-        observations.push(Observation {
-            time: None,
-            object: None,
-            track: Some(track),
-            molecule: None,
-        });
+        observations.push(Observation::new(None, None, Some(track), None));
         for (index, field) in TrackMeasurement::ALL.iter().enumerate() {
             data[index].push(field.value(track, set));
         }
@@ -1297,12 +1316,7 @@ fn timepoint_table(
         .map(|_| Vec::with_capacity(rows))
         .collect::<Vec<_>>();
     for frame in frames {
-        observations.push(Observation {
-            time: Some(frame.time),
-            object: None,
-            track: None,
-            molecule: None,
-        });
+        observations.push(Observation::new(Some(frame.time), None, None, None));
         for (index, field) in TimeField::ALL.iter().enumerate() {
             data[index].push(field.value(frame, frame_interval));
         }

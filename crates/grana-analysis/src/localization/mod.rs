@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use glam::Vec3;
 use grana_object::Spot;
-pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
+pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec, SpotWeight};
 use grana_volume::Region;
 
 mod cluster;
@@ -99,6 +99,14 @@ impl<'a> LocalizationFrame<'a> {
             .count()
     }
 
+    fn visible_spots(&self) -> impl Iterator<Item = &'a Spot> + '_ {
+        self.spots
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.visible(*index))
+            .map(|(_, spot)| spot)
+    }
+
     fn points(&self, grouped: bool) -> Vec<Point> {
         self.spots
             .iter()
@@ -113,6 +121,14 @@ impl<'a> LocalizationFrame<'a> {
             })
             .collect()
     }
+}
+
+pub fn localization_weight(frames: &[LocalizationFrame<'_>]) -> SpotWeight {
+    let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
+    SpotWeight::measure(
+        total,
+        frames.iter().flat_map(LocalizationFrame::visible_spots),
+    )
 }
 
 pub fn localization_report(
@@ -144,6 +160,7 @@ pub fn localization_report(
     let blur = layout.blur();
     let depth = layout.depth();
     let geometry = layout.geometry();
+    let weight = layout.weight();
     let preview = preview_geometry(low, span, spec.pixel() * 0.001, blur, depth)?;
     let preview_geometry = LocalizationGeometry::new(
         preview.origin(),
@@ -163,6 +180,7 @@ pub fn localization_report(
             preview_geometry,
             depth,
             survey.groups.clone(),
+            weight,
             &tick,
         )?;
         let density = renderer.survey()?;
@@ -199,7 +217,15 @@ pub fn localization_report(
     };
     let frc = {
         let mut advance = || ticker.borrow_mut().tick();
-        match measure_frc(frames, low, span, survey.sigma, region, &mut advance)? {
+        match measure_frc(
+            frames,
+            low,
+            span,
+            survey.sigma,
+            weight,
+            region,
+            &mut advance,
+        )? {
             Some(frc) => frc,
             None => return Ok(None),
         }
@@ -429,6 +455,7 @@ fn measure_frc(
     origin: [f32; 2],
     span: [f32; 2],
     sigma: f32,
+    weight: SpotWeight,
     region: Option<Region>,
     report: &mut dyn FnMut() -> bool,
 ) -> Result<Option<Frc>, String> {
@@ -471,10 +498,11 @@ fn measure_frc(
                 continue;
             }
             kept += 1;
+            let value = weight.of(spot);
             if split(index) {
-                first.add([center[0], center[1]], 1.0, None);
+                first.add([center[0], center[1]], value, None);
             } else {
-                second.add([center[0], center[1]], 1.0, None);
+                second.add([center[0], center[1]], value, None);
             }
             index += 1;
         }

@@ -12,7 +12,7 @@ use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
-use crate::table_request::{MeasureKey, TableRequest};
+use crate::table_request::{BasisKey, MeasureKey, TableRequest};
 
 #[derive(Debug, PartialEq)]
 pub struct MeasureState {
@@ -39,6 +39,7 @@ pub struct Measure {
     roi: Option<Region>,
     sort: Option<(usize, bool)>,
     table: Option<Arc<Table>>,
+    basis: Option<(BasisKey, Arc<Table>)>,
     retained: Option<(Vec<String>, Vec<bool>)>,
     rows: Vec<usize>,
     mask: Arc<Mask>,
@@ -81,6 +82,7 @@ impl Measure {
             roi: None,
             sort: None,
             table: None,
+            basis: None,
             retained: None,
             rows: Vec::new(),
             mask: Arc::new(Mask::none(0)),
@@ -115,6 +117,7 @@ impl Measure {
             return;
         }
         self.set = Some(set);
+        self.basis = None;
         self.time = scene.time();
         if self.group == Group::Molecule && !molecule_grouping(scene, set) {
             self.group = Group::Object;
@@ -450,6 +453,7 @@ impl Measure {
     pub fn reset(&mut self) {
         self.set = None;
         self.table = None;
+        self.basis = None;
         self.retained = None;
         self.rows.clear();
         self.total = 0;
@@ -491,7 +495,20 @@ impl Measure {
         let moved = self.time != time;
         self.time = time;
         if !busy && !self.settled(scene) {
-            let request = TableRequest::new(scene, id, self.group, self.aggregate)?;
+            let key = MeasureKey::of(scene, id, self.group, self.aggregate)?;
+            if self.group == Group::Object
+                && let Some((held, table)) = self.basis.as_ref()
+                && *held == key.basis()
+            {
+                self.pending = Some(key);
+                self.install(key, Some(Arc::clone(table)));
+                return None;
+            }
+            let request = self.laid(
+                scene,
+                id,
+                TableRequest::new(scene, id, self.group, self.aggregate)?,
+            );
             self.pending = Some(request.key());
             return Some(request);
         }
@@ -501,13 +518,35 @@ impl Measure {
         None
     }
 
-    pub fn install(&mut self, key: MeasureKey, table: Option<Table>) {
+    pub fn install(&mut self, key: MeasureKey, table: Option<Arc<Table>>) {
         if self.pending != Some(key) {
             return;
         }
         self.pending = None;
         self.origin = Some(key);
+        if let Some(table) = table.as_ref() {
+            self.remember_basis(key, table);
+        }
         self.adopt(table);
+    }
+
+    fn laid(&self, scene: &Scene, id: ObjectSetId, request: TableRequest) -> TableRequest {
+        let Some(key) = MeasureKey::of(scene, id, self.group, self.aggregate) else {
+            return request;
+        };
+        match self.basis.as_ref() {
+            Some((held, table)) if *held == key.basis() => request.with_basis(Arc::clone(table)),
+            _ => request,
+        }
+    }
+
+    fn remember_basis(&mut self, key: MeasureKey, table: &Arc<Table>) {
+        let basis = match key.group() {
+            Group::Object => Some(Arc::clone(table)),
+            Group::Track | Group::Timepoint => table.basis_shared(),
+            Group::Molecule => None,
+        };
+        self.basis = basis.map(|basis| (key.basis(), basis));
     }
 
     pub fn settled(&self, scene: &Scene) -> bool {
@@ -777,8 +816,14 @@ impl Measure {
             self.table = None;
             return;
         };
-        self.origin = Some(request.key());
-        self.adopt(request.build());
+        let request = self.laid(scene, id, request);
+        let key = request.key();
+        self.origin = Some(key);
+        let table = request.build().map(Arc::new);
+        if let Some(table) = table.as_ref() {
+            self.remember_basis(key, table);
+        }
+        self.adopt(table);
     }
 
     fn invalidate(&mut self) {
@@ -797,7 +842,7 @@ impl Measure {
         self.axes = [0; 2];
     }
 
-    fn adopt(&mut self, table: Option<Table>) {
+    fn adopt(&mut self, table: Option<Arc<Table>>) {
         self.dirty = true;
         self.clear_plot();
         self.rows.clear();
@@ -859,7 +904,7 @@ impl Measure {
         if self.sort.is_some_and(|(column, _)| column >= columns) {
             self.sort = None;
         }
-        self.table = Some(Arc::new(table));
+        self.table = Some(table);
         self.refresh();
     }
 

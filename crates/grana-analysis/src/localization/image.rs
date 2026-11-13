@@ -1,4 +1,5 @@
 use super::LocalizationFrame;
+use super::SpotWeight;
 use super::depth::LocalizationDepth;
 use super::grid::Grid;
 use super::group::Groups;
@@ -29,6 +30,7 @@ impl<'a> LocalizationRenderer<'a> {
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: Groups,
+        weight: SpotWeight,
         progress: &'a dyn Fn(usize, usize) -> bool,
     ) -> Result<Self, String> {
         if !geometry.renderable() {
@@ -37,7 +39,7 @@ impl<'a> LocalizationRenderer<'a> {
                 "the localization image would span {width}x{height} pixels; raise the pixel size"
             ));
         }
-        let cells = Cells::build(frames, geometry, depth, &groups, progress)?;
+        let cells = Cells::build(frames, geometry, depth, &groups, weight, progress)?;
         Ok(Self {
             geometry,
             depth,
@@ -237,6 +239,7 @@ struct Cells {
 struct Layer {
     starts: Vec<u32>,
     centers: Vec<[f32; 2]>,
+    weights: Vec<f32>,
     tints: Vec<u8>,
 }
 
@@ -246,6 +249,7 @@ impl Cells {
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: &Groups,
+        weight: SpotWeight,
         progress: &dyn Fn(usize, usize) -> bool,
     ) -> Result<Self, String> {
         let width = geometry.size()[0] as usize;
@@ -292,6 +296,7 @@ impl Cells {
             layers_out.push(Layer {
                 starts,
                 centers: vec![[0.0; 2]; held as usize],
+                weights: vec![0.0; held as usize],
                 tints: vec![0u8; held as usize],
             });
         }
@@ -308,6 +313,7 @@ impl Cells {
                 cursors[at] += 1;
                 let held = &mut layers_out[layer];
                 held.centers[cursor] = [center[0], center[1]];
+                held.weights[cursor] = weight.of(spot);
                 held.tints[cursor] = if chromatic {
                     groups.tint_slot(spot.group())
                 } else {
@@ -376,7 +382,7 @@ impl Cells {
                 let to = held.starts[tile + 1] as usize;
                 for index in from..to {
                     let tint = self.chromatic.then(|| groups.slot_tint(held.tints[index]));
-                    grid.add(held.centers[index], 1.0, tint);
+                    grid.add(held.centers[index], held.weights[index], tint);
                 }
             }
         }
