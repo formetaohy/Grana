@@ -19,11 +19,11 @@ pub use spec::{
     ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec,
     DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
     LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec,
-    MetricSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec, ProfileSampleSpec, ProfileSpec,
-    RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec,
-    SetSpec, ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StitchSpec,
-    StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec,
-    WarpSpec, WindowSpec,
+    MetricSpec, MoleculesSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec, ProfileSampleSpec,
+    ProfileSpec, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RemovalSpec, RenderSpec,
+    RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
+    StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
+    VolumeSpec, WarpSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -213,6 +213,17 @@ impl Protocol {
                     (SourceSpec::External { file }, _) => {
                         format!("{} from the object file {file}", set.name)
                     }
+                    (SourceSpec::Localizations { file, molecules }, _) => {
+                        let clustered = if molecules.clustered {
+                            " clustered"
+                        } else {
+                            ""
+                        };
+                        format!(
+                            "{} from the localization table {file}{clustered} at {:.0} nm/px",
+                            set.name, molecules.pixel
+                        )
+                    }
                     (_, Some(channel)) => format!("{} on {channel}", set.name),
                     (_, None) => format!("{} on an unknown channel", set.name),
                 };
@@ -255,7 +266,8 @@ impl Protocol {
                     | SourceSpec::Segments { .. }
                     | SourceSpec::Filaments { .. }
                     | SourceSpec::Labels { .. }
-                    | SourceSpec::External { .. } => {}
+                    | SourceSpec::External { .. }
+                    | SourceSpec::Localizations { .. } => {}
                 }
                 if let Some(measure) = &set.measure {
                     let group = measure.group();

@@ -580,10 +580,21 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
         text.contains("localizations.csv"),
         "the protocol records the localization table"
     );
+    assert!(
+        text.contains("\"kind\": \"localizations\""),
+        "the protocol names the localization source"
+    );
     assert_eq!(
         Protocol::from_json(&text).expect("the protocol parses"),
         protocol
     );
+    let molecules = protocol.sets()[0]
+        .source
+        .molecules()
+        .expect("the protocol carries the molecule parameters");
+    assert_eq!(molecules.frames, [0, 1]);
+    assert_eq!((molecules.pixel, molecules.blur), (10.0, 20.0));
+    assert!(!molecules.projected && !molecules.clustered);
     let project = Project::capture(
         scene,
         &Measure::new(),
@@ -2786,5 +2797,126 @@ fn clusters_imported_localizations_into_molecules() {
             .frames()
             .all(|(_, frame)| frame.spots_of().iter().all(|spot| spot.group().is_none())),
         "undoing the clustering clears the molecules"
+    );
+}
+
+#[test]
+fn replays_a_localization_protocol() {
+    let temp = Temp::new("session-localization-protocol");
+    let path = temp.path().join("localizations.hdf5");
+    let row = |frame: u32, x: f32, y: f32| support::Localization {
+        frame,
+        position: [x, y, 0.0],
+        photons: 1500.0,
+        precision: [0.02, 0.02, 0.02],
+        group: -1,
+    };
+    let mut rows = Vec::new();
+    for frame in 0..4 {
+        rows.push(row(frame, 30.0, 10.0));
+    }
+    for frame in 0..2 {
+        rows.push(row(frame, 5.0, 25.0));
+    }
+    rows.push(row(3, 50.0, 5.0));
+    support::picasso(&path, 100.0, &rows);
+    let volume = support::spheres(
+        Extent::new(64, 32, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "localizations",
+        VolumeSeries::new(
+            vec![
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume,
+            ],
+            1.0,
+        ),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let set = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    session.execute(Command::SetLocalizationSpec {
+        set,
+        spec: grana_session::LocalizationSpec::new([0, 3], 6.0, 12.0),
+    });
+    session.execute(Command::SetLocalizationClusters {
+        set,
+        clusters: grana_object::ClusterSpec::new(0.05, 2, 2),
+    });
+    session.execute(Command::SetLocalizationProjected {
+        set,
+        projected: true,
+    });
+    session.execute(Command::ClusterLocalizations(set));
+    settle(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
+        .expect("the localization scene captures");
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(
+        text.contains("\"kind\": \"localizations\""),
+        "the protocol names the localization table"
+    );
+    assert!(
+        text.contains("\"clustered\": true"),
+        "the protocol records the molecules"
+    );
+    session.set_protocol(protocol);
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let scene = session.scene().expect("the replayed series stays open");
+    let object = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set replays");
+    let source = object
+        .localization()
+        .expect("the replayed set remembers its table");
+    assert_eq!(
+        source.spec(),
+        grana_session::LocalizationSpec::new([0, 3], 6.0, 12.0),
+        "the replay renders the recorded frame range and pixel"
+    );
+    assert_eq!(
+        source.clusters(),
+        grana_object::ClusterSpec::new(0.05, 2, 2),
+        "the replay clusters with the recorded parameters"
+    );
+    assert!(source.projected(), "the replay projects the frames");
+    assert!(source.clustered(), "the replay recomputes the molecules");
+    assert_eq!(
+        object.tracks().map(|tracks| tracks.set().len()),
+        Some(2),
+        "the replayed molecules take their tracks"
+    );
+    let grouped = object
+        .frames()
+        .map(|(_, frame)| {
+            frame
+                .spots_of()
+                .iter()
+                .filter(|spot| spot.group().is_some())
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        grouped, 6,
+        "the replayed molecules group their localizations"
     );
 }

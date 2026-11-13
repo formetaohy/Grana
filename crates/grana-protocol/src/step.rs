@@ -2,6 +2,8 @@ use grana_measure::ColocPair;
 use grana_scene::{Criteria, MaskFilter, ObjectSetId};
 use grana_warp::Warp;
 
+use crate::MoleculesSpec;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     Drift {
@@ -21,6 +23,10 @@ pub enum Step {
     },
     Import {
         set: ObjectSetId,
+    },
+    Localize {
+        set: ObjectSetId,
+        molecules: MoleculesSpec,
     },
     Filter {
         set: ObjectSetId,
@@ -73,6 +79,7 @@ impl Step {
             | Self::Merge { set, .. } => Some(*set),
             Self::Relation { .. }
             | Self::Coloc { .. }
+            | Self::Localize { .. }
             | Self::ObjectColoc { .. }
             | Self::Labels { .. }
             | Self::Present => None,

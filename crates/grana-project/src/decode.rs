@@ -1038,6 +1038,7 @@ impl Decode for LocalizationSource {
         let dark = reader.u32()?;
         let minimum = reader.u32()?;
         let projected = reader.bool()?;
+        let clustered = reader.bool()?;
         if frames[0] > frames[1]
             || !spec_pixel.is_finite()
             || spec_pixel <= 0.0
@@ -1059,7 +1060,8 @@ impl Decode for LocalizationSource {
         );
         Ok(source
             .with_clusters(grana_object::ClusterSpec::new(radius, dark, minimum))
-            .with_projected(projected))
+            .with_projected(projected)
+            .with_clustered(clustered))
     }
 }
 

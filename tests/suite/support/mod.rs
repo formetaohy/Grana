@@ -365,6 +365,43 @@ impl Snapshot {
     }
 }
 
+pub fn localization_dataset(path: &Path, frames: u32) {
+    let channels = [grana_zarr::WriteChannel {
+        name: "GFP",
+        tint: [0.0, 1.0, 0.0],
+        range: grana_volume::Intensity::new(0.0, 255.0),
+    }];
+    let levels = [grana_volume::Level::new(
+        Extent::new(32, 32, 2),
+        Spacing::new(0.1, 0.1, 0.1),
+    )];
+    let mut fill = |_: usize,
+                    _: u32,
+                    _: usize,
+                    _: [u32; 3],
+                    _: [u32; 3],
+                    data: &mut [f32]|
+     -> Result<(), String> {
+        data.fill(64.0);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_image(
+        path,
+        grana_zarr::ImageSpec {
+            name: "sample",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames,
+            interval: 1.0,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the localization dataset writes");
+}
+
 pub fn plate(root: &Path) {
     std::fs::create_dir_all(root).expect("the plate directory is created");
     group(

@@ -1167,6 +1167,75 @@ pub struct SetSpec {
     pub meshes: Vec<MeshFormat>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoleculesSpec {
+    pub frames: [u32; 2],
+    pub pixel: f32,
+    pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub projected: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clustered: bool,
+    pub radius: f32,
+    pub dark: u32,
+    pub minimum: u32,
+}
+
+impl MoleculesSpec {
+    pub fn of(source: &grana_scene::LocalizationSource) -> Self {
+        let spec = source.spec();
+        let clusters = source.clusters();
+        Self {
+            frames: spec.frames(),
+            pixel: spec.pixel(),
+            blur: spec.blur(),
+            projected: source.projected(),
+            clustered: source.clustered(),
+            radius: clusters.radius(),
+            dark: clusters.dark(),
+            minimum: clusters.minimum(),
+        }
+    }
+
+    pub fn localization(&self) -> grana_object::LocalizationSpec {
+        grana_object::LocalizationSpec::new(self.frames, self.pixel, self.blur)
+    }
+
+    pub fn clusters(&self) -> grana_object::ClusterSpec {
+        grana_object::ClusterSpec::new(self.radius, self.dark, self.minimum)
+    }
+
+    fn checked(&self, set: &str) -> Result<(), ProtocolError> {
+        let invalid =
+            |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
+        if self.frames[0] > self.frames[1] {
+            return invalid("renders a frame range that ends before it starts".to_string());
+        }
+        if !(grana_object::LocalizationSpec::PIXEL_MINIMUM
+            ..=grana_object::LocalizationSpec::PIXEL_MAXIMUM)
+            .contains(&self.pixel)
+        {
+            return invalid("renders at an unsupported pixel size".to_string());
+        }
+        if !(0.0..=grana_object::LocalizationSpec::BLUR_MAXIMUM).contains(&self.blur) {
+            return invalid("blurs by an unsupported width".to_string());
+        }
+        if !(grana_object::ClusterSpec::RADIUS_MINIMUM..=grana_object::ClusterSpec::RADIUS_MAXIMUM)
+            .contains(&self.radius)
+        {
+            return invalid("clusters within an unsupported radius".to_string());
+        }
+        if self.dark > grana_object::ClusterSpec::DARK_MAXIMUM {
+            return invalid("clusters over an unsupported count of dark frames".to_string());
+        }
+        if self.minimum == 0 || self.minimum > grana_object::ClusterSpec::MINIMUM_MAXIMUM {
+            return invalid("clusters with an unsupported minimum of localizations".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSpec {
@@ -1220,6 +1289,10 @@ pub enum SourceSpec {
     },
     External {
         file: String,
+    },
+    Localizations {
+        file: String,
+        molecules: MoleculesSpec,
     },
     Filtered {
         source: String,
@@ -2938,7 +3011,9 @@ impl MeasureSpec {
 impl SourceSpec {
     pub fn kind(&self) -> Option<ObjectKind> {
         match self {
-            Self::Spots { .. } | Self::External { .. } => Some(ObjectKind::Spots),
+            Self::Spots { .. } | Self::External { .. } | Self::Localizations { .. } => {
+                Some(ObjectKind::Spots)
+            }
             Self::Surfaces { .. } | Self::Segments { .. } | Self::Labels { .. } => {
                 Some(ObjectKind::Surfaces)
             }
@@ -2961,6 +3036,7 @@ impl SourceSpec {
             | Self::Segments { channel, .. } => Some(channel),
             Self::Labels { .. }
             | Self::External { .. }
+            | Self::Localizations { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -2974,6 +3050,7 @@ impl SourceSpec {
             Self::Labels { label } => Some(label),
             Self::Spots { .. }
             | Self::External { .. }
+            | Self::Localizations { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
             | Self::Cells { .. }
@@ -2988,7 +3065,7 @@ impl SourceSpec {
 
     pub fn file(&self) -> Option<&str> {
         match self {
-            Self::External { file } => Some(file),
+            Self::External { file } | Self::Localizations { file, .. } => Some(file),
             Self::Spots { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
@@ -3000,6 +3077,13 @@ impl SourceSpec {
             | Self::Edited { .. }
             | Self::Masked { .. }
             | Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn molecules(&self) -> Option<&MoleculesSpec> {
+        match self {
+            Self::Localizations { molecules, .. } => Some(molecules),
+            _ => None,
         }
     }
 
@@ -3034,6 +3118,7 @@ impl SourceSpec {
             Self::Labels { .. }
             | Self::Segments { .. }
             | Self::External { .. }
+            | Self::Localizations { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3076,6 +3161,7 @@ impl SourceSpec {
             | Self::Cells { .. }
             | Self::Labels { .. }
             | Self::External { .. }
+            | Self::Localizations { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3094,6 +3180,7 @@ impl SourceSpec {
             | Self::Filaments { .. }
             | Self::Labels { .. }
             | Self::External { .. }
+            | Self::Localizations { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3264,6 +3351,10 @@ impl SourceSpec {
             Self::External { file } => {
                 validate(file, &format!("the object file of {set}"))?;
             }
+            Self::Localizations { file, molecules } => {
+                validate(file, &format!("the localization table of {set}"))?;
+                molecules.checked(set)?;
+            }
             Self::Filtered {
                 source,
                 group,
@@ -3405,7 +3496,8 @@ impl Protocol {
             | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
-            | SourceSpec::External { .. } => source.kind(),
+            | SourceSpec::External { .. }
+            | SourceSpec::Localizations { .. } => source.kind(),
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
             | SourceSpec::Edited { source, .. }
@@ -3434,7 +3526,9 @@ impl Protocol {
             | SourceSpec::Filaments { .. }
             | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. } => source.channel(),
-            SourceSpec::Labels { .. } | SourceSpec::External { .. } => None,
+            SourceSpec::Labels { .. }
+            | SourceSpec::External { .. }
+            | SourceSpec::Localizations { .. } => None,
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
             | SourceSpec::Edited { source, .. }

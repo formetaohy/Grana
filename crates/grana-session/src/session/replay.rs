@@ -167,6 +167,19 @@ impl Session {
                     self.start_detect(set);
                 }
                 Step::Import { set } => self.start_import(set),
+                Step::Localize { set, molecules } => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.set_localization_spec(set, molecules.localization());
+                        scene.set_localization_clusters(set, molecules.clusters());
+                        scene.set_localization_projected(set, molecules.projected);
+                    }
+                    if molecules.clustered {
+                        self.start_clusters(set);
+                        return;
+                    }
+                    self.advance_step();
+                    continue;
+                }
                 Step::Relation {
                     source,
                     target,

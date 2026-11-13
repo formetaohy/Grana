@@ -769,6 +769,11 @@ impl Objects {
             .is_some_and(|set| set.set_localization_projected(projected))
     }
 
+    pub fn set_localization_clustered(&mut self, id: ObjectSetId, clustered: bool) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization_clustered(clustered))
+    }
+
     pub fn set_localization_clusters(
         &mut self,
         id: ObjectSetId,

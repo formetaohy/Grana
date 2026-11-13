@@ -1962,6 +1962,76 @@ fn renders_and_measures_localizations() {
         (10.0..120.0).contains(&resolution),
         "the resolution measures {resolution} nm"
     );
+    let geometry = report.geometry();
+    assert!((report.pixel() - 10.0).abs() < 1.0e-4);
+    assert!((geometry.pixel() - 0.01).abs() < 1.0e-7);
+    assert!(geometry.renderable(), "the geometry covers a raster");
+    assert!(report.density() > 0.0, "the report normalizes its density");
+}
+
+#[test]
+fn renders_localizations_past_the_preview_resolution() {
+    let mut noise = support::Noise::new(0x9e37_79b9);
+    let precision = 0.012f32;
+    let field = 8.0f32;
+    let molecules = (0..600)
+        .map(|_| [2.0 + field * noise.value(), 2.0 + field * noise.value()])
+        .collect::<Vec<_>>();
+    let frames = (0..4)
+        .map(|_| {
+            molecules
+                .iter()
+                .map(|molecule| {
+                    Spot::gaussian(
+                        [
+                            molecule[0] + precision * noise.gaussian(),
+                            molecule[1] + precision * noise.gaussian(),
+                            0.0,
+                        ],
+                        [precision; 3],
+                        900.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let held = slices
+        .iter()
+        .map(|spots| LocalizationFrame::new(spots, None))
+        .collect::<Vec<_>>();
+    let spec = LocalizationSpec::new([0, 3], 3.0, 20.0);
+    let report =
+        grana_analysis::localization::localization_report(&held, spec, 0.1, &mut |_, _| true)
+            .expect("the report renders")
+            .expect("the report completes");
+    let geometry = report.geometry();
+    assert!(
+        geometry.size()[0] > 2048 && geometry.size()[1] > 2048,
+        "the image keeps its native size of {:?}",
+        geometry.size()
+    );
+    assert!(
+        report.image().size()[0] <= 2048,
+        "the preview stays bounded at {:?}",
+        report.image().size()
+    );
+    let mut progress = |_: usize, _: usize| true;
+    let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
+        &held,
+        geometry,
+        report.density(),
+        &mut progress,
+    )
+    .expect("the renderer accepts the geometry");
+    assert_eq!(renderer.width(), geometry.size()[0]);
+    let mut row = vec![0u8; geometry.size()[0] as usize * 4];
+    let mut painted = false;
+    for _ in 0..geometry.size()[1] {
+        renderer.row(&mut row).expect("the row renders");
+        painted |= row.iter().any(|sample| *sample > 0);
+    }
+    assert!(painted, "the export paints the localizations");
 }
 
 #[test]

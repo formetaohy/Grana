@@ -21,7 +21,7 @@ use crate::event::Event as RunEvent;
 use crate::label::Labeling;
 use crate::mesh::{self, Export as MeshExport};
 use crate::run;
-use grana_protocol::{Protocol, ProtocolError, SnapshotSpec, Step, ViewSpec};
+use grana_protocol::{Protocol, ProtocolError, SnapshotSpec, SourceSpec, Step, ViewSpec};
 
 use super::channel;
 use super::profile;
@@ -147,6 +147,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         dataset,
         channels,
         store: &store,
+        folder,
         scene,
         sets: staged.sets().to_vec(),
         pairs: staged.pairs().to_vec(),
@@ -176,6 +177,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 filter,
             } => run.detect(*set, *mask, *mask_radius, *filter)?,
             Step::Import { set } => run.import(*set)?,
+            Step::Localize { set, molecules } => run.localize(*set, molecules)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
             Step::Edit { set, .. } => run.edit(*set)?,
@@ -521,6 +523,7 @@ struct Run<'a, 'b> {
     dataset: &'b DatasetEntry,
     channels: Channels,
     store: &'b Arc<GeometryStore>,
+    folder: &'b Path,
     scene: Scene,
     sets: Vec<ObjectSetId>,
     pairs: Vec<ColocPair>,
@@ -657,15 +660,19 @@ impl Run<'_, '_> {
     }
 
     fn import(&mut self, id: ObjectSetId) -> Result<(), String> {
-        let task = self.task;
         let provenance = self
             .scene
             .objects
             .get(id)
             .map(|set| set.provenance().clone())
             .ok_or_else(|| "the object set left the scene".to_string())?;
-        let label = match provenance {
-            grana_scene::Provenance::Imported { label } => label,
+        match provenance {
+            grana_scene::Provenance::Imported { label } => self.import_labels(id, &label)?,
+            grana_scene::Provenance::Interop { file }
+                if grana_readout::localization::has_extension(Path::new(&file)) =>
+            {
+                self.import_localizations(id, &file)?;
+            }
             grana_scene::Provenance::Interop { .. } | grana_scene::Provenance::Attached { .. } => {
                 return Err(
                     "imported tracks belong to a single dataset and cannot be batched".to_string(),
@@ -680,18 +687,237 @@ impl Run<'_, '_> {
             | grana_scene::Provenance::Merged { .. } => {
                 return Err("the object set names no label image".to_string());
             }
-        };
+        }
+        self.scene.apply_curation(id);
+        let carried = self
+            .scene
+            .objects
+            .get(id)
+            .is_some_and(|set| set.tracks().is_some());
+        if carried {
+            return Ok(());
+        }
+        self.track(id)
+    }
+
+    fn import_labels(&mut self, id: ObjectSetId, label: &str) -> Result<(), String> {
+        let task = self.task;
         let name = self.name(id);
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("importing {name}"),
         });
+        let reader = &self.channels;
+        let drift = self.scene.drift().clone();
         let frames = self.scene.frame_count() as usize;
-        let mut collected = vec![None; frames];
-        let mut failure = None;
         let progress = &self.progress;
+        let mut collected = drain(frames, progress, &mut |_| {}, |sink| {
+            crate::run::import(
+                reader,
+                crate::run::ImportRequest::new(label, drift),
+                task.cancel,
+                sink,
+            )
+        })?;
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        for (time, frame) in collected.iter_mut().enumerate() {
+            if let Some(frame) = frame.take() {
+                self.scene.install_shared(id, time as u32, Arc::new(frame));
+            }
+        }
+        Ok(())
+    }
+
+    fn import_localizations(&mut self, id: ObjectSetId, file: &str) -> Result<(), String> {
+        let task = self.task;
+        let name = self.name(id);
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("importing the localizations of {name}"),
+        });
+        let reader = &self.channels;
+        let drift = self.scene.drift().clone();
+        let frames = self.scene.frame_count() as usize;
+        let progress = &self.progress;
+        let mut localization = None;
+        let mut tracks = None;
+        let mut collected = drain(
+            frames,
+            progress,
+            &mut |event| match event {
+                RunEvent::Localization {
+                    pixel,
+                    width,
+                    height,
+                    volume,
+                    drift,
+                } => localization = Some((pixel, width, height, volume, drift)),
+                RunEvent::Tracks(set) => tracks = Some(set),
+                _ => {}
+            },
+            |sink| {
+                crate::run::localization(
+                    reader,
+                    crate::run::LocalizationRequest::new(file, drift),
+                    task.cancel,
+                    sink,
+                )
+            },
+        )?;
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        for (time, frame) in collected.iter_mut().enumerate() {
+            if let Some(frame) = frame.take() {
+                self.scene.install_shared(id, time as u32, Arc::new(frame));
+            }
+        }
+        let (pixel, width, height, volume, drift) = localization
+            .ok_or_else(|| format!("the localization table of {name} holds no localization"))?;
+        let spec = grana_object::LocalizationSpec::cover(self.scene.frame_count());
+        self.scene.set_localization(
+            id,
+            grana_scene::LocalizationSource::new(pixel, width, height, volume, spec, drift),
+        );
+        if let Some(tracks) = tracks {
+            self.scene.install_tracks(id, tracks);
+        }
+        Ok(())
+    }
+
+    fn localize(
+        &mut self,
+        id: ObjectSetId,
+        molecules: &grana_protocol::MoleculesSpec,
+    ) -> Result<(), String> {
+        self.scene
+            .set_localization_spec(id, molecules.localization());
+        self.scene
+            .set_localization_clusters(id, molecules.clusters());
+        self.scene
+            .set_localization_projected(id, molecules.projected);
+        if molecules.clustered {
+            self.cluster(id, molecules.clusters())?;
+        }
+        self.superres(id, molecules)
+    }
+
+    fn superres(
+        &self,
+        id: ObjectSetId,
+        molecules: &grana_protocol::MoleculesSpec,
+    ) -> Result<(), String> {
+        let spec = molecules.localization().fitted(self.scene.frame_count());
+        let Some(object) = self.scene.objects.get(id) else {
+            return Err("the localization set left the scene".to_string());
+        };
+        let Some(source) = object.localization() else {
+            return Err(format!(
+                "{} carries no localization table to render",
+                object.name()
+            ));
+        };
+        let name = object.name().to_string();
+        let key = object.key().as_str().to_string();
+        let pixel = source.pixel() * 0.001;
+        let [start, end] = spec.frames();
+        let frames = (start..=end)
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        let masked = object.filtered() || object.hidden_count() > 0;
+        let visible = (start..=end)
+            .map(|time| {
+                if !masked {
+                    return None;
+                }
+                object.frame(time).map(|frame| {
+                    (0..frame.object_count())
+                        .map(|index| object.visible_object(time, index))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let held = frames
+            .iter()
+            .zip(&visible)
+            .map(|(frame, mask)| {
+                let spots = frame
+                    .as_deref()
+                    .and_then(ObjectFrame::spots)
+                    .map_or(&[][..], grana_object::SpotSet::spots);
+                grana_analysis::localization::LocalizationFrame::new(spots, mask.as_deref())
+            })
+            .collect::<Vec<_>>();
+        let _ = self.task.events.send(Event::Step {
+            index: self.task.index,
+            label: format!("rendering the super-resolution image of {name}"),
+        });
+        let Some(report) =
+            grana_analysis::localization::localization_report(&held, spec, pixel, &mut |_, _| {
+                true
+            })?
+        else {
+            return Ok(());
+        };
+        let geometry = report.geometry();
+        if !geometry.renderable() {
+            return Err(format!(
+                "the super-resolution image of {name} needs more than {} pixels on an axis",
+                grana_analysis::localization::LocalizationGeometry::MAXIMUM
+            ));
+        }
+        let mut progress = |_: usize, _: usize| true;
+        let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
+            &held,
+            geometry,
+            report.density(),
+            &mut progress,
+        )?;
+        grana_raster::write_stream(
+            &self.folder.join(format!("{key}-superres.png")),
+            geometry.size(),
+            &mut |_, row| renderer.row(row),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn cluster(&mut self, id: ObjectSetId, spec: grana_object::ClusterSpec) -> Result<(), String> {
+        let task = self.task;
+        let name = self.name(id);
+        let Some(object) = self.scene.objects.get(id) else {
+            return Err(format!("{name} left the scene before it clustered"));
+        };
+        if self.scene.frame_count() < 2 {
+            return Err(format!("{name} holds one frame to cluster"));
+        }
+        let revision = object.revision();
+        let frames = (0..self.scene.frame_count())
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        let masked = object.filtered() || object.hidden_count() > 0;
+        let visible = (0..self.scene.frame_count())
+            .map(|time| {
+                if !masked {
+                    return None;
+                }
+                object.frame(time).map(|frame| {
+                    (0..frame.object_count())
+                        .map(|index| object.visible_object(time, index))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("clustering the localizations of {name}"),
+        });
+        let progress = &self.progress;
+        let mut found = None;
+        let mut failure = None;
         let mut sink = |event: RunEvent| match event {
-            RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
+            RunEvent::LocalizationClusters { clusters, .. } => found = Some(clusters),
             RunEvent::Failed(detail) => failure = Some(detail),
             RunEvent::Progress { done, total, .. } if progress.hold() => {
                 let _ = progress.events.send(Event::Progress {
@@ -700,38 +926,24 @@ impl Run<'_, '_> {
                     total,
                 });
             }
-            RunEvent::Progress { .. } => {}
-            RunEvent::Tracks(_)
-            | RunEvent::Relation { .. }
-            | RunEvent::Coloc { .. }
-            | RunEvent::ObjectColoc { .. }
-            | RunEvent::Drift(_)
-            | RunEvent::Registration(_)
-            | RunEvent::Calibration { .. }
-            | RunEvent::Localization { .. }
-            | RunEvent::LocalizationReport { .. }
-            | RunEvent::LocalizationClusters { .. }
-            | RunEvent::Done => {}
+            _ => {}
         };
-        crate::run::import(
-            &self.channels,
-            crate::run::ImportRequest::new(&label, self.scene.drift().clone()),
+        crate::run::localization_cluster(
+            crate::run::LocalizationClusterRequest::new(id, revision, frames, visible, spec),
             task.cancel,
             &mut sink,
         )?;
-        if let Some(detail) = failure {
-            return Err(detail);
-        }
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
-        for (time, frame) in collected.into_iter().enumerate() {
-            if let Some(frame) = frame {
-                self.scene.install_shared(id, time as u32, Arc::new(frame));
-            }
+        if let Some(detail) = failure {
+            return Err(detail);
         }
-        self.scene.apply_curation(id);
-        self.track(id)
+        let clusters =
+            found.ok_or_else(|| format!("the localizations of {name} produced no molecule"))?;
+        self.scene
+            .install_molecules(id, clusters.groups())
+            .map(|_| ())
     }
 
     fn refilter(&mut self, id: ObjectSetId) -> Result<(), String> {
@@ -1188,6 +1400,38 @@ fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
         .collect()
 }
 
+fn drain(
+    frames: usize,
+    progress: &Progress<'_>,
+    extra: &mut dyn FnMut(RunEvent),
+    run: impl FnOnce(&mut dyn FnMut(RunEvent)) -> Result<(), String>,
+) -> Result<Vec<Option<ObjectFrame>>, String> {
+    let mut collected = vec![None; frames];
+    let mut failure = None;
+    {
+        let mut sink = |event: RunEvent| match event {
+            RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
+            RunEvent::Failed(detail) => failure = Some(detail),
+            RunEvent::Done => {}
+            RunEvent::Progress { done, total, .. } => {
+                if progress.hold() {
+                    let _ = progress.events.send(Event::Progress {
+                        index: progress.index,
+                        done,
+                        total,
+                    });
+                }
+            }
+            other => extra(other),
+        };
+        run(&mut sink)?;
+    }
+    match failure {
+        Some(detail) => Err(detail),
+        None => Ok(collected),
+    }
+}
+
 fn capture_view(
     capture: &dyn Capture,
     render: &Channels,
@@ -1282,6 +1526,11 @@ pub(super) fn artifacts(
         .iter()
         .map(|set| format!("{}-{}.csv", set.key(), set.group().key()))
         .collect::<Vec<_>>();
+    for set in protocol.sets() {
+        if matches!(set.source, SourceSpec::Localizations { .. }) {
+            artifacts.push(format!("{}-superres.png", set.key()));
+        }
+    }
     for relation in protocol.relations() {
         artifacts.push(grana_measure::PairExport::file_name(
             &relation.source,

@@ -11,6 +11,7 @@ pub struct LocalizationSource {
     spec: LocalizationSpec,
     clusters: ClusterSpec,
     projected: bool,
+    clustered: bool,
     applied: Drift,
 }
 
@@ -39,6 +40,7 @@ impl LocalizationSource {
             spec,
             clusters: ClusterSpec::default(),
             projected: false,
+            clustered: false,
             applied,
         }
     }
@@ -71,6 +73,10 @@ impl LocalizationSource {
         self.projected
     }
 
+    pub fn clustered(&self) -> bool {
+        self.clustered
+    }
+
     pub fn applied(&self) -> &Drift {
         &self.applied
     }
@@ -100,6 +106,13 @@ impl LocalizationSource {
     pub fn with_clusters(&self, clusters: ClusterSpec) -> Self {
         Self {
             clusters,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_clustered(&self, clustered: bool) -> Self {
+        Self {
+            clustered,
             ..self.clone()
         }
     }

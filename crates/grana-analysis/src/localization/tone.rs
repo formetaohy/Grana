@@ -14,26 +14,54 @@ const STOPS: [(f32, [f32; 3]); 6] = [
     (1.00, [1.00, 1.00, 0.95]),
 ];
 
-pub(super) fn tone(grid: &Grid) -> LocalizationImage {
-    let highlight = {
-        let held = grid.percentile(HIGHLIGHT);
-        if held > 0.0 { held } else { grid.maximum() }
-    };
-    let scale = if highlight > 0.0 {
-        1.0 / highlight
-    } else {
-        0.0
-    };
-    let table = table();
+pub(super) struct Tone {
+    scale: f32,
+    table: [[u8; 3]; ENTRIES],
+}
+
+impl Tone {
+    pub(super) fn density(grid: &Grid) -> f32 {
+        let highlight = {
+            let held = grid.percentile(HIGHLIGHT);
+            if held > 0.0 { held } else { grid.maximum() }
+        };
+        let pixel = grid.pixel();
+        highlight / (pixel * pixel)
+    }
+
+    pub(super) fn new(density: f32, pixel: f32) -> Self {
+        let highlight = density * pixel * pixel;
+        let scale = if highlight > 0.0 {
+            1.0 / highlight
+        } else {
+            0.0
+        };
+        Self {
+            scale,
+            table: table(),
+        }
+    }
+
+    pub(super) fn level(&self, value: f32) -> f32 {
+        (value * self.scale).clamp(0.0, 1.0).sqrt()
+    }
+
+    pub(super) fn pixel(&self, level: f32) -> [u8; 3] {
+        let entry = (level * (ENTRIES - 1) as f32) as usize;
+        self.table[entry.min(ENTRIES - 1)]
+    }
+}
+
+pub(super) fn tone(grid: &Grid) -> (LocalizationImage, f32) {
+    let density = Tone::density(grid);
+    let tone = Tone::new(density, grid.pixel());
     let size = grid.size();
     let mut pixels = Vec::with_capacity(grid.values().len() * 4);
     for value in grid.values() {
-        let level = (value * scale).clamp(0.0, 1.0).sqrt();
-        let entry = (level * (ENTRIES - 1) as f32) as usize;
-        let [red, green, blue] = table[entry.min(ENTRIES - 1)];
+        let [red, green, blue] = tone.pixel(tone.level(*value));
         pixels.extend_from_slice(&[red, green, blue, 255]);
     }
-    LocalizationImage::new(size, pixels)
+    (LocalizationImage::new(size, pixels), density)
 }
 
 fn table() -> [[u8; 3]; ENTRIES] {

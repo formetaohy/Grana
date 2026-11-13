@@ -369,6 +369,19 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn set_localization_clustered(&mut self, clustered: bool) -> bool {
+        let Some(source) = self.localization.as_ref() else {
+            return false;
+        };
+        let next = source.with_clustered(clustered);
+        if self.localization.as_ref() == Some(&next) {
+            return false;
+        }
+        self.localization = Some(next);
+        self.document = self.document.next();
+        true
+    }
+
     pub(crate) fn set_localization_clusters(
         &mut self,
         clusters: grana_object::ClusterSpec,

@@ -11,6 +11,7 @@ use super::dataset::DatasetExport;
 use super::derived::PendingChannel;
 use super::export::Csv;
 use super::label::Labels;
+use super::localization::Superres;
 use super::montage::Montage;
 use super::package::Export as Package;
 use super::preview::Previews;
@@ -43,6 +44,7 @@ pub(super) enum Completion {
     Package(Result<PathBuf, String>),
     Dataset(Result<Summary, String>),
     Montage(Result<PathBuf, String>),
+    Superres(Result<PathBuf, String>),
     Autosave(Result<RecoveryEntry, String>),
     Channel(PendingChannel, Result<Intensity, String>),
 }
@@ -108,6 +110,7 @@ pub(super) struct Tasks {
     pub package: Option<Package>,
     pub dataset: Option<DatasetExport>,
     pub montage: Option<Montage>,
+    pub superres: Option<Superres>,
     previews: Option<Previews>,
     autosave: Option<Progress<Result<RecoveryEntry, String>>>,
     channels: Vec<PendingChannel>,
@@ -274,6 +277,23 @@ impl Tasks {
                 }
             }
         }
+        if let Some(slot) = self.superres.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event(outcome) => {
+                    self.superres = None;
+                    completions.push(Completion::Superres(outcome));
+                }
+                Poll::Empty => {}
+                Poll::Closed => {
+                    self.superres = None;
+                    completions.push(Completion::Superres(Err(
+                        "the super-resolution export stopped before the image was written"
+                            .to_string(),
+                    )));
+                }
+            }
+        }
         if let Some(previews) = self.previews.as_mut() {
             stepped |= previews.poll();
         }
@@ -326,6 +346,7 @@ impl Tasks {
             || self.package.is_some()
             || self.dataset.is_some()
             || self.montage.is_some()
+            || self.superres.is_some()
     }
 
     pub(super) fn transferring(&self) -> bool {
@@ -397,6 +418,10 @@ impl Tasks {
             let (done, total) = dataset.progress();
             return Some((dataset.label(), done, total));
         }
+        if let Some(superres) = self.superres.as_ref() {
+            let (done, total) = superres.progress();
+            return Some(("Rendering the super-resolution image", done, total));
+        }
         self.csv.as_ref().map(|csv| {
             let (done, total) = csv.progress();
             (csv.label(), done, total)
@@ -439,6 +464,7 @@ impl Tasks {
         self.package = None;
         self.dataset = None;
         self.montage = None;
+        self.superres = None;
         self.autosave = None;
         self.channels.clear();
         self.pending_csv = None;
@@ -463,6 +489,7 @@ impl Session {
             Completion::Package(outcome) => self.finish_package(outcome),
             Completion::Dataset(outcome) => self.finish_dataset(outcome),
             Completion::Montage(outcome) => self.finish_montage(outcome),
+            Completion::Superres(outcome) => self.finish_superres(outcome),
             Completion::Autosave(outcome) => self.finish_autosave(outcome),
             Completion::Channel(pending, outcome) => self.finish_channel(pending, outcome),
         }

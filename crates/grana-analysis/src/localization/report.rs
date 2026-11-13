@@ -151,6 +151,79 @@ impl LocalizationImage {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalizationGeometry {
+    origin: [f32; 2],
+    pixel: f32,
+    size: [u32; 2],
+    blur: f32,
+    border: u32,
+}
+
+impl LocalizationGeometry {
+    pub const MAXIMUM: u32 = 65_535;
+
+    pub(super) fn new(
+        origin: [f32; 2],
+        pixel: f32,
+        size: [u32; 2],
+        blur: f32,
+        border: u32,
+    ) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a localization geometry covers at least one pixel"
+        );
+        assert!(
+            pixel.is_finite() && pixel > 0.0,
+            "a localization geometry rasterizes at a positive pixel size"
+        );
+        assert!(
+            origin.iter().all(|value| value.is_finite()),
+            "a localization geometry starts at a finite origin"
+        );
+        assert!(
+            blur.is_finite() && blur >= 0.0,
+            "a localization geometry blurs by a non-negative width"
+        );
+        Self {
+            origin,
+            pixel,
+            size,
+            blur,
+            border,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 2] {
+        self.origin
+    }
+
+    pub fn pixel(&self) -> f32 {
+        self.pixel
+    }
+
+    pub fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
+    pub fn blur(&self) -> f32 {
+        self.blur
+    }
+
+    pub fn border(&self) -> u32 {
+        self.border
+    }
+
+    pub fn rows(&self) -> u64 {
+        u64::from(self.size[0]) * u64::from(self.size[1])
+    }
+
+    pub fn renderable(&self) -> bool {
+        self.size[0] <= Self::MAXIMUM && self.size[1] <= Self::MAXIMUM && self.rows() > 0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalizationReport {
     pub(super) spec: LocalizationSpec,
@@ -158,6 +231,8 @@ pub struct LocalizationReport {
     pub(super) origin: [f32; 2],
     pub(super) extent: [f32; 2],
     pub(super) localizations: u64,
+    pub(super) geometry: LocalizationGeometry,
+    pub(super) density: f32,
     pub(super) nena: NeNa,
     pub(super) frc: Frc,
     pub(super) image: LocalizationImage,
@@ -182,6 +257,14 @@ impl LocalizationReport {
 
     pub fn localizations(&self) -> u64 {
         self.localizations
+    }
+
+    pub fn geometry(&self) -> LocalizationGeometry {
+        self.geometry
+    }
+
+    pub fn density(&self) -> f32 {
+        self.density
     }
 
     pub fn nena(&self) -> &NeNa {

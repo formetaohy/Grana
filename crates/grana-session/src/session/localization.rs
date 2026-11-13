@@ -1,13 +1,18 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use grana_analysis::localization::{Clusters, LocalizationReport, LocalizationSpec};
+use grana_analysis::localization::{
+    Clusters, LocalizationGeometry, LocalizationRenderer, LocalizationReport, LocalizationSpec,
+};
 use grana_object::ClusterSpec;
 use grana_pipeline::run::{LocalizationClusterRequest, LocalizationReportRequest};
 use grana_raster::Bitmap;
 use grana_scene::{Job, ObjectSetId, Revision, Scene};
 
 use super::*;
+use crate::task::Progress as ExportProgress;
 
 type Prepared = (
     Revision,
@@ -23,6 +28,8 @@ type PreparedClusters = (
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
 );
+
+type Window = (Vec<Option<Arc<ObjectFrame>>>, Vec<Option<Vec<bool>>>);
 
 #[derive(Default)]
 pub struct Localizations {
@@ -138,6 +145,24 @@ impl Session {
             return Err("the dataset holds one frame to estimate a precision".to_string());
         }
         let spec = source.spec().fitted(scene.frame_count());
+        let (frames, visible) = self.localization_window(set, spec)?;
+        let pixel = source.pixel() * 0.001;
+        if !(pixel.is_finite() && pixel > 0.0) {
+            return Err("the localization table carries no camera pixel".to_string());
+        }
+        Ok((object.revision(), spec, frames, visible, pixel))
+    }
+
+    pub(super) fn localization_window(
+        &self,
+        set: ObjectSetId,
+        spec: LocalizationSpec,
+    ) -> Result<Window, String> {
+        let scene = self.scene.as_ref().ok_or("open a dataset first")?;
+        let object = scene
+            .objects
+            .get(set)
+            .ok_or("the object set left the scene")?;
         let [start, end] = spec.frames();
         let frames = (start..=end)
             .map(|time| object.frame_shared(time))
@@ -155,11 +180,7 @@ impl Session {
                 })
             })
             .collect::<Vec<_>>();
-        let pixel = source.pixel() * 0.001;
-        if !(pixel.is_finite() && pixel > 0.0) {
-            return Err("the localization table carries no camera pixel".to_string());
-        }
-        Ok((object.revision(), spec, frames, visible, pixel))
+        Ok((frames, visible))
     }
 
     pub(super) fn cancel_localizations(&mut self, set: ObjectSetId) {
@@ -232,38 +253,16 @@ impl Session {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        if !scene.regroup(set, clusters.groups()) {
-            return;
-        }
-        let frame_interval = scene.dataset.frame_interval();
-        let mut grouped = Vec::new();
-        if let Some(object) = scene.objects.get(set) {
-            for (time, frame) in object.frames() {
-                let Some(spots) = frame.spots() else {
-                    continue;
-                };
-                for (index, spot) in spots.spots().iter().enumerate() {
-                    let Some(group) = spot.group() else {
-                        continue;
-                    };
-                    if object.visible_object(time, index) {
-                        grouped.push((group, time, index, spot.center()));
-                    }
-                }
+        match scene.install_molecules(set, clusters.groups()) {
+            Ok(_) => {
+                self.message = Some(Message::info(format!(
+                    "clustered {} localizations into {} molecules",
+                    clusters.localizations(),
+                    clusters.molecules()
+                )));
             }
+            Err(detail) => self.message = Some(Message::error(detail)),
         }
-        match grana_object::grouped_tracks(frame_interval, grouped) {
-            Ok(tracks) => scene.install_tracks(set, tracks),
-            Err(detail) => {
-                self.message = Some(Message::error(detail));
-                return;
-            }
-        }
-        self.message = Some(Message::info(format!(
-            "clustered {} localizations into {} molecules",
-            clusters.localizations(),
-            clusters.molecules()
-        )));
     }
 
     pub(super) fn clear_localizations(&mut self, set: ObjectSetId) {
@@ -273,9 +272,28 @@ impl Session {
     }
 
     pub(super) fn export_localization_image(&mut self, set: ObjectSetId) {
-        let Some(bitmap) = self.localization.bitmap(set) else {
+        if self.tasks.writing() {
+            self.message = Some(Message::error("an export is already running"));
+            return;
+        }
+        let Some(report) = self.localization.report(set) else {
             self.message = Some(Message::error(
                 "render a super-resolution image before exporting it",
+            ));
+            return;
+        };
+        let geometry = report.geometry();
+        if !geometry.renderable() {
+            let [width, height] = geometry.size();
+            self.message = Some(Message::error(format!(
+                "the super-resolution image would span {width}x{height} pixels; raise the pixel size"
+            )));
+            return;
+        }
+        let spec = report.spec();
+        let Ok((frames, visible)) = self.localization_window(set, spec) else {
+            self.message = Some(Message::error(
+                "the object set carries no localization table to export",
             ));
             return;
         };
@@ -295,19 +313,72 @@ impl Session {
         else {
             return;
         };
-        match grana_raster::write(&path, &bitmap.raster()) {
-            Ok(()) => {
-                self.message = Some(Message::info(format!(
-                    "exported the super-resolution image to {}",
-                    path.display()
-                )));
-            }
-            Err(error) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export the super-resolution image to {}: {error}",
-                    path.display()
-                )));
-            }
-        }
+        self.message = None;
+        self.tasks.superres = Some(Superres::start(
+            frames,
+            visible,
+            geometry,
+            report.density(),
+            path,
+        ));
+    }
+
+    pub(super) fn finish_superres(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!(
+                "exported the super-resolution image to {}",
+                path.display()
+            )),
+            Err(detail) => Message::error(detail),
+        });
+    }
+}
+
+pub(super) struct Superres {
+    task: ExportProgress<Result<PathBuf, String>>,
+}
+
+impl Superres {
+    fn start(
+        frames: Vec<Option<Arc<ObjectFrame>>>,
+        visible: Vec<Option<Vec<bool>>>,
+        geometry: LocalizationGeometry,
+        density: f32,
+        path: PathBuf,
+    ) -> Self {
+        let task = ExportProgress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+            let held = frames
+                .iter()
+                .zip(&visible)
+                .map(|(frame, mask)| {
+                    let spots = frame
+                        .as_deref()
+                        .and_then(ObjectFrame::spots)
+                        .map_or(&[][..], grana_object::SpotSet::spots);
+                    grana_analysis::localization::LocalizationFrame::new(spots, mask.as_deref())
+                })
+                .collect::<Vec<_>>();
+            let mut report = |done: usize, total: usize| {
+                progress(done, total);
+                !cancel.load(Ordering::Relaxed)
+            };
+            let mut renderer = LocalizationRenderer::new(&held, geometry, density, &mut report)?;
+            grana_raster::write_stream(&path, geometry.size(), &mut |_, row| renderer.row(row))
+                .map_err(|error| error.to_string())?;
+            Ok(path)
+        });
+        Self { task }
+    }
+
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+
+    pub(super) fn progress(&self) -> (usize, usize) {
+        self.task.progress()
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
+        self.task.poll()
     }
 }

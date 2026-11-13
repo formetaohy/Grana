@@ -599,7 +599,8 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Filaments { .. }
             | SourceSpec::Labels { .. }
-            | SourceSpec::External { .. } => Ok(()),
+            | SourceSpec::External { .. }
+            | SourceSpec::Localizations { .. } => Ok(()),
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
             | SourceSpec::Edited { source, .. }

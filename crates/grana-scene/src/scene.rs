@@ -1107,6 +1107,10 @@ impl Scene {
         self.objects.set_localization_projected(id, projected)
     }
 
+    pub fn set_localization_clustered(&mut self, id: ObjectSetId, clustered: bool) -> bool {
+        self.objects.set_localization_clustered(id, clustered)
+    }
+
     pub fn set_localization_clusters(
         &mut self,
         id: ObjectSetId,
@@ -1117,6 +1121,37 @@ impl Scene {
 
     pub fn regroup(&mut self, id: ObjectSetId, groups: &[Vec<Option<u32>>]) -> bool {
         self.objects.regroup(id, groups)
+    }
+
+    pub fn install_molecules(
+        &mut self,
+        id: ObjectSetId,
+        groups: &[Vec<Option<u32>>],
+    ) -> Result<bool, String> {
+        self.objects.set_localization_clustered(id, true);
+        if !self.regroup(id, groups) {
+            return Ok(false);
+        }
+        let frame_interval = self.dataset.frame_interval();
+        let mut grouped = Vec::new();
+        if let Some(object) = self.objects.get(id) {
+            for (time, frame) in object.frames() {
+                let Some(spots) = frame.spots() else {
+                    continue;
+                };
+                for (index, spot) in spots.spots().iter().enumerate() {
+                    let Some(group) = spot.group() else {
+                        continue;
+                    };
+                    if object.visible_object(time, index) {
+                        grouped.push((group, time, index, spot.center()));
+                    }
+                }
+            }
+        }
+        let tracks = grana_object::grouped_tracks(frame_interval, grouped)?;
+        self.install_tracks(id, tracks);
+        Ok(true)
     }
 
     pub fn realign_localization(&mut self, id: ObjectSetId) {

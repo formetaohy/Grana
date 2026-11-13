@@ -57,6 +57,7 @@ impl Recipe {
             Step::Drift { .. } | Step::Register { .. } => Vec::new(),
             Step::Detect { set, .. }
             | Step::Import { set }
+            | Step::Localize { set, .. }
             | Step::Filter { set, .. }
             | Step::Copy { set, .. }
             | Step::Edit { set, .. }
@@ -81,6 +82,7 @@ impl Recipe {
             Step::Register { .. } => Some(Job::Register),
             Step::Detect { set, .. } => Some(Job::Detect(*set)),
             Step::Import { set } => Some(Job::Import(*set)),
+            Step::Localize { set, molecules } => molecules.clustered.then_some(Job::Clusters(*set)),
             Step::Relation {
                 source,
                 target,
@@ -105,9 +107,9 @@ impl Recipe {
 
 fn follows(expected: Job, actual: Job) -> bool {
     match (expected, actual) {
-        (Job::Detect(set), Job::Track(track)) | (Job::Recut(set), Job::Track(track)) => {
-            set == track
-        }
+        (Job::Detect(set), Job::Track(track))
+        | (Job::Import(set), Job::Track(track))
+        | (Job::Recut(set), Job::Track(track)) => set == track,
         _ => false,
     }
 }

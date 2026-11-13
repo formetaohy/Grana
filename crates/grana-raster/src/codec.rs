@@ -1,4 +1,4 @@
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 use crate::{Error, Raster};
@@ -66,6 +66,40 @@ pub fn write(path: &Path, raster: &Raster) -> Result<(), Error> {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })
+}
+
+type StreamRow<'a> = &'a mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>;
+
+pub fn write_stream(path: &Path, size: [u32; 2], row: StreamRow<'_>) -> Result<(), Error> {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a streamed image covers at least one pixel"
+    );
+    let write = |detail: String| Error::Write {
+        path: path.to_path_buf(),
+        detail,
+    };
+    let atomic = grana_file::Atomic::file(path).map_err(|error| write(error.to_string()))?;
+    let file = std::fs::File::create(atomic.staging()).map_err(|error| write(error.to_string()))?;
+    let mut encoder = png::Encoder::new(BufWriter::new(file), size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|error| write(error.to_string()))?;
+    let mut stream = writer
+        .stream_writer()
+        .map_err(|error| write(error.to_string()))?;
+    let mut buffer = vec![0u8; size[0] as usize * 4];
+    for y in 0..size[1] {
+        row(y, &mut buffer).map_err(|detail| Error::Encode { detail })?;
+        stream
+            .write_all(&buffer)
+            .map_err(|error| write(error.to_string()))?;
+    }
+    stream.finish().map_err(|error| write(error.to_string()))?;
+    atomic.commit().map_err(|error| write(error.to_string()))
 }
 
 pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8>, Error> {

@@ -530,6 +530,7 @@ impl Encode for LocalizationSource {
         writer.u32(clusters.dark());
         writer.u32(clusters.minimum());
         writer.bool(self.projected());
+        writer.bool(self.clustered());
         self.applied().encode(writer);
     }
 }

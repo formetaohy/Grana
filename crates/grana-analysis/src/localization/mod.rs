@@ -6,15 +6,17 @@ mod fit;
 mod fourier;
 mod frc;
 mod grid;
+mod image;
 mod nena;
 mod report;
 mod tone;
 
 pub use cluster::{ClusterSpec, Clusters, cluster};
 use grid::Grid;
-pub use report::{Frc, LocalizationImage, LocalizationReport, NeNa};
+pub use image::LocalizationRenderer;
+pub use report::{Frc, LocalizationGeometry, LocalizationImage, LocalizationReport, NeNa};
 
-const IMAGE_LIMIT: u32 = 2048;
+const PREVIEW: u32 = 2048;
 
 const FRC_LIMIT: usize = 2048;
 
@@ -99,17 +101,10 @@ pub fn localization_report(
     let total = 3 * frames.len() + 1;
     let mut step = 0usize;
     let blur = spec.blur() * 0.001;
-    let margin = if blur > 0.0 { MARGIN * blur } else { 0.0 };
-    let pixel = (spec.pixel() * 0.001)
-        .max((span[0].max(span[1]) + 2.0 * margin) / (IMAGE_LIMIT as f32 - 1.0));
-    let border = margin_pixels(blur, pixel);
-    let origin = [
-        low[0] - border as f32 * pixel,
-        low[1] - border as f32 * pixel,
-    ];
-    let size =
-        [0, 1].map(|axis| ((span[axis] / pixel).ceil() as u32 + 2 * border + 1).min(IMAGE_LIMIT));
-    let mut raster = Grid::empty(size, pixel, origin);
+    let pixel = spec.pixel() * 0.001;
+    let geometry = rasterize(&spec, low, span, pixel, blur)?;
+    let preview = preview_geometry(low, span, geometry.pixel(), blur)?;
+    let mut raster = Grid::empty(preview.size(), preview.pixel(), preview.origin());
     for frame in frames {
         for (index, spot) in frame.spots.iter().enumerate() {
             if !frame.visible(index) {
@@ -141,21 +136,110 @@ pub fn localization_report(
         return Ok(None);
     };
     raster.blur(blur);
-    let image = tone::tone(&raster);
+    let (image, density) = tone::tone(&raster);
     step += 1;
     if !report(step, total) {
         return Ok(None);
     }
     Ok(Some(LocalizationReport {
         spec,
-        pixel: pixel * 1000.0,
-        origin,
-        extent: [0, 1].map(|axis| size[axis] as f32 * pixel),
+        pixel: geometry.pixel() * 1000.0,
+        origin: geometry.origin(),
+        extent: [0, 1].map(|axis| geometry.size()[axis] as f32 * geometry.pixel()),
         localizations: localizations as u64,
+        geometry,
+        density,
         nena,
         frc,
         image,
     }))
+}
+
+struct Preview {
+    origin: [f32; 2],
+    pixel: f32,
+    size: [u32; 2],
+}
+
+impl Preview {
+    fn origin(&self) -> [f32; 2] {
+        self.origin
+    }
+
+    fn pixel(&self) -> f32 {
+        self.pixel
+    }
+
+    fn size(&self) -> [u32; 2] {
+        self.size
+    }
+}
+
+fn rasterize(
+    spec: &LocalizationSpec,
+    low: [f32; 2],
+    span: [f32; 2],
+    pixel: f32,
+    blur: f32,
+) -> Result<LocalizationGeometry, String> {
+    let border = margin_pixels(blur, pixel);
+    let size = raster_size(span, pixel, border)?;
+    if size[0] > LocalizationGeometry::MAXIMUM || size[1] > LocalizationGeometry::MAXIMUM {
+        return Err(format!(
+            "the localization image would span {}x{} pixels; raise the pixel size of the {} nm render",
+            size[0],
+            size[1],
+            spec.pixel()
+        ));
+    }
+    Ok(LocalizationGeometry::new(
+        [
+            low[0] - border as f32 * pixel,
+            low[1] - border as f32 * pixel,
+        ],
+        pixel,
+        size,
+        blur,
+        border,
+    ))
+}
+
+fn preview_geometry(
+    low: [f32; 2],
+    span: [f32; 2],
+    pixel: f32,
+    blur: f32,
+) -> Result<Preview, String> {
+    let scale = ((span[0].max(span[1]) / pixel).ceil() / PREVIEW as f32)
+        .ceil()
+        .max(1.0);
+    let pixel = pixel * scale;
+    let border = margin_pixels(blur, pixel);
+    let size = raster_size(span, pixel, border)?;
+    Ok(Preview {
+        origin: [
+            low[0] - border as f32 * pixel,
+            low[1] - border as f32 * pixel,
+        ],
+        pixel,
+        size: [size[0].max(1), size[1].max(1)],
+    })
+}
+
+fn raster_size(span: [f32; 2], pixel: f32, border: u32) -> Result<[u32; 2], String> {
+    let sides = 2 * u64::from(border) + 1;
+    let Some(room) = u64::from(u32::MAX).checked_sub(sides) else {
+        return Err("the localization image blurs past the pixels of a raster".to_string());
+    };
+    let mut size = [0u32; 2];
+    for axis in 0..2 {
+        let cells = (f64::from(span[axis]) / f64::from(pixel)).ceil();
+        if !(cells.is_finite() && cells <= room as f64) {
+            return Err("the localization image spans more pixels than a raster holds".to_string());
+        }
+        size[axis] = cells as u32 + sides as u32;
+    }
+    Ok(size)
 }
 
 fn bounds(frames: &[LocalizationFrame<'_>]) -> Option<([f32; 2], [f32; 2])> {

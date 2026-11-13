@@ -229,6 +229,14 @@ impl Protocol {
                     )));
                 }
             }
+            SourceSpec::Localizations { molecules, .. } => {
+                if molecules.frames[1] >= frames {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the localization table renders the frame {} and the dataset holds {frames}",
+                        molecules.frames[1]
+                    )));
+                }
+            }
             SourceSpec::Edited { source, edits } => {
                 if !self.sets.iter().any(|set| set.key == *source) {
                     return Err(ProtocolError::Invalid(format!(
@@ -556,6 +564,9 @@ impl Builder<'_> {
             | SourceSpec::Segments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
             SourceSpec::External { file } => self.external(file, name, named, track),
+            SourceSpec::Localizations { file, molecules } => {
+                self.localizations(file, molecules, name, named, track)
+            }
             SourceSpec::Filtered {
                 source: reference,
                 group,
@@ -744,6 +755,25 @@ impl Builder<'_> {
         self.rename(id, name, named)?;
         self.apply_track(id, track);
         self.steps.push(Step::Import { set: id });
+        Ok(id)
+    }
+
+    fn localizations(
+        &mut self,
+        file: &str,
+        molecules: &crate::MoleculesSpec,
+        name: &str,
+        named: bool,
+        track: Option<crate::TrackSpec>,
+    ) -> Result<ObjectSetId, ProtocolError> {
+        let id = self.scene.import_localizations(file);
+        self.rename(id, name, named)?;
+        self.apply_track(id, track);
+        self.steps.push(Step::Import { set: id });
+        self.steps.push(Step::Localize {
+            set: id,
+            molecules: *molecules,
+        });
         Ok(id)
     }
 
@@ -1106,6 +1136,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 }
             }
             Step::Copy { source, .. } => dependencies[index].push(settled(&ready, *source)?),
+            Step::Localize { set, .. } => dependencies[index].push(settled(&ready, *set)?),
             Step::Edit { source, .. } => dependencies[index].push(settled(&ready, *source)?),
             Step::Merge { set, part } => {
                 dependencies[index].push(settled(&ready, *part)?);

@@ -367,7 +367,13 @@ fn source(
         Provenance::Imported { label } => Ok(SourceSpec::Labels {
             label: label.clone(),
         }),
-        Provenance::Interop { file } => Ok(SourceSpec::External { file: file.clone() }),
+        Provenance::Interop { file } => Ok(match set.localization() {
+            Some(localizations) => SourceSpec::Localizations {
+                file: file.clone(),
+                molecules: crate::MoleculesSpec::of(localizations),
+            },
+            None => SourceSpec::External { file: file.clone() },
+        }),
         Provenance::Attached { .. } => Err(ProtocolError::Invalid(format!(
             "{} is attached to its file and does not belong to a protocol",
             set.name()
@@ -688,7 +694,8 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         SourceSpec::Spots { .. }
         | SourceSpec::Filaments { .. }
         | SourceSpec::Labels { .. }
-        | SourceSpec::External { .. } => {}
+        | SourceSpec::External { .. }
+        | SourceSpec::Localizations { .. } => {}
     }
 }
 
