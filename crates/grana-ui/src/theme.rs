@@ -37,8 +37,11 @@ pub enum Level {
 pub struct TypeStyle {
     pub size: f32,
     pub weight: f32,
+    pub width: f32,
+    pub grade: f32,
     pub tracking: f32,
     pub leading: f32,
+    pub monospace: bool,
 }
 
 impl TypeStyle {
@@ -46,9 +49,23 @@ impl TypeStyle {
         Self {
             size,
             weight,
+            width: 100.0,
+            grade: 0.0,
             tracking: 0.0,
             leading,
+            monospace: false,
         }
+    }
+
+    pub const fn with_tracking(mut self, tracking: f32) -> Self {
+        self.tracking = tracking;
+        self
+    }
+
+    pub const fn glyph(self, hint: bool) -> grana_text::GlyphStyle {
+        grana_text::GlyphStyle::new(self.size, self.weight)
+            .with_axes(self.width, self.grade)
+            .hinted(hint)
     }
 
     pub const fn medium(self) -> Self {
@@ -234,50 +251,74 @@ impl Typography {
             display: TypeStyle {
                 size: 22.0,
                 weight: 700.0,
+                width: 108.0,
+                grade: 0.0,
                 tracking: -0.2,
                 leading: 28.0,
+                monospace: false,
             },
             headline: TypeStyle {
                 size: 15.0,
-                weight: 600.0,
+                weight: 650.0,
+                width: 104.0,
+                grade: 0.0,
                 tracking: 0.0,
                 leading: 20.0,
+                monospace: false,
             },
             title: TypeStyle {
                 size: 13.0,
                 weight: 600.0,
+                width: 102.0,
+                grade: 0.0,
                 tracking: 0.0,
                 leading: 18.0,
+                monospace: false,
             },
             body: TypeStyle {
                 size: 12.5,
                 weight: 400.0,
+                width: 100.0,
+                grade: 0.0,
                 tracking: 0.0,
                 leading: 17.0,
+                monospace: false,
             },
             label: TypeStyle {
                 size: 12.0,
-                weight: 500.0,
+                weight: 550.0,
+                width: 100.0,
+                grade: 20.0,
                 tracking: 0.1,
                 leading: 16.0,
+                monospace: false,
             },
             caption: TypeStyle {
                 size: 11.0,
-                weight: 400.0,
+                weight: 450.0,
+                width: 100.0,
+                grade: 0.0,
                 tracking: 0.1,
                 leading: 14.5,
+                monospace: false,
             },
             overline: TypeStyle {
                 size: 10.0,
-                weight: 600.0,
+                weight: 650.0,
+                width: 106.0,
+                grade: 25.0,
                 tracking: 0.65,
                 leading: 13.5,
+                monospace: false,
             },
             monospace: TypeStyle {
                 size: 11.0,
-                weight: 400.0,
+                weight: 450.0,
+                width: 100.0,
+                grade: 0.0,
                 tracking: 0.0,
                 leading: 15.0,
+                monospace: true,
             },
         }
     }

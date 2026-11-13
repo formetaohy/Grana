@@ -9,6 +9,10 @@ use crate::face::{self, Face};
 use crate::glyph::GlyphRaster;
 use crate::outline::Outline;
 
+const PRIMARY_FLEX: usize = 0;
+const PRIMARY_MONO: usize = 1;
+const FALLBACK_START: usize = 2;
+
 pub struct Fonts {
     faces: Vec<Face>,
     shape: ShapeContext,
@@ -21,16 +25,10 @@ impl Fonts {
     pub fn system() -> Self {
         let mut faces = Vec::new();
         let mut names = Vec::new();
-        for path in face::primary_paths() {
-            if let Some(face) = Face::load(&path) {
-                faces.push(face);
-                names.push(path.display().to_string());
-            }
+        for (face, name) in face::primary_faces() {
+            faces.push(face);
+            names.push(name);
         }
-        assert!(
-            !faces.is_empty(),
-            "no system UI font is available; set GRANA_UI_FONT to a TrueType font file"
-        );
         Self {
             faces,
             shape: ShapeContext::new(),
@@ -49,8 +47,14 @@ impl Fonts {
     }
 
     pub fn face_for(&mut self, character: char) -> usize {
-        if let Some(index) = self.faces.iter().position(|face| face.covers(character)) {
-            return index;
+        if self.faces[PRIMARY_FLEX].covers(character) {
+            return PRIMARY_FLEX;
+        }
+        if let Some(offset) = self.faces[FALLBACK_START..]
+            .iter()
+            .position(|face| face.covers(character))
+        {
+            return FALLBACK_START + offset;
         }
         while !self.pending.is_empty() {
             let path = self.pending.remove(0);
@@ -64,7 +68,14 @@ impl Fonts {
                 return self.faces.len() - 1;
             }
         }
-        0
+        PRIMARY_FLEX
+    }
+
+    pub fn face_for_mono(&mut self, character: char) -> usize {
+        if self.faces[PRIMARY_MONO].covers(character) {
+            return PRIMARY_MONO;
+        }
+        self.face_for(character)
     }
 
     fn font(&self, index: usize) -> FontRef<'static> {
@@ -74,14 +85,13 @@ impl Fonts {
     fn shaper(
         &mut self,
         font: FontRef<'static>,
-        size: f32,
-        weight: f32,
+        style: GlyphStyle,
         pixels_per_point: f32,
     ) -> Shaper<'_> {
         self.shape
             .builder(font)
-            .size(size * pixels_per_point)
-            .variations([Setting::from(("wght", weight))])
+            .size(style.size * pixels_per_point)
+            .variations(variations(style))
             .build()
     }
 
@@ -89,12 +99,11 @@ impl Fonts {
         &mut self,
         index: usize,
         text: &str,
-        size: f32,
-        weight: f32,
+        style: GlyphStyle,
         pixels_per_point: f32,
     ) -> ShapedRun {
         let font = self.font(index);
-        let mut shaper = self.shaper(font, size, weight, pixels_per_point);
+        let mut shaper = self.shaper(font, style, pixels_per_point);
         let metrics = shaper.metrics();
         shaper.add_str(text);
         let mut glyphs = Vec::new();
@@ -134,7 +143,7 @@ impl Fonts {
             .builder(font)
             .size(style.size * pixels_per_point)
             .hint(style.hint)
-            .variations([Setting::from(("wght", style.weight))])
+            .variations(variations(style))
             .build();
         let mut render = Render::new(&[Source::Outline]);
         render
@@ -162,7 +171,7 @@ impl Fonts {
             .builder(font)
             .size(style.size)
             .hint(false)
-            .variations([Setting::from(("wght", style.weight))])
+            .variations(variations(style))
             .build();
         let scaled = scaler.scale_outline(glyph)?;
         let mut outline = Outline::new();
@@ -179,11 +188,45 @@ impl Fonts {
     }
 }
 
+fn variations(style: GlyphStyle) -> [Setting<f32>; 4] {
+    [
+        Setting::from(("wght", style.weight)),
+        Setting::from(("wdth", style.width)),
+        Setting::from(("opsz", style.size.clamp(8.0, 144.0))),
+        Setting::from(("GRAD", style.grade)),
+    ]
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct GlyphStyle {
     pub size: f32,
     pub weight: f32,
+    pub width: f32,
+    pub grade: f32,
     pub hint: bool,
+}
+
+impl GlyphStyle {
+    pub const fn new(size: f32, weight: f32) -> Self {
+        Self {
+            size,
+            weight,
+            width: 100.0,
+            grade: 0.0,
+            hint: false,
+        }
+    }
+
+    pub const fn with_axes(mut self, width: f32, grade: f32) -> Self {
+        self.width = width;
+        self.grade = grade;
+        self
+    }
+
+    pub const fn hinted(mut self, hint: bool) -> Self {
+        self.hint = hint;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

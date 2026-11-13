@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec2;
-use grana_text::{Contour, Fonts, GlyphStyle};
+use grana_text::{Contour, Fonts};
 
 use crate::atlas::{Atlas, GlyphSlot};
 use crate::color::Color;
@@ -84,10 +84,13 @@ pub struct TextLayout {
 struct Spec {
     size: u32,
     weight: u32,
+    stretch: u16,
+    grade: i16,
     leading: u32,
     width: u32,
     pixels_per_point: u32,
     align: u8,
+    monospace: bool,
     wrap: bool,
     truncate: bool,
 }
@@ -167,10 +170,13 @@ impl Text {
         let spec = Spec {
             size: (style.size * 4.0).round() as u32,
             weight: (style.weight * 4.0).round() as u32,
+            stretch: (style.width * 4.0).round() as u16,
+            grade: (style.grade * 4.0).round() as i16,
             leading: (style.leading * 4.0).round() as u32,
             width: (max_width.max(0.0) * 4.0).round() as u32,
             pixels_per_point: (self.pixels_per_point * 100.0).round() as u32,
             align: align.factor() as u8,
+            monospace: style.monospace,
             wrap,
             truncate,
         };
@@ -225,23 +231,26 @@ impl Text {
             }
         };
 
+        let glyph_style = style.glyph(false);
         'paragraphs: for paragraph in text.split('\n') {
             if !glyphs.is_empty() {
                 flush(&mut lines, &mut glyphs, &mut pen);
             }
             for token in tokenize(paragraph) {
                 let character = token.chars().next().unwrap_or(' ');
-                let face = self.fonts.face_for(character);
-                let run = self.fonts.shape(face, token, style.size, style.weight, 1.0);
+                let face = if style.monospace {
+                    self.fonts.face_for_mono(character)
+                } else {
+                    self.fonts.face_for(character)
+                };
+                let run = self.fonts.shape(face, token, glyph_style, 1.0);
                 let whitespace = token.starts_with(' ');
                 if wrap && bounded && !whitespace && pen > 0.0 && pen + run.width > max_width + 0.01
                 {
                     flush(&mut lines, &mut glyphs, &mut pen);
                 }
                 if truncate && !wrap && bounded && pen + run.width > max_width {
-                    let ellipsis =
-                        self.fonts
-                            .shape(face, "\u{2026}", style.size, style.weight, 1.0);
+                    let ellipsis = self.fonts.shape(face, "\u{2026}", glyph_style, 1.0);
                     if pen + ellipsis.width <= max_width {
                         for glyph in &ellipsis.glyphs {
                             glyphs.push(PlacedGlyph {
@@ -307,11 +316,7 @@ impl Text {
     }
 
     pub fn contours(&mut self, layout: &TextLayout, origin: Vec2) -> Vec<Contour> {
-        let style = GlyphStyle {
-            size: layout.style.size,
-            weight: layout.style.weight,
-            hint: false,
-        };
+        let style = layout.style.glyph(false);
         let mut contours = Vec::new();
         for glyph in &layout.glyphs {
             let Some(mut outline) = self.fonts.outline(glyph.face as usize, glyph.id, style) else {

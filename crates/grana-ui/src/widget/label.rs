@@ -46,12 +46,7 @@ pub fn badge<'a, A>(label: &str, tint: Color) -> Element<'a, A> {
     .with_content(Content::Badge(BadgeContent {
         label: label.to_string(),
         tint,
-        font: TypeStyle {
-            size: 10.5,
-            weight: 600.0,
-            tracking: 0.25,
-            leading: 13.0,
-        },
+        font: TypeStyle::new(10.5, 600.0, 13.0).with_tracking(0.25),
     }))
 }
 

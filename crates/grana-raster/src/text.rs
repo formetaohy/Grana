@@ -4,9 +4,10 @@ use crate::Raster;
 use crate::raster::over;
 
 pub fn measure(fonts: &mut Fonts, text: &str, size: f32, weight: f32) -> u32 {
+    let style = GlyphStyle::new(size, weight);
     let mut width = 0.0f32;
     for run in runs(fonts, text) {
-        width += fonts.shape(run.face, run.text, size, weight, 1.0).width;
+        width += fonts.shape(run.face, run.text, style, 1.0).width;
     }
     width.round() as u32
 }
@@ -21,21 +22,13 @@ impl Raster {
         weight: f32,
         color: [u8; 4],
     ) -> u32 {
+        let style = GlyphStyle::new(size, weight).hinted(true);
         let mut pen = 0.0f32;
         for run in runs(fonts, text) {
-            let shaped = fonts.shape(run.face, run.text, size, weight, 1.0);
+            let shaped = fonts.shape(run.face, run.text, style, 1.0);
             for glyph in &shaped.glyphs {
-                let Some(raster) = fonts.rasterize(
-                    run.face,
-                    glyph.id,
-                    GlyphStyle {
-                        size,
-                        weight,
-                        hint: true,
-                    },
-                    1.0,
-                    [0.0, 0.0],
-                ) else {
+                let Some(raster) = fonts.rasterize(run.face, glyph.id, style, 1.0, [0.0, 0.0])
+                else {
                     continue;
                 };
                 let x = at[0] as i32 + (pen + glyph.x).round() as i32 + raster.left;

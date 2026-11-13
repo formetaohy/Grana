@@ -1,14 +1,11 @@
-<!--
-  grana · 图形标识 / mark badge
-  GRA-MK 01 · 512 × 512 · corner radius 22% (112u)
-  mark 276u · ink #0B1B13 · photon #D6E85C · edge 2u / 22% paper
--->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="grana-badge-title grana-badge-desc">
-  <title id="grana-badge-title">grana — 图形标识（圆角矩形）</title>
-  <desc id="grana-badge-desc">grana 图形标识：光子色五片膜片，置于层积墨圆角矩形徽章中。</desc>
-
-  <rect width="512" height="512" rx="112" fill="#0B1B13"/>
-  <g transform="translate(118 118) scale(2.300000)" fill="#D6E85C"><rect x="12" y="6" width="60" height="16" rx="8"/><rect x="12" y="29" width="69" height="16" rx="8"/><rect x="12" y="52" width="78" height="16" rx="8"/><rect x="12" y="75" width="87" height="16" rx="8"/><rect x="12" y="98" width="96" height="16" rx="8"/></g>
-  <rect x="1" y="1" width="510" height="510" rx="111"
-        fill="none" stroke="#F1F3EC" stroke-opacity="0.22" stroke-width="2"/>
+  <title id="grana-badge-title">Grana — Mark Badge</title>
+  <desc id="grana-badge-desc">Grana mark badge with three layered optical slabs in Material 3 Expressive tones.</desc>
+  <rect width="512" height="512" rx="124" fill="#11151F"/>
+  <path d="M136 240 H284 A40 40 0 0 1 324 280 V364 A40 40 0 0 1 284 404 H164 A68 68 0 0 1 96 336 V280 A40 40 0 0 1 136 240 Z" fill="#174EA6"/>
+  <path d="M182 158 H322 A64 64 0 0 1 386 222 V298 A56 56 0 0 1 330 354 H190 A64 64 0 0 1 126 290 V214 A56 56 0 0 1 182 158 Z" fill="#11151F"/>
+  <path d="M182 174 H322 A48 48 0 0 1 370 222 V298 A40 40 0 0 1 330 338 H190 A48 48 0 0 1 142 290 V214 A40 40 0 0 1 182 174 Z" fill="#4C8DF6"/>
+  <path d="M228 92 H348 A84 84 0 0 1 432 176 V232 A56 56 0 0 1 376 288 H236 A64 64 0 0 1 172 224 V148 A56 56 0 0 1 228 92 Z" fill="#11151F"/>
+  <path d="M228 108 H348 A68 68 0 0 1 416 176 V232 A40 40 0 0 1 376 272 H236 A48 48 0 0 1 188 224 V148 A40 40 0 0 1 228 108 Z" fill="#78F3E0"/>
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="122.75" fill="none" stroke="#A8C7FA" stroke-opacity="0.25" stroke-width="2.5"/>
 </svg>

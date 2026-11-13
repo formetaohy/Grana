@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use grana_text::{Fonts, GlyphRaster, GlyphStyle};
+use grana_text::{Fonts, GlyphRaster};
 use wgpu::{
     Device, FilterMode, Queue, Sampler, SamplerDescriptor, Texture, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
@@ -17,6 +17,8 @@ pub struct GlyphKey {
     id: u16,
     pixels: u16,
     weight: u16,
+    width: u16,
+    grade: i16,
     hint: bool,
     subpixel_x: u8,
     subpixel_y: u8,
@@ -28,11 +30,15 @@ impl GlyphKey {
             .round()
             .clamp(1.0, 65535.0) as u16;
         let weight = (style.weight * 4.0).round().clamp(0.0, 65535.0) as u16;
+        let width = (style.width * 4.0).round().clamp(0.0, 65535.0) as u16;
+        let grade = (style.grade * 4.0).round().clamp(-32768.0, 32767.0) as i16;
         Self {
             face: face as u16,
             id,
             pixels,
             weight,
+            width,
+            grade,
             hint,
             subpixel_x: 0,
             subpixel_y: 0,
@@ -132,11 +138,7 @@ impl Atlas {
         let raster = fonts.rasterize(
             request.face,
             request.id,
-            GlyphStyle {
-                size: request.style.size,
-                weight: request.style.weight,
-                hint: request.hint,
-            },
+            request.style.glyph(request.hint),
             request.pixels_per_point,
             [quantized_x as f32 / 4.0, quantized_y as f32 / 4.0],
         )?;

@@ -33,7 +33,7 @@ impl Color {
         Self::rgb(value, value, value)
     }
 
-    pub fn bytes(red: u8, green: u8, blue: u8) -> Self {
+    pub const fn bytes(red: u8, green: u8, blue: u8) -> Self {
         Self::rgba(
             red as f32 / 255.0,
             green as f32 / 255.0,

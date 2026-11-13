@@ -2,31 +2,8 @@ use std::path::{Path, PathBuf};
 
 use swash::FontRef;
 
-pub(crate) const FACE_CANDIDATES: &[(&str, &[&str])] = &[
-    (
-        "windows",
-        &[
-            "C:/Windows/Fonts/SegUIVar.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-        ],
-    ),
-    (
-        "macos",
-        &[
-            "/System/Library/Fonts/SFNS.ttf",
-            "/System/Library/Fonts/SFNSDisplay.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-        ],
-    ),
-    (
-        "linux",
-        &[
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ],
-    ),
-];
+const ROBOTO_FLEX: &[u8] = include_bytes!("../assets/roboto-flex.ttf");
+const ROBOTO_MONO: &[u8] = include_bytes!("../assets/roboto-mono.ttf");
 
 pub(crate) const FALLBACK_CANDIDATES: &[&str] = &[
     "C:/Windows/Fonts/seguisym.ttf",
@@ -47,6 +24,12 @@ pub(crate) struct Face {
 }
 
 impl Face {
+    pub(crate) fn embedded(data: &'static [u8]) -> Self {
+        let font =
+            FontRef::from_index(data, 0).expect("embedded Material 3 Expressive font is valid");
+        Self { font }
+    }
+
     pub(crate) fn load(path: &Path) -> Option<Self> {
         let data = std::fs::read(path).ok()?;
         let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
@@ -59,17 +42,11 @@ impl Face {
     }
 }
 
-pub(crate) fn primary_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(path) = std::env::var("GRANA_UI_FONT") {
-        paths.push(PathBuf::from(path));
-    }
-    for (platform, candidates) in FACE_CANDIDATES {
-        if std::env::consts::OS == *platform {
-            paths.extend(candidates.iter().map(PathBuf::from));
-        }
-    }
-    paths
+pub(crate) fn primary_faces() -> Vec<(Face, String)> {
+    vec![
+        (Face::embedded(ROBOTO_FLEX), "Roboto Flex".to_string()),
+        (Face::embedded(ROBOTO_MONO), "Roboto Mono".to_string()),
+    ]
 }
 
 pub(crate) fn fallback_paths() -> Vec<PathBuf> {
