@@ -14,7 +14,7 @@ mod surface;
 mod table;
 mod track;
 
-pub use cell::{CellSeed, GrowField, Growth, grow};
+pub use cell::{Band, CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
 pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};
 pub use drift::{
     BLOCK, Blocks, Lattice, Sample, blocks as drift_blocks, correlation as drift_correlation,

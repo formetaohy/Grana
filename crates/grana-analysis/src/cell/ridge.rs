@@ -1,22 +1,17 @@
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_volume::Level;
 
-use super::elevation;
-use crate::schedule;
+use super::{TOP, schedule};
 
 const SIGMA_LIMIT: f32 = 4.0;
 const KERNEL_LIMIT: usize = 16;
-const BINS: usize = 256;
+const MARGIN: u32 = 3;
+pub(crate) const BINS: usize = 256;
 const STEP: usize = (1 << 16) / BINS;
 const PLATE_FLOOR: f32 = 1.0e-6;
 const MAGNITUDE: f32 = 0.25;
-
-pub(crate) struct Shell {
-    pub centre: [f32; 3],
-    pub inner: f32,
-    pub outer: f32,
-}
 
 struct Smoothing {
     kernel: Vec<f32>,
@@ -79,6 +74,12 @@ impl Smoothing {
             }
         }
     }
+}
+
+pub(crate) fn halo(level: Level, grain: f32) -> u32 {
+    Smoothing::new(level, grain)
+        .map_or(0, |smoothing| smoothing.radius as u32)
+        .saturating_add(MARGIN)
 }
 
 pub(crate) fn elevations(
@@ -156,6 +157,53 @@ pub(crate) fn elevations(
     Some(dilate(&output, dims, workers))
 }
 
+pub(crate) fn sample(
+    histogram: &mut [u64; BINS],
+    elevations: &[u16],
+    ranges: &[Range<u32>; 3],
+    centre: [f32; 3],
+    inner: f32,
+    outer: f32,
+    steps: [f32; 3],
+) {
+    let dims = super::dims(ranges);
+    let narrowest = steps[0].min(steps[1]).min(steps[2]);
+    let base = centre.map(|value| value.floor() as i64);
+    let reach = (outer / narrowest).ceil() as i64;
+    let inner = inner * inner;
+    let outer = outer * outer;
+    for dz in -reach..=reach {
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let at = [base[0] + dx, base[1] + dy, base[2] + dz];
+                let local = [0, 1, 2].map(|axis| at[axis] - ranges[axis].start as i64);
+                if (0..3).any(|axis| local[axis] < 0 || local[axis] >= dims[axis] as i64) {
+                    continue;
+                }
+                let offset = [
+                    dx as f32 * steps[0],
+                    dy as f32 * steps[1],
+                    dz as f32 * steps[2],
+                ];
+                let squared = offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2];
+                if squared < inner || squared > outer {
+                    continue;
+                }
+                let index =
+                    local[0] as usize + dims[0] * (local[1] as usize + dims[1] * local[2] as usize);
+                histogram[usize::from(elevations[index]) / STEP] += 1;
+            }
+        }
+    }
+}
+
+pub(crate) fn threshold(histogram: &[u64; BINS]) -> u16 {
+    match otsu(histogram) {
+        Some(bin) => ((bin + 1) * STEP - 1) as u16,
+        None => u16::MAX,
+    }
+}
+
 fn dilate(response: &[u16], dims: [usize; 3], workers: usize) -> Vec<u16> {
     let plane = dims[0] * dims[1];
     let slices = (0..dims[2]).collect::<Vec<_>>();
@@ -186,53 +234,6 @@ fn dilate(response: &[u16], dims: [usize; 3], workers: usize) -> Vec<u16> {
         output[z * plane..(z + 1) * plane].copy_from_slice(&slice);
     }
     output
-}
-
-pub(crate) fn barrier(
-    elevations: &[u16],
-    dims: [usize; 3],
-    spacing: [f32; 3],
-    shells: &[Shell],
-) -> u16 {
-    let mut histogram = [0u64; BINS];
-    let narrowest = spacing[0].min(spacing[1]).min(spacing[2]);
-    for shell in shells {
-        if shell.outer <= shell.inner {
-            continue;
-        }
-        let reach = (shell.outer / narrowest).ceil() as i64;
-        let base = shell.centre.map(|value| value.floor() as i64);
-        let inner = shell.inner * shell.inner;
-        let outer = shell.outer * shell.outer;
-        for dz in -reach..=reach {
-            for dy in -reach..=reach {
-                for dx in -reach..=reach {
-                    let at = [base[0] + dx, base[1] + dy, base[2] + dz];
-                    if (0..3).any(|axis| at[axis] < 0 || at[axis] >= dims[axis] as i64) {
-                        continue;
-                    }
-                    let offset = [
-                        dx as f32 * spacing[0],
-                        dy as f32 * spacing[1],
-                        dz as f32 * spacing[2],
-                    ];
-                    let squared =
-                        offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2];
-                    if squared < inner || squared > outer {
-                        continue;
-                    }
-                    let slot =
-                        at[0] as usize + dims[0] * (at[1] as usize + dims[1] * at[2] as usize);
-                    histogram[usize::from(elevations[slot]) / STEP] += 1;
-                }
-            }
-        }
-    }
-    let bin = otsu(&histogram);
-    match bin {
-        Some(bin) => ((bin + 1) * STEP - 1) as u16,
-        None => u16::MAX,
-    }
 }
 
 fn otsu(histogram: &[u64; BINS]) -> Option<usize> {
@@ -319,6 +320,16 @@ fn eigenvalues(matrix: [[f32; 3]; 3]) -> [f32; 3] {
     let large = mean + 2.0 * scale * angle.cos();
     let small = mean + 2.0 * scale * (angle + 2.0 * std::f32::consts::PI / 3.0).cos();
     [large, 3.0 * mean - large - small, small]
+}
+
+fn elevation(value: f32) -> u16 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    if value >= 1.0 {
+        return TOP;
+    }
+    (value * f32::from(TOP)).round() as u16
 }
 
 fn clamp(index: i64, length: usize) -> usize {

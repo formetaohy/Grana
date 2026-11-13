@@ -2,12 +2,54 @@ use std::ops::Range;
 
 use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::SurfaceSet;
-use grana_volume::Level;
+use grana_volume::{Level, VoxelData};
 use grana_warp::Warp;
 
 use crate::channels::Channels;
 
 const LABEL_SLAB: u32 = 32;
+
+pub(super) struct Surfaces {
+    builder: LabelBuilder,
+}
+
+impl Surfaces {
+    pub(super) fn new(level: usize, info: Level, channels: usize) -> Self {
+        Self {
+            builder: LabelBuilder::new(level, info, channels),
+        }
+    }
+
+    pub(super) fn push(
+        &mut self,
+        origin: [u32; 3],
+        core: [u32; 3],
+        labels: &[u32],
+        channels: &[VoxelData],
+    ) {
+        let plane = core[0] as usize * core[1] as usize;
+        assert!(
+            plane > 0 && labels.len().is_multiple_of(plane),
+            "a label slab covers every voxel of its plane"
+        );
+        let span = (labels.len() / plane) as u32;
+        assert!(
+            span >= core[2],
+            "a label slab holds its core and the plane above it"
+        );
+        self.builder.push(LabelSlab {
+            origin,
+            core,
+            extent: [core[0], core[1], span],
+            labels,
+            channels,
+        });
+    }
+
+    pub(super) fn finish(self) -> Option<SurfaceSet> {
+        self.builder.finish()
+    }
+}
 
 pub(super) fn surfaces(
     reader: &Channels,
@@ -28,18 +70,17 @@ pub(super) fn surfaces(
         "the labels cover every voxel of their box"
     );
     let channels = reader.pyramid().channel_count();
-    let mut builder = LabelBuilder::new(level, info, channels);
+    let mut builder = Surfaces::new(level, info, channels);
     let mut z = 0u32;
     while z < depth {
         let core = LABEL_SLAB.min(depth - z);
         let span = (core + 1).min(depth - z);
         let start = z as usize * plane;
         let slab = &labels[start..start + span as usize * plane];
-        let origin = [ranges[0].start, ranges[1].start, ranges[2].start + z];
         let extent = [
             ranges[0].clone(),
             ranges[1].clone(),
-            origin[2]..origin[2] + span,
+            ranges[2].start + z..ranges[2].start + z + span,
         ];
         let mut data = Vec::with_capacity(channels);
         for channel in 0..channels {
@@ -49,13 +90,12 @@ pub(super) fn surfaces(
                     .map_err(|error| error.to_string())?,
             );
         }
-        builder.push(LabelSlab {
-            origin,
-            core: [width, height, core],
-            extent: [width, height, span],
-            labels: slab,
-            channels: &data,
-        });
+        builder.push(
+            [ranges[0].start, ranges[1].start, ranges[2].start + z],
+            [width, height, core],
+            slab,
+            &data,
+        );
         z += core;
     }
     Ok(builder.finish())

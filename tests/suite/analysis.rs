@@ -3,16 +3,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use grana_analysis::{
-    ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan, SurfaceBuilder,
-    TrackLinker, coloc_sampling, drift_shift,
+    CellSeed, ColocScan, ColocScanConfig, FilamentScan, GrowField, Growth, Reference, Sources,
+    SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
     local::{BlockField, BlockLevels},
 };
 use grana_geometry::GeometryStore;
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
-    FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, Track,
-    TrackDetection, TrackEvents, TrackNode, TrackParams, TrackSet,
+    CellParams, FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams,
+    SurfaceSet, Track, TrackDetection, TrackEvents, TrackNode, TrackParams, TrackSet,
 };
 use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
@@ -1638,4 +1638,131 @@ fn correlation(left: &[f32], right: &[f32]) -> f32 {
         right_square += b * b;
     }
     (cross / (left_square * right_square).sqrt()) as f32
+}
+
+#[test]
+fn streams_cell_growth_across_z_bands() {
+    let extent = Extent::new(48, 40, 64);
+    let spacing = Spacing::new(0.2, 0.2, 1.0);
+    let level = Level::new(extent, spacing);
+    let field = Membrane { level };
+    let seeds = [
+        CellSeed::new([-2.0, 0.0, -8.0], 2.0),
+        CellSeed::new([2.0, 0.0, 8.0], 2.5),
+    ];
+    let params = CellParams::new(2.0, 0.0);
+    let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
+    let whole = raise(&field, level, &ranges, params, &seeds, extent.z());
+    let mut counts = std::collections::BTreeMap::new();
+    for label in &whole {
+        if *label != 0 {
+            *counts.entry(*label).or_insert(0usize) += 1;
+        }
+    }
+    assert_eq!(counts.len(), 2, "each nucleus grows one cell");
+    assert!(
+        counts.values().all(|count| *count > 1000),
+        "a cell body spans more than a thousand voxels: {counts:?}"
+    );
+    for band in [17u32, 8, 3, 1] {
+        let streamed = raise(&field, level, &ranges, params, &seeds, band);
+        let divergence = whole
+            .iter()
+            .zip(&streamed)
+            .position(|(whole, streamed)| whole != streamed);
+        assert!(
+            divergence.is_none(),
+            "a band of {band} planes diverges at {divergence:?}: {:?} against {:?}",
+            divergence.map(|index| whole[index]),
+            divergence.map(|index| streamed[index])
+        );
+    }
+}
+
+struct Membrane {
+    level: Level,
+}
+
+impl grana_analysis::CellField for Membrane {
+    fn values(&self, ranges: &[std::ops::Range<u32>; 3]) -> Result<Vec<f32>, String> {
+        let width = (ranges[0].end - ranges[0].start) as usize;
+        let height = (ranges[1].end - ranges[1].start) as usize;
+        let depth = (ranges[2].end - ranges[2].start) as usize;
+        let mut values = vec![0.0f32; width * height * depth];
+        for z in 0..depth {
+            for y in 0..height {
+                for x in 0..width {
+                    let cell = [
+                        ranges[0].start + x as u32,
+                        ranges[1].start + y as u32,
+                        ranges[2].start + z as u32,
+                    ];
+                    let point = self.level.voxel_center(cell.map(|value| value as f32));
+                    let shell = [([-2.0f32, 0.0, -8.0], 4.0f32), ([2.0, 0.0, 8.0], 5.0)]
+                        .iter()
+                        .any(|(centre, body)| {
+                            let offset = [0, 1, 2]
+                                .map(|axis| (point[axis] - centre[axis]).powi(2))
+                                .into_iter()
+                                .sum::<f32>()
+                                .sqrt();
+                            (offset - body).abs() <= 0.7
+                        });
+                    values[x + width * (y + height * z)] = if shell { 1.0 } else { 0.0 };
+                }
+            }
+        }
+        Ok(values)
+    }
+}
+
+fn raise(
+    field: &Membrane,
+    level: Level,
+    ranges: &[std::ops::Range<u32>; 3],
+    params: CellParams,
+    seeds: &[CellSeed],
+    band: u32,
+) -> Vec<u32> {
+    let cancel = AtomicBool::new(false);
+    let mut growth = Growth::new(
+        GrowField {
+            level,
+            ranges: ranges.clone(),
+            params,
+            band,
+            mask: None,
+            seeds,
+        },
+        field,
+        &cancel,
+    )
+    .expect("the growth prepares")
+    .expect("the seeds grow");
+    let plane =
+        (ranges[0].end - ranges[0].start) as usize * (ranges[1].end - ranges[1].start) as usize;
+    let depth = (ranges[2].end - ranges[2].start) as usize;
+    let mut labels = vec![0u32; plane * depth];
+    let mut seamed = Vec::new();
+    for index in 0..growth.bands() {
+        let band = growth
+            .band(index)
+            .expect("the band grows")
+            .expect("the band is ready");
+        let start = (band.start() - ranges[2].start) as usize * plane;
+        let planes = band.planes() as usize * plane;
+        labels[start..start + planes].copy_from_slice(band.labels());
+        let core = band.core() as usize * plane;
+        if core < planes {
+            seamed.push((start + core, labels[start + core..start + planes].to_vec()));
+        }
+    }
+    for (plane_index, held) in seamed {
+        assert_eq!(
+            held,
+            labels[plane_index..plane_index + held.len()],
+            "a band carries the plane above its core"
+        );
+    }
+    labels
 }
