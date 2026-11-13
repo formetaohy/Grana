@@ -1,4 +1,7 @@
+use glam::Vec2;
+
 use crate::element::Axis;
+use crate::geometry::Rect;
 use crate::motion::{Animated, Motion};
 use crate::node::NodeId;
 use crate::ui::Ui;
@@ -43,6 +46,70 @@ impl Window {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub(crate) struct Bar {
+    pub axis: Axis,
+    pub track: Rect,
+    pub thumb: Rect,
+    pub hit: Rect,
+}
+
+impl Bar {
+    pub(crate) fn travel(&self) -> f32 {
+        match self.axis {
+            Axis::Column => (self.track.height() - self.thumb.height()).max(0.0),
+            Axis::Row => (self.track.width() - self.thumb.width()).max(0.0),
+        }
+    }
+}
+
+pub(crate) fn bar(rect: Rect, axis: Axis, scroll: ScrollState) -> Bar {
+    let ratio = (scroll.viewport / scroll.content.max(1.0)).clamp(0.1, 1.0);
+    let position = if scroll.limit() > 0.0 {
+        (scroll.offset / scroll.limit()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (track, thumb) = match axis {
+        Axis::Column => {
+            let track = Rect::from_min_size(
+                Vec2::new(rect.max.x - 6.0, rect.min.y + 4.0),
+                Vec2::new(3.5, (rect.height() - 8.0).max(8.0)),
+            );
+            let height = (track.height() * ratio).max(24.0).min(track.height());
+            let travel = track.height() - height;
+            let thumb = Rect::from_min_size(
+                Vec2::new(track.min.x, track.min.y + travel * position),
+                Vec2::new(track.width(), height),
+            );
+            (track, thumb)
+        }
+        Axis::Row => {
+            let track = Rect::from_min_size(
+                Vec2::new(rect.min.x + 4.0, rect.max.y - 6.0),
+                Vec2::new((rect.width() - 8.0).max(8.0), 3.5),
+            );
+            let width = (track.width() * ratio).max(24.0).min(track.width());
+            let travel = track.width() - width;
+            let thumb = Rect::from_min_size(
+                Vec2::new(track.min.x + travel * position, track.min.y),
+                Vec2::new(width, track.height()),
+            );
+            (track, thumb)
+        }
+    };
+    let hit = match axis {
+        Axis::Column => track.expand2(Vec2::new(5.0, 0.0)),
+        Axis::Row => track.expand2(Vec2::new(0.0, 5.0)),
+    };
+    Bar {
+        axis,
+        track,
+        thumb,
+        hit,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ScrollState {
     pub offset: f32,
     pub target: f32,
@@ -51,6 +118,7 @@ pub struct ScrollState {
     pub viewport: f32,
     pub bar: f32,
     pub moving: bool,
+    pub hover: bool,
 }
 
 impl ScrollState {
@@ -63,6 +131,7 @@ impl ScrollState {
             viewport: 0.0,
             bar: 0.0,
             moving: false,
+            hover: false,
         }
     }
 
@@ -88,7 +157,7 @@ impl ScrollState {
         self.offset = spring.value;
         self.velocity = spring.velocity;
         self.moving = !spring.is_at_rest();
-        let goal = if self.moving { 1.0 } else { 0.0 };
+        let goal = if self.moving || self.hover { 1.0 } else { 0.0 };
         let smooth = if motion.is_instant() {
             Motion::INSTANT
         } else {

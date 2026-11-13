@@ -59,7 +59,7 @@ pub(super) fn card<'a>(
         let height = (super::width() * size[1] as f32 / size[0].max(1) as f32)
             .clamp(IMAGE_MINIMUM, IMAGE_MAXIMUM);
         children.push(
-            grana_ui::canvas(Length::Fill, height).paint(move |painter, info| {
+            grana_ui::canvas(Length::Fill, height).view_live(move |painter, info| {
                 let target = fit(info.rect, size);
                 painter.rect(info.rect, Corners::all(6.0), Color::BLACK);
                 painter.bitmap(target, Corners::all(4.0), &bitmap);
@@ -636,7 +636,7 @@ fn chart_canvas<'a>(
     let theme = *ctx.theme();
     let style = grana_chart::Style::card(&theme, grana_chart::DistributionStyle::Box)
         .with_language(language);
-    grana_ui::canvas(Length::Fill, CHART_HEIGHT).paint(move |painter, info| {
+    grana_ui::canvas(Length::Fill, CHART_HEIGHT).view_live(move |painter, info| {
         grana_chart::series(
             painter,
             info.rect,

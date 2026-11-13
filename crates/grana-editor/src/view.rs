@@ -1,5 +1,5 @@
 use grana_session::Command;
-use grana_ui::popover::{menu_row as menu_row_widget, separator as separator_widget};
+use grana_ui::popover::separator as separator_widget;
 use grana_ui::{BuildContext, Corners, Edges, Element, Icon, Key, Length, Motion, Role};
 
 use crate::message::Message;
@@ -129,23 +129,6 @@ pub fn menu_row<'a>(
 pub fn menu_separator<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
     let _ = ctx;
     separator_widget()
-}
-
-pub fn popup_rows<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    key: &str,
-    items: &[String],
-    selected: usize,
-    select: impl Fn(usize) -> Message,
-) -> Vec<View<'a>> {
-    let mut rows = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let row = menu_row_widget(ctx.theme(), item, index == selected)
-            .key(Key::index(key, index))
-            .press(select(index));
-        rows.push(row);
-    }
-    rows
 }
 
 pub fn labelled<'a>(ctx: &mut BuildContext<'_, Message>, label: &str, value: &str) -> View<'a> {

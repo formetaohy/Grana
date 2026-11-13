@@ -1,7 +1,7 @@
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::element::{CanvasInfo, Element, Layout, Length, Size, spacer, text};
+use crate::element::{CanvasInfo, Element, Key, Layout, Length, Size, spacer, text};
 use crate::geometry::{Corners, Edges, Rect};
 use crate::icon::{self, Icon};
 use crate::paint::Painter;
@@ -239,4 +239,65 @@ fn paint_heading(props: &Heading, painter: &mut Painter, info: CanvasInfo<'_>) {
         painter.rect(pill, Corners::capsule(), props.pill);
         painter.text_in(pill, detail, props.detail_style, Align::Center);
     }
+}
+
+pub fn combo<'a, A>(
+    theme: &Theme,
+    key: Key,
+    width: Length,
+    popup_width: f32,
+    labels: &[String],
+    selected: usize,
+    message: impl Fn(usize) -> A + 'static,
+) -> Element<'a, A> {
+    let theme = *theme;
+    let shown = labels.get(selected).cloned().unwrap_or_default();
+    let height = theme.metrics.control_height;
+    let label_font = theme.font(Level::Label);
+    let text = theme.palette.on_surface;
+    let chevron = theme.palette.on_surface_variant;
+    let anchor = Element::new(Layout {
+        size: Size::new(width, Length::Fixed(height)),
+        ..Layout::row()
+    })
+    .view(shown, move |value: &String, painter, info| {
+        let look = theme
+            .surface(Role::Field, State::Rest)
+            .lerp(theme.surface(Role::Field, State::Hover), info.hover);
+        painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
+        painter.text_in(
+            Rect::from_min_max(
+                Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),
+                Vec2::new(info.rect.max.x - 24.0, info.rect.max.y),
+            ),
+            value,
+            TextStyle::new(label_font, text).truncating(),
+            Align::Center,
+        );
+        icon::chevron(
+            painter,
+            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
+            5.0,
+            std::f32::consts::FRAC_PI_2,
+            chevron,
+            1.5,
+        );
+    })
+    .key(key)
+    .hit_target()
+    .cursor(crate::input::Cursor::Pointing)
+    .focus_ring(Corners::all(theme.metrics.corner_sm));
+    let key_name = key.id();
+    let mut rows = Vec::with_capacity(labels.len());
+    for (index, label) in labels.iter().enumerate() {
+        rows.push(
+            super::menu_row(&theme, label, index == selected)
+                .key(Key::index(key_name.to_string(), index))
+                .press(message(index)),
+        );
+    }
+    let popup = crate::popover::popup(key, popup_width.max(120.0), rows);
+    Element::column()
+        .width(Length::Auto)
+        .children([anchor, popup])
 }

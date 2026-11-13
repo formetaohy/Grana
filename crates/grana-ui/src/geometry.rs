@@ -112,6 +112,13 @@ impl Rect {
         self.shrink2(Vec2::splat(amount))
     }
 
+    pub fn expand2(self, amount: Vec2) -> Self {
+        Rect {
+            min: self.min - amount,
+            max: self.max + amount,
+        }
+    }
+
     pub fn shrink2(self, amount: Vec2) -> Self {
         Self {
             min: self.min + amount,

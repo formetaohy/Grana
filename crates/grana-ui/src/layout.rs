@@ -237,15 +237,34 @@ impl LayoutEngine<'_> {
             x: loose_width,
             y: loose_height,
         };
+        let axis = match layout.flow {
+            Flow::Row if !layout.wrap => Some(Axis::Row),
+            Flow::Column => Some(Axis::Column),
+            _ => None,
+        };
         let mut cursor = inner.min;
         let mut cross = 0.0f32;
         let mut main = 0.0f32;
         let mut line = 0.0f32;
         let mut line_height = 0.0f32;
+        let mut flexible = Vec::new();
+        let mut fixed_main = 0.0f32;
+        let mut flow_children = 0usize;
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             if tree.nodes[child].position.is_some() || tree.nodes[child].popup_spec.is_some() {
                 self.measure(tree, child, available, Loose::TIGHT);
+                continue;
+            }
+            flow_children += 1;
+            let sizes = tree.nodes[child].layout.size;
+            let flex = match axis {
+                Some(Axis::Row) => sizes.width == Length::Fill,
+                Some(Axis::Column) => sizes.height == Length::Fill,
+                None => false,
+            };
+            if flex {
+                flexible.push(child);
                 continue;
             }
             let remaining = match layout.flow {
@@ -269,11 +288,13 @@ impl LayoutEngine<'_> {
             }
             match layout.flow {
                 Flow::Column | Flow::Stack => {
+                    fixed_main += size.y;
                     cursor.y += size.y + layout.gap;
                     cross = cross.max(size.x);
                     main = (cursor.y - inner.min.y - layout.gap).max(0.0);
                 }
                 Flow::Row => {
+                    fixed_main += size.x;
                     cursor.x += size.x + layout.gap;
                     if layout.wrap {
                         line_height = line_height.max(size.y);
@@ -285,6 +306,39 @@ impl LayoutEngine<'_> {
                     }
                 }
             }
+        }
+        if let Some(axis) = axis
+            && !flexible.is_empty()
+        {
+            let inner_main = match axis {
+                Axis::Row => inner.width(),
+                Axis::Column => inner.height(),
+            };
+            let gaps = layout.gap * flow_children.saturating_sub(1) as f32;
+            let free = (inner_main - fixed_main - gaps).max(0.0);
+            let share = free / flexible.len() as f32;
+            for child in flexible {
+                let target = match axis {
+                    Axis::Row => Vec2::new(share, inner.height()),
+                    Axis::Column => Vec2::new(inner.width(), share),
+                };
+                let tight = match axis {
+                    Axis::Row => Loose {
+                        x: false,
+                        y: child_loose.y,
+                    },
+                    Axis::Column => Loose {
+                        x: child_loose.x,
+                        y: false,
+                    },
+                };
+                self.measure(tree, child, target, tight);
+                match layout.flow {
+                    Flow::Column | Flow::Stack => cross = cross.max(tree.nodes[child].measured.x),
+                    Flow::Row => cross = cross.max(tree.nodes[child].measured.y),
+                }
+            }
+            main = fixed_main + free;
         }
         let content = match layout.flow {
             Flow::Column | Flow::Stack => Vec2::new(cross, main),

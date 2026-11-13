@@ -124,7 +124,7 @@ fn cell<'a>(
         .cloned();
     let lit = thumbnail.is_some();
     let element = grana_ui::canvas(Length::Fixed(side), side)
-        .paint(move |painter, info| {
+        .view_live(move |painter, info| {
             let rect = info.rect;
             let engaged = info.hover.max(info.press);
             let corners = Corners::all(if active { 12.0 } else { 8.0 });

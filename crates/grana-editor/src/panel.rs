@@ -385,7 +385,7 @@ fn sidebar<'a>(
     let spacing = format!("{:.2}×{:.2} µm", voxel.x, voxel.z);
     let mono = theme.font(Level::Monospace);
     let summary = grana_ui::canvas(Length::Fill, 26.0)
-        .paint(move |painter, info| {
+        .view((dims.clone(), spacing.clone()), move |_, painter, info| {
             painter.rect(
                 info.rect,
                 Corners::all(theme.metrics.corner_sm),
@@ -462,10 +462,7 @@ fn dock<'a>(
         })
         .at(grip)
         .cursor(grana_ui::Cursor::ResizeVertical)
-        .on_pointer(|pointer| {
-            (pointer.phase == grana_ui::Phase::Move)
-                .then_some(Message::SetDockHeight(-pointer.delta.y))
-        });
+        .on_drag(Axis::Column, |delta| Some(Message::SetDockHeight(-delta)));
     let header = Rect::from_min_size(
         rect.min + Vec2::new(14.0, 10.0),
         Vec2::new(rect.width() - 28.0, DOCK_HEADER),

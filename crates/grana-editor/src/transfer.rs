@@ -82,9 +82,12 @@ pub fn edit<'a>(
             grana_ui::row().gap(6.0).align(Align::Center).children([
                 crate::inspector::centered(
                     control,
-                    grana_ui::canvas(Length::Fixed(caption), 18.0).paint(move |painter, info| {
-                        painter.text_in(info.rect, &text, caption_style, Align::Center);
-                    }),
+                    grana_ui::canvas(Length::Fixed(caption), 18.0).view(
+                        text.clone(),
+                        move |_, painter, info| {
+                            painter.text_in(info.rect, &text, caption_style, Align::Center);
+                        },
+                    ),
                 ),
                 crate::inspector::centered(control, swatch),
                 popup,

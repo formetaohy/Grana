@@ -25,7 +25,9 @@ pub use button::{
     Split, action_button, button, button_enabled, button_width, icon_button, split_button,
 };
 pub use color::color_picker;
-pub use display::{card, card_title, divider, empty_state, form_row, group_card, section_header};
+pub use display::{
+    card, card_title, combo, divider, empty_state, form_row, group_card, section_header,
+};
 pub use field::text_field;
 pub use icon::icon;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
@@ -333,9 +335,13 @@ pub(crate) fn hit_changed(before: &Content, after: &Content) -> bool {
     hit_geometry(before) != hit_geometry(after)
 }
 
-fn hit_geometry(content: &Content) -> Option<(Option<&str>, crate::element::Length)> {
+fn hit_geometry(content: &Content) -> Option<(Option<&str>, bool, crate::element::Length)> {
     match content {
-        Content::Slider(slider) => Some((slider.label.as_deref(), slider.width)),
+        Content::Slider(slider) => Some((
+            slider.label.as_deref(),
+            slider.readout.is_some(),
+            slider.width,
+        )),
         _ => None,
     }
 }

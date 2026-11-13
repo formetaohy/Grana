@@ -452,7 +452,7 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
         };
         labels.push(
             grana_ui::canvas(Length::Fixed(cell), HEADER)
-                .paint(move |painter, info| {
+                .view(text.clone(), move |_, painter, info| {
                     painter.text_in(info.rect, &text, style, Align::Center);
                 })
                 .key(Key::index("relation.column", index))
@@ -461,9 +461,12 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
     }
     let gutter_style = TextStyle::new(theme.font(Level::Caption), palette.outline);
     let source_target = grana_i18n::relation::source_target(ctx.language());
-    let gutter = grana_ui::canvas(Length::Fixed(GUTTER), HEADER).paint(move |painter, info| {
-        painter.text_in(info.rect, source_target, gutter_style, Align::Center);
-    });
+    let gutter = grana_ui::canvas(Length::Fixed(GUTTER), HEADER).view(
+        source_target,
+        move |_, painter, info| {
+            painter.text_in(info.rect, source_target, gutter_style, Align::Center);
+        },
+    );
     let mut row = vec![gutter];
     row.extend(labels);
     grana_ui::row().height(Length::Fixed(HEADER)).children(row)
@@ -484,7 +487,7 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
         };
         gutter.push(
             grana_ui::canvas(Length::Fixed(GUTTER), cell)
-                .paint(move |painter, info| {
+                .view(text.clone(), move |_, painter, info| {
                     painter.text_in(
                         info.rect.shrink2(Vec2::new(6.0, 0.0)),
                         &text,
@@ -502,25 +505,35 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
     let width = (columns as f32 * cell).max(1.0);
     let height = (rows as f32 * cell).max(1.0);
     let grid = palette.surface_container_highest;
-    let canvas = grana_ui::canvas(Length::Fixed(width), height).paint(move |painter, info| {
-        for row in 0..rows {
-            for column in 0..columns {
-                let rect = Rect::from_min_size(
-                    Vec2::new(
-                        info.rect.min.x + column as f32 * cell,
-                        info.rect.min.y + row as f32 * cell,
-                    ),
-                    Vec2::splat(cell),
-                )
-                .shrink(0.5);
-                let color = match cells.get(&(row, column)) {
-                    Some(strength) => heat(*strength),
-                    None => grid,
-                };
-                painter.rect(rect, Corners::all(3.0), color);
-            }
-        }
+    let digest = cells.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, cell| {
+        let ((source, target), strength) = cell;
+        hash.rotate_left(7)
+            ^ ((*source as u64) << 32)
+            ^ (*target as u64)
+            ^ u64::from(strength.to_bits())
     });
+    let canvas = grana_ui::canvas(Length::Fixed(width), height).view(
+        (digest, rows, columns),
+        move |_, painter, info| {
+            for row in 0..rows {
+                for column in 0..columns {
+                    let rect = Rect::from_min_size(
+                        Vec2::new(
+                            info.rect.min.x + column as f32 * cell,
+                            info.rect.min.y + row as f32 * cell,
+                        ),
+                        Vec2::splat(cell),
+                    )
+                    .shrink(0.5);
+                    let color = match cells.get(&(row, column)) {
+                        Some(strength) => heat(*strength),
+                        None => grid,
+                    };
+                    painter.rect(rect, Corners::all(3.0), color);
+                }
+            }
+        },
+    );
     let row = vec![
         grana_ui::column()
             .width(Length::Fixed(GUTTER))
@@ -548,7 +561,7 @@ fn legend<'a>(
     } else {
         grana_i18n::relation::low_high(language, &low, &high)
     };
-    grana_ui::canvas(Length::Fill, 16.0).paint(move |painter, info| {
+    grana_ui::canvas(Length::Fill, 16.0).view(caption, move |_, painter, info| {
         let rect = Rect::from_min_size(info.rect.min, Vec2::new(160.0, 8.0));
         let width = rect.width() / STRIP_COUNT as f32;
         for index in 0..STRIP_COUNT {
@@ -620,38 +633,41 @@ fn pairs_card<'a>(
         };
         rows.push(
             grana_ui::canvas(Length::Fill, ROW_HEIGHT)
-                .paint(move |painter, info| {
-                    if info.hover > 0.01 {
-                        painter.rect(
-                            info.rect,
-                            Corners::all(theme.metrics.corner_sm),
-                            palette.on_surface.with_alpha(0.08 * info.hover),
+                .view(
+                    (text.clone(), value.clone(), strength.to_bits()),
+                    move |_, painter, info| {
+                        if info.hover > 0.01 {
+                            painter.rect(
+                                info.rect,
+                                Corners::all(theme.metrics.corner_sm),
+                                palette.on_surface.with_alpha(0.08 * info.hover),
+                            );
+                        }
+                        let swatch = Rect::from_min_size(
+                            Vec2::new(info.rect.min.x + 4.0, info.rect.center().y - 4.5),
+                            Vec2::splat(9.0),
                         );
-                    }
-                    let swatch = Rect::from_min_size(
-                        Vec2::new(info.rect.min.x + 4.0, info.rect.center().y - 4.5),
-                        Vec2::splat(9.0),
-                    );
-                    painter.rect(swatch, Corners::capsule(), heat(strength));
-                    painter.text_in(
-                        Rect::from_min_size(
-                            Vec2::new(info.rect.min.x + 20.0, info.rect.min.y),
-                            Vec2::new(150.0, info.rect.height()),
-                        ),
-                        &text,
-                        body,
-                        Align::Center,
-                    );
-                    painter.text_in(
-                        Rect::from_min_size(
-                            Vec2::new(info.rect.min.x + 186.0, info.rect.min.y),
-                            Vec2::new(120.0, info.rect.height()),
-                        ),
-                        &value,
-                        number,
-                        Align::Center,
-                    );
-                })
+                        painter.rect(swatch, Corners::capsule(), heat(strength));
+                        painter.text_in(
+                            Rect::from_min_size(
+                                Vec2::new(info.rect.min.x + 20.0, info.rect.min.y),
+                                Vec2::new(150.0, info.rect.height()),
+                            ),
+                            &text,
+                            body,
+                            Align::Center,
+                        );
+                        painter.text_in(
+                            Rect::from_min_size(
+                                Vec2::new(info.rect.min.x + 186.0, info.rect.min.y),
+                                Vec2::new(120.0, info.rect.height()),
+                            ),
+                            &value,
+                            number,
+                            Align::Center,
+                        );
+                    },
+                )
                 .key(Key::index("relation.pair", index))
                 .on_pointer(move |pointer| {
                     (pointer.phase == grana_ui::Phase::Up).then_some(message.clone())

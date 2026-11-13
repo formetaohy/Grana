@@ -69,6 +69,7 @@ pub struct Ui<A = ()> {
     pub(crate) preedit: Option<String>,
     pub(crate) animation: Vec<NodeId>,
     pub(crate) scrolling: Vec<NodeId>,
+    pub(crate) scrollbar: Option<(NodeId, Vec2, f32)>,
 }
 
 impl<A: Clone> Ui<A> {
@@ -115,6 +116,7 @@ impl<A: Clone> Ui<A> {
             preedit: None,
             animation: Vec::new(),
             scrolling: Vec::new(),
+            scrollbar: None,
         }
     }
 
@@ -239,7 +241,7 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn pointer_captured(&self) -> bool {
-        self.press.is_some()
+        self.press.is_some() || self.scrollbar.is_some()
     }
 
     pub fn popup_open_any(&self) -> bool {
@@ -564,10 +566,6 @@ impl<A> BuildContext<'_, A> {
             *self.animating = true;
         }
         spring.value
-    }
-
-    pub fn rect_of(&self, key: Key) -> Option<Rect> {
-        self.tree.node_at(key).map(|id| self.tree.nodes[id].rect)
     }
 
     pub fn window(&self, key: Key, row: f32, rows: usize) -> crate::scroll::Window {

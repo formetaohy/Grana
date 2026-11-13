@@ -8,8 +8,7 @@ use grana_measure::{
 use grana_scene::{Job, ObjectSetId, Progress};
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Corners, Cursor, Element, Icon, Key, Length, Level, Rect, Role, State,
-    TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle,
 };
 
 use crate::message::Message;
@@ -239,9 +238,12 @@ fn thresholds<'a>(
         let theme = *ctx.theme();
         let style = TextStyle::new(theme.font(Level::Monospace), theme.palette.on_surface)
             .aligned(Align::End);
-        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0).paint(move |painter, info| {
-            painter.text_in(info.rect, &format!("{value:.3}"), style, Align::Center);
-        });
+        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0).view(
+            value.to_bits(),
+            move |_, painter, info| {
+                painter.text_in(info.rect, &format!("{value:.3}"), style, Align::Center);
+            },
+        );
         let slider = grana_ui::widget::slider_sized(
             &theme,
             None,
@@ -356,58 +358,73 @@ fn diagnostics<'a>(
         ];
         let series_label = grana_i18n::coloc::series(language);
         let frame_label = grana_i18n::coloc::frame_row(language, time + 1);
-        let canvas = grana_ui::canvas(Length::Fill, height).paint(move |painter, info| {
-            let widths = statistic_widths(info.rect.width());
-            let mut left = info.rect.min.x;
-            for (index, (label, width)) in headers.iter().zip(widths.iter()).enumerate() {
-                painter.text_in(
-                    Rect::from_min_size(Vec2::new(left, info.rect.min.y), Vec2::new(*width, 18.0)),
-                    label,
-                    header_style.aligned(if index == 0 { Align::Start } else { Align::End }),
-                    Align::Center,
+        let digest = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            series_values.hash(&mut hasher);
+            current_values.hash(&mut hasher);
+            time.hash(&mut hasher);
+            hasher.finish()
+        };
+        let canvas =
+            grana_ui::canvas(Length::Fill, height).view(digest, move |_, painter, info| {
+                let widths = statistic_widths(info.rect.width());
+                let mut left = info.rect.min.x;
+                for (index, (label, width)) in headers.iter().zip(widths.iter()).enumerate() {
+                    painter.text_in(
+                        Rect::from_min_size(
+                            Vec2::new(left, info.rect.min.y),
+                            Vec2::new(*width, 18.0),
+                        ),
+                        label,
+                        header_style.aligned(if index == 0 { Align::Start } else { Align::End }),
+                        Align::Center,
+                    );
+                    left += width;
+                }
+                let line_y = info.rect.min.y + 18.0 + 4.0;
+                painter.rect(
+                    Rect::from_min_size(
+                        Vec2::new(info.rect.min.x, line_y),
+                        Vec2::new(info.rect.width(), 1.0),
+                    ),
+                    Corners::ZERO,
+                    palette.outline_variant.with_alpha(0.45),
                 );
-                left += width;
-            }
-            let line_y = info.rect.min.y + 18.0 + 4.0;
-            painter.rect(
-                Rect::from_min_size(
-                    Vec2::new(info.rect.min.x, line_y),
-                    Vec2::new(info.rect.width(), 1.0),
-                ),
-                Corners::ZERO,
-                palette.outline_variant.with_alpha(0.45),
-            );
-            let mut y = info.rect.min.y + 18.0 + 9.0;
-            painter.text_in(
-                Rect::from_min_size(Vec2::new(info.rect.min.x, y), Vec2::new(widths[0], 20.0)),
-                series_label,
-                caption_style,
-                Align::Center,
-            );
-            metric_row(
-                painter,
-                Vec2::new(info.rect.min.x, y),
-                &series_values,
-                &widths,
-                value_style,
-            );
-            y += 20.0;
-            if let Some(values) = &current_values {
+                let mut y = info.rect.min.y + 18.0 + 9.0;
                 painter.text_in(
                     Rect::from_min_size(Vec2::new(info.rect.min.x, y), Vec2::new(widths[0], 20.0)),
-                    &frame_label,
+                    series_label,
                     caption_style,
                     Align::Center,
                 );
                 metric_row(
                     painter,
                     Vec2::new(info.rect.min.x, y),
-                    values,
+                    &series_values,
                     &widths,
                     value_style,
                 );
-            }
-        });
+                y += 20.0;
+                if let Some(values) = &current_values {
+                    painter.text_in(
+                        Rect::from_min_size(
+                            Vec2::new(info.rect.min.x, y),
+                            Vec2::new(widths[0], 20.0),
+                        ),
+                        &frame_label,
+                        caption_style,
+                        Align::Center,
+                    );
+                    metric_row(
+                        painter,
+                        Vec2::new(info.rect.min.x, y),
+                        values,
+                        &widths,
+                        value_style,
+                    );
+                }
+            });
         let title = view::card_title(
             ctx,
             Icon::Table,
@@ -600,9 +617,18 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     )));
     let theme = *ctx.theme();
     let style = Style::card(&theme, DistributionStyle::Box).with_language(language);
-    let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0).paint(move |painter, info| {
-        page.paint(painter, info.rect, &style, &Decor::default());
-    });
+    let digest = (
+        state.scene.coloc.revision().raw(),
+        time,
+        pair.a(),
+        pair.b(),
+        thresholds.a().to_bits(),
+        thresholds.b().to_bits(),
+    );
+    let canvas =
+        grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0).view(digest, move |_, painter, info| {
+            page.paint(painter, info.rect, &style, &Decor::default());
+        });
     let title = view::card_title(
         ctx,
         Icon::Grid,
@@ -629,52 +655,13 @@ fn combo<'a>(
     message: impl Fn(usize) -> Message + 'static,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let palette = theme.palette;
-    let label = labels.get(selected).cloned().unwrap_or_default();
-    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
-    let rest = theme.surface(Role::Field, State::Rest);
-    let hover = theme.surface(Role::Field, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
-        .paint(move |painter, info| {
-            let surface = if info.hover > 0.5 { hover } else { rest };
-            painter.outlined(
-                info.rect,
-                surface.corners,
-                surface.fill,
-                surface.border,
-                surface.shadow,
-            );
-            painter.text_in(
-                Rect::from_min_max(
-                    info.rect.min + Vec2::new(10.0, 0.0),
-                    Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
-                ),
-                &label,
-                style,
-                Align::Center,
-            );
-            icon::chevron(
-                painter,
-                Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-                5.0,
-                std::f32::consts::FRAC_PI_2,
-                palette.on_surface_variant,
-                1.5,
-            );
-        })
-        .named(key)
-        .press(Message::Noop)
-        .cursor(Cursor::Pointing);
-    let mut rows = Vec::with_capacity(labels.len());
-    for (index, label) in labels.iter().enumerate() {
-        rows.push(
-            grana_ui::widget::menu_row(&theme, label, index == selected)
-                .key(Key::index(key, index))
-                .press(message(index)),
-        );
-    }
-    let popup = grana_ui::popover::popup(Key::new(key), width.max(120.0), rows);
-    grana_ui::column()
-        .width(Length::Auto)
-        .children([anchor, popup])
+    grana_ui::widget::combo(
+        &theme,
+        Key::new(key),
+        Length::Fixed(width),
+        width.max(120.0),
+        labels,
+        selected,
+        message,
+    )
 }

@@ -79,7 +79,7 @@ pub(super) fn transport<'a>(
     let font = theme.font(Level::Monospace);
     let readout_element =
         grana_ui::canvas(Length::Fixed(readout_rect.width()), readout_rect.height())
-            .paint(move |painter, info| {
+            .view(readout.clone(), move |_, painter, info| {
                 painter.rect(
                     info.rect,
                     Corners::capsule(),
@@ -134,7 +134,7 @@ fn scrub_track<'a>(
     let inner_r = 2.0;
     let ticks = frames > 1 && frames <= 48 && bar.width() / (frames - 1) as f32 >= 9.0;
     grana_ui::canvas(Length::Fixed(rect.width()), rect.height())
-        .paint(move |painter, info| {
+        .view((frames, position.to_bits()), move |_, painter, info| {
             let engaged = info.hover.max(info.press);
             let active_end = (handle_x - gap).clamp(bar.min.x, bar.max.x);
             if active_end > bar.min.x + 1.0 {

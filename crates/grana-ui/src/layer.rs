@@ -50,18 +50,21 @@ impl<A: Clone> Ui<A> {
                 .rect
                 .expand(CULL_MARGIN)
                 .intersects(self.tree.nodes[id].clip);
-        let repaint = !culled
-            && (self.tree.nodes[id].paint_dirty || self.tree.nodes[id].canvas == CanvasKind::Frame);
+        let tracked = self.hover == Some(id) || self.press == Some(id) || self.drag == Some(id);
+        let moved = tracked && self.pointer != self.tree.nodes[id].pointer_seen;
+        let live = self.tree.nodes[id].canvas == CanvasKind::Live;
+        let repaint = !culled && (self.tree.nodes[id].paint_dirty || moved || live);
         if repaint {
             self.repaint(id, canvases);
+            self.tree.nodes[id].pointer_seen = self.pointer;
         }
         #[cfg(debug_assertions)]
         if !repaint
             && !culled
             && !self.tree.nodes[id].paint_dirty
-            && !matches!(
+            && matches!(
                 self.tree.nodes[id].canvas,
-                CanvasKind::Frame | CanvasKind::None
+                CanvasKind::Static | CanvasKind::Props(_)
             )
         {
             self.verify_canvas(id, canvases);
@@ -199,6 +202,8 @@ impl<A: Clone> Ui<A> {
                     press,
                     engaged,
                     time,
+                    pointer: self.pointer,
+                    inside: rect.contains(self.pointer),
                 };
                 paint(&mut painter, info);
             }

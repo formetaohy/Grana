@@ -120,6 +120,9 @@ impl<A: Clone> Ui<A> {
         cleared(&mut self.drag);
         cleared(&mut self.focus);
         cleared(&mut self.edit);
+        if self.scrollbar.is_some_and(|(id, _, _)| gone.contains(&id)) {
+            self.scrollbar = None;
+        }
         if self.hovered_since.is_some_and(|(id, _)| gone.contains(&id)) {
             self.hovered_since = None;
             self.tooltip = None;

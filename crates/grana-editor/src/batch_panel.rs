@@ -141,43 +141,46 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             let label = state_label(language, &dataset.state).to_string();
             let detail = dataset.detail.clone();
             let mut row = grana_ui::canvas(Length::Fill, 32.0)
-                .paint(move |painter, info| {
-                    if info.hover > 0.01 {
-                        painter.rect(
-                            info.rect,
-                            Corners::all(theme.metrics.corner_sm),
-                            palette.on_surface.with_alpha(0.07 * info.hover),
+                .view(
+                    (name.clone(), label.clone(), tint),
+                    move |_, painter, info| {
+                        if info.hover > 0.01 {
+                            painter.rect(
+                                info.rect,
+                                Corners::all(theme.metrics.corner_sm),
+                                palette.on_surface.with_alpha(0.07 * info.hover),
+                            );
+                        }
+                        icon::paint(
+                            Icon::Folder,
+                            painter,
+                            Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
+                            14.0,
+                            palette.on_surface_variant,
+                            1.5,
                         );
-                    }
-                    icon::paint(
-                        Icon::Folder,
-                        painter,
-                        Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
-                        14.0,
-                        palette.on_surface_variant,
-                        1.5,
-                    );
-                    painter.text_in(
-                        Rect::from_min_max(
-                            Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
-                            Vec2::new(info.rect.max.x - 100.0, info.rect.max.y),
-                        ),
-                        &name,
-                        TextStyle::new(label_font, palette.on_surface).truncating(),
-                        Align::Center,
-                    );
-                    let badge = Rect::from_min_size(
-                        Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 10.0),
-                        Vec2::new(92.0, 20.0),
-                    );
-                    painter.rect(badge, Corners::capsule(), tint.with_alpha(0.18));
-                    painter.text_in(
-                        badge,
-                        &label,
-                        TextStyle::new(caption_font, tint).aligned(Align::Center),
-                        Align::Center,
-                    );
-                })
+                        painter.text_in(
+                            Rect::from_min_max(
+                                Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
+                                Vec2::new(info.rect.max.x - 100.0, info.rect.max.y),
+                            ),
+                            &name,
+                            TextStyle::new(label_font, palette.on_surface).truncating(),
+                            Align::Center,
+                        );
+                        let badge = Rect::from_min_size(
+                            Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 10.0),
+                            Vec2::new(92.0, 20.0),
+                        );
+                        painter.rect(badge, Corners::capsule(), tint.with_alpha(0.18));
+                        painter.text_in(
+                            badge,
+                            &label,
+                            TextStyle::new(caption_font, tint).aligned(Align::Center),
+                            Align::Center,
+                        );
+                    },
+                )
                 .tooltip(&detail);
             if reviewable {
                 row = row
@@ -290,17 +293,18 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         )
         .truncating();
         let path = path.to_string();
-        children.push(
-            grana_ui::canvas(Length::Fill, 30.0).paint(move |painter, info| {
+        children.push(grana_ui::canvas(Length::Fill, 30.0).view(
+            path,
+            move |path: &String, painter, info| {
                 painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
                 painter.text_in(
                     info.rect.shrink2(Vec2::new(10.0, 0.0)),
-                    &path,
+                    path,
                     style,
                     Align::Center,
                 );
-            }),
-        );
+            },
+        ));
     } else {
         children.push(view::weak(ctx, grana_i18n::batch::output_hint(language)));
     }
@@ -604,8 +608,26 @@ fn comparison<'a>(
     let style = Style::card(ctx.theme(), page.distribution()).with_language(ctx.language());
     let pointer = ctx.pointer();
     let count = slots.len();
+    let digest = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        visible.hash(&mut hasher);
+        state.batch_significance().len().hash(&mut hasher);
+        for test in state.batch_significance() {
+            test.adjusted.to_bits().hash(&mut hasher);
+            test.rank_adjusted.to_bits().hash(&mut hasher);
+        }
+        state.batch_interactions().len().hash(&mut hasher);
+        metric.key().hash(&mut hasher);
+        selected.hash(&mut hasher);
+        axis.index().hash(&mut hasher);
+        group.hash(&mut hasher);
+        key.hash(&mut hasher);
+        state.workspace.distribution_style.index().hash(&mut hasher);
+        hasher.finish()
+    };
     let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT)
-        .paint(move |painter, info| {
+        .view(digest, move |_, painter, info| {
             let decor = Decor {
                 pointer: info.rect.contains(pointer).then_some(pointer),
                 ..Decor::default()

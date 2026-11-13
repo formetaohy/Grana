@@ -136,26 +136,29 @@ fn header<'a>(
     let badge_style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
         .aligned(Align::Center);
     let count_text = count.to_string();
-    let title = grana_ui::canvas(Length::Fixed(title_w), 30.0).paint(move |painter, info| {
-        let rect = info.rect;
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 4.0, rect.min.y),
-                Vec2::new(rect.max.x - 32.0, rect.max.y),
-            ),
-            grana_i18n::object::object_sets(language),
-            label_style,
-            Align::Center,
-        );
-        if count > 0 {
-            let pill = Rect::from_min_size(
-                Vec2::new(rect.max.x - 28.0, rect.center().y - 9.5),
-                Vec2::new(24.0, 19.0),
+    let title = grana_ui::canvas(Length::Fixed(title_w), 30.0).view(
+        (count, count_text.clone()),
+        move |_, painter, info| {
+            let rect = info.rect;
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 4.0, rect.min.y),
+                    Vec2::new(rect.max.x - 32.0, rect.max.y),
+                ),
+                grana_i18n::object::object_sets(language),
+                label_style,
+                Align::Center,
             );
-            painter.rect(pill, Corners::capsule(), palette.surface_container_high);
-            painter.text_in(pill, &count_text, badge_style, Align::Center);
-        }
-    });
+            if count > 0 {
+                let pill = Rect::from_min_size(
+                    Vec2::new(rect.max.x - 28.0, rect.center().y - 9.5),
+                    Vec2::new(24.0, 19.0),
+                );
+                painter.rect(pill, Corners::capsule(), palette.surface_container_high);
+                painter.text_in(pill, &count_text, badge_style, Align::Center);
+            }
+        },
+    );
     let lead_msg = if loading {
         Message::Noop
     } else {

@@ -243,7 +243,7 @@ pub(crate) fn view<'a>(
     let backdrop = palette_colors.scrim;
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height())
-            .paint(move |painter, info| {
+            .view_static(move |painter, info| {
                 painter.rect(info.rect, Corners::ZERO, backdrop);
             })
             .named("palette.backdrop")
@@ -257,7 +257,7 @@ pub(crate) fn view<'a>(
         .editing(true)
         .on_commit(|_| Message::RunSelected)
         .on_cancel(|| Message::ClosePalette);
-    let search = grana_ui::canvas(Length::Fixed(26.0), 26.0).paint(move |painter, info| {
+    let search = grana_ui::canvas(Length::Fixed(26.0), 26.0).view_static(move |painter, info| {
         grana_ui::icon::paint(
             Icon::Search,
             painter,
@@ -292,7 +292,7 @@ pub(crate) fn view<'a>(
         let empty = grana_i18n::palette::no_matches(ctx.language());
         children.push(
             grana_ui::canvas(Length::Fill, ROW)
-                .paint(move |painter, info| {
+                .view(empty, move |_, painter, info| {
                     painter.text_in(
                         info.rect,
                         empty,
@@ -322,7 +322,7 @@ pub(crate) fn view<'a>(
 
 fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let color = ctx.theme().palette.outline_variant.with_alpha(0.5);
-    grana_ui::canvas(Length::Fill, DIVIDER).paint(move |painter, info| {
+    grana_ui::canvas(Length::Fill, DIVIDER).view_static(move |painter, info| {
         painter.rect(
             Rect::from_min_size(
                 Vec2::new(info.rect.min.x, info.rect.center().y),
@@ -339,7 +339,7 @@ fn group_header<'a>(ctx: &mut BuildContext<'_, Message>, group: Group) -> Elemen
     let palette = theme.palette;
     let font = theme.font(Level::Overline);
     let title = group.title(ctx.language()).to_uppercase();
-    grana_ui::canvas(Length::Fill, HEADER).paint(move |painter, info| {
+    grana_ui::canvas(Length::Fill, HEADER).view(title.clone(), move |_, painter, info| {
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),
@@ -373,51 +373,54 @@ fn row<'a>(
     );
     let shortcut_style = TextStyle::new(theme.font(Level::Monospace), palette.outline);
     grana_ui::canvas(Length::Fill, ROW)
-        .paint(move |painter, info| {
-            let rect = info.rect;
-            let engaged = if selected { 1.0 } else { info.hover };
-            if selected {
-                painter.rect(rect, Corners::capsule(), palette.secondary_container);
-            } else if engaged > 0.01 {
-                painter.rect(
-                    rect,
-                    Corners::all(theme.metrics.corner_sm),
-                    palette.on_surface.with_alpha(0.08 * engaged),
-                );
-            }
-            grana_ui::icon::paint(
-                symbol,
-                painter,
-                Vec2::new(rect.min.x + 15.0, rect.center().y),
-                13.5,
+        .view(
+            (title.clone(), shortcut.clone(), symbol, selected),
+            move |_, painter, info| {
+                let rect = info.rect;
+                let engaged = if selected { 1.0 } else { info.hover };
                 if selected {
-                    palette.on_secondary_container
-                } else {
-                    palette.on_surface_variant.lerp(palette.on_surface, engaged)
-                },
-                1.6,
-            );
-            let shortcut_width = shortcut.as_ref().map_or(10.0, |label| {
-                24.0 + painter.measure(label, shortcut_style).x
-            });
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.min.x + 30.0, rect.min.y),
-                    Vec2::new(rect.max.x - shortcut_width, rect.max.y),
-                ),
-                &title,
-                title_style,
-                Align::Center,
-            );
-            if let Some(label) = &shortcut {
+                    painter.rect(rect, Corners::capsule(), palette.secondary_container);
+                } else if engaged > 0.01 {
+                    painter.rect(
+                        rect,
+                        Corners::all(theme.metrics.corner_sm),
+                        palette.on_surface.with_alpha(0.08 * engaged),
+                    );
+                }
+                grana_ui::icon::paint(
+                    symbol,
+                    painter,
+                    Vec2::new(rect.min.x + 15.0, rect.center().y),
+                    13.5,
+                    if selected {
+                        palette.on_secondary_container
+                    } else {
+                        palette.on_surface_variant.lerp(palette.on_surface, engaged)
+                    },
+                    1.6,
+                );
+                let shortcut_width = shortcut.as_ref().map_or(10.0, |label| {
+                    24.0 + painter.measure(label, shortcut_style).x
+                });
                 painter.text_in(
-                    rect.shrink2(Vec2::new(10.0, 0.0)),
-                    label,
-                    shortcut_style.aligned(Align::End),
+                    Rect::from_min_max(
+                        Vec2::new(rect.min.x + 30.0, rect.min.y),
+                        Vec2::new(rect.max.x - shortcut_width, rect.max.y),
+                    ),
+                    &title,
+                    title_style,
                     Align::Center,
                 );
-            }
-        })
+                if let Some(label) = &shortcut {
+                    painter.text_in(
+                        rect.shrink2(Vec2::new(10.0, 0.0)),
+                        label,
+                        shortcut_style.aligned(Align::End),
+                        Align::Center,
+                    );
+                }
+            },
+        )
         .key(Key::index("palette.row", index))
         .press(Message::RunPaletteIndex(index))
         .focus_ring(Corners::capsule())
@@ -427,7 +430,7 @@ fn footer<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
     let font = ctx.theme().font(Level::Caption);
     let hint = grana_i18n::palette::footer_hint(ctx.language());
-    grana_ui::canvas(Length::Fill, FOOTER).paint(move |painter, info| {
+    grana_ui::canvas(Length::Fill, FOOTER).view(hint, move |_, painter, info| {
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),

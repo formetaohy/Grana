@@ -3,6 +3,14 @@ use std::collections::BTreeMap;
 use grana_measure::{Column, Level, Mask, Measurement, Statistic, Table, Unit, channel_keys};
 use serde::{Deserialize, Serialize};
 
+impl std::hash::Hash for Summary {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.objects.hash(state);
+        self.mean.to_bits().hash(state);
+        self.deviation.map(f64::to_bits).hash(state);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Summary {
@@ -57,6 +65,14 @@ impl Summary {
 
     pub fn deviation(self) -> Option<f64> {
         self.deviation
+    }
+}
+
+impl std::hash::Hash for FrameValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.count.hash(state);
+        self.mean.to_bits().hash(state);
+        self.deviation.map(f64::to_bits).hash(state);
     }
 }
 

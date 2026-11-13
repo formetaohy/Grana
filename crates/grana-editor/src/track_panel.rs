@@ -6,8 +6,8 @@ use grana_object::{Link, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
-    Role, State, TextStyle, TypeStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Rect, Role,
+    State, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -173,7 +173,7 @@ fn lineage_button<'a>(
     let rest = theme.surface(Role::SurfaceHigh, State::Rest);
     let hover = theme.surface(Role::SurfaceHigh, State::Hover);
     grana_ui::canvas(Length::Fixed(78.0), 30.0)
-        .paint(move |painter, info| {
+        .view_static(move |painter, info| {
             let surface = if info.hover > 0.5 { hover } else { rest };
             painter.surface(info.rect, surface);
             painter.text_in(
@@ -1475,54 +1475,15 @@ fn combo<'a>(
     message: impl Fn(usize) -> Message + 'static,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let palette = theme.palette;
-    let label = labels.get(selected).cloned().unwrap_or_default();
-    let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
-    let rest = theme.surface(Role::Field, State::Rest);
-    let hover = theme.surface(Role::Field, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
-        .paint(move |painter, info| {
-            let surface = if info.hover > 0.5 { hover } else { rest };
-            painter.outlined(
-                info.rect,
-                surface.corners,
-                surface.fill,
-                surface.border,
-                surface.shadow,
-            );
-            painter.text_in(
-                Rect::from_min_max(
-                    info.rect.min + Vec2::new(10.0, 0.0),
-                    Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
-                ),
-                &label,
-                style,
-                Align::Center,
-            );
-            icon::chevron(
-                painter,
-                Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-                5.0,
-                std::f32::consts::FRAC_PI_2,
-                palette.on_surface_variant,
-                1.5,
-            );
-        })
-        .named(key)
-        .press(Message::Noop)
-        .cursor(Cursor::Pointing);
-    let mut rows = Vec::with_capacity(labels.len());
-    for (index, label) in labels.iter().enumerate() {
-        rows.push(
-            grana_ui::widget::menu_row(&theme, label, index == selected)
-                .key(Key::index(key, index))
-                .press(message(index)),
-        );
-    }
-    let popup = grana_ui::popover::popup(Key::new(key), width.max(120.0), rows);
-    grana_ui::column()
-        .width(Length::Auto)
-        .children([anchor, popup])
+    grana_ui::widget::combo(
+        &theme,
+        Key::new(key),
+        Length::Fixed(width),
+        width.max(120.0),
+        labels,
+        selected,
+        message,
+    )
 }
 
 fn draw_link(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, kind: Link, tint: Color) {

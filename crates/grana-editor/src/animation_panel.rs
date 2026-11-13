@@ -114,12 +114,6 @@ fn keyframe_track<'a>(
     let empty = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
         .aligned(Align::Center);
     let hint = grana_i18n::animation::add_keyframe(ctx.language());
-    let track_key = Key::new("animation.track");
-    let track_rect = ctx.rect_of(track_key).unwrap_or(Rect::ZERO);
-    let bar = Rect::from_min_max(
-        Vec2::new(track_rect.min.x + 8.0, track_rect.center().y - 6.0),
-        Vec2::new(track_rect.max.x - 8.0, track_rect.center().y + 6.0),
-    );
     let keys = keys.to_vec();
     let markers = keys
         .iter()
@@ -127,107 +121,128 @@ fn keyframe_track<'a>(
         .map(|(index, key)| (index, key.at / duration.max(1.0e-6)))
         .collect::<Vec<_>>();
     let markers_paint = markers.clone();
-    let handler_markers = markers
-        .iter()
-        .map(|(index, fraction)| (*index, bar.min.x + bar.width() * fraction))
-        .collect::<Vec<_>>();
+    let digest = markers.iter().fold(0u64, |hash, (index, fraction)| {
+        hash.rotate_left(7) ^ ((*index as u64) << 32) ^ u64::from(fraction.to_bits())
+    });
     let key_selected = selected;
-    let hover = ctx.pointer();
     grana_ui::canvas(Length::Fill, TRACK_HEIGHT)
-        .paint(move |painter, info| {
-            let rect = info.rect;
-            let bar = Rect::from_min_max(
-                Vec2::new(rect.min.x + 8.0, rect.center().y - 6.0),
-                Vec2::new(rect.max.x - 8.0, rect.center().y + 6.0),
-            );
-            let playhead_x = bar.min.x + bar.width() * (position / duration.max(1.0e-6));
-            let gap = 5.0;
-            let active_end = (playhead_x - gap).clamp(bar.min.x, bar.max.x);
-            if active_end > bar.min.x + 1.0 {
+        .view(
+            (
+                position.to_bits(),
+                duration.to_bits(),
+                key_selected,
+                keys.len(),
+                digest,
+            ),
+            move |_, painter, info| {
+                let rect = info.rect;
+                let bar = Rect::from_min_max(
+                    Vec2::new(rect.min.x + 8.0, rect.center().y - 6.0),
+                    Vec2::new(rect.max.x - 8.0, rect.center().y + 6.0),
+                );
+                let playhead_x = bar.min.x + bar.width() * (position / duration.max(1.0e-6));
+                let gap = 5.0;
+                let active_end = (playhead_x - gap).clamp(bar.min.x, bar.max.x);
+                if active_end > bar.min.x + 1.0 {
+                    painter.rect(
+                        Rect::from_min_max(bar.min, Vec2::new(active_end, bar.max.y)),
+                        Corners::left(6.0, 2.0),
+                        accent.with_alpha(0.75),
+                    );
+                }
+                let inactive_start = (playhead_x + gap).clamp(bar.min.x, bar.max.x);
+                if bar.max.x > inactive_start + 1.0 {
+                    painter.rect(
+                        Rect::from_min_max(Vec2::new(inactive_start, bar.min.y), bar.max),
+                        Corners::right(6.0, 2.0),
+                        palette.surface_container_highest,
+                    );
+                }
+                let ticks = 6;
+                for index in 0..=ticks {
+                    let x = bar.min.x + bar.width() * index as f32 / ticks as f32;
+                    let label = format!("{:.1}s", duration * index as f32 / ticks as f32);
+                    let tick_rect = if index == 0 {
+                        Rect::from_min_size(Vec2::new(x, bar.max.y + 4.0), Vec2::new(40.0, 14.0))
+                    } else if index == ticks {
+                        Rect::from_min_size(
+                            Vec2::new(x - 40.0, bar.max.y + 4.0),
+                            Vec2::new(40.0, 14.0),
+                        )
+                    } else {
+                        Rect::from_center_size(
+                            Vec2::new(x, bar.max.y + 11.0),
+                            Vec2::new(40.0, 14.0),
+                        )
+                    };
+                    let align = if index == 0 {
+                        Align::Start
+                    } else if index == ticks {
+                        Align::End
+                    } else {
+                        Align::Center
+                    };
+                    painter.text_in(tick_rect, &label, label_style.aligned(align), Align::Center);
+                }
                 painter.rect(
-                    Rect::from_min_max(bar.min, Vec2::new(active_end, bar.max.y)),
-                    Corners::left(6.0, 2.0),
-                    accent.with_alpha(0.75),
-                );
-            }
-            let inactive_start = (playhead_x + gap).clamp(bar.min.x, bar.max.x);
-            if bar.max.x > inactive_start + 1.0 {
-                painter.rect(
-                    Rect::from_min_max(Vec2::new(inactive_start, bar.min.y), bar.max),
-                    Corners::right(6.0, 2.0),
-                    palette.surface_container_highest,
-                );
-            }
-            let ticks = 6;
-            for index in 0..=ticks {
-                let x = bar.min.x + bar.width() * index as f32 / ticks as f32;
-                let label = format!("{:.1}s", duration * index as f32 / ticks as f32);
-                let tick_rect = if index == 0 {
-                    Rect::from_min_size(Vec2::new(x, bar.max.y + 4.0), Vec2::new(40.0, 14.0))
-                } else if index == ticks {
-                    Rect::from_min_size(Vec2::new(x - 40.0, bar.max.y + 4.0), Vec2::new(40.0, 14.0))
-                } else {
-                    Rect::from_center_size(Vec2::new(x, bar.max.y + 11.0), Vec2::new(40.0, 14.0))
-                };
-                let align = if index == 0 {
-                    Align::Start
-                } else if index == ticks {
-                    Align::End
-                } else {
-                    Align::Center
-                };
-                painter.text_in(tick_rect, &label, label_style.aligned(align), Align::Center);
-            }
-            painter.rect(
-                Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(4.0, 22.0)),
-                Corners::capsule(),
-                accent,
-            );
-            for (index, fraction) in &markers_paint {
-                let x = bar.min.x + bar.width() * fraction;
-                let center = Vec2::new(x, bar.center().y);
-                let active = key_selected == Some(*index)
-                    || (hover.x - x).abs() <= 10.0 && bar.contains(hover);
-                let size = if active { 6.5 } else { 5.2 };
-                let color = if key_selected == Some(*index) {
-                    palette.tertiary
-                } else {
-                    Color::WHITE
-                };
-                painter.triangle(
-                    center + Vec2::new(0.0, -size),
-                    center + Vec2::new(size, 0.0),
-                    center + Vec2::new(0.0, size),
-                    color,
-                );
-                painter.triangle(
-                    center + Vec2::new(0.0, -size),
-                    center + Vec2::new(-size, 0.0),
-                    center + Vec2::new(0.0, size),
-                    color,
-                );
-            }
-            if keys.is_empty() {
-                painter.text_in(
-                    Rect::from_min_max(
-                        Vec2::new(rect.min.x, rect.min.y),
-                        Vec2::new(rect.max.x, rect.max.y - 14.0),
+                    Rect::from_center_size(
+                        Vec2::new(playhead_x, bar.center().y),
+                        Vec2::new(4.0, 22.0),
                     ),
-                    hint,
-                    empty,
-                    Align::Center,
+                    Corners::capsule(),
+                    accent,
                 );
-            }
-        })
+                for (index, fraction) in &markers_paint {
+                    let x = bar.min.x + bar.width() * fraction;
+                    let center = Vec2::new(x, bar.center().y);
+                    let active = key_selected == Some(*index)
+                        || (info.pointer.x - x).abs() <= 10.0 && bar.contains(info.pointer);
+                    let size = if active { 6.5 } else { 5.2 };
+                    let color = if key_selected == Some(*index) {
+                        palette.tertiary
+                    } else {
+                        Color::WHITE
+                    };
+                    painter.triangle(
+                        center + Vec2::new(0.0, -size),
+                        center + Vec2::new(size, 0.0),
+                        center + Vec2::new(0.0, size),
+                        color,
+                    );
+                    painter.triangle(
+                        center + Vec2::new(0.0, -size),
+                        center + Vec2::new(-size, 0.0),
+                        center + Vec2::new(0.0, size),
+                        color,
+                    );
+                }
+                if keys.is_empty() {
+                    painter.text_in(
+                        Rect::from_min_max(
+                            Vec2::new(rect.min.x, rect.min.y),
+                            Vec2::new(rect.max.x, rect.max.y - 14.0),
+                        ),
+                        hint,
+                        empty,
+                        Align::Center,
+                    );
+                }
+            },
+        )
         .named("animation.track")
         .cursor(Cursor::Crosshair)
         .on_pointer(move |pointer| {
+            let bar = Rect::from_min_max(
+                Vec2::new(pointer.rect.min.x + 8.0, pointer.rect.center().y - 6.0),
+                Vec2::new(pointer.rect.max.x - 8.0, pointer.rect.center().y + 6.0),
+            );
+            let centre = |fraction: f32| bar.min.x + bar.width() * fraction;
             let t = ((pointer.position.x - bar.min.x) / bar.width().max(1.0)).clamp(0.0, 1.0);
             let time = t * duration;
             if pointer.phase == grana_ui::Phase::Up
-                && let Some((index, _)) = handler_markers
+                && let Some((index, _)) = markers
                     .iter()
-                    .find(|(_, x)| (pointer.position.x - *x).abs() <= 10.0)
+                    .find(|(_, fraction)| (pointer.position.x - centre(*fraction)).abs() <= 10.0)
             {
                 return Some(Message::SetPlaybackSelected(Some(*index)));
             }
@@ -255,30 +270,34 @@ fn keyframe_list<'a>(
             key.camera.distance
         );
         let body = grana_ui::canvas(Length::Fixed(420.0), 26.0)
-            .paint(move |painter, info| {
-                if active {
-                    painter.rect(info.rect, Corners::capsule(), palette.secondary_container);
-                } else if info.hover > 0.01 {
-                    painter.rect(
-                        info.rect,
-                        Corners::all(theme.metrics.corner_sm),
-                        palette.on_surface.with_alpha(0.06 * info.hover),
+            .view(
+                (active, text),
+                move |props: &(bool, String), painter, info| {
+                    let (active, text) = props;
+                    if *active {
+                        painter.rect(info.rect, Corners::capsule(), palette.secondary_container);
+                    } else if info.hover > 0.01 {
+                        painter.rect(
+                            info.rect,
+                            Corners::all(theme.metrics.corner_sm),
+                            palette.on_surface.with_alpha(0.06 * info.hover),
+                        );
+                    }
+                    painter.text_in(
+                        info.rect.shrink2(Vec2::new(10.0, 0.0)),
+                        text,
+                        TextStyle::new(
+                            font,
+                            if *active {
+                                palette.on_secondary_container
+                            } else {
+                                palette.on_surface_variant
+                            },
+                        ),
+                        Align::Center,
                     );
-                }
-                painter.text_in(
-                    info.rect.shrink2(Vec2::new(10.0, 0.0)),
-                    &text,
-                    TextStyle::new(
-                        font,
-                        if active {
-                            palette.on_secondary_container
-                        } else {
-                            palette.on_surface_variant
-                        },
-                    ),
-                    Align::Center,
-                );
-            })
+                },
+            )
             .named(&format!("animation.key.{index}"))
             .on_pointer(move |pointer| {
                 (pointer.phase == grana_ui::Phase::Up)
@@ -590,7 +609,7 @@ fn combo<'a>(
     let rest = theme.surface(Role::Field, State::Rest);
     let hover = theme.surface(Role::Field, State::Hover);
     let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
-        .paint(move |painter, info| {
+        .view(label, move |label: &String, painter, info| {
             let surface = if info.hover > 0.5 { hover } else { rest };
             painter.outlined(
                 info.rect,
@@ -604,7 +623,7 @@ fn combo<'a>(
                     info.rect.min + Vec2::new(10.0, 0.0),
                     Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
                 ),
-                &label,
+                label,
                 style,
                 Align::Center,
             );

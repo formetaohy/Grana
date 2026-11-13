@@ -9,6 +9,16 @@ use crate::ui::Ui;
 
 impl<A: Clone> Ui<A> {
     pub(crate) fn dispatch(&mut self) {
+        self.hover_scrollbars();
+        if self.drag_scrollbar() {
+            self.wheel();
+            if self.edit.is_some() {
+                self.field_keys();
+            } else {
+                self.keys();
+            }
+            return;
+        }
         let pointer = self.pointer;
         let hover = hit::resolve(&self.hits, pointer).map(|hit| hit.node);
         if hover != self.hover {
@@ -72,6 +82,7 @@ impl<A: Clone> Ui<A> {
             self.wake_animation(press);
         }
         self.drag_values();
+        self.drag_gesture();
         if primary.down
             && let Some(press) = self.press
         {
@@ -158,6 +169,147 @@ impl<A: Clone> Ui<A> {
         self.tree.invalidate_arrange(node);
         self.wake_scroll(node);
         self.animating = true;
+    }
+
+    fn bar_at(
+        &self,
+        pointer: Vec2,
+    ) -> Option<(NodeId, crate::scroll::Bar, crate::scroll::ScrollState)> {
+        self.tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.visible && !node.rect.is_empty())
+            .filter_map(|(id, node)| {
+                let scroll = node.scroll?;
+                node.scroll_spec?;
+                if scroll.limit() <= 0.0 || !node.clip.contains(pointer) {
+                    return None;
+                }
+                let bar = crate::scroll::bar(node.rect, node.scroll_axis(), scroll);
+                bar.hit.contains(pointer).then_some((id, bar, scroll))
+            })
+            .max_by(|left, right| {
+                left.1
+                    .thumb
+                    .contains(self.pointer)
+                    .cmp(&right.1.thumb.contains(self.pointer))
+            })
+    }
+
+    fn hover_scrollbars(&mut self) {
+        let pointer = self.pointer;
+        let hovered = self.bar_at(pointer).map(|(id, _, _)| id);
+        let mut wake = Vec::new();
+        for (id, node) in self.tree.nodes.iter_mut() {
+            let Some(scroll) = node.scroll.as_mut() else {
+                continue;
+            };
+            let hover = hovered == Some(id);
+            if scroll.hover != hover {
+                scroll.hover = hover;
+                wake.push(id);
+            }
+        }
+        for id in wake {
+            self.wake_scroll(id);
+        }
+    }
+
+    fn drag_scrollbar(&mut self) -> bool {
+        let pointer = self.pointer;
+        let primary = self.input.button(Button::Primary);
+        if primary.pressed
+            && let Some((node, bar, scroll)) = self.bar_at(pointer)
+        {
+            let axis = bar.axis;
+            let offset = if bar.thumb.contains(pointer) {
+                scroll.offset
+            } else {
+                let position = match axis {
+                    Axis::Column => {
+                        (pointer.y - bar.track.min.y - bar.thumb.height() * 0.5)
+                            / bar.track.height().max(1.0)
+                    }
+                    Axis::Row => {
+                        (pointer.x - bar.track.min.x - bar.thumb.width() * 0.5)
+                            / bar.track.width().max(1.0)
+                    }
+                };
+                position.clamp(0.0, 1.0) * scroll.limit()
+            };
+            self.scrollbar = Some((node, pointer, offset));
+            self.press = None;
+            self.drag = None;
+            self.scroll_to(node, offset);
+            return true;
+        }
+        let Some((node, from, offset)) = self.scrollbar else {
+            return false;
+        };
+        if primary.down
+            && let Some(scroll) = self.tree.nodes[node].scroll
+        {
+            let axis = self.tree.nodes[node].scroll_axis();
+            let bar = crate::scroll::bar(self.tree.nodes[node].rect, axis, scroll);
+            let delta = match axis {
+                Axis::Column => pointer.y - from.y,
+                Axis::Row => pointer.x - from.x,
+            };
+            let travel = bar.travel();
+            let scale = if travel > 0.0 {
+                scroll.limit() / travel
+            } else {
+                0.0
+            };
+            self.scroll_to(node, offset + delta * scale);
+        }
+        if primary.released {
+            self.scrollbar = None;
+        }
+        self.scrollbar.is_some()
+    }
+
+    fn scroll_to(&mut self, node: NodeId, offset: f32) {
+        let Some(scroll) = self.tree.nodes[node].scroll.as_mut() else {
+            return;
+        };
+        let value = offset.clamp(0.0, scroll.limit());
+        scroll.offset = value;
+        scroll.target = value;
+        scroll.velocity = 0.0;
+        self.tree.nodes[node].paint_dirty = true;
+        self.tree.invalidate_arrange(node);
+        self.wake_scroll(node);
+        self.animating = true;
+    }
+
+    fn drag_gesture(&mut self) {
+        let Some(id) = self.drag else {
+            return;
+        };
+        let delta = self.input.delta();
+        let action = match &self.tree.nodes[id].interaction {
+            Interaction::Drag { axis, handler } => {
+                let amount = match axis {
+                    Axis::Row => delta.x,
+                    Axis::Column => delta.y,
+                };
+                if amount == 0.0 {
+                    return;
+                }
+                handler(amount)
+            }
+            Interaction::DragVector { handler } => {
+                if delta == Vec2::ZERO {
+                    return;
+                }
+                handler(delta)
+            }
+            _ => return,
+        };
+        if let Some(action) = action {
+            self.actions.push(action);
+        }
     }
 
     fn drag_values(&mut self) {
@@ -556,6 +708,13 @@ impl<A: Clone> Ui<A> {
             self.focus_visible = false;
             return;
         }
+        if !self.edit.is_some() {
+            for key in &keys {
+                if matches!(key, InputKey::PageUp | InputKey::PageDown) {
+                    self.scroll_keys(*key);
+                }
+            }
+        }
         let Some(node) = self.focus else {
             return;
         };
@@ -573,6 +732,36 @@ impl<A: Clone> Ui<A> {
         {
             self.activate(node);
         }
+    }
+
+    fn scroll_keys(&mut self, key: InputKey) {
+        let Some(node) = self.focus.or(self.hover) else {
+            return;
+        };
+        let Some(scroller) = self.scroll_ancestor(node) else {
+            return;
+        };
+        let Some(scroll) = self.tree.nodes[scroller].scroll else {
+            return;
+        };
+        let direction = match key {
+            InputKey::PageUp => -1.0,
+            _ => 1.0,
+        };
+        let amount = scroll.viewport.max(24.0) * 0.9 * direction;
+        self.scroll_to(scroller, scroll.target + amount);
+    }
+
+    fn scroll_ancestor(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let entry = &self.tree.nodes[id];
+            if entry.scroll_spec.is_some() {
+                return Some(id);
+            }
+            current = entry.parent;
+        }
+        None
     }
 
     fn adjust(&mut self, node: NodeId, key: InputKey) -> bool {

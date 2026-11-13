@@ -1,3 +1,45 @@
+impl std::hash::Hash for ComparisonSample {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.dataset.hash(state);
+        self.objects.hash(state);
+        self.values.hash(state);
+        for (time, frames) in &self.frames {
+            time.hash(state);
+            frames.hash(state);
+        }
+    }
+}
+
+impl std::hash::Hash for ComparisonFrame {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.mean.to_bits().hash(state);
+        self.lower.to_bits().hash(state);
+        self.upper.to_bits().hash(state);
+        self.images.hash(state);
+    }
+}
+
+impl std::hash::Hash for Comparison {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.group.hash(state);
+        self.key.hash(state);
+        self.name.hash(state);
+        self.kind.hash(state);
+        self.images.hash(state);
+        self.objects.hash(state);
+        for value in &self.means {
+            value.map(f64::to_bits).hash(state);
+        }
+        for value in &self.deviations {
+            value.map(f64::to_bits).hash(state);
+        }
+        self.samples.hash(state);
+        for frames in &self.frames {
+            frames.hash(state);
+        }
+    }
+}
+
 use std::collections::BTreeMap;
 
 use grana_measure::Sample;

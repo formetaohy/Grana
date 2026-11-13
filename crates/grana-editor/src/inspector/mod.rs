@@ -5,7 +5,7 @@ use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
 use grana_ui::{
     Align, BuildContext, Color, Corners, Edges, Element, Icon, Key, Length, Level, Motion, Rect,
-    Role, State, TextStyle, icon,
+    Role, TextStyle, icon,
 };
 use grana_volume::{Clip, Intensity};
 
@@ -319,7 +319,7 @@ pub fn objects_body<'a>(
 
 pub(crate) fn hidden<'a>() -> Element<'a, Message> {
     grana_ui::canvas(Length::Fixed(0.0), 0.0)
-        .paint(|_painter, _info| {})
+        .view_static(|_painter, _info| {})
         .at(Rect::ZERO)
 }
 
@@ -388,7 +388,7 @@ pub(crate) fn disclosure<'a>(
     );
     let label = title.to_string();
     let header = grana_ui::canvas(Length::Fill, 26.0)
-        .paint(move |painter, info| {
+        .view((label.clone(), arrow.to_bits()), move |_, painter, info| {
             let rect = info.rect;
             if info.hover > 0.01 {
                 painter.rect(
@@ -443,58 +443,20 @@ pub(crate) fn combo<'a, T: Clone + PartialEq + 'static>(
         .collect::<Vec<_>>();
     let index =
         selected.and_then(|selected| items.iter().position(|(value, _)| value == &selected));
-    let shown = index.map_or_else(String::new, |index| labels[index].clone());
     let values = items
         .iter()
         .map(|(value, _)| value.clone())
         .collect::<Vec<_>>();
-    let rows = view::popup_rows(ctx, key, &labels, index.unwrap_or(0), move |index| {
-        select(values[index].clone())
-    });
-    let anchor = combo_anchor(ctx, Key::new(key), shown, width);
-    let menu = view::menu(ctx, Key::new(key), popup_width, rows);
-    grana_ui::column().gap(0.0).children([anchor, menu])
-}
-
-fn combo_anchor<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    key: Key,
-    value: String,
-    width: Length,
-) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let palette = theme.palette;
-    let font = theme.font(Level::Label);
-    let height = theme.metrics.control_height;
-    grana_ui::canvas(width, height)
-        .paint(move |painter, info| {
-            let rect = info.rect;
-            let look = theme
-                .surface(Role::Field, State::Rest)
-                .lerp(theme.surface(Role::Field, State::Hover), info.hover);
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.min.x + 10.0, rect.min.y),
-                    Vec2::new(rect.max.x - 24.0, rect.max.y),
-                ),
-                &value,
-                TextStyle::new(font, look.text).truncating(),
-                Align::Center,
-            );
-            icon::paint(
-                Icon::ChevronDown,
-                painter,
-                Vec2::new(rect.max.x - 11.0, rect.center().y),
-                9.5,
-                palette.on_surface_variant,
-                1.6,
-            );
-        })
-        .key(key)
-        .press(Message::Noop)
-        .focus_ring(Corners::all(theme.metrics.corner_sm))
-        .cursor(grana_ui::Cursor::Pointing)
+    grana_ui::widget::combo(
+        &theme,
+        Key::new(key),
+        width,
+        popup_width,
+        &labels,
+        index.unwrap_or(0),
+        move |index| select(values[index].clone()),
+    )
 }
 
 pub(crate) fn form_combo<'a, T: Clone + PartialEq + 'static>(

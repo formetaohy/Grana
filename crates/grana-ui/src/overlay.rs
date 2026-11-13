@@ -1,6 +1,5 @@
 use glam::Vec2;
 
-use crate::element::Axis;
 use crate::geometry::{Corners, Rect};
 use crate::paint::{Clip, Painter};
 use crate::style::{Border, Fill, Shadow, State};
@@ -88,9 +87,9 @@ impl<A: Clone> Ui<A> {
                 })
                 .collect::<Vec<_>>();
             for (outer, axis, scroll) in bars {
-                let thumb = scrollbar_thumb(outer, axis, scroll);
+                let bar = crate::scroll::bar(outer, axis, scroll);
                 painter.rect(
-                    thumb,
+                    bar.thumb,
                     Corners::capsule(),
                     self.theme.palette.outline.with_alpha(0.65 * scroll.bar),
                 );
@@ -126,40 +125,5 @@ impl<A: Clone> Ui<A> {
             self.overlay.assign(&instances.material);
         }
         self.scratch = instances;
-    }
-}
-
-fn scrollbar_thumb(outer: Rect, axis: Axis, scroll: crate::scroll::ScrollState) -> Rect {
-    let ratio = (scroll.viewport / scroll.content.max(1.0)).clamp(0.1, 1.0);
-    let position = if scroll.limit() > 0.0 {
-        (scroll.offset / scroll.limit()).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    match axis {
-        Axis::Column => {
-            let track = Rect::from_min_size(
-                Vec2::new(outer.max.x - 6.0, outer.min.y + 4.0),
-                Vec2::new(3.5, (outer.height() - 8.0).max(8.0)),
-            );
-            let height = (track.height() * ratio).max(24.0).min(track.height());
-            let travel = track.height() - height;
-            Rect::from_min_size(
-                Vec2::new(track.min.x, track.min.y + travel * position),
-                Vec2::new(track.width(), height),
-            )
-        }
-        Axis::Row => {
-            let track = Rect::from_min_size(
-                Vec2::new(outer.min.x + 4.0, outer.max.y - 6.0),
-                Vec2::new((outer.width() - 8.0).max(8.0), 3.5),
-            );
-            let width = (track.width() * ratio).max(24.0).min(track.width());
-            let travel = track.width() - width;
-            Rect::from_min_size(
-                Vec2::new(track.min.x + travel * position, track.min.y),
-                Vec2::new(width, track.height()),
-            )
-        }
     }
 }

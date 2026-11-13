@@ -144,7 +144,7 @@ fn project_split<'a>(
     };
     let mark = if read_only { Icon::Lock } else { Icon::Cube };
     let lead_element = grana_ui::canvas(Length::Fixed(lead_width), theme.metrics.control_height)
-        .paint(move |painter, info| {
+        .view((title.clone(), dirty), move |_, painter, info| {
             let frame = info.rect;
             let corners = Corners::split_leading(inner)
                 .resolved(frame.size())

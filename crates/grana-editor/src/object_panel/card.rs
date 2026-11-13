@@ -74,7 +74,7 @@ pub(super) fn header_row<'a>(
         open: !expanded,
     };
     let body = grana_ui::canvas(Length::Fixed(38.0), HEADER)
-        .paint(move |painter, info| {
+        .view(tint, move |_, painter, info| {
             let rect = info.rect;
             let tile = Rect::from_center_size(
                 Vec2::new(rect.min.x + 15.0, rect.center().y),
@@ -106,24 +106,27 @@ pub(super) fn header_row<'a>(
     } else {
         let title = name.clone();
         grana_ui::canvas(Length::Fixed(text_width), HEADER)
-            .paint(move |painter, info| {
-                let rect = info.rect;
-                painter.text_in(
-                    Rect::from_min_max(
-                        Vec2::new(rect.min.x, rect.min.y + 1.0),
-                        Vec2::new(rect.max.x, rect.center().y + 1.0),
-                    ),
-                    &title,
-                    name_style,
-                    Align::Center,
-                );
-                painter.text_in(
-                    Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
-                    &subtitle,
-                    subtitle_style,
-                    Align::Center,
-                );
-            })
+            .view(
+                (title.clone(), subtitle.clone()),
+                move |_, painter, info| {
+                    let rect = info.rect;
+                    painter.text_in(
+                        Rect::from_min_max(
+                            Vec2::new(rect.min.x, rect.min.y + 1.0),
+                            Vec2::new(rect.max.x, rect.center().y + 1.0),
+                        ),
+                        &title,
+                        name_style,
+                        Align::Center,
+                    );
+                    painter.text_in(
+                        Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
+                        &subtitle,
+                        subtitle_style,
+                        Align::Center,
+                    );
+                },
+            )
             .key(Key::new(format!("object.{raw}.header.text")))
             .press(toggle())
     };
@@ -153,7 +156,7 @@ pub(super) fn header_row<'a>(
         Message::Noop,
     );
     let chevron = grana_ui::canvas(Length::Fixed(22.0), 22.0)
-        .paint(move |painter, info| {
+        .view(expanded, move |_, painter, info| {
             painter.rect(
                 info.rect,
                 Corners::capsule(),
@@ -182,9 +185,9 @@ pub(super) fn header_row<'a>(
         .cursor(grana_ui::Cursor::Pointing);
     let rows = object_menu(ctx, state, id, position, sets);
     let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 192.0, rows);
-    let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0).paint(|_painter, _info| {});
-    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0).paint(|_painter, _info| {});
-    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0).paint(|_painter, _info| {});
+    let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0).view_static(|_painter, _info| {});
+    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0).view_static(|_painter, _info| {});
+    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0).view_static(|_painter, _info| {});
     let row = grana_ui::row()
         .width(Length::Fixed(width))
         .height(Length::Fixed(HEADER))

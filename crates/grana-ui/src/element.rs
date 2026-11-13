@@ -181,6 +181,8 @@ pub struct CanvasInfo<'a> {
     pub press: f32,
     pub engaged: f32,
     pub time: f32,
+    pub pointer: Vec2,
+    pub inside: bool,
 }
 
 pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
@@ -189,7 +191,7 @@ pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
 pub enum CanvasKind {
     #[default]
     None,
-    Frame,
+    Live,
     Static,
     Props(u64),
 }
@@ -462,9 +464,9 @@ impl<'a, A> Element<'a, A> {
         self
     }
 
-    pub fn paint(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
+    pub fn view_live(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
         self.canvas = Some(Canvas {
-            kind: CanvasKind::Frame,
+            kind: CanvasKind::Live,
             paint: Box::new(paint),
         });
         self.content = Content::Canvas;
@@ -570,6 +572,26 @@ impl<'a, A> Element<'a, A> {
 
     pub fn on_pointer(mut self, handler: impl Fn(Pointer) -> Option<A> + 'static) -> Self {
         self.interaction = Interaction::Pointer {
+            handler: Box::new(handler),
+        };
+        self
+    }
+
+    pub fn on_drag_vector(mut self, handler: impl Fn(Vec2) -> Option<A> + 'static) -> Self {
+        self.interaction = Interaction::DragVector {
+            handler: Box::new(handler),
+        };
+        self
+    }
+
+    pub fn hit_target(mut self) -> Self {
+        self.interaction = Interaction::Hit;
+        self
+    }
+
+    pub fn on_drag(mut self, axis: Axis, handler: impl Fn(f32) -> Option<A> + 'static) -> Self {
+        self.interaction = Interaction::Drag {
+            axis,
             handler: Box::new(handler),
         };
         self
@@ -714,6 +736,14 @@ pub enum Interaction<A> {
     Pointer {
         handler: Box<dyn Fn(Pointer) -> Option<A>>,
     },
+    Drag {
+        axis: Axis,
+        handler: Box<dyn Fn(f32) -> Option<A>>,
+    },
+    DragVector {
+        handler: Box<dyn Fn(Vec2) -> Option<A>>,
+    },
+    Hit,
     Color {
         action: Box<dyn Fn([f32; 3]) -> A>,
     },
