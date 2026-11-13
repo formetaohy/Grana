@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
 use grana_object::{CellParams, CellSet, Roi, SurfaceSet};
-use grana_scene::{Drift, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame};
 use grana_volume::Region;
 use grana_warp::Warp;
 
@@ -18,7 +18,7 @@ pub struct GrowRequest {
     channel: usize,
     params: CellParams,
     region: Region,
-    drift: Drift,
+    drifts: Drifts,
     roi: Option<Roi>,
     sources: Vec<Option<Arc<ObjectFrame>>>,
 }
@@ -28,7 +28,7 @@ impl GrowRequest {
         channel: usize,
         params: CellParams,
         region: Region,
-        drift: Drift,
+        drifts: Drifts,
         roi: Option<Roi>,
         sources: Vec<Option<Arc<ObjectFrame>>>,
     ) -> Self {
@@ -36,7 +36,7 @@ impl GrowRequest {
             channel,
             params,
             region,
-            drift,
+            drifts,
             roi,
             sources,
         }
@@ -141,7 +141,7 @@ pub fn grow(
             continue;
         }
         let mask = domain.mask(request.roi.as_ref(), time)?;
-        let warp = request.drift.warp(time);
+        let warp = request.drifts.warp(request.channel, time);
         let leveling = Leveling::at(
             reader,
             time,

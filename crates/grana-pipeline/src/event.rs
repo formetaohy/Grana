@@ -47,6 +47,11 @@ pub enum Event {
     },
     Drift(Drift),
     Registration(Registration),
+    Fiducial {
+        channels: usize,
+        pairs: usize,
+        residual: f32,
+    },
     Calibration {
         source: usize,
         psf: Box<MeasuredPsf>,

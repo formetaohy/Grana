@@ -137,14 +137,16 @@ pub(super) fn drift<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
-    let drift = state.scene.drift();
+    let channel = state.scene.selected;
+    let drift = state.scene.drift(channel);
     let running = view::progress(state.jobs, grana_scene::Job::Drift);
     let summary = if running.is_some() {
         grana_i18n::inspector::aligning(language).to_string()
-    } else if drift.is_empty() {
-        grana_i18n::inspector::inactive(language).to_string()
     } else {
-        grana_i18n::inspector::drift_frames(language, drift.frames())
+        match drift {
+            None => grana_i18n::inspector::inactive(language).to_string(),
+            Some(drift) => grana_i18n::inspector::drift_frames(language, drift.frames()),
+        }
     };
     let key = Key::new("drift");
     let open = state.workspace.disclosures.is_open(key);
@@ -195,58 +197,62 @@ pub(super) fn drift<'a>(
                     )
                     .press(Message::Command(Command::ComputeDrift)),
                 );
-                if drift.is_empty() {
-                    let channel = state.scene.dataset.channels()[state.scene.selected]
-                        .name()
-                        .to_string();
-                    children.push(view::weak(
+                let name = state.scene.dataset.channels()[channel].name().to_string();
+                match drift {
+                    None => children.push(view::weak(
                         ctx,
-                        &grana_i18n::inspector::aligns_channel(language, &channel),
-                    ));
-                } else {
-                    let frames = drift.frames();
-                    let reference = drift.reference();
-                    let time = state.scene.time();
-                    children.push(view::caption(
-                        ctx,
-                        &grana_i18n::inspector::drift_summary(language, frames, drift.magnitude()),
-                    ));
-                    if drift.deformed() {
-                        let deformation = (0..frames)
-                            .map(|frame| drift.deformation(frame))
-                            .fold(0.0, f32::max);
-                        children.push(view::weak(
+                        &grana_i18n::inspector::aligns_channel(language, &name),
+                    )),
+                    Some(drift) => {
+                        let frames = drift.frames();
+                        let reference = drift.reference();
+                        let time = state.scene.time();
+                        children.push(view::caption(
                             ctx,
-                            &grana_i18n::inspector::drift_deformation(language, deformation),
+                            &grana_i18n::inspector::drift_summary(
+                                language,
+                                frames,
+                                drift.magnitude(),
+                            ),
                         ));
-                    }
-                    let reference_field = grana_ui::widget::drag_value(&theme, reference as f32, 0)
-                        .named("drift.reference")
-                        .on_drag_value(0.2, move |value| {
-                            Message::Command(Command::SetDriftReference(
-                                value.round().clamp(0.0, (frames - 1) as f32) as u32,
-                            ))
-                        });
-                    let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
-                    let row = grana_ui::row()
-                        .gap(6.0)
-                        .align(Align::Center)
-                        .children([reference_field, unit]);
-                    children.push(view::form_row(
-                        ctx,
-                        grana_i18n::inspector::reference(language),
-                        row,
-                    ));
-                    children.push(frame_table(ctx, state, time));
-                    children.push(
-                        view::button_with(
+                        if drift.deformed() {
+                            let deformation = (0..frames)
+                                .map(|frame| drift.deformation(frame))
+                                .fold(0.0, f32::max);
+                            children.push(view::weak(
+                                ctx,
+                                &grana_i18n::inspector::drift_deformation(language, deformation),
+                            ));
+                        }
+                        let reference_field =
+                            grana_ui::widget::drag_value(&theme, reference as f32, 0)
+                                .named("drift.reference")
+                                .on_drag_value(0.2, move |value| {
+                                    Message::Command(Command::SetDriftReference(
+                                        value.round().clamp(0.0, (frames - 1) as f32) as u32,
+                                    ))
+                                });
+                        let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
+                        let row = grana_ui::row()
+                            .gap(6.0)
+                            .align(Align::Center)
+                            .children([reference_field, unit]);
+                        children.push(view::form_row(
                             ctx,
-                            grana_i18n::inspector::clear_drift(language),
-                            Role::Error,
-                            Length::Fill,
-                        )
-                        .press(Message::Command(Command::ClearDrift)),
-                    );
+                            grana_i18n::inspector::reference(language),
+                            row,
+                        ));
+                        children.push(frame_table(ctx, time, drift));
+                        children.push(
+                            view::button_with(
+                                ctx,
+                                grana_i18n::inspector::clear_drift(language),
+                                Role::Error,
+                                Length::Fill,
+                            )
+                            .press(Message::Command(Command::ClearDrift)),
+                        );
+                    }
                 }
             }
         }
@@ -336,6 +342,19 @@ pub(super) fn registration<'a>(
                     )
                     .press(Message::Command(Command::RegisterChannels(reference))),
                 );
+                if fiducial(state, reference, channels) {
+                    children.push(
+                        view::button_with(
+                            ctx,
+                            grana_i18n::inspector::from_localizations(language),
+                            Role::SurfaceHigh,
+                            Length::Fill,
+                        )
+                        .press(Message::Command(
+                            Command::RegisterFromLocalizations(reference),
+                        )),
+                    );
+                }
                 if registration.is_empty() {
                     let name = state.scene.dataset.channels()[reference].name().to_string();
                     children.push(view::weak(
@@ -387,14 +406,32 @@ pub(super) fn registration<'a>(
     )
 }
 
+fn fiducial(state: &View<'_>, reference: usize, channels: usize) -> bool {
+    let mut source = false;
+    let mut moving = false;
+    for set in state.scene.objects.iter() {
+        if set.kind() != grana_scene::ObjectKind::Spots
+            || set.channel() >= channels
+            || set.localization().is_none()
+        {
+            continue;
+        }
+        if set.channel() == reference {
+            source = true;
+        } else {
+            moving = true;
+        }
+    }
+    source && moving
+}
+
 pub(super) fn frame_table<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    state: &'a View<'a>,
     time: u32,
+    drift: &grana_scene::Drift,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
-    let drift = state.scene.drift();
     let reference = drift.reference();
     let mut rows = Vec::new();
     for frame in 0..drift.frames() {

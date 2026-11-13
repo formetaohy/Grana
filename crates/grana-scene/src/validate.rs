@@ -70,10 +70,11 @@ impl SceneState {
                 "the scene state carries another frame count than its dataset",
             ));
         }
-        if !self.drift.is_empty()
-            && (self.drift.frames() != shape.frame_count
-                || self.drift.reference() >= shape.frame_count
-                || self.drift.channel() >= self.channels.len())
+        if self.drifts.held().any(|drift| {
+            drift.frames() != shape.frame_count
+                || drift.reference() >= shape.frame_count
+                || drift.channel() >= shape.base_channels
+        }) || self.drifts.channels() > shape.base_channels
         {
             return Err(fault(
                 "the drift correction covers another time series than its dataset",
@@ -281,7 +282,8 @@ impl SceneState {
                 || !applied.is_empty()
                     && (applied.channel() != set.channel
                         || !applied.drift().is_empty()
-                            && (applied.drift().frames() as usize != set.frames.len()
+                            && (applied.drift().channel() != set.channel
+                                || applied.drift().frames() as usize != set.frames.len()
                                 || applied.drift().reference() as usize >= set.frames.len()))
             {
                 return Err(fault(

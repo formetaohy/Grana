@@ -24,7 +24,7 @@ use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
-    ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
+    ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, Drifts, FilterRange, ItemState,
     LabelExport, LassoPath, LocalizationAlignment, LocalizationSource, MaskFilter, MeasureState,
     ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey,
     Operation, Provenance, RatioSpec, Recipe, Registration, RelationState, RestoreSpec, SceneState,
@@ -364,7 +364,7 @@ impl Decode for SceneState {
             selections: Vec::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
-            drift: Drift::decode(reader)?,
+            drifts: Drifts::decode(reader)?,
             registration: Registration::decode(reader)?,
             annotations: AnnotationState::decode(reader)?,
         };
@@ -1925,6 +1925,24 @@ impl Decode for Registration {
             return Err(FAULT_VALUE);
         }
         Ok(Registration::new(reference, warps))
+    }
+}
+
+impl Decode for Drifts {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let count = reader.count(1)?;
+        if count > CHANNEL_LIMIT {
+            return Err(FAULT_VALUE);
+        }
+        let mut drifts = Drifts::new();
+        for _ in 0..count {
+            let drift = Drift::decode(reader)?;
+            if drift.channel() >= CHANNEL_LIMIT || drifts.get(drift.channel()).is_some() {
+                return Err(FAULT_VALUE);
+            }
+            drifts = drifts.placed(drift);
+        }
+        Ok(drifts)
     }
 }
 

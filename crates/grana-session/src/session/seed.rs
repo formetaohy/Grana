@@ -20,7 +20,13 @@ impl Session {
         let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
         let time = scene.time();
         let data = channels
-            .read_region(time, level, channel, &ranges, scene.drift().warp(time))
+            .read_region(
+                time,
+                level,
+                channel,
+                &ranges,
+                scene.drift_warp(channel, time),
+            )
             .ok()?;
         let mut values = vec![0.0f32; data.voxel_count()];
         data.write_values(&mut values);

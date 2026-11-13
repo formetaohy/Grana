@@ -128,7 +128,8 @@ impl Protocol {
             .iter()
             .map(|set| set.key.as_str())
             .collect::<Vec<_>>();
-        if let Some(drift) = &self.drift {
+        let mut aligned = Vec::new();
+        for drift in &self.drifts {
             validate(&drift.channel, "a channel name")?;
             if !self.channels.is_empty() && !self.channels.iter().any(|c| c.name == drift.channel) {
                 return Err(ProtocolError::Invalid(format!(
@@ -136,6 +137,13 @@ impl Protocol {
                     drift.channel
                 )));
             }
+            if aligned.contains(&&drift.channel) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns the channel {} twice",
+                    drift.channel
+                )));
+            }
+            aligned.push(&drift.channel);
             drift.checked()?;
         }
         if let Some(registration) = &self.registration {

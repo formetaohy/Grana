@@ -43,8 +43,8 @@ pub struct Protocol {
     channels: Vec<ChannelSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     derived: Vec<DerivedSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    drift: Option<DriftSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    drifts: Vec<DriftSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     registration: Option<RegistrationSpec>,
     #[serde(default, skip_serializing_if = "spec::is_f32_zero")]
@@ -107,8 +107,8 @@ impl Protocol {
         &self.derived
     }
 
-    pub fn drift(&self) -> Option<&DriftSpec> {
-        self.drift.as_ref()
+    pub fn drifts(&self) -> &[DriftSpec] {
+        &self.drifts
     }
 
     pub fn registration(&self) -> Option<&RegistrationSpec> {
@@ -348,9 +348,9 @@ impl Protocol {
             }
             None => sets,
         };
-        if let Some(drift) = &self.drift {
+        for drift in &self.drifts {
             summary.push_str(&format!(
-                " · aligned on {} to frame {}",
+                " · aligned {} to frame {}",
                 drift.channel, drift.reference
             ));
             if drift.lattice.is_some() {

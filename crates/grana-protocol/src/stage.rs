@@ -71,8 +71,22 @@ impl Protocol {
         for spec in &self.channels {
             channel(&names, &spec.name)?;
         }
-        if let Some(drift) = &self.drift {
-            channel(&names, drift.channel())?;
+        let mut aligned = Vec::new();
+        for drift in &self.drifts {
+            let channel = channel(&names, drift.channel())?;
+            if channel >= scene.base_channels() {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns the derived channel {}",
+                    drift.channel()
+                )));
+            }
+            if aligned.contains(&channel) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns the channel {} twice",
+                    drift.channel()
+                )));
+            }
+            aligned.push(channel);
             if drift.reference() >= scene.frame_count() {
                 return Err(ProtocolError::Invalid(format!(
                     "the drift correction aligns to frame {}, which the dataset does not hold",
@@ -343,7 +357,7 @@ impl Protocol {
             steps: Vec::new(),
             mask_radius: self.mask_radius,
         };
-        builder.scene.set_drift(grana_scene::Drift::default());
+        builder.scene.set_drifts(grana_scene::Drifts::new());
         builder
             .scene
             .set_registration(grana_scene::Registration::default());
@@ -352,7 +366,7 @@ impl Protocol {
             let reference = channel(&names, registration.reference())?;
             builder.steps.push(Step::Register { reference, warps });
         }
-        if let Some(drift) = &self.drift {
+        for drift in &self.drifts {
             let warps = drift.built().map_err(ProtocolError::Invalid)?;
             builder.steps.push(Step::Drift {
                 channel: channel(&names, drift.channel())?,
@@ -1076,9 +1090,12 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
 
 fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolError> {
     let count = steps.len();
-    let drift = steps
+    let drifts = steps
         .iter()
-        .position(|step| matches!(step, Step::Drift { .. }));
+        .enumerate()
+        .filter(|(_, step)| matches!(step, Step::Drift { .. }))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
     let registration = steps
         .iter()
         .position(|step| matches!(step, Step::Register { .. }));
@@ -1099,13 +1116,13 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
         match step {
             Step::Drift { .. } | Step::Register { .. } => {}
             Step::Import { .. } => {
-                dependencies[index].extend(drift);
+                dependencies[index].extend(drifts.iter().copied());
                 dependencies[index].extend(registration);
             }
             Step::Detect {
                 set, mask, filter, ..
             } => {
-                dependencies[index].extend(drift);
+                dependencies[index].extend(drifts.iter().copied());
                 dependencies[index].extend(registration);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
@@ -1159,7 +1176,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 dependencies[index].push(settled(&ready, *target)?);
             }
             Step::ObjectColoc { set, .. } => {
-                dependencies[index].extend(drift);
+                dependencies[index].extend(drifts.iter().copied());
                 dependencies[index].extend(registration);
                 dependencies[index].push(settled(&ready, *set)?);
             }
@@ -1167,7 +1184,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 dependencies[index].push(settled(&ready, *set)?);
             }
             Step::Coloc { mask, filter, .. } => {
-                dependencies[index].extend(drift);
+                dependencies[index].extend(drifts.iter().copied());
                 dependencies[index].extend(registration);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);

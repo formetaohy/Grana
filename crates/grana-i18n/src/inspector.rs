@@ -81,6 +81,7 @@ labels! {
     registering => "Registering…" / "正在配准…";
     clear_drift => "Clear Drift" / "清除漂移";
     register_channels => "Register Channels" / "配准通道";
+    from_localizations => "From Localizations" / "由定位表";
     clear_registration => "Clear Registration" / "清除配准";
     reference => "Reference" / "参考帧";
     frame_unit => "frame" / "帧";

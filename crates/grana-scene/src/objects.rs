@@ -9,7 +9,7 @@ use crate::alignment::LocalizationAlignment;
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
-use crate::drift::Drift;
+use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind};
@@ -806,14 +806,18 @@ impl Objects {
         }
     }
 
-    pub fn realign_localizations(&mut self, drift: &Drift, registration: &Registration) {
+    pub fn realign_localizations(&mut self, drifts: &Drifts, registration: &Registration) {
         let mut aligned = Vec::new();
         for set in &mut self.sets {
             if set.localization().is_none() {
                 continue;
             }
-            let next =
-                LocalizationAlignment::new(set.channel(), drift.clone(), registration.clone());
+            let channel = set.channel();
+            let next = LocalizationAlignment::new(
+                channel,
+                drifts.get(channel).cloned().unwrap_or_default(),
+                registration.clone(),
+            );
             if set.realign(&next, &mut self.revisions) {
                 aligned.push((set.id(), set.frame_count()));
             }

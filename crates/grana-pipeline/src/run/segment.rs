@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_object::{Mask, Roi};
-use grana_scene::{Drift, ObjectFrame, SegmentParams};
+use grana_scene::{Drifts, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, assemble};
 use grana_volume::{Level, Region};
 
@@ -18,7 +18,7 @@ pub struct SegmentRequest {
     channel: usize,
     params: SegmentParams,
     region: Region,
-    drift: Drift,
+    drifts: Drifts,
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
 }
@@ -28,14 +28,14 @@ impl SegmentRequest {
         channel: usize,
         params: SegmentParams,
         region: Region,
-        drift: Drift,
+        drifts: Drifts,
         roi: Option<Roi>,
     ) -> Self {
         Self {
             channel,
             params,
             region,
-            drift,
+            drifts,
             roi,
             seeds: Vec::new(),
         }
@@ -113,7 +113,7 @@ pub fn segment(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let warp = request.drift.warp(time);
+        let warp = request.drifts.warp(request.channel, time);
         let mask = domain.mask(request.roi.as_ref(), time)?;
         let Some(ranges) = clip(&bounds, mask.as_ref(), info) else {
             continue;

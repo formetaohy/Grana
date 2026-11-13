@@ -12,7 +12,7 @@ use grana_scene::{DerivedSpec, MaskChannel, Operation, Registration, Scene};
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, Pyramid, VoxelData, pad_brick,
 };
-use grana_warp::Warp;
+use grana_warp::{Warp, Warps};
 
 use operator::RegionSource;
 
@@ -59,7 +59,7 @@ struct Site<'a> {
     time: u32,
     level: usize,
     info: Level,
-    warp: &'a Warp,
+    warps: &'a Warps,
 }
 
 struct RestoredTile {
@@ -196,18 +196,19 @@ impl Channels {
             start..start + window
         });
         let restore = RestoreChannel::new(source, psf, iterations, self.registration.digest());
+        let identity = Warps::single(Warp::IDENTITY);
         let reader = ChannelSource {
             channels: self,
             time: 0,
             level: 0,
-            warp: &Warp::IDENTITY,
+            warps: &identity,
         };
         let site = Site {
             source: &reader,
             time: 0,
             level: 0,
             info,
-            warp: &Warp::IDENTITY,
+            warps: &identity,
         };
         let data = restore.region(&site, &ranges)?;
         let range = data.range();
@@ -282,9 +283,20 @@ impl Channels {
         ranges: &[Range<u32>; 3],
         warp: &Warp,
     ) -> Result<VoxelData, ChannelsError> {
+        self.read_aligned(time, level, channel, ranges, &Warps::single(warp.clone()))
+    }
+
+    fn read_aligned(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+        warps: &Warps,
+    ) -> Result<VoxelData, ChannelsError> {
         let stored = self.stored_channels();
         if channel < stored {
-            let warp = self.aligned(channel, warp);
+            let warp = self.aligned(channel, warps);
             return self.read_stored(time, level, channel, ranges, &warp);
         }
         let node = self
@@ -300,7 +312,7 @@ impl Channels {
             channels: self,
             time,
             level,
-            warp,
+            warps,
         };
         match &node.kind {
             Kind::Mask(mask_channel) => {
@@ -316,7 +328,7 @@ impl Channels {
                     time,
                     level,
                     info,
-                    warp,
+                    warps,
                 },
                 ranges,
             ),
@@ -341,29 +353,31 @@ impl Channels {
         time: u32,
         level: usize,
         coord: BrickCoord,
-        warp: &Warp,
+        warps: &Warps,
     ) -> Result<BrickData, ChannelsError> {
         assert!(
             self.metric.is_none(),
             "a brick belongs to the source grid the renderer streams"
         );
-        let data = match self.registration.is_empty() {
-            true => self
-                .reader
-                .read_brick(time, level, coord, warp)
-                .map_err(ChannelsError::Image)?,
-            false => self.aligned_brick(time, level, coord, warp)?,
-        };
+        let stored = self.stored_channels();
+        let placed = Warps::new(
+            (0..stored)
+                .map(|channel| self.aligned(channel, warps))
+                .collect(),
+        );
+        let data = self
+            .reader
+            .read_brick(time, level, coord, &placed)
+            .map_err(ChannelsError::Image)?;
         if self.derived.is_empty() {
             return Ok(data);
         }
         let info = self.level(level)?;
         let grid = BrickGrid::new(info.extent());
-        let stored = self.stored_channels();
         let mut channels = data.channels().to_vec();
         for index in 0..self.derived.len() {
             let ranges = grid.padded_range(coord);
-            let region = self.read_region(time, level, stored + index, &ranges, warp)?;
+            let region = self.read_aligned(time, level, stored + index, &ranges, warps)?;
             let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
             let covered = Extent::new(
                 ranges[0].end - ranges[0].start,
@@ -396,8 +410,8 @@ impl Channels {
         self.read_stored(time, level, channel, ranges, warp)
     }
 
-    fn aligned(&self, channel: usize, warp: &Warp) -> Warp {
-        warp.added(self.registration.warp(channel))
+    fn aligned(&self, channel: usize, warps: &Warps) -> Warp {
+        warps.get(channel).added(self.registration.warp(channel))
     }
 
     fn read_stored(
@@ -417,37 +431,6 @@ impl Channels {
                 .read_region(time, level, channel, ranges, warp)
                 .map_err(ChannelsError::Image),
         }
-    }
-
-    fn aligned_brick(
-        &self,
-        time: u32,
-        level: usize,
-        coord: BrickCoord,
-        warp: &Warp,
-    ) -> Result<BrickData, ChannelsError> {
-        let info = self.level(level)?;
-        let grid = BrickGrid::new(info.extent());
-        let ranges = grid.padded_range(coord);
-        let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
-        let covered = Extent::new(
-            ranges[0].end - ranges[0].start,
-            ranges[1].end - ranges[1].start,
-            ranges[2].end - ranges[2].start,
-        );
-        let mut channels = Vec::with_capacity(self.stored_channels());
-        for channel in 0..self.stored_channels() {
-            let warp = self.aligned(channel, warp);
-            let region = self.read_stored(time, level, channel, &ranges, &warp)?;
-            channels.push(pad_brick(
-                &region,
-                origin,
-                covered,
-                grid.origin(coord),
-                info.extent(),
-            ));
-        }
-        Ok(BrickData::new(channels))
     }
 }
 
@@ -474,7 +457,7 @@ impl Channels {
                     Operation::Bleach => Kind::Bleach {
                         source: spec.source(),
                         factors: self
-                            .bleach_factors(spec.source(), scene.drift())
+                            .bleach_factors(spec.source(), scene.drifts())
                             .map_err(|error| error.to_string()),
                     },
                     Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
@@ -489,7 +472,7 @@ impl Channels {
     pub fn bleach_factors(
         &self,
         source: usize,
-        drift: &grana_scene::Drift,
+        drifts: &grana_scene::Drifts,
     ) -> Result<Arc<[f32]>, ChannelsError> {
         let stored = self.stored_channels();
         if source >= stored {
@@ -523,7 +506,7 @@ impl Channels {
                     level,
                     source,
                     &ranges,
-                    drift.warp(time),
+                    drifts.warp(source, time),
                 )
                 .map_err(ChannelsError::Image)?;
             let mut values = vec![0.0f32; data.voxel_count()];
@@ -560,9 +543,9 @@ impl Channels {
     pub fn bleach_range(
         &self,
         source: usize,
-        drift: &grana_scene::Drift,
+        drifts: &grana_scene::Drifts,
     ) -> Result<Intensity, ChannelsError> {
-        let factors = self.bleach_factors(source, drift)?;
+        let factors = self.bleach_factors(source, drifts)?;
         let low = factors.iter().copied().fold(f32::INFINITY, f32::min);
         let high = factors.iter().copied().fold(0.0f32, f32::max);
         let fundus = self.reader.pyramid().channels()[source].intensity();
@@ -593,13 +576,13 @@ struct ChannelSource<'a> {
     channels: &'a Channels,
     time: u32,
     level: usize,
-    warp: &'a Warp,
+    warps: &'a Warps,
 }
 
 impl RegionSource for ChannelSource<'_> {
     fn read(&self, channel: usize, ranges: &[Range<u32>; 3]) -> Result<VoxelData, ChannelsError> {
         self.channels
-            .read_region(self.time, self.level, channel, ranges, self.warp)
+            .read_aligned(self.time, self.level, channel, ranges, self.warps)
     }
 }
 
@@ -615,8 +598,8 @@ impl RestoreChannel {
         }
     }
 
-    fn warp_digest(&self, warp: &Warp) -> u64 {
-        let mut digest = warp.digest();
+    fn warp_digest(&self, warps: &Warps) -> u64 {
+        let mut digest = warps.digest();
         digest = digest.rotate_left(17) ^ self.registration;
         digest.wrapping_mul(0x0000_0100_0000_01b3)
     }
@@ -698,7 +681,7 @@ impl RestoreChannel {
         let key = (
             site.time,
             site.level as u32,
-            self.warp_digest(site.warp),
+            self.warp_digest(site.warps),
             coord,
         );
         let mut tiles = self.tiles.lock().unwrap_or_else(|error| error.into_inner());
@@ -730,7 +713,7 @@ impl RestoreChannel {
             key: (
                 site.time,
                 site.level as u32,
-                self.warp_digest(site.warp),
+                self.warp_digest(site.warps),
                 coord,
             ),
             core,

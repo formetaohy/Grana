@@ -12,6 +12,10 @@ pub struct LocalizationAlignment {
 
 impl LocalizationAlignment {
     pub fn new(channel: usize, drift: Drift, registration: Registration) -> Self {
+        assert!(
+            drift.is_empty() || drift.channel() == channel,
+            "a localization aligns with the drift of the channel it was measured in"
+        );
         Self {
             channel,
             drift,

@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
-use grana_scene::Drift;
+use grana_scene::Drifts;
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid, VolumeSeries};
 
 const ATTEMPTS: u32 = 3;
@@ -46,7 +46,7 @@ pub struct Loader {
     sender: Sender<Event>,
     reader: &'static Executor,
     time: Arc<AtomicU32>,
-    drift: Arc<RwLock<Drift>>,
+    drifts: Arc<RwLock<Drifts>>,
     channels: Arc<RwLock<Option<Arc<Channels>>>>,
     closed: Arc<AtomicBool>,
     source: Source,
@@ -80,7 +80,7 @@ impl Loader {
                 sender,
                 reader: Executor::lane(Role::Read),
                 time: Arc::new(AtomicU32::new(0)),
-                drift: Arc::new(RwLock::new(Drift::default())),
+                drifts: Arc::new(RwLock::new(Drifts::new())),
                 channels: Arc::new(RwLock::new(Some(channels))),
                 closed: Arc::new(AtomicBool::new(false)),
                 source,
@@ -109,7 +109,7 @@ impl Loader {
         let remote = source.is_remote();
         let (sender, events) = Pipe::new(CAPACITY);
         let time = Arc::new(AtomicU32::new(0));
-        let drift = Arc::new(RwLock::new(Drift::default()));
+        let drifts = Arc::new(RwLock::new(Drifts::new()));
         let channels = Arc::new(RwLock::new(None));
         let closed = Arc::new(AtomicBool::new(false));
         let reader = Executor::lane(Role::Read);
@@ -132,7 +132,7 @@ impl Loader {
             sender,
             reader,
             time,
-            drift,
+            drifts,
             channels,
             closed,
             source,
@@ -155,11 +155,11 @@ impl Loader {
             let priority = self.reader.stamp();
             let channels = Arc::clone(&self.channels);
             let time = Arc::clone(&self.time);
-            let drift = Arc::clone(&self.drift);
+            let drifts = Arc::clone(&self.drifts);
             let closed = Arc::clone(&self.closed);
             let events = self.sender.clone();
             self.reader.submit_ordered(priority, move |cancel| {
-                read(request, &channels, &time, &drift, &closed, cancel, &events);
+                read(request, &channels, &time, &drifts, &closed, cancel, &events);
             });
         }
         true
@@ -169,15 +169,15 @@ impl Loader {
         self.time.store(time, AtomicOrdering::Relaxed);
     }
 
-    pub fn set_drift(&self, drift: Drift) {
+    pub fn set_drifts(&self, drifts: Drifts) {
         *self
-            .drift
+            .drifts
             .write()
-            .unwrap_or_else(|error| error.into_inner()) = drift;
+            .unwrap_or_else(|error| error.into_inner()) = drifts;
     }
 
-    pub fn drift(&self) -> Drift {
-        self.drift
+    pub fn drifts(&self) -> Drifts {
+        self.drifts
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -285,7 +285,7 @@ fn read(
     request: BrickRequest,
     channels: &RwLock<Option<Arc<Channels>>>,
     time: &AtomicU32,
-    drift: &RwLock<Drift>,
+    drifts: &RwLock<Drifts>,
     closed: &AtomicBool,
     cancel: &Cancel,
     events: &Sender<Event>,
@@ -297,11 +297,6 @@ fn read(
     if request.time < time.load(AtomicOrdering::Relaxed) {
         return;
     }
-    let warp = drift
-        .read()
-        .unwrap_or_else(|error| error.into_inner())
-        .warp(request.time)
-        .clone();
     let Some(channels) = channels
         .read()
         .unwrap_or_else(|error| error.into_inner())
@@ -309,11 +304,16 @@ fn read(
     else {
         return;
     };
+    let base = channels.pyramid().channel_count();
+    let warps = drifts
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .warps(request.time, base);
     for attempt in 1..=ATTEMPTS {
         if stopped() {
             return;
         }
-        match channels.read_brick(request.time, request.level, request.coord, &warp) {
+        match channels.read_brick(request.time, request.level, request.coord, &warps) {
             Ok(data) => {
                 events.send_until(Event::Brick { request, data }, stopped);
                 return;

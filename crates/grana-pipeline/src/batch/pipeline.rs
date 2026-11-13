@@ -634,7 +634,7 @@ impl Run<'_, '_> {
             channel,
             region: self.scene.region,
             roi,
-            drift: self.scene.drift().clone(),
+            drifts: self.scene.drifts().clone(),
         };
         let frames = match (segmented, params) {
             (Some(params), _) => segment_frames(reading, params, seeds, &self.progress)?,
@@ -711,13 +711,14 @@ impl Run<'_, '_> {
             label: format!("importing {name}"),
         });
         let reader = &self.channels;
-        let drift = self.scene.drift().clone();
+        let drifts = self.scene.drifts().clone();
+        let channel = self.scene.objects.get(id).map_or(0, |set| set.channel());
         let frames = self.scene.frame_count() as usize;
         let progress = &self.progress;
         let mut collected = drain(frames, progress, &mut |_| {}, |sink| {
             crate::run::import(
                 reader,
-                crate::run::ImportRequest::new(label, drift),
+                crate::run::ImportRequest::new(channel, label, drifts.clone()),
                 task.cancel,
                 sink,
             )
@@ -800,7 +801,7 @@ impl Run<'_, '_> {
             .channel();
         Ok(grana_scene::LocalizationAlignment::new(
             channel,
-            self.scene.drift().clone(),
+            self.scene.drift(channel).cloned().unwrap_or_default(),
             self.scene.registration().clone(),
         ))
     }
@@ -1066,7 +1067,7 @@ impl Run<'_, '_> {
                     channel,
                     level,
                     strokes,
-                    drift: self.scene.drift(),
+                    drifts: self.scene.drifts(),
                 };
                 crate::run::mask(&self.channels, &frames, voxel, &request)?
             }
@@ -1343,7 +1344,7 @@ impl Run<'_, '_> {
                 roi,
                 mask_id,
                 settings,
-                self.scene.drift().clone(),
+                self.scene.drifts().clone(),
                 task.workers,
             ),
             task.cancel,
@@ -1412,7 +1413,7 @@ impl Run<'_, '_> {
                 pair,
                 region,
                 frames,
-                self.scene.drift().clone(),
+                self.scene.drifts().clone(),
                 task.workers,
             ),
             task.cancel,
@@ -1650,7 +1651,7 @@ struct Reading<'a> {
     channel: usize,
     region: Region,
     roi: Option<Roi>,
-    drift: grana_scene::Drift,
+    drifts: grana_scene::Drifts,
 }
 
 fn detect(
@@ -1680,6 +1681,7 @@ fn detect(
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
         | RunEvent::Registration(_)
+        | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
@@ -1694,7 +1696,7 @@ fn detect(
             params,
             reading.region,
             reading.roi,
-            reading.drift,
+            reading.drifts.clone(),
             task.workers,
             Arc::clone(store),
         )
@@ -1729,6 +1731,7 @@ fn grow_frames(
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
         | RunEvent::Registration(_)
+        | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
@@ -1742,7 +1745,7 @@ fn grow_frames(
             reading.channel,
             params,
             reading.region,
-            reading.drift,
+            reading.drifts.clone(),
             reading.roi,
             sources,
         ),
@@ -1776,6 +1779,7 @@ fn segment_frames(
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
         | RunEvent::Registration(_)
+        | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
@@ -1789,7 +1793,7 @@ fn segment_frames(
             reading.channel,
             params,
             reading.region,
-            reading.drift,
+            reading.drifts.clone(),
             reading.roi,
         )
         .with_seeds(seeds),

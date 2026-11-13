@@ -83,6 +83,11 @@ impl Session {
             },
             Drift(grana_scene::Drift),
             Registration(grana_scene::Registration),
+            Fiducial {
+                channels: usize,
+                pairs: usize,
+                residual: f32,
+            },
             Calibration {
                 source: usize,
                 psf: Box<grana_optics::MeasuredPsf>,
@@ -172,6 +177,21 @@ impl Session {
                     }
                     Poll::Event(Event::Registration(registration)) => {
                         updates.push((index, job, Update::Registration(registration)));
+                    }
+                    Poll::Event(Event::Fiducial {
+                        channels,
+                        pairs,
+                        residual,
+                    }) => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::Fiducial {
+                                channels,
+                                pairs,
+                                residual,
+                            },
+                        ));
                     }
                     Poll::Event(Event::Calibration {
                         source,
@@ -333,6 +353,16 @@ impl Session {
                     }
                     self.install_channels();
                     self.realign();
+                }
+                Update::Fiducial {
+                    channels,
+                    pairs,
+                    residual,
+                } => {
+                    self.message = Some(Message::info(format!(
+                        "registered {channels} channels from {pairs} bead pairs · residual {:.0} nm",
+                        residual * 1000.0
+                    )));
                 }
                 Update::Calibration {
                     source,
@@ -893,7 +923,7 @@ impl Session {
         let params = object.params();
         let segment = object.provenance().segment().cloned();
         let region = scene.region;
-        let drift = scene.drift().clone();
+        let drifts = scene.drifts().clone();
         let seed_source = scene.seed_source(set);
         let seeds = scene.seed_frames(set);
         if let Some(source) = seed_source
@@ -985,14 +1015,14 @@ impl Session {
             self.analysis.push(crate::grow(
                 Job::Detect(set),
                 Arc::clone(&channels),
-                GrowRequest::new(channel, params, region, drift, roi, sources),
+                GrowRequest::new(channel, params, region, drifts, roi, sources),
             ));
             return;
         }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
         if let Some(params) = segment {
-            let request = SegmentRequest::new(channel, params, region, drift, roi);
+            let request = SegmentRequest::new(channel, params, region, drifts, roi);
             let request = if seeds.iter().any(|frame| !frame.is_empty()) {
                 request.with_seeds(seeds)
             } else {
@@ -1015,7 +1045,7 @@ impl Session {
         self.analysis.push(crate::detect(
             Job::Detect(set),
             channels,
-            DetectRequest::new(channel, params, region, roi, drift, 0, self.store())
+            DetectRequest::new(channel, params, region, roi, drifts, 0, self.store())
                 .with_seeds(seeds, policy),
         ));
     }
@@ -1218,7 +1248,7 @@ impl Session {
             return;
         }
         let settings = scene.coloc.settings();
-        let drift = scene.drift().clone();
+        let drifts = scene.drifts().clone();
         let mask = scene.mask;
         let roi = match mask {
             None => None,
@@ -1259,7 +1289,7 @@ impl Session {
                 roi,
                 mask.map(|set| set.raw()),
                 settings,
-                drift,
+                drifts,
                 0,
             ),
         ));
@@ -1316,13 +1346,13 @@ impl Session {
         let frames = (0..scene.frame_count())
             .map(|time| object.frame_shared(time))
             .collect::<Vec<_>>();
-        let drift = scene.drift().clone();
+        let drifts = scene.drifts().clone();
         self.message = None;
         self.record_progress(Job::ObjectColoc(set), 0, 0, 0);
         self.analysis.push(crate::object_coloc(
             Job::ObjectColoc(set),
             channels,
-            grana_pipeline::run::ObjectColocRequest::new(pair, region, frames, drift, 0),
+            grana_pipeline::run::ObjectColocRequest::new(pair, region, frames, drifts, 0),
         ));
     }
 
@@ -1333,8 +1363,10 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let reference = scene.drift().reference();
         let channel = scene.selected;
+        let reference = scene
+            .drift(channel)
+            .map_or(0, grana_scene::Drift::reference);
         self.align_drift(channel, reference);
     }
 
@@ -1372,13 +1404,9 @@ impl Session {
             self.message = Some(Message::error("the dataset holds one frame to align"));
             return;
         }
-        let base = scene.drift().clone();
+        let channel = object.channel();
+        let base = scene.drift(channel).cloned().unwrap_or_default();
         let reference = base.reference();
-        let channel = if base.is_empty() {
-            object.channel()
-        } else {
-            base.channel()
-        };
         let mut frames = Vec::with_capacity(scene.frame_count() as usize);
         for time in 0..scene.frame_count() {
             let mut centers = Vec::new();
@@ -1456,7 +1484,9 @@ impl Session {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        let drift = scene.drift().clone();
+        let Some(drift) = scene.drift(scene.selected).cloned() else {
+            return;
+        };
         if drift.is_empty() || reference >= drift.frames() || reference == drift.reference() {
             return;
         }
@@ -1469,7 +1499,9 @@ impl Session {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        let drift = scene.drift().clone();
+        let Some(drift) = scene.drift(scene.selected).cloned() else {
+            return;
+        };
         if drift.is_empty() || time >= drift.frames() || time == drift.reference() {
             return;
         }
@@ -1487,9 +1519,95 @@ impl Session {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        if scene.set_drift(grana_scene::Drift::default()) {
+        if scene.clear_drift(scene.selected) {
             self.realign();
         }
+    }
+
+    pub(super) fn start_fiducial_registration(&mut self, reference: usize) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Register)
+        {
+            return;
+        }
+        if !self.analysable() {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if scene.base_channels() < 2 {
+            self.message = Some(Message::error("the dataset holds one channel to register"));
+            return;
+        }
+        if reference >= scene.base_channels() {
+            self.message = Some(Message::error(
+                "the channel registration aligns a stored channel",
+            ));
+            return;
+        }
+        let fiducial = scene
+            .objects
+            .iter()
+            .filter(|set| {
+                set.kind() == grana_scene::ObjectKind::Spots
+                    && set.channel() < scene.base_channels()
+                    && set.localization().is_some()
+            })
+            .map(|set| (set.id(), set.channel()))
+            .collect::<Vec<_>>();
+        let Some(source) = fiducial
+            .iter()
+            .find(|(_, channel)| *channel == reference)
+            .map(|(set, _)| *set)
+        else {
+            self.message = Some(Message::error(
+                "the selected channel carries no localization table to register from",
+            ));
+            return;
+        };
+        let mut moving = Vec::new();
+        let mut channels = Vec::new();
+        for (set, channel) in &fiducial {
+            if *channel == reference || channels.contains(channel) {
+                continue;
+            }
+            channels.push(*channel);
+            moving.push(*set);
+        }
+        if moving.is_empty() {
+            self.message = Some(Message::error(
+                "another channel needs a localization table to register",
+            ));
+            return;
+        }
+        let scale = scene
+            .dataset
+            .pyramid()
+            .level(0)
+            .voxel()
+            .into_iter()
+            .fold(f32::INFINITY, f32::min);
+        let reference =
+            grana_pipeline::run::FiducialChannel::new(reference, fiducial_points(scene, source));
+        let moving = moving
+            .into_iter()
+            .zip(channels)
+            .map(|(set, channel)| {
+                grana_pipeline::run::FiducialChannel::new(channel, fiducial_points(scene, set))
+            })
+            .collect::<Vec<_>>();
+        let total = moving.len();
+        let channels = scene.base_channels();
+        self.message = None;
+        self.record_progress(Job::Register, 0, 0, total);
+        self.analysis.push(crate::fiducial(
+            Job::Register,
+            grana_pipeline::run::FiducialRequest::new(reference, moving, channels, scale),
+        ));
     }
 
     pub(super) fn start_registration(&mut self, reference: usize) {
@@ -1544,12 +1662,58 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let drift = scene.drift().clone();
+        let drifts = scene.drifts().clone();
         if let Some(source) = self.source.as_ref() {
-            source.set_drift(drift);
+            source.set_drifts(drifts);
         }
         self.in_flight.clear();
         self.bricks.clear();
         self.reloaded();
     }
+}
+
+fn fiducial_points(scene: &Scene, set: ObjectSetId) -> Vec<[f32; 3]> {
+    let Some(object) = scene.objects.get(set) else {
+        return Vec::new();
+    };
+    let grouped = object
+        .localization()
+        .is_some_and(|source| source.clustered());
+    if !grouped {
+        let mut points = Vec::new();
+        for time in 0..object.frame_count() {
+            let Some(frame) = object.frame(time) else {
+                continue;
+            };
+            for (index, spot) in frame.spots_of().iter().enumerate() {
+                if object.visible_object(time, index) {
+                    points.push(spot.center());
+                }
+            }
+        }
+        return points;
+    }
+    let mut groups = std::collections::BTreeMap::<u32, (u32, [f64; 3])>::new();
+    for time in 0..object.frame_count() {
+        let Some(frame) = object.frame(time) else {
+            continue;
+        };
+        for (index, spot) in frame.spots_of().iter().enumerate() {
+            let Some(group) = spot.group() else {
+                continue;
+            };
+            if !object.visible_object(time, index) {
+                continue;
+            }
+            let entry = groups.entry(group).or_insert((0, [0.0; 3]));
+            entry.0 += 1;
+            for (axis, value) in spot.center().iter().enumerate() {
+                entry.1[axis] += f64::from(*value);
+            }
+        }
+    }
+    groups
+        .values()
+        .map(|(count, sum)| [0, 1, 2].map(|axis| (sum[axis] / f64::from(*count)) as f32))
+        .collect()
 }

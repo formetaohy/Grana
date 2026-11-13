@@ -197,6 +197,12 @@ pub fn register(job: Job, channels: Arc<Channels>, request: RegisterRequest) -> 
     })
 }
 
+pub fn fiducial(job: Job, request: grana_pipeline::run::FiducialRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::fiducial(request, cancel, sink)
+    })
+}
+
 pub fn calibration(
     job: Job,
     image: Arc<grana_image::Image>,

@@ -720,6 +720,125 @@ fn realigns_localizations_when_drift_changes() {
 }
 
 #[test]
+fn aligns_each_channel_with_its_own_drift() {
+    let extent = Extent::new(16, 16, 4);
+    let data = VoxelData::F32(vec![0.0; extent.voxel_count() as usize]);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![
+            Channel::new("first", [1.0, 0.0, 0.0], data.clone()),
+            Channel::new("second", [0.0, 1.0, 0.0], data),
+        ],
+    );
+    let pyramid = VolumeSeries::new(vec![volume.clone(), volume], 1.0)
+        .pyramid()
+        .clone();
+    let mut scene = Scene::new(Dataset::synthetic("channels", pyramid));
+    let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
+    let center = [0.4, -0.2, 0.1];
+    let mut sets = Vec::new();
+    for channel in 0..2 {
+        let set = scene.add_object(ObjectKind::Spots, channel);
+        for time in 0..2 {
+            scene.install(
+                set,
+                time,
+                ObjectFrame::Spots(grana_object::SpotSet::new(
+                    0,
+                    vec![Spot::grouped(center, [0.02; 3], 1.0, None)],
+                    IntensityTable::new(2, vec![statistics; 2]),
+                )),
+            );
+        }
+        scene.set_localization(
+            set,
+            LocalizationSource::new(
+                100.0,
+                16,
+                16,
+                false,
+                false,
+                grana_object::LocalizationSpec::cover(2),
+                LocalizationAlignment::new(channel, Drift::default(), Registration::default()),
+            ),
+        );
+        sets.push(set);
+    }
+    let drift = Drift::new(
+        1,
+        0,
+        vec![
+            grana_warp::Warp::IDENTITY,
+            grana_warp::Warp::shift([0.5, 0.0, 0.0]),
+        ],
+    );
+    assert!(scene.set_drift(drift));
+    fn centre(scene: &Scene, set: grana_scene::ObjectSetId) -> f32 {
+        scene
+            .objects
+            .get(set)
+            .expect("the spot set stays")
+            .frame(1)
+            .expect("the frame stays")
+            .spots()
+            .expect("the frame carries spots")
+            .spots()[0]
+            .center()[0]
+    }
+    assert!(
+        (centre(&scene, sets[0]) - center[0]).abs() < 1.0e-6,
+        "the other channel holds still"
+    );
+    assert!((centre(&scene, sets[1]) - (center[0] - 0.5)).abs() < 1.0e-6);
+    assert!(
+        scene.drift(0).is_none(),
+        "the drift of the second channel leaves the first alone"
+    );
+    assert!(scene.drift(1).is_some());
+    assert!(scene.clear_drift(1));
+    assert!((centre(&scene, sets[1]) - center[0]).abs() < 1.0e-6);
+    assert!(scene.drift(1).is_none());
+}
+
+#[test]
+fn registers_channels_from_fiducial_beads() {
+    let mut reference = Vec::new();
+    for row in 0..6 {
+        for column in 0..6 {
+            reference.push([column as f32 * 12.0, row as f32 * 12.0, 0.0]);
+        }
+    }
+    let moving = reference
+        .iter()
+        .map(|point| {
+            [
+                point[0] + 0.8 - 0.004 * point[0],
+                point[1] + 0.3 + 0.002 * point[1],
+                point[2],
+            ]
+        })
+        .collect::<Vec<_>>();
+    let fiducial = grana_analysis::fiducial_registration(&reference, &moving, 0.1)
+        .expect("the fiducials register the channels");
+    assert_eq!(fiducial.pairs(), reference.len());
+    assert!(
+        fiducial.residual() < 0.05,
+        "the fiducial fit leaves {:.3} µm",
+        fiducial.residual()
+    );
+    for (expected, moving) in reference.iter().zip(&moving) {
+        let offset = fiducial.warp().sample(*moving);
+        let corrected = [0, 1, 2].map(|axis| moving[axis] - offset[axis]);
+        for axis in 0..2 {
+            assert!(
+                (corrected[axis] - expected[axis]).abs() < 0.05,
+                "the bead at {moving:?} lands {corrected:?} from {expected:?}"
+            );
+        }
+    }
+}
+#[test]
 fn aligns_localizations_with_channel_registration() {
     let extent = Extent::new(16, 16, 4);
     let data = VoxelData::F32(vec![0.0; extent.voxel_count() as usize]);
@@ -1342,7 +1461,7 @@ fn spots_of(channels: &Channels) -> Vec<Spot> {
         ObjectParams::Spots(SpotParams::new(1.5, 0.01)),
         Region::none(),
         None,
-        Drift::default(),
+        grana_scene::Drifts::new(),
         1,
         GeometryStore::temporary(256 << 20).expect("the geometry store opens"),
     );

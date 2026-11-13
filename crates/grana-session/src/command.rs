@@ -413,6 +413,7 @@ pub enum Command {
         offset: [f32; 3],
     },
     RegisterChannels(usize),
+    RegisterFromLocalizations(usize),
     CancelRegistration,
     ClearRegistration,
     ExportColoc,

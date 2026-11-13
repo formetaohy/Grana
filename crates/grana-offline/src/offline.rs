@@ -188,7 +188,7 @@ impl Offline {
         }
         let mut uploaded = Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
         for request in requests.volume.iter().chain(&requests.prefetch) {
-            let data = bricks.read(*request, scene.drift().warp(request.time))?;
+            let data = bricks.read(*request, &scene.drift_warps(request.time))?;
             uploaded.push((*request, data));
         }
         self.renderer.upload(&self.queue, &uploaded);

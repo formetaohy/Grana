@@ -4,7 +4,7 @@ use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::{
     Mask, MaskEdit, MaskMode, MaskTool, ObjectAnchor, Roi, Shape, SurfaceSet, assign,
 };
-use grana_scene::{Drift, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame};
 use grana_volume::{Level, VoxelData};
 
 use crate::channels::Channels;
@@ -18,7 +18,7 @@ pub struct MaskRequest<'a> {
     pub channel: usize,
     pub level: usize,
     pub strokes: &'a [MaskEdit],
-    pub drift: &'a Drift,
+    pub drifts: &'a Drifts,
 }
 
 pub fn mask(
@@ -230,7 +230,7 @@ fn flood(
                 request.level,
                 request.channel,
                 &ranges,
-                request.drift.warp(frame),
+                request.drifts.warp(request.channel, frame),
             )
             .map_err(|error| error.to_string())?;
         let region = grow(
@@ -372,7 +372,7 @@ fn rebuild(
                         request.level,
                         channel,
                         &ranges,
-                        request.drift.warp(frame),
+                        request.drifts.warp(request.channel, frame),
                     )
                     .map_err(|error| error.to_string())?,
             );

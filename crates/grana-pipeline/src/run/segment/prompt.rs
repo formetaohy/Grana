@@ -53,7 +53,7 @@ pub(super) fn segment(
                 info,
                 channel: request.channel,
                 roi: mask.as_ref(),
-                warp: request.drift.warp(time),
+                warp: request.drifts.warp(request.channel, time),
                 time,
                 settings,
             };
@@ -82,7 +82,7 @@ pub(super) fn segment(
                 break;
             }
             found += blocks.len();
-            if let Some(surfaces) = surfaces(reader, time, info, &blocks, &request.drift)? {
+            if let Some(surfaces) = surfaces(reader, time, info, &blocks, &request.drifts)? {
                 sink(Event::Frame {
                     time,
                     frame: ObjectFrame::Surfaces(surfaces),
@@ -478,10 +478,9 @@ fn surfaces(
     time: u32,
     info: Level,
     blocks: &[Block],
-    drift: &grana_scene::Drift,
+    drifts: &grana_scene::Drifts,
 ) -> Result<Option<SurfaceSet>, String> {
     let channels = reader.pyramid().channel_count();
-    let warp = drift.warp(time);
     let mut merged: Option<SurfaceSet> = None;
     for block in blocks {
         let extent = block.extent;
@@ -494,7 +493,7 @@ fn surfaces(
         for channel in 0..channels {
             data.push(
                 reader
-                    .read_region(time, 0, channel, &ranges, warp)
+                    .read_region(time, 0, channel, &ranges, drifts.warp(channel, time))
                     .map_err(|error| error.to_string())?,
             );
         }

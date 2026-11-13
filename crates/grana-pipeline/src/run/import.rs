@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::channels::Channels;
 use grana_analysis::{LabelBuilder, LabelSlab};
-use grana_scene::{Drift, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame};
 use grana_volume::{Pyramid, VoxelData};
 
 use crate::event::Event;
@@ -12,16 +12,18 @@ const TILE_Y: u32 = 128;
 const TILE_Z: u32 = 32;
 
 pub struct ImportRequest {
+    channel: usize,
     label: String,
-    drift: Drift,
+    drifts: Drifts,
 }
 
 impl ImportRequest {
-    pub fn new(label: &str, drift: Drift) -> Self {
+    pub fn new(channel: usize, label: &str, drifts: Drifts) -> Self {
         assert!(!label.trim().is_empty(), "an import names a label image");
         Self {
+            channel,
             label: label.to_string(),
-            drift,
+            drifts,
         }
     }
 
@@ -76,7 +78,7 @@ pub fn import(
         total,
     });
     for time in 0..frames {
-        let warp = request.drift.warp(time);
+        let warp = request.drifts.warp(request.channel, time);
         let voxels = info
             .basis()
             .untransform(warp.translation())
@@ -104,7 +106,13 @@ pub fn import(
             let mut channels = Vec::with_capacity(pyramid.channel_count());
             for channel in 0..pyramid.channel_count() {
                 let values: VoxelData = reader
-                    .read_region(time, image_level, channel, &ranges, warp)
+                    .read_region(
+                        time,
+                        image_level,
+                        channel,
+                        &ranges,
+                        request.drifts.warp(channel, time),
+                    )
                     .map_err(|error| error.to_string())?;
                 channels.push(values);
             }

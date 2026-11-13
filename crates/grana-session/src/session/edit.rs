@@ -521,11 +521,10 @@ impl Session {
                 let Some(level) = level else {
                     return Err("the painted object set carries no surface frame".to_string());
                 };
-                let drift = self
+                let drifts = self
                     .scene
                     .as_ref()
-                    .map(|scene| scene.drift().clone())
-                    .unwrap_or_default();
+                    .map_or_else(Default::default, |scene| scene.drifts().clone());
                 grana_pipeline::run::mask(
                     reader.as_ref(),
                     &frames,
@@ -534,7 +533,7 @@ impl Session {
                         channel,
                         level,
                         strokes: &strokes,
-                        drift: &drift,
+                        drifts: &drifts,
                     },
                 )?
             }

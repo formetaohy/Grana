@@ -411,6 +411,42 @@ const REGULARITY: f32 = 0.05;
 const ANCHOR: f32 = 0.02;
 const RESIDUAL_LIMIT: f32 = 0.5;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Smoothing {
+    neighbour: f32,
+    anchor: f32,
+}
+
+impl Smoothing {
+    pub const SMOOTH: Self = Self {
+        neighbour: REGULARITY,
+        anchor: ANCHOR,
+    };
+
+    pub const EXACT: Self = Self {
+        neighbour: 0.0,
+        anchor: 0.0,
+    };
+
+    pub fn new(neighbour: f32, anchor: f32) -> Self {
+        assert!(
+            [neighbour, anchor]
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0),
+            "a displacement smoothing prior weighs non negative couplings"
+        );
+        Self { neighbour, anchor }
+    }
+
+    pub fn neighbour(&self) -> f32 {
+        self.neighbour
+    }
+
+    pub fn anchor(&self) -> f32 {
+        self.anchor
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
     pub point: [f32; 3],
@@ -554,7 +590,12 @@ pub fn mean(samples: &[Sample]) -> Option<[f32; 3]> {
     (total > 0.0).then(|| sum.map(|value| value / total))
 }
 
-pub fn deform(samples: &[Sample], lattice: Lattice, scale: f32) -> Option<Warp> {
+pub fn deform(
+    samples: &[Sample],
+    lattice: Lattice,
+    scale: f32,
+    smoothing: Smoothing,
+) -> Option<Warp> {
     if samples.len() < MINIMUM_SAMPLES {
         return None;
     }
@@ -563,7 +604,7 @@ pub fn deform(samples: &[Sample], lattice: Lattice, scale: f32) -> Option<Warp> 
         return None;
     }
     let mean = mean(samples)?;
-    let values = fit(samples, lattice, mean)?;
+    let values = fit(samples, lattice, mean, smoothing)?;
     let grid = Grid::new(lattice.dims, lattice.origin, lattice.step, values);
     let residual = residual(&grid, samples);
     let deviation = grid
@@ -632,7 +673,12 @@ fn taps(lattice: Lattice, point: [f32; 3]) -> Tap {
     Tap { node, weight }
 }
 
-fn fit(samples: &[Sample], lattice: Lattice, mean: [f32; 3]) -> Option<Vec<[f32; 3]>> {
+fn fit(
+    samples: &[Sample],
+    lattice: Lattice,
+    mean: [f32; 3],
+    smoothing: Smoothing,
+) -> Option<Vec<[f32; 3]>> {
     let count = lattice.nodes();
     let dims = lattice.dims;
     let stride = [
@@ -645,8 +691,8 @@ fn fit(samples: &[Sample], lattice: Lattice, mean: [f32; 3]) -> Option<Vec<[f32;
         .map(|sample| taps(lattice, sample.point))
         .collect::<Vec<_>>();
     let total = samples.iter().map(|sample| sample.weight).sum::<f32>();
-    let regularity = REGULARITY * total / count as f32;
-    let anchor = ANCHOR * total / count as f32;
+    let regularity = smoothing.neighbour * total / count as f32;
+    let anchor = smoothing.anchor * total / count as f32;
     let mut rhs = vec![[0.0f32; 3]; count];
     for (sample, tap) in samples.iter().zip(&taps) {
         for corner in 0..8usize {

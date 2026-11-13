@@ -7,6 +7,7 @@ mod curation;
 mod dataset;
 mod derived;
 mod drift;
+mod drifts;
 mod job;
 mod key;
 mod label_export;
@@ -44,6 +45,7 @@ pub use derived::{
     RestoreSpec, SmoothSpec, derived_infos, mask_info, mask_intensity,
 };
 pub use drift::Drift;
+pub use drifts::Drifts;
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use grana_measure::RelationField;
 pub use grana_object::{ObjectAnchor, SurfaceEdit, SurfaceEditKind};

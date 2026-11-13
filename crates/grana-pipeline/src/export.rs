@@ -6,7 +6,7 @@ use glam::Vec3;
 use grana_object::{LabelRaster, Shape};
 use grana_scene::{ObjectFrame, ObjectSet};
 use grana_volume::{Extent, Intensity, Level, Region};
-use grana_warp::Warp;
+use grana_warp::Warps;
 use grana_zarr::{ImageSpec, LabelSpec, WriteChannel};
 
 use crate::channels::Channels;
@@ -111,7 +111,7 @@ pub struct DatasetSpec {
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
-    pub drift: Vec<Warp>,
+    pub drift: Vec<Warps>,
     pub labels: Vec<LabelLayer>,
 }
 
@@ -208,7 +208,9 @@ pub fn write_dataset(
             start[1]..start[1] + extent[1],
             start[2]..start[2] + extent[2],
         ];
-        let warp = drift.get(time as usize).unwrap_or(&Warp::IDENTITY);
+        let warp = drift
+            .get(time as usize)
+            .map_or(&grana_warp::Warp::IDENTITY, |warps| warps.get(index));
         let values = channels
             .read_region(time, level, index, &ranges, warp)
             .map_err(|error| error.to_string())?;

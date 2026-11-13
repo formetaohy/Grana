@@ -9,7 +9,7 @@ use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
     SpotSet, SurfaceSet, SurfaceStatistics,
 };
-use grana_scene::{Drift, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame};
 use grana_volume::{Level, VoxelData};
 
 use crate::channels::Channels;
@@ -17,16 +17,16 @@ use crate::event::Event;
 
 pub struct InteropRequest {
     file: String,
-    drift: Drift,
+    drifts: Drifts,
     store: Arc<GeometryStore>,
 }
 
 impl InteropRequest {
-    pub fn new(file: &str, drift: Drift, store: Arc<GeometryStore>) -> Self {
+    pub fn new(file: &str, drifts: Drifts, store: Arc<GeometryStore>) -> Self {
         assert!(!file.trim().is_empty(), "an import names a track file");
         Self {
             file: file.to_string(),
-            drift,
+            drifts,
             store,
         }
     }
@@ -279,7 +279,7 @@ fn intensities(
         reader.pyramid().level(0),
         time,
         &spots,
-        request.drift.warp(time),
+        &request.drifts.warps(time, reader.pyramid().channel_count()),
     )
 }
 
@@ -288,7 +288,7 @@ fn measure(
     info: Level,
     time: u32,
     spots: &[Spot],
-    warp: &grana_warp::Warp,
+    warps: &grana_warp::Warps,
 ) -> Result<IntensityTable, String> {
     let channels = reader.pyramid().channel_count();
     let extent = info.extent();
@@ -319,7 +319,7 @@ fn measure(
                 low[2]..high[2] + 1,
             ];
             let data: VoxelData = reader
-                .read_region(time, 0, channel, &ranges, warp)
+                .read_region(time, 0, channel, &ranges, warps.get(channel))
                 .map_err(|error| error.to_string())?;
             let mut samples = vec![0.0f32; data.voxel_count()];
             data.write_values(&mut samples);

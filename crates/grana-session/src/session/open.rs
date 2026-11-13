@@ -470,7 +470,7 @@ impl Session {
         if let Some(source) = &self.source {
             if let Some(scene) = self.scene.as_ref() {
                 source.set_time(scene.time());
-                source.set_drift(scene.drift().clone());
+                source.set_drifts(scene.drifts().clone());
             } else {
                 source.set_time(0);
             }

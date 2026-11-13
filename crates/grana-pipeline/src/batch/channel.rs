@@ -41,7 +41,7 @@ pub(super) fn write(
         .collect::<Vec<_>>();
     let frames = scene.frame_count();
     let drift = (0..frames)
-        .map(|time| scene.drift().warp(time).clone())
+        .map(|time| scene.drift_warps(time))
         .collect::<Vec<_>>();
     let path = folder.join(format!("{}.ome.zarr", slug(&name)));
     let mut progress = |done: usize, total: usize| {

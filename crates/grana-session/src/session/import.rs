@@ -48,10 +48,11 @@ impl Session {
             return;
         };
         let provenance = object.provenance().clone();
-        let drift = scene.drift().clone();
+        let channel = object.channel();
+        let drifts = scene.drifts().clone();
         let alignment = grana_scene::LocalizationAlignment::new(
-            object.channel(),
-            drift.clone(),
+            channel,
+            scene.drift(channel).cloned().unwrap_or_default(),
             scene.registration().clone(),
         );
         self.message = None;
@@ -61,7 +62,7 @@ impl Session {
                 self.analysis.push(crate::import(
                     Job::Import(set),
                     channels,
-                    ImportRequest::new(&label, drift),
+                    ImportRequest::new(channel, &label, drifts),
                 ));
             }
             Provenance::Interop { file } => {
@@ -76,7 +77,7 @@ impl Session {
                     self.analysis.push(crate::interop(
                         Job::Import(set),
                         channels,
-                        InteropRequest::new(&file, drift, Arc::clone(&self.store)),
+                        InteropRequest::new(&file, drifts, Arc::clone(&self.store)),
                     ));
                 }
             }

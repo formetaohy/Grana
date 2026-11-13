@@ -8,7 +8,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
     pad_brick,
 };
-use grana_warp::Warp;
+use grana_warp::{Warp, Warps};
 use grana_zarr::{Labels, Plate};
 use rayon::prelude::*;
 
@@ -163,9 +163,9 @@ impl Image {
         time: u32,
         level: usize,
         coord: BrickCoord,
-        warp: &Warp,
+        warps: &Warps,
     ) -> Result<BrickData, Error> {
-        if warp.identity() && level < self.pyramid.stored() {
+        if warps.identity() && level < self.pyramid.stored() {
             return self.stored_brick(time, level, coord);
         }
         let extent = self.level_extent(level)?;
@@ -182,7 +182,7 @@ impl Image {
         let bricks = (0..self.pyramid.channel_count())
             .into_par_iter()
             .map(|channel| {
-                let data = self.brick_region(time, level, channel, coord, warp)?;
+                let data = self.brick_region(time, level, channel, coord, warps.get(channel))?;
                 Ok(pad_brick(
                     &data,
                     origin,

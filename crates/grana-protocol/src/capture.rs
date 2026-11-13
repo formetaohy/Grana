@@ -280,15 +280,18 @@ impl Protocol {
             view.as_ref().and_then(ViewSpec::export),
             views.iter().map(|named| named.name.clone()).collect(),
         ));
-        let drift = match scene.drift() {
-            drift if drift.is_empty() => None,
-            drift => Some(DriftSpec {
-                channel: channels[drift.channel()].clone(),
-                reference: drift.reference(),
-                lattice: lattice(drift.warps())?,
-                warps: drift.warps().iter().map(warp_spec).collect(),
-            }),
-        };
+        let drifts = scene
+            .drifts()
+            .held()
+            .map(|drift| {
+                Ok(DriftSpec {
+                    channel: channels[drift.channel()].clone(),
+                    reference: drift.reference(),
+                    lattice: lattice(drift.warps())?,
+                    warps: drift.warps().iter().map(warp_spec).collect(),
+                })
+            })
+            .collect::<Result<Vec<_>, ProtocolError>>()?;
         let registration = match scene.registration() {
             registration if registration.is_empty() => None,
             registration => Some(RegistrationSpec {
@@ -332,7 +335,7 @@ impl Protocol {
             )),
             channels: specs,
             derived,
-            drift,
+            drifts,
             registration,
             mask_radius: scene.mask_radius,
             mask_filter,

@@ -20,6 +20,7 @@ use crate::derived::{
     Derived, DerivedSpec, MaskFrames, Operation, RestoreSpec, mask_info, mask_intensity,
 };
 use crate::drift::Drift;
+use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::mask::MaskFilter;
@@ -64,7 +65,7 @@ pub struct Scene {
     pub mask_radius: f32,
     pub mask_filter: Option<MaskFilter>,
     pub annotations: Annotations,
-    drift: Drift,
+    drifts: Drifts,
     registration: Registration,
     pub objects: Objects,
     pub coloc: Coloc,
@@ -97,7 +98,7 @@ impl Scene {
             mask_radius: 0.0,
             mask_filter: None,
             annotations: Annotations::new(),
-            drift: Drift::default(),
+            drifts: Drifts::new(),
             registration: Registration::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count),
@@ -342,7 +343,7 @@ impl Scene {
         {
             return Err("an object set measures this derived channel".to_string());
         }
-        if self.drift().channel() == channel && !self.drift().is_empty() {
+        if self.drifts.get(channel).is_some() {
             return Err("the drift correction aligns this derived channel".to_string());
         }
         self.derived.remove(index);
@@ -1085,19 +1086,57 @@ impl Scene {
         self.clip = clip;
     }
 
-    pub fn drift(&self) -> &Drift {
-        &self.drift
+    pub fn drifts(&self) -> &Drifts {
+        &self.drifts
+    }
+
+    pub fn drift(&self, channel: usize) -> Option<&Drift> {
+        self.drifts.get(channel)
+    }
+
+    pub fn drift_warp(&self, channel: usize, time: u32) -> &grana_warp::Warp {
+        self.drifts.warp(channel, time)
+    }
+
+    pub fn drift_warps(&self, time: u32) -> grana_warp::Warps {
+        self.drifts.warps(time, self.base_channels)
     }
 
     pub fn set_drift(&mut self, drift: Drift) -> bool {
-        if self.drift == drift {
+        assert!(
+            drift.channel() < self.base_channels,
+            "a drift correction aligns a stored channel"
+        );
+        if self.drifts.get(drift.channel()) == Some(&drift) {
             return false;
         }
-        self.drift = drift;
-        self.objects
-            .realign_localizations(&self.drift, &self.registration);
-        self.clear_object_coloc_all();
+        self.drifts = self.drifts.placed(drift);
+        self.realigned();
         true
+    }
+
+    pub fn clear_drift(&mut self, channel: usize) -> bool {
+        if self.drifts.get(channel).is_none() {
+            return false;
+        }
+        self.drifts = self.drifts.without(channel);
+        self.realigned();
+        true
+    }
+
+    pub fn set_drifts(&mut self, drifts: Drifts) -> bool {
+        if self.drifts == drifts {
+            return false;
+        }
+        self.drifts = drifts.fitted(self.base_channels);
+        self.realigned();
+        true
+    }
+
+    fn realigned(&mut self) {
+        self.objects
+            .realign_localizations(&self.drifts, &self.registration);
+        self.clear_object_coloc_all();
     }
 
     pub fn set_localization(
@@ -1183,8 +1222,11 @@ impl Scene {
         let Some(channel) = self.objects.get(id).map(|set| set.channel()) else {
             return;
         };
-        let next =
-            LocalizationAlignment::new(channel, self.drift.clone(), self.registration.clone());
+        let next = LocalizationAlignment::new(
+            channel,
+            self.drifts.get(channel).cloned().unwrap_or_default(),
+            self.registration.clone(),
+        );
         self.objects.realign_localization(id, &next);
     }
 
@@ -1198,7 +1240,7 @@ impl Scene {
         }
         self.registration = registration;
         self.objects
-            .realign_localizations(&self.drift, &self.registration);
+            .realign_localizations(&self.drifts, &self.registration);
         self.coloc.clear();
         self.clear_object_coloc_all();
         true

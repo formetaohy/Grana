@@ -16,7 +16,7 @@ use grana_object::{
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
+    Criteria, Curation, DerivedSpec, Drift, Drifts, FilterRange, ItemState, LabelExport, LassoPath,
     LocalizationAlignment, LocalizationSource, MeasureState, ObjectColor, ObjectFrame,
     ObjectParams, Provenance, Recipe, Registration, RelationState, SceneState, Seeds,
     SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
@@ -250,7 +250,7 @@ impl Encode for SceneState {
         self.selections.encode(writer);
         self.sets.encode(writer);
         self.coloc.encode(writer);
-        self.drift.encode(writer);
+        self.drifts.encode(writer);
         self.registration.encode(writer);
         self.annotations.encode(writer);
     }
@@ -325,6 +325,15 @@ impl Encode for Registration {
         writer.count(self.warps().len());
         for warp in self.warps() {
             warp.encode(writer);
+        }
+    }
+}
+
+impl Encode for Drifts {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.len());
+        for drift in self.held() {
+            drift.encode(writer);
         }
     }
 }

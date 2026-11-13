@@ -10,7 +10,7 @@ use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::derived::{DerivedSpec, Operation};
-use crate::drift::Drift;
+use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::localization::LocalizationSource;
@@ -39,7 +39,7 @@ pub struct SceneState {
     pub exposure: f32,
     pub region: Region,
     pub clip: Clip,
-    pub drift: Drift,
+    pub drifts: Drifts,
     pub registration: Registration,
     pub mask: Option<u64>,
     pub mask_filter: Option<MaskFilter>,
@@ -133,7 +133,7 @@ impl Scene {
             exposure: self.exposure,
             region: self.region,
             clip: self.clip,
-            drift: self.drift().clone(),
+            drifts: self.drifts().clone(),
             registration: self.registration().clone(),
             mask: self.mask.map(|set| set.raw()),
             mask_filter: self.mask_filter,
@@ -192,7 +192,7 @@ impl Scene {
         self.exposure = state.exposure;
         self.region = state.region;
         self.clip = state.clip;
-        self.set_drift(state.drift);
+        self.set_drifts(state.drifts);
         self.set_registration(state.registration);
         self.objects.restore(state.sets, &self.dataset);
         if derived {
@@ -381,7 +381,7 @@ impl Scene {
         } else {
             hash = mix(hash, 0);
         }
-        hash = mix(hash, self.drift().digest());
+        hash = mix(hash, self.drifts().digest());
         hash = mix(hash, self.registration().digest());
         hash = mix(hash, self.coloc.revision().raw());
         hash

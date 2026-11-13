@@ -258,10 +258,10 @@ impl Session {
                 name,
                 info.tint(),
                 info.name().to_string(),
-                scene.drift().clone(),
+                scene.drifts().clone(),
             ))
         })();
-        let Some((name, tint, source_name, drift)) = prepared else {
+        let Some((name, tint, source_name, drifts)) = prepared else {
             self.message = Some(Message::error(
                 "the channel has no intensity range to normalize",
             ));
@@ -269,7 +269,7 @@ impl Session {
         };
         let task = calibrate(Arc::clone(&channels), move |channels| {
             channels
-                .bleach_range(source, &drift)
+                .bleach_range(source, &drifts)
                 .map_err(|error| error.to_string())
         });
         self.message = Some(Message::info(format!(

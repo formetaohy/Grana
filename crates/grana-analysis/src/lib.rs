@@ -1,6 +1,7 @@
 mod cell;
 mod coloc;
 mod drift;
+mod fiducial;
 mod filament;
 mod hash;
 mod label;
@@ -19,10 +20,12 @@ mod track;
 pub use cell::{Band, CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
 pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};
 pub use drift::{
-    BLOCK, Blocks, Lattice, Sample, blocks as drift_blocks, correlation as drift_correlation,
-    deform as drift_deform, mean as drift_mean, shift as drift_shift, spans as drift_spans,
-    spread as drift_spread, window as drift_window, working_level as drift_level,
+    BLOCK, Blocks, Lattice, Sample, Smoothing, blocks as drift_blocks,
+    correlation as drift_correlation, deform as drift_deform, mean as drift_mean,
+    shift as drift_shift, spans as drift_spans, spread as drift_spread, window as drift_window,
+    working_level as drift_level,
 };
+pub use fiducial::{Fiducial, fiducial_registration};
 pub use filament::{FilamentScan, filament_level};
 pub use label::{LabelBuilder, LabelSlab};
 pub use localization_drift::localization_drift;

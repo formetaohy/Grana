@@ -6,7 +6,7 @@ use grana_volume::{BrickData, BrickRequest};
 use crate::plan::Plan;
 
 pub trait Bricks: Send + Sync {
-    fn read(&self, request: BrickRequest, warp: &grana_warp::Warp) -> Result<BrickData, String>;
+    fn read(&self, request: BrickRequest, warps: &grana_warp::Warps) -> Result<BrickData, String>;
 }
 
 pub struct Task {

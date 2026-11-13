@@ -728,6 +728,9 @@ impl Session {
             Command::SetDriftReference(reference) => self.set_drift_reference(reference),
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::RegisterChannels(reference) => self.start_registration(reference),
+            Command::RegisterFromLocalizations(reference) => {
+                self.start_fiducial_registration(reference)
+            }
             Command::CancelRegistration => self.cancel(Job::Register),
             Command::ClearRegistration => self.clear_registration(),
             Command::ExportColoc => self.export_coloc(),

@@ -11,7 +11,7 @@ use grana_analysis::{
 use grana_geometry::GeometryStore;
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, Roi};
-use grana_scene::{Drift, ObjectFrame, ObjectParams};
+use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 use grana_warp::Warp;
 
@@ -20,6 +20,7 @@ use crate::event::Event;
 mod calibration;
 mod domain;
 mod edit;
+mod fiducial;
 mod frames;
 mod grow;
 mod import;
@@ -38,6 +39,7 @@ mod segment;
 pub use self::calibration::calibrate;
 use self::domain::Domain;
 pub use self::edit::edit;
+pub use self::fiducial::{FiducialChannel, FiducialRequest, fiducial};
 use self::frames::Notice;
 use self::frames::frames as pipeline;
 pub use self::grow::{GrowRequest, grow};
@@ -88,7 +90,7 @@ pub struct DetectRequest {
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
     seed_policy: SeedPolicy,
-    drift: Drift,
+    drifts: Drifts,
     workers: usize,
     store: Arc<GeometryStore>,
 }
@@ -99,7 +101,7 @@ impl DetectRequest {
         params: ObjectParams,
         region: grana_volume::Region,
         roi: Option<Roi>,
-        drift: Drift,
+        drifts: Drifts,
         workers: usize,
         store: Arc<GeometryStore>,
     ) -> Self {
@@ -110,7 +112,7 @@ impl DetectRequest {
             roi,
             seeds: Vec::new(),
             seed_policy: SeedPolicy::Unseeded,
-            drift,
+            drifts,
             workers,
             store,
         }
@@ -242,7 +244,7 @@ pub struct ColocRequest {
     roi: Option<Roi>,
     mask: Option<u64>,
     settings: ColocSettings,
-    drift: Drift,
+    drifts: Drifts,
     workers: usize,
 }
 
@@ -253,7 +255,7 @@ impl ColocRequest {
         roi: Option<Roi>,
         mask: Option<u64>,
         settings: ColocSettings,
-        drift: Drift,
+        drifts: Drifts,
         workers: usize,
     ) -> Self {
         Self {
@@ -262,7 +264,7 @@ impl ColocRequest {
             roi,
             mask,
             settings,
-            drift,
+            drifts,
             workers,
         }
     }
@@ -280,7 +282,7 @@ pub fn coloc(
         roi,
         mask: mask_id,
         settings,
-        drift,
+        drifts,
         workers,
     } = request;
     let pyramid = reader.pyramid();
@@ -318,7 +320,13 @@ pub fn coloc(
         cancel,
         &|time, channel, ranges| {
             reader
-                .read_region(time, scan_level, channel, ranges, drift.warp(time))
+                .read_region(
+                    time,
+                    scan_level,
+                    channel,
+                    ranges,
+                    drifts.warp(channel, time),
+                )
                 .map_err(String::from)
         },
         &|time| scan_domain.mask(roi.as_ref(), time),
@@ -359,7 +367,7 @@ pub struct ObjectColocRequest {
     pair: ColocPair,
     region: grana_volume::Region,
     frames: Vec<Option<Arc<ObjectFrame>>>,
-    drift: Drift,
+    drifts: Drifts,
     workers: usize,
 }
 
@@ -368,14 +376,14 @@ impl ObjectColocRequest {
         pair: ColocPair,
         region: grana_volume::Region,
         frames: Vec<Option<Arc<ObjectFrame>>>,
-        drift: Drift,
+        drifts: Drifts,
         workers: usize,
     ) -> Self {
         Self {
             pair,
             region,
             frames,
-            drift,
+            drifts,
             workers,
         }
     }
@@ -391,7 +399,7 @@ pub fn object_coloc(
         pair,
         region,
         frames,
-        drift,
+        drifts,
         workers,
     } = request;
     let pyramid = reader.pyramid();
@@ -458,7 +466,13 @@ pub fn object_coloc(
             };
             let read = |time: u32, channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
                 reader
-                    .read_region(time, level_index, channel, ranges, drift.warp(time))
+                    .read_region(
+                        time,
+                        level_index,
+                        channel,
+                        ranges,
+                        drifts.warp(channel, time),
+                    )
                     .map_err(String::from)
             };
             let mut notify = |done: usize, blocks: usize| report(done, blocks);
@@ -500,7 +514,7 @@ fn spots(
         region,
         roi,
         workers,
-        drift,
+        drifts,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -539,7 +553,13 @@ fn spots(
             let mask = domain.mask(roi.as_ref(), time)?;
             let read = |measured: usize, ranges: &[Range<u32>; 3]| {
                 reader
-                    .read_region(time, level_index, measured, ranges, drift.warp(time))
+                    .read_region(
+                        time,
+                        level_index,
+                        measured,
+                        ranges,
+                        drifts.warp(measured, time),
+                    )
                     .map_err(String::from)
             };
             let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
@@ -568,7 +588,7 @@ fn surfaces(
         roi,
         seeds,
         seed_policy,
-        drift,
+        drifts,
         workers,
         store,
         ..
@@ -622,12 +642,24 @@ fn surfaces(
                 Sources::new(
                     &|ranges| {
                         reader
-                            .read_region(time, level_index, channel, ranges, drift.warp(time))
+                            .read_region(
+                                time,
+                                level_index,
+                                channel,
+                                ranges,
+                                drifts.warp(channel, time),
+                            )
                             .map_err(String::from)
                     },
                     &|measured, core| {
                         reader
-                            .read_region(time, level_index, measured, core, drift.warp(time))
+                            .read_region(
+                                time,
+                                level_index,
+                                measured,
+                                core,
+                                drifts.warp(measured, time),
+                            )
                             .map_err(String::from)
                     },
                     &store,
@@ -654,7 +686,7 @@ fn filaments(
         channel,
         region,
         roi,
-        drift,
+        drifts,
         store,
         workers,
         ..
@@ -687,10 +719,24 @@ fn filaments(
         cancel,
         || FilamentScan::new(level, info, params, channels, channel, region, intensity),
         |scan, time, _report| {
-            let detection = full_region(reader, pyramid, time, level, channel, drift.warp(time))?;
+            let detection = full_region(
+                reader,
+                pyramid,
+                time,
+                level,
+                channel,
+                drifts.warp(channel, time),
+            )?;
             let mask = domain.mask(roi.as_ref(), time)?;
             let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
-                full_region(reader, pyramid, time, level, measured, drift.warp(time))
+                full_region(
+                    reader,
+                    pyramid,
+                    time,
+                    level,
+                    measured,
+                    drifts.warp(measured, time),
+                )
             })?;
             Ok(Some(ObjectFrame::Filaments(set)))
         },
@@ -888,8 +934,13 @@ pub fn drift(
                     weight,
                 });
             }
-            grana_analysis::drift_deform(&samples, lattice, scale)
-                .unwrap_or_else(|| Warp::shift(global))
+            grana_analysis::drift_deform(
+                &samples,
+                lattice,
+                scale,
+                grana_analysis::Smoothing::SMOOTH,
+            )
+            .unwrap_or_else(|| Warp::shift(global))
         };
         warps.push(warp);
         sink(Event::Progress {
@@ -1085,8 +1136,13 @@ pub fn register(
                     weight,
                 });
             }
-            grana_analysis::drift_deform(&samples, lattice, scale)
-                .unwrap_or_else(|| Warp::shift(global))
+            grana_analysis::drift_deform(
+                &samples,
+                lattice,
+                scale,
+                grana_analysis::Smoothing::SMOOTH,
+            )
+            .unwrap_or_else(|| Warp::shift(global))
         };
         warps.push(warp);
         sink(Event::Progress {
