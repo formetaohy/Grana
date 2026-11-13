@@ -113,6 +113,13 @@ pub fn key(scene: &Scene) -> u64 {
             set.frame_stamp(scene.time())
                 .map_or(u64::MAX, |stamp| stamp.raw()),
         );
+        if let Some(source) = set.localization()
+            && source.projected()
+        {
+            for time in source.projected_frames(scene.time(), scene.frame_count()) {
+                key.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
+            }
+        }
         key.mix(
             set.tracks()
                 .map_or(u64::MAX, |tracks| tracks.revision().raw()),
@@ -129,28 +136,29 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
         if !scene.shown(set) {
             continue;
         }
-        let Some(frame) = set.frame(scene.time()) else {
-            detail.push(0);
-            splats.push(Choice::Full);
-            continue;
-        };
+        let frame = set.frame(scene.time());
         detail.push(match (frame, lens) {
-            (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
+            (Some(ObjectFrame::Surfaces(surfaces)), Some(lens)) => {
                 surfaces.select_detail(triangle_target(surfaces, lens))
             }
-            (ObjectFrame::Cells(cells), Some(lens)) => {
+            (Some(ObjectFrame::Cells(cells)), Some(lens)) => {
                 cells.select_detail(triangle_target(cells.bodies(), lens))
             }
             _ => 0,
         });
-        splats.push(match (frame, lens) {
-            (ObjectFrame::Spots(spots), Some(lens)) => {
-                let pixels = lens
-                    .camera
-                    .world_per_point(lens.height as f32, lens.camera.distance());
-                spot::choose(spots, pixels)
+        splats.push(match lens {
+            Some(lens) => {
+                let held = crate::splat::frames(scene, set);
+                if held.is_empty() {
+                    Choice::Full
+                } else {
+                    let pixels = lens
+                        .camera
+                        .world_per_point(lens.height as f32, lens.camera.distance());
+                    spot::choose(&held, pixels)
+                }
             }
-            _ => Choice::Full,
+            None => Choice::Full,
         });
     }
     Targets { detail, splats }

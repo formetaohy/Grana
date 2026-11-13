@@ -1,4 +1,4 @@
-use grana_analysis::localization::LocalizationReport;
+use grana_analysis::localization::{Clusters, LocalizationReport};
 use grana_measure::{ColocSeries, ObjectColoc};
 use grana_object::{RelationFrame, TrackSet};
 use grana_optics::MeasuredPsf;
@@ -26,6 +26,11 @@ pub enum Event {
         set: ObjectSetId,
         revision: Revision,
         report: Box<LocalizationReport>,
+    },
+    LocalizationClusters {
+        set: ObjectSetId,
+        revision: Revision,
+        clusters: Box<Clusters>,
     },
     Tracks(TrackSet),
     Relation {

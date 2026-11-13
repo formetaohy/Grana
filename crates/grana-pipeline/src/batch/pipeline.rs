@@ -710,6 +710,7 @@ impl Run<'_, '_> {
             | RunEvent::Calibration { .. }
             | RunEvent::Localization { .. }
             | RunEvent::LocalizationReport { .. }
+            | RunEvent::LocalizationClusters { .. }
             | RunEvent::Done => {}
         };
         crate::run::import(
@@ -1393,6 +1394,7 @@ fn detect(
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
+        | RunEvent::LocalizationClusters { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };
@@ -1441,6 +1443,7 @@ fn grow_frames(
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
+        | RunEvent::LocalizationClusters { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };
@@ -1487,6 +1490,7 @@ fn segment_frames(
         | RunEvent::Calibration { .. }
         | RunEvent::Localization { .. }
         | RunEvent::LocalizationReport { .. }
+        | RunEvent::LocalizationClusters { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };

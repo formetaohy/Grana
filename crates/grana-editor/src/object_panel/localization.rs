@@ -1,5 +1,6 @@
 use grana_chart::{Axis, Band, BandPoint, Curve, CurvePoint, SeriesChart};
 use grana_i18n::Language;
+use grana_object::ClusterSpec;
 use grana_scene::{Job, ObjectKind, ObjectSet, ObjectSetId};
 use grana_session::{Command, LocalizationReport, LocalizationSpec};
 use grana_ui::{Align, BuildContext, Color, Corners, Element, Icon, Length, Rect, Role, Vec2};
@@ -22,7 +23,16 @@ pub(super) fn card<'a>(
     let language = ctx.language();
     let id = set.id();
     let frames = state.scene.frame_count();
-    let spec = state.workspace.localization_spec(id, frames);
+    let spec = set
+        .localization()
+        .map_or_else(
+            || LocalizationSpec::cover(frames),
+            grana_scene::LocalizationSource::spec,
+        )
+        .fitted(frames);
+    let projected = set
+        .localization()
+        .is_some_and(grana_scene::LocalizationSource::projected);
     let theme = *ctx.theme();
     let job = Job::Localizations(id);
     let running = view::progress(state.jobs, job);
@@ -88,6 +98,16 @@ pub(super) fn card<'a>(
         ));
     }
     children.push(fields(ctx, &theme, id, spec, frames));
+    children.push(view::toggle_row(
+        ctx,
+        "localization.projected",
+        grana_i18n::localization::projected(language),
+        projected,
+        move |value| Command::SetLocalizationProjected {
+            set: id,
+            projected: value,
+        },
+    ));
     let mut actions = Vec::new();
     if running.is_some() {
         actions.push(
@@ -107,10 +127,7 @@ pub(super) fn card<'a>(
                 Role::Filled,
                 Length::Fill,
             )
-            .press(Message::Command(Command::AnalyzeLocalizations {
-                set: id,
-                spec,
-            })),
+            .press(Message::Command(Command::AnalyzeLocalizations(id))),
         );
     }
     children.push(grana_ui::row().gap(8.0).children(actions));
@@ -154,7 +171,98 @@ pub(super) fn card<'a>(
         ));
         children.push(correlation_chart(ctx, language, report));
     }
+    children.push(view::divider(ctx));
+    let molecules = set.tracks().map_or(0, |tracks| tracks.set().len());
+    let detail =
+        (molecules > 0).then(|| grana_i18n::localization::molecule_count(language, molecules));
+    children.push(view::section_header(
+        ctx,
+        grana_i18n::localization::molecules(language),
+        detail.as_deref(),
+    ));
+    let clusters = set.localization().map_or_else(
+        grana_object::ClusterSpec::default,
+        grana_scene::LocalizationSource::clusters,
+    );
+    children.push(cluster_fields(ctx, &theme, id, clusters));
+    let clustering = view::progress(state.jobs, Job::Clusters(id));
+    children.push(if clustering.is_some() {
+        view::button_with(
+            ctx,
+            grana_i18n::common::cancel(language),
+            Role::SurfaceHigh,
+            Length::Fill,
+        )
+        .press(Message::Command(Command::CancelClusters(id)))
+    } else {
+        view::button_with(
+            ctx,
+            grana_i18n::localization::cluster(language),
+            Role::PrimaryContainer,
+            Length::Fill,
+        )
+        .press(Message::Command(Command::ClusterLocalizations(id)))
+    });
     view::card(ctx, 8.0, children)
+}
+
+fn cluster_fields<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    theme: &grana_ui::Theme,
+    id: ObjectSetId,
+    clusters: grana_object::ClusterSpec,
+) -> Element<'a, Message> {
+    let language = ctx.language();
+    let radius = grana_ui::widget::drag_value(theme, clusters.radius() * 1000.0, 0)
+        .named("cluster.radius")
+        .on_drag_value(0.2, move |value| {
+            let radius = (value.clamp(1.0, 10_000.0) * 0.001)
+                .clamp(ClusterSpec::RADIUS_MINIMUM, ClusterSpec::RADIUS_MAXIMUM);
+            Message::Command(Command::SetLocalizationClusters {
+                set: id,
+                clusters: clusters.at_radius(radius),
+            })
+        });
+    let dark = grana_ui::widget::drag_value(theme, clusters.dark() as f32, 0)
+        .named("cluster.dark")
+        .on_drag_value(0.2, move |value| {
+            let dark = value.round().clamp(0.0, ClusterSpec::DARK_MAXIMUM as f32) as u32;
+            Message::Command(Command::SetLocalizationClusters {
+                set: id,
+                clusters: clusters.at_dark(dark),
+            })
+        });
+    let minimum = grana_ui::widget::drag_value(theme, clusters.minimum() as f32, 0)
+        .named("cluster.minimum")
+        .on_drag_value(0.2, move |value| {
+            let minimum = value
+                .round()
+                .clamp(1.0, ClusterSpec::MINIMUM_MAXIMUM as f32) as u32;
+            Message::Command(Command::SetLocalizationClusters {
+                set: id,
+                clusters: clusters.at_minimum(minimum),
+            })
+        });
+    grana_ui::column().gap(6.0).children([
+        view::form_row(
+            ctx,
+            grana_i18n::localization::radius(language),
+            single(radius),
+        ),
+        view::form_row(ctx, grana_i18n::localization::dark(language), single(dark)),
+        view::form_row(
+            ctx,
+            grana_i18n::localization::minimum(language),
+            single(minimum),
+        ),
+    ])
+}
+
+fn single<'a>(field: Element<'a, Message>) -> Element<'a, Message> {
+    grana_ui::row()
+        .gap(6.0)
+        .align(Align::Center)
+        .children([field])
 }
 
 fn fields<'a>(
@@ -171,19 +279,19 @@ fn fields<'a>(
         .named("localization.start")
         .on_drag_value(0.2, move |value| {
             let start = value.round().clamp(0.0, last as f32) as u32;
-            Message::SetLocalizationSpec {
+            Message::Command(Command::SetLocalizationSpec {
                 set: id,
                 spec: spec.placed([start.min(end), end]),
-            }
+            })
         });
     let end_field = grana_ui::widget::drag_value(theme, end as f32, 0)
         .named("localization.end")
         .on_drag_value(0.2, move |value| {
             let end = value.round().clamp(0.0, last as f32) as u32;
-            Message::SetLocalizationSpec {
+            Message::Command(Command::SetLocalizationSpec {
                 set: id,
                 spec: spec.placed([start, end.max(start)]),
-            }
+            })
         });
     let span_row = grana_ui::row()
         .gap(6.0)
@@ -196,19 +304,19 @@ fn fields<'a>(
                 LocalizationSpec::PIXEL_MINIMUM,
                 LocalizationSpec::PIXEL_MAXIMUM,
             );
-            Message::SetLocalizationSpec {
+            Message::Command(Command::SetLocalizationSpec {
                 set: id,
                 spec: spec.at_pixel(pixel),
-            }
+            })
         });
     let blur_field = grana_ui::widget::drag_value(theme, spec.blur(), 1)
         .named("localization.blur")
         .on_drag_value(0.2, move |value| {
             let blur = value.clamp(0.0, LocalizationSpec::BLUR_MAXIMUM);
-            Message::SetLocalizationSpec {
+            Message::Command(Command::SetLocalizationSpec {
                 set: id,
                 spec: spec.at_blur(blur),
-            }
+            })
         });
     let pixel_row = grana_ui::row()
         .gap(6.0)

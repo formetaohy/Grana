@@ -72,6 +72,10 @@ impl Spot {
     pub fn moved(self, center: [f32; 3]) -> Self {
         Self::grouped(center, self.sigma, self.quality, self.group)
     }
+
+    pub fn with_group(self, group: Option<u32>) -> Self {
+        Self { group, ..self }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,5 +167,20 @@ impl SpotSet {
             spots,
             self.intensities.merge(&other.intensities),
         )
+    }
+
+    pub fn regrouped(&self, groups: &[Option<u32>]) -> Self {
+        assert_eq!(
+            groups.len(),
+            self.spots.len(),
+            "the molecule of every spot is named"
+        );
+        let spots = self
+            .spots
+            .iter()
+            .zip(groups)
+            .map(|(spot, group)| spot.with_group(*group))
+            .collect::<Vec<_>>();
+        Self::new(self.level, spots, self.intensities.clone())
     }
 }

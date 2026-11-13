@@ -1,5 +1,7 @@
+pub use grana_object::LocalizationSpec;
 use grana_object::Spot;
 
+mod cluster;
 mod fit;
 mod fourier;
 mod frc;
@@ -8,8 +10,9 @@ mod nena;
 mod report;
 mod tone;
 
+pub use cluster::{ClusterSpec, Clusters, cluster};
 use grid::Grid;
-pub use report::{Frc, LocalizationImage, LocalizationReport, LocalizationSpec, NeNa};
+pub use report::{Frc, LocalizationImage, LocalizationReport, NeNa};
 
 const IMAGE_LIMIT: u32 = 2048;
 

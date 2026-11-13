@@ -168,6 +168,7 @@ pub struct SplatChunk {
     key: u64,
     level: u8,
     active: bool,
+    pickable: bool,
     data: SplatLevel,
 }
 
@@ -181,8 +182,18 @@ impl SplatChunk {
             key,
             level,
             active,
+            pickable: true,
             data,
         }
+    }
+
+    pub fn pickable(mut self, pickable: bool) -> Self {
+        self.pickable = pickable;
+        self
+    }
+
+    pub fn is_pickable(&self) -> bool {
+        self.pickable
     }
 
     pub fn single(key: u64, stamp: u64, splats: Vec<Splat>) -> Self {
@@ -376,6 +387,7 @@ impl SplatSlot {
 pub(crate) struct SplatPasses {
     slots: HashMap<(u64, u8), SplatSlot>,
     active: Vec<(u64, u8)>,
+    pickable: Vec<(u64, u8)>,
     ranges: Vec<(u32, u32, u64, u8)>,
     next_base: u32,
     count: u32,
@@ -541,6 +553,7 @@ impl SplatPasses {
         Self {
             slots: HashMap::new(),
             active: Vec::new(),
+            pickable: Vec::new(),
             ranges: Vec::new(),
             next_base: 0,
             count: 0,
@@ -557,6 +570,7 @@ impl SplatPasses {
     pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, splats: Splats<'_>) {
         let mut seen = HashSet::new();
         self.active.clear();
+        self.pickable.clear();
         let mut count = 0usize;
         for chunk in splats.chunks() {
             if chunk.is_empty() {
@@ -585,6 +599,9 @@ impl SplatPasses {
             }
             if chunk.active() {
                 self.active.push(entry);
+                if chunk.is_pickable() {
+                    self.pickable.push(entry);
+                }
             }
         }
         self.slots.retain(|entry, _| seen.contains(entry));
@@ -744,12 +761,12 @@ impl SplatPasses {
     }
 
     pub fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        if self.active.is_empty() {
+        if self.pickable.is_empty() {
             return;
         }
         pass.set_pipeline(&self.pick);
         pass.set_bind_group(0, scene, &[]);
-        for entry in &self.active {
+        for entry in &self.pickable {
             let slot = &self.slots[entry];
             pass.set_bind_group(1, &slot.rows, &[]);
             pass.set_bind_group(2, &slot.pick, &[]);
@@ -758,12 +775,12 @@ impl SplatPasses {
     }
 
     pub fn draw_pick_slice<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        if self.active.is_empty() {
+        if self.pickable.is_empty() {
             return;
         }
         pass.set_pipeline(&self.slice_pick);
         pass.set_bind_group(0, scene, &[]);
-        for entry in &self.active {
+        for entry in &self.pickable {
             let slot = &self.slots[entry];
             pass.set_bind_group(1, &slot.rows, &[]);
             pass.set_bind_group(2, &slot.pick, &[]);

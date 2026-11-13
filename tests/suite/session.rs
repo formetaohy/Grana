@@ -2627,10 +2627,11 @@ fn analyzes_imported_localizations() {
         .find(|set| set.kind() == ObjectKind::Spots)
         .expect("the localization set lands")
         .id();
-    session.execute(Command::AnalyzeLocalizations {
+    session.execute(Command::SetLocalizationSpec {
         set,
         spec: grana_session::LocalizationSpec::new([0, 4], 10.0, 20.0),
     });
+    session.execute(Command::AnalyzeLocalizations(set));
     settle(&mut session);
     let report = session
         .localizations()
@@ -2649,5 +2650,141 @@ fn analyzes_imported_localizations() {
     assert!(
         report.frc().resolution().is_some(),
         "the rings cross the threshold"
+    );
+}
+
+#[test]
+fn clusters_imported_localizations_into_molecules() {
+    let temp = Temp::new("session-clusters");
+    let path = temp.path().join("localizations.hdf5");
+    let row = |frame: u32, x: f32, y: f32| support::Localization {
+        frame,
+        position: [x, y, 0.0],
+        photons: 1500.0,
+        precision: [0.02, 0.02, 0.02],
+        group: -1,
+    };
+    let mut rows = Vec::new();
+    for frame in 0..4 {
+        rows.push(row(frame, 30.0, 10.0));
+    }
+    for frame in 0..2 {
+        rows.push(row(frame, 5.0, 25.0));
+    }
+    rows.push(row(3, 50.0, 5.0));
+    support::picasso(&path, 100.0, &rows);
+    let volume = support::spheres(
+        Extent::new(64, 32, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "localizations",
+        VolumeSeries::new(
+            vec![
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume,
+            ],
+            1.0,
+        ),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let set = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    session.execute(Command::SetLocalizationClusters {
+        set,
+        clusters: grana_object::ClusterSpec::new(0.05, 2, 2),
+    });
+    session.execute(Command::ClusterLocalizations(set));
+    settle(&mut session);
+    let object = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .get(set)
+        .expect("the localization set stays");
+    let grouped = object
+        .frames()
+        .map(|(_, frame)| {
+            frame
+                .spots_of()
+                .iter()
+                .filter(|spot| spot.group().is_some())
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(grouped, 6, "the clustered localizations carry a molecule");
+    assert_eq!(
+        object.tracks().map(|tracks| tracks.set().len()),
+        Some(2),
+        "each molecule takes one track"
+    );
+    let exported = temp.path().join("molecules.hdf5");
+    session
+        .export_localizations(set, &exported)
+        .expect("the molecules export");
+    let level = session
+        .scene()
+        .expect("the series stays open")
+        .dataset
+        .pyramid()
+        .level(0);
+    let found = grana_readout::localization::read(&exported, level, 5, &mut |_, _| true)
+        .expect("the exported table reads")
+        .expect("the exported table exists");
+    let grouped = found
+        .localizations()
+        .iter()
+        .filter(|entry| entry.group().is_some())
+        .count();
+    assert_eq!(grouped, 6, "the group column survives the export");
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "localizations".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([5; 32]),
+    );
+    let document = temp.path().join("molecules.grana");
+    project
+        .write(&document, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the clustered project writes");
+    let loaded = Project::read(
+        &document,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the clustered project reads");
+    assert_eq!(loaded, project, "the molecules survive a project");
+    session.execute(Command::Undo);
+    settle(&mut session);
+    let object = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .get(set)
+        .expect("the localization set stays");
+    assert!(
+        object
+            .frames()
+            .all(|(_, frame)| frame.spots_of().iter().all(|spot| spot.group().is_none())),
+        "undoing the clustering clears the molecules"
     );
 }

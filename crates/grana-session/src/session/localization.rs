@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use grana_analysis::localization::{LocalizationReport, LocalizationSpec};
-use grana_pipeline::run::LocalizationReportRequest;
+use grana_analysis::localization::{Clusters, LocalizationReport, LocalizationSpec};
+use grana_object::ClusterSpec;
+use grana_pipeline::run::{LocalizationClusterRequest, LocalizationReportRequest};
 use grana_raster::Bitmap;
 use grana_scene::{Job, ObjectSetId, Revision, Scene};
 
@@ -14,6 +15,13 @@ type Prepared = (
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
     f32,
+);
+
+type PreparedClusters = (
+    Revision,
+    ClusterSpec,
+    Vec<Option<Arc<ObjectFrame>>>,
+    Vec<Option<Vec<bool>>>,
 );
 
 #[derive(Default)]
@@ -86,7 +94,7 @@ impl Session {
         &self.localization
     }
 
-    pub(super) fn start_localizations(&mut self, set: ObjectSetId, spec: LocalizationSpec) {
+    pub(super) fn start_localizations(&mut self, set: ObjectSetId) {
         if self.loading.is_some()
             || self
                 .analysis
@@ -98,7 +106,7 @@ impl Session {
         if !self.analysable() {
             return;
         }
-        let prepared = self.prepare_localizations(set, spec);
+        let prepared = self.prepare_localizations(set);
         let (revision, spec, frames, visible, pixel) = match prepared {
             Ok(prepared) => prepared,
             Err(detail) => {
@@ -114,11 +122,7 @@ impl Session {
         ));
     }
 
-    fn prepare_localizations(
-        &self,
-        set: ObjectSetId,
-        spec: LocalizationSpec,
-    ) -> Result<Prepared, String> {
+    fn prepare_localizations(&self, set: ObjectSetId) -> Result<Prepared, String> {
         let scene = self.scene.as_ref().ok_or("open a dataset first")?;
         let object = scene
             .objects
@@ -133,7 +137,7 @@ impl Session {
         if scene.frame_count() < 2 {
             return Err("the dataset holds one frame to estimate a precision".to_string());
         }
-        let spec = spec.fitted(scene.frame_count());
+        let spec = source.spec().fitted(scene.frame_count());
         let [start, end] = spec.frames();
         let frames = (start..=end)
             .map(|time| object.frame_shared(time))
@@ -160,6 +164,106 @@ impl Session {
 
     pub(super) fn cancel_localizations(&mut self, set: ObjectSetId) {
         self.cancel(Job::Localizations(set));
+    }
+
+    pub(super) fn start_clusters(&mut self, set: ObjectSetId) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Clusters(set))
+        {
+            return;
+        }
+        if !self.analysable() {
+            return;
+        }
+        let prepared = self.prepare_clusters(set);
+        let (revision, clusters, frames, visible) = match prepared {
+            Ok(prepared) => prepared,
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                return;
+            }
+        };
+        self.message = None;
+        self.record_progress(Job::Clusters(set), 0, 0, frames.len());
+        self.analysis.push(crate::localization_cluster(
+            Job::Clusters(set),
+            LocalizationClusterRequest::new(set, revision, frames, visible, clusters),
+        ));
+    }
+
+    fn prepare_clusters(&self, set: ObjectSetId) -> Result<PreparedClusters, String> {
+        let scene = self.scene.as_ref().ok_or("open a dataset first")?;
+        let object = scene
+            .objects
+            .get(set)
+            .ok_or("the object set left the scene")?;
+        if object.kind() != grana_scene::ObjectKind::Spots {
+            return Err("molecules cluster a spot object set".to_string());
+        }
+        let source = object
+            .localization()
+            .ok_or("the object set carries no localization table to cluster")?;
+        if scene.frame_count() < 2 {
+            return Err("the dataset holds one frame to cluster".to_string());
+        }
+        let frames = (0..scene.frame_count())
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        let masked = object.filtered() || object.hidden_count() > 0;
+        let visible = (0..scene.frame_count())
+            .map(|time| {
+                if !masked {
+                    return None;
+                }
+                object.frame(time).map(|frame| {
+                    (0..frame.object_count())
+                        .map(|index| object.visible_object(time, index))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok((object.revision(), source.clusters(), frames, visible))
+    }
+
+    pub(super) fn install_clusters(&mut self, set: ObjectSetId, clusters: &Clusters) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if !scene.regroup(set, clusters.groups()) {
+            return;
+        }
+        let frame_interval = scene.dataset.frame_interval();
+        let mut grouped = Vec::new();
+        if let Some(object) = scene.objects.get(set) {
+            for (time, frame) in object.frames() {
+                let Some(spots) = frame.spots() else {
+                    continue;
+                };
+                for (index, spot) in spots.spots().iter().enumerate() {
+                    let Some(group) = spot.group() else {
+                        continue;
+                    };
+                    if object.visible_object(time, index) {
+                        grouped.push((group, time, index, spot.center()));
+                    }
+                }
+            }
+        }
+        match grana_object::grouped_tracks(frame_interval, grouped) {
+            Ok(tracks) => scene.install_tracks(set, tracks),
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                return;
+            }
+        }
+        self.message = Some(Message::info(format!(
+            "clustered {} localizations into {} molecules",
+            clusters.localizations(),
+            clusters.molecules()
+        )));
     }
 
     pub(super) fn clear_localizations(&mut self, set: ObjectSetId) {

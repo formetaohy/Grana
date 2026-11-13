@@ -877,9 +877,6 @@ pub fn apply(
             Message::SetClassifierFeatures { set, features } => {
                 workspace.classifier.insert(set, features);
             }
-            Message::SetLocalizationSpec { set, spec } => {
-                workspace.set_localization_spec(set, spec);
-            }
             Message::FitView => {
                 if let Some(scene) = view.scene {
                     crate::fitting::fit_camera(scene, camera, stage.aspect());

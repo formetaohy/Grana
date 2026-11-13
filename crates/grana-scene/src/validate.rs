@@ -276,6 +276,8 @@ impl SceneState {
         }
         if let Some(localization) = &set.localization
             && (set.kind != ObjectKind::Spots
+                || localization.spec()
+                    != localization.spec().fitted(set.frames.len().max(1) as u32)
                 || !localization.applied().is_empty()
                     && (localization.applied().frames() as usize != set.frames.len()
                         || localization.applied().reference() as usize >= set.frames.len()))

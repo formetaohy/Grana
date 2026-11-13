@@ -18,6 +18,18 @@ pub(crate) const STANDALONE: u32 = u32::MAX;
 
 pub(crate) const LEVEL_COUNT: u8 = LADDER + 1;
 
+#[derive(Clone, Copy)]
+pub(crate) struct Frame<'a> {
+    pub(crate) time: u32,
+    pub(crate) spots: &'a SpotSet,
+}
+
+impl<'a> Frame<'a> {
+    pub(crate) fn new(time: u32, spots: &'a SpotSet) -> Self {
+        Self { time, spots }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     Full,
@@ -59,6 +71,10 @@ impl Detections {
             None => STANDALONE,
         });
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.geometry.len()
+    }
 }
 
 pub(crate) struct Ladder {
@@ -67,8 +83,27 @@ pub(crate) struct Ladder {
 }
 
 impl Ladder {
-    pub(crate) fn new(spots: &[Spot]) -> Option<Self> {
-        let diameter = diameter(spots)?;
+    pub(crate) fn over(frames: &[Frame<'_>]) -> Option<Self> {
+        let total = frames.iter().map(|frame| frame.spots.len()).sum::<usize>();
+        if total == 0 {
+            return None;
+        }
+        let stride = total.div_ceil(SAMPLE_LIMIT).max(1);
+        let mut radii = Vec::with_capacity(total.div_ceil(stride) + frames.len());
+        let mut seen = 0usize;
+        for frame in frames {
+            for spot in frame.spots.spots() {
+                if seen.is_multiple_of(stride) {
+                    radii.push(spot.radius());
+                }
+                seen += 1;
+            }
+        }
+        radii.sort_unstable_by(f32::total_cmp);
+        let diameter = 2.0 * radii[radii.len() / 2];
+        if !(diameter.is_finite() && diameter > 0.0) {
+            return None;
+        }
         let mut cells = [0.0f32; LADDER as usize];
         for (slot, exponent) in cells.iter_mut().zip(1..=LADDER) {
             *slot = diameter * 2f32.powi(i32::from(exponent));
@@ -89,22 +124,34 @@ impl Ladder {
     }
 }
 
-pub(crate) fn aggregated(spots: &SpotSet) -> bool {
-    spots.len() >= AGGREGATE_FLOOR
+pub(crate) fn aggregated(frames: &[Frame<'_>]) -> bool {
+    frames.iter().map(|frame| frame.spots.len()).sum::<usize>() >= AGGREGATE_FLOOR
 }
 
-pub(crate) fn choose(spots: &SpotSet, world_per_pixel: f32) -> Choice {
-    if !aggregated(spots) || !(world_per_pixel.is_finite() && world_per_pixel > 0.0) {
+pub(crate) fn choose(frames: &[Frame<'_>], world_per_pixel: f32) -> Choice {
+    let projected = frames.len() > 1;
+    let usable = world_per_pixel.is_finite() && world_per_pixel > 0.0;
+    if !projected && (!aggregated(frames) || !usable) {
         return Choice::Full;
     }
-    let Some(ladder) = Ladder::new(spots.spots()) else {
-        return Choice::Full;
+    let Some(ladder) = Ladder::over(frames) else {
+        return if projected {
+            Choice::Level(1)
+        } else {
+            Choice::Full
+        };
     };
-    let pixels = ladder.diameter() / world_per_pixel;
-    if !pixels.is_finite() || pixels >= RAW_PIXELS {
-        return Choice::Full;
+    if !projected {
+        let pixels = ladder.diameter() / world_per_pixel;
+        if !pixels.is_finite() || pixels >= RAW_PIXELS {
+            return Choice::Full;
+        }
     }
-    let wanted = CELL_PIXELS * world_per_pixel;
+    let wanted = if usable {
+        CELL_PIXELS * world_per_pixel
+    } else {
+        ladder.diameter()
+    };
     for level in 1..=LADDER {
         if ladder.cell(level) >= wanted {
             return Choice::Level(level);
@@ -113,35 +160,26 @@ pub(crate) fn choose(spots: &SpotSet, world_per_pixel: f32) -> Choice {
     Choice::Level(LADDER)
 }
 
-pub(crate) fn detections<F>(spots: &SpotSet, choice: Choice, opacity: f32, style: F) -> Detections
+pub(crate) fn detections<F>(
+    frames: &[Frame<'_>],
+    choice: Choice,
+    opacity: f32,
+    style: F,
+) -> Detections
 where
-    F: Fn(usize) -> Appearance,
+    F: Fn(u32, usize) -> Appearance,
 {
-    let entries = spots.spots();
-    let level = match choice {
-        Choice::Full => return raw(entries, opacity, &style),
-        Choice::Level(level) => level,
-    };
-    let Some(ladder) = Ladder::new(entries) else {
-        return Detections::default();
-    };
-    let mut grid = Grid::new(ladder.cell(level));
-    let mut palette = Palette::default();
-    for (index, spot) in entries.iter().enumerate() {
-        let look = style(index);
-        if !look.visible {
-            continue;
-        }
-        grid.add(index, spot, palette.radiance(look.color));
+    if frames.len() == 1 {
+        let frame = frames[0];
+        return match choice {
+            Choice::Full => raw(frame.spots, opacity, &|index: usize| {
+                style(frame.time, index)
+            }),
+            Choice::Level(level) => binned(frames, level, opacity, &style, true),
+        };
     }
-    let count = grid.len();
-    let mut detections = Detections {
-        geometry: Vec::with_capacity(count),
-        style: Vec::with_capacity(count),
-        members: Vec::with_capacity(count),
-    };
-    grid.finish(opacity, &mut detections);
-    detections
+    let level = choice.level().max(1);
+    binned(frames, level, opacity, &style, false)
 }
 
 pub(crate) fn highlights<F>(
@@ -175,10 +213,11 @@ where
     detections
 }
 
-fn raw<F>(entries: &[Spot], opacity: f32, style: &F) -> Detections
+fn raw<F>(spots: &SpotSet, opacity: f32, style: &F) -> Detections
 where
     F: Fn(usize) -> Appearance,
 {
+    let entries = spots.spots();
     let mut palette = Palette::default();
     let mut detections = Detections {
         geometry: Vec::with_capacity(entries.len()),
@@ -199,6 +238,35 @@ where
     detections
 }
 
+fn binned<F>(frames: &[Frame<'_>], level: u8, opacity: f32, style: &F, pickable: bool) -> Detections
+where
+    F: Fn(u32, usize) -> Appearance,
+{
+    let Some(ladder) = Ladder::over(frames) else {
+        return Detections::default();
+    };
+    let mut grid = Grid::new(ladder.cell(level));
+    let mut palette = Palette::default();
+    for frame in frames {
+        for (index, spot) in frame.spots.spots().iter().enumerate() {
+            let look = style(frame.time, index);
+            if !look.visible {
+                continue;
+            }
+            let member = pickable.then_some(index);
+            grid.add(member, spot, palette.radiance(look.color));
+        }
+    }
+    let count = grid.len();
+    let mut detections = Detections {
+        geometry: Vec::with_capacity(count),
+        style: Vec::with_capacity(count),
+        members: Vec::with_capacity(count),
+    };
+    grid.finish(opacity, &mut detections);
+    detections
+}
+
 #[derive(Default)]
 struct Palette {
     cached: Option<([f32; 3], [f32; 3])>,
@@ -215,20 +283,6 @@ impl Palette {
             }
         }
     }
-}
-
-fn diameter(entries: &[Spot]) -> Option<f32> {
-    if entries.is_empty() {
-        return None;
-    }
-    let stride = entries.len().div_ceil(SAMPLE_LIMIT).max(1);
-    let mut radii = entries
-        .iter()
-        .step_by(stride)
-        .map(|spot| spot.radius())
-        .collect::<Vec<_>>();
-    radii.sort_unstable_by(f32::total_cmp);
-    Some(2.0 * radii[radii.len() / 2])
 }
 
 #[derive(Clone, Copy)]
@@ -279,22 +333,24 @@ impl Grid {
         point.map(|value| (value / self.cell).floor() as i64)
     }
 
-    fn add(&mut self, index: usize, spot: &Spot, radiance: [f32; 3]) {
+    fn add(&mut self, member: Option<usize>, spot: &Spot, radiance: [f32; 3]) {
         let center = spot.center();
         let at = self.slot(center);
-        let reach = [0, 1, 2]
-            .map(|axis| {
-                let offset =
-                    f64::from(center[axis]) - (at[axis] as f64 + 0.5) * f64::from(self.cell);
-                offset * offset
-            })
-            .into_iter()
-            .sum::<f64>();
         let sigma = spot.sigma();
         let cell = self.cells.entry(at).or_insert(Cell::EMPTY);
-        if reach < cell.reach {
-            cell.reach = reach;
-            cell.member = index as u32;
+        if let Some(member) = member {
+            let reach = [0, 1, 2]
+                .map(|axis| {
+                    let offset =
+                        f64::from(center[axis]) - (at[axis] as f64 + 0.5) * f64::from(self.cell);
+                    offset * offset
+                })
+                .into_iter()
+                .sum::<f64>();
+            if reach < cell.reach {
+                cell.reach = reach;
+                cell.member = member as u32;
+            }
         }
         cell.count += 1;
         for axis in 0..3 {

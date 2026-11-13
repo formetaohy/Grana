@@ -755,6 +755,43 @@ impl Objects {
             .is_some_and(|set| set.set_localization(source))
     }
 
+    pub fn set_localization_spec(
+        &mut self,
+        id: ObjectSetId,
+        spec: grana_object::LocalizationSpec,
+    ) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization_spec(spec))
+    }
+
+    pub fn set_localization_projected(&mut self, id: ObjectSetId, projected: bool) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization_projected(projected))
+    }
+
+    pub fn set_localization_clusters(
+        &mut self,
+        id: ObjectSetId,
+        clusters: grana_object::ClusterSpec,
+    ) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization_clusters(clusters))
+    }
+
+    pub fn regroup(&mut self, id: ObjectSetId, groups: &[Vec<Option<u32>>]) -> bool {
+        let mut frames = 0;
+        if let Some(set) = self.sets.iter_mut().find(|set| set.id() == id) {
+            let count = set.frame_count();
+            if set.regroup(groups, &mut self.revisions) {
+                frames = count;
+            }
+        }
+        for time in 0..frames {
+            self.invalidate_relations(id, time);
+        }
+        frames > 0
+    }
+
     pub fn realign_localization(&mut self, id: ObjectSetId, next: &Drift) {
         let mut frames = 0;
         if let Some(set) = self.sets.iter_mut().find(|set| set.id() == id) {

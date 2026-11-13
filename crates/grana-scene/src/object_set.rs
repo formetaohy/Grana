@@ -343,6 +343,48 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn set_localization_spec(&mut self, spec: grana_object::LocalizationSpec) -> bool {
+        let Some(source) = self.localization.as_ref() else {
+            return false;
+        };
+        let next = source.with_spec(spec);
+        if self.localization.as_ref() == Some(&next) {
+            return false;
+        }
+        self.localization = Some(next);
+        self.document = self.document.next();
+        true
+    }
+
+    pub(crate) fn set_localization_projected(&mut self, projected: bool) -> bool {
+        let Some(source) = self.localization.as_ref() else {
+            return false;
+        };
+        let next = source.with_projected(projected);
+        if self.localization.as_ref() == Some(&next) {
+            return false;
+        }
+        self.localization = Some(next);
+        self.document = self.document.next();
+        true
+    }
+
+    pub(crate) fn set_localization_clusters(
+        &mut self,
+        clusters: grana_object::ClusterSpec,
+    ) -> bool {
+        let Some(source) = self.localization.as_ref() else {
+            return false;
+        };
+        let next = source.with_clusters(clusters);
+        if self.localization.as_ref() == Some(&next) {
+            return false;
+        }
+        self.localization = Some(next);
+        self.document = self.document.next();
+        true
+    }
+
     pub(crate) fn set_label_export(&mut self, export: Option<LabelExport>) -> bool {
         if self.label_export == export {
             return false;
@@ -2015,6 +2057,42 @@ impl ObjectSet {
         self.revision = stamp;
         self.document = self.document.next();
         true
+    }
+
+    pub(crate) fn regroup(&mut self, groups: &[Vec<Option<u32>>], stamps: &mut Revisions) -> bool {
+        if self.kind != ObjectKind::Spots || groups.len() != self.frames.len() {
+            return false;
+        }
+        let mut changed = false;
+        for (time, slot) in self.frames.iter_mut().enumerate() {
+            let Some(frame) = slot.data.as_deref() else {
+                continue;
+            };
+            let ObjectFrame::Spots(spots) = frame else {
+                return false;
+            };
+            let Some(held) = groups.get(time) else {
+                continue;
+            };
+            if held.len() != spots.len() {
+                continue;
+            }
+            if spots
+                .spots()
+                .iter()
+                .zip(held)
+                .all(|(spot, group)| spot.group() == *group)
+            {
+                continue;
+            }
+            let stamp = stamps.mint();
+            slot.data = Some(Arc::new(ObjectFrame::Spots(spots.regrouped(held))));
+            slot.stamp = stamp;
+            self.revision = stamp;
+            self.document = self.document.next();
+            changed = true;
+        }
+        changed
     }
 
     pub(crate) fn realign(&mut self, next: &Drift, stamps: &mut Revisions) -> bool {

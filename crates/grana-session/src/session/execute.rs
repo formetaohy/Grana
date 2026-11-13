@@ -690,7 +690,24 @@ impl Session {
                     scene.clear_object_coloc(set);
                 }
             }
-            Command::AnalyzeLocalizations { set, spec } => self.start_localizations(set, spec),
+            Command::AnalyzeLocalizations(set) => self.start_localizations(set),
+            Command::SetLocalizationSpec { set, spec } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_localization_spec(set, spec);
+                }
+            }
+            Command::SetLocalizationProjected { set, projected } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_localization_projected(set, projected);
+                }
+            }
+            Command::SetLocalizationClusters { set, clusters } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_localization_clusters(set, clusters);
+                }
+            }
+            Command::ClusterLocalizations(set) => self.start_clusters(set),
+            Command::CancelClusters(set) => self.cancel(Job::Clusters(set)),
             Command::CancelLocalizations(set) => self.cancel_localizations(set),
             Command::ClearLocalizations(set) => self.clear_localizations(set),
             Command::ExportLocalizationImage(set) => self.export_localization_image(set),
@@ -885,6 +902,7 @@ impl Session {
                     self.cancel(Job::Track(set));
                 }
                 Action::Track => self.cancel(Job::Track(set)),
+                Action::Cluster => self.cancel(Job::Clusters(set)),
                 Action::ObjectColoc => self.cancel(Job::ObjectColoc(set)),
                 Action::Relation => {
                     self.analysis.retain(|analysis| {

@@ -665,7 +665,14 @@ fn realigns_localizations_when_drift_changes() {
     );
     scene.set_localization(
         set,
-        LocalizationSource::new(100.0, 16, 16, false, Drift::default()),
+        LocalizationSource::new(
+            100.0,
+            16,
+            16,
+            false,
+            grana_object::LocalizationSpec::cover(2),
+            Drift::default(),
+        ),
     );
     let drift = Drift::new(
         0,
@@ -1955,4 +1962,96 @@ fn renders_and_measures_localizations() {
         (10.0..120.0).contains(&resolution),
         "the resolution measures {resolution} nm"
     );
+}
+
+#[test]
+fn clusters_localizations_into_molecules() {
+    let spot = |x: f32| Spot::new([x, 0.0, 0.0], 0.02, 500.0);
+    let frames = [
+        vec![spot(0.0), spot(0.02), spot(4.0)],
+        vec![spot(0.01)],
+        Vec::new(),
+        vec![spot(0.0)],
+    ];
+    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let held = slices
+        .iter()
+        .map(|spots| LocalizationFrame::new(spots, None))
+        .collect::<Vec<_>>();
+    let spec = grana_object::ClusterSpec::new(0.05, 2, 2);
+    let clusters = grana_analysis::localization::cluster(&held, spec, &mut |_, _| true)
+        .expect("the molecules cluster")
+        .expect("the molecules complete");
+    assert_eq!(
+        clusters.molecules(),
+        1,
+        "the chained spots form one molecule"
+    );
+    assert_eq!(clusters.localizations(), 4);
+    let groups = clusters.groups();
+    assert_eq!(groups[0], vec![Some(1), Some(1), None]);
+    assert_eq!(groups[1], vec![Some(1)]);
+    assert!(groups[2].is_empty());
+    assert_eq!(groups[3], vec![Some(1)]);
+    let short = grana_object::ClusterSpec::new(0.05, 1, 2);
+    let clusters = grana_analysis::localization::cluster(&held, short, &mut |_, _| true)
+        .expect("the short molecules cluster")
+        .expect("the short molecules complete");
+    assert_eq!(clusters.molecules(), 1);
+    assert_eq!(clusters.localizations(), 3);
+    assert_eq!(clusters.groups()[3], vec![None]);
+}
+
+#[test]
+fn projects_localizations_over_their_frame_range() {
+    let volume = support::spheres(
+        Extent::new(16, 16, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let pyramid = VolumeSeries::new(vec![volume.clone(), volume.clone(), volume], 1.0)
+        .pyramid()
+        .clone();
+    let mut scene = Scene::new(Dataset::synthetic("projected", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
+    for time in 0..3 {
+        let spots = (0..3)
+            .map(|index| Spot::new([index as f32, 0.5 * time as f32, 0.0], 0.01, 100.0))
+            .collect::<Vec<_>>();
+        scene.install(
+            set,
+            time,
+            ObjectFrame::Spots(grana_object::SpotSet::new(
+                0,
+                spots.clone(),
+                IntensityTable::new(1, vec![statistics; spots.len()]),
+            )),
+        );
+    }
+    scene.set_localization(
+        set,
+        LocalizationSource::new(
+            100.0,
+            16,
+            16,
+            false,
+            LocalizationSpec::new([0, 2], 10.0, 20.0),
+            Drift::default(),
+        ),
+    );
+    scene.set_time(1);
+    let mut cache = grana_engine::SplatCache::new();
+    let single = grana_engine::plan(&scene, None);
+    let single = grana_engine::frame(&scene, &single, &mut cache)
+        .expect("the single frame renders")
+        .splat_count();
+    assert_eq!(single, 3, "one frame paints its own localizations");
+    assert!(scene.set_localization_projected(set, true));
+    let projected = grana_engine::plan(&scene, None);
+    let projected = grana_engine::frame(&scene, &projected, &mut cache)
+        .expect("the projected frames render")
+        .splat_count();
+    assert_eq!(projected, 9, "the projection accumulates every frame");
 }

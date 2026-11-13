@@ -75,6 +75,11 @@ impl Session {
                 revision: Revision,
                 report: Box<grana_analysis::localization::LocalizationReport>,
             },
+            LocalizationClusters {
+                set: ObjectSetId,
+                revision: Revision,
+                clusters: Box<grana_analysis::localization::Clusters>,
+            },
             Drift(grana_scene::Drift),
             Registration(grana_scene::Registration),
             Calibration {
@@ -141,6 +146,21 @@ impl Session {
                                 set,
                                 revision,
                                 report,
+                            },
+                        ));
+                    }
+                    Poll::Event(Event::LocalizationClusters {
+                        set,
+                        revision,
+                        clusters,
+                    }) => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::LocalizationClusters {
+                                set,
+                                revision,
+                                clusters,
                             },
                         ));
                     }
@@ -214,10 +234,11 @@ impl Session {
                     drift,
                 } => {
                     if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        let spec = grana_object::LocalizationSpec::cover(scene.frame_count());
                         scene.set_localization(
                             set,
                             grana_scene::LocalizationSource::new(
-                                pixel, width, height, volume, drift,
+                                pixel, width, height, volume, spec, drift,
                             ),
                         );
                     }
@@ -279,6 +300,23 @@ impl Session {
                         self.localization.install(set, revision, *report);
                     }
                 }
+                Update::LocalizationClusters {
+                    set,
+                    revision,
+                    clusters,
+                } => {
+                    let current = self
+                        .scene
+                        .as_ref()
+                        .and_then(|scene| scene.objects.get(set))
+                        .map(|object| object.revision());
+                    if let (Job::Clusters(held), Some(current)) = (job, current)
+                        && held == set
+                        && revision == current
+                    {
+                        self.install_clusters(set, &clusters);
+                    }
+                }
                 Update::Drift(drift) => {
                     if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
                         scene.set_drift(drift);
@@ -325,6 +363,7 @@ impl Session {
                         | Job::Coloc
                         | Job::ObjectColoc(_)
                         | Job::Localizations(_)
+                        | Job::Clusters(_)
                         | Job::Drift
                         | Job::Register => {}
                         Job::Calibrate => {}

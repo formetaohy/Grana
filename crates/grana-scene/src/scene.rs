@@ -1095,6 +1095,30 @@ impl Scene {
         self.objects.set_localization(id, source)
     }
 
+    pub fn set_localization_spec(
+        &mut self,
+        id: ObjectSetId,
+        spec: grana_object::LocalizationSpec,
+    ) -> bool {
+        self.objects.set_localization_spec(id, spec)
+    }
+
+    pub fn set_localization_projected(&mut self, id: ObjectSetId, projected: bool) -> bool {
+        self.objects.set_localization_projected(id, projected)
+    }
+
+    pub fn set_localization_clusters(
+        &mut self,
+        id: ObjectSetId,
+        clusters: grana_object::ClusterSpec,
+    ) -> bool {
+        self.objects.set_localization_clusters(id, clusters)
+    }
+
+    pub fn regroup(&mut self, id: ObjectSetId, groups: &[Vec<Option<u32>>]) -> bool {
+        self.objects.regroup(id, groups)
+    }
+
     pub fn realign_localization(&mut self, id: ObjectSetId) {
         self.objects.realign_localization(id, &self.drift);
     }

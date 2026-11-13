@@ -14,6 +14,7 @@ pub enum Job {
     Coloc,
     ObjectColoc(ObjectSetId),
     Localizations(ObjectSetId),
+    Clusters(ObjectSetId),
     Drift,
     Register,
     Calibrate,
@@ -30,6 +31,7 @@ impl Job {
             Self::Relation { source, .. } => source == set,
             Self::Coloc
             | Self::Localizations(_)
+            | Self::Clusters(_)
             | Self::Drift
             | Self::Register
             | Self::Calibrate => false,
@@ -43,6 +45,7 @@ impl Job {
             | Self::Coloc
             | Self::ObjectColoc(_)
             | Self::Localizations(_)
+            | Self::Clusters(_)
             | Self::Drift
             | Self::Register
             | Self::Calibrate => false,
@@ -56,7 +59,8 @@ impl Job {
             | Self::Recut(id)
             | Self::Track(id)
             | Self::ObjectColoc(id)
-            | Self::Localizations(id) => id == set,
+            | Self::Localizations(id)
+            | Self::Clusters(id) => id == set,
             Self::Relation { source, target, .. } => source == set || target == set,
             Self::Coloc | Self::Drift | Self::Register | Self::Calibrate => false,
         }

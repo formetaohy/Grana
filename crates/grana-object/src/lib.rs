@@ -6,6 +6,7 @@ mod intensity;
 mod label;
 mod layout;
 mod lineage;
+mod localization;
 mod mask;
 mod mask_edit;
 mod params;
@@ -22,6 +23,7 @@ pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;
+pub use localization::{ClusterSpec, LocalizationSpec};
 pub use mask::{Mask, Roi};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
@@ -35,4 +37,6 @@ pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
     SurfaceTopology, TopologyInfo,
 };
-pub use track::{Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics};
+pub use track::{
+    Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics, grouped_tracks,
+};

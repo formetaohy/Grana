@@ -375,10 +375,21 @@ pub enum Command {
     ComputeObjectColoc(ObjectSetId),
     CancelObjectColoc(ObjectSetId),
     ClearObjectColoc(ObjectSetId),
-    AnalyzeLocalizations {
+    AnalyzeLocalizations(ObjectSetId),
+    SetLocalizationSpec {
         set: ObjectSetId,
-        spec: grana_analysis::localization::LocalizationSpec,
+        spec: grana_object::LocalizationSpec,
     },
+    SetLocalizationProjected {
+        set: ObjectSetId,
+        projected: bool,
+    },
+    SetLocalizationClusters {
+        set: ObjectSetId,
+        clusters: grana_object::ClusterSpec,
+    },
+    ClusterLocalizations(ObjectSetId),
+    CancelClusters(ObjectSetId),
     CancelLocalizations(ObjectSetId),
     ClearLocalizations(ObjectSetId),
     ExportLocalizationImage(ObjectSetId),
@@ -505,6 +516,8 @@ pub enum Action {
     TrackThickness,
     TrackColoring,
     TrackParameters,
+    Localization,
+    Cluster,
     Region,
     Clip,
     Exposure,
@@ -557,6 +570,7 @@ impl Action {
                 | Self::TrackThickness
                 | Self::TrackColoring
                 | Self::TrackParameters
+                | Self::Localization
                 | Self::Region
                 | Self::Exposure
                 | Self::StepScale
@@ -576,6 +590,7 @@ impl Action {
                 | Self::Track
                 | Self::ComputeColoc
                 | Self::ObjectColoc
+                | Self::Cluster
                 | Self::ApplyProtocol
         )
     }
@@ -670,6 +685,9 @@ impl Command {
                 | Self::SetTrackVisible { .. }
                 | Self::SetTrackThickness { .. }
                 | Self::SetTrackColoring { .. }
+                | Self::SetLocalizationSpec { .. }
+                | Self::SetLocalizationProjected { .. }
+                | Self::SetLocalizationClusters { .. }
                 | Self::SetRegion(_)
                 | Self::SetClip(_)
                 | Self::SetExposure(_)
@@ -711,6 +729,7 @@ impl Command {
                 | Self::ApplyView(_)
                 | Self::CancelDetect(_)
                 | Self::CancelTrack(_)
+                | Self::CancelClusters(_)
                 | Self::CancelColoc
                 | Self::CancelObjectColoc(_)
                 | Self::CancelDrift
@@ -818,6 +837,12 @@ impl Command {
             }
             Self::SetTrackColoring { set, .. } => Edit::targeted(Action::TrackColoring, set.raw()),
             Self::SetTrackParams { set, .. } => Edit::targeted(Action::TrackParameters, set.raw()),
+            Self::SetLocalizationSpec { set, .. }
+            | Self::SetLocalizationProjected { set, .. }
+            | Self::SetLocalizationClusters { set, .. } => {
+                Edit::targeted(Action::Localization, set.raw())
+            }
+            Self::ClusterLocalizations(set) => Edit::targeted(Action::Cluster, set.raw()),
             Self::SetRegion(_) => Edit::new(Action::Region),
             Self::SetClip(_) => Edit::new(Action::Clip),
             Self::SetExposure(_) => Edit::new(Action::Exposure),

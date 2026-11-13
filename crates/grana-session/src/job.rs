@@ -10,8 +10,8 @@ use crate::task::{Poll, Task};
 use grana_pipeline::Event;
 use grana_pipeline::run::{
     self, ColocRequest, DetectRequest, DriftRequest, GrowRequest, ImportRequest, InteropRequest,
-    LocalizationDriftRequest, LocalizationReportRequest, LocalizationRequest, RegisterRequest,
-    SegmentRequest,
+    LocalizationClusterRequest, LocalizationDriftRequest, LocalizationReportRequest,
+    LocalizationRequest, RegisterRequest, SegmentRequest,
 };
 
 pub struct Analysis {
@@ -182,6 +182,12 @@ pub fn localization_drift(job: Job, request: LocalizationDriftRequest) -> Analys
 pub fn localization_report(job: Job, request: LocalizationReportRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::localization_report(request, cancel, sink)
+    })
+}
+
+pub fn localization_cluster(job: Job, request: LocalizationClusterRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::localization_cluster(request, cancel, sink)
     })
 }
 

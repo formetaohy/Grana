@@ -1,75 +1,8 @@
 use std::sync::Arc;
 
+use grana_object::LocalizationSpec;
+
 const THRESHOLD: f32 = 1.0 / 7.0;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LocalizationSpec {
-    frames: [u32; 2],
-    pixel: f32,
-    blur: f32,
-}
-
-impl LocalizationSpec {
-    pub const PIXEL_MINIMUM: f32 = 1.0;
-    pub const PIXEL_MAXIMUM: f32 = 200.0;
-    pub const BLUR_MAXIMUM: f32 = 200.0;
-
-    pub fn new(frames: [u32; 2], pixel: f32, blur: f32) -> Self {
-        assert!(
-            frames[0] <= frames[1],
-            "a localization spec names an ordered frame range"
-        );
-        assert!(
-            pixel.is_finite() && pixel > 0.0,
-            "a localization spec renders at a positive pixel size"
-        );
-        assert!(
-            blur.is_finite() && blur >= 0.0,
-            "a localization spec blurs by a non-negative width"
-        );
-        Self {
-            frames,
-            pixel,
-            blur,
-        }
-    }
-
-    pub fn frames(&self) -> [u32; 2] {
-        self.frames
-    }
-
-    pub fn count(&self) -> u32 {
-        self.frames[1] - self.frames[0] + 1
-    }
-
-    pub fn pixel(&self) -> f32 {
-        self.pixel
-    }
-
-    pub fn blur(&self) -> f32 {
-        self.blur
-    }
-
-    pub fn fitted(&self, frames: u32) -> Self {
-        assert!(frames > 0, "a dataset holds at least one frame");
-        let last = frames - 1;
-        let start = self.frames[0].min(last);
-        let end = self.frames[1].clamp(start, last);
-        Self::new([start, end], self.pixel, self.blur)
-    }
-
-    pub fn placed(&self, frames: [u32; 2]) -> Self {
-        Self::new(frames, self.pixel, self.blur)
-    }
-
-    pub fn at_pixel(&self, pixel: f32) -> Self {
-        Self::new(self.frames, pixel, self.blur)
-    }
-
-    pub fn at_blur(&self, blur: f32) -> Self {
-        Self::new(self.frames, self.pixel, blur)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NeNa {

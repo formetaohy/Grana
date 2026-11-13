@@ -51,6 +51,8 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::TrackThickness => ("track width", "轨迹宽度"),
         Action::TrackColoring => ("track colors", "轨迹着色"),
         Action::TrackParameters => ("track parameters", "轨迹参数"),
+        Action::Localization => ("super-resolution settings", "超分辨设置"),
+        Action::Cluster => ("molecule clustering", "分子聚类"),
         Action::Region => ("region", "区域"),
         Action::Clip => ("clipping plane", "裁剪平面"),
         Action::Exposure => ("exposure", "曝光"),

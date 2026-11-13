@@ -3,9 +3,11 @@ use std::sync::Arc;
 use grana_render::{Digest, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
 use grana_scene::{Item, ObjectSet, ObjectSetId, Scene};
 
-use crate::spot::{self, Appearance, Choice, LEVEL_COUNT};
+use crate::spot::{self, Appearance, Choice, Frame, LEVEL_COUNT};
 
 const _: () = assert!(LEVEL_COUNT == grana_render::SPLAT_LEVELS);
+
+const SPLAT_LIMIT: usize = 1 << 21;
 
 pub struct SplatCache {
     sets: Vec<SetLevels>,
@@ -37,7 +39,8 @@ impl SplatCache {
         key: u64,
         choice: Choice,
     ) -> Prepared {
-        let time = scene.time();
+        let held = frames(scene, set);
+        let range = range(set, scene.time(), scene.frame_count());
         let index = match self
             .sets
             .iter()
@@ -53,7 +56,7 @@ impl SplatCache {
             }
         };
         let entry = &mut self.sets[index];
-        let Some(spots) = set.frame(time).and_then(|frame| frame.spots()) else {
+        if held.is_empty() {
             entry.levels = std::array::from_fn(|_| None);
             return Prepared {
                 chunks: Vec::new(),
@@ -63,26 +66,36 @@ impl SplatCache {
                     levels: std::array::from_fn(|_| None),
                 },
             };
-        };
-        let rungs = if spot::aggregated(spots) {
-            LEVEL_COUNT
-        } else {
-            1
-        };
-        for (_, level) in entry.levels.iter_mut().enumerate().skip(rungs as usize) {
-            *level = None;
         }
-        for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
+        let projected = held.len() > 1;
+        let choice = if projected {
+            Choice::Level(choice.level().max(1))
+        } else {
+            choice
+        };
+        let wanted = if projected {
+            vec![choice.level()]
+        } else if spot::aggregated(&held) {
+            (0..LEVEL_COUNT).collect()
+        } else {
+            vec![0]
+        };
+        for (slot, level) in entry.levels.iter_mut().enumerate() {
+            if !wanted.contains(&(slot as u8)) {
+                *level = None;
+                continue;
+            }
             if level.as_ref().is_some_and(|level| {
-                let stamp = stamps(set, slot as u8, time);
+                let stamp = stamps(set, slot as u8, range);
                 stamp.geometry != level.geometry_stamp || stamp.style != level.style_stamp
             }) {
                 *level = None;
             }
         }
-        for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
+        for slot in wanted {
+            let level = &mut entry.levels[slot as usize];
             if level.is_none() {
-                *level = Some(build(scene, set, slot as u8, time));
+                *level = Some(build(scene, set, slot, &held, range));
             }
         }
         let levels = &entry.levels;
@@ -92,17 +105,20 @@ impl SplatCache {
             let Some(level) = level else {
                 continue;
             };
-            chunks.push(SplatChunk::new(
-                key,
-                slot as u8,
-                slot as u8 == active,
-                SplatLevel::new(
-                    level.geometry_stamp,
-                    level.style_stamp,
-                    Arc::clone(&level.geometry),
-                    Arc::clone(&level.style),
-                ),
-            ));
+            chunks.push(
+                SplatChunk::new(
+                    key,
+                    slot as u8,
+                    slot as u8 == active,
+                    SplatLevel::new(
+                        level.geometry_stamp,
+                        level.style_stamp,
+                        Arc::clone(&level.geometry),
+                        Arc::clone(&level.style),
+                    ),
+                )
+                .pickable(level.members.is_some()),
+            );
         }
         Prepared {
             chunks,
@@ -112,11 +128,26 @@ impl SplatCache {
                 levels: std::array::from_fn(|slot| {
                     levels[slot]
                         .as_ref()
-                        .map(|level| Arc::clone(&level.members))
+                        .and_then(|level| level.members.as_ref().map(Arc::clone))
                 }),
             },
         }
     }
+}
+
+pub(crate) fn range(set: &ObjectSet, time: u32, frames: u32) -> [u32; 2] {
+    set.localization()
+        .map_or([time, time], |source| source.projected_frames(time, frames))
+}
+
+pub(crate) fn frames<'a>(scene: &'a Scene, set: &'a ObjectSet) -> Vec<Frame<'a>> {
+    let [start, end] = range(set, scene.time(), scene.frame_count());
+    (start..=end)
+        .filter_map(|time| {
+            let spots = set.frame(time).and_then(|frame| frame.spots())?;
+            Some(Frame::new(time, spots))
+        })
+        .collect()
 }
 
 pub(crate) struct Prepared {
@@ -171,7 +202,7 @@ struct Level {
     style_stamp: u64,
     geometry: Arc<Vec<SplatGeometry>>,
     style: Arc<Vec<SplatStyle>>,
-    members: Arc<Vec<u32>>,
+    members: Option<Arc<Vec<u32>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -180,45 +211,67 @@ struct Stamps {
     style: u64,
 }
 
-fn build(scene: &Scene, set: &ObjectSet, level: u8, time: u32) -> Level {
-    let choice = match level {
+fn build(
+    scene: &Scene,
+    set: &ObjectSet,
+    level: u8,
+    frames: &[Frame<'_>],
+    range: [u32; 2],
+) -> Level {
+    let mut choice = match level {
         0 => Choice::Full,
         level => Choice::Level(level),
     };
-    let stamp = stamps(set, level, time);
-    let spots = set
-        .frame(time)
-        .and_then(|frame| frame.spots())
-        .expect("a spot set carries spots on its frame");
-    let colors = scene.object_colors(set);
-    let appearance = |index: usize| Appearance {
+    if frames.len() > 1 && choice == Choice::Full {
+        choice = Choice::Level(1);
+    }
+    let stamp = stamps(set, level, range);
+    let colors = (frames.len() == 1)
+        .then(|| scene.object_colors(set))
+        .flatten();
+    let appearance = |time: u32, index: usize| Appearance {
         color: colors
             .as_ref()
             .and_then(|colors| colors.get(index).copied())
             .unwrap_or_else(|| set.color()),
         visible: set.visible_object(time, index),
     };
-    let detections = spot::detections(spots, choice, set.opacity(), appearance);
+    let mut detections = spot::detections(frames, choice, set.opacity(), appearance);
+    let mut rung = choice.level();
+    while detections.len() > SPLAT_LIMIT && rung < LEVEL_COUNT - 1 {
+        rung += 1;
+        detections = spot::detections(frames, Choice::Level(rung), set.opacity(), appearance);
+    }
+    let members = (frames.len() == 1).then(|| Arc::new(detections.members));
     Level {
         geometry_stamp: stamp.geometry,
         style_stamp: stamp.style,
         geometry: Arc::new(detections.geometry),
         style: Arc::new(detections.style),
-        members: Arc::new(detections.members),
+        members,
     }
 }
 
-fn stamps(set: &ObjectSet, level: u8, time: u32) -> Stamps {
+fn stamps(set: &ObjectSet, level: u8, range: [u32; 2]) -> Stamps {
     let mut geometry = Digest::new();
     geometry.mix(set.id().raw());
-    geometry.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
-    geometry.mix(u64::from(time));
+    geometry.mix(
+        set.frame_stamp(range[0])
+            .map_or(u64::MAX, |stamp| stamp.raw()),
+    );
+    geometry.mix(
+        set.frame_stamp(range[1])
+            .map_or(u64::MAX, |stamp| stamp.raw()),
+    );
+    geometry.mix(u64::from(range[0]));
+    geometry.mix(u64::from(range[1]));
     geometry.mix(u64::from(level));
     let mut style = Digest::new();
     style.mix(set.id().raw());
     style.mix(set.document().raw());
     style.real(set.opacity());
-    style.mix(u64::from(time));
+    style.mix(u64::from(range[0]));
+    style.mix(u64::from(range[1]));
     style.mix(u64::from(level));
     Stamps {
         geometry: geometry.finish(),

@@ -1,3 +1,5 @@
+use grana_object::{ClusterSpec, LocalizationSpec};
+
 use crate::drift::Drift;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -6,11 +8,21 @@ pub struct LocalizationSource {
     width: u32,
     height: u32,
     volume: bool,
+    spec: LocalizationSpec,
+    clusters: ClusterSpec,
+    projected: bool,
     applied: Drift,
 }
 
 impl LocalizationSource {
-    pub fn new(pixel: f32, width: u32, height: u32, volume: bool, applied: Drift) -> Self {
+    pub fn new(
+        pixel: f32,
+        width: u32,
+        height: u32,
+        volume: bool,
+        spec: LocalizationSpec,
+        applied: Drift,
+    ) -> Self {
         assert!(
             pixel.is_finite() && pixel > 0.0,
             "a localization table carries a positive camera pixel"
@@ -24,6 +36,9 @@ impl LocalizationSource {
             width,
             height,
             volume,
+            spec,
+            clusters: ClusterSpec::default(),
+            projected: false,
             applied,
         }
     }
@@ -44,8 +59,49 @@ impl LocalizationSource {
         self.volume
     }
 
+    pub fn spec(&self) -> LocalizationSpec {
+        self.spec
+    }
+
+    pub fn clusters(&self) -> ClusterSpec {
+        self.clusters
+    }
+
+    pub fn projected(&self) -> bool {
+        self.projected
+    }
+
     pub fn applied(&self) -> &Drift {
         &self.applied
+    }
+
+    pub fn projected_frames(&self, time: u32, frames: u32) -> [u32; 2] {
+        if self.projected {
+            self.spec.fitted(frames).frames()
+        } else {
+            [time, time]
+        }
+    }
+
+    pub fn with_spec(&self, spec: LocalizationSpec) -> Self {
+        Self {
+            spec,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_projected(&self, projected: bool) -> Self {
+        Self {
+            projected,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_clusters(&self, clusters: ClusterSpec) -> Self {
+        Self {
+            clusters,
+            ..self.clone()
+        }
     }
 
     pub(crate) fn set_applied(&mut self, applied: Drift) {

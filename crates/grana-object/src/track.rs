@@ -673,3 +673,31 @@ fn distance(left: [f32; 3], right: [f32; 3]) -> f64 {
         .sum::<f64>()
         .sqrt()
 }
+
+pub fn grouped_tracks(
+    frame_interval: f32,
+    groups: impl IntoIterator<Item = (u32, u32, usize, [f32; 3])>,
+) -> Result<TrackSet, String> {
+    let mut held = std::collections::BTreeMap::<u32, Vec<TrackNode>>::new();
+    for (group, time, object, centroid) in groups {
+        held.entry(group)
+            .or_default()
+            .push(TrackNode::new(time, object, centroid));
+    }
+    let mut tracks = Vec::new();
+    for nodes in held.values_mut() {
+        nodes.sort_unstable_by_key(|node| node.time());
+        let mut start = 0;
+        for index in 1..=nodes.len() {
+            let broken = index == nodes.len() || nodes[index].time() != nodes[index - 1].time() + 1;
+            if !broken {
+                continue;
+            }
+            if index - start > 1 {
+                tracks.push(Track::new(nodes[start..index].to_vec()));
+            }
+            start = index;
+        }
+    }
+    TrackSet::try_with_links(frame_interval, tracks, Vec::new())
+}

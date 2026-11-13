@@ -8,6 +8,7 @@ labels! {
     clear_image => "Clear Image" / "清除图像";
     pixel_size => "Pixel" / "像素";
     blur_width => "Blur" / "模糊";
+    projected => "Project frames" / "投影帧区间";
     precision => "Precision" / "精度";
     resolution => "Resolution" / "分辨率";
     neighbours => "Neighbours" / "最近邻";
@@ -19,6 +20,12 @@ labels! {
     curve_smooth => "Smoothed" / "平滑";
     curve_raw => "Rings" / "各环";
     threshold => "1/7" / "1/7";
+    molecules => "Molecules" / "分子";
+    radius => "Radius" / "半径";
+    dark => "Dark frames" / "暗帧";
+    minimum => "Min locs" / "最少定位";
+    cluster => "Cluster" / "聚类";
+    clustered => "Clustered" / "已聚类";
 }
 
 messages! {
@@ -27,4 +34,5 @@ messages! {
     nanometres(value: f32) => "{value:.1} nm" / "{value:.1} nm";
     neighbour_pairs(pairs: f64) => "{pairs:.0} pairs" / "{pairs:.0} 对";
     localizations(count: u64) => "{count} localizations" / "{count} 个定位";
+    molecule_count(count: usize) => "{count} molecules" / "{count} 个分子";
 }

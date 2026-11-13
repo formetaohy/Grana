@@ -1031,13 +1031,35 @@ impl Decode for LocalizationSource {
         if !pixel.is_finite() || pixel <= 0.0 || width == 0 || height == 0 {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(
+        let frames = [reader.u32()?, reader.u32()?];
+        let spec_pixel = finite(reader.f32()?)?;
+        let blur = reader.f32()?;
+        let radius = finite(reader.f32()?)?;
+        let dark = reader.u32()?;
+        let minimum = reader.u32()?;
+        let projected = reader.bool()?;
+        if frames[0] > frames[1]
+            || !spec_pixel.is_finite()
+            || spec_pixel <= 0.0
+            || !blur.is_finite()
+            || blur < 0.0
+            || !radius.is_finite()
+            || radius <= 0.0
+            || minimum == 0
+        {
+            return Err(FAULT_VALUE);
+        }
+        let source = Self::new(
             pixel,
             width,
             height,
             volume,
+            grana_object::LocalizationSpec::new(frames, spec_pixel, blur),
             Drift::decode(reader)?,
-        ))
+        );
+        Ok(source
+            .with_clusters(grana_object::ClusterSpec::new(radius, dark, minimum))
+            .with_projected(projected))
     }
 }
 
