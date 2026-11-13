@@ -353,8 +353,19 @@ impl Session {
                 }
                 Update::Done => {
                     self.progress.retain(|progress| progress.job != job);
+                    let mut molecule = Ok(false);
                     if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
                         scene.realign_localization(set);
+                        if scene
+                            .objects
+                            .get(set)
+                            .is_some_and(|object| object.localization().is_some())
+                        {
+                            molecule = scene.rebuild_molecule_tracks(set);
+                        }
+                    }
+                    if let Err(detail) = molecule {
+                        self.message = Some(Message::error(detail));
                     }
                     removed.push(index);
                     finished.push(job);

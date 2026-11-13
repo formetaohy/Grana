@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use grana_measure::{
@@ -115,6 +116,9 @@ impl Measure {
         }
         self.set = Some(set);
         self.time = scene.time();
+        if self.group == Group::Molecule && !molecule_grouping(scene, set) {
+            self.group = Group::Object;
+        }
         if !scene
             .objects
             .get(set)
@@ -141,6 +145,9 @@ impl Measure {
             .and_then(|set| scene.objects.get(set))
             .is_some_and(|object| object.kind().trackable());
         if group == Group::Track && !trackable {
+            return;
+        }
+        if group == Group::Molecule && !self.set.is_some_and(|set| molecule_grouping(scene, set)) {
             return;
         }
         self.group = group;
@@ -543,7 +550,7 @@ impl Measure {
 
     fn restriction(&self, scene: &Scene, id: ObjectSetId) -> Option<Visibility> {
         let object = scene.objects.get(id)?;
-        let roi = self.roi.filter(|_| self.group == Group::Object);
+        let roi = self.roi.filter(|_| self.group != Group::Track);
         if !self.visibility || (self.filters.is_empty() && self.lasso.is_none() && roi.is_none()) {
             return Some(Visibility::All);
         }
@@ -584,6 +591,28 @@ impl Measure {
                     }
                 }
                 Visibility::Track(Arc::new(visible))
+            }
+            Group::Molecule => {
+                let admitted = mask
+                    .iter()
+                    .filter_map(|row| table.observation(row).molecule())
+                    .collect::<BTreeSet<_>>();
+                let mut frames = (0..object.frame_count())
+                    .map(|time| {
+                        vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)]
+                    })
+                    .collect::<Vec<_>>();
+                for (time, frame) in object.frames() {
+                    let Some(spots) = frame.spots() else {
+                        continue;
+                    };
+                    for (index, spot) in spots.spots().iter().enumerate() {
+                        if spot.group().is_some_and(|group| admitted.contains(&group)) {
+                            frames[time as usize][index] = true;
+                        }
+                    }
+                }
+                Visibility::Object(Arc::new(frames))
             }
             Group::Timepoint => Visibility::All,
         })
@@ -844,7 +873,7 @@ impl Measure {
             return;
         };
         let frame = self.scope_frame();
-        let roi = self.roi.filter(|_| self.group == Group::Object);
+        let roi = self.roi.filter(|_| self.group != Group::Track);
         let table = table.as_ref();
         self.sync_scope(table, frame, roi);
         self.sync_gate(table);
@@ -950,7 +979,8 @@ impl Measure {
     }
 
     fn scope_frame(&self) -> Option<u32> {
-        (self.scope == Scope::Current && self.group != Group::Track).then_some(self.time)
+        (self.scope == Scope::Current && !matches!(self.group, Group::Track | Group::Molecule))
+            .then_some(self.time)
     }
 
     fn refresh_plot(&mut self) {
@@ -989,6 +1019,14 @@ impl PlotRequest {
         let window = self.window?;
         self.table.plot(self.view, self.axes, &self.mask, window)
     }
+}
+
+pub fn molecule_grouping(scene: &Scene, set: ObjectSetId) -> bool {
+    scene
+        .objects
+        .get(set)
+        .and_then(|object| object.localization())
+        .is_some_and(crate::LocalizationSource::clustered)
 }
 
 fn holds_row(region: Region, table: &Table, row: usize) -> bool {

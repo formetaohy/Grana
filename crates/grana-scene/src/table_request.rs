@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use grana_measure::{Aggregate, Child, ChildField, ColocMetric, Frame, Group, ObjectColoc};
@@ -65,9 +66,12 @@ pub struct TableRequest {
 impl TableRequest {
     pub fn new(scene: &Scene, id: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Self> {
         let set = scene.objects.get(id)?;
+        if group == Group::Molecule && !crate::measure::molecule_grouping(scene, id) {
+            return None;
+        }
         let children = match group {
             Group::Object => scene.objects.child_sets(id),
-            Group::Track | Group::Timepoint => Vec::new(),
+            Group::Track | Group::Timepoint | Group::Molecule => Vec::new(),
         };
         let mut rows = Vec::new();
         for time in 0..set.frame_count() {
@@ -170,9 +174,9 @@ impl TableRequest {
         if let Some(classifier) = &self.classifier {
             let column = match self.key.group {
                 Group::Object => Some((classifier.column(), classifier.scores(&table, &keys))),
-                Group::Track | Group::Timepoint => Some((
+                Group::Track | Group::Timepoint | Group::Molecule => Some((
                     classifier.aggregate_column(self.key.aggregate),
-                    self.aggregate_scores(classifier),
+                    self.aggregate_scores(&table, classifier),
                 )),
             };
             if let Some((column, values)) = column {
@@ -196,7 +200,9 @@ impl TableRequest {
                                 .map_or(f32::NAN, |value| value as f32)
                         })
                         .collect(),
-                    Group::Track | Group::Timepoint => self.aggregate_coloc(coloc, metric),
+                    Group::Track | Group::Timepoint | Group::Molecule => {
+                        self.aggregate_coloc(&table, coloc, metric)
+                    }
                 };
                 table = table.with_column(column, values);
             }
@@ -204,7 +210,7 @@ impl TableRequest {
         Some(table)
     }
 
-    fn aggregate_scores(&self, classifier: &grana_measure::Classifier) -> Vec<f32> {
+    fn aggregate_scores(&self, table: &Table, classifier: &grana_measure::Classifier) -> Vec<f32> {
         let aggregate = self.key.aggregate;
         match self.key.group {
             Group::Object => Vec::new(),
@@ -239,10 +245,13 @@ impl TableRequest {
                     aggregate.apply(&collected)
                 })
                 .collect(),
+            Group::Molecule => self.aggregate_members(table, |row, index| {
+                Some(classifier.score(row.objects.objects(), index))
+            }),
         }
     }
 
-    fn aggregate_coloc(&self, coloc: &ObjectColoc, metric: ColocMetric) -> Vec<f32> {
+    fn aggregate_coloc(&self, table: &Table, coloc: &ObjectColoc, metric: ColocMetric) -> Vec<f32> {
         let aggregate = self.key.aggregate;
         match self.key.group {
             Group::Object => Vec::new(),
@@ -285,7 +294,47 @@ impl TableRequest {
                     aggregate.apply(&collected)
                 })
                 .collect(),
+            Group::Molecule => self.aggregate_members(table, |row, index| {
+                coloc
+                    .objects(row.time)?
+                    .get(index)?
+                    .metric(metric)
+                    .map(|value| value as f32)
+            }),
         }
+    }
+
+    fn aggregate_members(
+        &self,
+        table: &Table,
+        value: impl Fn(&Row, usize) -> Option<f32>,
+    ) -> Vec<f32> {
+        let mut rows = HashMap::with_capacity(table.rows());
+        for row in 0..table.rows() {
+            if let Some(molecule) = table.observation(row).molecule() {
+                rows.insert(molecule, row);
+            }
+        }
+        let mut collected = vec![Vec::<f32>::new(); table.rows()];
+        for row in &self.rows {
+            let objects = row.objects.objects();
+            for index in 0..row.objects.object_count() {
+                let Some(molecule) = objects.molecule(index) else {
+                    continue;
+                };
+                let Some(at) = rows.get(&molecule).copied() else {
+                    continue;
+                };
+                if let Some(value) = value(row, index) {
+                    collected[at].push(value);
+                }
+            }
+        }
+        let aggregate = self.key.aggregate;
+        collected
+            .iter()
+            .map(|values| aggregate.apply(values))
+            .collect()
     }
 }
 

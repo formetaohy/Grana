@@ -394,6 +394,23 @@ fn settle(session: &mut Session) {
     }
 }
 
+fn measure(session: &mut Session) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        session.sync_measure();
+        session.apply_measure();
+        session.settle_measure();
+        let settled = session
+            .scene()
+            .is_some_and(|scene| session.measure().settled(scene));
+        if settled {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the statistics never settled");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn round_trips_detected_surfaces_through_geff() {
     let temp = Temp::new("session-geff-surfaces");
@@ -2745,6 +2762,7 @@ fn clusters_imported_localizations_into_molecules() {
         Some(2),
         "each molecule takes one track"
     );
+
     let exported = temp.path().join("molecules.hdf5");
     session
         .export_localizations(set, &exported)
@@ -2800,6 +2818,77 @@ fn clusters_imported_localizations_into_molecules() {
             .frames()
             .all(|(_, frame)| frame.spots_of().iter().all(|spot| spot.group().is_none())),
         "undoing the clustering clears the molecules"
+    );
+    session.execute(Command::ClusterLocalizations(set));
+    settle(&mut session);
+    session.execute(Command::SetMeasureSet(Some(set)));
+    measure(&mut session);
+    session.execute(Command::SetMeasureGroup(grana_measure::Group::Molecule));
+    measure(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let table = session
+        .measure()
+        .current(scene)
+        .expect("the molecules measure themselves");
+    assert_eq!(table.rows(), 2, "every molecule takes one row");
+    let counted = table
+        .column("localizations")
+        .expect("the molecules count their localizations");
+    let mut localizations = (0..table.rows())
+        .map(|row| table.value(row, counted))
+        .collect::<Vec<_>>();
+    localizations.sort_by(|left, right| left.total_cmp(right));
+    assert_eq!(
+        localizations,
+        vec![2.0, 4.0],
+        "each molecule sums the localizations of its group"
+    );
+    session.execute(Command::SetMeasureVisibility(true));
+    session.execute(Command::SetGate {
+        column: counted,
+        minimum: 4.0,
+        maximum: 4.0,
+    });
+    measure(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let object = scene.objects.get(set).expect("the localization set stays");
+    let visible = (0..scene.frame_count())
+        .map(|time| {
+            let Some(frame) = object.frame(time) else {
+                return 0;
+            };
+            (0..frame.object_count())
+                .filter(|index| object.visible_object(time, *index))
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(visible, 4, "gating a molecule keeps its localizations");
+    let sets = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .count();
+    session.execute(Command::ExtractFiltered);
+    settle(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    assert_eq!(
+        scene.objects.iter().count(),
+        sets + 1,
+        "the gated molecule extracts an object set of its own"
+    );
+    let derived = scene
+        .objects
+        .iter()
+        .last()
+        .expect("the derived object set lands");
+    let extracted = derived
+        .frames()
+        .map(|(_, frame)| frame.object_count())
+        .sum::<usize>();
+    assert_eq!(
+        extracted, 4,
+        "the derived set keeps the localizations of one molecule"
     );
 }
 

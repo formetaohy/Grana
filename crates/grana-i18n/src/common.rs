@@ -21,6 +21,7 @@ labels! {
     time => "Time" / "时间";
     track => "Track" / "轨迹";
     tracks => "Tracks" / "轨迹";
+    molecules => "Molecules" / "分子";
     object => "Object" / "对象";
     objects => "Objects" / "对象";
     every_frame => "Every frame" / "每一帧";

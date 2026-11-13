@@ -326,7 +326,13 @@ impl Protocol {
                 }
             }
             if let Some(measure) = &set.measure {
-                measure.checked(&set.name, set.track.is_some())?;
+                measure.checked(
+                    &set.name,
+                    set.track.is_some(),
+                    set.source
+                        .molecules()
+                        .is_some_and(|molecules| molecules.clustered),
+                )?;
             }
             if let Some(curation) = &set.curation {
                 curation.checked(&set.name, set.track.is_some())?;

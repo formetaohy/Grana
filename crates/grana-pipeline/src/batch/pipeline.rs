@@ -742,21 +742,21 @@ impl Run<'_, '_> {
         let frames = self.scene.frame_count() as usize;
         let progress = &self.progress;
         let mut localization = None;
-        let mut tracks = None;
         let mut collected = drain(
             frames,
             progress,
-            &mut |event| match event {
-                RunEvent::Localization {
+            &mut |event| {
+                if let RunEvent::Localization {
                     pixel,
                     width,
                     height,
                     volume,
                     photons,
                     drift,
-                } => localization = Some((pixel, width, height, volume, photons, drift)),
-                RunEvent::Tracks(set) => tracks = Some(set),
-                _ => {}
+                } = event
+                {
+                    localization = Some((pixel, width, height, volume, photons, drift));
+                }
             },
             |sink| {
                 crate::run::localization(
@@ -784,9 +784,7 @@ impl Run<'_, '_> {
                 pixel, width, height, volume, photons, spec, drift,
             ),
         );
-        if let Some(tracks) = tracks {
-            self.scene.install_tracks(id, tracks);
-        }
+        self.scene.rebuild_molecule_tracks(id)?;
         Ok(())
     }
 

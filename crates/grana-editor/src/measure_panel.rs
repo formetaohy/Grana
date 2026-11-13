@@ -84,24 +84,27 @@ fn toolbar<'a>(
         .objects
         .get(chosen)
         .is_some_and(|object| object.kind().trackable());
+    let molecule = state
+        .scene
+        .objects
+        .get(chosen)
+        .and_then(|object| object.localization())
+        .is_some_and(grana_scene::LocalizationSource::clustered);
     let group = state.measure.group();
     let language = ctx.language();
     let mut options = vec![grana_i18n::common::objects(language).to_string()];
+    let mut groups = vec![Group::Object];
     if trackable {
         options.push(grana_i18n::common::tracks(language).to_string());
+        groups.push(Group::Track);
+    }
+    if molecule {
+        options.push(grana_i18n::common::molecules(language).to_string());
+        groups.push(Group::Molecule);
     }
     options.push(grana_i18n::common::frames(language).to_string());
-    let group_index = match group {
-        Group::Object => 0,
-        Group::Track => 1,
-        Group::Timepoint => {
-            if trackable {
-                2
-            } else {
-                1
-            }
-        }
-    };
+    groups.push(Group::Timepoint);
+    let group_index = groups.iter().position(|value| *value == group).unwrap_or(0);
     let mut items = vec![
         field_label(ctx, grana_i18n::measure::set(language)),
         combo(
@@ -130,17 +133,9 @@ fn toolbar<'a>(
         "measure.group",
         &group_options,
         group_index,
-        move |index| {
-            let next = match index {
-                0 => Group::Object,
-                1 if trackable => Group::Track,
-                _ => Group::Timepoint,
-            };
-            if next != group {
-                Message::Command(Command::SetMeasureGroup(next))
-            } else {
-                Message::Noop
-            }
+        move |index| match groups.get(index) {
+            Some(next) if *next != group => Message::Command(Command::SetMeasureGroup(*next)),
+            _ => Message::Noop,
         },
     ));
     if group != Group::Object {
@@ -167,7 +162,7 @@ fn toolbar<'a>(
             },
         ));
     }
-    if state.measure.table().is_some() && group != Group::Track {
+    if state.measure.table().is_some() && !matches!(group, Group::Track | Group::Molecule) {
         let scope = state.measure.scope();
         let scope_index = Scope::ALL
             .iter()
@@ -745,6 +740,7 @@ fn table<'a>(
     if table.rows() == 0 {
         let detail = match state.measure.group() {
             Group::Track => grana_i18n::measure::no_rows_track_detail(language),
+            Group::Molecule => grana_i18n::measure::no_rows_molecule_detail(language),
             Group::Object | Group::Timepoint => grana_i18n::measure::no_rows_detail(language),
         };
         return vec![

@@ -167,6 +167,7 @@ impl Session {
             Group::Object => "objects",
             Group::Track => "tracks",
             Group::Timepoint => "timepoints",
+            Group::Molecule => "molecules",
         };
         let file_name = format!(
             "{}-{}-{}-{group}.csv",

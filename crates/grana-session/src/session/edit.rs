@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor};
@@ -168,6 +170,22 @@ impl Session {
                     }
                 }
             }
+            Group::Molecule => {
+                let admitted = rows
+                    .into_iter()
+                    .filter_map(|row| table.observation(row).molecule())
+                    .collect::<BTreeSet<_>>();
+                for (time, frame) in object.frames() {
+                    let Some(spots) = frame.spots() else {
+                        continue;
+                    };
+                    for (index, spot) in spots.spots().iter().enumerate() {
+                        if spot.group().is_some_and(|group| admitted.contains(&group)) {
+                            keep[time as usize][index] = true;
+                        }
+                    }
+                }
+            }
             Group::Timepoint => unreachable!("the timepoint group is rejected above"),
         }
         if keep.iter().flatten().all(|kept| !kept) {
@@ -179,8 +197,8 @@ impl Session {
     pub(super) fn filtered_deletions(&self) -> Result<Deletions, String> {
         let (set, keep) = self.filtered_keeps(true)?;
         let scene = self.scene.as_ref().ok_or("no dataset is open")?;
-        let current =
-            self.measure.scope() == Scope::Current && self.measure.group() != Group::Track;
+        let current = self.measure.scope() == Scope::Current
+            && !matches!(self.measure.group(), Group::Track | Group::Molecule);
         let mut deletions = Vec::new();
         for (time, mask) in keep.iter().enumerate() {
             if current && time != scene.time() as usize {

@@ -813,6 +813,17 @@ impl Scene {
             return Ok(true);
         }
         let tracks = filtered.tracks().map(|layer| layer.set());
+        let groups = if criteria.group() == Group::Molecule {
+            (0..self.frame_count())
+                .map(|time| {
+                    filtered.frame(time).map_or_else(Vec::new, |frame| {
+                        frame.spots_of().iter().map(|spot| spot.group()).collect()
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let table = self
             .table(source, criteria.group(), Aggregate::MEAN)
             .ok_or_else(|| {
@@ -822,7 +833,7 @@ impl Scene {
                     set.name()
                 )
             })?;
-        let keep = criteria.keep(&table, tracks, &counts)?;
+        let keep = criteria.keep(&table, tracks, &groups, &counts)?;
         if keep.iter().flatten().all(|kept| !kept) {
             return Err(format!(
                 "the filter of {} keeps no object of {}",
@@ -1137,24 +1148,31 @@ impl Scene {
         if !self.regroup(id, groups) {
             return Ok(false);
         }
-        let frame_interval = self.dataset.frame_interval();
+        self.rebuild_molecule_tracks(id)
+    }
+
+    pub fn rebuild_molecule_tracks(&mut self, id: ObjectSetId) -> Result<bool, String> {
+        let Some(object) = self.objects.get(id) else {
+            return Ok(false);
+        };
         let mut grouped = Vec::new();
-        if let Some(object) = self.objects.get(id) {
-            for (time, frame) in object.frames() {
-                let Some(spots) = frame.spots() else {
+        for (time, frame) in object.frames() {
+            let Some(spots) = frame.spots() else {
+                continue;
+            };
+            for (index, spot) in spots.spots().iter().enumerate() {
+                let Some(group) = spot.group() else {
                     continue;
                 };
-                for (index, spot) in spots.spots().iter().enumerate() {
-                    let Some(group) = spot.group() else {
-                        continue;
-                    };
-                    if object.visible_object(time, index) {
-                        grouped.push((group, time, index, spot.center()));
-                    }
+                if object.visible_object(time, index) {
+                    grouped.push((group, time, index, spot.center()));
                 }
             }
         }
-        let tracks = grana_object::grouped_tracks(frame_interval, grouped)?;
+        if grouped.is_empty() {
+            return Ok(false);
+        }
+        let tracks = grana_object::grouped_tracks(self.dataset.frame_interval(), grouped)?;
         self.install_tracks(id, tracks);
         Ok(true)
     }

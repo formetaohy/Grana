@@ -70,7 +70,6 @@ pub fn localization(
     for entry in table.localizations() {
         slots[entry.time() as usize].push(*entry);
     }
-    let mut grouped = Vec::new();
     for (time, entries) in slots.into_iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
@@ -79,12 +78,6 @@ pub fn localization(
         let Some(set) = frame(reader, time, &entries, request.drift.warp(time))? else {
             continue;
         };
-        for (object, entry) in entries.iter().enumerate() {
-            if let Some(group) = entry.group() {
-                let spot = set.spots()[object];
-                grouped.push((group, time, object, spot.center()));
-            }
-        }
         sink(Event::Frame {
             time,
             frame: ObjectFrame::Spots(set),
@@ -97,10 +90,6 @@ pub fn localization(
     }
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
-    }
-    if !grouped.is_empty() {
-        let tracks = grana_object::grouped_tracks(reader.pyramid().frame_interval(), grouped)?;
-        sink(Event::Tracks(tracks));
     }
     sink(Event::Done);
     Ok(())

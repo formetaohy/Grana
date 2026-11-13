@@ -71,6 +71,40 @@ fn summarises_spots_and_exports_a_csv() {
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3);
     assert!(lines[0].starts_with("frame,time_s,objects"));
+
+    let first_group = grouped(3.0);
+    let second_group = grouped(5.0);
+    let frame_of = [
+        Frame::new(0, Objects::Spots(&first_group), &[], &[]),
+        Frame::new(1, Objects::Spots(&second_group), &[], &[]),
+    ];
+    let molecules = Table::build(
+        &frame_of,
+        None,
+        &channels,
+        2.0,
+        Group::Molecule,
+        Aggregate::MEAN,
+    );
+    assert_eq!(
+        molecules.rows(),
+        2,
+        "every localization group takes one row"
+    );
+    assert_eq!(value(&molecules, 0, "molecule"), 1.0);
+    assert_eq!(value(&molecules, 0, "localizations"), 2.0);
+    assert_eq!(value(&molecules, 0, "first_frame"), 1.0);
+    assert_eq!(value(&molecules, 0, "last_frame"), 2.0);
+    assert_eq!(value(&molecules, 0, "z_um"), 4.0);
+    assert!((value(&molecules, 0, "spread_z_um") - 2.0f32.sqrt()).abs() < 1.0e-5);
+    assert_eq!(value(&molecules, 0, "contrast_mean"), 0.5);
+    assert_eq!(molecules.observation(0).molecule(), Some(1));
+    assert!((value(&molecules, 0, "nearest_distance_um") - 27.0f32.sqrt()).abs() < 1.0e-5);
+    assert!(
+        molecules.csv(&[0]).starts_with(
+            "molecule,localizations,first_frame,last_frame,x_um,y_um,z_um,spread_x_um"
+        )
+    );
 }
 
 #[test]
@@ -425,6 +459,24 @@ fn spots() -> SpotSet {
         vec![
             Spot::new([1.0, 2.0, 3.0], 0.5, 0.25),
             Spot::new([4.0, 5.0, 6.0], 0.5, 0.75),
+        ],
+        intensities,
+    )
+}
+
+fn grouped(z: f32) -> SpotSet {
+    let intensities = IntensityTable::new(
+        1,
+        vec![
+            SampleStatistics::new(10.0, 9.0, 11.0, 0.5, 100.0),
+            SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0),
+        ],
+    );
+    SpotSet::new(
+        0,
+        vec![
+            Spot::grouped([1.0, 2.0, z], [0.5; 3], 0.5, Some(1)),
+            Spot::grouped([4.0, 5.0, z + 3.0], [0.5; 3], 0.5, Some(2)),
         ],
         intensities,
     )

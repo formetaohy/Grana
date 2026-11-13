@@ -2975,7 +2975,12 @@ impl MeasureSpec {
         Some((table.column(&sort.column)?, sort.descending))
     }
 
-    pub(super) fn checked(&self, set: &str, tracked: bool) -> Result<(), ProtocolError> {
+    pub(super) fn checked(
+        &self,
+        set: &str,
+        tracked: bool,
+        molecules: bool,
+    ) -> Result<(), ProtocolError> {
         let invalid =
             |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
         let group = Group::parse(&self.group).ok_or_else(|| {
@@ -2989,6 +2994,9 @@ impl MeasureSpec {
         }
         if group == Group::Track && !tracked {
             return invalid("groups by tracks without tracking".to_string());
+        }
+        if group == Group::Molecule && !molecules {
+            return invalid("groups by molecules without clustered localizations".to_string());
         }
         if let Some(scope) = &self.scope
             && Scope::parse(scope).is_none()

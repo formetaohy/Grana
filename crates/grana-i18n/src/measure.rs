@@ -7,6 +7,11 @@ pub fn term(language: Language, english: &str) -> Option<String> {
         "object" => "对象",
         "objects" => "对象数",
         "track" => "轨迹",
+        "molecule" => "分子",
+        "localizations" => "定位数",
+        "spread x" => "离散 X",
+        "spread y" => "离散 Y",
+        "spread z" => "离散 Z",
         "x" => "X",
         "y" => "Y",
         "z" => "Z",
@@ -106,6 +111,7 @@ labels! {
     no_detection_detail => "Detect this object set to build its measurement table." / "检测此对象集以生成其测量表。";
     no_rows => "No Rows" / "无数据行";
     no_rows_track_detail => "Track the objects to summarise their trajectories." / "追踪对象以汇总其轨迹。";
+    no_rows_molecule_detail => "Cluster the localizations into molecules to summarise them." / "把定位聚类成分子后再汇总。";
     no_rows_detail => "Detect objects in the region to build a measurement table." / "检测区域内的对象以生成测量表。";
     no_visible_columns => "No Visible Columns" / "无可见列";
     no_visible_columns_detail => "Choose at least one column from the columns menu." / "请从列菜单中至少选择一列。";

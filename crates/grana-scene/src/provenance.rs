@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use grana_measure::{Filter, Group, Lasso, Table};
 use grana_object::{MaskEdit, SurfaceEdit, TrackSet};
 
@@ -138,6 +140,7 @@ impl Criteria {
         &self,
         table: &Table,
         tracks: Option<&TrackSet>,
+        groups: &[Vec<Option<u32>>],
         counts: &[usize],
     ) -> Result<Vec<Vec<bool>>, String> {
         let filters = self
@@ -153,7 +156,22 @@ impl Criteria {
             .iter()
             .map(|count| vec![false; *count])
             .collect::<Vec<_>>();
-        for row in table.matching(&filters, lasso.as_ref(), None) {
+        let matched = table.matching(&filters, lasso.as_ref(), None);
+        if self.group == Group::Molecule {
+            let admitted = matched
+                .into_iter()
+                .filter_map(|row| table.observation(row).molecule())
+                .collect::<BTreeSet<_>>();
+            for (time, groups) in groups.iter().enumerate() {
+                for (index, group) in groups.iter().enumerate() {
+                    if group.is_some_and(|group| admitted.contains(&group)) {
+                        keep[time][index] = true;
+                    }
+                }
+            }
+            return Ok(keep);
+        }
+        for row in matched {
             let observation = table.observation(row);
             match self.group {
                 Group::Object => {
@@ -180,6 +198,7 @@ impl Criteria {
                     }
                 }
                 Group::Timepoint => unreachable!("a derived object set filters no timepoints"),
+                Group::Molecule => unreachable!("a molecule set keeps its localizations whole"),
             }
         }
         Ok(keep)

@@ -147,14 +147,14 @@ impl Table {
         gated: &Mask,
     ) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
         let frames = match self.group() {
-            Group::Object | Group::Track => BTreeSet::new(),
+            Group::Object | Group::Track | Group::Molecule => BTreeSet::new(),
             Group::Timepoint => gated
                 .iter()
                 .filter_map(|row| self.observation(row).time())
                 .collect::<BTreeSet<_>>(),
         };
         let tracks = match self.group() {
-            Group::Object | Group::Timepoint => BTreeSet::new(),
+            Group::Object | Group::Timepoint | Group::Molecule => BTreeSet::new(),
             Group::Track => gated
                 .iter()
                 .filter_map(|row| self.observation(row).track())
@@ -180,6 +180,7 @@ impl Table {
                     .observation(row)
                     .track()
                     .is_some_and(|track| tracks.contains(&track)),
+                Group::Molecule => true,
             };
             if admitted {
                 buckets.entry(time).or_default().push(f64::from(value));
