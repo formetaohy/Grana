@@ -239,7 +239,7 @@ fn thresholds<'a>(
         let theme = *ctx.theme();
         let style = TextStyle::new(theme.font(Level::Monospace), theme.palette.on_surface)
             .aligned(Align::End);
-        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0, move |painter, info| {
+        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0).paint(move |painter, info| {
             painter.text_in(info.rect, &format!("{value:.3}"), style, Align::Center);
         });
         let slider = grana_ui::widget::slider_sized(
@@ -356,7 +356,7 @@ fn diagnostics<'a>(
         ];
         let series_label = grana_i18n::coloc::series(language);
         let frame_label = grana_i18n::coloc::frame_row(language, time + 1);
-        let canvas = grana_ui::canvas(Length::Fill, height, move |painter, info| {
+        let canvas = grana_ui::canvas(Length::Fill, height).paint(move |painter, info| {
             let widths = statistic_widths(info.rect.width());
             let mut left = info.rect.min.x;
             for (index, (label, width)) in headers.iter().zip(widths.iter()).enumerate() {
@@ -600,7 +600,7 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     )));
     let theme = *ctx.theme();
     let style = Style::card(&theme, DistributionStyle::Box).with_language(language);
-    let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0, move |painter, info| {
+    let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0).paint(move |painter, info| {
         page.paint(painter, info.rect, &style, &Decor::default());
     });
     let title = view::card_title(
@@ -634,36 +634,37 @@ fn combo<'a>(
     let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
     let rest = theme.surface(Role::Field, State::Rest);
     let hover = theme.surface(Role::Field, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
-        let surface = if info.hover > 0.5 { hover } else { rest };
-        painter.outlined(
-            info.rect,
-            surface.corners,
-            surface.fill,
-            surface.border,
-            surface.shadow,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                info.rect.min + Vec2::new(10.0, 0.0),
-                Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
-            ),
-            &label,
-            style,
-            Align::Center,
-        );
-        icon::chevron(
-            painter,
-            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-            5.0,
-            std::f32::consts::FRAC_PI_2,
-            palette.on_surface_variant,
-            1.5,
-        );
-    })
-    .named(key)
-    .press(Message::Noop)
-    .cursor(Cursor::Pointing);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
+        .paint(move |painter, info| {
+            let surface = if info.hover > 0.5 { hover } else { rest };
+            painter.outlined(
+                info.rect,
+                surface.corners,
+                surface.fill,
+                surface.border,
+                surface.shadow,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    info.rect.min + Vec2::new(10.0, 0.0),
+                    Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
+                ),
+                &label,
+                style,
+                Align::Center,
+            );
+            icon::chevron(
+                painter,
+                Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
+                5.0,
+                std::f32::consts::FRAC_PI_2,
+                palette.on_surface_variant,
+                1.5,
+            );
+        })
+        .named(key)
+        .press(Message::Noop)
+        .cursor(Cursor::Pointing);
     let mut rows = Vec::with_capacity(labels.len());
     for (index, label) in labels.iter().enumerate() {
         rows.push(

@@ -12,7 +12,9 @@ use crate::theme::Theme;
 
 pub(crate) mod button;
 pub(crate) mod color;
+pub(crate) mod display;
 pub(crate) mod field;
+pub(crate) mod icon;
 pub(crate) mod label;
 pub(crate) mod menu;
 pub(crate) mod segment;
@@ -23,9 +25,11 @@ pub use button::{
     Split, action_button, button, button_enabled, button_width, icon_button, split_button,
 };
 pub use color::color_picker;
+pub use display::{card, card_title, divider, empty_state, form_row, group_card, section_header};
 pub use field::text_field;
+pub use icon::icon;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
-pub use menu::{action_row, menu_row, separator};
+pub use menu::{action_row, disclosure_row, menu_row, separator};
 pub use segment::{segmented, segmented_fill, tabs};
 pub use slider::{drag_value, gradient_bar, progress, range_slider, slider_readout, slider_sized};
 pub use toggle::{checkbox, toggle, toggle_row};
@@ -70,6 +74,7 @@ pub(crate) fn measure(
         Content::Tabs(tabs) => (segment::measure_tabs(tabs, available), None),
         Content::DragValue(drag) => (slider::measure_drag(drag, theme), None),
         Content::Field(field) => (field::measure_field(field, layout, available), None),
+        Content::Icon(content) => (icon::measure(content), None),
         Content::MenuRow(_) => (Vec2::new(available.x, menu::MENU_ROW), None),
         Content::ActionRow(_) => (Vec2::new(available.x, menu::MENU_ROW), None),
         Content::Badge(badge) => (label::measure_badge(badge, text), None),
@@ -99,7 +104,7 @@ pub(crate) fn paint(
     match content {
         Content::Empty | Content::Canvas => None,
         Content::Text(text) => {
-            let max = if text.style.wrap {
+            let max = if text.style.bounded() {
                 info.rect.width()
             } else {
                 0.0
@@ -145,6 +150,10 @@ pub(crate) fn paint(
             None
         }
         Content::Field(field) => field::paint_field(field, runtime, painter, info),
+        Content::Icon(content) => {
+            icon::paint(content, painter, info);
+            None
+        }
         Content::MenuRow(row) => {
             menu::paint_menu_row(row, runtime, painter, info);
             None
@@ -318,4 +327,15 @@ pub(crate) fn cursor(content: &Content) -> Option<Cursor> {
 
 pub(crate) fn padding(theme: &Theme) -> f32 {
     (theme.metrics.control_height * 0.44).round()
+}
+
+pub(crate) fn hit_changed(before: &Content, after: &Content) -> bool {
+    hit_geometry(before) != hit_geometry(after)
+}
+
+fn hit_geometry(content: &Content) -> Option<(Option<&str>, crate::element::Length)> {
+    match content {
+        Content::Slider(slider) => Some((slider.label.as_deref(), slider.width)),
+        _ => None,
+    }
 }

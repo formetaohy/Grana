@@ -140,44 +140,45 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             let name = dataset.name.clone();
             let label = state_label(language, &dataset.state).to_string();
             let detail = dataset.detail.clone();
-            let mut row = grana_ui::canvas(Length::Fill, 32.0, move |painter, info| {
-                if info.hover > 0.01 {
-                    painter.rect(
-                        info.rect,
-                        Corners::all(theme.metrics.corner_sm),
-                        palette.on_surface.with_alpha(0.07 * info.hover),
+            let mut row = grana_ui::canvas(Length::Fill, 32.0)
+                .paint(move |painter, info| {
+                    if info.hover > 0.01 {
+                        painter.rect(
+                            info.rect,
+                            Corners::all(theme.metrics.corner_sm),
+                            palette.on_surface.with_alpha(0.07 * info.hover),
+                        );
+                    }
+                    icon::paint(
+                        Icon::Folder,
+                        painter,
+                        Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
+                        14.0,
+                        palette.on_surface_variant,
+                        1.5,
                     );
-                }
-                icon::paint(
-                    Icon::Folder,
-                    painter,
-                    Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
-                    14.0,
-                    palette.on_surface_variant,
-                    1.5,
-                );
-                painter.text_in(
-                    Rect::from_min_max(
-                        Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
-                        Vec2::new(info.rect.max.x - 100.0, info.rect.max.y),
-                    ),
-                    &name,
-                    TextStyle::new(label_font, palette.on_surface).truncating(),
-                    Align::Center,
-                );
-                let badge = Rect::from_min_size(
-                    Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 10.0),
-                    Vec2::new(92.0, 20.0),
-                );
-                painter.rect(badge, Corners::capsule(), tint.with_alpha(0.18));
-                painter.text_in(
-                    badge,
-                    &label,
-                    TextStyle::new(caption_font, tint).aligned(Align::Center),
-                    Align::Center,
-                );
-            })
-            .tooltip(&detail);
+                    painter.text_in(
+                        Rect::from_min_max(
+                            Vec2::new(info.rect.min.x + 26.0, info.rect.min.y),
+                            Vec2::new(info.rect.max.x - 100.0, info.rect.max.y),
+                        ),
+                        &name,
+                        TextStyle::new(label_font, palette.on_surface).truncating(),
+                        Align::Center,
+                    );
+                    let badge = Rect::from_min_size(
+                        Vec2::new(info.rect.max.x - 92.0, info.rect.center().y - 10.0),
+                        Vec2::new(92.0, 20.0),
+                    );
+                    painter.rect(badge, Corners::capsule(), tint.with_alpha(0.18));
+                    painter.text_in(
+                        badge,
+                        &label,
+                        TextStyle::new(caption_font, tint).aligned(Align::Center),
+                        Align::Center,
+                    );
+                })
+                .tooltip(&detail);
             if reviewable {
                 row = row
                     .press(Message::Command(Command::ReviewBatchDataset(index)))
@@ -289,10 +290,8 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         )
         .truncating();
         let path = path.to_string();
-        children.push(grana_ui::canvas(
-            Length::Fill,
-            30.0,
-            move |painter, info| {
+        children.push(
+            grana_ui::canvas(Length::Fill, 30.0).paint(move |painter, info| {
                 painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
                 painter.text_in(
                     info.rect.shrink2(Vec2::new(10.0, 0.0)),
@@ -300,8 +299,8 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                     style,
                     Align::Center,
                 );
-            },
-        ));
+            }),
+        );
     } else {
         children.push(view::weak(ctx, grana_i18n::batch::output_hint(language)));
     }
@@ -605,24 +604,26 @@ fn comparison<'a>(
     let style = Style::card(ctx.theme(), page.distribution()).with_language(ctx.language());
     let pointer = ctx.pointer();
     let count = slots.len();
-    let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT, move |painter, info| {
-        let decor = Decor {
-            pointer: info.rect.contains(pointer).then_some(pointer),
-            ..Decor::default()
-        };
-        page.paint(painter, info.rect, &style, &decor);
-    })
-    .key(Key::new("comparison.chart"))
-    .cursor(Cursor::Crosshair)
-    .on_pointer(move |pointer| {
-        if pointer.phase != Phase::Up || !pointer.rect.contains(pointer.position) || count == 0 {
-            return None;
-        }
-        let frame = style.metrics.frame(pointer.rect);
-        let index = grana_chart::group_at(frame, count, pointer.position)?;
-        let (group, key) = slots.get(index)?.clone();
-        Some(Message::ToggleComparisonDetail { group, key })
-    });
+    let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT)
+        .paint(move |painter, info| {
+            let decor = Decor {
+                pointer: info.rect.contains(pointer).then_some(pointer),
+                ..Decor::default()
+            };
+            page.paint(painter, info.rect, &style, &decor);
+        })
+        .key(Key::new("comparison.chart"))
+        .cursor(Cursor::Crosshair)
+        .on_pointer(move |pointer| {
+            if pointer.phase != Phase::Up || !pointer.rect.contains(pointer.position) || count == 0
+            {
+                return None;
+            }
+            let frame = style.metrics.frame(pointer.rect);
+            let index = grana_chart::group_at(frame, count, pointer.position)?;
+            let (group, key) = slots.get(index)?.clone();
+            Some(Message::ToggleComparisonDetail { group, key })
+        });
     children.push(canvas);
     let open = state
         .workspace

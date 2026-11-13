@@ -11,6 +11,7 @@ pub(crate) enum ContentKind {
     Empty,
     Text,
     Canvas,
+    Icon,
     Button,
     IconButton,
     Toggle,
@@ -37,6 +38,7 @@ pub(crate) enum Content {
     Empty,
     Text(TextContent),
     Canvas,
+    Icon(IconContent),
     Button(ButtonContent),
     IconButton(IconButtonContent),
     Toggle(ToggleContent),
@@ -65,6 +67,7 @@ impl Content {
             Self::Empty => ContentKind::Empty,
             Self::Text(_) => ContentKind::Text,
             Self::Canvas => ContentKind::Canvas,
+            Self::Icon(_) => ContentKind::Icon,
             Self::Button(_) => ContentKind::Button,
             Self::IconButton(_) => ContentKind::IconButton,
             Self::Toggle(_) => ContentKind::Toggle,
@@ -94,6 +97,7 @@ impl Content {
             (Self::Spinner(a), Self::Spinner(b)) => a == b,
             (Self::Separator, Self::Separator) => true,
             (Self::Text(a), Self::Text(b)) => a == b,
+            (Self::Icon(a), Self::Icon(b)) => a == b,
             (Self::Button(a), Self::Button(b)) => a == b,
             (Self::IconButton(a), Self::IconButton(b)) => a == b,
             (Self::Toggle(a), Self::Toggle(b)) => a == b,
@@ -115,6 +119,28 @@ impl Content {
             _ => false,
         }
     }
+
+    pub(crate) fn dirty_since(&self, previous: &Self) -> crate::element::Dirty {
+        if self.same(previous) {
+            return crate::element::Dirty::NONE;
+        }
+        crate::element::Dirty {
+            geometry: true,
+            paint: true,
+            animate: true,
+            hits: crate::widget::hit_changed(previous, self),
+            fields: matches!(self, Self::Field(_)),
+            ..crate::element::Dirty::NONE
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IconContent {
+    pub symbol: Icon,
+    pub size: f32,
+    pub color: Color,
+    pub weight: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -222,7 +248,16 @@ pub struct ActionRowContent {
     pub symbol: Icon,
     pub label: String,
     pub shortcut: Option<String>,
+    pub detail: Option<String>,
     pub font: TypeStyle,
+    pub trailing: Option<Trailing>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trailing {
+    pub symbol: Icon,
+    pub angle: f32,
+    pub open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

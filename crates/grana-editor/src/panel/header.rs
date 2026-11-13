@@ -143,10 +143,8 @@ fn project_split<'a>(
         (full > measured).then(|| project.clone())
     };
     let mark = if read_only { Icon::Lock } else { Icon::Cube };
-    let lead_element = grana_ui::canvas(
-        Length::Fixed(lead_width),
-        theme.metrics.control_height,
-        move |painter, info| {
+    let lead_element = grana_ui::canvas(Length::Fixed(lead_width), theme.metrics.control_height)
+        .paint(move |painter, info| {
             let frame = info.rect;
             let corners = Corners::split_leading(inner)
                 .resolved(frame.size())
@@ -184,10 +182,9 @@ fn project_split<'a>(
                     palette.tertiary,
                 );
             }
-        },
-    )
-    .named("project.save")
-    .focus_ring(Corners::capsule());
+        })
+        .named("project.save")
+        .focus_ring(Corners::capsule());
     let lead_element = if state.access.author() {
         lead_element.press(Message::Command(Command::SaveProject))
     } else {

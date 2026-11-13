@@ -779,21 +779,23 @@ fn table<'a>(
     let palette = ctx.theme().palette;
     let theme = *ctx.theme();
     let mut elements = vec![
-        grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
-            painter.surface(info.rect, surface);
-        })
-        .at(rect),
+        grana_ui::canvas(Length::Fill, rect.height())
+            .paint(move |painter, info| {
+                painter.surface(info.rect, surface);
+            })
+            .at(rect),
     ];
     let band = Rect::from_min_size(rect.min, Vec2::new(total, HEADER_HEIGHT));
     elements.push(
-        grana_ui::canvas(Length::Fill, HEADER_HEIGHT, move |painter, info| {
-            painter.rect(
-                info.rect,
-                Corners::top(theme.metrics.corner_lg),
-                palette.surface_container_high,
-            );
-        })
-        .at(band),
+        grana_ui::canvas(Length::Fill, HEADER_HEIGHT)
+            .paint(move |painter, info| {
+                painter.rect(
+                    info.rect,
+                    Corners::top(theme.metrics.corner_lg),
+                    palette.surface_container_high,
+                );
+            })
+            .at(band),
     );
     let mut left = band.min.x;
     let sort = state.measure.sort();
@@ -822,40 +824,41 @@ fn table<'a>(
             None => None,
         };
         elements.push(
-            grana_ui::canvas(Length::Fixed(width), HEADER_HEIGHT, move |painter, info| {
-                if info.hover > 0.01 {
-                    painter.rect(
-                        info.rect.shrink(2.0),
-                        Corners::all(theme.metrics.corner_xs),
-                        palette.on_surface.with_alpha(0.08 * info.hover),
-                    );
-                }
-                painter.text_in(
-                    Rect::from_min_max(
-                        info.rect.min + Vec2::new(8.0, 0.0),
-                        Vec2::new(
-                            info.rect.max.x - arrow.map_or(8.0, |_| 18.0),
-                            info.rect.max.y,
+            grana_ui::canvas(Length::Fixed(width), HEADER_HEIGHT)
+                .paint(move |painter, info| {
+                    if info.hover > 0.01 {
+                        painter.rect(
+                            info.rect.shrink(2.0),
+                            Corners::all(theme.metrics.corner_xs),
+                            palette.on_surface.with_alpha(0.08 * info.hover),
+                        );
+                    }
+                    painter.text_in(
+                        Rect::from_min_max(
+                            info.rect.min + Vec2::new(8.0, 0.0),
+                            Vec2::new(
+                                info.rect.max.x - arrow.map_or(8.0, |_| 18.0),
+                                info.rect.max.y,
+                            ),
                         ),
-                    ),
-                    &label,
-                    style,
-                    Align::Center,
-                );
-                if let Some(arrow) = arrow {
-                    icon::paint(
-                        arrow,
-                        painter,
-                        Vec2::new(info.rect.max.x - 10.0, info.rect.center().y),
-                        9.5,
-                        icon_color,
-                        1.5,
+                        &label,
+                        style,
+                        Align::Center,
                     );
-                }
-            })
-            .at(cell)
-            .key(Key::index("measure.head", *index))
-            .press(Message::Command(Command::ToggleSort(*index))),
+                    if let Some(arrow) = arrow {
+                        icon::paint(
+                            arrow,
+                            painter,
+                            Vec2::new(info.rect.max.x - 10.0, info.rect.center().y),
+                            9.5,
+                            icon_color,
+                            1.5,
+                        );
+                    }
+                })
+                .at(cell)
+                .key(Key::index("measure.head", *index))
+                .press(Message::Command(Command::ToggleSort(*index))),
         );
         let grip = Rect::from_min_max(
             Vec2::new(cell.max.x - 3.0, cell.min.y),
@@ -866,7 +869,8 @@ fn table<'a>(
         let spare = (available - 1.0 - total).max(0.0);
         let ceiling = (width + spare).max(MIN_COLUMN_WIDTH);
         elements.push(
-            grana_ui::canvas(Length::Fixed(4.0), HEADER_HEIGHT, |_, _| {})
+            grana_ui::canvas(Length::Fixed(4.0), HEADER_HEIGHT)
+                .paint(|_, _| {})
                 .at(grip)
                 .key(grip_key)
                 .cursor(Cursor::ResizeHorizontal)
@@ -880,96 +884,103 @@ fn table<'a>(
         left += width;
     }
     let shown = state.measure.rows().len();
-    let content = shown as f32 * ROW_HEIGHT;
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, band.max.y),
         Vec2::new(rect.min.x + total.max(1.0), rect.max.y),
     );
-    let rows_key = Key::new("measure.rows");
-    let offset = ctx.scroll_offset(rows_key);
-    let first = (offset / ROW_HEIGHT).floor().max(0.0) as usize;
-    let visible_rows = (body.height() / ROW_HEIGHT).ceil() as usize + 1;
-    let last = (first + visible_rows).min(shown);
     let rows = state.measure.rows();
     let time = state.scene.time();
     let selection = state.scene.selection();
     let font = theme.font(Level::Monospace);
     let on_selected = palette.on_secondary_container;
     let on_row = palette.on_surface;
-    let mut children = vec![grana_ui::canvas(
-        Length::Fill,
-        content,
-        move |painter, info| {
-            for row in first..last {
-                let Some(index) = state_index(rows, row) else {
-                    continue;
-                };
-                let observation = table.observation(index);
-                let selected = matches_selection(selection, set, observation, time);
-                let row_rect = Rect::from_min_size(
-                    Vec2::new(info.rect.min.x, info.rect.min.y + row as f32 * ROW_HEIGHT),
-                    Vec2::new(total, ROW_HEIGHT),
-                );
-                if selected {
-                    painter.rect(
-                        row_rect.shrink2(Vec2::new(4.0, 1.0)),
-                        Corners::all(8.0),
-                        palette.secondary_container,
-                    );
-                } else if row % 2 == 1 {
-                    painter.rect(
-                        row_rect.shrink2(Vec2::new(4.0, 1.0)),
-                        Corners::all(4.0),
-                        Color::white_alpha(0.02),
+    let document = state.measure.document_hash();
+    let digest = widths.iter().fold(0u64, |hash, width| {
+        hash.rotate_left(7) ^ u64::from(width.to_bits())
+    });
+    let rows_key = Key::new("measure.rows");
+    elements.push(
+        ctx.scroll(
+            rows_key,
+            Axis::Column,
+            Length::Fill,
+            ROW_HEIGHT,
+            shown,
+            move |window| {
+                let mut children = Vec::new();
+                for row in window.span() {
+                    let Some(index) = state_index(rows, row) else {
+                        continue;
+                    };
+                    let observation = table.observation(index);
+                    let selected = matches_selection(selection, set, observation, time);
+                    let cells = columns
+                        .iter()
+                        .zip(widths.iter())
+                        .map(|((column_index, column), width)| {
+                            (column.format(table.value(index, *column_index)), *width)
+                        })
+                        .collect::<Vec<_>>();
+                    children.push(
+                        grana_ui::canvas(Length::Fill, ROW_HEIGHT)
+                            .view(
+                                (document, row, selected, digest, cells.len()),
+                                move |_, painter, info| {
+                                    let rect = info.rect;
+                                    let body = rect.shrink2(Vec2::new(4.0, 1.0));
+                                    if selected {
+                                        painter.rect(
+                                            body,
+                                            Corners::all(8.0),
+                                            palette.secondary_container,
+                                        );
+                                    } else if row % 2 == 1 {
+                                        painter.rect(
+                                            body,
+                                            Corners::all(4.0),
+                                            Color::white_alpha(0.02),
+                                        );
+                                    }
+                                    if info.hover > 0.01 {
+                                        painter.rect(
+                                            body,
+                                            Corners::all(8.0),
+                                            palette.on_surface.with_alpha(0.07 * info.hover),
+                                        );
+                                    }
+                                    let mut left = rect.min.x;
+                                    for (text, width) in cells.iter() {
+                                        let cell = Rect::from_min_size(
+                                            Vec2::new(left, rect.min.y),
+                                            Vec2::new(*width, ROW_HEIGHT),
+                                        );
+                                        painter.text_in(
+                                            cell.shrink2(Vec2::new(8.0, 0.0)),
+                                            text,
+                                            TextStyle::new(
+                                                font,
+                                                if selected { on_selected } else { on_row },
+                                            )
+                                            .aligned(Align::End),
+                                            Align::Center,
+                                        );
+                                        left += *width;
+                                    }
+                                },
+                            )
+                            .key(Key::index("measure.row", row))
+                            .on_pointer(move |pointer| {
+                                (pointer.phase == grana_ui::Phase::Up
+                                    && pointer.rect.contains(pointer.position))
+                                .then_some(Message::Locate(row))
+                            }),
                     );
                 }
-                let mut left = row_rect.min.x;
-                for ((column_index, column), width) in columns.iter().zip(widths.iter()) {
-                    let cell = Rect::from_min_size(
-                        Vec2::new(left, row_rect.min.y),
-                        Vec2::new(*width, ROW_HEIGHT),
-                    );
-                    painter.text_in(
-                        cell.shrink2(Vec2::new(8.0, 0.0)),
-                        &column.format(table.value(index, *column_index)),
-                        TextStyle::new(font, if selected { on_selected } else { on_row })
-                            .aligned(Align::End),
-                        Align::Center,
-                    );
-                    left += *width;
-                }
-            }
-        },
-    )];
-    for row in first..last {
-        let row_rect = Rect::from_min_size(
-            Vec2::new(body.min.x, body.min.y + row as f32 * ROW_HEIGHT - offset),
-            Vec2::new(total, ROW_HEIGHT),
-        );
-        children.push(
-            grana_ui::canvas(Length::Fill, ROW_HEIGHT, move |painter, info| {
-                if info.hover > 0.01 {
-                    painter.rect(
-                        info.rect.shrink2(Vec2::new(4.0, 1.0)),
-                        Corners::all(8.0),
-                        palette.on_surface.with_alpha(0.07 * info.hover),
-                    );
-                }
-            })
-            .at(row_rect)
-            .key(Key::index("measure.row", row))
-            .on_pointer(move |pointer| {
-                (pointer.phase == grana_ui::Phase::Up && row_rect.contains(pointer.position))
-                    .then_some(Message::Locate(row))
-            }),
-        );
-    }
-    let scroller = Element::new(grana_ui::Layout::column())
-        .at(body)
-        .scroll(Axis::Column, Length::Fill, Some(content + 4.0))
-        .clipped()
-        .children(children);
-    elements.push(scroller);
+                children
+            },
+        )
+        .at(body),
+    );
     elements
 }
 
@@ -1063,36 +1074,37 @@ fn combo<'a>(
     let style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
     let rest = theme.surface(Role::Field, State::Rest);
     let hover = theme.surface(Role::Field, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0, move |painter, info| {
-        let surface = if info.hover > 0.5 { hover } else { rest };
-        painter.outlined(
-            info.rect,
-            surface.corners,
-            surface.fill,
-            surface.border,
-            surface.shadow,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                info.rect.min + Vec2::new(10.0, 0.0),
-                Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
-            ),
-            &label,
-            style,
-            Align::Center,
-        );
-        icon::chevron(
-            painter,
-            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-            5.0,
-            std::f32::consts::FRAC_PI_2,
-            palette.on_surface_variant,
-            1.5,
-        );
-    })
-    .named(key)
-    .press(Message::Noop)
-    .cursor(Cursor::Pointing);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
+        .paint(move |painter, info| {
+            let surface = if info.hover > 0.5 { hover } else { rest };
+            painter.outlined(
+                info.rect,
+                surface.corners,
+                surface.fill,
+                surface.border,
+                surface.shadow,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    info.rect.min + Vec2::new(10.0, 0.0),
+                    Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
+                ),
+                &label,
+                style,
+                Align::Center,
+            );
+            icon::chevron(
+                painter,
+                Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
+                5.0,
+                std::f32::consts::FRAC_PI_2,
+                palette.on_surface_variant,
+                1.5,
+            );
+        })
+        .named(key)
+        .press(Message::Noop)
+        .cursor(Cursor::Pointing);
     let mut rows = Vec::with_capacity(labels.len());
     for (index, label) in labels.iter().enumerate() {
         rows.push(

@@ -22,14 +22,14 @@ pub(super) fn view<'a>(
     let mut elements = Vec::new();
     let palette = ctx.theme().palette;
     let backdrop = palette.surface_dim;
-    let content = grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
-        painter.rect(info.rect, Corners::ZERO, backdrop);
-        painter.scene(info.rect, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
-    })
-    .cached(grana_ui::CanvasKey::LAYOUT)
-    .named("stage.content")
-    .at(full)
-    .layer(Layer::Content);
+    let content = grana_ui::canvas(Length::Fill, full.height())
+        .view_static(move |painter, info| {
+            painter.rect(info.rect, Corners::ZERO, backdrop);
+            painter.scene(info.rect, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
+        })
+        .named("stage.content")
+        .at(full)
+        .layer(Layer::Content);
     elements.push(content);
     elements.push(overlay_view(state, layout));
     if state.camera.slice().is_none() {
@@ -244,17 +244,14 @@ fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message
         overlay::annotations(state.scene, state.scene.time())
     };
     let layout = *layout;
-    grana_ui::canvas(
-        Length::Fill,
-        layout.viewport.height(),
-        move |painter, _info| {
+    grana_ui::canvas(Length::Fill, layout.viewport.height())
+        .paint(move |painter, _info| {
             let viewport = viewport(state, &layout, &legends, &labels, &annotations);
             overlay::paint(painter, &viewport);
-        },
-    )
-    .named("stage.overlay")
-    .at(layout.viewport)
-    .layer(Layer::Content)
+        })
+        .named("stage.overlay")
+        .at(layout.viewport)
+        .layer(Layer::Content)
 }
 
 fn region_handles<'a>(state: &'a View<'a>, layout: &Layout) -> Vec<Element<'a, Message>> {
@@ -276,29 +273,25 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
         world_per_point,
     } = handle;
     let direction = screen / screen.length();
-    grana_ui::canvas(
-        Length::Fixed(rect.width()),
-        rect.height(),
-        move |painter, info| {
+    grana_ui::canvas(Length::Fixed(rect.width()), rect.height())
+        .view_static(move |painter, info| {
             let active = info.hover.max(info.press);
             painter.rect(
                 info.rect,
                 Corners::capsule(),
                 REGION.lerp(REGION_ACTIVE, active),
             );
-        },
-    )
-    .key(Key::new(format!("region.handle.{}.{side}", axis)))
-    .cached(grana_ui::CanvasKey::LAYOUT)
-    .at(rect)
-    .layer(Layer::Content)
-    .on_pointer(move |pointer| {
-        (pointer.phase == grana_ui::Phase::Move).then_some(Message::Region {
-            axis,
-            side,
-            delta: pointer.delta.dot(direction) * world_per_point,
         })
-    })
+        .key(Key::new(format!("region.handle.{}.{side}", axis)))
+        .at(rect)
+        .layer(Layer::Content)
+        .on_pointer(move |pointer| {
+            (pointer.phase == grana_ui::Phase::Move).then_some(Message::Region {
+                axis,
+                side,
+                delta: pointer.delta.dot(direction) * world_per_point,
+            })
+        })
 }
 
 fn recording_chip<'a>(
@@ -336,25 +329,26 @@ fn chip<'a>(
     let layout = ctx.layout_text(title, style, maximum);
     let width = (layout.size.x + 40.0).min(maximum + 24.0);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
-    grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
-        let rect = info.rect;
-        icon::paint(
-            symbol,
-            painter,
-            Vec2::new(rect.min.x + 14.0, rect.center().y),
-            12.5,
-            tint,
-            1.6,
-        );
-        painter.text(
-            &layout,
-            Vec2::new(rect.min.x + 25.0, rect.min.y + 6.0),
-            tint,
-        );
-    })
-    .named(key)
-    .at(Rect::from_min_size(origin, Vec2::new(width, 28.0)))
-    .background(surface)
+    grana_ui::canvas(Length::Fixed(width), 28.0)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            icon::paint(
+                symbol,
+                painter,
+                Vec2::new(rect.min.x + 14.0, rect.center().y),
+                12.5,
+                tint,
+                1.6,
+            );
+            painter.text(
+                &layout,
+                Vec2::new(rect.min.x + 25.0, rect.min.y + 6.0),
+                tint,
+            );
+        })
+        .named(key)
+        .at(Rect::from_min_size(origin, Vec2::new(width, 28.0)))
+        .background(surface)
 }
 
 pub(super) fn toast<'a>(
@@ -387,27 +381,28 @@ pub(super) fn toast<'a>(
     );
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     vec![
-        grana_ui::canvas(Length::Fill, height, move |painter, info| {
-            let rect = info.rect;
-            icon::paint(
-                mark,
-                painter,
-                Vec2::new(rect.min.x + 18.0, rect.center().y),
-                14.5,
-                tint.with_alpha(tint.alpha * appear),
-                1.6,
-            );
-            painter.text(
-                &layout_text,
-                Vec2::new(rect.min.x + 34.0, rect.min.y + 10.0),
-                palette
-                    .on_surface
-                    .with_alpha(palette.on_surface.alpha * appear),
-            );
-        })
-        .named("stage.toast")
-        .at(rect)
-        .background(surface)
-        .layer(Layer::Hud),
+        grana_ui::canvas(Length::Fill, height)
+            .paint(move |painter, info| {
+                let rect = info.rect;
+                icon::paint(
+                    mark,
+                    painter,
+                    Vec2::new(rect.min.x + 18.0, rect.center().y),
+                    14.5,
+                    tint.with_alpha(tint.alpha * appear),
+                    1.6,
+                );
+                painter.text(
+                    &layout_text,
+                    Vec2::new(rect.min.x + 34.0, rect.min.y + 10.0),
+                    palette
+                        .on_surface
+                        .with_alpha(palette.on_surface.alpha * appear),
+                );
+            })
+            .named("stage.toast")
+            .at(rect)
+            .background(surface)
+            .layer(Layer::Hud),
     ]
 }

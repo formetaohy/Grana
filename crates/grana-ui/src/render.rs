@@ -22,6 +22,8 @@ const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
 const MINIMUM_INSTANCES: usize = 512;
 const MAX_BLUR_MIPS: u32 = 5;
+const OVERLAY_SLOT: usize = Layer::ALL.len();
+const SLOTS: usize = Layer::ALL.len() + 1;
 
 const PREMULTIPLIED: BlendState = BlendState {
     color: BlendComponent {
@@ -148,6 +150,7 @@ pub(crate) struct PaintFrame<'a> {
     pub chrome: &'a LayerBuffer,
     pub popup: &'a LayerBuffer,
     pub hud: &'a LayerBuffer,
+    pub overlay: &'a LayerBuffer,
 }
 
 struct PaintTarget<'a> {
@@ -201,7 +204,7 @@ impl InstanceBuffer {
 }
 
 struct Buffers {
-    buffers: [InstanceBuffer; Layer::ALL.len()],
+    buffers: [InstanceBuffer; SLOTS],
 }
 
 impl Buffers {
@@ -212,7 +215,8 @@ impl Buffers {
                     0 => "grana.ui.instances.content",
                     1 => "grana.ui.instances.chrome",
                     2 => "grana.ui.instances.popup",
-                    _ => "grana.ui.instances.hud",
+                    3 => "grana.ui.instances.hud",
+                    _ => "grana.ui.instances.overlay",
                 };
                 InstanceBuffer::new(device, label)
             }),
@@ -243,7 +247,7 @@ pub struct Renderer {
     figure_instances: Buffer,
     figure_capacity: usize,
     figure_uniforms: Buffer,
-    revisions: [u64; Layer::ALL.len()],
+    revisions: [u64; SLOTS],
     uniform_state: Option<(f32, [u32; 2])>,
     canvas_generation: u64,
     blit_cache: Option<(u64, BindGroup)>,
@@ -396,7 +400,7 @@ impl Renderer {
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            revisions: [u64::MAX; Layer::ALL.len()],
+            revisions: [u64::MAX; SLOTS],
             uniform_state: None,
             canvas_generation: 0,
             blit_cache: None,
@@ -506,6 +510,7 @@ impl Renderer {
             chrome,
             popup,
             hud,
+            overlay,
         } = frame;
         assert!(
             self.size[0] > 0 && self.size[1] > 0,
@@ -518,8 +523,8 @@ impl Renderer {
         let backdrop = self.backdrop.as_ref().expect("the renderer is sized");
         let backdrop_sampled = backdrop.sampled.clone();
 
-        let layers = [content, chrome, popup, hud];
-        let changed: [bool; Layer::ALL.len()] =
+        let layers = [content, chrome, popup, hud, overlay];
+        let changed: [bool; SLOTS] =
             std::array::from_fn(|index| self.revisions[index] != layers[index].revision);
         let reupload = changed.iter().any(|changed| *changed);
         let content_refresh = reset || scene_changed || changed[Layer::Content.index()];
@@ -528,7 +533,7 @@ impl Renderer {
             || changed[Layer::Popup.index()]
             || changed[Layer::Hud.index()];
         if reupload {
-            for index in 0..Layer::ALL.len() {
+            for index in 0..SLOTS {
                 if !changed[index] {
                     continue;
                 }
@@ -606,6 +611,18 @@ impl Renderer {
                 },
                 &self.buffers.buffers[Layer::Hud.index()].buffer,
                 hud.material.len(),
+            );
+            self.paint_material(
+                encoder,
+                atlases,
+                &PaintTarget {
+                    target: &canvas_linear,
+                    scene,
+                    backdrop: &backdrop_sampled,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.buffers[OVERLAY_SLOT].buffer,
+                overlay.material.len(),
             );
         }
 

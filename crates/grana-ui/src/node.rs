@@ -3,7 +3,7 @@ use slotmap::DefaultKey;
 
 use crate::edit::Edit;
 use crate::element::{
-    Axis, CanvasKey, Content, ContentKind, Interaction, Key, Layer, Layout, Popup, Scroll,
+    Axis, CanvasKind, Content, ContentKind, Interaction, Key, Layer, Layout, Popup, Scroll,
 };
 use crate::geometry::{Corners, Rect};
 use crate::input::Cursor;
@@ -125,9 +125,11 @@ pub(crate) struct Node<A> {
     pub clip_corners: Corners,
     pub paint: Instances,
     pub paint_dirty: bool,
-    pub canvas: Option<CanvasKey>,
+    pub canvas: CanvasKind,
     pub visible: bool,
     pub painted: bool,
+    pub paint_version: u64,
+    pub layer_version: u64,
     pub layer_range: (u32, u32),
     pub measure_dirty: bool,
     pub measure_valid: bool,
@@ -182,9 +184,11 @@ impl<A> Node<A> {
             clip_corners: Corners::ZERO,
             paint: Instances::default(),
             paint_dirty: true,
-            canvas: None,
+            canvas: CanvasKind::None,
             visible: true,
             painted: false,
+            paint_version: 0,
+            layer_version: 0,
             layer_range: (0, 0),
             measure_dirty: true,
             measure_valid: false,

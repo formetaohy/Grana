@@ -1,6 +1,6 @@
 use glam::Vec2;
 
-use crate::element::{Axis, Layer};
+use crate::element::Axis;
 use crate::geometry::{Corners, Rect};
 use crate::paint::{Clip, Painter};
 use crate::style::{Border, Fill, Shadow, State};
@@ -122,17 +122,10 @@ impl<A: Clone> Ui<A> {
                 );
             }
         }
-        let changed = self.overlay.material != instances.material;
-        if changed {
-            std::mem::swap(&mut self.overlay, &mut instances);
+        if self.overlay.material != instances.material {
+            self.overlay.assign(&instances.material);
         }
         self.scratch = instances;
-        if changed || self.hud_rebuilt {
-            let layer = &mut self.layers[Layer::Hud.index()];
-            layer.truncate(self.hud_node_len);
-            layer.append(&self.overlay.material);
-            self.hud_rebuilt = false;
-        }
     }
 }
 

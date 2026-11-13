@@ -384,28 +384,29 @@ fn sidebar<'a>(
     let voxel = dataset.voxel_size();
     let spacing = format!("{:.2}×{:.2} µm", voxel.x, voxel.z);
     let mono = theme.font(Level::Monospace);
-    let summary = grana_ui::canvas(Length::Fill, 26.0, move |painter, info| {
-        painter.rect(
-            info.rect,
-            Corners::all(theme.metrics.corner_sm),
-            palette.surface_container,
-        );
-        let inner = info.rect.shrink2(Vec2::new(10.0, 0.0));
-        painter.text_in(
-            inner,
-            &dims,
-            TextStyle::new(mono, palette.on_surface_variant).truncating(),
-            Align::Center,
-        );
-        painter.text_in(
-            inner,
-            &spacing,
-            TextStyle::new(mono, palette.primary).aligned(Align::End),
-            Align::Center,
-        );
-    })
-    .named("sidebar.summary")
-    .at(summary_rect);
+    let summary = grana_ui::canvas(Length::Fill, 26.0)
+        .paint(move |painter, info| {
+            painter.rect(
+                info.rect,
+                Corners::all(theme.metrics.corner_sm),
+                palette.surface_container,
+            );
+            let inner = info.rect.shrink2(Vec2::new(10.0, 0.0));
+            painter.text_in(
+                inner,
+                &dims,
+                TextStyle::new(mono, palette.on_surface_variant).truncating(),
+                Align::Center,
+            );
+            painter.text_in(
+                inner,
+                &spacing,
+                TextStyle::new(mono, palette.primary).aligned(Align::End),
+                Align::Center,
+            );
+        })
+        .named("sidebar.summary")
+        .at(summary_rect);
     let body_bottom = rect.max.y - SIDEBAR_PAD;
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, summary_rect.max.y + 6.0),
@@ -447,23 +448,24 @@ fn dock<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 10.0));
-    let grip_element = grana_ui::canvas(Length::Fill, 10.0, move |painter, info| {
-        let engaged = info.hover.max(info.press);
-        painter.rect(
-            Rect::from_center_size(
-                Vec2::new(info.rect.center().x, info.rect.min.y + 5.0),
-                Vec2::new(36.0 + 14.0 * engaged, 4.0),
-            ),
-            Corners::capsule(),
-            palette.outline_variant.lerp(palette.outline, engaged),
-        );
-    })
-    .cached(grana_ui::CanvasKey::LAYOUT)
-    .at(grip)
-    .cursor(grana_ui::Cursor::ResizeVertical)
-    .on_pointer(|pointer| {
-        (pointer.phase == grana_ui::Phase::Move).then_some(Message::SetDockHeight(-pointer.delta.y))
-    });
+    let grip_element = grana_ui::canvas(Length::Fill, 10.0)
+        .view_static(move |painter, info| {
+            let engaged = info.hover.max(info.press);
+            painter.rect(
+                Rect::from_center_size(
+                    Vec2::new(info.rect.center().x, info.rect.min.y + 5.0),
+                    Vec2::new(36.0 + 14.0 * engaged, 4.0),
+                ),
+                Corners::capsule(),
+                palette.outline_variant.lerp(palette.outline, engaged),
+            );
+        })
+        .at(grip)
+        .cursor(grana_ui::Cursor::ResizeVertical)
+        .on_pointer(|pointer| {
+            (pointer.phase == grana_ui::Phase::Move)
+                .then_some(Message::SetDockHeight(-pointer.delta.y))
+        });
     let header = Rect::from_min_size(
         rect.min + Vec2::new(14.0, 10.0),
         Vec2::new(rect.width() - 28.0, DOCK_HEADER),

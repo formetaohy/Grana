@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use slotmap::SlotMap;
 
-use crate::element::{CanvasPaint, ContentKind, Element, Key, Layer};
+use crate::element::{CanvasKind, CanvasPaint, ContentKind, Dirty, Element, Key, Layer};
 use crate::node::{Node, NodeId};
 
 pub struct Tree<A> {
@@ -186,17 +186,20 @@ impl<A> Tree<A> {
         removed: &mut Vec<NodeId>,
     ) {
         let children = std::mem::take(&mut element.children);
-        let canvas = element.canvas.as_ref().map(|canvas| canvas.key);
+        let canvas = element
+            .canvas
+            .as_ref()
+            .map_or(CanvasKind::None, |canvas| canvas.kind);
         if let Some(canvas) = element.canvas.take() {
             canvases.insert(id, canvas.paint);
         }
+        let layer = element.layer;
+        let mut patch = element.patch(&mut self.nodes[id]);
         if self.nodes[id].canvas != canvas {
             self.nodes[id].canvas = canvas;
-            self.nodes[id].paint_dirty = true;
+            patch = patch.union(Dirty::PAINT);
         }
-        let layer = element.layer;
-        let patch = element.patch(&mut self.nodes[id]);
-        if patch.layout {
+        if patch.geometry {
             self.dirty_layout(id);
         }
         if patch.paint {

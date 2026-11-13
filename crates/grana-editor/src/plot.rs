@@ -9,7 +9,7 @@ use grana_measure::{
 };
 use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
 use grana_session::Command;
-use grana_ui::{BuildContext, CanvasKey, Cursor, Element, Key, Length, Phase, Rect, Role, State};
+use grana_ui::{BuildContext, Cursor, Element, Key, Length, Phase, Rect, Role, State};
 
 use crate::message::{Message, PlotEvent};
 use crate::state::{PlotDrag, View, Workspace};
@@ -175,7 +175,7 @@ pub fn view<'a>(
         .with_summary(summary_text(plot, table, readout, language))
         .with_empty(empty_text(language, plot));
     let selection = selected_row(table, measure.rows(), state.scene, measure.set());
-    let canvas_key = CanvasKey::new((
+    let props = (
         measure.document_hash(),
         measure
             .set()
@@ -203,7 +203,7 @@ pub fn view<'a>(
                 ^ u64::from(point.x.to_bits())
                 ^ (u64::from(point.y.to_bits()) << 32)
         }),
-    ));
+    );
     let chart = PlotView {
         plot,
         table,
@@ -218,39 +218,39 @@ pub fn view<'a>(
         gate: drag.gate,
         moved: drag.moved,
     };
-    let canvas = grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
-        let card = info.rect;
-        let surface = theme.surface(Role::Card, State::Rest);
-        painter.outlined(
-            card,
-            surface.corners,
-            surface.fill,
-            surface.border,
-            surface.shadow,
-        );
-        let style = Style::card(&theme, distribution).with_language(language);
-        let view = ChartView {
-            heading: &heading,
-            plot: chart.plot,
-            style,
-            decor: chart.decor(),
-        };
-        view.paint(painter, card);
-    })
-    .cached(canvas_key)
-    .at(rect)
-    .key(Key::new("plot.surface"))
-    .cursor(Cursor::Crosshair)
-    .on_pointer(move |pointer| {
-        if pointer.phase == Phase::Down && !frame.contains(pointer.position) {
-            return None;
-        }
-        Some(Message::Plot(PlotEvent {
-            phase: pointer.phase,
-            position: normalize(frame, pointer.position),
-            shift: pointer.modifiers.shift,
-        }))
-    });
+    let canvas = grana_ui::canvas(Length::Fill, rect.height())
+        .view(props, move |_, painter, info| {
+            let card = info.rect;
+            let surface = theme.surface(Role::Card, State::Rest);
+            painter.outlined(
+                card,
+                surface.corners,
+                surface.fill,
+                surface.border,
+                surface.shadow,
+            );
+            let style = Style::card(&theme, distribution).with_language(language);
+            let view = ChartView {
+                heading: &heading,
+                plot: chart.plot,
+                style,
+                decor: chart.decor(),
+            };
+            view.paint(painter, card);
+        })
+        .at(rect)
+        .key(Key::new("plot.surface"))
+        .cursor(Cursor::Crosshair)
+        .on_pointer(move |pointer| {
+            if pointer.phase == Phase::Down && !frame.contains(pointer.position) {
+                return None;
+            }
+            Some(Message::Plot(PlotEvent {
+                phase: pointer.phase,
+                position: normalize(frame, pointer.position),
+                shift: pointer.modifiers.shift,
+            }))
+        });
     vec![canvas]
 }
 

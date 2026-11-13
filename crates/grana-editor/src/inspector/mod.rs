@@ -318,7 +318,9 @@ pub fn objects_body<'a>(
 }
 
 pub(crate) fn hidden<'a>() -> Element<'a, Message> {
-    grana_ui::canvas(Length::Fixed(0.0), 0.0, |_painter, _info| {}).at(Rect::ZERO)
+    grana_ui::canvas(Length::Fixed(0.0), 0.0)
+        .paint(|_painter, _info| {})
+        .at(Rect::ZERO)
 }
 
 pub(crate) fn centered<'a>(height: f32, child: Element<'a, Message>) -> Element<'a, Message> {
@@ -385,39 +387,40 @@ pub(crate) fn disclosure<'a>(
         Motion::spatial_fast(),
     );
     let label = title.to_string();
-    let header = grana_ui::canvas(Length::Fill, 26.0, move |painter, info| {
-        let rect = info.rect;
-        if info.hover > 0.01 {
-            painter.rect(
-                rect.expand(2.0),
-                Corners::all(theme.metrics.corner_sm),
-                palette.on_surface.with_alpha(0.08 * info.hover),
+    let header = grana_ui::canvas(Length::Fill, 26.0)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            if info.hover > 0.01 {
+                painter.rect(
+                    rect.expand(2.0),
+                    Corners::all(theme.metrics.corner_sm),
+                    palette.on_surface.with_alpha(0.08 * info.hover),
+                );
+            }
+            painter.text_in(
+                Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 22.0, rect.max.y)),
+                &label,
+                TextStyle::new(
+                    font,
+                    palette
+                        .on_surface_variant
+                        .lerp(palette.on_surface, info.hover),
+                ),
+                Align::Center,
             );
-        }
-        painter.text_in(
-            Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 22.0, rect.max.y)),
-            &label,
-            TextStyle::new(
-                font,
-                palette
-                    .on_surface_variant
-                    .lerp(palette.on_surface, info.hover),
-            ),
-            Align::Center,
-        );
-        icon::chevron(
-            painter,
-            Vec2::new(rect.max.x - 8.0, rect.center().y),
-            8.0,
-            std::f32::consts::FRAC_PI_2 * arrow,
-            palette.outline.lerp(palette.on_surface, info.hover),
-            1.6,
-        );
-    })
-    .key(token)
-    .press(Message::ToggleOpen(token))
-    .focus_ring(Corners::all(theme.metrics.corner_sm))
-    .cursor(grana_ui::Cursor::Pointing);
+            icon::chevron(
+                painter,
+                Vec2::new(rect.max.x - 8.0, rect.center().y),
+                8.0,
+                std::f32::consts::FRAC_PI_2 * arrow,
+                palette.outline.lerp(palette.on_surface, info.hover),
+                1.6,
+            );
+        })
+        .key(token)
+        .press(Message::ToggleOpen(token))
+        .focus_ring(Corners::all(theme.metrics.corner_sm))
+        .cursor(grana_ui::Cursor::Pointing);
     let mut items = vec![header];
     if open {
         items.push(grana_ui::column().gap(6.0).children(children));
@@ -463,34 +466,35 @@ fn combo_anchor<'a>(
     let palette = theme.palette;
     let font = theme.font(Level::Label);
     let height = theme.metrics.control_height;
-    grana_ui::canvas(width, height, move |painter, info| {
-        let rect = info.rect;
-        let look = theme
-            .surface(Role::Field, State::Rest)
-            .lerp(theme.surface(Role::Field, State::Hover), info.hover);
-        painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 10.0, rect.min.y),
-                Vec2::new(rect.max.x - 24.0, rect.max.y),
-            ),
-            &value,
-            TextStyle::new(font, look.text).truncating(),
-            Align::Center,
-        );
-        icon::paint(
-            Icon::ChevronDown,
-            painter,
-            Vec2::new(rect.max.x - 11.0, rect.center().y),
-            9.5,
-            palette.on_surface_variant,
-            1.6,
-        );
-    })
-    .key(key)
-    .press(Message::Noop)
-    .focus_ring(Corners::all(theme.metrics.corner_sm))
-    .cursor(grana_ui::Cursor::Pointing)
+    grana_ui::canvas(width, height)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let look = theme
+                .surface(Role::Field, State::Rest)
+                .lerp(theme.surface(Role::Field, State::Hover), info.hover);
+            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 10.0, rect.min.y),
+                    Vec2::new(rect.max.x - 24.0, rect.max.y),
+                ),
+                &value,
+                TextStyle::new(font, look.text).truncating(),
+                Align::Center,
+            );
+            icon::paint(
+                Icon::ChevronDown,
+                painter,
+                Vec2::new(rect.max.x - 11.0, rect.center().y),
+                9.5,
+                palette.on_surface_variant,
+                1.6,
+            );
+        })
+        .key(key)
+        .press(Message::Noop)
+        .focus_ring(Corners::all(theme.metrics.corner_sm))
+        .cursor(grana_ui::Cursor::Pointing)
 }
 
 pub(crate) fn form_combo<'a, T: Clone + PartialEq + 'static>(

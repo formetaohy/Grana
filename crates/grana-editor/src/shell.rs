@@ -92,13 +92,14 @@ pub(crate) fn view<'a>(
     let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.58 * full.height()));
     let primary = palette.primary;
     let mut elements = vec![
-        grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
-            painter.rect(info.rect, Corners::ZERO, backdrop);
-            painter.gradient(glow, Corners::ZERO, backdrop.lerp(primary, 0.09), backdrop);
-        })
-        .named("shell.backdrop")
-        .at(full)
-        .layer(Layer::Content),
+        grana_ui::canvas(Length::Fill, full.height())
+            .paint(move |painter, info| {
+                painter.rect(info.rect, Corners::ZERO, backdrop);
+                painter.gradient(glow, Corners::ZERO, backdrop.lerp(primary, 0.09), backdrop);
+            })
+            .named("shell.backdrop")
+            .at(full)
+            .layer(Layer::Content),
     ];
     let mut children = vec![
         hero_header(ctx, &status),
@@ -191,11 +192,12 @@ pub(crate) fn view<'a>(
 fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let brand = grana_ui::canvas(Length::Fixed(48.0), 48.0, |painter, info| {
-        let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(44.0));
-        grana_brand::paint(painter, badge);
-    })
-    .named("shell.brand");
+    let brand = grana_ui::canvas(Length::Fixed(48.0), 48.0)
+        .paint(|painter, info| {
+            let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(44.0));
+            grana_brand::paint(painter, badge);
+        })
+        .named("shell.brand");
     let title_color = if status.error {
         palette.error
     } else {
@@ -621,18 +623,19 @@ fn recent_block<'a>(
     let header_style = TextStyle::new(theme.font(Level::Overline), palette.on_surface_variant);
     let recent_label = grana_i18n::shell::recent(ctx.language());
     let mut children = vec![
-        grana_ui::canvas(Length::Fill, RECENT_HEADER, move |painter, info| {
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(info.rect.min.x + 4.0, info.rect.min.y),
-                    info.rect.max,
-                ),
-                recent_label,
-                header_style,
-                Align::Center,
-            );
-        })
-        .named("shell.recent.header"),
+        grana_ui::canvas(Length::Fill, RECENT_HEADER)
+            .paint(move |painter, info| {
+                painter.text_in(
+                    Rect::from_min_max(
+                        Vec2::new(info.rect.min.x + 4.0, info.rect.min.y),
+                        info.rect.max,
+                    ),
+                    recent_label,
+                    header_style,
+                    Align::Center,
+                );
+            })
+            .named("shell.recent.header"),
     ];
     let count = entries.len();
     for (index, entry) in entries.iter().enumerate() {
@@ -671,59 +674,60 @@ fn recent_row<'a>(
     let tooltip = detail.clone();
     let title_style = TextStyle::new(theme.font(Level::Label), palette.on_surface).truncating();
     let detail_style = TextStyle::new(theme.font(Level::Monospace), palette.outline).truncating();
-    grana_ui::canvas(Length::Fill, RECENT_ROW, move |painter, info| {
-        let rect = info.rect;
-        let fill = palette
-            .surface_container
-            .lerp(palette.secondary_container, info.hover);
-        let row_corners = if info.hover > 0.25 {
-            corners.lerp(Corners::all(theme.metrics.corner_md), info.hover)
-        } else {
-            corners
-        };
-        painter.rect(rect, row_corners, fill);
-        grana_ui::icon::paint(
-            symbol,
-            painter,
-            Vec2::new(rect.min.x + 16.0, rect.center().y),
-            14.0,
-            palette
-                .primary
-                .lerp(palette.on_secondary_container, info.hover),
-            1.6,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 34.0, rect.min.y + 4.0),
-                Vec2::new(rect.max.x - 26.0, rect.min.y + 22.0),
-            ),
-            &title,
-            title_style,
-            Align::Center,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 34.0, rect.min.y + 21.0),
-                Vec2::new(rect.max.x - 26.0, rect.max.y - 4.0),
-            ),
-            &detail,
-            detail_style,
-            Align::Center,
-        );
-        grana_ui::icon::paint(
-            Icon::ChevronRight,
-            painter,
-            Vec2::new(rect.max.x - 14.0, rect.center().y),
-            10.0,
-            palette
-                .outline
-                .lerp(palette.on_secondary_container, info.hover),
-            1.6,
-        );
-    })
-    .key(Key::index("shell.recent", index))
-    .tooltip(&tooltip)
-    .press(Message::Command(Command::OpenRecent(index)))
-    .cursor(grana_ui::Cursor::Pointing)
-    .focus_ring(corners)
+    grana_ui::canvas(Length::Fill, RECENT_ROW)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let fill = palette
+                .surface_container
+                .lerp(palette.secondary_container, info.hover);
+            let row_corners = if info.hover > 0.25 {
+                corners.lerp(Corners::all(theme.metrics.corner_md), info.hover)
+            } else {
+                corners
+            };
+            painter.rect(rect, row_corners, fill);
+            grana_ui::icon::paint(
+                symbol,
+                painter,
+                Vec2::new(rect.min.x + 16.0, rect.center().y),
+                14.0,
+                palette
+                    .primary
+                    .lerp(palette.on_secondary_container, info.hover),
+                1.6,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 34.0, rect.min.y + 4.0),
+                    Vec2::new(rect.max.x - 26.0, rect.min.y + 22.0),
+                ),
+                &title,
+                title_style,
+                Align::Center,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 34.0, rect.min.y + 21.0),
+                    Vec2::new(rect.max.x - 26.0, rect.max.y - 4.0),
+                ),
+                &detail,
+                detail_style,
+                Align::Center,
+            );
+            grana_ui::icon::paint(
+                Icon::ChevronRight,
+                painter,
+                Vec2::new(rect.max.x - 14.0, rect.center().y),
+                10.0,
+                palette
+                    .outline
+                    .lerp(palette.on_secondary_container, info.hover),
+                1.6,
+            );
+        })
+        .key(Key::index("shell.recent", index))
+        .tooltip(&tooltip)
+        .press(Message::Command(Command::OpenRecent(index)))
+        .cursor(grana_ui::Cursor::Pointing)
+        .focus_ring(corners)
 }

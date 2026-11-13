@@ -82,7 +82,7 @@ pub fn edit<'a>(
             grana_ui::row().gap(6.0).align(Align::Center).children([
                 crate::inspector::centered(
                     control,
-                    grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
+                    grana_ui::canvas(Length::Fixed(caption), 18.0).paint(move |painter, info| {
                         painter.text_in(info.rect, &text, caption_style, Align::Center);
                     }),
                 ),

@@ -55,8 +55,10 @@ impl LayoutEngine<'_> {
         for index in 0..tree.nodes[root].children.len() {
             let child = tree.nodes[root].children[index];
             let size = tree.nodes[child].measured;
-            outcome.geometry |=
-                self.arrange(tree, child, Rect::from_min_size(Vec2::ZERO, size), clip);
+            let rect = tree.nodes[child]
+                .position
+                .unwrap_or_else(|| Rect::from_min_size(Vec2::ZERO, size));
+            outcome.geometry |= self.arrange(tree, child, rect, clip);
         }
         outcome
     }
@@ -361,17 +363,15 @@ impl LayoutEngine<'_> {
         rect: Rect,
         parent_clip: Clip,
     ) -> bool {
-        let (layout, position, scroll_spec, popup_spec, background) = {
+        let (layout, scroll_spec, popup_spec, background) = {
             let node = &tree.nodes[id];
             (
                 node.layout,
-                node.position,
                 node.scroll_spec,
                 node.popup_spec,
                 node.background,
             )
         };
-        let rect = position.unwrap_or(rect);
         {
             let node = &tree.nodes[id];
             if !node.arrange_dirty
@@ -550,6 +550,10 @@ impl LayoutEngine<'_> {
     fn arrange_scroll<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
         let spec = tree.nodes[id].scroll_spec.expect("the scroll is present");
         let offset = tree.nodes[id].scroll.map_or(0.0, |scroll| scroll.offset);
+        let shift = match spec.axis {
+            Axis::Column => Vec2::new(0.0, -offset),
+            Axis::Row => Vec2::new(-offset, 0.0),
+        };
         let origin = match spec.axis {
             Axis::Column => Vec2::new(rect.min.x, rect.min.y - offset),
             Axis::Row => Vec2::new(rect.min.x - offset, rect.min.y),
@@ -559,7 +563,10 @@ impl LayoutEngine<'_> {
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
-            let child_rect = Rect::from_min_size(cursor, size);
+            let child_rect = tree.nodes[child].position.map_or_else(
+                || Rect::from_min_size(cursor, size),
+                |position| position.translate(shift),
+            );
             if tree.nodes[child].position.is_some() || window.intersects(child_rect) {
                 self.arrange(tree, child, child_rect, clip);
             } else {
@@ -623,7 +630,10 @@ impl LayoutEngine<'_> {
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
-            self.arrange(tree, child, Rect::from_min_size(cursor, size), clip);
+            let rect = tree.nodes[child]
+                .position
+                .unwrap_or_else(|| Rect::from_min_size(cursor, size));
+            self.arrange(tree, child, rect, clip);
             cursor.y += size.y + gap;
         }
     }
@@ -663,22 +673,31 @@ pub fn measure_leaf(
     match content {
         Content::Text(text_content) => {
             let style = text_content.style;
-            let wrap = style.wrap;
-            let width = if wrap { available.x } else { 0.0 };
+            let span = match layout.size.width {
+                Length::Fixed(value) => value,
+                _ => available.x,
+            };
+            let bounded = style.bounded() || !matches!(layout.size.width, Length::Auto);
+            let width = if bounded { span } else { 0.0 };
             let text_layout = text.layout(
                 &text_content.text,
                 style.font,
                 width,
-                wrap,
+                style.wrap,
                 style.truncate,
                 style.align,
             );
-            let width =
-                if matches!(style.align, Align::Start | Align::Baseline) || available.x <= 0.0 {
-                    text_layout.size.x
-                } else {
-                    available.x
-                };
+            let width = match layout.size.width {
+                Length::Fixed(value) => value,
+                Length::Fill => available.x,
+                _ => {
+                    if matches!(style.align, Align::Start | Align::Baseline) || available.x <= 0.0 {
+                        text_layout.size.x
+                    } else {
+                        available.x
+                    }
+                }
+            };
             let size = Vec2::new(width, text_layout.size.y);
             (size, Some(text_layout.baseline))
         }

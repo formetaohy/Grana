@@ -187,9 +187,10 @@ fn range<'a>(
                 )
                 .x + inset * 2.0;
             let caption = (width - crate::panel::FORM_LABEL - 6.0 - button - 2.0).max(40.0);
-            let label = grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
-                painter.text_in(info.rect, &text, style, Align::Center);
-            });
+            let label =
+                grana_ui::canvas(Length::Fixed(caption), 18.0).paint(move |painter, info| {
+                    painter.text_in(info.rect, &text, style, Align::Center);
+                });
             let fix = crate::view::button(ctx, fix_label, Role::SurfaceHigh).press({
                 let mut next = base.clone();
                 next.set_manual(Some((minimum, maximum)));

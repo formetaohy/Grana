@@ -209,6 +209,15 @@ pub struct Corners {
     pub bottom_left: f32,
 }
 
+impl std::hash::Hash for Corners {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.top_left.to_bits().hash(state);
+        self.top_right.to_bits().hash(state);
+        self.bottom_right.to_bits().hash(state);
+        self.bottom_left.to_bits().hash(state);
+    }
+}
+
 impl Corners {
     pub const ZERO: Self = Self::all(0.0);
 

@@ -77,24 +77,22 @@ pub(super) fn transport<'a>(
         Vec2::new(rect.max.x - 8.0, center + 14.0),
     );
     let font = theme.font(Level::Monospace);
-    let readout_element = grana_ui::canvas(
-        Length::Fixed(readout_rect.width()),
-        readout_rect.height(),
-        move |painter, info| {
-            painter.rect(
-                info.rect,
-                Corners::capsule(),
-                palette.surface_container_high,
-            );
-            painter.text_in(
-                info.rect.shrink2(Vec2::new(10.0, 0.0)),
-                &readout,
-                TextStyle::new(font, palette.on_surface).aligned(Align::Center),
-                Align::Center,
-            );
-        },
-    )
-    .at(readout_rect);
+    let readout_element =
+        grana_ui::canvas(Length::Fixed(readout_rect.width()), readout_rect.height())
+            .paint(move |painter, info| {
+                painter.rect(
+                    info.rect,
+                    Corners::capsule(),
+                    palette.surface_container_high,
+                );
+                painter.text_in(
+                    info.rect.shrink2(Vec2::new(10.0, 0.0)),
+                    &readout,
+                    TextStyle::new(font, palette.on_surface).aligned(Align::Center),
+                    Align::Center,
+                );
+            })
+            .at(readout_rect);
     let surface = theme.surface(Role::FloatingToolbar, State::Rest);
     Element::new(grana_ui::Layout::column())
         .named("transport")
@@ -135,10 +133,8 @@ fn scrub_track<'a>(
     let outer_r = track_h * 0.5;
     let inner_r = 2.0;
     let ticks = frames > 1 && frames <= 48 && bar.width() / (frames - 1) as f32 >= 9.0;
-    grana_ui::canvas(
-        Length::Fixed(rect.width()),
-        rect.height(),
-        move |painter, info| {
+    grana_ui::canvas(Length::Fixed(rect.width()), rect.height())
+        .paint(move |painter, info| {
             let engaged = info.hover.max(info.press);
             let active_end = (handle_x - gap).clamp(bar.min.x, bar.max.x);
             if active_end > bar.min.x + 1.0 {
@@ -197,11 +193,10 @@ fn scrub_track<'a>(
                     palette.primary
                 },
             );
-        },
-    )
-    .named("timeline.scrub")
-    .at(rect)
-    .on_pointer(seek(bar, frames, frame))
+        })
+        .named("timeline.scrub")
+        .at(rect)
+        .on_pointer(seek(bar, frames, frame))
 }
 
 fn seek(bar: Rect, frames: u32, frame: u32) -> impl Fn(Pointer) -> Option<Message> + 'static {

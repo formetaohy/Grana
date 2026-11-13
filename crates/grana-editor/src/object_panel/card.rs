@@ -73,17 +73,18 @@ pub(super) fn header_row<'a>(
         set: id,
         open: !expanded,
     };
-    let body = grana_ui::canvas(Length::Fixed(38.0), HEADER, move |painter, info| {
-        let rect = info.rect;
-        let tile = Rect::from_center_size(
-            Vec2::new(rect.min.x + 15.0, rect.center().y),
-            Vec2::splat(30.0),
-        );
-        painter.rect(tile, Corners::all(10.0), tint.with_alpha(0.20));
-        icon::paint(kind_icon(kind), painter, tile.center(), 15.0, tint, 1.6);
-    })
-    .key(Key::new(format!("object.{raw}.header.icon")))
-    .press(toggle());
+    let body = grana_ui::canvas(Length::Fixed(38.0), HEADER)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let tile = Rect::from_center_size(
+                Vec2::new(rect.min.x + 15.0, rect.center().y),
+                Vec2::splat(30.0),
+            );
+            painter.rect(tile, Corners::all(10.0), tint.with_alpha(0.20));
+            icon::paint(kind_icon(kind), painter, tile.center(), 15.0, tint, 1.6);
+        })
+        .key(Key::new(format!("object.{raw}.header.icon")))
+        .press(toggle());
     let text_width = width - 122.0;
     let text = if editing {
         let current_name = name.clone();
@@ -104,26 +105,27 @@ pub(super) fn header_row<'a>(
             .on_cancel(|| Message::EndRename)
     } else {
         let title = name.clone();
-        grana_ui::canvas(Length::Fixed(text_width), HEADER, move |painter, info| {
-            let rect = info.rect;
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.min.x, rect.min.y + 1.0),
-                    Vec2::new(rect.max.x, rect.center().y + 1.0),
-                ),
-                &title,
-                name_style,
-                Align::Center,
-            );
-            painter.text_in(
-                Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
-                &subtitle,
-                subtitle_style,
-                Align::Center,
-            );
-        })
-        .key(Key::new(format!("object.{raw}.header.text")))
-        .press(toggle())
+        grana_ui::canvas(Length::Fixed(text_width), HEADER)
+            .paint(move |painter, info| {
+                let rect = info.rect;
+                painter.text_in(
+                    Rect::from_min_max(
+                        Vec2::new(rect.min.x, rect.min.y + 1.0),
+                        Vec2::new(rect.max.x, rect.center().y + 1.0),
+                    ),
+                    &title,
+                    name_style,
+                    Align::Center,
+                );
+                painter.text_in(
+                    Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
+                    &subtitle,
+                    subtitle_style,
+                    Align::Center,
+                );
+            })
+            .key(Key::new(format!("object.{raw}.header.text")))
+            .press(toggle())
     };
     let eye = view::icon_button(
         ctx,
@@ -150,38 +152,39 @@ pub(super) fn header_row<'a>(
         grana_i18n::object::object_commands(language),
         Message::Noop,
     );
-    let chevron = grana_ui::canvas(Length::Fixed(22.0), 22.0, move |painter, info| {
-        painter.rect(
-            info.rect,
-            Corners::capsule(),
-            if expanded {
-                palette.secondary_container
-            } else {
-                palette.surface_container_high
-            },
-        );
-        icon::chevron(
-            painter,
-            info.rect.center(),
-            8.0,
-            std::f32::consts::FRAC_PI_2 * arrow,
-            if expanded {
-                palette.on_secondary_container
-            } else {
-                palette.on_surface_variant
-            },
-            1.6,
-        );
-    })
-    .key(Key::new(format!("object.{raw}.arrow.anchor")))
-    .press(toggle())
-    .focus_ring(Corners::capsule())
-    .cursor(grana_ui::Cursor::Pointing);
+    let chevron = grana_ui::canvas(Length::Fixed(22.0), 22.0)
+        .paint(move |painter, info| {
+            painter.rect(
+                info.rect,
+                Corners::capsule(),
+                if expanded {
+                    palette.secondary_container
+                } else {
+                    palette.surface_container_high
+                },
+            );
+            icon::chevron(
+                painter,
+                info.rect.center(),
+                8.0,
+                std::f32::consts::FRAC_PI_2 * arrow,
+                if expanded {
+                    palette.on_secondary_container
+                } else {
+                    palette.on_surface_variant
+                },
+                1.6,
+            );
+        })
+        .key(Key::new(format!("object.{raw}.arrow.anchor")))
+        .press(toggle())
+        .focus_ring(Corners::capsule())
+        .cursor(grana_ui::Cursor::Pointing);
     let rows = object_menu(ctx, state, id, position, sets);
     let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 192.0, rows);
-    let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0, |_painter, _info| {});
-    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
-    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
+    let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0).paint(|_painter, _info| {});
+    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0).paint(|_painter, _info| {});
+    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0).paint(|_painter, _info| {});
     let row = grana_ui::row()
         .width(Length::Fixed(width))
         .height(Length::Fixed(HEADER))

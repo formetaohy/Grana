@@ -3,6 +3,45 @@ use crate::motion::{Animated, Motion};
 use crate::node::NodeId;
 use crate::ui::Ui;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Window {
+    pub axis: Axis,
+    pub offset: f32,
+    pub viewport: f32,
+    pub row: f32,
+    pub rows: usize,
+    pub first: usize,
+    pub last: usize,
+}
+
+impl Window {
+    pub const EMPTY: Self = Self {
+        axis: Axis::Column,
+        offset: 0.0,
+        viewport: 0.0,
+        row: 0.0,
+        rows: 0,
+        first: 0,
+        last: 0,
+    };
+
+    pub fn content(&self) -> f32 {
+        self.rows as f32 * self.row
+    }
+
+    pub fn limit(&self) -> f32 {
+        (self.content() - self.viewport).max(0.0)
+    }
+
+    pub fn position(&self, index: usize) -> f32 {
+        index as f32 * self.row
+    }
+
+    pub fn span(&self) -> std::ops::Range<usize> {
+        self.first..self.last
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollState {
     pub offset: f32,

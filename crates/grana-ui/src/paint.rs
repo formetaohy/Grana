@@ -201,14 +201,10 @@ impl LayerBuffer {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    pub(crate) fn truncate(&mut self, len: usize) {
-        self.material.truncate(len);
-    }
-
-    pub(crate) fn append(&mut self, instances: &[Instance]) {
-        let start = self.material.len();
+    pub(crate) fn assign(&mut self, instances: &[Instance]) {
+        self.material.clear();
         self.material.extend_from_slice(instances);
-        self.mark(start, instances.len());
+        self.dirty = Some((0, self.material.len()));
         self.touch();
     }
 }

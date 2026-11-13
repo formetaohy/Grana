@@ -6,6 +6,15 @@ pub struct Color {
     pub alpha: f32,
 }
 
+impl std::hash::Hash for Color {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.red.to_bits().hash(state);
+        self.green.to_bits().hash(state);
+        self.blue.to_bits().hash(state);
+        self.alpha.to_bits().hash(state);
+    }
+}
+
 impl Color {
     pub const TRANSPARENT: Self = Self::rgba(0.0, 0.0, 0.0, 0.0);
     pub const WHITE: Self = Self::rgb(1.0, 1.0, 1.0);

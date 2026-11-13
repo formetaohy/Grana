@@ -54,86 +54,6 @@ fn mix(left: u64, right: u64) -> u64 {
     hash
 }
 
-#[derive(Default)]
-struct CanvasHasher(u64);
-
-impl Hasher for CanvasHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0 = mix(self.0 ^ 0x9e37_79b9_7f4a_7c15, value);
-    }
-
-    fn write_u32(&mut self, value: u32) {
-        self.write_u64(u64::from(value));
-    }
-
-    fn write_u16(&mut self, value: u16) {
-        self.write_u64(u64::from(value));
-    }
-
-    fn write_u8(&mut self, value: u8) {
-        self.write_u64(u64::from(value));
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.write_u64(value as u64);
-    }
-
-    fn write_i64(&mut self, value: i64) {
-        self.write_u64(value as u64);
-    }
-
-    fn write_i32(&mut self, value: i32) {
-        self.write_u64(value as u64);
-    }
-
-    fn write_i16(&mut self, value: i16) {
-        self.write_u64(value as u64);
-    }
-
-    fn write_i8(&mut self, value: i8) {
-        self.write_u64(value as u64);
-    }
-
-    fn write_isize(&mut self, value: isize) {
-        self.write_u64(value as u64);
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CanvasKey(u64);
-
-impl CanvasKey {
-    pub const FRAME: Self = Self(0);
-
-    pub const LAYOUT: Self = Self(1);
-
-    pub fn new(parts: impl Hash) -> Self {
-        let mut hasher = CanvasHasher(0xcbf2_9ce4_8422_2325);
-        parts.hash(&mut hasher);
-        Self(hasher.finish().max(2))
-    }
-
-    pub fn then(self, parts: impl Hash) -> Self {
-        let mut hasher = CanvasHasher(self.0);
-        parts.hash(&mut hasher);
-        Self(hasher.finish().max(2))
-    }
-
-    pub fn id(self) -> u64 {
-        self.0
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Length {
     Auto,
@@ -265,8 +185,17 @@ pub struct CanvasInfo<'a> {
 
 pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanvasKind {
+    #[default]
+    None,
+    Frame,
+    Static,
+    Props(u64),
+}
+
 pub(crate) struct Canvas<'a> {
-    pub key: CanvasKey,
+    pub kind: CanvasKind,
     pub paint: CanvasPaint<'a>,
 }
 
@@ -291,15 +220,63 @@ impl Layer {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-pub(crate) struct Patch {
-    pub layout: bool,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Dirty {
+    pub geometry: bool,
     pub paint: bool,
     pub focus: bool,
     pub fields: bool,
     pub popup: bool,
     pub hits: bool,
     pub animate: bool,
+}
+
+impl Dirty {
+    pub const NONE: Self = Self {
+        geometry: false,
+        paint: false,
+        focus: false,
+        fields: false,
+        popup: false,
+        hits: false,
+        animate: false,
+    };
+
+    pub const GEOMETRY: Self = Self {
+        geometry: true,
+        hits: true,
+        ..Self::NONE
+    };
+
+    pub const PAINT: Self = Self {
+        paint: true,
+        ..Self::NONE
+    };
+
+    pub const FOCUS: Self = Self {
+        focus: true,
+        hits: true,
+        ..Self::NONE
+    };
+
+    pub const INTERACTION: Self = Self {
+        paint: true,
+        focus: true,
+        hits: true,
+        ..Self::NONE
+    };
+
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            geometry: self.geometry | other.geometry,
+            paint: self.paint | other.paint,
+            focus: self.focus | other.focus,
+            fields: self.fields | other.fields,
+            popup: self.popup | other.popup,
+            hits: self.hits | other.hits,
+            animate: self.animate | other.animate,
+        }
+    }
 }
 
 pub struct Element<'a, A> {
@@ -487,19 +464,37 @@ impl<'a, A> Element<'a, A> {
 
     pub fn paint(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
         self.canvas = Some(Canvas {
-            key: CanvasKey::FRAME,
+            kind: CanvasKind::Frame,
             paint: Box::new(paint),
         });
         self.content = Content::Canvas;
         self
     }
 
-    pub fn cached(mut self, key: CanvasKey) -> Self {
-        let canvas = self
-            .canvas
-            .as_mut()
-            .expect("a cached element paints a canvas");
-        canvas.key = key;
+    pub fn view<P>(
+        mut self,
+        props: P,
+        paint: impl Fn(&P, &mut Painter, CanvasInfo<'_>) + 'a,
+    ) -> Self
+    where
+        P: Hash + 'a,
+    {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        props.hash(&mut hasher);
+        self.canvas = Some(Canvas {
+            kind: CanvasKind::Props(hasher.finish()),
+            paint: Box::new(move |painter, info| paint(&props, painter, info)),
+        });
+        self.content = Content::Canvas;
+        self
+    }
+
+    pub fn view_static(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
+        self.canvas = Some(Canvas {
+            kind: CanvasKind::Static,
+            paint: Box::new(paint),
+        });
+        self.content = Content::Canvas;
         self
     }
 
@@ -604,11 +599,14 @@ impl<'a, A> Element<'a, A> {
         node.enabled = self.enabled;
         node.focus_ring = self.focus_ring;
         node.blocks_pointer = self.blocks_pointer;
-        node.canvas = self.canvas.as_ref().map(|canvas| canvas.key);
+        node.canvas = self
+            .canvas
+            .as_ref()
+            .map_or(CanvasKind::None, |canvas| canvas.kind);
         node
     }
 
-    pub(crate) fn patch(self, node: &mut crate::node::Node<A>) -> Patch {
+    pub(crate) fn patch(self, node: &mut crate::node::Node<A>) -> Dirty {
         let Self {
             id: _,
             layout,
@@ -627,15 +625,9 @@ impl<'a, A> Element<'a, A> {
             focus_ring,
             blocks_pointer,
         } = self;
-        let mut patch = Patch::default();
-        let kind = content.kind();
-        let content_changed = node.kind != kind || !node.content.same(&content);
-        let layout_changed = node.layout != layout
-            || node.position != position
-            || node.scroll_spec != scroll
-            || node.popup_spec != popup;
+        let mut dirty = Dirty::NONE;
         if node.popup_spec != popup {
-            patch.popup = true;
+            dirty.popup = true;
         }
         if node.layout != layout
             || node.position != position
@@ -646,29 +638,20 @@ impl<'a, A> Element<'a, A> {
             node.position = position;
             node.scroll_spec = scroll;
             node.popup_spec = popup;
-            patch.layout = true;
-            patch.hits = true;
+            dirty = dirty.union(Dirty::GEOMETRY);
         }
-        if content_changed {
-            patch.hits = hit_affected(&node.content, &content);
-            patch.fields = matches!(content, Content::Field(_));
-            patch.animate = animates(&content);
-            patch.layout = true;
-            patch.paint = true;
-            patch.focus = node.kind != kind;
-            node.kind = kind;
+        dirty = dirty.union(content.dirty_since(&node.content));
+        if !node.content.same(&content) {
+            node.kind = content.kind();
             node.content = content;
         }
-        let focusable = interaction.is_focusable();
-        if focusable != node.interaction.is_focusable() {
-            patch.focus = true;
-            patch.hits = true;
+        if interaction.is_focusable() != node.interaction.is_focusable() {
+            dirty = dirty.union(Dirty::FOCUS);
         }
         node.interaction = interaction;
         if node.background != background {
             node.background = background;
-            patch.paint = true;
-            patch.hits = true;
+            dirty = dirty.union(Dirty::INTERACTION);
         }
         if node.tooltip != tooltip {
             node.tooltip = tooltip;
@@ -676,26 +659,17 @@ impl<'a, A> Element<'a, A> {
         node.cursor = cursor;
         if node.enabled != enabled {
             node.enabled = enabled;
-            patch.paint = true;
-            patch.focus = true;
-            patch.hits = true;
+            dirty = dirty.union(Dirty::INTERACTION);
         }
         if node.focus_ring != focus_ring {
             node.focus_ring = focus_ring;
-            patch.paint = true;
+            dirty = dirty.union(Dirty::PAINT);
         }
         if node.blocks_pointer != blocks_pointer {
             node.blocks_pointer = blocks_pointer;
-            patch.hits = true;
+            dirty.hits = true;
         }
-        if layout_changed {
-            patch.layout = true;
-            patch.hits = true;
-        }
-        if patch.layout {
-            patch.animate |= animates(&node.content);
-        }
-        patch
+        dirty
     }
 }
 
@@ -712,13 +686,6 @@ pub(crate) fn animates(content: &Content) -> bool {
             | Content::Spinner(_)
             | Content::Progress(_)
     )
-}
-
-fn hit_affected(before: &Content, after: &Content) -> bool {
-    match (before, after) {
-        (Content::Slider(a), Content::Slider(b)) => a.label != b.label,
-        _ => true,
-    }
 }
 
 pub enum Interaction<A> {
@@ -783,21 +750,27 @@ pub fn text<'a, A>(value: impl Into<String>, style: TextStyle) -> Element<'a, A>
     }))
 }
 
-pub fn canvas<'a, A>(
-    width: Length,
-    height: f32,
-    paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a,
-) -> Element<'a, A> {
+pub fn canvas<'a, A>(width: Length, height: f32) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(width, Length::Fixed(height)),
         ..Layout::column()
     })
-    .paint(paint)
 }
 
 pub fn spacer<'a, A>(size: f32) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fixed(0.0), Length::Fixed(size)),
+        ..Layout::column()
+    })
+    .with_content(Content::Empty)
+}
+
+pub(crate) fn extent<'a, A>(axis: Axis, size: f32) -> Element<'a, A> {
+    Element::new(Layout {
+        size: match axis {
+            Axis::Column => Size::new(Length::Fixed(0.0), Length::Fixed(size)),
+            Axis::Row => Size::new(Length::Fixed(size), Length::Fixed(0.0)),
+        },
         ..Layout::column()
     })
     .with_content(Content::Empty)

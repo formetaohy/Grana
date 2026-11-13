@@ -55,89 +55,91 @@ pub(super) fn channel_row<'a>(
     let width = panel_width() - switch_left;
     let corners =
         Corners::group_vertical(index, count, metrics.corner_lg, metrics.corner_xs, active);
-    let canvas = grana_ui::canvas(Length::Fixed(width), CHANNEL_ROW, move |painter, info| {
-        let rect = info.rect;
-        let full = Rect::from_min_max(rect.min, Vec2::new(rect.max.x + switch_left, rect.max.y));
-        let fill = if active {
-            palette
-                .secondary_container
-                .lerp(palette.on_secondary_container, 0.06 * info.hover)
-        } else {
-            palette
-                .surface_container
-                .lerp(palette.surface_container_high, info.hover)
-        };
-        painter.rect(full, corners, fill);
-        let dot = Rect::from_center_size(
-            Vec2::new(rect.min.x + 15.0, rect.center().y),
-            Vec2::splat(10.0),
-        );
-        if active {
-            painter.ring(
-                dot.center(),
-                7.8,
-                1.5,
-                0.0,
-                std::f32::consts::TAU,
-                tint.with_alpha(if enabled { 0.65 } else { 0.25 }),
+    let canvas = grana_ui::canvas(Length::Fixed(width), CHANNEL_ROW)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let full =
+                Rect::from_min_max(rect.min, Vec2::new(rect.max.x + switch_left, rect.max.y));
+            let fill = if active {
+                palette
+                    .secondary_container
+                    .lerp(palette.on_secondary_container, 0.06 * info.hover)
+            } else {
+                palette
+                    .surface_container
+                    .lerp(palette.surface_container_high, info.hover)
+            };
+            painter.rect(full, corners, fill);
+            let dot = Rect::from_center_size(
+                Vec2::new(rect.min.x + 15.0, rect.center().y),
+                Vec2::splat(10.0),
             );
-        }
-        painter.rect(
-            dot,
-            Corners::capsule(),
-            tint.with_alpha(if enabled { 1.0 } else { 0.30 }),
-        );
-        let label_right = if enabled && opacity < 0.995 {
-            let badge = Rect::from_min_max(
-                Vec2::new(rect.max.x + switch_left - 96.0, rect.center().y - 9.0),
-                Vec2::new(rect.max.x + switch_left - 58.0, rect.center().y + 9.0),
-            );
+            if active {
+                painter.ring(
+                    dot.center(),
+                    7.8,
+                    1.5,
+                    0.0,
+                    std::f32::consts::TAU,
+                    tint.with_alpha(if enabled { 0.65 } else { 0.25 }),
+                );
+            }
             painter.rect(
-                badge,
+                dot,
                 Corners::capsule(),
-                if active {
-                    palette.on_secondary_container.with_alpha(0.12)
-                } else {
-                    palette.surface_container_highest
-                },
+                tint.with_alpha(if enabled { 1.0 } else { 0.30 }),
             );
-            painter.text_in(
-                badge,
-                &format!("{:.0}%", opacity * 100.0),
-                TextStyle::new(
-                    mono,
+            let label_right = if enabled && opacity < 0.995 {
+                let badge = Rect::from_min_max(
+                    Vec2::new(rect.max.x + switch_left - 96.0, rect.center().y - 9.0),
+                    Vec2::new(rect.max.x + switch_left - 58.0, rect.center().y + 9.0),
+                );
+                painter.rect(
+                    badge,
+                    Corners::capsule(),
                     if active {
-                        palette.on_secondary_container
+                        palette.on_secondary_container.with_alpha(0.12)
                     } else {
-                        palette.on_surface_variant
+                        palette.surface_container_highest
                     },
-                )
-                .aligned(Align::Center),
+                );
+                painter.text_in(
+                    badge,
+                    &format!("{:.0}%", opacity * 100.0),
+                    TextStyle::new(
+                        mono,
+                        if active {
+                            palette.on_secondary_container
+                        } else {
+                            palette.on_surface_variant
+                        },
+                    )
+                    .aligned(Align::Center),
+                    Align::Center,
+                );
+                badge.min.x - 6.0
+            } else {
+                rect.max.x - 6.0
+            };
+            let color = if !enabled {
+                palette.outline
+            } else if active {
+                palette.on_secondary_container
+            } else {
+                palette.on_surface
+            };
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 30.0, rect.min.y),
+                    Vec2::new(label_right.max(rect.min.x + 30.0), rect.max.y),
+                ),
+                &name,
+                TextStyle::new(font, color).truncating(),
                 Align::Center,
             );
-            badge.min.x - 6.0
-        } else {
-            rect.max.x - 6.0
-        };
-        let color = if !enabled {
-            palette.outline
-        } else if active {
-            palette.on_secondary_container
-        } else {
-            palette.on_surface
-        };
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 30.0, rect.min.y),
-                Vec2::new(label_right.max(rect.min.x + 30.0), rect.max.y),
-            ),
-            &name,
-            TextStyle::new(font, color).truncating(),
-            Align::Center,
-        );
-    })
-    .key(Key::index("channel.pick", index))
-    .press(Message::Command(Command::SelectChannel(index)));
+        })
+        .key(Key::index("channel.pick", index))
+        .press(Message::Command(Command::SelectChannel(index)));
     let switch = grana_ui::widget::toggle(&theme, enabled)
         .key(Key::index("channel.enabled", index))
         .on_toggle(move |value| {
@@ -149,8 +151,8 @@ pub(super) fn channel_row<'a>(
     let gap = grana_ui::canvas(
         Length::Fixed(switch_left - metrics.switch_width - SWITCH_TRAIL),
         0.0,
-        |_painter, _info| {},
-    );
+    )
+    .paint(|_painter, _info| {});
     grana_ui::row()
         .width(Length::Fill)
         .height(Length::Fixed(CHANNEL_ROW))

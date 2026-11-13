@@ -203,68 +203,69 @@ fn row<'a>(
         theme.metrics.corner_xs,
         selected,
     );
-    let body = grana_ui::canvas(Length::Fill, ROW_HEIGHT, move |painter, info| {
-        let rect = info.rect;
-        let hovered = info.hover.max(info.press);
-        let fill = if selected {
-            palette.secondary_container
-        } else {
-            palette
-                .surface_container_high
-                .lerp(palette.surface_container_highest, hovered)
-        };
-        painter.rect(rect, corners, fill);
-        let fg = if selected {
-            palette.on_secondary_container
-        } else {
-            palette.on_surface
-        };
-        icon::paint(
-            match kind.tag() {
-                AnnotationTag::Point => Icon::Target,
-                AnnotationTag::Distance => Icon::Ruler,
-            },
-            painter,
-            Vec2::new(rect.min.x + 14.0, rect.center().y),
-            14.0,
-            if selected {
+    let body = grana_ui::canvas(Length::Fill, ROW_HEIGHT)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let hovered = info.hover.max(info.press);
+            let fill = if selected {
+                palette.secondary_container
+            } else {
+                palette
+                    .surface_container_high
+                    .lerp(palette.surface_container_highest, hovered)
+            };
+            painter.rect(rect, corners, fill);
+            let fg = if selected {
                 palette.on_secondary_container
             } else {
-                palette.primary
-            },
-            1.6,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 28.0, rect.min.y),
-                Vec2::new(rect.max.x - 84.0, rect.max.y),
-            ),
-            &name,
-            TextStyle::new(font, fg).truncating(),
-            Align::Center,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.max.x - 190.0, rect.min.y),
-                Vec2::new(rect.max.x - 10.0, rect.max.y),
-            ),
-            &detail,
-            TextStyle::new(
-                theme.font(Level::Caption),
-                if selected {
-                    palette.on_secondary_container.with_alpha(0.82)
-                } else {
-                    palette.on_surface_variant
+                palette.on_surface
+            };
+            icon::paint(
+                match kind.tag() {
+                    AnnotationTag::Point => Icon::Target,
+                    AnnotationTag::Distance => Icon::Ruler,
                 },
-            )
-            .aligned(Align::End)
-            .truncating(),
-            Align::Center,
-        );
-    })
-    .key(Key::index("annotation.row", index))
-    .press(Message::Command(Command::SelectAnnotation(Some(index))))
-    .focus_ring(corners);
+                painter,
+                Vec2::new(rect.min.x + 14.0, rect.center().y),
+                14.0,
+                if selected {
+                    palette.on_secondary_container
+                } else {
+                    palette.primary
+                },
+                1.6,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x + 28.0, rect.min.y),
+                    Vec2::new(rect.max.x - 84.0, rect.max.y),
+                ),
+                &name,
+                TextStyle::new(font, fg).truncating(),
+                Align::Center,
+            );
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.max.x - 190.0, rect.min.y),
+                    Vec2::new(rect.max.x - 10.0, rect.max.y),
+                ),
+                &detail,
+                TextStyle::new(
+                    theme.font(Level::Caption),
+                    if selected {
+                        palette.on_secondary_container.with_alpha(0.82)
+                    } else {
+                        palette.on_surface_variant
+                    },
+                )
+                .aligned(Align::End)
+                .truncating(),
+                Align::Center,
+            );
+        })
+        .key(Key::index("annotation.row", index))
+        .press(Message::Command(Command::SelectAnnotation(Some(index))))
+        .focus_ring(corners);
     let eye = view::icon_button(
         ctx,
         "annotation.visible",
@@ -397,7 +398,7 @@ fn profile_card<'a>(
         let theme = *ctx.theme();
         let style = grana_chart::Style::card(&theme, grana_chart::DistributionStyle::Box)
             .with_language(language);
-        let chart = grana_ui::canvas(Length::Fill, 148.0, move |painter, info| {
+        let chart = grana_ui::canvas(Length::Fill, 148.0).paint(move |painter, info| {
             page.paint(painter, info.rect, &style, &grana_chart::Decor::default());
         });
         children.push(chart);

@@ -1,4 +1,5 @@
 mod atlas;
+mod build;
 mod clipboard;
 mod color;
 mod content;
@@ -34,8 +35,8 @@ pub use clipboard::Clipboard;
 pub use color::Color;
 pub use edit::{Edit, Outcome as EditOutcome};
 pub use element::{
-    Axis, CanvasInfo, CanvasKey, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase,
-    Pointer, Size, canvas, column, place, row, spacer, stack, text,
+    Axis, CanvasInfo, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase, Pointer, Size,
+    canvas, column, place, row, spacer, stack, text,
 };
 pub use geometry::{Corners, Edges, Rect};
 pub use glam::Vec2;
@@ -49,6 +50,7 @@ pub use paint::{Clip, Instance, Painter};
 pub use record::Mark;
 pub use recorder::Recorder;
 pub use render::Figure;
+pub use scroll::Window;
 pub use style::{Border, Fill, Shadow, State, Surface};
 pub use text::{Align, Text, TextLayout, TextStyle};
 pub use theme::{Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};

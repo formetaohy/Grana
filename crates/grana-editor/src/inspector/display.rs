@@ -212,10 +212,8 @@ pub(super) fn display<'a>(
     let mono = theme.font(Level::Monospace);
     let minimum = grana_i18n::inspector::minimum_readout(language, start);
     let maximum = grana_i18n::inspector::maximum_readout(language, end);
-    children.push(grana_ui::canvas(
-        Length::Fill,
-        15.0,
-        move |painter, info| {
+    children.push(
+        grana_ui::canvas(Length::Fill, 15.0).paint(move |painter, info| {
             let rect = info.rect;
             let style = TextStyle::new(mono, palette.on_surface_variant);
             painter.text_in(
@@ -230,8 +228,8 @@ pub(super) fn display<'a>(
                 TextStyle::new(mono, palette.on_surface_variant).aligned(Align::End),
                 Align::Center,
             );
-        },
-    ));
+        }),
+    );
     let opacity_readout = format!("{:.0}%", opacity * 100.0);
     children.push(view::slider_readout(
         ctx,

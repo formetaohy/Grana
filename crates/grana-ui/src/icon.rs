@@ -7,7 +7,7 @@ use crate::geometry::{Corners, Rect};
 use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     ChevronDown,
     ChevronUp,

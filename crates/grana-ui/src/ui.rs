@@ -5,7 +5,7 @@ use grana_i18n::Language;
 use slotmap::SecondaryMap;
 
 use crate::clipboard::{Clipboard, NullClipboard};
-use crate::element::{CanvasPaint, Element, Key, Layer};
+use crate::element::{Axis, CanvasPaint, Element, Key, Layer, Layout, Length};
 use crate::geometry::Rect;
 use crate::image::ImageAtlas;
 use crate::input::{Cursor, Input, Key as InputKey};
@@ -38,9 +38,7 @@ pub struct Ui<A = ()> {
     pub(crate) animations: HashMap<u64, Animated>,
     pub(crate) layers: [LayerBuffer; Layer::ALL.len()],
     pub(crate) scratch: Instances,
-    pub(crate) overlay: Instances,
-    pub(crate) hud_node_len: usize,
-    pub(crate) hud_rebuilt: bool,
+    pub(crate) overlay: LayerBuffer,
     pub(crate) change: Change,
     pub(crate) scale: f32,
     pub(crate) size: Vec2,
@@ -86,9 +84,7 @@ impl<A: Clone> Ui<A> {
             animations: HashMap::new(),
             layers: std::array::from_fn(|_| LayerBuffer::default()),
             scratch: Instances::default(),
-            overlay: Instances::default(),
-            hud_node_len: 0,
-            hud_rebuilt: false,
+            overlay: LayerBuffer::default(),
             change: Change::default(),
             scale: 1.0,
             size: Vec2::ZERO,
@@ -349,9 +345,9 @@ impl<A: Clone> Ui<A> {
             self.run_layout();
             self.tree.layout = false;
         }
-        self.paint_layers(&canvases);
         self.update_tooltip();
         self.paint_overlays();
+        self.paint_layers(&canvases);
     }
 
     fn run_layout(&mut self) {
@@ -387,6 +383,7 @@ impl<A: Clone> Ui<A> {
                 text,
                 images,
                 layers,
+                overlay,
                 change,
                 ..
             } = self;
@@ -401,6 +398,7 @@ impl<A: Clone> Ui<A> {
                         glyphs: text.atlas(),
                         images,
                     },
+                    overlay,
                     content: &layers[Layer::Content.index()],
                     chrome: &layers[Layer::Chrome.index()],
                     popup: &layers[Layer::Popup.index()],
@@ -572,11 +570,67 @@ impl<A> BuildContext<'_, A> {
         self.tree.node_at(key).map(|id| self.tree.nodes[id].rect)
     }
 
-    pub fn scroll_offset(&self, key: Key) -> f32 {
-        self.tree
-            .node_at(key)
-            .and_then(|id| self.tree.nodes[id].scroll)
-            .map_or(0.0, |scroll| scroll.offset)
+    pub fn window(&self, key: Key, row: f32, rows: usize) -> crate::scroll::Window {
+        let row = row.max(1.0);
+        let screen = self.size.y.max(self.size.x);
+        let (offset, viewport, axis) =
+            self.tree
+                .node_at(key)
+                .map_or((0.0, screen, Axis::Column), |id| {
+                    let node = &self.tree.nodes[id];
+                    let axis = node.scroll_axis();
+                    let viewport = match axis {
+                        Axis::Row => node.rect.width(),
+                        Axis::Column => node.rect.height(),
+                    };
+                    let viewport = if viewport > 0.0 { viewport } else { screen };
+                    (
+                        node.scroll.map_or(0.0, |scroll| scroll.offset),
+                        viewport,
+                        axis,
+                    )
+                });
+        let visible = (viewport / row).ceil() as usize + 2;
+        let first = ((offset / row).floor().max(0.0) as usize).min(rows);
+        let last = (first + visible).min(rows);
+        crate::scroll::Window {
+            offset,
+            viewport,
+            row,
+            rows,
+            first,
+            last,
+            axis,
+        }
+    }
+
+    pub fn scroll<'a>(
+        &self,
+        key: Key,
+        axis: Axis,
+        length: Length,
+        row: f32,
+        rows: usize,
+        build: impl FnOnce(crate::scroll::Window) -> Vec<Element<'a, A>>,
+    ) -> Element<'a, A>
+    where
+        A: 'a,
+    {
+        let window = self.window(key, row, rows);
+        let mut children = build(window);
+        let lead = window.first as f32 * row;
+        let tail = rows.saturating_sub(window.last) as f32 * row;
+        if lead > 0.0 {
+            children.insert(0, crate::element::extent(axis, lead));
+        }
+        if tail > 0.0 {
+            children.push(crate::element::extent(axis, tail));
+        }
+        Element::new(Layout::column())
+            .key(key)
+            .scroll(axis, length, Some(rows as f32 * row))
+            .clipped()
+            .children(children)
     }
 
     pub fn popup_open(&self, key: Key) -> bool {

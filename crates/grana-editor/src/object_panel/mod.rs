@@ -136,7 +136,7 @@ fn header<'a>(
     let badge_style = TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant)
         .aligned(Align::Center);
     let count_text = count.to_string();
-    let title = grana_ui::canvas(Length::Fixed(title_w), 30.0, move |painter, info| {
+    let title = grana_ui::canvas(Length::Fixed(title_w), 30.0).paint(move |painter, info| {
         let rect = info.rect;
         painter.text_in(
             Rect::from_min_max(

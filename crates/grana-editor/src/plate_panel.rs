@@ -123,67 +123,68 @@ fn cell<'a>(
         .and_then(|field| view.thumbnail(field.series()))
         .cloned();
     let lit = thumbnail.is_some();
-    let element = grana_ui::canvas(Length::Fixed(side), side, move |painter, info| {
-        let rect = info.rect;
-        let engaged = info.hover.max(info.press);
-        let corners = Corners::all(if active { 12.0 } else { 8.0 });
-        let border = if active {
-            palette.primary
-        } else {
-            palette.outline_variant.amplify(0.4 + 0.6 * engaged)
-        };
-        if present {
-            let fill = if active {
-                palette.secondary_container
+    let element = grana_ui::canvas(Length::Fixed(side), side)
+        .paint(move |painter, info| {
+            let rect = info.rect;
+            let engaged = info.hover.max(info.press);
+            let corners = Corners::all(if active { 12.0 } else { 8.0 });
+            let border = if active {
+                palette.primary
             } else {
-                palette
-                    .surface_container_high
-                    .lerp(palette.surface_container_highest, engaged)
+                palette.outline_variant.amplify(0.4 + 0.6 * engaged)
             };
-            painter.rect(rect, corners, fill);
-        } else {
-            painter.rect(rect, corners, palette.surface_container_lowest);
-        }
-        if let Some(bitmap) = &thumbnail {
-            painter.bitmap(rect, corners, bitmap);
-        }
-        if present && active {
-            painter.outlined(
-                rect,
-                corners,
-                Fill::None,
-                grana_ui::Border {
-                    width: 2.0,
-                    color: border,
-                },
-                Shadow::NONE,
-            );
-        }
-        if present {
-            let tint = if lit {
-                Color::white_alpha(0.95)
-            } else if active {
-                palette.on_secondary_container
+            if present {
+                let fill = if active {
+                    palette.secondary_container
+                } else {
+                    palette
+                        .surface_container_high
+                        .lerp(palette.surface_container_highest, engaged)
+                };
+                painter.rect(rect, corners, fill);
             } else {
-                palette.on_surface_variant.lerp(palette.on_surface, engaged)
-            };
-            let style = TextStyle::new(font, tint).aligned(Align::Center);
-            let ink = painter.measure(&drawn, style);
-            let pill = if lit {
-                Rect::from_min_size(
-                    Vec2::new(rect.min.x + 5.0, rect.max.y - 20.0),
-                    Vec2::new(ink.x + 12.0, 15.0),
-                )
-            } else {
-                Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
-            };
-            if lit {
-                painter.rect(pill, Corners::capsule(), Color::black_alpha(0.68));
+                painter.rect(rect, corners, palette.surface_container_lowest);
             }
-            painter.text_in(pill, &drawn, style, Align::Center);
-        }
-    })
-    .named(&format!("plate.{row}.{column}"));
+            if let Some(bitmap) = &thumbnail {
+                painter.bitmap(rect, corners, bitmap);
+            }
+            if present && active {
+                painter.outlined(
+                    rect,
+                    corners,
+                    Fill::None,
+                    grana_ui::Border {
+                        width: 2.0,
+                        color: border,
+                    },
+                    Shadow::NONE,
+                );
+            }
+            if present {
+                let tint = if lit {
+                    Color::white_alpha(0.95)
+                } else if active {
+                    palette.on_secondary_container
+                } else {
+                    palette.on_surface_variant.lerp(palette.on_surface, engaged)
+                };
+                let style = TextStyle::new(font, tint).aligned(Align::Center);
+                let ink = painter.measure(&drawn, style);
+                let pill = if lit {
+                    Rect::from_min_size(
+                        Vec2::new(rect.min.x + 5.0, rect.max.y - 20.0),
+                        Vec2::new(ink.x + 12.0, 15.0),
+                    )
+                } else {
+                    Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
+                };
+                if lit {
+                    painter.rect(pill, Corners::capsule(), Color::black_alpha(0.68));
+                }
+                painter.text_in(pill, &drawn, style, Align::Center);
+            }
+        })
+        .named(&format!("plate.{row}.{column}"));
     match well.and_then(|well| well.fields().first()) {
         Some(field) => {
             let detail = grana_i18n::plate::well_fields(

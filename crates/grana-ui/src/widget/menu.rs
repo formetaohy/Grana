@@ -1,6 +1,6 @@
 use glam::Vec2;
 
-use crate::content::{ActionRowContent, Content, MenuRowContent};
+use crate::content::{ActionRowContent, Content, MenuRowContent, Trailing};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::icon::{self, Icon};
@@ -40,7 +40,35 @@ pub fn action_row<'a, A>(
         symbol,
         label: label.to_string(),
         shortcut: shortcut.map(str::to_string),
+        detail: None,
         font: theme.font(Level::Label),
+        trailing: None,
+    }))
+}
+
+pub fn disclosure_row<'a, A>(
+    theme: &Theme,
+    symbol: Icon,
+    label: &str,
+    detail: &str,
+    open: bool,
+    angle: f32,
+) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(Length::Fill, Length::Fixed(MENU_ROW)),
+        ..Layout::row()
+    })
+    .with_content(Content::ActionRow(ActionRowContent {
+        symbol,
+        label: label.to_string(),
+        shortcut: None,
+        detail: Some(detail.to_string()),
+        font: theme.font(Level::Title),
+        trailing: Some(Trailing {
+            symbol: Icon::ChevronDown,
+            angle,
+            open,
+        }),
     }))
 }
 
@@ -117,7 +145,17 @@ pub(super) fn paint_action_row(
             palette.secondary_container.with_alpha(0.65 * info.hover),
         );
     }
-    let shortcut_width = row.shortcut.as_ref().map_or(10.0, |text| {
+    let trailing = row.trailing.map_or(10.0, |_| 34.0);
+    let detail_width = row.detail.as_ref().map_or(0.0, |text| {
+        painter
+            .measure(
+                text,
+                TextStyle::new(info.theme.label_font(), palette.on_surface_variant),
+            )
+            .x
+            + 12.0
+    });
+    let shortcut_width = row.shortcut.as_ref().map_or(0.0, |text| {
         18.0 + painter
             .measure(
                 text,
@@ -125,6 +163,7 @@ pub(super) fn paint_action_row(
             )
             .x
     });
+    let right = info.rect.max.x - trailing - detail_width - shortcut_width;
     icon::paint(
         row.symbol,
         painter,
@@ -138,7 +177,7 @@ pub(super) fn paint_action_row(
     painter.text_in(
         Rect::from_min_max(
             Vec2::new(info.rect.min.x + 29.0, info.rect.min.y),
-            Vec2::new(info.rect.max.x - shortcut_width, info.rect.max.y),
+            Vec2::new(right.max(info.rect.min.x + 29.0), info.rect.max.y),
         ),
         &row.label,
         TextStyle::new(
@@ -150,12 +189,54 @@ pub(super) fn paint_action_row(
         .truncating(),
         Align::Center,
     );
+    if let Some(detail) = &row.detail {
+        painter.text_in(
+            Rect::from_min_max(
+                Vec2::new(right, info.rect.min.y),
+                Vec2::new(info.rect.max.x - trailing - shortcut_width, info.rect.max.y),
+            ),
+            detail,
+            TextStyle::new(info.theme.label_font(), palette.on_surface_variant)
+                .truncating()
+                .aligned(Align::End),
+            Align::Center,
+        );
+    }
     if let Some(shortcut) = &row.shortcut {
         painter.text_in(
             info.rect.shrink2(Vec2::new(10.0, 0.0)),
             shortcut,
             TextStyle::new(info.theme.font(Level::Monospace), palette.outline).aligned(Align::End),
             Align::Center,
+        );
+    }
+    if let Some(trailing) = row.trailing {
+        let badge = Rect::from_center_size(
+            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
+            Vec2::splat(22.0),
+        );
+        painter.rect(
+            badge,
+            Corners::capsule(),
+            if trailing.open {
+                palette.secondary_container
+            } else {
+                palette
+                    .surface_container_high
+                    .lerp(palette.surface_container_highest, runtime.hover.value)
+            },
+        );
+        icon::chevron(
+            painter,
+            badge.center(),
+            8.0,
+            std::f32::consts::FRAC_PI_2 * trailing.angle,
+            if trailing.open {
+                palette.on_secondary_container
+            } else {
+                palette.on_surface_variant
+            },
+            1.6,
         );
     }
 }

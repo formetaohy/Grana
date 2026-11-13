@@ -8,7 +8,7 @@ use crate::atlas::{Atlas, GlyphSlot};
 use crate::color::Color;
 use crate::theme::TypeStyle;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Align {
     Start,
     Center,
@@ -26,7 +26,7 @@ impl Align {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct TextStyle {
     pub font: TypeStyle,
     pub color: Color,
@@ -59,6 +59,10 @@ impl TextStyle {
     pub fn truncating(mut self) -> Self {
         self.truncate = true;
         self
+    }
+
+    pub(crate) fn bounded(self) -> bool {
+        self.wrap || self.truncate || !matches!(self.align, Align::Start | Align::Baseline)
     }
 }
 

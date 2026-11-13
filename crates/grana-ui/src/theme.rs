@@ -91,6 +91,18 @@ impl TypeStyle {
     }
 }
 
+impl std::hash::Hash for TypeStyle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.size.to_bits().hash(state);
+        self.weight.to_bits().hash(state);
+        self.width.to_bits().hash(state);
+        self.grade.to_bits().hash(state);
+        self.tracking.to_bits().hash(state);
+        self.leading.to_bits().hash(state);
+        self.monospace.hash(state);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub surface_dim: Color,

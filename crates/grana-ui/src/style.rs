@@ -136,6 +136,13 @@ impl Surface {
         text: Color::WHITE,
     };
 
+    pub const fn fill(color: Color) -> Self {
+        Self {
+            fill: Fill::Solid(color),
+            ..Self::NONE
+        }
+    }
+
     pub const fn with_backdrop(mut self, backdrop: f32) -> Self {
         self.backdrop = backdrop;
         self
