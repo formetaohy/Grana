@@ -46,9 +46,23 @@ impl Tone {
         (value * self.scale).clamp(0.0, 1.0).sqrt()
     }
 
-    pub(super) fn pixel(&self, level: f32) -> [u8; 3] {
-        let entry = (level * (ENTRIES - 1) as f32) as usize;
-        self.table[entry.min(ENTRIES - 1)]
+    pub(super) fn shade(&self, value: f32, chroma: Option<[f32; 3]>) -> [u8; 3] {
+        let level = self.level(value);
+        match chroma {
+            Some(chroma) => {
+                let peak = chroma.iter().copied().fold(0.0f32, f32::max);
+                if peak <= 0.0 {
+                    return [0, 0, 0];
+                }
+                chroma.map(|component| {
+                    (grana_display::linear_to_srgb(component / peak * level) * 255.0).round() as u8
+                })
+            }
+            None => {
+                let entry = (level * (ENTRIES - 1) as f32) as usize;
+                self.table[entry.min(ENTRIES - 1)]
+            }
+        }
     }
 }
 
@@ -57,8 +71,8 @@ pub(super) fn tone(grid: &Grid) -> (LocalizationImage, f32) {
     let tone = Tone::new(density, grid.pixel());
     let size = grid.size();
     let mut pixels = Vec::with_capacity(grid.values().len() * 4);
-    for value in grid.values() {
-        let [red, green, blue] = tone.pixel(tone.level(*value));
+    for (index, value) in grid.values().iter().enumerate() {
+        let [red, green, blue] = tone.shade(*value, grid.chroma(index));
         pixels.extend_from_slice(&[red, green, blue, 255]);
     }
     (LocalizationImage::new(size, pixels), density)

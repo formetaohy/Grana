@@ -1,8 +1,9 @@
 use grana_chart::{Axis, Band, BandPoint, Curve, CurvePoint, SeriesChart};
+use grana_display::linear_to_srgb;
 use grana_i18n::Language;
 use grana_object::ClusterSpec;
 use grana_scene::{Job, ObjectKind, ObjectSet, ObjectSetId};
-use grana_session::{Command, LocalizationReport, LocalizationSpec};
+use grana_session::{Command, Groups, LocalizationReport, LocalizationSpec, NeNa};
 use grana_ui::{Align, BuildContext, Color, Corners, Element, Icon, Length, Rect, Role, Vec2};
 
 use crate::message::Message;
@@ -14,6 +15,8 @@ const IMAGE_MINIMUM: f32 = 96.0;
 const IMAGE_MAXIMUM: f32 = 260.0;
 
 const CHART_HEIGHT: f32 = 148.0;
+
+const GROUP_ROWS: usize = 4;
 
 pub(super) fn card<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -62,11 +65,14 @@ pub(super) fn card<'a>(
                 painter.bitmap(target, Corners::all(4.0), &bitmap);
             },
         ));
-        children.push(view::labelled(
-            ctx,
-            grana_i18n::localization::precision(language),
-            &grana_i18n::localization::nanometres(language, report.nena().precision()),
-        ));
+        children.push(match report.nena() {
+            Some(nena) => view::labelled(
+                ctx,
+                grana_i18n::localization::precision(language),
+                &grana_i18n::localization::nanometres(language, nena.precision()),
+            ),
+            None => view::caption(ctx, grana_i18n::localization::precision_missing(language)),
+        });
         let resolution = report.frc().resolution().map_or_else(
             || grana_i18n::localization::resolution_missing(language).to_string(),
             |value| grana_i18n::localization::nanometres(language, value),
@@ -156,14 +162,28 @@ pub(super) fn card<'a>(
         children.push(grana_ui::column().gap(8.0).children(tools));
     }
     if let Some(report) = report {
+        let groups = report.groups();
+        if !groups.stats().is_empty() {
+            children.push(view::divider(ctx));
+            let held = grana_i18n::localization::group_count(language, groups.stats().len());
+            children.push(view::section_header(
+                ctx,
+                grana_i18n::localization::groups(language),
+                Some(&held),
+            ));
+            children.push(group_rows(ctx, language, groups));
+        }
+        if let Some(nena) = report.nena() {
+            children.push(view::divider(ctx));
+            let pairs = grana_i18n::localization::neighbour_pairs(language, nena.pairs());
+            children.push(view::section_header(
+                ctx,
+                grana_i18n::localization::neighbours(language),
+                Some(&pairs),
+            ));
+            children.push(neighbours_chart(ctx, language, nena));
+        }
         children.push(view::divider(ctx));
-        let pairs = grana_i18n::localization::neighbour_pairs(language, report.nena().pairs());
-        children.push(view::section_header(
-            ctx,
-            grana_i18n::localization::neighbours(language),
-            Some(&pairs),
-        ));
-        children.push(neighbours_chart(ctx, language, report));
         children.push(view::section_header(
             ctx,
             grana_i18n::localization::correlation(language),
@@ -186,24 +206,70 @@ pub(super) fn card<'a>(
     );
     children.push(cluster_fields(ctx, &theme, id, clusters));
     let clustering = view::progress(state.jobs, Job::Clusters(id));
-    children.push(if clustering.is_some() {
-        view::button_with(
-            ctx,
-            grana_i18n::common::cancel(language),
-            Role::SurfaceHigh,
-            Length::Fill,
-        )
-        .press(Message::Command(Command::CancelClusters(id)))
+    let mut cluster_actions = Vec::new();
+    if clustering.is_some() {
+        cluster_actions.push(
+            view::button_with(
+                ctx,
+                grana_i18n::common::cancel(language),
+                Role::SurfaceHigh,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::CancelClusters(id))),
+        );
     } else {
-        view::button_with(
-            ctx,
-            grana_i18n::localization::cluster(language),
-            Role::PrimaryContainer,
-            Length::Fill,
-        )
-        .press(Message::Command(Command::ClusterLocalizations(id)))
-    });
+        cluster_actions.push(
+            view::button_with(
+                ctx,
+                grana_i18n::localization::cluster(language),
+                Role::PrimaryContainer,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::ClusterLocalizations(id))),
+        );
+    }
+    if report.is_some() && clustering.is_none() {
+        cluster_actions.push(
+            view::button_with(
+                ctx,
+                grana_i18n::localization::estimate(language),
+                Role::SurfaceHigh,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::EstimateLocalizationClusters(id))),
+        );
+    }
+    children.push(grana_ui::row().gap(8.0).children(cluster_actions));
     view::card(ctx, 8.0, children)
+}
+
+fn group_rows<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    language: Language,
+    groups: &'a Groups,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let rows = groups
+        .stats()
+        .iter()
+        .take(GROUP_ROWS)
+        .map(|stat| {
+            let name = match stat.group() {
+                Some(group) => grana_i18n::localization::group(language, group),
+                None => grana_i18n::localization::ungrouped(language).to_string(),
+            };
+            let detail = grana_i18n::localization::group_detail(
+                language,
+                stat.localizations(),
+                stat.precision(),
+            );
+            grana_ui::row().gap(8.0).align(Align::Center).children([
+                grana_ui::widget::color_swatch(stat.tint().map(linear_to_srgb), 10.0),
+                grana_ui::widget::labelled(&theme, &name, &detail),
+            ])
+        })
+        .collect::<Vec<_>>();
+    grana_ui::column().gap(2.0).children(rows)
 }
 
 fn cluster_fields<'a>(
@@ -344,9 +410,8 @@ fn fields<'a>(
 fn neighbours_chart<'a>(
     ctx: &mut BuildContext<'_, Message>,
     language: Language,
-    report: &'a LocalizationReport,
+    nena: &'a NeNa,
 ) -> Element<'a, Message> {
-    let nena = report.nena();
     let high = nena.bins().last().copied().unwrap_or(1.0).max(1.0);
     let peak = nena
         .counts()

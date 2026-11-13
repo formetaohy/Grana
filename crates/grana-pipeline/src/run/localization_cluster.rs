@@ -13,6 +13,7 @@ pub struct LocalizationClusterRequest {
     frames: Vec<Option<Arc<ObjectFrame>>>,
     visible: Vec<Option<Vec<bool>>>,
     spec: ClusterSpec,
+    grouped: bool,
 }
 
 impl LocalizationClusterRequest {
@@ -22,6 +23,7 @@ impl LocalizationClusterRequest {
         frames: Vec<Option<Arc<ObjectFrame>>>,
         visible: Vec<Option<Vec<bool>>>,
         spec: ClusterSpec,
+        grouped: bool,
     ) -> Self {
         assert!(
             !frames.is_empty(),
@@ -38,6 +40,7 @@ impl LocalizationClusterRequest {
             frames,
             visible,
             spec,
+            grouped,
         }
     }
 }
@@ -53,6 +56,7 @@ pub fn localization_cluster(
         frames,
         visible,
         spec,
+        grouped,
     } = request;
     sink(Event::Progress {
         time: 0,
@@ -77,7 +81,8 @@ pub fn localization_cluster(
         });
         !cancel.load(Ordering::Relaxed)
     };
-    let Some(clusters) = grana_analysis::localization::cluster(&held, spec, &mut report)? else {
+    let Some(clusters) = grana_analysis::localization::cluster(&held, spec, grouped, &mut report)?
+    else {
         sink(Event::Done);
         return Ok(());
     };

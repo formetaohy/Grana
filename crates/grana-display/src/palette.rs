@@ -1,3 +1,18 @@
+pub const CATEGORICAL: [[f32; 3]; 8] = [
+    [0.35, 0.70, 1.00],
+    [0.35, 0.90, 0.55],
+    [1.00, 0.55, 0.35],
+    [0.80, 0.55, 1.00],
+    [1.00, 0.80, 0.35],
+    [0.35, 0.90, 0.90],
+    [1.00, 0.45, 0.70],
+    [0.75, 0.85, 0.45],
+];
+
+pub fn categorical(index: usize) -> [f32; 3] {
+    CATEGORICAL[index % CATEGORICAL.len()]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Palette {
     Viridis,

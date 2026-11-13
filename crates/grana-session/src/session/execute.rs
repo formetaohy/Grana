@@ -707,6 +707,7 @@ impl Session {
                 }
             }
             Command::ClusterLocalizations(set) => self.start_clusters(set),
+            Command::EstimateLocalizationClusters(set) => self.estimate_clusters(set),
             Command::CancelClusters(set) => self.cancel(Job::Clusters(set)),
             Command::CancelLocalizations(set) => self.cancel_localizations(set),
             Command::ClearLocalizations(set) => self.clear_localizations(set),

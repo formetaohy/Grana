@@ -850,14 +850,18 @@ impl Run<'_, '_> {
                 grana_analysis::localization::LocalizationFrame::new(spots, mask.as_deref())
             })
             .collect::<Vec<_>>();
+        let grouped = !source.clustered();
         let _ = self.task.events.send(Event::Step {
             index: self.task.index,
             label: format!("rendering the super-resolution image of {name}"),
         });
-        let Some(report) =
-            grana_analysis::localization::localization_report(&held, spec, pixel, &mut |_, _| {
-                true
-            })?
+        let Some(report) = grana_analysis::localization::localization_report(
+            &held,
+            spec,
+            pixel,
+            grouped,
+            &mut |_, _| true,
+        )?
         else {
             return Ok(());
         };
@@ -873,6 +877,7 @@ impl Run<'_, '_> {
             &held,
             geometry,
             report.density(),
+            report.groups().clone(),
             &mut progress,
         )?;
         grana_raster::write_stream(
@@ -889,9 +894,9 @@ impl Run<'_, '_> {
         let Some(object) = self.scene.objects.get(id) else {
             return Err(format!("{name} left the scene before it clustered"));
         };
-        if self.scene.frame_count() < 2 {
-            return Err(format!("{name} holds one frame to cluster"));
-        }
+        let grouped = object
+            .localization()
+            .is_none_or(|source| !source.clustered());
         let revision = object.revision();
         let frames = (0..self.scene.frame_count())
             .map(|time| object.frame_shared(time))
@@ -929,7 +934,9 @@ impl Run<'_, '_> {
             _ => {}
         };
         crate::run::localization_cluster(
-            crate::run::LocalizationClusterRequest::new(id, revision, frames, visible, spec),
+            crate::run::LocalizationClusterRequest::new(
+                id, revision, frames, visible, spec, grouped,
+            ),
             task.cancel,
             &mut sink,
         )?;

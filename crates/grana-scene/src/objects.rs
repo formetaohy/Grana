@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_display::Extent;
+use grana_display::{CATEGORICAL as PALETTE, Extent};
 use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 
@@ -18,17 +18,6 @@ use crate::revision::Revisions;
 use crate::segment::SegmentParams;
 use crate::slug::slug;
 use crate::state::SetState;
-
-const PALETTE: [[f32; 3]; 8] = [
-    [0.35, 0.70, 1.00],
-    [0.35, 0.90, 0.55],
-    [1.00, 0.55, 0.35],
-    [0.80, 0.55, 1.00],
-    [1.00, 0.80, 0.35],
-    [0.35, 0.90, 0.90],
-    [1.00, 0.45, 0.70],
-    [0.75, 0.85, 0.45],
-];
 
 pub struct Objects {
     sets: Vec<ObjectSet>,

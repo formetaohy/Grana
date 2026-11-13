@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use grana_object::LocalizationSpec;
+use grana_object::{ClusterSpec, LocalizationSpec};
+
+use super::group::Groups;
 
 const THRESHOLD: f32 = 1.0 / 7.0;
 
@@ -233,8 +235,10 @@ pub struct LocalizationReport {
     pub(super) localizations: u64,
     pub(super) geometry: LocalizationGeometry,
     pub(super) density: f32,
-    pub(super) nena: NeNa,
+    pub(super) nena: Option<NeNa>,
     pub(super) frc: Frc,
+    pub(super) groups: Groups,
+    pub(super) suggested: ClusterSpec,
     pub(super) image: LocalizationImage,
 }
 
@@ -267,12 +271,20 @@ impl LocalizationReport {
         self.density
     }
 
-    pub fn nena(&self) -> &NeNa {
-        &self.nena
+    pub fn nena(&self) -> Option<&NeNa> {
+        self.nena.as_ref()
     }
 
     pub fn frc(&self) -> &Frc {
         &self.frc
+    }
+
+    pub fn groups(&self) -> &Groups {
+        &self.groups
+    }
+
+    pub fn suggested_clusters(&self) -> ClusterSpec {
+        self.suggested
     }
 
     pub fn image(&self) -> &LocalizationImage {

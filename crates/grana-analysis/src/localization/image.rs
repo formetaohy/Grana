@@ -1,26 +1,28 @@
 use super::LocalizationFrame;
 use super::grid::Grid;
+use super::group::Groups;
 use super::report::LocalizationGeometry;
 use super::tone::Tone;
 
-const BAND_CELLS: usize = 1 << 21;
+const SIDE: usize = 512;
 
 pub struct LocalizationRenderer<'a> {
-    frames: &'a [LocalizationFrame<'a>],
     geometry: LocalizationGeometry,
     tone: Tone,
+    groups: Groups,
+    tiles: Tiles,
     progress: &'a mut dyn FnMut(usize, usize) -> bool,
     band: usize,
-    band_rows: usize,
-    pending: Vec<u8>,
-    cursor: usize,
+    row: usize,
+    buffer: Vec<u8>,
 }
 
 impl<'a> LocalizationRenderer<'a> {
     pub fn new(
-        frames: &'a [LocalizationFrame<'a>],
+        frames: &[LocalizationFrame<'_>],
         geometry: LocalizationGeometry,
         density: f32,
+        groups: Groups,
         progress: &'a mut dyn FnMut(usize, usize) -> bool,
     ) -> Result<Self, String> {
         assert!(
@@ -33,19 +35,17 @@ impl<'a> LocalizationRenderer<'a> {
                 "the localization image would span {width}×{height} pixels; raise the pixel size"
             ));
         }
-        let width = geometry.size()[0] as usize;
-        let border = geometry.border() as usize;
-        let height = geometry.size()[1] as usize;
-        let band_rows = (BAND_CELLS / width).max(2 * border + 1).min(height);
+        let tiles = Tiles::build(frames, geometry, &groups);
+        let tone = Tone::new(density, geometry.pixel());
         Ok(Self {
-            frames,
             geometry,
-            tone: Tone::new(density, geometry.pixel()),
+            tone,
+            groups,
+            tiles,
             progress,
             band: 0,
-            band_rows,
-            pending: Vec::new(),
-            cursor: 0,
+            row: 0,
+            buffer: Vec::new(),
         })
     }
 
@@ -63,59 +63,178 @@ impl<'a> LocalizationRenderer<'a> {
             self.width() as usize * 4,
             "a rendered localization row holds four bytes per pixel"
         );
-        if self.cursor == self.pending.len() / row.len() {
+        if self.row * row.len() >= self.buffer.len() {
             self.render()?;
         }
-        let width = row.len();
-        let start = self.cursor * width;
-        row.copy_from_slice(&self.pending[start..start + width]);
-        self.cursor += 1;
+        let start = self.row * row.len();
+        row.copy_from_slice(&self.buffer[start..start + row.len()]);
+        self.row += 1;
         Ok(())
     }
 
     fn render(&mut self) -> Result<(), String> {
-        let size = self.geometry.size();
-        let width = size[0] as usize;
-        let height = size[1] as usize;
-        let pixel = self.geometry.pixel();
-        let border = self.geometry.border() as usize;
-        let start = self.band * self.band_rows;
-        let end = (start + self.band_rows).min(height);
-        let top = start as i64 - border as i64;
-        let mut raster = Grid::empty(
-            [size[0], (end - start + 2 * border) as u32],
-            pixel,
-            [
-                self.geometry.origin()[0],
-                (f64::from(self.geometry.origin()[1]) + top as f64 * f64::from(pixel)) as f32,
-            ],
-        );
-        for frame in self.frames {
-            for (index, spot) in frame.spots().iter().enumerate() {
-                let visible = frame.visible(index);
-                if !visible {
-                    continue;
-                }
-                let center = spot.center();
-                raster.add([center[0], center[1]], 1.0);
-            }
+        if self.band >= self.tiles.rows {
+            return Err("the localization image rendered past its rows".to_string());
         }
-        raster.blur(self.geometry.blur());
-        self.pending.clear();
-        self.pending.reserve((end - start) * width * 4);
-        for y in start..end {
-            let offset = (y - start + border) * width;
-            for value in &raster.values()[offset..offset + width] {
-                let [red, green, blue] = self.tone.pixel(self.tone.level(*value));
-                self.pending.extend_from_slice(&[red, green, blue, 255]);
-            }
+        let width = self.geometry.size()[0] as usize;
+        let height = self.geometry.size()[1] as usize;
+        let start = self.band * SIDE;
+        let rows = (height - start).min(SIDE);
+        let mut buffer = std::mem::take(&mut self.buffer);
+        buffer.clear();
+        buffer.resize(width * rows * 4, 0);
+        for column in 0..self.tiles.columns {
+            self.paint(column, start, rows, width, &mut buffer);
         }
+        self.buffer = buffer;
         self.band += 1;
-        self.cursor = 0;
-        let total = height.div_ceil(self.band_rows);
-        if !(self.progress)(self.band, total) {
+        self.row = 0;
+        if !(self.progress)(self.band, self.tiles.rows) {
             return Err("the localization image render was cancelled".to_string());
         }
         Ok(())
+    }
+
+    fn paint(&self, column: usize, start: usize, rows: usize, width: usize, buffer: &mut [u8]) {
+        let border = self.geometry.border() as usize;
+        let column_start = column * SIDE;
+        let mut grid = self.tiles.grid(column, start, rows, self.geometry);
+        let reach = border.div_ceil(SIDE) as i64;
+        for held in -reach..=reach {
+            let row = self.band as i64 + held;
+            if !(0..self.tiles.rows as i64).contains(&row) {
+                continue;
+            }
+            for across in -reach..=reach {
+                let column = column as i64 + across;
+                if !(0..self.tiles.columns as i64).contains(&column) {
+                    continue;
+                }
+                let tile = row as usize * self.tiles.columns + column as usize;
+                for index in self.tiles.starts[tile]..self.tiles.starts[tile + 1] {
+                    let tint = self
+                        .groups
+                        .chromatic()
+                        .then(|| self.groups.slot_tint(self.tiles.tints[index]));
+                    grid.add(self.tiles.centers[index], 1.0, tint);
+                }
+            }
+        }
+        grid.blur(self.geometry.blur());
+        let grid_width = grid.size()[0] as usize;
+        let painted = (width - column_start).min(SIDE);
+        for line in 0..rows {
+            let target = (line * width + column_start) * 4;
+            for across in 0..painted {
+                let index = (line + border) * grid_width + across + border;
+                let [red, green, blue] = self.tone.shade(grid.values()[index], grid.chroma(index));
+                let at = target + across * 4;
+                buffer[at..at + 4].copy_from_slice(&[red, green, blue, 255]);
+            }
+        }
+    }
+}
+
+struct Tiles {
+    columns: usize,
+    rows: usize,
+    chromatic: bool,
+    starts: Vec<usize>,
+    centers: Vec<[f32; 2]>,
+    tints: Vec<u8>,
+}
+
+impl Tiles {
+    fn build(
+        frames: &[LocalizationFrame<'_>],
+        geometry: LocalizationGeometry,
+        groups: &Groups,
+    ) -> Self {
+        let width = geometry.size()[0] as usize;
+        let height = geometry.size()[1] as usize;
+        let columns = width.div_ceil(SIDE);
+        let rows = height.div_ceil(SIDE);
+        let cells = columns * rows;
+        let chromatic = groups.chromatic();
+        let mut starts = vec![0usize; cells + 1];
+        for frame in frames {
+            for (index, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(index) {
+                    continue;
+                }
+                let center = spot.center();
+                let tile = Self::tile([center[0], center[1]], geometry, columns);
+                starts[tile + 1] += 1;
+            }
+        }
+        let mut held = 0usize;
+        for count in starts.iter_mut() {
+            held += *count;
+            *count = held;
+        }
+        let mut cursor = starts.clone();
+        let mut centers = vec![[0.0; 2]; held];
+        let mut tints = vec![0u8; held];
+        for frame in frames {
+            for (index, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(index) {
+                    continue;
+                }
+                let center = spot.center();
+                let tile = Self::tile([center[0], center[1]], geometry, columns);
+                let at = cursor[tile];
+                cursor[tile] += 1;
+                centers[at] = [center[0], center[1]];
+                tints[at] = if chromatic {
+                    groups.tint_slot(spot.group())
+                } else {
+                    0
+                };
+            }
+        }
+        Self {
+            columns,
+            rows,
+            chromatic,
+            starts,
+            centers,
+            tints,
+        }
+    }
+
+    fn tile(center: [f32; 2], geometry: LocalizationGeometry, columns: usize) -> usize {
+        let pixel = geometry.pixel();
+        let origin = geometry.origin();
+        let width = geometry.size()[0] as usize;
+        let height = geometry.size()[1] as usize;
+        let column = (((center[0] - origin[0]) / pixel) as usize).min(width - 1) / SIDE;
+        let row = (((center[1] - origin[1]) / pixel) as usize).min(height - 1) / SIDE;
+        row * columns + column
+    }
+
+    fn grid(
+        &self,
+        column: usize,
+        start: usize,
+        rows: usize,
+        geometry: LocalizationGeometry,
+    ) -> Grid {
+        let border = geometry.border() as usize;
+        let pixel = geometry.pixel();
+        let origin = geometry.origin();
+        let width = geometry.size()[0] as usize;
+        let size = [
+            ((width - column * SIDE).min(SIDE) + 2 * border) as u32,
+            (rows + 2 * border) as u32,
+        ];
+        let corner = [
+            origin[0] + (column * SIDE) as f32 * pixel - border as f32 * pixel,
+            origin[1] + start as f32 * pixel - border as f32 * pixel,
+        ];
+        if self.chromatic {
+            Grid::tinted(size, pixel, corner)
+        } else {
+            Grid::empty(size, pixel, corner)
+        }
     }
 }

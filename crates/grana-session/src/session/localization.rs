@@ -20,6 +20,7 @@ type Prepared = (
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
     f32,
+    bool,
 );
 
 type PreparedClusters = (
@@ -27,6 +28,7 @@ type PreparedClusters = (
     ClusterSpec,
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
+    bool,
 );
 
 type Window = (Vec<Option<Arc<ObjectFrame>>>, Vec<Option<Vec<bool>>>);
@@ -114,7 +116,7 @@ impl Session {
             return;
         }
         let prepared = self.prepare_localizations(set);
-        let (revision, spec, frames, visible, pixel) = match prepared {
+        let (revision, spec, frames, visible, pixel, grouped) = match prepared {
             Ok(prepared) => prepared,
             Err(detail) => {
                 self.message = Some(Message::error(detail));
@@ -125,7 +127,7 @@ impl Session {
         self.record_progress(Job::Localizations(set), 0, 0, 0);
         self.analysis.push(crate::localization_report(
             Job::Localizations(set),
-            LocalizationReportRequest::new(set, revision, frames, visible, spec, pixel),
+            LocalizationReportRequest::new(set, revision, frames, visible, spec, pixel, grouped),
         ));
     }
 
@@ -141,16 +143,20 @@ impl Session {
         let source = object
             .localization()
             .ok_or("the object set carries no localization table to render")?;
-        if scene.frame_count() < 2 {
-            return Err("the dataset holds one frame to estimate a precision".to_string());
-        }
         let spec = source.spec().fitted(scene.frame_count());
         let (frames, visible) = self.localization_window(set, spec)?;
         let pixel = source.pixel() * 0.001;
         if !(pixel.is_finite() && pixel > 0.0) {
             return Err("the localization table carries no camera pixel".to_string());
         }
-        Ok((object.revision(), spec, frames, visible, pixel))
+        Ok((
+            object.revision(),
+            spec,
+            frames,
+            visible,
+            pixel,
+            !source.clustered(),
+        ))
     }
 
     pub(super) fn localization_window(
@@ -200,7 +206,7 @@ impl Session {
             return;
         }
         let prepared = self.prepare_clusters(set);
-        let (revision, clusters, frames, visible) = match prepared {
+        let (revision, clusters, frames, visible, grouped) = match prepared {
             Ok(prepared) => prepared,
             Err(detail) => {
                 self.message = Some(Message::error(detail));
@@ -211,7 +217,7 @@ impl Session {
         self.record_progress(Job::Clusters(set), 0, 0, frames.len());
         self.analysis.push(crate::localization_cluster(
             Job::Clusters(set),
-            LocalizationClusterRequest::new(set, revision, frames, visible, clusters),
+            LocalizationClusterRequest::new(set, revision, frames, visible, clusters, grouped),
         ));
     }
 
@@ -227,9 +233,6 @@ impl Session {
         let source = object
             .localization()
             .ok_or("the object set carries no localization table to cluster")?;
-        if scene.frame_count() < 2 {
-            return Err("the dataset holds one frame to cluster".to_string());
-        }
         let frames = (0..scene.frame_count())
             .map(|time| object.frame_shared(time))
             .collect::<Vec<_>>();
@@ -246,7 +249,13 @@ impl Session {
                 })
             })
             .collect::<Vec<_>>();
-        Ok((object.revision(), source.clusters(), frames, visible))
+        Ok((
+            object.revision(),
+            source.clusters(),
+            frames,
+            visible,
+            !source.clustered(),
+        ))
     }
 
     pub(super) fn install_clusters(&mut self, set: ObjectSetId, clusters: &Clusters) {
@@ -319,8 +328,39 @@ impl Session {
             visible,
             geometry,
             report.density(),
+            report.groups().clone(),
             path,
         ));
+    }
+
+    pub(super) fn estimate_clusters(&mut self, set: ObjectSetId) {
+        let Some(report) = self.localization.report(set) else {
+            self.message = Some(Message::error(
+                "render a super-resolution image before estimating the cluster parameters",
+            ));
+            return;
+        };
+        let suggested = report.suggested_clusters();
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let Some(source) = object.localization() else {
+            return;
+        };
+        let clusters = source
+            .clusters()
+            .at_radius(suggested.radius())
+            .at_dark(suggested.dark());
+        if scene.set_localization_clusters(set, clusters) {
+            self.message = Some(Message::info(format!(
+                "estimated a cluster radius of {:.1} nm over {} dark frames",
+                clusters.radius() * 1000.0,
+                clusters.dark()
+            )));
+        }
     }
 
     pub(super) fn finish_superres(&mut self, outcome: Result<PathBuf, String>) {
@@ -344,6 +384,7 @@ impl Superres {
         visible: Vec<Option<Vec<bool>>>,
         geometry: LocalizationGeometry,
         density: f32,
+        groups: grana_analysis::localization::Groups,
         path: PathBuf,
     ) -> Self {
         let task = ExportProgress::spawn(grana_exec::Role::Write, move |cancel, progress| {
@@ -362,7 +403,8 @@ impl Superres {
                 progress(done, total);
                 !cancel.load(Ordering::Relaxed)
             };
-            let mut renderer = LocalizationRenderer::new(&held, geometry, density, &mut report)?;
+            let mut renderer =
+                LocalizationRenderer::new(&held, geometry, density, groups, &mut report)?;
             grana_raster::write_stream(&path, geometry.size(), &mut |_, row| renderer.row(row))
                 .map_err(|error| error.to_string())?;
             Ok(path)

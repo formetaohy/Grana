@@ -389,6 +389,7 @@ pub enum Command {
         clusters: grana_object::ClusterSpec,
     },
     ClusterLocalizations(ObjectSetId),
+    EstimateLocalizationClusters(ObjectSetId),
     CancelClusters(ObjectSetId),
     CancelLocalizations(ObjectSetId),
     ClearLocalizations(ObjectSetId),
@@ -839,7 +840,8 @@ impl Command {
             Self::SetTrackParams { set, .. } => Edit::targeted(Action::TrackParameters, set.raw()),
             Self::SetLocalizationSpec { set, .. }
             | Self::SetLocalizationProjected { set, .. }
-            | Self::SetLocalizationClusters { set, .. } => {
+            | Self::SetLocalizationClusters { set, .. }
+            | Self::EstimateLocalizationClusters(set) => {
                 Edit::targeted(Action::Localization, set.raw())
             }
             Self::ClusterLocalizations(set) => Edit::targeted(Action::Cluster, set.raw()),

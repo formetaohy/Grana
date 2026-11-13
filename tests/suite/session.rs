@@ -2653,7 +2653,10 @@ fn analyzes_imported_localizations() {
         "the report paints a bitmap"
     );
     assert_eq!(report.localizations(), 600);
-    let measured = report.nena().precision();
+    let measured = report
+        .nena()
+        .expect("two frames estimate a precision")
+        .precision();
     assert!(
         (measured - 20.0).abs() < 8.0,
         "the precision measures {measured} nm against 20 nm"

@@ -12,12 +12,13 @@ pub(super) fn measure(
     frames: &[LocalizationFrame<'_>],
     reach: f32,
     sigma: f32,
+    grouped: bool,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<NeNa>, String> {
     if frames.len() < 2 {
         return Err("the localizations span one frame to estimate a precision".to_string());
     }
-    let Some(counts) = histogram(frames, reach, report)? else {
+    let Some(counts) = histogram(frames, reach, grouped, report)? else {
         return Ok(None);
     };
     let total: f64 = counts.iter().sum();
@@ -79,6 +80,7 @@ pub(super) fn measure(
 fn histogram(
     frames: &[LocalizationFrame<'_>],
     reach: f32,
+    grouped: bool,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<Vec<f64>>, String> {
     assert!(
@@ -87,15 +89,15 @@ fn histogram(
     );
     let pairs = frames.len() - 1;
     let mut counts = vec![0.0f64; BINS];
-    let mut next = Lattice::new(frames[1].centers(), reach);
+    let mut next = Lattice::new(frames[1].points(grouped), reach);
     for pair in 0..pairs {
         if !report(pair, pairs) {
             return Ok(None);
         }
-        let source = frames[pair].centers();
+        let source = frames[pair].points(grouped);
         accumulate(&source, &next, reach, &mut counts);
         if pair + 2 < frames.len() {
-            next = Lattice::new(frames[pair + 2].centers(), reach);
+            next = Lattice::new(frames[pair + 2].points(grouped), reach);
         }
         if counts.iter().any(|count| !count.is_finite()) {
             return Err("the next-frame neighbour histogram overflows".to_string());
@@ -105,12 +107,15 @@ fn histogram(
     Ok(Some(counts))
 }
 
-fn accumulate(source: &[[f32; 2]], target: &Lattice, reach: f32, counts: &mut [f64]) {
+fn accumulate(source: &[super::Point], target: &Lattice, reach: f32, counts: &mut [f64]) {
     let width = f64::from(reach) / BINS as f64;
     for point in source {
         target.visit_near(*point, reach, |other| {
-            let x = f64::from(point[0]) - f64::from(other[0]);
-            let y = f64::from(point[1]) - f64::from(other[1]);
+            if other.group != point.group {
+                return;
+            }
+            let x = f64::from(point.center[0]) - f64::from(other.center[0]);
+            let y = f64::from(point.center[1]) - f64::from(other.center[1]);
             let distance = (x * x + y * y).sqrt();
             if distance < f64::from(reach) {
                 let bin = (distance / width) as usize;
@@ -124,12 +129,12 @@ struct Lattice {
     low: [f32; 2],
     cell: f32,
     dims: [usize; 2],
-    points: Vec<[f32; 2]>,
+    points: Vec<super::Point>,
     cells: Vec<Vec<u32>>,
 }
 
 impl Lattice {
-    fn new(points: Vec<[f32; 2]>, cell: f32) -> Self {
+    fn new(points: Vec<super::Point>, cell: f32) -> Self {
         assert!(
             cell.is_finite() && cell > 0.0,
             "a neighbour lattice spans a positive cell"
@@ -146,7 +151,7 @@ impl Lattice {
         let mut low = [f32::INFINITY; 2];
         let mut high = [f32::NEG_INFINITY; 2];
         for point in &points {
-            for (axis, value) in point.iter().enumerate() {
+            for (axis, value) in point.center.iter().enumerate() {
                 low[axis] = low[axis].min(*value);
                 high[axis] = high[axis].max(*value);
             }
@@ -154,8 +159,9 @@ impl Lattice {
         let dims = [0, 1].map(|axis| ((high[axis] - low[axis]) / cell).ceil() as usize + 1);
         let mut cells = vec![Vec::new(); dims[0] * dims[1]];
         for (index, point) in points.iter().enumerate() {
-            let coord = [0, 1]
-                .map(|axis| (((point[axis] - low[axis]) / cell) as usize).min(dims[axis] - 1));
+            let coord = [0, 1].map(|axis| {
+                (((point.center[axis] - low[axis]) / cell) as usize).min(dims[axis] - 1)
+            });
             cells[coord[0] + dims[0] * coord[1]].push(index as u32);
         }
         Self {
@@ -167,9 +173,9 @@ impl Lattice {
         }
     }
 
-    fn visit_near(&self, point: [f32; 2], reach: f32, mut visit: impl FnMut([f32; 2])) {
+    fn visit_near(&self, point: super::Point, reach: f32, mut visit: impl FnMut(&super::Point)) {
         let center = [0, 1].map(|axis| {
-            let probe = (point[axis] - self.low[axis]) / self.cell;
+            let probe = (point.center[axis] - self.low[axis]) / self.cell;
             if probe.is_finite() {
                 (probe.floor() as i64).clamp(0, self.dims[axis] as i64 - 1)
             } else {
@@ -186,9 +192,9 @@ impl Lattice {
                 }
                 let cell = &self.cells[column as usize + self.dims[0] * row as usize];
                 for index in cell {
-                    let other = self.points[*index as usize];
-                    let x = other[0] - point[0];
-                    let y = other[1] - point[1];
+                    let other = &self.points[*index as usize];
+                    let x = other.center[0] - point.center[0];
+                    let y = other.center[1] - point.center[1];
                     if x * x + y * y <= reach * reach {
                         visit(other);
                     }

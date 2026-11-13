@@ -14,6 +14,7 @@ pub struct LocalizationReportRequest {
     visible: Vec<Option<Vec<bool>>>,
     spec: LocalizationSpec,
     pixel: f32,
+    grouped: bool,
 }
 
 impl LocalizationReportRequest {
@@ -24,6 +25,7 @@ impl LocalizationReportRequest {
         visible: Vec<Option<Vec<bool>>>,
         spec: LocalizationSpec,
         pixel: f32,
+        grouped: bool,
     ) -> Self {
         assert!(
             !frames.is_empty(),
@@ -45,6 +47,7 @@ impl LocalizationReportRequest {
             visible,
             spec,
             pixel,
+            grouped,
         }
     }
 }
@@ -61,6 +64,7 @@ pub fn localization_report(
         visible,
         spec,
         pixel,
+        grouped,
     } = request;
     sink(Event::Progress {
         time: 0,
@@ -85,8 +89,13 @@ pub fn localization_report(
         });
         !cancel.load(Ordering::Relaxed)
     };
-    let Some(found) =
-        grana_analysis::localization::localization_report(&held, spec, pixel, &mut report)?
+    let Some(found) = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        pixel,
+        grouped,
+        &mut report,
+    )?
     else {
         sink(Event::Done);
         return Ok(());
