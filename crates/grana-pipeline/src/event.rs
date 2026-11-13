@@ -20,6 +20,7 @@ pub enum Event {
         width: u32,
         height: u32,
         volume: bool,
+        photons: bool,
         drift: Drift,
     },
     LocalizationReport {

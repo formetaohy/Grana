@@ -99,6 +99,7 @@ pub(super) fn read(
         width,
         height,
         columns.z.is_some(),
+        columns.photons.is_some(),
     )))
 }
 

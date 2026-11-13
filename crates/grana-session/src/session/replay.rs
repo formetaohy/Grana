@@ -168,9 +168,24 @@ impl Session {
                 }
                 Step::Import { set } => self.start_import(set),
                 Step::Localize { set, molecules } => {
+                    let spec = molecules.localization();
+                    let supported = self
+                        .scene
+                        .as_ref()
+                        .and_then(|scene| scene.objects.get(set))
+                        .and_then(|object| object.localization())
+                        .is_some_and(|source| source.photons());
+                    if spec.filter().photons() > 0.0 && !supported {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(
+                            "the localization table carries no photon count to filter",
+                        ));
+                        return;
+                    }
                     if let Some(scene) = self.scene.as_mut() {
-                        scene.set_localization_spec(set, molecules.localization());
+                        scene.set_localization_spec(set, spec);
                         scene.set_localization_clusters(set, molecules.clusters());
+                        scene.set_localization_group_colored(set, molecules.group_colored);
                         scene.set_localization_projected(set, molecules.projected);
                     }
                     if molecules.clustered {

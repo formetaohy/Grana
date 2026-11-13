@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use grana_object::{ClusterSpec, LocalizationSpec};
+use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
+use grana_volume::Region;
 
 use super::group::Groups;
 
@@ -65,6 +66,7 @@ pub struct Frc {
     curve: Vec<f32>,
     smooth: Vec<f32>,
     resolution: Option<f32>,
+    scoped: bool,
 }
 
 impl Frc {
@@ -75,6 +77,7 @@ impl Frc {
         curve: Vec<f32>,
         smooth: Vec<f32>,
         resolution: Option<f32>,
+        scoped: bool,
     ) -> Self {
         assert_eq!(
             frequencies.len(),
@@ -97,6 +100,7 @@ impl Frc {
             curve,
             smooth,
             resolution,
+            scoped,
         }
     }
 
@@ -114,6 +118,10 @@ impl Frc {
 
     pub fn resolution(&self) -> Option<f32> {
         self.resolution
+    }
+
+    pub fn scoped(&self) -> bool {
+        self.scoped
     }
 }
 
@@ -229,6 +237,8 @@ impl LocalizationGeometry {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalizationReport {
     pub(super) spec: LocalizationSpec,
+    pub(super) filter: LocalizationFilter,
+    pub(super) region: Option<Region>,
     pub(super) pixel: f32,
     pub(super) origin: [f32; 2],
     pub(super) extent: [f32; 2],
@@ -245,6 +255,14 @@ pub struct LocalizationReport {
 impl LocalizationReport {
     pub fn spec(&self) -> LocalizationSpec {
         self.spec
+    }
+
+    pub fn filter(&self) -> LocalizationFilter {
+        self.filter
+    }
+
+    pub fn region(&self) -> Option<Region> {
+        self.region
     }
 
     pub fn pixel(&self) -> f32 {

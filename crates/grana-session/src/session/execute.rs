@@ -696,6 +696,11 @@ impl Session {
                     scene.set_localization_spec(set, spec);
                 }
             }
+            Command::SetLocalizationGroupColored { set, group_colored } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_localization_group_colored(set, group_colored);
+                }
+            }
             Command::SetLocalizationProjected { set, projected } => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_localization_projected(set, projected);

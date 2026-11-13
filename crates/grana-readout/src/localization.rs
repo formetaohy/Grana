@@ -65,6 +65,7 @@ pub struct Table {
     width: u32,
     height: u32,
     volume: bool,
+    photons: bool,
 }
 
 impl Table {
@@ -74,6 +75,7 @@ impl Table {
         width: u32,
         height: u32,
         volume: bool,
+        photons: bool,
     ) -> Self {
         assert!(
             pixel.is_finite() && pixel > 0.0,
@@ -89,6 +91,7 @@ impl Table {
             width,
             height,
             volume,
+            photons,
         }
     }
 
@@ -110,6 +113,10 @@ impl Table {
 
     pub fn volume(&self) -> bool {
         self.volume
+    }
+
+    pub fn photons(&self) -> bool {
+        self.photons
     }
 }
 

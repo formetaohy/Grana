@@ -30,6 +30,7 @@ mod localization;
 mod localization_cluster;
 mod localization_drift;
 mod localization_report;
+mod localization_window;
 mod mask;
 mod segment;
 
@@ -45,6 +46,7 @@ pub use self::localization::{LocalizationRequest, localization};
 pub use self::localization_cluster::{LocalizationClusterRequest, localization_cluster};
 pub use self::localization_drift::{LocalizationDriftRequest, localization_drift};
 pub use self::localization_report::{LocalizationReportRequest, localization_report};
+pub use self::localization_window::LocalizationWindow;
 pub use self::mask::{MaskRequest, mask};
 pub use self::segment::{SegmentRequest, segment};
 

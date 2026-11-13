@@ -1028,12 +1028,16 @@ impl Decode for LocalizationSource {
         let width = reader.u32()?;
         let height = reader.u32()?;
         let volume = reader.bool()?;
+        let photons = reader.bool()?;
+        let group_colored = reader.bool()?;
         if !pixel.is_finite() || pixel <= 0.0 || width == 0 || height == 0 {
             return Err(FAULT_VALUE);
         }
         let frames = [reader.u32()?, reader.u32()?];
         let spec_pixel = finite(reader.f32()?)?;
         let blur = reader.f32()?;
+        let filter_photons = finite(reader.f32()?)?;
+        let filter_precision = finite(reader.f32()?)?;
         let radius = finite(reader.f32()?)?;
         let dark = reader.u32()?;
         let minimum = reader.u32()?;
@@ -1050,16 +1054,28 @@ impl Decode for LocalizationSource {
         {
             return Err(FAULT_VALUE);
         }
+        if !(0.0..=grana_object::LocalizationFilter::PHOTONS_MAXIMUM).contains(&filter_photons)
+            || !(0.0..=grana_object::LocalizationFilter::PRECISION_MAXIMUM)
+                .contains(&filter_precision)
+            || filter_photons > 0.0 && !photons
+        {
+            return Err(FAULT_VALUE);
+        }
+        let spec = grana_object::LocalizationSpec::new(frames, spec_pixel, blur).at_filter(
+            grana_object::LocalizationFilter::new(filter_photons, filter_precision),
+        );
         let source = Self::new(
             pixel,
             width,
             height,
             volume,
-            grana_object::LocalizationSpec::new(frames, spec_pixel, blur),
+            photons,
+            spec,
             Drift::decode(reader)?,
         );
         Ok(source
             .with_clusters(grana_object::ClusterSpec::new(radius, dark, minimum))
+            .with_group_colored(group_colored)
             .with_projected(projected)
             .with_clustered(clustered))
     }

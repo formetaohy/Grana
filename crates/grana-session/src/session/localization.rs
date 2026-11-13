@@ -4,12 +4,14 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use grana_analysis::localization::{
-    Clusters, LocalizationGeometry, LocalizationRenderer, LocalizationReport, LocalizationSpec,
+    Clusters, LocalizationFilter, LocalizationGeometry, LocalizationRenderer, LocalizationReport,
+    LocalizationSpec,
 };
 use grana_object::ClusterSpec;
 use grana_pipeline::run::{LocalizationClusterRequest, LocalizationReportRequest};
 use grana_raster::Bitmap;
 use grana_scene::{Job, ObjectSetId, Revision, Scene};
+use grana_volume::Region;
 
 use super::*;
 use crate::task::Progress as ExportProgress;
@@ -17,6 +19,7 @@ use crate::task::Progress as ExportProgress;
 type Prepared = (
     Revision,
     LocalizationSpec,
+    Option<Region>,
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
     f32,
@@ -26,6 +29,7 @@ type Prepared = (
 type PreparedClusters = (
     Revision,
     ClusterSpec,
+    LocalizationFilter,
     Vec<Option<Arc<ObjectFrame>>>,
     Vec<Option<Vec<bool>>>,
     bool,
@@ -116,7 +120,7 @@ impl Session {
             return;
         }
         let prepared = self.prepare_localizations(set);
-        let (revision, spec, frames, visible, pixel, grouped) = match prepared {
+        let (revision, spec, region, frames, visible, pixel, grouped) = match prepared {
             Ok(prepared) => prepared,
             Err(detail) => {
                 self.message = Some(Message::error(detail));
@@ -127,7 +131,15 @@ impl Session {
         self.record_progress(Job::Localizations(set), 0, 0, 0);
         self.analysis.push(crate::localization_report(
             Job::Localizations(set),
-            LocalizationReportRequest::new(set, revision, frames, visible, spec, pixel, grouped),
+            LocalizationReportRequest::new(
+                set,
+                revision,
+                grana_pipeline::run::LocalizationWindow::new(frames, visible),
+                spec,
+                region,
+                pixel,
+                grouped,
+            ),
         ));
     }
 
@@ -152,6 +164,7 @@ impl Session {
         Ok((
             object.revision(),
             spec,
+            scene.region_scope(),
             frames,
             visible,
             pixel,
@@ -206,7 +219,7 @@ impl Session {
             return;
         }
         let prepared = self.prepare_clusters(set);
-        let (revision, clusters, frames, visible, grouped) = match prepared {
+        let (revision, clusters, filter, frames, visible, grouped) = match prepared {
             Ok(prepared) => prepared,
             Err(detail) => {
                 self.message = Some(Message::error(detail));
@@ -217,7 +230,14 @@ impl Session {
         self.record_progress(Job::Clusters(set), 0, 0, frames.len());
         self.analysis.push(crate::localization_cluster(
             Job::Clusters(set),
-            LocalizationClusterRequest::new(set, revision, frames, visible, clusters, grouped),
+            LocalizationClusterRequest::new(
+                set,
+                revision,
+                grana_pipeline::run::LocalizationWindow::new(frames, visible),
+                clusters,
+                filter,
+                grouped,
+            ),
         ));
     }
 
@@ -252,6 +272,7 @@ impl Session {
         Ok((
             object.revision(),
             source.clusters(),
+            source.spec().filter(),
             frames,
             visible,
             !source.clustered(),
@@ -328,6 +349,7 @@ impl Session {
             visible,
             geometry,
             report.density(),
+            report.filter(),
             report.groups().clone(),
             path,
         ));
@@ -384,6 +406,7 @@ impl Superres {
         visible: Vec<Option<Vec<bool>>>,
         geometry: LocalizationGeometry,
         density: f32,
+        filter: LocalizationFilter,
         groups: grana_analysis::localization::Groups,
         path: PathBuf,
     ) -> Self {
@@ -396,7 +419,11 @@ impl Superres {
                         .as_deref()
                         .and_then(ObjectFrame::spots)
                         .map_or(&[][..], grana_object::SpotSet::spots);
-                    grana_analysis::localization::LocalizationFrame::new(spots, mask.as_deref())
+                    grana_analysis::localization::LocalizationFrame::new(
+                        spots,
+                        mask.as_deref(),
+                        filter,
+                    )
                 })
                 .collect::<Vec<_>>();
             let mut report = |done: usize, total: usize| {

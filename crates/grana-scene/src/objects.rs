@@ -753,6 +753,11 @@ impl Objects {
             .is_some_and(|set| set.set_localization_spec(spec))
     }
 
+    pub fn set_localization_group_colored(&mut self, id: ObjectSetId, group_colored: bool) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_localization_group_colored(group_colored))
+    }
+
     pub fn set_localization_projected(&mut self, id: ObjectSetId, projected: bool) -> bool {
         self.get_mut(id)
             .is_some_and(|set| set.set_localization_projected(projected))

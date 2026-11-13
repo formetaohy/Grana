@@ -53,6 +53,7 @@ impl Choice {
 pub(crate) struct Appearance {
     pub(crate) color: [f32; 3],
     pub(crate) visible: bool,
+    pub(crate) categorical: bool,
 }
 
 #[derive(Default)]
@@ -167,13 +168,13 @@ pub(crate) fn detections<F>(
     style: F,
 ) -> Detections
 where
-    F: Fn(u32, usize) -> Appearance,
+    F: Fn(u32, usize, &Spot) -> Appearance,
 {
     if frames.len() == 1 {
         let frame = frames[0];
         return match choice {
-            Choice::Full => raw(frame.spots, opacity, &|index: usize| {
-                style(frame.time, index)
+            Choice::Full => raw(frame.spots, opacity, &|index: usize, spot| {
+                style(frame.time, index, spot)
             }),
             Choice::Level(level) => binned(frames, level, opacity, &style, true),
         };
@@ -215,7 +216,7 @@ where
 
 fn raw<F>(spots: &SpotSet, opacity: f32, style: &F) -> Detections
 where
-    F: Fn(usize) -> Appearance,
+    F: Fn(usize, &Spot) -> Appearance,
 {
     let entries = spots.spots();
     let mut palette = Palette::default();
@@ -225,7 +226,7 @@ where
         members: Vec::with_capacity(entries.len()),
     };
     for (index, spot) in entries.iter().enumerate() {
-        let look = style(index);
+        let look = style(index, spot);
         detections.push(
             SplatGeometry::gaussian(spot.center(), spot.sigma()),
             SplatStyle::new(
@@ -240,7 +241,7 @@ where
 
 fn binned<F>(frames: &[Frame<'_>], level: u8, opacity: f32, style: &F, pickable: bool) -> Detections
 where
-    F: Fn(u32, usize) -> Appearance,
+    F: Fn(u32, usize, &Spot) -> Appearance,
 {
     let Some(ladder) = Ladder::over(frames) else {
         return Detections::default();
@@ -249,12 +250,12 @@ where
     let mut palette = Palette::default();
     for frame in frames {
         for (index, spot) in frame.spots.spots().iter().enumerate() {
-            let look = style(frame.time, index);
+            let look = style(frame.time, index, spot);
             if !look.visible {
                 continue;
             }
             let member = pickable.then_some(index);
-            grid.add(member, spot, palette.radiance(look.color));
+            grid.add(member, spot, palette.radiance(look.color), look.categorical);
         }
     }
     let count = grid.len();
@@ -292,8 +293,10 @@ struct Cell {
     square: [f64; 3],
     sigma: [f64; 3],
     radiance: [f64; 3],
+    nearest: [f64; 3],
     member: u32,
     reach: f64,
+    categorical: bool,
 }
 
 impl Cell {
@@ -303,8 +306,10 @@ impl Cell {
         square: [0.0; 3],
         sigma: [0.0; 3],
         radiance: [0.0; 3],
+        nearest: [0.0; 3],
         member: EMPTY,
         reach: f64::INFINITY,
+        categorical: false,
     };
 }
 
@@ -333,12 +338,12 @@ impl Grid {
         point.map(|value| (value / self.cell).floor() as i64)
     }
 
-    fn add(&mut self, member: Option<usize>, spot: &Spot, radiance: [f32; 3]) {
+    fn add(&mut self, member: Option<usize>, spot: &Spot, radiance: [f32; 3], categorical: bool) {
         let center = spot.center();
         let at = self.slot(center);
         let sigma = spot.sigma();
         let cell = self.cells.entry(at).or_insert(Cell::EMPTY);
-        if let Some(member) = member {
+        if member.is_some() || categorical {
             let reach = [0, 1, 2]
                 .map(|axis| {
                     let offset =
@@ -349,7 +354,11 @@ impl Grid {
                 .sum::<f64>();
             if reach < cell.reach {
                 cell.reach = reach;
-                cell.member = member as u32;
+                if let Some(member) = member {
+                    cell.member = member as u32;
+                }
+                cell.nearest = radiance.map(f64::from);
+                cell.categorical = categorical;
             }
         }
         cell.count += 1;
@@ -371,7 +380,11 @@ impl Grid {
                 let variance = (cell.square[axis] / count - mean * mean).max(0.0);
                 ((variance + cell.sigma[axis] / count).sqrt() as f32).max(f32::MIN_POSITIVE)
             });
-            let radiance = cell.radiance.map(|sum| (sum / count) as f32);
+            let radiance = if cell.categorical {
+                cell.nearest.map(|value| value as f32)
+            } else {
+                cell.radiance.map(|sum| (sum / count) as f32)
+            };
             let alpha = (1.0 - (1.0 - opacity).powi(cell.count as i32)).clamp(0.0, 1.0);
             detections.push(
                 SplatGeometry::gaussian(center, sigma),

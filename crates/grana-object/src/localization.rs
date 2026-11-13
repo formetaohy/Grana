@@ -1,8 +1,67 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalizationFilter {
+    photons: f32,
+    precision: f32,
+}
+
+impl LocalizationFilter {
+    pub const NONE: Self = Self {
+        photons: 0.0,
+        precision: 0.0,
+    };
+    pub const PHOTONS_MAXIMUM: f32 = 1.0e7;
+    pub const PRECISION_MAXIMUM: f32 = 1.0e4;
+
+    pub fn new(photons: f32, precision: f32) -> Self {
+        assert!(
+            photons.is_finite() && (0.0..=Self::PHOTONS_MAXIMUM).contains(&photons),
+            "a localization filter keeps a bounded photon count"
+        );
+        assert!(
+            precision.is_finite() && (0.0..=Self::PRECISION_MAXIMUM).contains(&precision),
+            "a localization filter keeps a bounded precision"
+        );
+        Self { photons, precision }
+    }
+
+    pub fn photons(&self) -> f32 {
+        self.photons
+    }
+
+    pub fn precision(&self) -> f32 {
+        self.precision
+    }
+
+    pub fn active(&self) -> bool {
+        self.photons > 0.0 || self.precision > 0.0
+    }
+
+    pub fn keeps(&self, quality: f32, sigma: [f32; 3]) -> bool {
+        (self.photons <= 0.0 || quality >= self.photons)
+            && (self.precision <= 0.0 || 0.5 * (sigma[0] + sigma[1]) * 1000.0 <= self.precision)
+    }
+
+    pub fn at_photons(&self, photons: f32) -> Self {
+        Self::new(photons, self.precision)
+    }
+
+    pub fn at_precision(&self, precision: f32) -> Self {
+        Self::new(self.photons, precision)
+    }
+}
+
+impl Default for LocalizationFilter {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalizationSpec {
     frames: [u32; 2],
     pixel: f32,
     blur: f32,
+    filter: LocalizationFilter,
 }
 
 impl LocalizationSpec {
@@ -29,6 +88,7 @@ impl LocalizationSpec {
             frames,
             pixel,
             blur,
+            filter: LocalizationFilter::NONE,
         }
     }
 
@@ -53,24 +113,35 @@ impl LocalizationSpec {
         self.blur
     }
 
+    pub fn filter(&self) -> LocalizationFilter {
+        self.filter
+    }
+
     pub fn fitted(&self, frames: u32) -> Self {
         assert!(frames > 0, "a dataset holds at least one frame");
         let last = frames - 1;
         let start = self.frames[0].min(last);
         let end = self.frames[1].clamp(start, last);
-        Self::new([start, end], self.pixel, self.blur)
+        Self {
+            frames: [start, end],
+            ..*self
+        }
     }
 
     pub fn placed(&self, frames: [u32; 2]) -> Self {
-        Self::new(frames, self.pixel, self.blur)
+        Self { frames, ..*self }
     }
 
     pub fn at_pixel(&self, pixel: f32) -> Self {
-        Self::new(self.frames, pixel, self.blur)
+        Self { pixel, ..*self }
     }
 
     pub fn at_blur(&self, blur: f32) -> Self {
-        Self::new(self.frames, self.pixel, blur)
+        Self { blur, ..*self }
+    }
+
+    pub fn at_filter(&self, filter: LocalizationFilter) -> Self {
+        Self { filter, ..*self }
     }
 }
 

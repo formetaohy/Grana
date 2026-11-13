@@ -752,8 +752,9 @@ impl Run<'_, '_> {
                     width,
                     height,
                     volume,
+                    photons,
                     drift,
-                } => localization = Some((pixel, width, height, volume, drift)),
+                } => localization = Some((pixel, width, height, volume, photons, drift)),
                 RunEvent::Tracks(set) => tracks = Some(set),
                 _ => {}
             },
@@ -774,12 +775,14 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
             }
         }
-        let (pixel, width, height, volume, drift) = localization
+        let (pixel, width, height, volume, photons, drift) = localization
             .ok_or_else(|| format!("the localization table of {name} holds no localization"))?;
         let spec = grana_object::LocalizationSpec::cover(self.scene.frame_count());
         self.scene.set_localization(
             id,
-            grana_scene::LocalizationSource::new(pixel, width, height, volume, spec, drift),
+            grana_scene::LocalizationSource::new(
+                pixel, width, height, volume, photons, spec, drift,
+            ),
         );
         if let Some(tracks) = tracks {
             self.scene.install_tracks(id, tracks);
@@ -792,10 +795,27 @@ impl Run<'_, '_> {
         id: ObjectSetId,
         molecules: &grana_protocol::MoleculesSpec,
     ) -> Result<(), String> {
+        let filter = molecules.filter();
+        if filter.photons() > 0.0 {
+            let supported = self
+                .scene
+                .objects
+                .get(id)
+                .and_then(|object| object.localization())
+                .is_some_and(|source| source.photons());
+            if !supported {
+                return Err(format!(
+                    "the localization table of {} carries no photon count to filter",
+                    self.name(id)
+                ));
+            }
+        }
         self.scene
             .set_localization_spec(id, molecules.localization());
         self.scene
             .set_localization_clusters(id, molecules.clusters());
+        self.scene
+            .set_localization_group_colored(id, molecules.group_colored);
         self.scene
             .set_localization_projected(id, molecules.projected);
         if molecules.clustered {
@@ -847,7 +867,11 @@ impl Run<'_, '_> {
                     .as_deref()
                     .and_then(ObjectFrame::spots)
                     .map_or(&[][..], grana_object::SpotSet::spots);
-                grana_analysis::localization::LocalizationFrame::new(spots, mask.as_deref())
+                grana_analysis::localization::LocalizationFrame::new(
+                    spots,
+                    mask.as_deref(),
+                    spec.filter(),
+                )
             })
             .collect::<Vec<_>>();
         let grouped = !source.clustered();
@@ -860,6 +884,7 @@ impl Run<'_, '_> {
             spec,
             pixel,
             grouped,
+            self.scene.region_scope(),
             &mut |_, _| true,
         )?
         else {
@@ -897,6 +922,11 @@ impl Run<'_, '_> {
         let grouped = object
             .localization()
             .is_none_or(|source| !source.clustered());
+        let filter = object
+            .localization()
+            .map_or(grana_object::LocalizationFilter::NONE, |source| {
+                source.spec().filter()
+            });
         let revision = object.revision();
         let frames = (0..self.scene.frame_count())
             .map(|time| object.frame_shared(time))
@@ -935,7 +965,12 @@ impl Run<'_, '_> {
         };
         crate::run::localization_cluster(
             crate::run::LocalizationClusterRequest::new(
-                id, revision, frames, visible, spec, grouped,
+                id,
+                revision,
+                crate::run::LocalizationWindow::new(frames, visible),
+                spec,
+                filter,
+                grouped,
             ),
             task.cancel,
             &mut sink,

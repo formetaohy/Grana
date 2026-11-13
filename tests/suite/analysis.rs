@@ -2,7 +2,7 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use grana_analysis::localization::{LocalizationFrame, LocalizationSpec};
+use grana_analysis::localization::{LocalizationFilter, LocalizationFrame, LocalizationSpec};
 use grana_analysis::{
     CellSeed, ColocScan, ColocScanConfig, FilamentScan, GrowField, Growth, Reference, Sources,
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
@@ -670,6 +670,7 @@ fn realigns_localizations_when_drift_changes() {
             16,
             16,
             false,
+            true,
             grana_object::LocalizationSpec::cover(2),
             Drift::default(),
         ),
@@ -1927,7 +1928,7 @@ fn renders_and_measures_localizations() {
     let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let held = slices
         .iter()
-        .map(|spots| LocalizationFrame::new(spots, None))
+        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
         .collect::<Vec<_>>();
     let spec = LocalizationSpec::new([0, 7], 10.0, 20.0);
     let mut reached = 0usize;
@@ -1936,6 +1937,7 @@ fn renders_and_measures_localizations() {
         spec,
         0.1,
         true,
+        None,
         &mut |done, _| {
             reached = done.max(reached);
             true
@@ -2006,13 +2008,19 @@ fn renders_localizations_past_the_preview_resolution() {
     let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let held = slices
         .iter()
-        .map(|spots| LocalizationFrame::new(spots, None))
+        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
         .collect::<Vec<_>>();
     let spec = LocalizationSpec::new([0, 3], 3.0, 20.0);
-    let report =
-        grana_analysis::localization::localization_report(&held, spec, 0.1, true, &mut |_, _| true)
-            .expect("the report renders")
-            .expect("the report completes");
+    let report = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the report renders")
+    .expect("the report completes");
     let geometry = report.geometry();
     assert!(
         geometry.size()[0] > 2048 && geometry.size()[1] > 2048,
@@ -2062,12 +2070,22 @@ fn renders_single_frame_localizations_grouped() {
             )
         })
         .collect::<Vec<_>>();
-    let held = [LocalizationFrame::new(&frame, None)];
+    let held = [LocalizationFrame::new(
+        &frame,
+        None,
+        LocalizationFilter::NONE,
+    )];
     let spec = LocalizationSpec::new([0, 0], 10.0, 20.0);
-    let report =
-        grana_analysis::localization::localization_report(&held, spec, 0.1, true, &mut |_, _| true)
-            .expect("the single frame renders")
-            .expect("the report completes");
+    let report = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the single frame renders")
+    .expect("the report completes");
     assert!(
         report.nena().is_none(),
         "one frame measures no localization precision"
@@ -2109,7 +2127,7 @@ fn clusters_localizations_into_molecules() {
     let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let held = slices
         .iter()
-        .map(|spots| LocalizationFrame::new(spots, None))
+        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
         .collect::<Vec<_>>();
     let spec = grana_object::ClusterSpec::new(0.05, 2, 2);
     let clusters = grana_analysis::localization::cluster(&held, spec, true, &mut |_, _| true)
@@ -2136,6 +2154,76 @@ fn clusters_localizations_into_molecules() {
 }
 
 #[test]
+fn filters_and_scopes_localization_reports() {
+    let frame = vec![
+        Spot::grouped([0.5, 0.5, 0.0], [0.010; 3], 500.0, Some(1)),
+        Spot::grouped([1.5, 1.5, 0.0], [0.015; 3], 5000.0, Some(2)),
+        Spot::grouped([2.0, 2.0, 0.0], [0.010; 3], 5000.0, Some(2)),
+    ];
+    let filter = LocalizationFilter::new(1000.0, 20.0);
+    let held = [LocalizationFrame::new(&frame, None, filter)];
+    let spec = LocalizationSpec::new([0, 0], 10.0, 0.0);
+    let region = Region::axis_aligned(
+        glam::Vec3::new(1.75, 1.75, -0.5),
+        glam::Vec3::new(2.5, 2.5, 0.5),
+    );
+    let report = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        Some(region),
+        &mut |_, _| true,
+    )
+    .expect("the filtered report renders")
+    .expect("the filtered report completes");
+    assert_eq!(
+        report.localizations(),
+        2,
+        "the filter keeps the bright and precise localizations"
+    );
+    assert_eq!(
+        report.filter(),
+        filter,
+        "the report names the filter it measured"
+    );
+    assert_eq!(
+        report.groups().stats().len(),
+        1,
+        "the filter drops the dim molecule"
+    );
+    let group = &report.groups().stats()[0];
+    assert_eq!(group.group(), Some(2));
+    assert!(
+        (group.precision() - 12.5).abs() < 0.5,
+        "the group precision measures {} nm",
+        group.precision()
+    );
+    assert!(
+        report.frc().scoped(),
+        "the correlation measures inside the region"
+    );
+    assert_eq!(report.region(), Some(region));
+    let outside = Region::axis_aligned(
+        glam::Vec3::new(8.0, 8.0, -0.5),
+        glam::Vec3::new(9.0, 9.0, 0.5),
+    );
+    let error = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        Some(outside),
+        &mut |_, _| true,
+    )
+    .expect_err("an empty region correlates no localization");
+    assert!(
+        error.contains("region"),
+        "the failure names the region: {error}"
+    );
+}
+
+#[test]
 fn projects_localizations_over_their_frame_range() {
     let volume = support::spheres(
         Extent::new(16, 16, 4),
@@ -2151,7 +2239,14 @@ fn projects_localizations_over_their_frame_range() {
     let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
     for time in 0..3 {
         let spots = (0..3)
-            .map(|index| Spot::new([index as f32, 0.5 * time as f32, 0.0], 0.01, 100.0))
+            .map(|index| {
+                Spot::grouped(
+                    [index as f32, 0.5 * time as f32, 0.0],
+                    [0.01; 3],
+                    100.0,
+                    Some((index % 2 + 1) as u32),
+                )
+            })
             .collect::<Vec<_>>();
         scene.install(
             set,
@@ -2170,6 +2265,7 @@ fn projects_localizations_over_their_frame_range() {
             16,
             16,
             false,
+            true,
             LocalizationSpec::new([0, 2], 10.0, 20.0),
             Drift::default(),
         ),
@@ -2181,6 +2277,15 @@ fn projects_localizations_over_their_frame_range() {
         .expect("the single frame renders")
         .splat_count();
     assert_eq!(single, 3, "one frame paints its own localizations");
+    assert!(
+        scene.set_localization_group_colored(set, true),
+        "the set colors its localizations by group"
+    );
+    let grouped = grana_engine::plan(&scene, None);
+    let grouped = grana_engine::frame(&scene, &grouped, &mut cache)
+        .expect("the group colors render")
+        .splat_count();
+    assert_eq!(grouped, 3, "the group colors paint every localization");
     assert!(scene.set_localization_projected(set, true));
     let projected = grana_engine::plan(&scene, None);
     let projected = grana_engine::frame(&scene, &projected, &mut cache)
@@ -2208,12 +2313,22 @@ fn exports_tiles_that_match_the_preview() {
             )
         })
         .collect::<Vec<_>>();
-    let held = [LocalizationFrame::new(&frame, None)];
+    let held = [LocalizationFrame::new(
+        &frame,
+        None,
+        LocalizationFilter::NONE,
+    )];
     let spec = LocalizationSpec::new([0, 0], 5.0, 20.0);
-    let report =
-        grana_analysis::localization::localization_report(&held, spec, 0.1, true, &mut |_, _| true)
-            .expect("the report renders")
-            .expect("the report completes");
+    let report = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the report renders")
+    .expect("the report completes");
     let geometry = report.geometry();
     let width = geometry.size()[0] as usize;
     let height = geometry.size()[1] as usize;

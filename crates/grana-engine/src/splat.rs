@@ -226,15 +226,23 @@ fn build(
         choice = Choice::Level(1);
     }
     let stamp = stamps(set, level, range);
-    let colors = (frames.len() == 1)
+    let group_colored = set
+        .localization()
+        .is_some_and(grana_scene::LocalizationSource::group_colored);
+    let colors = (frames.len() == 1 && !group_colored)
         .then(|| scene.object_colors(set))
         .flatten();
-    let appearance = |time: u32, index: usize| Appearance {
-        color: colors
-            .as_ref()
-            .and_then(|colors| colors.get(index).copied())
-            .unwrap_or_else(|| set.color()),
+    let appearance = |time: u32, index: usize, spot: &grana_object::Spot| Appearance {
+        color: if group_colored {
+            grana_display::group_tint(spot.group())
+        } else {
+            colors
+                .as_ref()
+                .and_then(|colors| colors.get(index).copied())
+                .unwrap_or_else(|| set.color())
+        },
         visible: set.visible_object(time, index),
+        categorical: group_colored,
     };
     let mut detections = spot::detections(frames, choice, set.opacity(), appearance);
     let mut rung = choice.level();

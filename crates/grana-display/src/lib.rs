@@ -11,7 +11,7 @@ mod volume;
 pub use camera::{APERTURE_LIMIT, Camera, CameraProjection, CameraState, Ray};
 pub use color::{ColorState, Coloring, Extent, merged};
 pub use material::Material;
-pub use palette::{CATEGORICAL, Palette, categorical};
+pub use palette::{CATEGORICAL, GROUP_NEUTRAL, Palette, categorical, group_tint};
 pub use shading::{AZIMUTH_LIMIT, DEFAULT_AZIMUTH, DEFAULT_ELEVATION, ELEVATION_LIMIT, Shading};
 pub use size::OutputSize;
 pub use slice::{Plane, Slice};

@@ -139,6 +139,7 @@ pub(super) fn read(
         extent.x(),
         extent.y(),
         columns.z.is_some(),
+        columns.quality.is_some(),
     )))
 }
 

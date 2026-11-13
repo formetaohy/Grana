@@ -1,5 +1,7 @@
+use glam::Vec3;
 use grana_object::Spot;
-pub use grana_object::{ClusterSpec, LocalizationSpec};
+pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
+use grana_volume::Region;
 
 mod cluster;
 mod fit;
@@ -44,10 +46,11 @@ pub(super) struct Point {
 pub struct LocalizationFrame<'a> {
     spots: &'a [Spot],
     visible: Option<&'a [bool]>,
+    filter: LocalizationFilter,
 }
 
 impl<'a> LocalizationFrame<'a> {
-    pub fn new(spots: &'a [Spot], visible: Option<&'a [bool]>) -> Self {
+    pub fn new(spots: &'a [Spot], visible: Option<&'a [bool]>, filter: LocalizationFilter) -> Self {
         if let Some(visible) = visible {
             assert_eq!(
                 visible.len(),
@@ -55,23 +58,33 @@ impl<'a> LocalizationFrame<'a> {
                 "a localization frame marks every spot it holds"
             );
         }
-        Self { spots, visible }
+        Self {
+            spots,
+            visible,
+            filter,
+        }
     }
 
     pub fn spots(&self) -> &'a [Spot] {
         self.spots
     }
 
+    pub fn filter(&self) -> LocalizationFilter {
+        self.filter
+    }
+
     fn visible(&self, index: usize) -> bool {
-        self.visible
-            .is_none_or(|mask| mask.get(index).copied().unwrap_or(false))
+        let spot = &self.spots[index];
+        (self
+            .visible
+            .is_none_or(|mask| mask.get(index).copied().unwrap_or(false)))
+            && self.filter.keeps(spot.quality(), spot.sigma())
     }
 
     fn count(&self) -> usize {
-        match self.visible {
-            Some(mask) => mask.iter().filter(|held| **held).count(),
-            None => self.spots.len(),
-        }
+        (0..self.spots.len())
+            .filter(|index| self.visible(*index))
+            .count()
     }
 
     fn points(&self, grouped: bool) -> Vec<Point> {
@@ -95,6 +108,7 @@ pub fn localization_report(
     spec: LocalizationSpec,
     camera_pixel: f32,
     grouped: bool,
+    region: Option<Region>,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<LocalizationReport>, String> {
     assert!(
@@ -104,6 +118,11 @@ pub fn localization_report(
     if frames.is_empty() {
         return Err("the frame range holds no frame".to_string());
     }
+    let filter = frames[0].filter();
+    assert!(
+        frames.iter().all(|frame| frame.filter() == filter),
+        "a localization report filters every frame alike"
+    );
     let survey = Survey::of(frames);
     if survey.localizations == 0 {
         return Err("the frame range holds no visible localization".to_string());
@@ -156,7 +175,7 @@ pub fn localization_report(
     };
     let frc = {
         let mut advance = || progress.tick();
-        match measure_frc(frames, low, span, survey.sigma, &mut advance)? {
+        match measure_frc(frames, low, span, survey.sigma, region, &mut advance)? {
             Some(frc) => frc,
             None => return Ok(None),
         }
@@ -173,6 +192,8 @@ pub fn localization_report(
     }
     Ok(Some(LocalizationReport {
         spec,
+        filter,
+        region,
         pixel: geometry.pixel() * 1000.0,
         origin: geometry.origin(),
         extent: [0, 1].map(|axis| geometry.size()[axis] as f32 * geometry.pixel()),
@@ -354,27 +375,48 @@ fn measure_frc(
     origin: [f32; 2],
     span: [f32; 2],
     sigma: f32,
+    region: Option<Region>,
     report: &mut dyn FnMut() -> bool,
 ) -> Result<Option<Frc>, String> {
-    let side = span[0].min(span[1]);
+    let (side, corner) = match region {
+        Some(region) => {
+            let (low, high) = region.bounds();
+            let size = high - low;
+            (size.x.min(size.y), [low.x, low.y])
+        }
+        None => {
+            let side = span[0].min(span[1]);
+            (
+                side,
+                [
+                    origin[0] + 0.5 * (span[0] - side),
+                    origin[1] + 0.5 * (span[1] - side),
+                ],
+            )
+        }
+    };
+    if !(side.is_finite() && side > 0.0) {
+        return Err("the region of interest spans no square to correlate".to_string());
+    }
     let preferred = sigma * 0.0005;
     let grid = ((side / preferred).ceil() as usize)
         .next_power_of_two()
         .clamp(FRC_MINIMUM, FRC_LIMIT);
     let pixel = side / grid as f32;
-    let corner = [
-        origin[0] + 0.5 * (span[0] - side),
-        origin[1] + 0.5 * (span[1] - side),
-    ];
     let mut first = Grid::empty([grid as u32; 2], pixel, corner);
     let mut second = Grid::empty([grid as u32; 2], pixel, corner);
     let mut index = 0u64;
+    let mut kept = 0usize;
     for frame in frames {
         for (spot_index, spot) in frame.spots.iter().enumerate() {
             if !frame.visible(spot_index) {
                 continue;
             }
             let center = spot.center();
+            if region.is_some_and(|region| !region.contains(Vec3::from(center))) {
+                continue;
+            }
+            kept += 1;
             if split(index) {
                 first.add([center[0], center[1]], 1.0, None);
             } else {
@@ -386,7 +428,10 @@ fn measure_frc(
             return Ok(None);
         }
     }
-    Ok(Some(frc::measure(&first, &second)))
+    if kept == 0 {
+        return Err("the region of interest holds no visible localization".to_string());
+    }
+    Ok(Some(frc::measure(&first, &second, region.is_some())))
 }
 
 fn split(index: u64) -> bool {

@@ -30,6 +30,10 @@ labels! {
     cluster => "Cluster" / "聚类";
     estimate => "Estimate" / "估计";
     clustered => "Clustered" / "已聚类";
+    photons => "Min photons" / "最少光子";
+    precision_limit => "Max precision" / "最大精度";
+    color_by_group => "Color by group" / "按分组着色";
+    region_scoped => "Correlated inside the region of interest" / "在所选区域内做相关";
 }
 
 messages! {

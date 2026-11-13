@@ -63,6 +63,7 @@ pub fn localization(
         width: table.width(),
         height: table.height(),
         volume: table.volume(),
+        photons: table.photons(),
         drift: request.drift.clone(),
     });
     let mut slots = (0..frames).map(|_| Vec::new()).collect::<Vec<_>>();

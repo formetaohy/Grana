@@ -9,8 +9,14 @@ pub const CATEGORICAL: [[f32; 3]; 8] = [
     [0.75, 0.85, 0.45],
 ];
 
+pub const GROUP_NEUTRAL: [f32; 3] = [0.42, 0.42, 0.46];
+
 pub fn categorical(index: usize) -> [f32; 3] {
     CATEGORICAL[index % CATEGORICAL.len()]
+}
+
+pub fn group_tint(group: Option<u32>) -> [f32; 3] {
+    group.map_or(GROUP_NEUTRAL, |group| categorical(group as usize))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

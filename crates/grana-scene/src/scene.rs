@@ -1103,6 +1103,11 @@ impl Scene {
         self.objects.set_localization_spec(id, spec)
     }
 
+    pub fn set_localization_group_colored(&mut self, id: ObjectSetId, group_colored: bool) -> bool {
+        self.objects
+            .set_localization_group_colored(id, group_colored)
+    }
+
     pub fn set_localization_projected(&mut self, id: ObjectSetId, projected: bool) -> bool {
         self.objects.set_localization_projected(id, projected)
     }

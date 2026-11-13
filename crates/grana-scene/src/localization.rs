@@ -8,8 +8,10 @@ pub struct LocalizationSource {
     width: u32,
     height: u32,
     volume: bool,
+    photons: bool,
     spec: LocalizationSpec,
     clusters: ClusterSpec,
+    group_colored: bool,
     projected: bool,
     clustered: bool,
     applied: Drift,
@@ -21,6 +23,7 @@ impl LocalizationSource {
         width: u32,
         height: u32,
         volume: bool,
+        photons: bool,
         spec: LocalizationSpec,
         applied: Drift,
     ) -> Self {
@@ -37,8 +40,10 @@ impl LocalizationSource {
             width,
             height,
             volume,
+            photons,
             spec,
             clusters: ClusterSpec::default(),
+            group_colored: false,
             projected: false,
             clustered: false,
             applied,
@@ -61,12 +66,20 @@ impl LocalizationSource {
         self.volume
     }
 
+    pub fn photons(&self) -> bool {
+        self.photons
+    }
+
     pub fn spec(&self) -> LocalizationSpec {
         self.spec
     }
 
     pub fn clusters(&self) -> ClusterSpec {
         self.clusters
+    }
+
+    pub fn group_colored(&self) -> bool {
+        self.group_colored
     }
 
     pub fn projected(&self) -> bool {
@@ -113,6 +126,13 @@ impl LocalizationSource {
     pub fn with_clustered(&self, clustered: bool) -> Self {
         Self {
             clustered,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_group_colored(&self, group_colored: bool) -> Self {
+        Self {
+            group_colored,
             ..self.clone()
         }
     }

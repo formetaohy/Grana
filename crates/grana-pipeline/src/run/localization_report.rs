@@ -1,18 +1,19 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::localization::{LocalizationFrame, LocalizationSpec};
 use grana_object::Spot;
-use grana_scene::{ObjectFrame, ObjectSetId, Revision};
+use grana_scene::{ObjectSetId, Revision};
+use grana_volume::Region;
 
+use super::localization_window::LocalizationWindow;
 use crate::event::Event;
 
 pub struct LocalizationReportRequest {
     set: ObjectSetId,
     revision: Revision,
-    frames: Vec<Option<Arc<ObjectFrame>>>,
-    visible: Vec<Option<Vec<bool>>>,
+    window: LocalizationWindow,
     spec: LocalizationSpec,
+    region: Option<Region>,
     pixel: f32,
     grouped: bool,
 }
@@ -21,20 +22,15 @@ impl LocalizationReportRequest {
     pub fn new(
         set: ObjectSetId,
         revision: Revision,
-        frames: Vec<Option<Arc<ObjectFrame>>>,
-        visible: Vec<Option<Vec<bool>>>,
+        window: LocalizationWindow,
         spec: LocalizationSpec,
+        region: Option<Region>,
         pixel: f32,
         grouped: bool,
     ) -> Self {
         assert!(
-            !frames.is_empty(),
+            !window.is_empty(),
             "a localization report names the frames of its range"
-        );
-        assert_eq!(
-            frames.len(),
-            visible.len(),
-            "a localization report marks every frame it ranges over"
         );
         assert!(
             pixel.is_finite() && pixel > 0.0,
@@ -43,9 +39,9 @@ impl LocalizationReportRequest {
         Self {
             set,
             revision,
-            frames,
-            visible,
+            window,
             spec,
+            region,
             pixel,
             grouped,
         }
@@ -60,9 +56,9 @@ pub fn localization_report(
     let LocalizationReportRequest {
         set,
         revision,
-        frames,
-        visible,
+        window,
         spec,
+        region,
         pixel,
         grouped,
     } = request;
@@ -71,14 +67,15 @@ pub fn localization_report(
         done: 0,
         total: 0,
     });
+    let filter = spec.filter();
     let empty: &[Spot] = &[];
-    let held = (0..frames.len())
+    let held = (0..window.len())
         .map(|index| {
-            let spots = frames[index]
-                .as_deref()
-                .and_then(ObjectFrame::spots)
+            let spots = window
+                .frame(index)
+                .and_then(|frame| frame.spots())
                 .map_or(empty, |set| set.spots());
-            LocalizationFrame::new(spots, visible[index].as_deref())
+            LocalizationFrame::new(spots, window.visible(index), filter)
         })
         .collect::<Vec<_>>();
     let mut report = |done: usize, total: usize| {
@@ -94,6 +91,7 @@ pub fn localization_report(
         spec,
         pixel,
         grouped,
+        region,
         &mut report,
     )?
     else {

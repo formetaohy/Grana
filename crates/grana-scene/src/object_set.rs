@@ -356,6 +356,19 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn set_localization_group_colored(&mut self, group_colored: bool) -> bool {
+        let Some(source) = self.localization.as_ref() else {
+            return false;
+        };
+        let next = source.with_group_colored(group_colored);
+        if self.localization.as_ref() == Some(&next) {
+            return false;
+        }
+        self.localization = Some(next);
+        self.document = self.document.next();
+        true
+    }
+
     pub(crate) fn set_localization_projected(&mut self, projected: bool) -> bool {
         let Some(source) = self.localization.as_ref() else {
             return false;
@@ -1319,7 +1332,15 @@ impl ObjectSet {
     }
 
     pub fn filtered(&self) -> bool {
-        !matches!(self.visibility, Visibility::All)
+        !matches!(self.visibility, Visibility::All) || self.localization_filter().active()
+    }
+
+    pub fn localization_filter(&self) -> grana_object::LocalizationFilter {
+        self.localization
+            .as_ref()
+            .map_or(grana_object::LocalizationFilter::NONE, |source| {
+                source.spec().filter()
+            })
     }
 
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {
@@ -1337,7 +1358,22 @@ impl ObjectSet {
     }
 
     pub fn visible_object(&self, time: u32, object: usize) -> bool {
-        self.filtered_object(time, object) && !self.hidden_object(time, object)
+        self.filtered_object(time, object)
+            && !self.hidden_object(time, object)
+            && self.localized_object(time, object)
+    }
+
+    fn localized_object(&self, time: u32, object: usize) -> bool {
+        let filter = self.localization_filter();
+        if !filter.active() {
+            return true;
+        }
+        self.frames
+            .get(time as usize)
+            .and_then(|slot| slot.data.as_deref())
+            .and_then(ObjectFrame::spots)
+            .and_then(|set| set.spots().get(object))
+            .is_none_or(|spot| filter.keeps(spot.quality(), spot.sigma()))
     }
 
     pub fn visible_track(&self, track: usize) -> bool {

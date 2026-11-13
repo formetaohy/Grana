@@ -1177,6 +1177,12 @@ pub struct MoleculesSpec {
     pub projected: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub clustered: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub group_colored: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_photons: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_precision: Option<f32>,
     pub radius: f32,
     pub dark: u32,
     pub minimum: u32,
@@ -1186,12 +1192,16 @@ impl MoleculesSpec {
     pub fn of(source: &grana_scene::LocalizationSource) -> Self {
         let spec = source.spec();
         let clusters = source.clusters();
+        let filter = spec.filter();
         Self {
             frames: spec.frames(),
             pixel: spec.pixel(),
             blur: spec.blur(),
             projected: source.projected(),
             clustered: source.clustered(),
+            group_colored: source.group_colored(),
+            min_photons: (filter.photons() > 0.0).then_some(filter.photons()),
+            max_precision: (filter.precision() > 0.0).then_some(filter.precision()),
             radius: clusters.radius(),
             dark: clusters.dark(),
             minimum: clusters.minimum(),
@@ -1200,10 +1210,18 @@ impl MoleculesSpec {
 
     pub fn localization(&self) -> grana_object::LocalizationSpec {
         grana_object::LocalizationSpec::new(self.frames, self.pixel, self.blur)
+            .at_filter(self.filter())
     }
 
     pub fn clusters(&self) -> grana_object::ClusterSpec {
         grana_object::ClusterSpec::new(self.radius, self.dark, self.minimum)
+    }
+
+    pub fn filter(&self) -> grana_object::LocalizationFilter {
+        grana_object::LocalizationFilter::new(
+            self.min_photons.unwrap_or(0.0),
+            self.max_precision.unwrap_or(0.0),
+        )
     }
 
     fn checked(&self, set: &str) -> Result<(), ProtocolError> {
@@ -1220,6 +1238,16 @@ impl MoleculesSpec {
         }
         if !(0.0..=grana_object::LocalizationSpec::BLUR_MAXIMUM).contains(&self.blur) {
             return invalid("blurs by an unsupported width".to_string());
+        }
+        if self.min_photons.is_some_and(|photons| {
+            !(0.0..=grana_object::LocalizationFilter::PHOTONS_MAXIMUM).contains(&photons)
+        }) {
+            return invalid("filters localizations by an unsupported photon count".to_string());
+        }
+        if self.max_precision.is_some_and(|precision| {
+            !(0.0..=grana_object::LocalizationFilter::PRECISION_MAXIMUM).contains(&precision)
+        }) {
+            return invalid("filters localizations by an unsupported precision".to_string());
         }
         if !(grana_object::ClusterSpec::RADIUS_MINIMUM..=grana_object::ClusterSpec::RADIUS_MAXIMUM)
             .contains(&self.radius)

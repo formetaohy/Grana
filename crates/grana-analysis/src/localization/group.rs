@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use grana_display::{CATEGORICAL, srgb_to_linear};
+use grana_display::{CATEGORICAL, group_tint, srgb_to_linear};
 
 use super::LocalizationFrame;
 
 const TRACKED: usize = 32;
 
-const NEUTRAL: [f32; 3] = [0.42, 0.42, 0.46];
+const NANOMETRES_PER_MICROMETRE: f64 = 1000.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupStat {
@@ -64,7 +64,7 @@ impl Groups {
     pub(super) fn slot_tint(&self, slot: u8) -> [f32; 3] {
         self.stats
             .get(slot as usize)
-            .map_or(NEUTRAL, |stat| stat.tint)
+            .map_or(grana_display::GROUP_NEUTRAL, |stat| stat.tint)
     }
 
     pub(super) fn measure(frames: &[LocalizationFrame<'_>]) -> Self {
@@ -144,17 +144,13 @@ impl Tally {
         let stats = self
             .entries
             .into_iter()
-            .enumerate()
-            .map(|(slot, entry)| GroupStat {
+            .map(|entry| GroupStat {
                 group: entry.group,
                 localizations: entry.localizations,
-                precision: (entry.sigma / entry.localizations as f64 * 1.0e6) as f32,
+                precision: (entry.sigma / entry.localizations as f64 * NANOMETRES_PER_MICROMETRE)
+                    as f32,
                 photons: (entry.quality / entry.localizations as f64) as f32,
-                tint: srgb_to_linear(if chromatic {
-                    grana_display::categorical(slot)
-                } else {
-                    CATEGORICAL[0]
-                }),
+                tint: srgb_to_linear(group_tint(entry.group)),
             })
             .collect();
         Groups { stats, chromatic }

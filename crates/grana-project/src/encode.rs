@@ -520,11 +520,16 @@ impl Encode for LocalizationSource {
         writer.u32(self.width());
         writer.u32(self.height());
         writer.bool(self.volume());
+        writer.bool(self.photons());
+        writer.bool(self.group_colored());
         let spec = self.spec();
         writer.u32(spec.frames()[0]);
         writer.u32(spec.frames()[1]);
         writer.f32(spec.pixel());
         writer.f32(spec.blur());
+        let filter = spec.filter();
+        writer.f32(filter.photons());
+        writer.f32(filter.precision());
         let clusters = self.clusters();
         writer.f32(clusters.radius());
         writer.u32(clusters.dark());

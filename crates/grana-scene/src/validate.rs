@@ -274,17 +274,22 @@ impl SceneState {
                 "the object colocalization covers another set of frames",
             ));
         }
-        if let Some(localization) = &set.localization
-            && (set.kind != ObjectKind::Spots
-                || localization.spec()
-                    != localization.spec().fitted(set.frames.len().max(1) as u32)
+        if let Some(localization) = &set.localization {
+            if set.kind != ObjectKind::Spots
+                || localization.spec() != localization.spec().fitted(set.frames.len().max(1) as u32)
                 || !localization.applied().is_empty()
                     && (localization.applied().frames() as usize != set.frames.len()
-                        || localization.applied().reference() as usize >= set.frames.len()))
-        {
-            return Err(fault(
-                "the localization source covers another set of frames",
-            ));
+                        || localization.applied().reference() as usize >= set.frames.len())
+            {
+                return Err(fault(
+                    "the localization source covers another set of frames",
+                ));
+            }
+            if localization.spec().filter().photons() > 0.0 && !localization.photons() {
+                return Err(fault(
+                    "the localization filter reads photons the table does not carry",
+                ));
+            }
         }
         Ok(())
     }

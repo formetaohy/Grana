@@ -3,7 +3,9 @@ use grana_display::linear_to_srgb;
 use grana_i18n::Language;
 use grana_object::ClusterSpec;
 use grana_scene::{Job, ObjectKind, ObjectSet, ObjectSetId};
-use grana_session::{Command, Groups, LocalizationReport, LocalizationSpec, NeNa};
+use grana_session::{
+    Command, Groups, LocalizationFilter, LocalizationReport, LocalizationSpec, NeNa,
+};
 use grana_ui::{Align, BuildContext, Color, Corners, Element, Icon, Length, Rect, Role, Vec2};
 
 use crate::message::Message;
@@ -82,7 +84,7 @@ pub(super) fn card<'a>(
             grana_i18n::localization::resolution(language),
             &resolution,
         ));
-        if report.spec() != spec {
+        if report.spec() != spec || report.region() != state.scene.region_scope() {
             children.push(view::caption(
                 ctx,
                 grana_i18n::localization::stale(language),
@@ -103,7 +105,7 @@ pub(super) fn card<'a>(
             &grana_i18n::localization::localizations(language, count),
         ));
     }
-    children.push(fields(ctx, &theme, id, spec, frames));
+    children.push(fields(ctx, &theme, id, spec, frames, set));
     children.push(view::toggle_row(
         ctx,
         "localization.projected",
@@ -112,6 +114,19 @@ pub(super) fn card<'a>(
         move |value| Command::SetLocalizationProjected {
             set: id,
             projected: value,
+        },
+    ));
+    let group_colored = set
+        .localization()
+        .is_some_and(grana_scene::LocalizationSource::group_colored);
+    children.push(view::toggle_row(
+        ctx,
+        "localization.group_colored",
+        grana_i18n::localization::color_by_group(language),
+        group_colored,
+        move |value| Command::SetLocalizationGroupColored {
+            set: id,
+            group_colored: value,
         },
     ));
     let mut actions = Vec::new();
@@ -190,6 +205,12 @@ pub(super) fn card<'a>(
             None,
         ));
         children.push(correlation_chart(ctx, language, report));
+        if report.frc().scoped() {
+            children.push(view::caption(
+                ctx,
+                grana_i18n::localization::region_scoped(language),
+            ));
+        }
     }
     children.push(view::divider(ctx));
     let molecules = set.tracks().map_or(0, |tracks| tracks.set().len());
@@ -337,6 +358,7 @@ fn fields<'a>(
     id: ObjectSetId,
     spec: LocalizationSpec,
     frames: u32,
+    set: &'a ObjectSet,
 ) -> Element<'a, Message> {
     let language = ctx.language();
     let last = frames.saturating_sub(1);
@@ -384,6 +406,16 @@ fn fields<'a>(
                 spec: spec.at_blur(blur),
             })
         });
+    let filter = spec.filter();
+    let precision_field = grana_ui::widget::drag_value(theme, filter.precision(), 1)
+        .named("localization.precision_limit")
+        .on_drag_value(0.5, move |value| {
+            let precision = value.clamp(0.0, LocalizationFilter::PRECISION_MAXIMUM);
+            Message::Command(Command::SetLocalizationSpec {
+                set: id,
+                spec: spec.at_filter(filter.at_precision(precision)),
+            })
+        });
     let pixel_row = grana_ui::row()
         .gap(6.0)
         .align(Align::Center)
@@ -392,7 +424,11 @@ fn fields<'a>(
         .gap(6.0)
         .align(Align::Center)
         .children([blur_field]);
-    grana_ui::column().gap(6.0).children([
+    let precision_row = grana_ui::row()
+        .gap(6.0)
+        .align(Align::Center)
+        .children([precision_field]);
+    let mut rows = vec![
         view::form_row(ctx, grana_i18n::common::frames(language), span_row),
         view::form_row(
             ctx,
@@ -404,7 +440,36 @@ fn fields<'a>(
             grana_i18n::localization::blur_width(language),
             blur_row,
         ),
-    ])
+        view::form_row(
+            ctx,
+            grana_i18n::localization::precision_limit(language),
+            precision_row,
+        ),
+    ];
+    if set
+        .localization()
+        .is_some_and(grana_scene::LocalizationSource::photons)
+    {
+        let photons_field = grana_ui::widget::drag_value(theme, filter.photons(), 0)
+            .named("localization.photons")
+            .on_drag_value(5.0, move |value| {
+                let photons = value.clamp(0.0, LocalizationFilter::PHOTONS_MAXIMUM);
+                Message::Command(Command::SetLocalizationSpec {
+                    set: id,
+                    spec: spec.at_filter(filter.at_photons(photons)),
+                })
+            });
+        let photons_row = grana_ui::row()
+            .gap(6.0)
+            .align(Align::Center)
+            .children([photons_field]);
+        rows.push(view::form_row(
+            ctx,
+            grana_i18n::localization::photons(language),
+            photons_row,
+        ));
+    }
+    grana_ui::column().gap(6.0).children(rows)
 }
 
 fn neighbours_chart<'a>(

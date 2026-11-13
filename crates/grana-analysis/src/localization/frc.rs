@@ -8,7 +8,7 @@ const ROBUSTNESS: usize = 3;
 
 const SPAN_MINIMUM: usize = 5;
 
-pub(super) fn measure(first: &Grid, second: &Grid) -> Frc {
+pub(super) fn measure(first: &Grid, second: &Grid, scoped: bool) -> Frc {
     let size = first.size();
     assert_eq!(
         size,
@@ -77,7 +77,7 @@ pub(super) fn measure(first: &Grid, second: &Grid) -> Frc {
     let span = ((side / 2).div_ceil(20)).max(SPAN_MINIMUM);
     let smooth = smooth(&curve, span);
     let resolution = crossing(&frequencies, &smooth);
-    Frc::new(frequencies, curve, smooth, resolution)
+    Frc::new(frequencies, curve, smooth, resolution, scoped)
 }
 
 fn fold(index: usize, size: usize) -> i64 {

@@ -380,6 +380,10 @@ pub enum Command {
         set: ObjectSetId,
         spec: grana_object::LocalizationSpec,
     },
+    SetLocalizationGroupColored {
+        set: ObjectSetId,
+        group_colored: bool,
+    },
     SetLocalizationProjected {
         set: ObjectSetId,
         projected: bool,
@@ -687,6 +691,7 @@ impl Command {
                 | Self::SetTrackThickness { .. }
                 | Self::SetTrackColoring { .. }
                 | Self::SetLocalizationSpec { .. }
+                | Self::SetLocalizationGroupColored { .. }
                 | Self::SetLocalizationProjected { .. }
                 | Self::SetLocalizationClusters { .. }
                 | Self::SetRegion(_)
@@ -839,6 +844,7 @@ impl Command {
             Self::SetTrackColoring { set, .. } => Edit::targeted(Action::TrackColoring, set.raw()),
             Self::SetTrackParams { set, .. } => Edit::targeted(Action::TrackParameters, set.raw()),
             Self::SetLocalizationSpec { set, .. }
+            | Self::SetLocalizationGroupColored { set, .. }
             | Self::SetLocalizationProjected { set, .. }
             | Self::SetLocalizationClusters { set, .. }
             | Self::EstimateLocalizationClusters(set) => {

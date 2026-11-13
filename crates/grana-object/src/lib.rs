@@ -23,7 +23,7 @@ pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;
-pub use localization::{ClusterSpec, LocalizationSpec};
+pub use localization::{ClusterSpec, LocalizationFilter, LocalizationSpec};
 pub use mask::{Mask, Roi};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
