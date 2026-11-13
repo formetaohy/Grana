@@ -28,6 +28,7 @@ mod labelled;
 mod level;
 mod localization;
 mod localization_drift;
+mod localization_report;
 mod mask;
 mod segment;
 
@@ -41,6 +42,7 @@ pub use self::import::{ImportRequest, import};
 pub use self::interop::{InteropRequest, interop};
 pub use self::localization::{LocalizationRequest, localization};
 pub use self::localization_drift::{LocalizationDriftRequest, localization_drift};
+pub use self::localization_report::{LocalizationReportRequest, localization_report};
 pub use self::mask::{MaskRequest, mask};
 pub use self::segment::{SegmentRequest, segment};
 

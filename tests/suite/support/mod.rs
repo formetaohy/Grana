@@ -90,6 +90,24 @@ pub fn revision() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+pub struct Noise(u32);
+
+impl Noise {
+    pub fn new(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    pub fn value(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (self.0 >> 8) as f32 / 16_777_216.0
+    }
+
+    pub fn gaussian(&mut self) -> f32 {
+        let first = self.value().max(f32::MIN_POSITIVE);
+        (-2.0 * first.ln()).sqrt() * (2.0 * std::f64::consts::PI as f32 * self.value()).cos()
+    }
+}
+
 pub struct Localization {
     pub frame: u32,
     pub position: [f32; 3],

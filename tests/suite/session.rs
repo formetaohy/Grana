@@ -1905,7 +1905,7 @@ fn reads_a_batch_run_record() {
                         {"key": "volume_um3", "label": "volume", "unit": "cubic_micrometer", "decimals": 3, "level": "object"},
                         {"key": "area_um2", "label": "area", "unit": "square_micrometer", "decimals": 3, "level": "object"},
                         {"key": "diameter_um", "label": "diameter", "unit": "micrometer", "decimals": 3, "level": "object"},
-                        {"key": "nuclei_intensity_mean", "label": "Nuclei · mean", "unit": "count", "decimals": 2, "level": "object"}
+                        {"key": "nuclei_intensity_mean", "label": "Nuclei 路 mean", "unit": "count", "decimals": 2, "level": "object"}
                     ],
                     "values": [
                         {"objects": 1, "mean": objects},
@@ -2569,4 +2569,85 @@ fn wait_for_scene(session: &mut Session, frames: u32) {
     }
     let scene = session.scene().expect("the dataset opens");
     assert_eq!(scene.frame_count(), frames, "the dataset keeps its frames");
+}
+
+#[test]
+fn analyzes_imported_localizations() {
+    let temp = Temp::new("session-localization-report");
+    let path = temp.path().join("localizations.hdf5");
+    let mut noise = support::Noise::new(0x5eed_1234);
+    let precision = 0.2f32;
+    let molecules = (0..120)
+        .map(|_| [2.0 + 60.0 * noise.value(), 2.0 + 28.0 * noise.value()])
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for frame in 0..5u32 {
+        for molecule in &molecules {
+            rows.push(support::Localization {
+                frame,
+                position: [
+                    molecule[0] + precision * noise.gaussian(),
+                    molecule[1] + precision * noise.gaussian(),
+                    0.0,
+                ],
+                photons: 1500.0,
+                precision: [precision, precision, 0.0],
+                group: -1,
+            });
+        }
+    }
+    support::picasso(&path, 100.0, &rows);
+    let volume = support::spheres(
+        Extent::new(64, 32, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "localizations",
+        VolumeSeries::new(
+            vec![
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume.clone(),
+                volume,
+            ],
+            1.0,
+        ),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let set = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    session.execute(Command::AnalyzeLocalizations {
+        set,
+        spec: grana_session::LocalizationSpec::new([0, 4], 10.0, 20.0),
+    });
+    settle(&mut session);
+    let report = session
+        .localizations()
+        .report(set)
+        .expect("the super-resolution report lands");
+    assert!(
+        session.localizations().bitmap(set).is_some(),
+        "the report paints a bitmap"
+    );
+    assert_eq!(report.localizations(), 600);
+    let measured = report.nena().precision();
+    assert!(
+        (measured - 20.0).abs() < 8.0,
+        "the precision measures {measured} nm against 20 nm"
+    );
+    assert!(
+        report.frc().resolution().is_some(),
+        "the rings cross the threshold"
+    );
 }

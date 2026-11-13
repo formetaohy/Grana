@@ -103,6 +103,10 @@ pub enum Message {
         set: ObjectSetId,
         features: Vec<grana_measure::Measurement>,
     },
+    SetLocalizationSpec {
+        set: ObjectSetId,
+        spec: grana_session::LocalizationSpec,
+    },
     FitView,
     Plot(PlotEvent),
     Locate(usize),

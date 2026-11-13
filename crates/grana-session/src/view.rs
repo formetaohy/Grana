@@ -7,6 +7,7 @@ use grana_scene::{Measure, Progress, Scene};
 
 use crate::access::Access;
 use crate::command::Action;
+use crate::session::Localizations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -152,6 +153,7 @@ pub struct SessionView<'a> {
     pub measuring: bool,
     pub timeline: &'a Timeline,
     pub jobs: &'a [Progress],
+    pub localizations: &'a Localizations,
     pub io: IoView<'a>,
     pub batch: Option<BatchView<'a>>,
     pub stitch: Option<StitchView>,

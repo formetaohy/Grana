@@ -19,6 +19,7 @@ mod appearance;
 mod card;
 mod classifier;
 mod detail;
+mod localization;
 mod metrics;
 mod relations;
 
@@ -388,6 +389,9 @@ fn object<'a>(
             children.push(detect(ctx, state, id, kind, frames));
         }
         children.push(summary(ctx, kind, current, mean, detected, frames, time));
+        if set.localization().is_some() {
+            children.push(localization::card(ctx, state, set));
+        }
         if let Some(export) = set.label_export() {
             children.push(view::weak(
                 ctx,

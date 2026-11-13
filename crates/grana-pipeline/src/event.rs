@@ -1,7 +1,8 @@
+use grana_analysis::localization::LocalizationReport;
 use grana_measure::{ColocSeries, ObjectColoc};
 use grana_object::{RelationFrame, TrackSet};
 use grana_optics::MeasuredPsf;
-use grana_scene::{Drift, ObjectFrame, Registration};
+use grana_scene::{Drift, ObjectFrame, ObjectSetId, Registration, Revision};
 use grana_volume::Region;
 
 pub enum Event {
@@ -20,6 +21,11 @@ pub enum Event {
         height: u32,
         volume: bool,
         drift: Drift,
+    },
+    LocalizationReport {
+        set: ObjectSetId,
+        revision: Revision,
+        report: Box<LocalizationReport>,
     },
     Tracks(TrackSet),
     Relation {

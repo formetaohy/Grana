@@ -3419,6 +3419,7 @@ dependencies = [
  "bytemuck",
  "fs4",
  "glam",
+ "grana-display",
  "grana-geometry",
  "grana-measure",
  "grana-object",

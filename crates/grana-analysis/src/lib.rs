@@ -5,6 +5,7 @@ mod filament;
 mod hash;
 mod label;
 pub mod local;
+pub mod localization;
 mod localization_drift;
 mod morphology;
 mod object_coloc;

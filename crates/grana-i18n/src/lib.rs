@@ -8,6 +8,7 @@ pub mod coloc;
 pub mod common;
 pub mod header;
 pub mod inspector;
+pub mod localization;
 pub mod measure;
 pub mod object;
 pub mod palette;

@@ -70,6 +70,11 @@ impl Session {
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
             ObjectColoc(Box<grana_measure::ObjectColoc>),
+            LocalizationReport {
+                set: ObjectSetId,
+                revision: Revision,
+                report: Box<grana_analysis::localization::LocalizationReport>,
+            },
             Drift(grana_scene::Drift),
             Registration(grana_scene::Registration),
             Calibration {
@@ -123,6 +128,21 @@ impl Session {
                     }
                     Poll::Event(Event::ObjectColoc { coloc }) => {
                         updates.push((index, job, Update::ObjectColoc(coloc)));
+                    }
+                    Poll::Event(Event::LocalizationReport {
+                        set,
+                        revision,
+                        report,
+                    }) => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::LocalizationReport {
+                                set,
+                                revision,
+                                report,
+                            },
+                        ));
                     }
                     Poll::Event(Event::Drift(drift)) => {
                         updates.push((index, job, Update::Drift(drift)));
@@ -242,6 +262,23 @@ impl Session {
                         scene.install_object_coloc(set, *coloc);
                     }
                 }
+                Update::LocalizationReport {
+                    set,
+                    revision,
+                    report,
+                } => {
+                    let current = self
+                        .scene
+                        .as_ref()
+                        .and_then(|scene| scene.objects.get(set))
+                        .map(|object| object.revision());
+                    if let (Job::Localizations(held), Some(current)) = (job, current)
+                        && held == set
+                        && revision == current
+                    {
+                        self.localization.install(set, revision, *report);
+                    }
+                }
                 Update::Drift(drift) => {
                     if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
                         scene.set_drift(drift);
@@ -287,6 +324,7 @@ impl Session {
                         | Job::Relation { .. }
                         | Job::Coloc
                         | Job::ObjectColoc(_)
+                        | Job::Localizations(_)
                         | Job::Drift
                         | Job::Register => {}
                         Job::Calibrate => {}

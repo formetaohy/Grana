@@ -1,0 +1,155 @@
+use rayon::prelude::*;
+
+const REACH: f32 = 3.0;
+
+const KERNEL_FLOOR: f32 = 1.0e-3;
+
+#[derive(Clone, Debug)]
+pub(super) struct Grid {
+    size: [u32; 2],
+    pixel: f32,
+    origin: [f32; 2],
+    values: Vec<f32>,
+}
+
+impl Grid {
+    pub(super) fn empty(size: [u32; 2], pixel: f32, origin: [f32; 2]) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a localization grid covers at least one pixel"
+        );
+        assert!(
+            pixel.is_finite() && pixel > 0.0,
+            "a localization grid rasterizes at a positive pixel size"
+        );
+        assert!(
+            origin.iter().all(|value| value.is_finite()),
+            "a localization grid starts at a finite origin"
+        );
+        Self {
+            size,
+            pixel,
+            origin,
+            values: vec![0.0; size[0] as usize * size[1] as usize],
+        }
+    }
+
+    pub(super) fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
+    pub(super) fn pixel(&self) -> f32 {
+        self.pixel
+    }
+
+    pub(super) fn values(&self) -> &[f32] {
+        &self.values
+    }
+
+    pub(super) fn index(&self, point: [f32; 2]) -> Option<usize> {
+        let column = ((point[0] - self.origin[0]) / self.pixel).floor();
+        let row = ((point[1] - self.origin[1]) / self.pixel).floor();
+        if !(column >= 0.0 && row >= 0.0) {
+            return None;
+        }
+        let column = column as u32;
+        let row = row as u32;
+        (column < self.size[0] && row < self.size[1])
+            .then_some(column as usize + self.size[0] as usize * row as usize)
+    }
+
+    pub(super) fn add(&mut self, point: [f32; 2], weight: f32) {
+        if let Some(index) = self.index(point) {
+            self.values[index] += weight;
+        }
+    }
+
+    pub(super) fn blur(&mut self, sigma: f32) {
+        if !(sigma.is_finite() && sigma > 0.0) {
+            return;
+        }
+        let sigma = (sigma / self.pixel).max(KERNEL_FLOOR);
+        let radius = (REACH * sigma).ceil().max(1.0) as usize;
+        let kernel = kernel(sigma, radius);
+        let width = self.size[0] as usize;
+        let height = self.size[1] as usize;
+        let mut horizontal = vec![0.0f32; width * height];
+        horizontal
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(row, line)| {
+                let source = &self.values[row * width..(row + 1) * width];
+                convolve(source, &kernel, line);
+            });
+        let held = &horizontal;
+        self.values
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(row, line)| {
+                line.fill(0.0);
+                for (offset, weight) in kernel.iter().enumerate() {
+                    let sample = (row as i64 + offset as i64 - radius as i64)
+                        .clamp(0, height as i64 - 1) as usize;
+                    for (value, held) in line.iter_mut().zip(&held[sample * width..]) {
+                        *value += held * weight;
+                    }
+                }
+            });
+    }
+
+    pub(super) fn maximum(&self) -> f32 {
+        self.values.iter().copied().fold(0.0, f32::max)
+    }
+
+    pub(super) fn percentile(&self, fraction: f32) -> f32 {
+        let maximum = self.maximum();
+        if maximum <= 0.0 {
+            return 0.0;
+        }
+        let bins = 4096usize;
+        let mut counts = vec![0u64; bins];
+        let scale = (bins - 1) as f32 / maximum;
+        for value in &self.values {
+            let bin = (value * scale) as usize;
+            counts[bin.min(bins - 1)] += 1;
+        }
+        let target = (fraction.clamp(0.0, 1.0) * self.values.len() as f32) as u64;
+        let mut held = 0u64;
+        for (bin, count) in counts.iter().enumerate() {
+            held += count;
+            if held >= target {
+                return (bin as f32 + 0.5) / scale;
+            }
+        }
+        maximum
+    }
+}
+
+fn kernel(sigma: f32, radius: usize) -> Vec<f32> {
+    let mut kernel = Vec::with_capacity(radius * 2 + 1);
+    let mut total = 0.0f32;
+    for offset in -(radius as i64)..=radius as i64 {
+        let distance = offset as f32;
+        let weight = (-0.5 * distance * distance / (sigma * sigma)).exp();
+        kernel.push(weight);
+        total += weight;
+    }
+    for weight in &mut kernel {
+        *weight /= total;
+    }
+    kernel
+}
+
+fn convolve(source: &[f32], kernel: &[f32], target: &mut [f32]) {
+    let length = source.len();
+    let radius = (kernel.len() - 1) / 2;
+    for (index, value) in target.iter_mut().enumerate() {
+        let mut sum = 0.0f32;
+        for (offset, weight) in kernel.iter().enumerate() {
+            let sample = index as i64 + offset as i64 - radius as i64;
+            let sample = sample.clamp(0, length as i64 - 1) as usize;
+            sum += source[sample] * weight;
+        }
+        *value = sum;
+    }
+}

@@ -656,6 +656,7 @@ pub fn progress_caption(
             grana_scene::ObjectKind::Cells => grana_i18n::common::frames(language),
         },
         grana_scene::Job::Import(_) => grana_i18n::common::tiles(language),
+        grana_scene::Job::Localizations(_) => grana_i18n::common::steps(language),
         grana_scene::Job::Track(_)
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
@@ -676,6 +677,7 @@ pub fn progress_caption(
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
         | grana_scene::Job::ObjectColoc(_)
+        | grana_scene::Job::Localizations(_)
         | grana_scene::Job::Drift
         | grana_scene::Job::Register
         | grana_scene::Job::Calibrate => String::new(),

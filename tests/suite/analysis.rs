@@ -2,6 +2,7 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use grana_analysis::localization::{LocalizationFrame, LocalizationSpec};
 use grana_analysis::{
     CellSeed, ColocScan, ColocScanConfig, FilamentScan, GrowField, Growth, Reference, Sources,
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
@@ -1888,4 +1889,70 @@ fn raise(
         );
     }
     labels
+}
+
+#[test]
+fn renders_and_measures_localizations() {
+    let mut noise = support::Noise::new(0x2545_f491);
+    let precision = 0.012f32;
+    let field = 8.0f32;
+    let molecules = (0..600)
+        .map(|_| [2.0 + field * noise.value(), 2.0 + field * noise.value()])
+        .collect::<Vec<_>>();
+    let frames = (0..8)
+        .map(|_| {
+            molecules
+                .iter()
+                .map(|molecule| {
+                    Spot::gaussian(
+                        [
+                            molecule[0] + precision * noise.gaussian(),
+                            molecule[1] + precision * noise.gaussian(),
+                            0.0,
+                        ],
+                        [precision; 3],
+                        900.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let held = slices
+        .iter()
+        .map(|spots| LocalizationFrame::new(spots, None))
+        .collect::<Vec<_>>();
+    let spec = LocalizationSpec::new([0, 7], 10.0, 20.0);
+    let mut reached = 0usize;
+    let report =
+        grana_analysis::localization::localization_report(&held, spec, 0.1, &mut |done, _| {
+            reached = done.max(reached);
+            true
+        })
+        .expect("the report renders")
+        .expect("the report completes");
+    assert!(reached > 0, "the render reports its progress");
+    assert_eq!(report.localizations(), 4800);
+    let measured = report.nena().precision();
+    assert!(
+        (measured - 12.0).abs() < 4.0,
+        "the precision measures {measured} nm against 12 nm"
+    );
+    assert!(
+        report.image().size().iter().all(|side| *side > 400),
+        "the image covers the field"
+    );
+    assert!(
+        report.image().pixels().iter().any(|sample| *sample > 0),
+        "the image paints the localizations"
+    );
+    assert!(!report.frc().frequencies().is_empty());
+    let resolution = report
+        .frc()
+        .resolution()
+        .expect("the rings cross the threshold");
+    assert!(
+        (10.0..120.0).contains(&resolution),
+        "the resolution measures {resolution} nm"
+    );
 }

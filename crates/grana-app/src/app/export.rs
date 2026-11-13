@@ -301,6 +301,7 @@ impl App {
                 measuring: session.measuring(),
                 timeline: session.timeline(),
                 jobs: session.progress(),
+                localizations: session.localizations(),
                 io: session.io(exporting, export_message),
                 batch: session.batch(),
                 stitch: session.stitch().map(|stitch| stitch.view()),

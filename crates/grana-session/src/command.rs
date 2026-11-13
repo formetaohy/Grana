@@ -375,6 +375,13 @@ pub enum Command {
     ComputeObjectColoc(ObjectSetId),
     CancelObjectColoc(ObjectSetId),
     ClearObjectColoc(ObjectSetId),
+    AnalyzeLocalizations {
+        set: ObjectSetId,
+        spec: grana_analysis::localization::LocalizationSpec,
+    },
+    CancelLocalizations(ObjectSetId),
+    ClearLocalizations(ObjectSetId),
+    ExportLocalizationImage(ObjectSetId),
     ComputeDrift,
     ComputeLocalizationDrift(ObjectSetId),
     CancelDrift,

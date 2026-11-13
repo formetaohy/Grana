@@ -1,0 +1,105 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use grana_analysis::localization::{LocalizationFrame, LocalizationSpec};
+use grana_object::Spot;
+use grana_scene::{ObjectFrame, ObjectSetId, Revision};
+
+use crate::event::Event;
+
+pub struct LocalizationReportRequest {
+    set: ObjectSetId,
+    revision: Revision,
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    visible: Vec<Option<Vec<bool>>>,
+    spec: LocalizationSpec,
+    pixel: f32,
+}
+
+impl LocalizationReportRequest {
+    pub fn new(
+        set: ObjectSetId,
+        revision: Revision,
+        frames: Vec<Option<Arc<ObjectFrame>>>,
+        visible: Vec<Option<Vec<bool>>>,
+        spec: LocalizationSpec,
+        pixel: f32,
+    ) -> Self {
+        assert!(
+            !frames.is_empty(),
+            "a localization report names the frames of its range"
+        );
+        assert_eq!(
+            frames.len(),
+            visible.len(),
+            "a localization report marks every frame it ranges over"
+        );
+        assert!(
+            pixel.is_finite() && pixel > 0.0,
+            "a localization report knows its positive camera pixel"
+        );
+        Self {
+            set,
+            revision,
+            frames,
+            visible,
+            spec,
+            pixel,
+        }
+    }
+}
+
+pub fn localization_report(
+    request: LocalizationReportRequest,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<(), String> {
+    let LocalizationReportRequest {
+        set,
+        revision,
+        frames,
+        visible,
+        spec,
+        pixel,
+    } = request;
+    sink(Event::Progress {
+        time: 0,
+        done: 0,
+        total: 0,
+    });
+    let empty: &[Spot] = &[];
+    let held = (0..frames.len())
+        .map(|index| {
+            let spots = frames[index]
+                .as_deref()
+                .and_then(ObjectFrame::spots)
+                .map_or(empty, |set| set.spots());
+            LocalizationFrame::new(spots, visible[index].as_deref())
+        })
+        .collect::<Vec<_>>();
+    let mut report = |done: usize, total: usize| {
+        sink(Event::Progress {
+            time: 0,
+            done,
+            total,
+        });
+        !cancel.load(Ordering::Relaxed)
+    };
+    let Some(found) =
+        grana_analysis::localization::localization_report(&held, spec, pixel, &mut report)?
+    else {
+        sink(Event::Done);
+        return Ok(());
+    };
+    if cancel.load(Ordering::Relaxed) {
+        sink(Event::Done);
+        return Ok(());
+    }
+    sink(Event::LocalizationReport {
+        set,
+        revision,
+        report: Box::new(found),
+    });
+    sink(Event::Done);
+    Ok(())
+}

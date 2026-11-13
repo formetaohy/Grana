@@ -137,6 +137,10 @@ pub struct MaskBrush {
 
 pub use grana_chart::DistributionStyle;
 
+const DEFAULT_LOCALIZATION_PIXEL: f32 = 10.0;
+
+const DEFAULT_LOCALIZATION_BLUR: f32 = 20.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelationMetric {
     Contact,
@@ -237,6 +241,7 @@ pub struct Workspace {
     pub psf_threshold: f32,
     pub psf_separation: f32,
     pub classifier: HashMap<ObjectSetId, Vec<Measurement>>,
+    pub localization: HashMap<ObjectSetId, grana_session::LocalizationSpec>,
     pub relation: Option<(ObjectSetId, ObjectSetId, i32)>,
     pub relation_metric: RelationMetric,
     pub relation_filter: f32,
@@ -282,6 +287,7 @@ impl Default for Workspace {
             psf_threshold: 8.0,
             psf_separation: 1.5,
             classifier: HashMap::new(),
+            localization: HashMap::new(),
             relation: None,
             relation_metric: RelationMetric::Contact,
             relation_filter: 0.0,
@@ -324,6 +330,29 @@ impl Workspace {
             .cloned()
             .unwrap_or_else(|| set.colorable_measurements())
     }
+
+    pub fn localization_spec(
+        &self,
+        set: ObjectSetId,
+        frames: u32,
+    ) -> grana_session::LocalizationSpec {
+        let spec = self.localization.get(&set).copied().unwrap_or_else(|| {
+            grana_session::LocalizationSpec::new(
+                [0, frames.saturating_sub(1)],
+                DEFAULT_LOCALIZATION_PIXEL,
+                DEFAULT_LOCALIZATION_BLUR,
+            )
+        });
+        spec.fitted(frames)
+    }
+
+    pub fn set_localization_spec(
+        &mut self,
+        set: ObjectSetId,
+        spec: grana_session::LocalizationSpec,
+    ) {
+        self.localization.insert(set, spec);
+    }
 }
 
 pub struct View<'a> {
@@ -333,6 +362,7 @@ pub struct View<'a> {
     pub measuring: bool,
     pub timeline: &'a Timeline,
     pub jobs: &'a [Progress],
+    pub localizations: &'a grana_session::Localizations,
     pub io: &'a IoView<'a>,
     pub batch: Option<&'a BatchView<'a>>,
     pub history: HistoryView,

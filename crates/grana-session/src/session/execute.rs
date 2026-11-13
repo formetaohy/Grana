@@ -690,6 +690,10 @@ impl Session {
                     scene.clear_object_coloc(set);
                 }
             }
+            Command::AnalyzeLocalizations { set, spec } => self.start_localizations(set, spec),
+            Command::CancelLocalizations(set) => self.cancel_localizations(set),
+            Command::ClearLocalizations(set) => self.clear_localizations(set),
+            Command::ExportLocalizationImage(set) => self.export_localization_image(set),
             Command::ComputeDrift => self.start_drift(),
             Command::ComputeLocalizationDrift(set) => self.start_localization_drift(set),
             Command::CancelDrift => self.cancel(Job::Drift),

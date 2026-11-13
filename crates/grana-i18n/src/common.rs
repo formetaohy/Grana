@@ -31,6 +31,7 @@ labels! {
     blocks => "blocks" / "块";
     tiles => "tiles" / "瓦片";
     beads => "beads" / "微球";
+    steps => "steps" / "步";
     preparing => "Preparing" / "准备中";
 }
 

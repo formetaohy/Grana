@@ -10,6 +10,7 @@ mod import;
 mod intensity;
 mod interop;
 mod label;
+mod localization;
 mod mask;
 mod montage;
 mod open;
@@ -64,6 +65,7 @@ use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
+pub use localization::Localizations;
 use recover::Restore;
 use stitch::Stitch;
 use tasks::Tasks;
@@ -165,6 +167,7 @@ pub struct Session {
     recent: Recent,
     import: Vec<ImportNote>,
     stitch: Option<Stitch>,
+    localization: Localizations,
 }
 
 impl Default for Session {
@@ -252,6 +255,7 @@ impl Session {
             recent: Recent::default(),
             import: Vec::new(),
             stitch: None,
+            localization: Localizations::default(),
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -499,6 +503,12 @@ impl Session {
     pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
         std::mem::take(&mut self.bricks)
     }
+    fn prune_localizations(&mut self) -> bool {
+        match self.scene.as_ref() {
+            Some(scene) => self.localization.retain(scene),
+            None => self.localization.clear(),
+        }
+    }
     pub fn sync_measure(&mut self) {
         let busy = self.scene.is_some()
             && self.measure.set().is_some_and(|set| {
@@ -563,6 +573,7 @@ impl Session {
         repaint |= self.poll_batch();
         repaint |= self.poll_stitch();
         repaint |= self.refresh_masks();
+        repaint |= self.prune_localizations();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
             self.baseline = self.document_hash();
             self.deferred = false;
