@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use grana_i18n::Language;
 use serde::{Deserialize, Serialize};
 
-const FILE: &str = "preferences.json";
+const FILE: &str = "preferences.toml";
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -59,7 +59,7 @@ impl Preference {
             return Self::default();
         };
         let text = text.trim_start_matches('\u{feff}');
-        let Ok(stored) = serde_json::from_str::<Stored>(text) else {
+        let Ok(stored) = toml::from_str::<Stored>(text) else {
             return Self::default();
         };
         Self {
@@ -78,9 +78,9 @@ impl Preference {
         let stored = Stored {
             language: Some(self.language.into()),
         };
-        let bytes = serde_json::to_vec_pretty(&stored)
+        let text = toml::to_string_pretty(&stored)
             .map_err(|error| format!("failed to encode the preferences: {error}"))?;
-        grana_file::write(&path, &bytes)
+        grana_file::write(&path, text.as_bytes())
             .map_err(|error| format!("failed to write {}: {error}", path.display()))
     }
 }

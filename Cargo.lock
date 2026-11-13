@@ -3450,7 +3450,7 @@ dependencies = [
  "grana-warp",
  "rfd",
  "serde",
- "serde_json",
+ "toml",
  "wgpu",
  "winit",
 ]
@@ -3937,7 +3937,7 @@ dependencies = [
  "grana-zarr",
  "rfd",
  "serde",
- "serde_json",
+ "toml",
 ]
 
 [[package]]

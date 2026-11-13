@@ -7,7 +7,7 @@ use grana_project::Project;
 
 use crate::task::Progress;
 
-const FILE: &str = "recovery.json";
+const FILE: &str = "recovery.toml";
 
 const SNAPSHOT: &str = "snapshot.grana";
 
@@ -140,7 +140,7 @@ impl Recovery {
                             .map_err(|error| error.to_string())
                     })
                     .and_then(|()| {
-                        let text = serde_json::to_string_pretty(&label)
+                        let text = toml::to_string_pretty(&label)
                             .map_err(|error| format!("the recovery does not serialize: {error}"))?;
                         grana_file::write(&root.join(FILE), text.as_bytes()).map_err(|error| {
                             format!("failed to write the recovery record: {error}")
@@ -172,7 +172,7 @@ fn discard(root: &Path) {
 
 fn read(path: &Path) -> Option<Entry> {
     let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<Entry>(&text) {
+    match toml::from_str::<Entry>(&text) {
         Ok(entry) => Some(entry),
         Err(_) => {
             let _ = std::fs::remove_file(path);

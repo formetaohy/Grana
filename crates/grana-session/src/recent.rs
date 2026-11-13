@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 const LIMIT: usize = 12;
-const FILE: &str = "recent.json";
+const FILE: &str = "recent.toml";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -84,6 +84,13 @@ impl Entry {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+    #[serde(default)]
+    entry: Vec<Entry>,
+}
+
 #[derive(Default)]
 pub struct Recent {
     entries: Vec<Entry>,
@@ -97,8 +104,9 @@ impl Recent {
         };
         let entries = std::fs::read_to_string(&root)
             .ok()
-            .and_then(|text| serde_json::from_str::<Vec<Entry>>(&text).ok())
+            .and_then(|text| toml::from_str::<Stored>(&text).ok())
             .unwrap_or_default()
+            .entry
             .into_iter()
             .filter(Entry::present)
             .take(LIMIT)
@@ -138,7 +146,10 @@ impl Recent {
         if let Some(parent) = root.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = serde_json::to_string_pretty(&self.entries)
+        let stored = Stored {
+            entry: self.entries.clone(),
+        };
+        let text = toml::to_string_pretty(&stored)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         std::fs::write(root, text)
     }
