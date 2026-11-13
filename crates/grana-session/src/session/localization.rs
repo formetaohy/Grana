@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use grana_analysis::localization::{
-    Clusters, LocalizationFilter, LocalizationGeometry, LocalizationRenderer, LocalizationReport,
-    LocalizationSpec,
+    Clusters, LocalizationDepth, LocalizationFilter, LocalizationGeometry, LocalizationRenderer,
+    LocalizationReport, LocalizationSpec,
 };
 use grana_object::ClusterSpec;
 use grana_pipeline::run::{LocalizationClusterRequest, LocalizationReportRequest};
@@ -13,8 +13,8 @@ use grana_raster::Bitmap;
 use grana_scene::{Job, ObjectSetId, Revision, Scene};
 use grana_volume::Region;
 
+use super::export::Writer;
 use super::*;
-use crate::task::Progress as ExportProgress;
 
 type Prepared = (
     Revision,
@@ -45,7 +45,8 @@ pub struct Localizations {
 struct Entry {
     revision: Revision,
     report: Arc<LocalizationReport>,
-    bitmap: Bitmap,
+    bitmaps: Vec<Bitmap>,
+    layer: usize,
 }
 
 impl Localizations {
@@ -54,11 +55,35 @@ impl Localizations {
     }
 
     pub fn bitmap(&self, set: ObjectSetId) -> Option<&Bitmap> {
-        self.entries.get(&set).map(|entry| &entry.bitmap)
+        self.entries
+            .get(&set)
+            .and_then(|entry| entry.bitmaps.get(entry.layer))
+    }
+
+    pub fn layer(&self, set: ObjectSetId) -> usize {
+        self.entries.get(&set).map_or(0, |entry| entry.layer)
+    }
+
+    pub fn layers(&self, set: ObjectSetId) -> usize {
+        self.entries
+            .get(&set)
+            .map_or(0, |entry| entry.bitmaps.len())
     }
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub(super) fn set_layer(&mut self, set: ObjectSetId, layer: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(&set) else {
+            return false;
+        };
+        let layer = layer.min(entry.bitmaps.len().saturating_sub(1));
+        if entry.layer == layer {
+            return false;
+        }
+        entry.layer = layer;
+        true
     }
 
     pub(super) fn install(
@@ -67,14 +92,20 @@ impl Localizations {
         revision: Revision,
         report: LocalizationReport,
     ) -> bool {
-        let image = report.image();
-        let bitmap = Bitmap::new(image.size(), image.shared());
+        let bitmaps = report
+            .stack()
+            .layers()
+            .iter()
+            .map(|image| Bitmap::new(image.size(), image.shared()))
+            .collect::<Vec<_>>();
+        let layer = bitmaps.len() / 2;
         self.entries.insert(
             set,
             Entry {
                 revision,
                 report: Arc::new(report),
-                bitmap,
+                bitmaps,
+                layer,
             },
         );
         true
@@ -306,27 +337,6 @@ impl Session {
             self.message = Some(Message::error("an export is already running"));
             return;
         }
-        let Some(report) = self.localization.report(set) else {
-            self.message = Some(Message::error(
-                "render a super-resolution image before exporting it",
-            ));
-            return;
-        };
-        let geometry = report.geometry();
-        if !geometry.renderable() {
-            let [width, height] = geometry.size();
-            self.message = Some(Message::error(format!(
-                "the super-resolution image would span {width}x{height} pixels; raise the pixel size"
-            )));
-            return;
-        }
-        let spec = report.spec();
-        let Ok((frames, visible)) = self.localization_window(set, spec) else {
-            self.message = Some(Message::error(
-                "the object set carries no localization table to export",
-            ));
-            return;
-        };
         let name = self
             .scene
             .as_ref()
@@ -344,27 +354,68 @@ impl Session {
         else {
             return;
         };
-        let raster = match ImageFile::of(&path) {
-            Ok(raster) => raster,
-            Err(detail) => {
-                self.message = Some(Message::error(detail));
-                return;
-            }
+        if let Err(detail) = self.export_localization_image_to(set, &path) {
+            self.message = Some(Message::error(detail));
+        }
+    }
+
+    pub fn export_localization_image_to(
+        &mut self,
+        set: ObjectSetId,
+        path: &Path,
+    ) -> Result<(), String> {
+        if self.tasks.writing() {
+            return Err("an export is already running".to_string());
+        }
+        let (geometry, depth, density, filter, groups, spec, selected) = {
+            let report = self
+                .localization
+                .report(set)
+                .ok_or_else(|| "render a super-resolution image before exporting it".to_string())?;
+            (
+                report.geometry(),
+                report.depth(),
+                report.density(),
+                report.filter(),
+                report.groups().clone(),
+                report.spec(),
+                self.localization.layer(set),
+            )
         };
+        if !geometry.renderable() {
+            let [width, height] = geometry.size();
+            return Err(format!(
+                "the super-resolution image would span {width}x{height} pixels; raise the pixel size"
+            ));
+        }
+        let (frames, visible) = self
+            .localization_window(set, spec)
+            .map_err(|_| "the object set carries no localization table to export".to_string())?;
+        let raster = ImageFile::of(path)?;
+        let name = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .map_or_else(
+                || "localizations".to_string(),
+                |object| object.name().to_string(),
+            );
         self.message = None;
-        self.tasks.superres = Some(Superres::start(Request {
+        self.tasks.superres = Some(start_superres(Request {
             frames,
             visible,
             geometry,
-            density: report.density(),
-            filter: report.filter(),
-            groups: report.groups().clone(),
+            depth,
+            density,
+            filter,
+            groups,
             raster,
+            selected,
             name,
-            path,
+            path: path.to_path_buf(),
         }));
+        Ok(())
     }
-
     pub(super) fn estimate_clusters(&mut self, set: ObjectSetId) {
         let Some(report) = self.localization.report(set) else {
             self.message = Some(Message::error(
@@ -433,32 +484,34 @@ pub(super) struct Request {
     frames: Vec<Option<Arc<ObjectFrame>>>,
     visible: Vec<Option<Vec<bool>>>,
     geometry: LocalizationGeometry,
+    depth: LocalizationDepth,
     density: f32,
     filter: LocalizationFilter,
     groups: grana_analysis::localization::Groups,
     raster: ImageFile,
+    selected: usize,
     name: String,
     path: PathBuf,
 }
 
-pub(super) struct Superres {
-    task: ExportProgress<Result<PathBuf, String>>,
-}
-
-impl Superres {
-    fn start(request: Request) -> Self {
-        let Request {
-            frames,
-            visible,
-            geometry,
-            density,
-            filter,
-            groups,
-            raster,
-            name,
-            path,
-        } = request;
-        let task = ExportProgress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+pub(super) fn start_superres(request: Request) -> Writer {
+    let Request {
+        frames,
+        visible,
+        geometry,
+        depth,
+        density,
+        filter,
+        groups,
+        raster,
+        selected,
+        name,
+        path,
+    } = request;
+    Writer::start(
+        "Rendering the super-resolution image".to_string(),
+        path,
+        move |cancel, progress, path| {
             let held = frames
                 .iter()
                 .zip(&visible)
@@ -479,41 +532,43 @@ impl Superres {
                 !cancel.load(Ordering::Relaxed)
             };
             let mut renderer =
-                LocalizationRenderer::new(&held, geometry, density, groups, &mut report)?;
+                LocalizationRenderer::new(&held, geometry, depth, groups, &mut report)?;
+            renderer.at_density(density);
             match raster {
                 ImageFile::Png => {
-                    grana_raster::write_stream(&path, geometry.size(), &mut |_, row| {
+                    renderer.begin((selected.min(depth.layers() as usize - 1)) as u32)?;
+                    grana_raster::write_stream(path, geometry.size(), &mut |_, row| {
                         renderer.row(row)
                     })
                     .map_err(|error| error.to_string())?
                 }
                 ImageFile::Tiff => {
                     let pixel = geometry.pixel();
-                    let stream = grana_tiff::Stream {
+                    let slice = if depth.step() > 0.0 {
+                        depth.step()
+                    } else {
+                        pixel
+                    };
+                    let stack = grana_tiff::Stack {
                         size: geometry.size(),
                         samples: 3,
                         name: &name,
-                        physical: Some([pixel, pixel]),
+                        physical: Some([pixel, pixel, slice]),
                         interval: None,
+                        depth: depth.layers(),
                     };
-                    grana_tiff::write_stream(&path, &stream, &mut |_, row| renderer.row_rgb(row))
-                        .map_err(|error| error.to_string())?;
+                    let mut current = u32::MAX;
+                    grana_tiff::write_stack(path, &stack, &mut |layer, _, bytes| {
+                        if layer != current {
+                            renderer.begin(layer)?;
+                            current = layer;
+                        }
+                        renderer.row_rgb(bytes)
+                    })
+                    .map_err(|error| error.to_string())?
                 }
             }
-            Ok(path)
-        });
-        Self { task }
-    }
-
-    pub(super) fn stepped(&mut self) -> bool {
-        self.task.stepped()
-    }
-
-    pub(super) fn progress(&self) -> (usize, usize) {
-        self.task.progress()
-    }
-
-    pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
-        self.task.poll()
-    }
+            Ok(())
+        },
+    )
 }

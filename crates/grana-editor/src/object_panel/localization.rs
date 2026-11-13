@@ -67,6 +67,30 @@ pub(super) fn card<'a>(
                 painter.bitmap(target, Corners::all(4.0), &bitmap);
             },
         ));
+        let depth = report.depth();
+        if depth.layers() > 1 {
+            let layers = depth.layers();
+            let selected = state.localizations.layer(id).min(layers as usize - 1);
+            let field = grana_ui::widget::drag_value(&theme, (selected + 1) as f32, 0)
+                .named("localization.layer")
+                .on_drag_value(0.2, move |value| {
+                    let layer = (value.round() as i64 - 1).clamp(0, i64::from(layers) - 1) as usize;
+                    Message::Command(Command::SetLocalizationLayer { set: id, layer })
+                });
+            children.push(view::form_row(
+                ctx,
+                grana_i18n::localization::slice(language),
+                single(field),
+            ));
+            children.push(view::caption(
+                ctx,
+                &grana_i18n::localization::slice_range(
+                    language,
+                    depth.lower(selected as u32) * 1000.0,
+                    depth.upper(selected as u32) * 1000.0,
+                ),
+            ));
+        }
         children.push(match report.nena() {
             Some(nena) => view::labelled(
                 ctx,
@@ -424,6 +448,19 @@ fn fields<'a>(
         .gap(6.0)
         .align(Align::Center)
         .children([blur_field]);
+    let depth_field = grana_ui::widget::drag_value(theme, spec.depth(), 0)
+        .named("localization.depth")
+        .on_drag_value(1.0, move |value| {
+            let depth = value.clamp(0.0, LocalizationSpec::DEPTH_MAXIMUM);
+            Message::Command(Command::SetLocalizationSpec {
+                set: id,
+                spec: spec.at_depth(depth),
+            })
+        });
+    let depth_row = grana_ui::row()
+        .gap(6.0)
+        .align(Align::Center)
+        .children([depth_field]);
     let precision_row = grana_ui::row()
         .gap(6.0)
         .align(Align::Center)
@@ -442,10 +479,21 @@ fn fields<'a>(
         ),
         view::form_row(
             ctx,
+            grana_i18n::localization::slice_depth(language),
+            depth_row,
+        ),
+        view::form_row(
+            ctx,
             grana_i18n::localization::precision_limit(language),
             precision_row,
         ),
     ];
+    if spec.depth() == 0.0 {
+        rows.push(view::caption(
+            ctx,
+            grana_i18n::localization::slice_projection(language),
+        ));
+    }
     if set
         .localization()
         .is_some_and(grana_scene::LocalizationSource::photons)

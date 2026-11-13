@@ -527,6 +527,7 @@ impl Encode for LocalizationSource {
         writer.u32(spec.frames()[1]);
         writer.f32(spec.pixel());
         writer.f32(spec.blur());
+        writer.f32(spec.depth());
         let filter = spec.filter();
         writer.f32(filter.photons());
         writer.f32(filter.precision());

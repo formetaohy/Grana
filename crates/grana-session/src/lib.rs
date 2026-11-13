@@ -15,8 +15,8 @@ mod view;
 pub use access::Access;
 pub use command::{Action, Command};
 pub use grana_analysis::localization::{
-    Frc, GroupStat, Groups, LocalizationFilter, LocalizationImage, LocalizationReport,
-    LocalizationSpec, NeNa,
+    Frc, GroupStat, Groups, LocalizationDepth, LocalizationFilter, LocalizationImage,
+    LocalizationReport, LocalizationSpec, NeNa,
 };
 pub use grana_image::{Image, Plate, Series, Source, Well, is_image, is_remote};
 pub use grana_mesh::Format as MeshFormat;

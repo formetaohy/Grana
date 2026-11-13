@@ -895,25 +895,40 @@ impl Run<'_, '_> {
                 grana_analysis::localization::LocalizationGeometry::MAXIMUM
             ));
         }
+        let depth = report.depth();
         let mut progress = |_: usize, _: usize| true;
         let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
             &held,
             geometry,
-            report.density(),
+            depth,
             report.groups().clone(),
             &mut progress,
         )?;
+        renderer.at_density(report.density());
         let step = geometry.pixel();
-        grana_tiff::write_stream(
+        let slice = if depth.step() > 0.0 {
+            depth.step()
+        } else {
+            step
+        };
+        let mut current = u32::MAX;
+        grana_tiff::write_stack(
             &self.folder.join(format!("{key}-superres.ome.tif")),
-            &grana_tiff::Stream {
+            &grana_tiff::Stack {
                 size: geometry.size(),
                 samples: 3,
                 name: &name,
-                physical: Some([step, step]),
+                physical: Some([step, step, slice]),
                 interval: None,
+                depth: depth.layers(),
             },
-            &mut |_, row| renderer.row_rgb(row),
+            &mut |layer, _, bytes| {
+                if layer != current {
+                    renderer.begin(layer)?;
+                    current = layer;
+                }
+                renderer.row_rgb(bytes)
+            },
         )
         .map_err(|error| error.to_string())
     }

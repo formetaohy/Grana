@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use grana_measure::{Aggregate, Group, Table};
 use grana_mesh::Format as MeshFormat;
@@ -40,16 +40,23 @@ fn stream(
     file.commit()
 }
 
-pub(super) struct Csv {
+pub(super) struct Writer {
     task: Progress<Result<PathBuf, String>>,
     label: String,
 }
 
-impl Csv {
-    fn start(table: Arc<Table>, rows: Vec<usize>, path: PathBuf, name: &str) -> Self {
-        let label = format!("Exporting {name} statistics");
-        let task = Progress::spawn(grana_exec::Role::Write, move |_, progress| {
-            write(&path, &table, &rows, progress)
+impl Writer {
+    pub(super) fn start(
+        label: String,
+        path: PathBuf,
+        work: impl FnOnce(&AtomicBool, &mut dyn FnMut(usize, usize), &Path) -> Result<(), String>
+        + Send
+        + 'static,
+    ) -> Self {
+        let returned = path.clone();
+        let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
+            work(cancel, progress, &path)?;
+            Ok(returned)
         });
         Self { task, label }
     }
@@ -323,7 +330,10 @@ impl Session {
             return;
         };
         self.message = None;
-        self.tasks.csv = Some(Csv::start(table, rows, path, &name));
+        let label = format!("Exporting {name} statistics");
+        self.tasks.csv = Some(Writer::start(label, path, move |_, progress, path| {
+            write(path, &table, &rows, progress).map(|_| ())
+        }));
     }
 
     pub(super) fn export_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {

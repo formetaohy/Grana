@@ -1956,11 +1956,17 @@ fn renders_and_measures_localizations() {
         "the precision measures {measured} nm against 12 nm"
     );
     assert!(
-        report.image().size().iter().all(|side| *side > 400),
+        report
+            .stack()
+            .layer(0)
+            .is_some_and(|image| image.size().iter().all(|side| *side > 400)),
         "the image covers the field"
     );
     assert!(
-        report.image().pixels().iter().any(|sample| *sample > 0),
+        report
+            .stack()
+            .layer(0)
+            .is_some_and(|image| image.pixels().iter().any(|sample| *sample > 0)),
         "the image paints the localizations"
     );
     assert!(!report.frc().frequencies().is_empty());
@@ -2027,20 +2033,23 @@ fn renders_localizations_past_the_preview_resolution() {
         "the image keeps its native size of {:?}",
         geometry.size()
     );
+    let preview = report.stack().layer(0).expect("the preview paints a slice");
     assert!(
-        report.image().size()[0] <= 2048,
+        preview.size()[0] <= 2048,
         "the preview stays bounded at {:?}",
-        report.image().size()
+        preview.size()
     );
     let mut progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
         geometry,
-        report.density(),
+        report.depth(),
         report.groups().clone(),
         &mut progress,
     )
     .expect("the renderer accepts the geometry");
+    renderer.at_density(report.density());
+    renderer.begin(0).expect("the first slice begins");
     assert_eq!(renderer.width(), geometry.size()[0]);
     let mut row = vec![0u8; geometry.size()[0] as usize * 4];
     let mut painted = false;
@@ -2095,7 +2104,10 @@ fn renders_single_frame_localizations_grouped() {
         "one frame correlates its rings"
     );
     assert!(
-        report.image().pixels().iter().any(|sample| *sample > 0),
+        report
+            .stack()
+            .layer(0)
+            .is_some_and(|image| image.pixels().iter().any(|sample| *sample > 0)),
         "the image paints the localizations"
     );
     assert_eq!(
@@ -2113,6 +2125,83 @@ fn renders_single_frame_localizations_grouped() {
         "the estimate reaches twice the precision"
     );
     assert!(suggested.dark() >= 1, "a molecule tolerates a dark frame");
+}
+
+#[test]
+fn slices_localizations_into_a_stack() {
+    let spots = (0..300)
+        .map(|index| {
+            Spot::gaussian(
+                [
+                    (index % 30) as f32 * 0.1,
+                    (index / 30) as f32 * 0.1,
+                    (index % 5) as f32 * 0.5,
+                ],
+                [0.01; 3],
+                900.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    let held = [LocalizationFrame::new(
+        &spots,
+        None,
+        LocalizationFilter::NONE,
+    )];
+    let spec = LocalizationSpec::new([0, 0], 10.0, 20.0).at_depth(250.0);
+    let report = grana_analysis::localization::localization_report(
+        &held,
+        spec,
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the stack renders")
+    .expect("the report completes");
+    let depth = report.depth();
+    assert_eq!(
+        depth.layers(),
+        8,
+        "a span of two micrometres slices in eight"
+    );
+    assert_eq!(report.stack().count(), 8, "the preview paints every slice");
+    let painted = report
+        .stack()
+        .layers()
+        .iter()
+        .filter(|image| {
+            image
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[..3].iter().any(|sample| *sample > 0))
+        })
+        .count();
+    assert_eq!(painted, 5, "each of the five heights paints its own slice");
+    let mut progress = |_: usize, _: usize| true;
+    let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
+        &held,
+        report.geometry(),
+        depth,
+        report.groups().clone(),
+        &mut progress,
+    )
+    .expect("the renderer accepts the stack");
+    renderer.at_density(report.density());
+    renderer.begin(2).expect("the rendered slice begins");
+    let width = report.geometry().size()[0] as usize;
+    let mut row = vec![0u8; width * 4];
+    let mut painted = false;
+    for _ in 0..report.geometry().size()[1] {
+        renderer.row(&mut row).expect("the row renders");
+        painted |= row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[..3].iter().any(|sample| *sample > 0));
+    }
+    assert!(painted, "the exported slice paints its localizations");
 }
 
 #[test]
@@ -2332,8 +2421,9 @@ fn exports_tiles_that_match_the_preview() {
     let geometry = report.geometry();
     let width = geometry.size()[0] as usize;
     let height = geometry.size()[1] as usize;
+    let preview = report.stack().layer(0).expect("the preview paints a slice");
     assert_eq!(
-        report.image().size(),
+        preview.size(),
         geometry.size(),
         "the preview keeps the native pixel size"
     );
@@ -2343,21 +2433,20 @@ fn exports_tiles_that_match_the_preview() {
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
         geometry,
-        report.density(),
+        report.depth(),
         report.groups().clone(),
         &mut progress,
     )
     .expect("the renderer accepts the geometry");
+    renderer.at_density(report.density());
+    renderer.begin(0).expect("the first slice begins");
     let mut row = vec![0u8; width * 4];
     for y in 0..height {
         renderer.row(&mut row).expect("the row renders");
         image[y * width * 4..(y + 1) * width * 4].copy_from_slice(&row);
     }
     assert!(
-        image
-            .iter()
-            .zip(report.image().pixels())
-            .all(|(a, b)| a == b),
+        image.iter().zip(preview.pixels()).all(|(a, b)| a == b),
         "the tiles seam nothing against the single grid"
     );
 }

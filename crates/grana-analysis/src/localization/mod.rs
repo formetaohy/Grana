@@ -4,6 +4,7 @@ pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
 use grana_volume::Region;
 
 mod cluster;
+mod depth;
 mod fit;
 mod fourier;
 mod frc;
@@ -12,15 +13,20 @@ mod group;
 mod image;
 mod nena;
 mod report;
+mod stack;
 mod tone;
 
 pub use cluster::{Clusters, cluster};
+pub use depth::LocalizationDepth;
 use grid::Grid;
 pub use group::{GroupStat, Groups};
 pub use image::LocalizationRenderer;
 pub use report::{Frc, LocalizationGeometry, LocalizationImage, LocalizationReport, NeNa};
+pub use stack::LocalizationStack;
 
 const PREVIEW: u32 = 2048;
+
+const PREVIEW_BYTES: u64 = 256 << 20;
 
 const FRC_LIMIT: usize = 2048;
 
@@ -134,38 +140,47 @@ pub fn localization_report(
     let blur = spec.blur() * 0.001;
     let pixel = spec.pixel() * 0.001;
     let geometry = rasterize(&spec, low, span, pixel, blur)?;
-    let preview = preview_geometry(low, span, geometry.pixel(), blur)?;
-    let mut progress = Ticker::new(total_steps(frames.len()), report);
-    let mut raster = if survey.groups.chromatic() {
-        Grid::tinted(preview.size(), preview.pixel(), preview.origin())
-    } else {
-        Grid::empty(preview.size(), preview.pixel(), preview.origin())
-    };
-    for frame in frames {
-        for (index, spot) in frame.spots.iter().enumerate() {
-            if !frame.visible(index) {
-                continue;
+    let depth = survey.depth(spec.depth() * 0.001)?;
+    let preview = preview_geometry(low, span, pixel, blur, depth)?;
+    let preview_geometry = LocalizationGeometry::new(
+        preview.origin(),
+        preview.pixel(),
+        preview.size(),
+        blur,
+        margin_pixels(blur, preview.pixel()),
+    );
+    let mut ticker = Ticker::new(total_steps(frames.len(), depth, preview.size()), report);
+    let (density, stack) = {
+        let mut progress = |_: usize, _: usize| ticker.tick();
+        let mut renderer = LocalizationRenderer::new(
+            frames,
+            preview_geometry,
+            depth,
+            survey.groups.clone(),
+            &mut progress,
+        )?;
+        let density = renderer.survey()?;
+        let size = preview.size();
+        let mut layers = Vec::with_capacity(depth.layers() as usize);
+        for layer in 0..depth.layers() {
+            renderer.begin(layer)?;
+            let mut pixels = vec![0u8; size[0] as usize * size[1] as usize * 4];
+            let stride = size[0] as usize * 4;
+            for row in 0..size[1] as usize {
+                renderer.row(&mut pixels[row * stride..(row + 1) * stride])?;
             }
-            let center = spot.center();
-            let tint = survey.groups.chromatic().then(|| {
-                survey
-                    .groups
-                    .slot_tint(survey.groups.tint_slot(spot.group()))
-            });
-            raster.add([center[0], center[1]], 1.0, tint);
+            layers.push(LocalizationImage::new(size, pixels));
         }
-        if !progress.tick() {
-            return Ok(None);
-        }
-    }
+        (density, LocalizationStack::new(depth, layers))
+    };
     let nena = if frames.len() > 1 {
-        let mut advance = |_: usize, _: usize| progress.tick();
+        let mut progress = |_: usize, _: usize| ticker.tick();
         match nena::measure(
             frames,
             REACH * camera_pixel,
             survey.sigma,
             grouped,
-            &mut advance,
+            &mut progress,
         )? {
             Some(nena) => Some(nena),
             None => return Ok(None),
@@ -174,20 +189,18 @@ pub fn localization_report(
         None
     };
     let frc = {
-        let mut advance = || progress.tick();
+        let mut advance = || ticker.tick();
         match measure_frc(frames, low, span, survey.sigma, region, &mut advance)? {
             Some(frc) => frc,
             None => return Ok(None),
         }
     };
-    raster.blur(blur);
-    let (image, density) = tone::tone(&raster);
-    if !progress.tick() {
+    if !ticker.tick() {
         return Ok(None);
     }
     let precision = nena.as_ref().map_or(survey.sigma, |nena| nena.precision()) * 0.001;
     let suggested = cluster::estimate(frames, precision);
-    if !progress.tick() {
+    if !ticker.tick() {
         return Ok(None);
     }
     Ok(Some(LocalizationReport {
@@ -204,13 +217,14 @@ pub fn localization_report(
         frc,
         suggested,
         groups: survey.groups,
-        image,
+        stack,
     }))
 }
 
 struct Survey {
     localizations: u64,
     bounds: Option<([f32; 2], [f32; 2])>,
+    heights: Option<[f32; 2]>,
     sigma: f32,
     groups: Groups,
 }
@@ -222,6 +236,7 @@ impl Survey {
         let mut low = [f32::INFINITY; 2];
         let mut high = [f32::NEG_INFINITY; 2];
         let mut sigmas = Vec::with_capacity(total.div_ceil(stride).min(SAMPLE) + 1);
+        let mut heights = [f32::INFINITY, f32::NEG_INFINITY];
         let mut seen = 0usize;
         for frame in frames {
             for (index, spot) in frame.spots.iter().enumerate() {
@@ -233,6 +248,8 @@ impl Survey {
                     low[axis] = low[axis].min(*value);
                     high[axis] = high[axis].max(*value);
                 }
+                heights[0] = heights[0].min(center[2]);
+                heights[1] = heights[1].max(center[2]);
                 if seen.is_multiple_of(stride) {
                     let sigma = spot.sigma();
                     sigmas.push(0.5 * (sigma[0] + sigma[1]) * 1000.0);
@@ -244,8 +261,18 @@ impl Survey {
         Self {
             localizations: total as u64,
             bounds: (seen > 0).then_some((low, high)),
+            heights: (seen > 0).then_some(heights),
             sigma: sigmas.get(sigmas.len() / 2).copied().unwrap_or(0.0),
             groups: Groups::measure(frames),
+        }
+    }
+
+    fn depth(&self, thickness: f32) -> Result<LocalizationDepth, String> {
+        let [low, high] = self.heights.unwrap_or([0.0; 2]);
+        if thickness > 0.0 {
+            LocalizationDepth::sliced(low, high, thickness)
+        } else {
+            Ok(LocalizationDepth::projection(low))
         }
     }
 }
@@ -271,8 +298,14 @@ impl Ticker<'_> {
     }
 }
 
-fn total_steps(frames: usize) -> usize {
-    2 * frames + if frames > 1 { frames } else { 0 } + 2
+fn total_steps(frames: usize, depth: LocalizationDepth, size: [u32; 2]) -> usize {
+    let bands = (size[1] as usize).div_ceil(512);
+    frames
+        + 2 * depth.layers() as usize
+        + bands * depth.layers() as usize
+        + if frames > 1 { frames } else { 0 }
+        + frames
+        + 2
 }
 
 struct Preview {
@@ -329,21 +362,33 @@ fn preview_geometry(
     span: [f32; 2],
     pixel: f32,
     blur: f32,
+    depth: LocalizationDepth,
 ) -> Result<Preview, String> {
-    let scale = ((span[0].max(span[1]) / pixel).ceil() / PREVIEW as f32)
+    let budget = PREVIEW_BYTES / 4;
+    let mut scale = ((span[0].max(span[1]) / pixel).ceil() / PREVIEW as f32)
         .ceil()
         .max(1.0);
-    let pixel = pixel * scale;
-    let border = margin_pixels(blur, pixel);
-    let size = raster_size(span, pixel, border)?;
-    Ok(Preview {
-        origin: [
-            low[0] - border as f32 * pixel,
-            low[1] - border as f32 * pixel,
-        ],
-        pixel,
-        size: [size[0].max(1), size[1].max(1)],
-    })
+    loop {
+        let scaled = pixel * scale;
+        let border = margin_pixels(blur, scaled);
+        let size = raster_size(span, scaled, border)?;
+        let pixels = u64::from(size[0].max(1)) * u64::from(size[1].max(1));
+        if size[0] <= PREVIEW && size[1] <= PREVIEW && pixels * u64::from(depth.layers()) <= budget
+        {
+            return Ok(Preview {
+                origin: [
+                    low[0] - border as f32 * scaled,
+                    low[1] - border as f32 * scaled,
+                ],
+                pixel: scaled,
+                size: [size[0].max(1), size[1].max(1)],
+            });
+        }
+        scale *= 2.0;
+        if !scale.is_finite() {
+            return Err("the localization image cannot be bounded to a preview".to_string());
+        }
+    }
 }
 
 fn raster_size(span: [f32; 2], pixel: f32, border: u32) -> Result<[u32; 2], String> {

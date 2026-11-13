@@ -1173,6 +1173,8 @@ pub struct MoleculesSpec {
     pub frames: [u32; 2],
     pub pixel: f32,
     pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_f32_zero")]
+    pub depth: f32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub projected: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1197,6 +1199,7 @@ impl MoleculesSpec {
             frames: spec.frames(),
             pixel: spec.pixel(),
             blur: spec.blur(),
+            depth: spec.depth(),
             projected: source.projected(),
             clustered: source.clustered(),
             group_colored: source.group_colored(),
@@ -1210,6 +1213,7 @@ impl MoleculesSpec {
 
     pub fn localization(&self) -> grana_object::LocalizationSpec {
         grana_object::LocalizationSpec::new(self.frames, self.pixel, self.blur)
+            .at_depth(self.depth)
             .at_filter(self.filter())
     }
 
@@ -1238,6 +1242,9 @@ impl MoleculesSpec {
         }
         if !(0.0..=grana_object::LocalizationSpec::BLUR_MAXIMUM).contains(&self.blur) {
             return invalid("blurs by an unsupported width".to_string());
+        }
+        if !(0.0..=grana_object::LocalizationSpec::DEPTH_MAXIMUM).contains(&self.depth) {
+            return invalid("slices an unsupported depth".to_string());
         }
         if self.min_photons.is_some_and(|photons| {
             !(0.0..=grana_object::LocalizationFilter::PHOTONS_MAXIMUM).contains(&photons)

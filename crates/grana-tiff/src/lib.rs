@@ -11,4 +11,4 @@ mod write;
 
 pub use error::Error;
 pub use image::{Image, dataset_name};
-pub use write::{Picture, Stream, write, write_stream};
+pub use write::{Picture, Stack, Stream, write, write_stack, write_stream};

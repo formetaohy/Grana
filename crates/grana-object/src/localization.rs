@@ -61,6 +61,7 @@ pub struct LocalizationSpec {
     frames: [u32; 2],
     pixel: f32,
     blur: f32,
+    depth: f32,
     filter: LocalizationFilter,
 }
 
@@ -68,6 +69,7 @@ impl LocalizationSpec {
     pub const PIXEL_MINIMUM: f32 = 1.0;
     pub const PIXEL_MAXIMUM: f32 = 200.0;
     pub const BLUR_MAXIMUM: f32 = 200.0;
+    pub const DEPTH_MAXIMUM: f32 = 10_000.0;
     pub const DEFAULT_PIXEL: f32 = 10.0;
     pub const DEFAULT_BLUR: f32 = 20.0;
 
@@ -88,6 +90,7 @@ impl LocalizationSpec {
             frames,
             pixel,
             blur,
+            depth: 0.0,
             filter: LocalizationFilter::NONE,
         }
     }
@@ -111,6 +114,10 @@ impl LocalizationSpec {
 
     pub fn blur(&self) -> f32 {
         self.blur
+    }
+
+    pub fn depth(&self) -> f32 {
+        self.depth
     }
 
     pub fn filter(&self) -> LocalizationFilter {
@@ -138,6 +145,14 @@ impl LocalizationSpec {
 
     pub fn at_blur(&self, blur: f32) -> Self {
         Self { blur, ..*self }
+    }
+
+    pub fn at_depth(&self, depth: f32) -> Self {
+        assert!(
+            depth.is_finite() && (0.0..=Self::DEPTH_MAXIMUM).contains(&depth),
+            "a localization spec slices a bounded depth"
+        );
+        Self { depth, ..*self }
     }
 
     pub fn at_filter(&self, filter: LocalizationFilter) -> Self {

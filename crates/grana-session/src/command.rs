@@ -392,6 +392,10 @@ pub enum Command {
         set: ObjectSetId,
         clusters: grana_object::ClusterSpec,
     },
+    SetLocalizationLayer {
+        set: ObjectSetId,
+        layer: usize,
+    },
     ClusterLocalizations(ObjectSetId),
     EstimateLocalizationClusters(ObjectSetId),
     CancelClusters(ObjectSetId),
@@ -694,6 +698,7 @@ impl Command {
                 | Self::SetLocalizationGroupColored { .. }
                 | Self::SetLocalizationProjected { .. }
                 | Self::SetLocalizationClusters { .. }
+                | Self::SetLocalizationLayer { .. }
                 | Self::SetRegion(_)
                 | Self::SetClip(_)
                 | Self::SetExposure(_)

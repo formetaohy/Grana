@@ -1,7 +1,4 @@
-use super::grid::Grid;
-use super::report::LocalizationImage;
-
-const HIGHLIGHT: f32 = 0.999;
+const HIGHLIGHT_BINS: usize = 4096;
 
 const ENTRIES: usize = 1024;
 
@@ -15,20 +12,12 @@ const STOPS: [(f32, [f32; 3]); 6] = [
 ];
 
 pub(super) struct Tone {
+    density: f32,
     scale: f32,
     table: [[u8; 3]; ENTRIES],
 }
 
 impl Tone {
-    pub(super) fn density(grid: &Grid) -> f32 {
-        let highlight = {
-            let held = grid.percentile(HIGHLIGHT);
-            if held > 0.0 { held } else { grid.maximum() }
-        };
-        let pixel = grid.pixel();
-        highlight / (pixel * pixel)
-    }
-
     pub(super) fn new(density: f32, pixel: f32) -> Self {
         let highlight = density * pixel * pixel;
         let scale = if highlight > 0.0 {
@@ -37,9 +26,14 @@ impl Tone {
             0.0
         };
         Self {
+            density,
             scale,
             table: table(),
         }
+    }
+
+    pub(super) fn density(&self) -> f32 {
+        self.density
     }
 
     pub(super) fn level(&self, value: f32) -> f32 {
@@ -66,16 +60,45 @@ impl Tone {
     }
 }
 
-pub(super) fn tone(grid: &Grid) -> (LocalizationImage, f32) {
-    let density = Tone::density(grid);
-    let tone = Tone::new(density, grid.pixel());
-    let size = grid.size();
-    let mut pixels = Vec::with_capacity(grid.values().len() * 4);
-    for (index, value) in grid.values().iter().enumerate() {
-        let [red, green, blue] = tone.shade(*value, grid.chroma(index));
-        pixels.extend_from_slice(&[red, green, blue, 255]);
+pub(super) struct Histogram {
+    bins: Vec<u64>,
+    maximum: f32,
+    count: u64,
+}
+
+impl Histogram {
+    pub(super) fn new(maximum: f32) -> Self {
+        Self {
+            bins: vec![0; HIGHLIGHT_BINS],
+            maximum,
+            count: 0,
+        }
     }
-    (LocalizationImage::new(size, pixels), density)
+
+    pub(super) fn push(&mut self, values: &[f32]) {
+        let scale = (HIGHLIGHT_BINS - 1) as f32 / self.maximum;
+        for value in values {
+            let bin = (value * scale) as usize;
+            self.bins[bin.min(HIGHLIGHT_BINS - 1)] += 1;
+        }
+        self.count += values.len() as u64;
+    }
+
+    pub(super) fn highlight(&self, fraction: f32) -> f32 {
+        if self.count == 0 || self.maximum <= 0.0 {
+            return 0.0;
+        }
+        let scale = (HIGHLIGHT_BINS - 1) as f32 / self.maximum;
+        let target = (fraction.clamp(0.0, 1.0) * self.count as f32) as u64;
+        let mut held = 0u64;
+        for (bin, count) in self.bins.iter().enumerate() {
+            held += count;
+            if held >= target {
+                return (bin as f32 + 0.5) / scale;
+            }
+        }
+        self.maximum
+    }
 }
 
 fn table() -> [[u8; 3]; ENTRIES] {

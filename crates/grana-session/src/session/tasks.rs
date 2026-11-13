@@ -9,9 +9,8 @@ use grana_zarr::Written;
 use super::Session;
 use super::dataset::DatasetExport;
 use super::derived::PendingChannel;
-use super::export::Csv;
+use super::export::Writer;
 use super::label::Labels;
-use super::localization::Superres;
 use super::montage::Montage;
 use super::package::Export as Package;
 use super::preview::Previews;
@@ -40,6 +39,8 @@ pub(super) enum Completion {
         outcome: Result<Written, String>,
     },
     Csv(Result<PathBuf, String>),
+    Geff(Result<PathBuf, String>),
+    Localizations(Result<PathBuf, String>),
     Provenance(Result<PathBuf, String>),
     Package(Result<PathBuf, String>),
     Dataset(Result<Summary, String>),
@@ -105,12 +106,14 @@ pub(super) struct Tasks {
     pub plot: Option<PlotJob>,
     pub document: Option<Document>,
     pub labels: Option<Labels>,
-    pub csv: Option<Csv>,
+    pub csv: Option<Writer>,
+    pub geff: Option<Writer>,
+    pub localizations: Option<Writer>,
     pub provenance: Option<Provenance>,
     pub package: Option<Package>,
     pub dataset: Option<DatasetExport>,
     pub montage: Option<Montage>,
-    pub superres: Option<Superres>,
+    pub superres: Option<Writer>,
     previews: Option<Previews>,
     autosave: Option<Progress<Result<RecoveryEntry, String>>>,
     channels: Vec<PendingChannel>,
@@ -209,6 +212,38 @@ impl Tasks {
                     self.csv = None;
                     completions.push(Completion::Csv(Err(
                         "the statistics export stopped before the file was written".to_string(),
+                    )));
+                }
+            }
+        }
+        if let Some(slot) = self.geff.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event(outcome) => {
+                    self.geff = None;
+                    completions.push(Completion::Geff(outcome));
+                }
+                Poll::Empty => {}
+                Poll::Closed => {
+                    self.geff = None;
+                    completions.push(Completion::Geff(Err(
+                        "the graph export stopped before the file was written".to_string(),
+                    )));
+                }
+            }
+        }
+        if let Some(slot) = self.localizations.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event(outcome) => {
+                    self.localizations = None;
+                    completions.push(Completion::Localizations(outcome));
+                }
+                Poll::Empty => {}
+                Poll::Closed => {
+                    self.localizations = None;
+                    completions.push(Completion::Localizations(Err(
+                        "the localization export stopped before the file was written".to_string(),
                     )));
                 }
             }
@@ -342,6 +377,8 @@ impl Tasks {
     pub(super) fn writing(&self) -> bool {
         self.labels.is_some()
             || self.csv.is_some()
+            || self.geff.is_some()
+            || self.localizations.is_some()
             || self.provenance.is_some()
             || self.package.is_some()
             || self.dataset.is_some()
@@ -420,12 +457,18 @@ impl Tasks {
         }
         if let Some(superres) = self.superres.as_ref() {
             let (done, total) = superres.progress();
-            return Some(("Rendering the super-resolution image", done, total));
+            return Some((superres.label(), done, total));
         }
-        self.csv.as_ref().map(|csv| {
-            let (done, total) = csv.progress();
-            (csv.label(), done, total)
-        })
+        let writer = [
+            self.geff.as_ref(),
+            self.localizations.as_ref(),
+            self.csv.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()?;
+        let (done, total) = writer.progress();
+        Some((writer.label(), done, total))
     }
 
     pub(super) fn document(&self) -> Option<(&str, usize, usize)> {
@@ -460,6 +503,8 @@ impl Tasks {
         self.document = None;
         self.labels = None;
         self.csv = None;
+        self.geff = None;
+        self.localizations = None;
         self.provenance = None;
         self.package = None;
         self.dataset = None;
@@ -485,6 +530,8 @@ impl Session {
             }
             Completion::Labels { set, outcome } => self.finish_labels(set, outcome),
             Completion::Csv(outcome) => self.finish_csv(outcome),
+            Completion::Geff(outcome) => self.finish_geff(outcome),
+            Completion::Localizations(outcome) => self.finish_localizations(outcome),
             Completion::Provenance(outcome) => self.finish_provenance(outcome),
             Completion::Package(outcome) => self.finish_package(outcome),
             Completion::Dataset(outcome) => self.finish_dataset(outcome),

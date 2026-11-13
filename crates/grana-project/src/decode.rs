@@ -1036,6 +1036,7 @@ impl Decode for LocalizationSource {
         let frames = [reader.u32()?, reader.u32()?];
         let spec_pixel = finite(reader.f32()?)?;
         let blur = reader.f32()?;
+        let depth = reader.f32()?;
         let filter_photons = finite(reader.f32()?)?;
         let filter_precision = finite(reader.f32()?)?;
         let radius = finite(reader.f32()?)?;
@@ -1058,12 +1059,16 @@ impl Decode for LocalizationSource {
             || !(0.0..=grana_object::LocalizationFilter::PRECISION_MAXIMUM)
                 .contains(&filter_precision)
             || filter_photons > 0.0 && !photons
+            || !(0.0..=grana_object::LocalizationSpec::DEPTH_MAXIMUM).contains(&depth)
         {
             return Err(FAULT_VALUE);
         }
-        let spec = grana_object::LocalizationSpec::new(frames, spec_pixel, blur).at_filter(
-            grana_object::LocalizationFilter::new(filter_photons, filter_precision),
-        );
+        let spec = grana_object::LocalizationSpec::new(frames, spec_pixel, blur)
+            .at_depth(depth)
+            .at_filter(grana_object::LocalizationFilter::new(
+                filter_photons,
+                filter_precision,
+            ));
         let source = Self::new(
             pixel,
             width,

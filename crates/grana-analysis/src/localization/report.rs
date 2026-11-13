@@ -3,7 +3,9 @@ use std::sync::Arc;
 use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
 use grana_volume::Region;
 
+use super::depth::LocalizationDepth;
 use super::group::Groups;
+use super::stack::LocalizationStack;
 
 const THRESHOLD: f32 = 1.0 / 7.0;
 
@@ -249,7 +251,7 @@ pub struct LocalizationReport {
     pub(super) frc: Frc,
     pub(super) groups: Groups,
     pub(super) suggested: ClusterSpec,
-    pub(super) image: LocalizationImage,
+    pub(super) stack: LocalizationStack,
 }
 
 impl LocalizationReport {
@@ -305,7 +307,11 @@ impl LocalizationReport {
         self.suggested
     }
 
-    pub fn image(&self) -> &LocalizationImage {
-        &self.image
+    pub fn stack(&self) -> &LocalizationStack {
+        &self.stack
+    }
+
+    pub fn depth(&self) -> LocalizationDepth {
+        self.stack.depth()
     }
 }

@@ -169,6 +169,57 @@ fn streams_an_eight_bit_ome_tiff() {
     }
 }
 
+#[test]
+fn writes_a_multi_page_ome_tiff_stack() {
+    let temp = Temp::new("suite-tiff-stack");
+    let path = temp.path().join("stack.ome.tif");
+    let size = [3u32, 2];
+    let depth = 4u32;
+    let plane = size[0] as usize * size[1] as usize * 3;
+    let pixels = (0..plane * depth as usize)
+        .map(|index| (index * 11 % 251) as u8)
+        .collect::<Vec<_>>();
+    grana_tiff::write_stack(
+        &path,
+        &grana_tiff::Stack {
+            size,
+            samples: 3,
+            name: "stack",
+            physical: Some([0.01, 0.01, 0.05]),
+            interval: None,
+            depth,
+        },
+        &mut |layer, row, buffer| {
+            let start = layer as usize * plane + row as usize * size[0] as usize * 3;
+            buffer.copy_from_slice(&pixels[start..start + buffer.len()]);
+            Ok(())
+        },
+    )
+    .expect("the stack writes");
+    let image = grana_tiff::Image::open(&path).expect("the stack opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 3);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(3, 2, 4));
+    assert!((pyramid.level(0).voxel()[2] - 0.05).abs() < 1.0e-6);
+    for z in 0..depth {
+        for channel in 0..3 {
+            let data = image
+                .read_region(0, 0, channel, 0..3, 0..2, z..z + 1)
+                .expect("the stacked plane reads");
+            let VoxelData::U8(values) = data else {
+                panic!("the stacked picture stores eight bit voxels");
+            };
+            for (index, value) in values.iter().enumerate() {
+                assert_eq!(
+                    *value,
+                    pixels[z as usize * plane + index * 3 + channel],
+                    "slice {z}, texel {index}, channel {channel}"
+                );
+            }
+        }
+    }
+}
+
 fn write_zarr(root: &std::path::Path) {
     let levels = [
         Level::new(Extent::new(24, 16, 8), Spacing::new(0.5, 0.5, 1.0)),

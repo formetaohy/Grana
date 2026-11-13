@@ -120,29 +120,6 @@ impl Grid {
     pub(super) fn maximum(&self) -> f32 {
         self.values.iter().copied().fold(0.0, f32::max)
     }
-
-    pub(super) fn percentile(&self, fraction: f32) -> f32 {
-        let maximum = self.maximum();
-        if maximum <= 0.0 {
-            return 0.0;
-        }
-        let bins = 4096usize;
-        let mut counts = vec![0u64; bins];
-        let scale = (bins - 1) as f32 / maximum;
-        for value in &self.values {
-            let bin = (value * scale) as usize;
-            counts[bin.min(bins - 1)] += 1;
-        }
-        let target = (fraction.clamp(0.0, 1.0) * self.values.len() as f32) as u64;
-        let mut held = 0u64;
-        for (bin, count) in counts.iter().enumerate() {
-            held += count;
-            if held >= target {
-                return (bin as f32 + 0.5) / scale;
-            }
-        }
-        maximum
-    }
 }
 
 fn kernel(sigma: f32, radius: usize) -> Vec<f32> {

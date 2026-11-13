@@ -8,6 +8,9 @@ labels! {
     clear_image => "Clear Image" / "清除图像";
     pixel_size => "Pixel" / "像素";
     blur_width => "Blur" / "模糊";
+    slice => "Slice" / "层";
+    slice_depth => "Slice depth" / "层厚";
+    slice_projection => "0 projects every height" / "0 表示投影全部高度";
     projected => "Project frames" / "投影帧区间";
     precision => "Precision" / "精度";
     precision_missing => "Needs two frames" / "需要两帧";
@@ -46,4 +49,5 @@ messages! {
     group_count(count: usize) => "{count} groups" / "{count} 个分组";
     group(index: u32) => "Group {index}" / "分组 {index}";
     group_detail(count: u64, precision: f32) => "{count} locs · {precision:.1} nm" / "{count} 个定位 · {precision:.1} nm";
+    slice_range(low: f32, high: f32) => "{low:.1}–{high:.1} nm" / "{low:.1}–{high:.1} nm";
 }

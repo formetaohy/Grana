@@ -436,6 +436,12 @@ fn round_trips_detected_surfaces_through_geff() {
     session
         .export_geff(set, &path)
         .expect("the surfaces export");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(Instant::now() < deadline, "the graph export never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
     assert_eq!(
         grana_interop::geff::kind(&path).expect("the graph kind reads"),
         grana_interop::Kind::Surfaces
@@ -2685,6 +2691,88 @@ fn analyzes_imported_localizations() {
 }
 
 #[test]
+fn exports_a_super_resolution_stack() {
+    let temp = Temp::new("session-localization-stack");
+    let path = temp.path().join("localizations.hdf5");
+    let mut rows = Vec::new();
+    for frame in 0..3u32 {
+        for index in 0..64 {
+            rows.push(support::Localization {
+                frame,
+                position: [
+                    2.0 + (index % 8) as f32 * 3.0,
+                    2.0 + (index / 8) as f32 * 3.0,
+                    (index % 4) as f32 * 100.0,
+                ],
+                photons: 1500.0,
+                precision: [0.2, 0.2, 0.2],
+                group: -1,
+            });
+        }
+    }
+    support::picasso(&path, 100.0, &rows);
+    let volume = support::spheres(
+        Extent::new(64, 32, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "stack",
+        VolumeSeries::new(vec![volume.clone(), volume.clone(), volume], 1.0),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let set = session
+        .scene()
+        .expect("the series stays open")
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    session.execute(Command::SetLocalizationSpec {
+        set,
+        spec: grana_session::LocalizationSpec::new([0, 2], 10.0, 20.0).at_depth(150.0),
+    });
+    session.execute(Command::AnalyzeLocalizations(set));
+    settle(&mut session);
+    let layers = session
+        .localizations()
+        .report(set)
+        .expect("the report lands")
+        .depth()
+        .layers();
+    assert_eq!(layers, 2, "a span of three hundred nanometres slices twice");
+    assert_eq!(session.localizations().layers(set), 2);
+    let exported = temp.path().join("stack.ome.tif");
+    session
+        .export_localization_image_to(set, &exported)
+        .expect("the stack exports");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(Instant::now() < deadline, "the stack never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let image = grana_tiff::Image::open(&exported).expect("the exported stack opens");
+    assert_eq!(image.pyramid().channel_count(), 3);
+    assert_eq!(image.pyramid().level(0).extent().z(), 2);
+    let extent = image.pyramid().level(0).extent();
+    let data = image
+        .read_region(0, 0, 0, 0..extent.x(), 0..extent.y(), 0..2)
+        .expect("the stacked planes read");
+    let VoxelData::U8(values) = data else {
+        panic!("the super-resolution stack stores eight bit voxels");
+    };
+    assert!(
+        values.iter().any(|value| *value > 0),
+        "the exported stack paints its localizations"
+    );
+}
+
+#[test]
 fn clusters_imported_localizations_into_molecules() {
     let temp = Temp::new("session-clusters");
     let path = temp.path().join("localizations.hdf5");
@@ -2769,6 +2857,15 @@ fn clusters_imported_localizations_into_molecules() {
     session
         .export_localizations(set, &exported)
         .expect("the molecules export");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(
+            Instant::now() < deadline,
+            "the localization export never finishes"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let level = session
         .scene()
         .expect("the series stays open")

@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::PackedMesh;
 use grana_interop::geff;
 use grana_interop::{Detection, Edge, Lineage, Mesh, Objects, Related, Shape};
-use grana_scene::{ObjectFrame, ObjectKind, ObjectSet, Origin, Scene};
+use grana_object::TrackSet;
+use grana_scene::{ObjectFrame, ObjectKind, Origin, Scene};
 
+use super::export::Writer;
 use super::*;
 
 const DEFAULT_QUALITY: f32 = 0.0;
@@ -55,6 +59,9 @@ impl Session {
     }
 
     pub fn export_geff(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
+        if self.tasks.writing() {
+            return Err("an export is already running".to_string());
+        }
         let image = self
             .source
             .as_ref()
@@ -67,17 +74,34 @@ impl Session {
             .objects
             .get(set)
             .ok_or_else(|| "the object set left the scene".to_string())?;
-        let lineage = lineage(scene, object)?;
-        let objects = objects(scene, object, path, image.as_deref())?;
+        let frames = visible_frames(object, 0..scene.frame_count());
+        let tracks = object.tracks().map(|layer| layer.shared_set());
         let spacing = scene.dataset.spacing();
         let axes = geff::Axes::new(
             [spacing.x(), spacing.y(), spacing.z()],
             scene.dataset.frame_interval(),
         );
-        geff::write_objects(path, &lineage, &axes, &objects).map_err(|error| error.to_string())
+        let voxel = scene.dataset.voxel_size().min_element();
+        let request = GraphRequest {
+            frames,
+            kind: object.kind(),
+            tracks,
+            floor: (0.5 * voxel).max(1.0e-6),
+            axes,
+            channels: scene.dataset.channels().len(),
+            related: related(scene, object, path, image.as_deref()),
+            name: object.name().to_string(),
+            path: path.to_path_buf(),
+        };
+        self.message = None;
+        self.tasks.geff = Some(start_graph_export(request));
+        Ok(())
     }
 
     pub fn export_localizations(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
+        if self.tasks.writing() {
+            return Err("an export is already running".to_string());
+        }
         let scene = self
             .scene
             .as_ref()
@@ -103,28 +127,28 @@ impl Session {
             source.map_or(extent.z() > 1, grana_scene::LocalizationSource::volume),
             level.origin(),
         );
-        let mut table = grana_readout::localization::Table::new(path, metadata)
-            .map_err(|error| error.to_string())?;
-        for time in 0..scene.frame_count() {
-            let Some(frame) = object.frame(time) else {
-                continue;
-            };
-            for (index, spot) in frame.spots_of().iter().enumerate() {
-                if !object.visible_object(time, index) {
-                    continue;
-                }
-                table
-                    .push(
-                        time,
-                        spot.center(),
-                        spot.sigma(),
-                        spot.quality(),
-                        spot.group(),
-                    )
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        table.write().map_err(|error| error.to_string())
+        let request = TableRequest {
+            frames: visible_frames(object, 0..scene.frame_count()),
+            metadata,
+            path: path.to_path_buf(),
+        };
+        self.message = None;
+        self.tasks.localizations = Some(start_table_export(request));
+        Ok(())
+    }
+
+    pub(super) fn finish_geff(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!("exported the graph to {}", path.display())),
+            Err(detail) => Message::error(detail),
+        });
+    }
+
+    pub(super) fn finish_localizations(&mut self, outcome: Result<PathBuf, String>) {
+        self.message = Some(match outcome {
+            Ok(path) => Message::info(format!("exported the localizations to {}", path.display())),
+            Err(detail) => Message::error(detail),
+        });
     }
 
     pub(super) fn choose_import_tracks(&mut self) {
@@ -155,14 +179,11 @@ impl Session {
         let Some(path) = self.track_path(set, "tracks.geff", "Export a GEFF tracking graph") else {
             return;
         };
-        match self.export_geff(set, &path) {
-            Ok(()) => self.message = None,
-            Err(detail) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export the graph to {}: {detail}",
-                    path.display()
-                )));
-            }
+        if let Err(detail) = self.export_geff(set, &path) {
+            self.message = Some(Message::error(format!(
+                "failed to export the graph to {}: {detail}",
+                path.display()
+            )));
         }
     }
 
@@ -174,19 +195,11 @@ impl Session {
         ) else {
             return;
         };
-        match self.export_localizations(set, &path) {
-            Ok(()) => {
-                self.message = Some(Message::info(format!(
-                    "exported the localizations to {}",
-                    path.display()
-                )));
-            }
-            Err(detail) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export the localizations to {}: {detail}",
-                    path.display()
-                )));
-            }
+        if let Err(detail) = self.export_localizations(set, &path) {
+            self.message = Some(Message::error(format!(
+                "failed to export the localizations to {}: {detail}",
+                path.display()
+            )));
         }
     }
 
@@ -205,20 +218,137 @@ impl Session {
     }
 }
 
-fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
-    let voxel = scene.dataset.voxel_size().min_element();
-    let floor = (0.5 * voxel).max(1.0e-6);
+struct FrameRow {
+    time: u32,
+    frame: Arc<ObjectFrame>,
+    visible: Option<Vec<bool>>,
+}
+
+impl FrameRow {
+    fn visible(&self, object: usize) -> bool {
+        self.visible
+            .as_ref()
+            .is_none_or(|mask| mask.get(object).copied().unwrap_or(false))
+    }
+}
+
+fn visible_frames(set: &grana_scene::ObjectSet, range: std::ops::Range<u32>) -> Vec<FrameRow> {
+    let masked = set.filtered() || set.hidden_count() > 0;
+    range
+        .filter_map(|time| {
+            let frame = set.frame_shared(time)?;
+            let visible = masked.then(|| {
+                (0..frame.object_count())
+                    .map(|index| set.visible_object(time, index))
+                    .collect()
+            });
+            Some(FrameRow {
+                time,
+                frame,
+                visible,
+            })
+        })
+        .collect()
+}
+
+struct GraphRequest {
+    frames: Vec<FrameRow>,
+    kind: ObjectKind,
+    tracks: Option<Arc<TrackSet>>,
+    floor: f32,
+    axes: geff::Axes,
+    channels: usize,
+    related: Vec<Related>,
+    name: String,
+    path: PathBuf,
+}
+
+struct TableRequest {
+    frames: Vec<FrameRow>,
+    metadata: grana_readout::localization::Metadata,
+    path: PathBuf,
+}
+
+fn start_graph_export(request: GraphRequest) -> Writer {
+    let label = format!("Exporting the graph of {}", request.name);
+    let path = request.path.clone();
+    Writer::start(label, path, move |cancel, progress, path| {
+        let GraphRequest {
+            frames,
+            kind,
+            tracks,
+            floor,
+            axes,
+            channels,
+            related,
+            name,
+            ..
+        } = request;
+        let total = 2 * frames.len() + 1;
+        let lineage = lineage(&frames, tracks.as_deref(), floor, total, cancel, progress)?;
+        if lineage.is_empty() {
+            return Err(format!("{name} holds no visible object to export"));
+        }
+        let objects = objects(&frames, kind, channels, related, total, cancel, progress)?;
+        progress(total, total);
+        geff::write_objects(path, &lineage, &axes, &objects).map_err(|error| error.to_string())
+    })
+}
+
+fn start_table_export(request: TableRequest) -> Writer {
+    let label = "Exporting the localizations".to_string();
+    let path = request.path.clone();
+    Writer::start(label, path, move |cancel, progress, path| {
+        let TableRequest {
+            frames, metadata, ..
+        } = request;
+        let total = frames.len() + 1;
+        let mut table = grana_readout::localization::Table::new(path, metadata)
+            .map_err(|error| error.to_string())?;
+        for (done, row) in frames.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("the localization export was cancelled".to_string());
+            }
+            for (index, spot) in row.frame.spots_of().iter().enumerate() {
+                if !row.visible(index) {
+                    continue;
+                }
+                table
+                    .push(
+                        row.time,
+                        spot.center(),
+                        spot.sigma(),
+                        spot.quality(),
+                        spot.group(),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            progress(done + 1, total);
+        }
+        table.write().map_err(|error| error.to_string())?;
+        progress(total, total);
+        Ok(())
+    })
+}
+
+fn lineage(
+    frames: &[FrameRow],
+    tracks: Option<&TrackSet>,
+    floor: f32,
+    total: usize,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<Lineage, String> {
     let mut detections = Vec::new();
     let mut ids = HashMap::new();
     let mut next = 0u64;
-    for time in 0..scene.frame_count() {
-        let Some(frame) = set.frame(time) else {
-            continue;
-        };
-        let spots = frame.spots_of();
-        let anchors = frame.anchors();
-        for (object, anchor) in anchors.into_iter().enumerate() {
-            if !set.visible_object(time, object) {
+    for (done, row) in frames.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("the graph export was cancelled".to_string());
+        }
+        let spots = row.frame.spots_of();
+        for (object, anchor) in row.frame.anchors().into_iter().enumerate() {
+            if !row.visible(object) {
                 continue;
             }
             let spot = spots.get(object).copied();
@@ -232,21 +362,18 @@ fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
             let quality = spot.map_or(DEFAULT_QUALITY, |spot| spot.quality());
             detections.push(Detection::new(
                 next,
-                time,
+                row.time,
                 anchor.position(),
                 radius,
                 quality,
             ));
-            ids.insert((time, object), next);
+            ids.insert((row.time, object), next);
             next += 1;
         }
-    }
-    if detections.is_empty() {
-        return Err(format!("{} holds no visible object to export", set.name()));
+        progress(done + 1, total);
     }
     let mut edges = Vec::new();
-    if let Some(tracks) = set.tracks() {
-        let tracks = tracks.set();
+    if let Some(tracks) = tracks {
         for (index, track) in tracks.tracks().iter().enumerate() {
             for pair in track.nodes().windows(2) {
                 let source = ids.get(&(pair[0].time(), pair[0].object()));
@@ -279,34 +406,37 @@ fn lineage(scene: &Scene, set: &ObjectSet) -> Result<Lineage, String> {
 }
 
 fn objects(
-    scene: &Scene,
-    set: &ObjectSet,
-    path: &Path,
-    image: Option<&Path>,
+    frames: &[FrameRow],
+    kind: ObjectKind,
+    channels: usize,
+    related: Vec<Related>,
+    total: usize,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, usize),
 ) -> Result<Objects, String> {
-    let kind = match set.kind() {
+    let kind = match kind {
         ObjectKind::Spots => geff::Kind::Points,
         ObjectKind::Surfaces | ObjectKind::Cells => geff::Kind::Surfaces,
         ObjectKind::Filaments => geff::Kind::Filaments,
     };
-    let channels = scene.dataset.channels().len();
     let mut shapes = Vec::new();
     let mut labels = Vec::new();
     let mut intensities = Vec::new();
     let mut measured = true;
-    for time in 0..scene.frame_count() {
-        let Some(frame) = set.frame(time) else {
-            continue;
-        };
-        let geometry = frame.geometry().map_err(|error| error.to_string())?;
-        let table = frame.intensities();
-        let complete = table.channels() == channels && table.objects() == frame.object_count();
+    let offset = total - frames.len();
+    for (done, row) in frames.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("the graph export was cancelled".to_string());
+        }
+        let geometry = row.frame.geometry().map_err(|error| error.to_string())?;
+        let table = row.frame.intensities();
+        let complete = table.channels() == channels && table.objects() == row.frame.object_count();
         measured &= complete;
-        for object in 0..frame.object_count() {
-            if !set.visible_object(time, object) {
+        for object in 0..row.frame.object_count() {
+            if !row.visible(object) {
                 continue;
             }
-            shapes.push(shape(frame, geometry.as_deref(), object)?);
+            shapes.push(shape(&row.frame, geometry.as_deref(), object)?);
             labels.push(object as u64 + 1);
             if complete {
                 intensities.push(
@@ -316,10 +446,15 @@ fn objects(
                 );
             }
         }
+        progress(offset + done + 1, total);
     }
-    let intensities = measured.then_some(intensities);
-    let related = related(scene, set, path, image);
-    Ok(Objects::new(kind, shapes, labels, intensities, related))
+    Ok(Objects::new(
+        kind,
+        shapes,
+        labels,
+        measured.then_some(intensities),
+        related,
+    ))
 }
 
 fn shape(
@@ -393,7 +528,12 @@ fn mesh(geometry: Option<&PackedMesh>, object: usize) -> Result<Mesh, String> {
     Ok(Mesh::new(positions, normals, indices))
 }
 
-fn related(scene: &Scene, set: &ObjectSet, path: &Path, image: Option<&Path>) -> Vec<Related> {
+fn related(
+    scene: &Scene,
+    set: &grana_scene::ObjectSet,
+    path: &Path,
+    image: Option<&Path>,
+) -> Vec<Related> {
     let Some(base) = path.parent() else {
         return Vec::new();
     };
