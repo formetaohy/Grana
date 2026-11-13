@@ -137,7 +137,7 @@ jobs:
 
       - name: Build installer
         if: runner.os == 'macOS'
-        run: ./installer/macos/build.sh --output dist
+        run: bash installer/macos/build.sh --output dist
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -163,4 +163,5 @@ jobs:
           test "${{ needs.test.result }}" = success
           test "${{ needs.build.result }}" = success
           test "${{ needs.installer.result }}" = success
+
 
