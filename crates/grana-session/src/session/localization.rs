@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use grana_analysis::localization::{
-    Clusters, LocalizationDepth, LocalizationFilter, LocalizationGeometry, LocalizationRenderer,
-    LocalizationReport, LocalizationSpec,
+    Clusters, CompositionSpec, LocalizationDepth, LocalizationFilter, LocalizationGeometry,
+    LocalizationRenderer, LocalizationReport, LocalizationSpec,
 };
 use grana_object::ClusterSpec;
 use grana_pipeline::run::{LocalizationClusterRequest, LocalizationReportRequest};
@@ -72,6 +72,10 @@ impl Localizations {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn rendered(&self) -> usize {
+        self.entries.len()
     }
 
     pub(super) fn set_layer(&mut self, set: ObjectSetId, layer: usize) -> bool {
@@ -359,6 +363,79 @@ impl Session {
         }
     }
 
+    pub(super) fn export_localization_composite(&mut self) {
+        if self.tasks.writing() {
+            self.message = Some(Message::error("an export is already running"));
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export the composed super-resolution image")
+            .set_file_name("superres.ome.tif")
+            .add_filter("OME-TIFF", &["tif", "tiff"])
+            .save_file()
+        else {
+            return;
+        };
+        if let Err(detail) = self.export_localization_composite_to(&path) {
+            self.message = Some(Message::error(detail));
+        }
+    }
+
+    pub fn export_localization_composite_to(&mut self, path: &Path) -> Result<(), String> {
+        if self.tasks.writing() {
+            return Err("an export is already running".to_string());
+        }
+        let scene = self.scene.as_ref().ok_or("open a dataset first")?;
+        let rendered = self.localization.rendered();
+        if rendered < 2 {
+            return Err(
+                "render at least two localization channels before composing their image"
+                    .to_string(),
+            );
+        }
+        let mut sets = Vec::with_capacity(rendered);
+        for object in scene.objects.iter() {
+            if self.localization.report(object.id()).is_none() {
+                continue;
+            }
+            let Some(source) = object.localization() else {
+                continue;
+            };
+            let spec = source.spec().fitted(scene.frame_count());
+            let (frames, visible) = self.localization_window(object.id(), spec)?;
+            sets.push(CompositeSet {
+                frames,
+                visible,
+                filter: spec.filter(),
+                tint: object.color(),
+                pixel: spec.pixel(),
+                blur: spec.blur(),
+                depth: spec.depth(),
+            });
+        }
+        let pixel = sets.iter().map(|set| set.pixel).fold(f32::MIN, f32::max) * 0.001;
+        let blur = sets.iter().map(|set| set.blur).fold(0.0, f32::max) * 0.001;
+        let depth = sets
+            .iter()
+            .map(|set| set.depth)
+            .filter(|depth| *depth > 0.0)
+            .fold(f32::INFINITY, f32::min);
+        let depth = if depth.is_finite() {
+            depth * 0.001
+        } else {
+            0.0
+        };
+        let name = scene.dataset.name().to_string();
+        self.message = None;
+        self.tasks.superres = Some(start_composite(CompositeRequest {
+            sets,
+            spec: CompositionSpec::new(pixel, blur, depth),
+            name,
+            path: path.to_path_buf(),
+        }));
+        Ok(())
+    }
+
     pub fn export_localization_image_to(
         &mut self,
         set: ObjectSetId,
@@ -494,6 +571,98 @@ pub(super) struct Request {
     path: PathBuf,
 }
 
+pub(super) struct CompositeSet {
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    visible: Vec<Option<Vec<bool>>>,
+    filter: LocalizationFilter,
+    tint: [f32; 3],
+    pixel: f32,
+    blur: f32,
+    depth: f32,
+}
+
+pub(super) struct CompositeRequest {
+    sets: Vec<CompositeSet>,
+    spec: CompositionSpec,
+    name: String,
+    path: PathBuf,
+}
+
+pub(super) fn start_composite(request: CompositeRequest) -> Writer {
+    let CompositeRequest {
+        sets,
+        spec,
+        name,
+        path,
+    } = request;
+    Writer::start(
+        "Composing the super-resolution image".to_string(),
+        path,
+        move |cancel, progress, path| {
+            let held = sets
+                .iter()
+                .map(|set| {
+                    set.frames
+                        .iter()
+                        .zip(&set.visible)
+                        .map(|(frame, mask)| {
+                            let spots = frame
+                                .as_deref()
+                                .and_then(ObjectFrame::spots)
+                                .map_or(&[][..], grana_object::SpotSet::spots);
+                            grana_analysis::localization::LocalizationFrame::new(
+                                spots,
+                                mask.as_deref(),
+                                set.filter,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let entries = held
+                .iter()
+                .zip(&sets)
+                .map(|(frames, set)| {
+                    grana_analysis::localization::CompositionEntry::new(frames, set.tint)
+                })
+                .collect::<Vec<_>>();
+            let report = std::cell::RefCell::new(progress);
+            let tick = |done: usize, total: usize| {
+                (report.borrow_mut())(done, total);
+                !cancel.load(Ordering::Relaxed)
+            };
+            let mut composition =
+                grana_analysis::localization::LocalizationComposition::new(&entries, spec, &tick)?;
+            let geometry = composition.geometry();
+            let depth = composition.depth();
+            let pixel = geometry.pixel();
+            let slice = if depth.step() > 0.0 {
+                depth.step()
+            } else {
+                pixel
+            };
+            let stack = grana_tiff::Stack {
+                size: geometry.size(),
+                samples: 3,
+                name: &name,
+                physical: Some([pixel, pixel, slice]),
+                interval: None,
+                depth: depth.layers(),
+            };
+            let mut current = u32::MAX;
+            grana_tiff::write_stack(path, &stack, &mut |layer, _, bytes| {
+                if layer != current {
+                    composition.begin(layer)?;
+                    current = layer;
+                }
+                composition.row_rgb(bytes)
+            })
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        },
+    )
+}
+
 pub(super) fn start_superres(request: Request) -> Writer {
     let Request {
         frames,
@@ -527,12 +696,12 @@ pub(super) fn start_superres(request: Request) -> Writer {
                     )
                 })
                 .collect::<Vec<_>>();
-            let mut report = |done: usize, total: usize| {
-                progress(done, total);
+            let report = std::cell::RefCell::new(progress);
+            let tick = |done: usize, total: usize| {
+                (report.borrow_mut())(done, total);
                 !cancel.load(Ordering::Relaxed)
             };
-            let mut renderer =
-                LocalizationRenderer::new(&held, geometry, depth, groups, &mut report)?;
+            let mut renderer = LocalizationRenderer::new(&held, geometry, depth, groups, &tick)?;
             renderer.at_density(density);
             match raster {
                 ImageFile::Png => {

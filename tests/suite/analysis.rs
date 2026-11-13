@@ -2039,13 +2039,13 @@ fn renders_localizations_past_the_preview_resolution() {
         "the preview stays bounded at {:?}",
         preview.size()
     );
-    let mut progress = |_: usize, _: usize| true;
+    let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
         geometry,
         report.depth(),
         report.groups().clone(),
-        &mut progress,
+        &progress,
     )
     .expect("the renderer accepts the geometry");
     renderer.at_density(report.density());
@@ -2128,6 +2128,64 @@ fn renders_single_frame_localizations_grouped() {
 }
 
 #[test]
+fn composes_localization_channels_in_color() {
+    let mut noise = support::Noise::new(0x2f14_9ab3);
+    let precision = 0.012f32;
+    let field = 4.0f32;
+    let mut side = |offset: f32| {
+        (0..200)
+            .map(|_| {
+                Spot::gaussian(
+                    [
+                        offset + 0.25 * field * noise.value(),
+                        0.5 * field + 0.25 * field * noise.value(),
+                        precision * noise.gaussian(),
+                    ],
+                    [precision; 3],
+                    900.0,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let first = side(0.0);
+    let second = side(2.0 * field);
+    let channels = [
+        LocalizationFrame::new(&first, None, LocalizationFilter::NONE),
+        LocalizationFrame::new(&second, None, LocalizationFilter::NONE),
+    ];
+    let entries = [
+        grana_analysis::localization::CompositionEntry::new(&channels[..1], [1.0, 0.2, 0.1]),
+        grana_analysis::localization::CompositionEntry::new(&channels[1..], [0.1, 1.0, 0.3]),
+    ];
+    let spec = grana_analysis::localization::CompositionSpec::new(0.01, 0.02, 0.0);
+    let mut composition =
+        grana_analysis::localization::LocalizationComposition::new(&entries, spec, &|_, _| true)
+            .expect("the two channels compose");
+    assert_eq!(composition.channels(), 2, "every channel contributes");
+    assert_eq!(
+        composition.depth().layers(),
+        1,
+        "a projection holds one slice"
+    );
+    let width = composition.geometry().size()[0] as usize;
+    let mut row = vec![0u8; width * 3];
+    composition.begin(0).expect("the projected slice begins");
+    let mut red = false;
+    let mut green = false;
+    for _ in 0..composition.geometry().size()[1] {
+        composition.row_rgb(&mut row).expect("the row composes");
+        for texel in row.as_chunks::<3>().0 {
+            red |= texel[0] > texel[1] && texel[0] > 16;
+            green |= texel[1] > texel[0] && texel[1] > 16;
+        }
+    }
+    assert!(
+        red && green,
+        "both channels paint their own color into the composed rows"
+    );
+}
+
+#[test]
 fn slices_localizations_into_a_stack() {
     let spots = (0..300)
         .map(|index| {
@@ -2179,13 +2237,13 @@ fn slices_localizations_into_a_stack() {
         })
         .count();
     assert_eq!(painted, 5, "each of the five heights paints its own slice");
-    let mut progress = |_: usize, _: usize| true;
+    let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
         report.geometry(),
         depth,
         report.groups().clone(),
-        &mut progress,
+        &progress,
     )
     .expect("the renderer accepts the stack");
     renderer.at_density(report.density());
@@ -2429,13 +2487,13 @@ fn exports_tiles_that_match_the_preview() {
     );
     assert!(width > 1024 && height > 1024, "the export spans tiles");
     let mut image = vec![0u8; width * height * 4];
-    let mut progress = |_: usize, _: usize| true;
+    let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
         geometry,
         report.depth(),
         report.groups().clone(),
-        &mut progress,
+        &progress,
     )
     .expect("the renderer accepts the geometry");
     renderer.at_density(report.density());

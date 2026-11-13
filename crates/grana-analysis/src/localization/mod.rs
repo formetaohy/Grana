@@ -1,9 +1,12 @@
+use std::cell::RefCell;
+
 use glam::Vec3;
 use grana_object::Spot;
 pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec};
 use grana_volume::Region;
 
 mod cluster;
+mod composition;
 mod depth;
 mod fit;
 mod fourier;
@@ -17,6 +20,7 @@ mod stack;
 mod tone;
 
 pub use cluster::{Clusters, cluster};
+pub use composition::{CompositionEntry, CompositionSpec, LocalizationComposition};
 pub use depth::LocalizationDepth;
 use grid::Grid;
 pub use group::{GroupStat, Groups};
@@ -149,15 +153,18 @@ pub fn localization_report(
         blur,
         margin_pixels(blur, preview.pixel()),
     );
-    let mut ticker = Ticker::new(total_steps(frames.len(), depth, preview.size()), report);
+    let ticker = RefCell::new(Ticker::new(
+        total_steps(frames.len(), depth, preview.size()),
+        report,
+    ));
+    let tick = |_: usize, _: usize| ticker.borrow_mut().tick();
     let (density, stack) = {
-        let mut progress = |_: usize, _: usize| ticker.tick();
         let mut renderer = LocalizationRenderer::new(
             frames,
             preview_geometry,
             depth,
             survey.groups.clone(),
-            &mut progress,
+            &tick,
         )?;
         let density = renderer.survey()?;
         let size = preview.size();
@@ -171,10 +178,13 @@ pub fn localization_report(
             }
             layers.push(LocalizationImage::new(size, pixels));
         }
-        (density, LocalizationStack::new(depth, layers))
+        (
+            density,
+            LocalizationStack::new(preview_geometry, depth, layers),
+        )
     };
     let nena = if frames.len() > 1 {
-        let mut progress = |_: usize, _: usize| ticker.tick();
+        let mut progress = |_: usize, _: usize| ticker.borrow_mut().tick();
         match nena::measure(
             frames,
             REACH * camera_pixel,
@@ -189,18 +199,18 @@ pub fn localization_report(
         None
     };
     let frc = {
-        let mut advance = || ticker.tick();
+        let mut advance = || ticker.borrow_mut().tick();
         match measure_frc(frames, low, span, survey.sigma, region, &mut advance)? {
             Some(frc) => frc,
             None => return Ok(None),
         }
     };
-    if !ticker.tick() {
+    if !ticker.borrow_mut().tick() {
         return Ok(None);
     }
     let precision = nena.as_ref().map_or(survey.sigma, |nena| nena.precision()) * 0.001;
     let suggested = cluster::estimate(frames, precision);
-    if !ticker.tick() {
+    if !ticker.borrow_mut().tick() {
         return Ok(None);
     }
     Ok(Some(LocalizationReport {

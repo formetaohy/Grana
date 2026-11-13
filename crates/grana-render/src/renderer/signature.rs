@@ -14,6 +14,7 @@ pub(super) struct Signature<'a> {
     pub(super) exposure: f32,
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
+    pub(super) overlay: u64,
 }
 
 impl Signature<'_> {
@@ -30,6 +31,7 @@ impl Signature<'_> {
             exposure,
             epoch,
             size,
+            overlay,
         } = self;
         let mut hasher = DefaultHasher::new();
         let mut data = *data;
@@ -50,6 +52,7 @@ impl Signature<'_> {
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
         generation.hash(&mut hasher);
+        overlay.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -62,6 +65,7 @@ impl Signature<'_> {
             exposure,
             epoch,
             size,
+            overlay,
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
@@ -80,6 +84,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
+        overlay.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -94,6 +99,7 @@ impl Signature<'_> {
             exposure,
             epoch,
             size,
+            overlay,
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
@@ -118,6 +124,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
+        overlay.hash(&mut hasher);
         hasher.finish()
     }
 }

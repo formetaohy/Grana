@@ -200,6 +200,7 @@ fn background(
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let blank = View {
         target: view.target,
@@ -245,6 +246,7 @@ fn measures_the_convergence_of_a_volume() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -332,6 +334,7 @@ fn streams_and_shades_two_channels() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -416,6 +419,7 @@ fn renders_a_rotated_placement() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -500,6 +504,7 @@ fn composites_a_mesh_layer() {
         styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -522,6 +527,82 @@ fn composites_a_mesh_layer() {
         shot.painted([0, 0, SIDE / 8, SIDE / 8]),
         0,
         "the mesh spilled into the corner"
+    );
+}
+
+#[test]
+fn tints_a_localization_overlay() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        display: grana_render::Display::Still,
+    };
+    settle(&gpu, &mut renderer, &view, &volume);
+    let plain = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let texels = [255u8; 16];
+    let half = 0.5 * Vec3::from(volume.world_extent());
+    let corners = [
+        [-half.x, -half.y, 0.0],
+        [half.x, -half.y, 0.0],
+        [half.x, half.y, 0.0],
+        [-half.x, half.y, 0.0],
+    ];
+    let overlay = grana_render::Overlay::new(7, [2, 2], &texels, corners, [1.0, 0.6, 0.2], 1.0);
+    let overlaid = [overlay];
+    let painted = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &overlaid,
+    };
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &painted,
+        viewport: WHOLE,
+        display: grana_render::Display::Still,
+    };
+    settle(&gpu, &mut renderer, &view, &volume);
+    let lit = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let shot = Snapshot::new([SIDE, SIDE], plain, lit);
+    assert!(
+        shot.hue(shot.all(), Hue::Red) > 1_000,
+        "the overlay barely painted: {} red pixels",
+        shot.hue(shot.all(), Hue::Red)
     );
 }
 
@@ -556,6 +637,7 @@ fn keeps_a_translucent_layer() {
         styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -595,6 +677,7 @@ fn keeps_a_translucent_layer() {
         styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
+        overlays: &[],
     };
     let view = View {
         target: &view_texture,
@@ -650,6 +733,7 @@ fn clips_an_oriented_region() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -736,6 +820,7 @@ fn assured_pixels(
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(gpu, pyramid);
     let target = texture(gpu, SIDE);
@@ -885,6 +970,7 @@ fn render_volume(
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(gpu, &pyramid);
     let target = texture(gpu, SIDE);
@@ -1077,6 +1163,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = Renderer::new(
         gpu.device(),
@@ -1137,6 +1224,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let detail = grana_render::residency(&pyramid, &camera, SIDE, Region::none());
     assert_eq!(
@@ -1196,6 +1284,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1316,6 +1405,7 @@ fn reuses_the_history_of_a_still_camera() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1415,6 +1505,7 @@ fn reprojects_the_history_of_a_moving_camera() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1508,6 +1599,7 @@ fn drops_the_history_of_another_shot() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
     let second_channels = channels(&pyramid, &second_transfers);
@@ -1519,6 +1611,7 @@ fn drops_the_history_of_another_shot() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let target = texture(&gpu, SIDE);
     let mut renderer = build_renderer(&gpu, &pyramid);
@@ -1684,6 +1777,7 @@ fn bare_scene<'a>(versions: Versions, channels: &'a [grana_render::ChannelRow]) 
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     }
 }
 
@@ -1763,6 +1857,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let target = texture(&gpu, SIDE);
     let view = target.create_view(&Default::default());
@@ -1886,6 +1981,7 @@ fn cuts_the_object_surfaces_of_a_slice() {
         styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1945,6 +2041,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         styles: &[],
         layers: &[],
         splats: Splats::new(&chunks),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -2010,6 +2107,7 @@ fn composites_soft_splats_through_the_depth_layers() {
         styles: &[],
         layers: &[],
         splats: Splats::new(&solid_chunks),
+        overlays: &[],
     };
     let faint_scene = SceneFrame {
         versions: versions(),
@@ -2019,6 +2117,7 @@ fn composites_soft_splats_through_the_depth_layers() {
         styles: &[],
         layers: &[],
         splats: Splats::new(&faint_chunks),
+        overlays: &[],
     };
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
@@ -2090,6 +2189,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
         styles: &[],
         layers: &[],
         splats: Splats::empty(),
+        overlays: &[],
     };
     let target = texture(&gpu, SIDE);
     let camera = slice_camera(&pyramid, 16);
@@ -2180,6 +2280,7 @@ fn converges_the_brightness_of_overlapping_splats() {
             styles: &[],
             layers: &[],
             splats: Splats::new(&chunks),
+            overlays: &[],
         };
         let view = View {
             target: &view_texture,
@@ -2321,7 +2422,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let mut renderer = build_renderer(&gpu, &pyramid);
-    let proxied_frame = proxied.frame();
+    let proxied_frame = proxied.frame(&[]);
     let proxied_view = View {
         target: &view_texture,
         camera: &far,
@@ -2350,7 +2451,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
         (member as usize) < side * side * side,
         "the proxy pick names a spot of its set"
     );
-    let detail_frame = detail.frame();
+    let detail_frame = detail.frame(&[]);
     let detail_view = View {
         target: &view_texture,
         camera: &far,

@@ -96,6 +96,7 @@ impl Renderer {
             occupancy_group,
             bake,
             baked,
+            overlay,
             ..
         } = self;
         let (
@@ -345,6 +346,7 @@ impl Renderer {
             exposure,
             epoch: *epoch,
             size,
+            overlay: overlay_digest(scene.overlays),
         };
         let structure = signature.digest();
         let transition = signature.transition();
@@ -744,6 +746,15 @@ impl Renderer {
                 };
                 volume.draw(&mut encoder, volume_frame, path);
             }
+            if !scene.overlays.is_empty() {
+                overlay.prepare(
+                    device,
+                    queue,
+                    scene.overlays,
+                    glam::Mat4::from_cols_array_2d(&data.view_projection),
+                );
+                overlay.draw(&mut encoder, target.scene.color(), viewport);
+            }
             if *exporting && target.samples > 1 {
                 convergence.encode(
                     device,
@@ -843,6 +854,15 @@ impl Renderer {
         target.view = view_now;
         *info
     }
+}
+
+fn overlay_digest(overlays: &[crate::schema::Overlay<'_>]) -> u64 {
+    let mut digest = crate::schema::Digest::new();
+    digest.mix(overlays.len() as u64);
+    for overlay in overlays {
+        digest.mix(overlay.digest());
+    }
+    digest.finish()
 }
 
 fn view_motion(camera: &Camera, viewport: [u32; 4], clip: Region, time: u32, exposure: f32) -> u64 {

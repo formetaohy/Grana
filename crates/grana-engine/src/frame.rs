@@ -16,6 +16,7 @@ pub(crate) struct View<'a> {
     pub samples: u32,
     pub display: Display,
     pub level_cap: usize,
+    pub overlays: &'a [grana_render::Overlay<'a>],
 }
 
 pub(crate) fn draw(
@@ -26,7 +27,7 @@ pub(crate) fn draw(
     rendered: &view::RenderedScene,
 ) -> FrameInfo {
     renderer.set_transparent(false);
-    let scene = rendered.frame();
+    let scene = rendered.frame(frame.overlays);
     renderer.draw(
         device,
         queue,

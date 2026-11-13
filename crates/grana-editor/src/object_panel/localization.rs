@@ -197,6 +197,17 @@ pub(super) fn card<'a>(
             .press(Message::Command(Command::ClearLocalizations(id))),
         );
     }
+    if bitmap.is_some() && state.localizations.rendered() > 1 {
+        tools.push(
+            view::button_with(
+                ctx,
+                grana_i18n::localization::export_composite(language),
+                Role::SurfaceHigh,
+                Length::Fill,
+            )
+            .press(Message::Command(Command::ExportLocalizationComposite)),
+        );
+    }
     if !tools.is_empty() {
         children.push(grana_ui::column().gap(8.0).children(tools));
     }

@@ -5,6 +5,7 @@ labels! {
     title => "Super-Res" / "超分辨";
     render => "Render" / "渲染";
     export_image => "Export Image…" / "导出图像…";
+    export_composite => "Export Composed…" / "导出合成图…";
     clear_image => "Clear Image" / "清除图像";
     pixel_size => "Pixel" / "像素";
     blur_width => "Blur" / "模糊";

@@ -44,7 +44,7 @@ pub struct RenderedScene {
 }
 
 impl RenderedScene {
-    pub fn frame(&self) -> SceneFrame<'_> {
+    pub fn frame<'a>(&'a self, overlays: &'a [grana_render::Overlay<'a>]) -> SceneFrame<'a> {
         SceneFrame {
             versions: self.versions,
             channels: &self.channels,
@@ -53,6 +53,7 @@ impl RenderedScene {
             styles: &self.styles,
             layers: &self.layers,
             splats: Splats::new(&self.splats),
+            overlays,
         }
     }
 

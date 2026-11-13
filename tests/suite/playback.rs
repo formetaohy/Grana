@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+﻿use std::time::{Duration, Instant};
 
 use grana_display::Camera;
 use grana_engine::{Display, Engine};
@@ -72,6 +72,7 @@ fn play(display: Display, seconds: f64, advancing: bool) -> (u32, usize) {
                     size: [320, 320],
                     display,
                     level_cap: 99,
+                    overlays: &[],
                 },
             )
             .expect("the viewport draws");

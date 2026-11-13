@@ -209,7 +209,7 @@ impl Export {
         let pose = self.poses[self.frame];
         let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
-        let frame = rendered.frame();
+        let frame = rendered.frame(&[]);
         let info = renderer.draw(
             device,
             queue,

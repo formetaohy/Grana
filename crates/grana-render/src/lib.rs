@@ -11,6 +11,7 @@ mod mesh;
 mod occupancy;
 mod oit;
 mod oit_resolve;
+mod overlay;
 mod pick;
 mod planner;
 mod present;
@@ -29,6 +30,6 @@ pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget}
 pub use image::{Image16, read16 as read_image16};
 pub use pick::PickId;
 pub use renderer::{Display, Frame, FrameInfo, Renderer, Requests, ViewInfo};
-pub use schema::{ChannelRow, Digest, Layer, LayerKey, SceneFrame, Style, Versions};
+pub use schema::{ChannelRow, Digest, Layer, LayerKey, Overlay, SceneFrame, Style, Versions};
 pub use splat::{SPLAT_LEVELS, Splat, SplatChunk, SplatGeometry, SplatLevel, SplatStyle, Splats};
 pub use temporal::Temporal;

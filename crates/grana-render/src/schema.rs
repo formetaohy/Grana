@@ -194,6 +194,97 @@ pub struct Layer {
     pub style_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Overlay<'a> {
+    key: u64,
+    size: [u32; 2],
+    pixels: &'a [u8],
+    corners: [[f32; 3]; 4],
+    tint: [f32; 3],
+    opacity: f32,
+}
+
+impl<'a> Overlay<'a> {
+    pub fn new(
+        key: u64,
+        size: [u32; 2],
+        pixels: &'a [u8],
+        corners: [[f32; 3]; 4],
+        tint: [f32; 3],
+        opacity: f32,
+    ) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "an overlay image covers at least one pixel"
+        );
+        assert_eq!(
+            pixels.len(),
+            size[0] as usize * size[1] as usize * 4,
+            "an overlay image holds four bytes per pixel"
+        );
+        assert!(
+            corners.iter().flatten().all(|value| value.is_finite()),
+            "an overlay image lies at finite corners"
+        );
+        assert!(
+            tint.iter().all(|value| (0.0..=1.0).contains(value)),
+            "an overlay tint is a linear rgb triple"
+        );
+        assert!(
+            opacity.is_finite() && (0.0..=1.0).contains(&opacity),
+            "an overlay fades by a bounded opacity"
+        );
+        Self {
+            key,
+            size,
+            pixels,
+            corners,
+            tint,
+            opacity,
+        }
+    }
+
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+
+    pub fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
+    pub fn pixels(&self) -> &'a [u8] {
+        self.pixels
+    }
+
+    pub fn corners(&self) -> [[f32; 3]; 4] {
+        self.corners
+    }
+
+    pub fn tint(&self) -> [f32; 3] {
+        self.tint
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn digest(&self) -> u64 {
+        let mut digest = Digest::new();
+        digest.mix(self.key);
+        digest.mix(u64::from(self.size[0]) | (u64::from(self.size[1]) << 32));
+        for corner in self.corners {
+            for value in corner {
+                digest.real(value);
+            }
+        }
+        for value in self.tint {
+            digest.real(value);
+        }
+        digest.real(self.opacity);
+        digest.finish()
+    }
+}
+
 pub struct SceneFrame<'a> {
     pub versions: Versions,
     pub channels: &'a [ChannelRow],
@@ -202,4 +293,5 @@ pub struct SceneFrame<'a> {
     pub styles: &'a [Style],
     pub layers: &'a [Layer],
     pub splats: Splats<'a>,
+    pub overlays: &'a [Overlay<'a>],
 }

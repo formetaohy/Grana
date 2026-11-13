@@ -35,6 +35,7 @@ use crate::mesh::MeshPasses;
 use crate::occupancy::Occupancy;
 use crate::oit::Oit;
 use crate::oit_resolve::OitResolve;
+use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
     self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, VolumeFit, bucket_scale,
@@ -208,6 +209,7 @@ pub struct Renderer {
     object_key: Option<u64>,
     sections: Sections,
     sliced: bool,
+    overlay: Overlays,
     settled: Option<Residency>,
     planned: Option<Residency>,
     demand: Option<ResidencyDemand>,
@@ -295,6 +297,7 @@ impl Renderer {
             object_key: None,
             sections,
             sliced: false,
+            overlay: Overlays::new(device),
             settled: None,
             planned: None,
             demand: None,

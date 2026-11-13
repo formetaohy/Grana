@@ -1,4 +1,4 @@
-use super::LocalizationFrame;
+﻿use super::LocalizationFrame;
 use super::depth::LocalizationDepth;
 use super::grid::Grid;
 use super::group::Groups;
@@ -15,7 +15,7 @@ pub struct LocalizationRenderer<'a> {
     groups: Groups,
     cells: Cells,
     tone: Option<Tone>,
-    progress: &'a mut dyn FnMut(usize, usize) -> bool,
+    progress: &'a dyn Fn(usize, usize) -> bool,
     layer: usize,
     band: usize,
     row: usize,
@@ -29,12 +29,12 @@ impl<'a> LocalizationRenderer<'a> {
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: Groups,
-        progress: &'a mut dyn FnMut(usize, usize) -> bool,
+        progress: &'a dyn Fn(usize, usize) -> bool,
     ) -> Result<Self, String> {
         if !geometry.renderable() {
             let [width, height] = geometry.size();
             return Err(format!(
-                "the localization image would span {width}×{height} pixels; raise the pixel size"
+                "the localization image would span {width}脳{height} pixels; raise the pixel size"
             ));
         }
         let cells = Cells::build(frames, geometry, depth, &groups, progress)?;
@@ -246,7 +246,7 @@ impl Cells {
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: &Groups,
-        progress: &mut dyn FnMut(usize, usize) -> bool,
+        progress: &dyn Fn(usize, usize) -> bool,
     ) -> Result<Self, String> {
         let width = geometry.size()[0] as usize;
         let height = geometry.size()[1] as usize;

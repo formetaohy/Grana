@@ -100,6 +100,7 @@ impl App {
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
             return None;
         };
+        let overlays = super::overlay::overlays(session);
         if let Some(scene) = session.scene()
             && let Err(detail) = engine.draw(
                 &surface.gpu.device,
@@ -110,6 +111,7 @@ impl App {
                     size: [viewport.region[2], viewport.region[3]],
                     display,
                     level_cap: cap,
+                    overlays: &overlays,
                 },
             )
         {

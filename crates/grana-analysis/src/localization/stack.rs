@@ -1,14 +1,19 @@
 use super::depth::LocalizationDepth;
-use super::report::LocalizationImage;
+use super::report::{LocalizationGeometry, LocalizationImage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalizationStack {
+    geometry: LocalizationGeometry,
     depth: LocalizationDepth,
     layers: Vec<LocalizationImage>,
 }
 
 impl LocalizationStack {
-    pub(super) fn new(depth: LocalizationDepth, layers: Vec<LocalizationImage>) -> Self {
+    pub(super) fn new(
+        geometry: LocalizationGeometry,
+        depth: LocalizationDepth,
+        layers: Vec<LocalizationImage>,
+    ) -> Self {
         assert_eq!(
             layers.len(),
             depth.layers() as usize,
@@ -18,12 +23,19 @@ impl LocalizationStack {
             !layers.is_empty(),
             "a localization stack holds at least one slice"
         );
-        let size = layers[0].size();
         assert!(
-            layers.iter().all(|layer| layer.size() == size),
-            "every slice of a localization stack covers the same raster"
+            layers.iter().all(|layer| layer.size() == geometry.size()),
+            "every slice of a localization stack covers the raster it is placed on"
         );
-        Self { depth, layers }
+        Self {
+            geometry,
+            depth,
+            layers,
+        }
+    }
+
+    pub fn geometry(&self) -> LocalizationGeometry {
+        self.geometry
     }
 
     pub fn depth(&self) -> LocalizationDepth {
@@ -31,7 +43,7 @@ impl LocalizationStack {
     }
 
     pub fn size(&self) -> [u32; 2] {
-        self.layers[0].size()
+        self.geometry.size()
     }
 
     pub fn layers(&self) -> &[LocalizationImage] {

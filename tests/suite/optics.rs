@@ -1,4 +1,4 @@
-use glam::Vec3;
+﻿use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
 use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, SplatChunk, Splats};
 use grana_volume::{
@@ -70,6 +70,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         styles: &[],
         layers: &[],
         splats: Splats::new(&chunks),
+        overlays: &[],
     };
     let mut render = |camera: &Camera| {
         let frame = Frame {

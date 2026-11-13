@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_display::CameraState;
-use grana_render::{FrameInfo, PickId, Renderer, Requests};
+use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
@@ -25,6 +25,7 @@ const SAMPLE_BLEND: f64 = 0.5;
 #[derive(Clone, Copy, PartialEq)]
 struct Request {
     scene: u64,
+    overlays: u64,
     camera: CameraState,
     size: [u32; 2],
     level_cap: usize,
@@ -137,6 +138,7 @@ impl Engine {
         let scene_key = view::key(view.scene);
         let request = Request {
             scene: scene_key,
+            overlays: overlay_key(view.overlays),
             camera: view.camera.state(),
             size: view.size,
             level_cap: view.level_cap,
@@ -222,6 +224,7 @@ impl Engine {
                     samples: SAMPLE_LIMIT,
                     display: view.display.render(),
                     level_cap: view.level_cap,
+                    overlays: view.overlays,
                 },
                 &prepared.scene,
             )
@@ -339,6 +342,15 @@ impl Engine {
     pub fn pick_pending(&self) -> bool {
         self.pending_pick.is_some()
     }
+}
+
+fn overlay_key(overlays: &[grana_render::Overlay<'_>]) -> u64 {
+    let mut key = Digest::new();
+    key.mix(overlays.len() as u64);
+    for overlay in overlays {
+        key.mix(overlay.digest());
+    }
+    key.finish()
 }
 
 fn draft_size(size: [u32; 2], scale: f32) -> [u32; 2] {

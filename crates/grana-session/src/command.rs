@@ -402,6 +402,7 @@ pub enum Command {
     CancelLocalizations(ObjectSetId),
     ClearLocalizations(ObjectSetId),
     ExportLocalizationImage(ObjectSetId),
+    ExportLocalizationComposite,
     ComputeDrift,
     ComputeLocalizationDrift(ObjectSetId),
     CancelDrift,
@@ -724,6 +725,7 @@ impl Command {
                 | Self::SetExport(_)
                 | Self::ExportGeff(_)
                 | Self::ExportLocalizations(_)
+                | Self::ExportLocalizationComposite
                 | Self::ExportColoc
                 | Self::ExportMeasure
                 | Self::ExportProvenance

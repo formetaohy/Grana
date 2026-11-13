@@ -1,4 +1,4 @@
-use std::path::Path;
+﻿use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -451,9 +451,9 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             if !file.is_file() {
                 continue;
             }
-            let mut detail = format!("{} · {}", dataset.group(), dataset.scene_label());
+            let mut detail = format!("{} 路 {}", dataset.group(), dataset.scene_label());
             if let Some(view) = spec.views().get(index) {
-                detail.push_str(&format!(" · {view}"));
+                detail.push_str(&format!(" 路 {view}"));
             }
             recorded.push(grana_page::Recorded::picture(
                 &file,
@@ -896,13 +896,13 @@ impl Run<'_, '_> {
             ));
         }
         let depth = report.depth();
-        let mut progress = |_: usize, _: usize| true;
+        let progress = |_: usize, _: usize| true;
         let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
             &held,
             geometry,
             depth,
             report.groups().clone(),
-            &mut progress,
+            &progress,
         )?;
         renderer.at_density(report.density());
         let step = geometry.pixel();
@@ -1846,7 +1846,7 @@ fn colocalization(
     let statistics = result.statistics();
     let manders = statistics.manders();
     let caption = format!(
-        "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
+        "Pearson {} 路 Overlap {} 路 M1 {} 路 M2 {} 路 p {}",
         number(statistics.pearson()),
         number(statistics.overlap()),
         number(manders[0]),
@@ -1861,7 +1861,7 @@ fn colocalization(
         format!("Y: {y}"),
         format!("X: {x}"),
     )
-    .with_summary(format!("{name} · {caption}"))
+    .with_summary(format!("{name} 路 {caption}"))
     .with_language(language);
     grana_chart::Page::Joint(Box::new(grana_chart::Joint::total(
         heading,
@@ -1888,3 +1888,4 @@ fn stream(path: &Path, table: &grana_measure::Table, rows: &[usize]) -> Result<(
         .map_err(fault)?;
     std::io::Write::flush(&mut writer).map_err(fault)
 }
+

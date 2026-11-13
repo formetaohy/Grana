@@ -2773,6 +2773,109 @@ fn exports_a_super_resolution_stack() {
 }
 
 #[test]
+fn composes_imported_localization_channels() {
+    let temp = Temp::new("session-localization-composite");
+    let table = |name: &str, offset: f32| {
+        let path = temp.path().join(name);
+        let rows = (0..64)
+            .map(|index| support::Localization {
+                frame: 0,
+                position: [
+                    offset + (index % 8) as f32 * 3.0,
+                    2.0 + (index / 8) as f32 * 3.0,
+                    0.0,
+                ],
+                photons: 1500.0,
+                precision: [0.02, 0.02, 0.02],
+                group: -1,
+            })
+            .collect::<Vec<_>>();
+        support::picasso(&path, 100.0, &rows);
+        path
+    };
+    let first = table("first.hdf5", 2.0);
+    let second = table("second.hdf5", 30.0);
+    let volume = support::spheres(
+        Extent::new(64, 32, 4),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series("composite", VolumeSeries::new(vec![volume], 1.0));
+    assert!(
+        session.import_localizations(&first),
+        "the first table imports"
+    );
+    settle(&mut session);
+    assert!(
+        session.import_localizations(&second),
+        "the second table imports"
+    );
+    settle(&mut session);
+    let sets = session
+        .scene()
+        .expect("the dataset stays open")
+        .objects
+        .iter()
+        .filter(|set| set.kind() == ObjectKind::Spots)
+        .map(|set| set.id())
+        .collect::<Vec<_>>();
+    assert_eq!(sets.len(), 2, "both tables land as their own channel");
+    for set in &sets {
+        session.execute(Command::SetLocalizationSpec {
+            set: *set,
+            spec: grana_session::LocalizationSpec::new([0, 0], 10.0, 20.0),
+        });
+        session.execute(Command::AnalyzeLocalizations(*set));
+    }
+    settle(&mut session);
+    assert_eq!(
+        session.localizations().rendered(),
+        2,
+        "both channels render their super-resolution image"
+    );
+    let exported = temp.path().join("composite.ome.tif");
+    session
+        .export_localization_composite_to(&exported)
+        .expect("the composed image exports");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(
+            Instant::now() < deadline,
+            "the composed image never finishes"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let image = grana_tiff::Image::open(&exported).expect("the composed image opens");
+    assert_eq!(image.pyramid().channel_count(), 3);
+    let extent = image.pyramid().level(0).extent();
+    let data = image
+        .read_region(0, 0, 0, 0..extent.x(), 0..extent.y(), 0..1)
+        .expect("the composed plane reads");
+    let VoxelData::U8(values) = data else {
+        panic!("the composed image stores eight bit voxels");
+    };
+    let mut hues = [false; 3];
+    for texel in values.chunks(3) {
+        let Some(brightest) = texel
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value > 16)
+            .max_by_key(|(_, value)| **value)
+        else {
+            continue;
+        };
+        hues[brightest.0] = true;
+    }
+    assert!(
+        hues.iter().filter(|held| **held).count() >= 2,
+        "both channels paint their own color into the composed image"
+    );
+}
+
+#[test]
 fn clusters_imported_localizations_into_molecules() {
     let temp = Temp::new("session-clusters");
     let path = temp.path().join("localizations.hdf5");

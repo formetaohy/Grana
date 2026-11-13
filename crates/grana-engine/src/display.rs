@@ -29,4 +29,5 @@ pub struct View<'a> {
     pub size: [u32; 2],
     pub display: Display,
     pub level_cap: usize,
+    pub overlays: &'a [grana_render::Overlay<'a>],
 }
