@@ -1,4 +1,4 @@
-﻿use std::path::Path;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -1888,4 +1888,3 @@ fn stream(path: &Path, table: &grana_measure::Table, rows: &[usize]) -> Result<(
         .map_err(fault)?;
     std::io::Write::flush(&mut writer).map_err(fault)
 }
-
