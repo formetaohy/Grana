@@ -125,7 +125,6 @@ pub fn key(scene: &Scene) -> u64 {
 pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
     let mut detail = Vec::new();
     let mut splats = Vec::new();
-    let world = scene.dataset.world_size();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
@@ -149,7 +148,7 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
                 let pixels = lens
                     .camera
                     .world_per_point(lens.height as f32, lens.camera.distance());
-                spot::choose(spots, world, pixels)
+                spot::choose(spots, pixels)
             }
             _ => Choice::Full,
         });
@@ -177,7 +176,6 @@ pub fn frame(
     let mut appearance = Digest::new();
     let mut ordinal = 0usize;
     let time = scene.time();
-    let world = scene.dataset.world_size();
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
     data.mix(scene.channels.len() as u64);
     data.mix(scene.dataset.channels().len() as u64);
@@ -226,7 +224,6 @@ pub fn frame(
                 set,
                 splat_key(set.id().raw(), DETECTION_PART),
                 choice,
-                world,
             );
             for chunk in &prepared.chunks {
                 objects.mix(chunk.key());

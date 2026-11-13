@@ -90,7 +90,10 @@ impl Session {
     pub(super) fn choose_import_localizations(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Open a localization table")
-            .add_filter("Localization table", &["csv", "tsv", "txt", "dat"])
+            .add_filter(
+                "Localization table",
+                &["csv", "tsv", "txt", "dat", "hdf5", "h5"],
+            )
             .pick_file()
         else {
             return;

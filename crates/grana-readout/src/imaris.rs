@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use hdf5_pure::{AttrValue, Dataset, Datatype, DatatypeByteOrder, File};
+use hdf5_pure::{AttrValue, Dataset, Datatype, File};
 use openreadout_hdf5::ims_scene::{self, FieldValue, Records, SceneTable, SceneTableKind};
 
 use crate::error::Error;
+use crate::number;
 
 const CONTENT: [&str; 2] = ["Scene8/Content", "Scene/Content"];
 
@@ -1214,7 +1215,7 @@ fn read_columns(
         .read_raw()
         .map_err(|error| Error::read(path, error.to_string()))?;
     let count = rows * columns;
-    if let Some(width) = element_size(&datatype) {
+    if let Some(width) = number::size(&datatype) {
         if raw.len() < count * width {
             return Err(Error::read(
                 path,
@@ -1225,7 +1226,7 @@ fn read_columns(
             .chunks_exact(width)
             .take(count)
             .map(|element| {
-                decode(&datatype, element).ok_or_else(|| {
+                number::decode(&datatype, element).ok_or_else(|| {
                     Error::read(
                         path,
                         format!("the Imaris dataset `{name}` holds an unreadable number"),
@@ -1237,7 +1238,7 @@ fn read_columns(
     if let Datatype::Compound { size, ref members } = datatype {
         let fields = members
             .iter()
-            .filter(|member| element_size(&member.datatype).is_some())
+            .filter(|member| number::size(&member.datatype).is_some())
             .collect::<Vec<_>>();
         if fields.len() != columns {
             return Err(Error::read(
@@ -1256,10 +1257,10 @@ fn read_columns(
         for index in 0..rows {
             let start = index * record;
             for field in &fields {
-                let width = element_size(&field.datatype).expect("the field is numeric");
+                let width = number::size(&field.datatype).expect("the field is numeric");
                 let offset = start + field.byte_offset as usize;
                 let reader = |slice: &[u8]| {
-                    decode(&field.datatype, slice).ok_or_else(|| {
+                    number::decode(&field.datatype, slice).ok_or_else(|| {
                         Error::read(
                             path,
                             format!("the Imaris dataset `{name}` holds an unreadable number"),
@@ -1281,55 +1282,6 @@ fn read_columns(
         path,
         format!("the Imaris dataset `{name}` is not numeric"),
     ))
-}
-
-fn element_size(datatype: &Datatype) -> Option<usize> {
-    match datatype {
-        Datatype::FloatingPoint { size, .. } | Datatype::FixedPoint { size, .. } => {
-            Some(*size as usize)
-        }
-        _ => None,
-    }
-}
-
-fn decode(datatype: &Datatype, bytes: &[u8]) -> Option<f64> {
-    if bytes.len() > 8 {
-        return None;
-    }
-    let big = matches!(
-        datatype,
-        Datatype::FloatingPoint {
-            byte_order: DatatypeByteOrder::BigEndian,
-            ..
-        } | Datatype::FixedPoint {
-            byte_order: DatatypeByteOrder::BigEndian,
-            ..
-        }
-    );
-    let mut buffer = [0u8; 8];
-    if big {
-        for (slot, byte) in bytes.iter().rev().enumerate() {
-            buffer[slot] = *byte;
-        }
-    } else {
-        buffer[..bytes.len()].copy_from_slice(bytes);
-    }
-    match datatype {
-        Datatype::FloatingPoint { size: 8, .. } => Some(f64::from_le_bytes(buffer)),
-        Datatype::FloatingPoint { size: 4, .. } => {
-            Some(f64::from(f32::from_le_bytes(buffer[..4].try_into().ok()?)))
-        }
-        Datatype::FixedPoint { size, layout, .. } => {
-            let value = u64::from_le_bytes(buffer);
-            if layout.signed {
-                let shift = 64 - 8 * *size;
-                Some(((value << shift) as i64 >> shift) as f64)
-            } else {
-                Some(value as f64)
-            }
-        }
-        _ => None,
-    }
 }
 
 fn time_of(value: f64) -> u32 {

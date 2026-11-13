@@ -281,7 +281,7 @@ fn forks(
         let mother_volume = volume(detections.radius(mother));
         let carried_volume = volume(detections.radius(carried));
         let mother_support = support.established(detections, chains, parent);
-        grid.near(near, range, |point, _| {
+        grid.near(near, Vec3::splat(range), |point, _| {
             let Some(&start) = starts.get(&point) else {
                 return;
             };
@@ -334,7 +334,7 @@ fn forks(
         let mother_volume = volume(detections.radius(mother));
         let mother_support = support.established(detections, chains, parent);
         let mut nearby = Vec::new();
-        grid.near(predicted, range, |point, distance| {
+        grid.near(predicted, Vec3::splat(range), |point, distance| {
             if let Some(&start) = starts.get(&point) {
                 nearby.push((start, point, distance));
             }
@@ -363,8 +363,8 @@ fn forks(
                     continue;
                 }
                 let score = reached(predicted, mid, range)
-                    * ((1.0 - f64::from(first_distance) / f64::from(range)).max(0.0)
-                        * (1.0 - f64::from(second_distance) / f64::from(range)).max(0.0))
+                    * ((1.0 - f64::from(first_distance)).max(0.0)
+                        * (1.0 - f64::from(second_distance)).max(0.0))
                     .sqrt()
                     * middle
                     * conserved(mother_volume, volume_gain)
@@ -411,7 +411,7 @@ fn joins(
         let carried_volume = volume(detections.radius(carried));
         let source_established = support.established(detections, chains, head);
         let merged_support = support.onward(detections, chains, head, position);
-        grid.near(carried_centre, range, |point, _| {
+        grid.near(carried_centre, Vec3::splat(range), |point, _| {
             let Some(&end) = ends.get(&point) else {
                 return;
             };
@@ -461,7 +461,7 @@ fn joins(
         let seat = detections.centroid(merged);
         let merged_support = support.established(detections, chains, child);
         let mut nearby = Vec::new();
-        grid.near(seat, range, |point, distance| {
+        grid.near(seat, Vec3::splat(range), |point, distance| {
             if let Some(&end) = ends.get(&point) {
                 nearby.push((end, point, distance));
             }
@@ -494,8 +494,8 @@ fn joins(
                     continue;
                 }
                 let score = reached(seat, mid, range)
-                    * ((1.0 - f64::from(first_distance) / f64::from(range)).max(0.0)
-                        * (1.0 - f64::from(second_distance) / f64::from(range)).max(0.0))
+                    * ((1.0 - f64::from(first_distance)).max(0.0)
+                        * (1.0 - f64::from(second_distance)).max(0.0))
                     .sqrt()
                     * middle
                     * conserved(source_volume, merged_volume)

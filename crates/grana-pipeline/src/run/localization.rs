@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet};
+use grana_object::{
+    IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
+};
 use grana_readout::localization::{self, Localization};
 use grana_scene::{Drift, ObjectFrame};
 use grana_warp::Warp;
@@ -62,34 +64,66 @@ pub fn localization(
     for entry in &table {
         slots[entry.time() as usize].push(*entry);
     }
+    let mut grouped = BTreeMap::<u32, Vec<TrackNode>>::new();
     for (time, entries) in slots.into_iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let Some(set) = frame(
-            reader,
-            time as u32,
-            &entries,
-            request.drift.warp(time as u32),
-        )?
-        else {
+        let time = time as u32;
+        let Some(set) = frame(reader, time, &entries, request.drift.warp(time))? else {
             continue;
         };
+        for (object, entry) in entries.iter().enumerate() {
+            if let Some(group) = entry.group() {
+                let spot = set.spots()[object];
+                grouped
+                    .entry(group)
+                    .or_default()
+                    .push(TrackNode::new(time, object, spot.center()));
+            }
+        }
         sink(Event::Frame {
-            time: time as u32,
+            time,
             frame: ObjectFrame::Spots(set),
         });
         sink(Event::Progress {
-            time: time as u32,
-            done: time + 1,
+            time,
+            done: time as usize + 1,
             total: frames as usize,
         });
     }
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
     }
+    if !grouped.is_empty() {
+        sink(Event::Tracks(grouped_tracks(
+            grouped,
+            reader.pyramid().frame_interval(),
+        )?));
+    }
     sink(Event::Done);
     Ok(())
+}
+
+fn grouped_tracks(
+    grouped: BTreeMap<u32, Vec<TrackNode>>,
+    frame_interval: f32,
+) -> Result<TrackSet, String> {
+    let mut tracks = Vec::new();
+    for nodes in grouped.into_values() {
+        let mut start = 0;
+        for index in 1..=nodes.len() {
+            let broken = index == nodes.len() || nodes[index].time() != nodes[index - 1].time() + 1;
+            if !broken {
+                continue;
+            }
+            if index - start > 1 {
+                tracks.push(Track::new(nodes[start..index].to_vec()));
+            }
+            start = index;
+        }
+    }
+    TrackSet::try_with_links(frame_interval, tracks, Vec::new())
 }
 
 fn frame(

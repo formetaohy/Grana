@@ -512,20 +512,20 @@ impl ObjectFrame {
             Self::Spots(set) => set
                 .spots()
                 .iter()
-                .map(|spot| TrackDetection::new(spot.center(), spot.radius()))
+                .map(|spot| TrackDetection::new(spot.center(), spot.radii()))
                 .collect(),
             Self::Surfaces(set) => set
                 .objects()
                 .iter()
                 .map(|object| {
-                    TrackDetection::new(object.centroid(), equivalent_radius(object.volume()))
+                    TrackDetection::new(object.centroid(), [equivalent_radius(object.volume()); 3])
                 })
                 .collect(),
             Self::Filaments(set) => set
                 .objects()
                 .iter()
                 .map(|object| {
-                    TrackDetection::new(object.centroid(), (0.5 * object.diameter()) as f32)
+                    TrackDetection::new(object.centroid(), [(0.5 * object.diameter()) as f32; 3])
                 })
                 .collect(),
             Self::Cells(set) => set
@@ -533,7 +533,7 @@ impl ObjectFrame {
                 .objects()
                 .iter()
                 .map(|object| {
-                    TrackDetection::new(object.centroid(), equivalent_radius(object.volume()))
+                    TrackDetection::new(object.centroid(), [equivalent_radius(object.volume()); 3])
                 })
                 .collect(),
         }

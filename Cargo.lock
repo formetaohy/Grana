@@ -3406,6 +3406,7 @@ dependencies = [
  "grana-warp",
  "grana-weight",
  "grana-zarr",
+ "hdf5-pure",
  "serde_json",
  "wgpu",
  "zarrs",

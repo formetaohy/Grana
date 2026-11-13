@@ -446,6 +446,64 @@ fn round_trips_detected_surfaces_through_geff() {
 }
 
 #[test]
+fn imports_picasso_group_trajectories_as_tracks() {
+    let temp = Temp::new("session-picasso");
+    let path = temp.path().join("localizations.hdf5");
+    let localization = |frame: u32, x: f32, group: i64| support::Localization {
+        frame,
+        position: [x, 5.0, 600.0],
+        photons: 2000.0,
+        precision: [0.2, 0.2, 45.0],
+        group,
+    };
+    support::picasso(
+        &path,
+        100.0,
+        &[
+            localization(0, 10.0, 7),
+            localization(0, 50.0, 9),
+            localization(1, 30.0, 7),
+            localization(1, 60.0, 9),
+        ],
+    );
+    let volume = support::spheres(
+        Extent::new(64, 32, 32),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[([10.0, 5.0, 16.0], 4.0)],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "picasso",
+        VolumeSeries::new(vec![volume.clone(), volume], 1.0),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let set = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    let object = scene.objects.get(set).expect("the localization set stays");
+    let tracks = object
+        .tracks()
+        .expect("the grouping localizations track")
+        .set();
+    assert_eq!(
+        tracks.tracks().len(),
+        2,
+        "every group of consecutive frames forms one track"
+    );
+    for track in tracks.tracks() {
+        assert_eq!(track.nodes().len(), 2, "a group spans both frames");
+    }
+    let spot = object.frame(0).expect("the first frame lands").spots_of()[0];
+    assert_eq!(spot.quality(), 2000.0);
+}
+
+#[test]
 fn imports_anisotropic_localizations_and_round_trips_them() {
     let temp = Temp::new("session-localizations");
     let path = temp.path().join("localizations.csv");

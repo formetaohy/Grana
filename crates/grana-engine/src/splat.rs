@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use glam::Vec3;
 use grana_render::{Digest, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
 use grana_scene::{Item, ObjectSet, ObjectSetId, Scene};
 
@@ -37,7 +36,6 @@ impl SplatCache {
         set: &ObjectSet,
         key: u64,
         choice: Choice,
-        world: Vec3,
     ) -> Prepared {
         let time = scene.time();
         let index = match self
@@ -76,7 +74,7 @@ impl SplatCache {
         }
         for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
             if level.as_ref().is_some_and(|level| {
-                let stamp = stamps(set, slot as u8, world, time);
+                let stamp = stamps(set, slot as u8, time);
                 stamp.geometry != level.geometry_stamp || stamp.style != level.style_stamp
             }) {
                 *level = None;
@@ -84,7 +82,7 @@ impl SplatCache {
         }
         for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
             if level.is_none() {
-                *level = Some(build(scene, set, slot as u8, world, time));
+                *level = Some(build(scene, set, slot as u8, time));
             }
         }
         let levels = &entry.levels;
@@ -182,12 +180,12 @@ struct Stamps {
     style: u64,
 }
 
-fn build(scene: &Scene, set: &ObjectSet, level: u8, world: Vec3, time: u32) -> Level {
+fn build(scene: &Scene, set: &ObjectSet, level: u8, time: u32) -> Level {
     let choice = match level {
         0 => Choice::Full,
         level => Choice::Level(level),
     };
-    let stamp = stamps(set, level, world, time);
+    let stamp = stamps(set, level, time);
     let spots = set
         .frame(time)
         .and_then(|frame| frame.spots())
@@ -200,7 +198,7 @@ fn build(scene: &Scene, set: &ObjectSet, level: u8, world: Vec3, time: u32) -> L
             .unwrap_or_else(|| set.color()),
         visible: set.visible_object(time, index),
     };
-    let detections = spot::detections(spots, choice, world, set.opacity(), appearance);
+    let detections = spot::detections(spots, choice, set.opacity(), appearance);
     Level {
         geometry_stamp: stamp.geometry,
         style_stamp: stamp.style,
@@ -210,14 +208,11 @@ fn build(scene: &Scene, set: &ObjectSet, level: u8, world: Vec3, time: u32) -> L
     }
 }
 
-fn stamps(set: &ObjectSet, level: u8, world: Vec3, time: u32) -> Stamps {
+fn stamps(set: &ObjectSet, level: u8, time: u32) -> Stamps {
     let mut geometry = Digest::new();
     geometry.mix(set.id().raw());
     geometry.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
     geometry.mix(u64::from(time));
-    geometry.real(world.x);
-    geometry.real(world.y);
-    geometry.real(world.z);
     geometry.mix(u64::from(level));
     let mut style = Digest::new();
     style.mix(set.id().raw());

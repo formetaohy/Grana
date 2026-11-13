@@ -304,18 +304,12 @@ impl Session {
                     scene.apply_curation(set);
                 }
             }
-            let imported_tracks = self
+            let carried_tracks = self
                 .scene
                 .as_ref()
                 .and_then(|scene| scene.objects.get(set))
-                .is_some_and(|object| {
-                    let localized = object
-                        .provenance()
-                        .file()
-                        .is_some_and(super::import::localization_table);
-                    !localized && (object.provenance().is_interop() || object.tracks().is_some())
-                });
-            if !imported_tracks {
+                .is_some_and(|object| object.tracks().is_some());
+            if !carried_tracks {
                 self.start_tracks(set);
             }
             self.resume_relations(set);

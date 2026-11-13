@@ -1,12 +1,11 @@
-use glam::Vec3;
+use std::collections::BTreeMap;
+
 use grana_display::srgb_to_linear;
 use grana_object::{Spot, SpotSet};
 use grana_render::{SplatGeometry, SplatStyle};
 
 const RAW_PIXELS: f32 = 3.0;
 const CELL_PIXELS: f32 = 4.0;
-const CELL_BUDGET: u64 = 1 << 15;
-const AXIS_LIMIT: f32 = 32.0;
 const SAMPLE_LIMIT: usize = 1024;
 const AGGREGATE_FLOOR: usize = 512;
 const LADDER: u8 = 4;
@@ -68,11 +67,11 @@ pub(crate) struct Ladder {
 }
 
 impl Ladder {
-    pub(crate) fn new(spots: &[Spot], world: Vec3) -> Option<Self> {
+    pub(crate) fn new(spots: &[Spot]) -> Option<Self> {
         let diameter = diameter(spots)?;
         let mut cells = [0.0f32; LADDER as usize];
         for (slot, exponent) in cells.iter_mut().zip(1..=LADDER) {
-            *slot = cell_size(diameter * 2f32.powi(i32::from(exponent)), world);
+            *slot = diameter * 2f32.powi(i32::from(exponent));
         }
         Some(Self { diameter, cells })
     }
@@ -94,11 +93,11 @@ pub(crate) fn aggregated(spots: &SpotSet) -> bool {
     spots.len() >= AGGREGATE_FLOOR
 }
 
-pub(crate) fn choose(spots: &SpotSet, world: Vec3, world_per_pixel: f32) -> Choice {
+pub(crate) fn choose(spots: &SpotSet, world_per_pixel: f32) -> Choice {
     if !aggregated(spots) || !(world_per_pixel.is_finite() && world_per_pixel > 0.0) {
         return Choice::Full;
     }
-    let Some(ladder) = Ladder::new(spots.spots(), world) else {
+    let Some(ladder) = Ladder::new(spots.spots()) else {
         return Choice::Full;
     };
     let pixels = ladder.diameter() / world_per_pixel;
@@ -114,27 +113,19 @@ pub(crate) fn choose(spots: &SpotSet, world: Vec3, world_per_pixel: f32) -> Choi
     Choice::Level(LADDER)
 }
 
-pub(crate) fn detections<F>(
-    spots: &SpotSet,
-    choice: Choice,
-    world: Vec3,
-    opacity: f32,
-    style: F,
-) -> Detections
+pub(crate) fn detections<F>(spots: &SpotSet, choice: Choice, opacity: f32, style: F) -> Detections
 where
     F: Fn(usize) -> Appearance,
 {
     let entries = spots.spots();
-    let Some(ladder) = Ladder::new(entries, world) else {
-        return Detections::default();
-    };
     let level = match choice {
         Choice::Full => return raw(entries, opacity, &style),
         Choice::Level(level) => level,
     };
-    let Some(mut grid) = Grid::new(world, ladder.cell(level)) else {
-        return raw(entries, opacity, &style);
+    let Some(ladder) = Ladder::new(entries) else {
+        return Detections::default();
     };
+    let mut grid = Grid::new(ladder.cell(level));
     let mut palette = Palette::default();
     for (index, spot) in entries.iter().enumerate() {
         let look = style(index);
@@ -143,10 +134,11 @@ where
         }
         grid.add(index, spot, palette.radiance(look.color));
     }
+    let count = grid.len();
     let mut detections = Detections {
-        geometry: Vec::with_capacity(grid.len().min(entries.len())),
-        style: Vec::with_capacity(grid.len().min(entries.len())),
-        members: Vec::with_capacity(grid.len().min(entries.len())),
+        geometry: Vec::with_capacity(count),
+        style: Vec::with_capacity(count),
+        members: Vec::with_capacity(count),
     };
     grid.finish(opacity, &mut detections);
     detections
@@ -239,24 +231,6 @@ fn diameter(entries: &[Spot]) -> Option<f32> {
     Some(2.0 * radii[radii.len() / 2])
 }
 
-fn cell_size(cell: f32, world: Vec3) -> f32 {
-    let mut cell = cell.max(world.max_element() / AXIS_LIMIT);
-    while cells(world, cell) > CELL_BUDGET {
-        cell *= 2.0;
-    }
-    cell
-}
-
-fn dims(world: Vec3, cell: f32) -> [u32; 3] {
-    [world.x, world.y, world.z]
-        .map(|span| ((span.max(0.0) / cell).ceil() as u64).clamp(1, AXIS_LIMIT as u64) as u32)
-}
-
-fn cells(world: Vec3, cell: f32) -> u64 {
-    let dims = dims(world, cell);
-    u64::from(dims[0]) * u64::from(dims[1]) * u64::from(dims[2])
-}
-
 #[derive(Clone, Copy)]
 struct Cell {
     count: u32,
@@ -281,56 +255,43 @@ impl Cell {
 }
 
 struct Grid {
-    origin: Vec3,
     cell: f32,
-    dims: [u32; 3],
-    cells: Vec<Cell>,
+    cells: BTreeMap<[i64; 3], Cell>,
 }
 
 impl Grid {
-    fn new(world: Vec3, cell: f32) -> Option<Self> {
-        let dims = dims(world, cell);
-        let count = u64::from(dims[0]) * u64::from(dims[1]) * u64::from(dims[2]);
-        if count > CELL_BUDGET {
-            return None;
-        }
-        Some(Self {
-            origin: -0.5 * world,
+    fn new(cell: f32) -> Self {
+        assert!(
+            cell.is_finite() && cell > 0.0,
+            "an aggregation cell spans a positive length"
+        );
+        Self {
             cell,
-            dims,
-            cells: vec![Cell::EMPTY; count as usize],
-        })
+            cells: BTreeMap::new(),
+        }
     }
 
     fn len(&self) -> usize {
         self.cells.len()
     }
 
-    fn slot(&self, point: [f32; 3]) -> ([usize; 3], usize) {
-        let mut at = [0usize; 3];
-        for axis in 0..3 {
-            let cell = ((point[axis] - self.origin[axis]) / self.cell).floor();
-            let limit = self.dims[axis].saturating_sub(1) as f32;
-            at[axis] = cell.clamp(0.0, limit) as usize;
-        }
-        let slot = at[0] + self.dims[0] as usize * (at[1] + self.dims[1] as usize * at[2]);
-        (at, slot)
+    fn slot(&self, point: [f32; 3]) -> [i64; 3] {
+        point.map(|value| (value / self.cell).floor() as i64)
     }
 
     fn add(&mut self, index: usize, spot: &Spot, radiance: [f32; 3]) {
         let center = spot.center();
-        let (at, slot) = self.slot(center);
+        let at = self.slot(center);
         let reach = [0, 1, 2]
-            .iter()
             .map(|axis| {
-                let offset = f64::from(center[*axis])
-                    - f64::from(self.origin[*axis])
-                    - (at[*axis] as f64 + 0.5) * f64::from(self.cell);
+                let offset =
+                    f64::from(center[axis]) - (at[axis] as f64 + 0.5) * f64::from(self.cell);
                 offset * offset
             })
+            .into_iter()
             .sum::<f64>();
         let sigma = spot.sigma();
-        let cell = &mut self.cells[slot];
+        let cell = self.cells.entry(at).or_insert(Cell::EMPTY);
         if reach < cell.reach {
             cell.reach = reach;
             cell.member = index as u32;
@@ -346,10 +307,7 @@ impl Grid {
     }
 
     fn finish(&self, opacity: f32, detections: &mut Detections) {
-        for cell in &self.cells {
-            if cell.count == 0 {
-                continue;
-            }
+        for cell in self.cells.values() {
             let count = f64::from(cell.count);
             let center = [0, 1, 2].map(|axis| (cell.sum[axis] / count) as f32);
             let sigma = [0, 1, 2].map(|axis| {

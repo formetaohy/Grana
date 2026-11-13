@@ -3,6 +3,7 @@ mod family;
 mod image;
 mod imaris;
 pub mod localization;
+mod number;
 mod open;
 mod plane;
 mod probe;

@@ -117,12 +117,13 @@ fn candidates(
             if target >= detections.frame_count() {
                 break;
             }
-            let gate = step * reach as f32;
-            let grid = detections.grid(target, gate);
+            let reach_gate = step * reach as f32;
+            let grid = detections.grid(target, reach_gate);
             for source in detections.span(frame) {
                 let predicted = detections.centroid(source) + velocity[source] * reach as f32;
+                let gate = detections.gate(source, reach_gate);
                 grid.near(predicted, gate, |candidate, distance| {
-                    let closeness = 1.0 - distance / gate;
+                    let closeness = 1.0 - distance;
                     if closeness <= 0.0 {
                         return;
                     }

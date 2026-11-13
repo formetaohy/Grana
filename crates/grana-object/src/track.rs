@@ -3,28 +3,32 @@ use crate::lineage::Lineage;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackDetection {
     centroid: [f32; 3],
-    radius: f32,
+    radii: [f32; 3],
 }
 
 impl TrackDetection {
-    pub fn new(centroid: [f32; 3], radius: f32) -> Self {
+    pub fn new(centroid: [f32; 3], radii: [f32; 3]) -> Self {
         assert!(
             centroid.iter().all(|value| value.is_finite()),
             "a tracked detection lies at a finite centroid"
         );
         assert!(
-            radius.is_finite() && radius > 0.0,
-            "a tracked detection spans a positive radius"
+            radii.iter().all(|value| value.is_finite() && *value > 0.0),
+            "a tracked detection spans a positive radius on every axis"
         );
-        Self { centroid, radius }
+        Self { centroid, radii }
     }
 
     pub fn centroid(self) -> [f32; 3] {
         self.centroid
     }
 
+    pub fn radii(self) -> [f32; 3] {
+        self.radii
+    }
+
     pub fn radius(self) -> f32 {
-        self.radius
+        (self.radii[0] * self.radii[1] * self.radii[2]).cbrt()
     }
 }
 

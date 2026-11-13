@@ -6,7 +6,8 @@ use grana_object::TrackDetection;
 
 pub(super) struct Detection {
     centroid: Vec3,
-    radius: f32,
+    radii: [f32; 3],
+    stretch: [f32; 3],
     frame: u32,
     object: usize,
 }
@@ -14,28 +15,40 @@ pub(super) struct Detection {
 pub(super) struct Detections {
     detections: Vec<Detection>,
     spans: Vec<Range<usize>>,
+    stretch: f32,
 }
 
 impl Detections {
     pub fn new(frames: &[&[TrackDetection]]) -> Self {
         let mut detections = Vec::new();
         let mut spans = Vec::with_capacity(frames.len());
+        let mut widest = 1.0f32;
         for (frame, frame_detections) in frames.iter().enumerate() {
             let start = detections.len();
             detections.extend(
                 frame_detections
                     .iter()
                     .enumerate()
-                    .map(|(object, detection)| Detection {
-                        centroid: Vec3::from(detection.centroid()),
-                        radius: detection.radius(),
-                        frame: frame as u32,
-                        object,
+                    .map(|(object, detection)| {
+                        let radii = detection.radii();
+                        let shape = stretch(radii);
+                        widest = widest.max(shape.into_iter().fold(1.0, f32::max));
+                        Detection {
+                            centroid: Vec3::from(detection.centroid()),
+                            radii,
+                            stretch: shape,
+                            frame: frame as u32,
+                            object,
+                        }
                     }),
             );
             spans.push(start..detections.len());
         }
-        Self { detections, spans }
+        Self {
+            detections,
+            spans,
+            stretch: widest,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -67,16 +80,26 @@ impl Detections {
     }
 
     pub fn radius(&self, index: usize) -> f32 {
-        self.detection(index).radius
+        let radii = self.detection(index).radii;
+        (radii[0] * radii[1] * radii[2]).cbrt()
     }
 
-    pub fn grid(&self, frame: usize, cell: f32) -> Grid<'_> {
-        Grid::new(self, frame, cell)
+    pub fn gate(&self, index: usize, reach: f32) -> Vec3 {
+        Vec3::from(self.detection(index).stretch) * reach
+    }
+
+    pub fn grid(&self, frame: usize, reach: f32) -> Grid<'_> {
+        Grid::new(self, frame, reach * self.stretch)
     }
 
     fn detection(&self, index: usize) -> &Detection {
         &self.detections[index]
     }
+}
+
+fn stretch(radii: [f32; 3]) -> [f32; 3] {
+    let smallest = radii.into_iter().fold(f32::INFINITY, f32::min);
+    radii.map(|radius| radius / smallest)
 }
 
 pub(super) struct Grid<'a> {
@@ -101,19 +124,25 @@ impl<'a> Grid<'a> {
         }
     }
 
-    pub fn near(&self, at: Vec3, radius: f32, mut visit: impl FnMut(usize, f32)) {
+    pub fn near(&self, at: Vec3, gate: Vec3, mut visit: impl FnMut(usize, f32)) {
+        let gate = gate.to_array();
         let base = key(at, self.cell);
-        let reach = (radius / self.cell).ceil() as i64;
-        for z in -reach..=reach {
-            for y in -reach..=reach {
-                for x in -reach..=reach {
+        for z in -1..=1 {
+            for y in -1..=1 {
+                for x in -1..=1 {
                     let Some(indices) = self.cells.get(&[base[0] + x, base[1] + y, base[2] + z])
                     else {
                         continue;
                     };
                     for &index in indices {
-                        let distance = at.distance(self.detections.centroid(index));
-                        if distance <= radius {
+                        let offset = at - self.detections.centroid(index);
+                        let distance = [offset.x, offset.y, offset.z]
+                            .into_iter()
+                            .zip(gate)
+                            .map(|(offset, gate)| (offset / gate).powi(2))
+                            .sum::<f32>()
+                            .sqrt();
+                        if distance <= 1.0 {
                             visit(index, distance);
                         }
                     }

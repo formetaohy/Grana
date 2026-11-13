@@ -988,7 +988,7 @@ fn events(division: bool, division_range: f32, merge_range: f32, overlap: f32) -
 fn detections(centroids: &[[f32; 3]], radius: f32) -> Vec<TrackDetection> {
     centroids
         .iter()
-        .map(|centroid| TrackDetection::new(*centroid, radius))
+        .map(|centroid| TrackDetection::new(*centroid, [radius; 3]))
         .collect()
 }
 

@@ -48,7 +48,11 @@ impl Spot {
     }
 
     pub fn radius(self) -> f32 {
-        self.sigma.iter().copied().fold(0.0, f32::max) * RADIUS_PER_SIGMA
+        self.radii().into_iter().fold(0.0, f32::max)
+    }
+
+    pub fn radii(self) -> [f32; 3] {
+        self.sigma.map(|value| value * RADIUS_PER_SIGMA)
     }
 
     pub fn quality(self) -> f32 {

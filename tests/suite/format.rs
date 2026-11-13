@@ -983,6 +983,54 @@ fn round_trips_a_filament_geff_graph() {
 }
 
 #[test]
+fn reads_picasso_localization_tables() {
+    let temp = Temp::new("suite-picasso-table");
+    let path = temp.path().join("localizations.hdf5");
+    support::picasso(
+        &path,
+        100.0,
+        &[
+            support::Localization {
+                frame: 0,
+                position: [10.0, 5.0, 600.0],
+                photons: 3000.0,
+                precision: [0.2, 0.22, 45.0],
+                group: 7,
+            },
+            support::Localization {
+                frame: 1,
+                position: [30.0, 5.0, 600.0],
+                photons: 2000.0,
+                precision: [0.25, 0.25, 45.0],
+                group: 7,
+            },
+        ],
+    );
+    let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
+    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
+        .expect("the table reads")
+        .expect("the table finishes");
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].time(), 0);
+    assert_eq!(found[1].time(), 1);
+    assert_eq!(
+        (
+            found[0].center().to_vec(),
+            found[0].sigma().to_vec(),
+            found[0].quality(),
+            found[0].group()
+        ),
+        (
+            vec![-2.2, -1.1, -1.0],
+            vec![0.02, 0.022, 0.045],
+            3000.0,
+            Some(7)
+        ),
+        "a Picasso localization lands on the dataset with its precision and group"
+    );
+}
+
+#[test]
 fn reads_one_based_localization_tables() {
     let temp = Temp::new("suite-localization-table");
     let path = temp.path().join("localizations.txt");
