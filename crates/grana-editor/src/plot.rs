@@ -9,7 +9,7 @@ use grana_measure::{
 };
 use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
 use grana_session::Command;
-use grana_ui::{BuildContext, Cursor, Element, Key, Length, Phase, Rect, Role, State};
+use grana_ui::{BuildContext, CanvasKey, Cursor, Element, Key, Length, Phase, Rect, Role, State};
 
 use crate::message::{Message, PlotEvent};
 use crate::state::{PlotDrag, View, Workspace};
@@ -174,13 +174,43 @@ pub fn view<'a>(
     let heading = Heading::new("", title_y, title_x)
         .with_summary(summary_text(plot, table, readout, language))
         .with_empty(empty_text(language, plot));
+    let selection = selected_row(table, measure.rows(), state.scene, measure.set());
+    let canvas_key = CanvasKey::new((
+        measure.document_hash(),
+        measure
+            .set()
+            .and_then(|set| state.scene.objects.get(set))
+            .map_or(0, |set| set.revision().raw()),
+        table.rows(),
+        measure.rows().len(),
+        selection,
+        matches!(
+            state.workspace.distribution_style,
+            grana_chart::DistributionStyle::Violin
+        ),
+        hovering.then(|| (pointer.x.to_bits(), pointer.y.to_bits())),
+        drag.origin
+            .filter(|_| drag.view == Some(plot.view()))
+            .map(|point| (point.x.to_bits(), point.y.to_bits())),
+        drag.gate.map_or(0u8, |kind| match kind {
+            BrushKind::Rectangle => 1,
+            BrushKind::Lasso => 2,
+        }),
+        drag.moved,
+        drag.vertices.len(),
+        drag.vertices.iter().fold(0u64, |hash, point| {
+            hash.rotate_left(7)
+                ^ u64::from(point.x.to_bits())
+                ^ (u64::from(point.y.to_bits()) << 32)
+        }),
+    ));
     let chart = PlotView {
         plot,
         table,
         rows: measure.rows(),
         filters: measure.filters(),
         lasso: measure.lasso(),
-        selection: selected_row(table, measure.rows(), state.scene, measure.set()),
+        selection,
         pointer,
         hovering,
         origin: drag.origin.filter(|_| drag.view == Some(plot.view())),
@@ -207,6 +237,7 @@ pub fn view<'a>(
         };
         view.paint(painter, card);
     })
+    .cached(canvas_key)
     .at(rect)
     .key(Key::new("plot.surface"))
     .cursor(Cursor::Crosshair)

@@ -26,6 +26,7 @@ pub(super) fn view<'a>(
         painter.rect(info.rect, Corners::ZERO, backdrop);
         painter.scene(info.rect, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
     })
+    .cached(grana_ui::CanvasKey::LAYOUT)
     .named("stage.content")
     .at(full)
     .layer(Layer::Content);
@@ -288,6 +289,7 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
         },
     )
     .key(Key::new(format!("region.handle.{}.{side}", axis)))
+    .cached(grana_ui::CanvasKey::LAYOUT)
     .at(rect)
     .layer(Layer::Content)
     .on_pointer(move |pointer| {

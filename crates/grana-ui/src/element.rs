@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use glam::Vec2;
 
 pub(crate) use crate::content::{Content, ContentKind};
@@ -50,6 +52,86 @@ fn mix(left: u64, right: u64) -> u64 {
     hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
     hash ^= hash >> 33;
     hash
+}
+
+#[derive(Default)]
+struct CanvasHasher(u64);
+
+impl Hasher for CanvasHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = mix(self.0 ^ 0x9e37_79b9_7f4a_7c15, value);
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(value as u64);
+    }
+
+    fn write_i64(&mut self, value: i64) {
+        self.write_u64(value as u64);
+    }
+
+    fn write_i32(&mut self, value: i32) {
+        self.write_u64(value as u64);
+    }
+
+    fn write_i16(&mut self, value: i16) {
+        self.write_u64(value as u64);
+    }
+
+    fn write_i8(&mut self, value: i8) {
+        self.write_u64(value as u64);
+    }
+
+    fn write_isize(&mut self, value: isize) {
+        self.write_u64(value as u64);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanvasKey(u64);
+
+impl CanvasKey {
+    pub const FRAME: Self = Self(0);
+
+    pub const LAYOUT: Self = Self(1);
+
+    pub fn new(parts: impl Hash) -> Self {
+        let mut hasher = CanvasHasher(0xcbf2_9ce4_8422_2325);
+        parts.hash(&mut hasher);
+        Self(hasher.finish().max(2))
+    }
+
+    pub fn then(self, parts: impl Hash) -> Self {
+        let mut hasher = CanvasHasher(self.0);
+        parts.hash(&mut hasher);
+        Self(hasher.finish().max(2))
+    }
+
+    pub fn id(self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -183,6 +265,11 @@ pub struct CanvasInfo<'a> {
 
 pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
 
+pub(crate) struct Canvas<'a> {
+    pub key: CanvasKey,
+    pub paint: CanvasPaint<'a>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer {
     Content,
@@ -204,12 +291,23 @@ impl Layer {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Patch {
+    pub layout: bool,
+    pub paint: bool,
+    pub focus: bool,
+    pub fields: bool,
+    pub popup: bool,
+    pub hits: bool,
+    pub animate: bool,
+}
+
 pub struct Element<'a, A> {
     pub(crate) id: Key,
     pub(crate) layout: Layout,
     pub(crate) content: Content,
     pub(crate) interaction: Interaction<A>,
-    pub(crate) canvas: Option<CanvasPaint<'a>>,
+    pub(crate) canvas: Option<Canvas<'a>>,
     pub(crate) children: Vec<Element<'a, A>>,
     pub(crate) background: Option<Surface>,
     pub(crate) layer: Option<Layer>,
@@ -388,8 +486,20 @@ impl<'a, A> Element<'a, A> {
     }
 
     pub fn paint(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
-        self.canvas = Some(Box::new(paint));
+        self.canvas = Some(Canvas {
+            key: CanvasKey::FRAME,
+            paint: Box::new(paint),
+        });
         self.content = Content::Canvas;
+        self
+    }
+
+    pub fn cached(mut self, key: CanvasKey) -> Self {
+        let canvas = self
+            .canvas
+            .as_mut()
+            .expect("a cached element paints a canvas");
+        canvas.key = key;
         self
     }
 
@@ -494,44 +604,120 @@ impl<'a, A> Element<'a, A> {
         node.enabled = self.enabled;
         node.focus_ring = self.focus_ring;
         node.blocks_pointer = self.blocks_pointer;
+        node.canvas = self.canvas.as_ref().map(|canvas| canvas.key);
         node
     }
 
-    pub(crate) fn patch(&mut self, node: &mut crate::node::Node<A>) -> bool {
-        let background_changed = node.background != self.background;
-        let mut layout_changed = node.layout != self.layout
-            || node.content.kind() != self.content.kind()
-            || !node.content.same(&self.content)
-            || node.position != self.position
-            || node.scroll_spec != self.scroll
-            || node.popup_spec != self.popup
-            || node.enabled != self.enabled
-            || node.blocks_pointer != self.blocks_pointer;
-        if layout_changed {
-            node.content = std::mem::replace(&mut self.content, Content::Empty);
-            node.layout = self.layout;
-            node.position = self.position;
-            node.scroll_spec = self.scroll;
-            node.popup_spec = self.popup;
-            node.enabled = self.enabled;
-            node.blocks_pointer = self.blocks_pointer;
+    pub(crate) fn patch(self, node: &mut crate::node::Node<A>) -> Patch {
+        let Self {
+            id: _,
+            layout,
+            content,
+            interaction,
+            canvas: _,
+            children: _,
+            background,
+            layer: _,
+            position,
+            scroll,
+            popup,
+            tooltip,
+            cursor,
+            enabled,
+            focus_ring,
+            blocks_pointer,
+        } = self;
+        let mut patch = Patch::default();
+        let kind = content.kind();
+        let content_changed = node.kind != kind || !node.content.same(&content);
+        let layout_changed = node.layout != layout
+            || node.position != position
+            || node.scroll_spec != scroll
+            || node.popup_spec != popup;
+        if node.popup_spec != popup {
+            patch.popup = true;
         }
-        if let Some(layer) = self.layer
-            && node.layer != layer
+        if node.layout != layout
+            || node.position != position
+            || node.scroll_spec != scroll
+            || node.popup_spec != popup
         {
-            node.layer = layer;
-            node.layer_explicit = true;
+            node.layout = layout;
+            node.position = position;
+            node.scroll_spec = scroll;
+            node.popup_spec = popup;
+            patch.layout = true;
+            patch.hits = true;
         }
-        node.interaction = std::mem::replace(&mut self.interaction, Interaction::None);
-        node.background = self.background;
-        node.tooltip = self.tooltip.take();
-        node.cursor = self.cursor;
-        node.focus_ring = self.focus_ring;
-        if background_changed {
-            node.paint_dirty = true;
-            layout_changed = true;
+        if content_changed {
+            patch.hits = hit_affected(&node.content, &content);
+            patch.fields = matches!(content, Content::Field(_));
+            patch.animate = animates(&content);
+            patch.layout = true;
+            patch.paint = true;
+            patch.focus = node.kind != kind;
+            node.kind = kind;
+            node.content = content;
         }
-        layout_changed
+        let focusable = interaction.is_focusable();
+        if focusable != node.interaction.is_focusable() {
+            patch.focus = true;
+            patch.hits = true;
+        }
+        node.interaction = interaction;
+        if node.background != background {
+            node.background = background;
+            patch.paint = true;
+            patch.hits = true;
+        }
+        if node.tooltip != tooltip {
+            node.tooltip = tooltip;
+        }
+        node.cursor = cursor;
+        if node.enabled != enabled {
+            node.enabled = enabled;
+            patch.paint = true;
+            patch.focus = true;
+            patch.hits = true;
+        }
+        if node.focus_ring != focus_ring {
+            node.focus_ring = focus_ring;
+            patch.paint = true;
+        }
+        if node.blocks_pointer != blocks_pointer {
+            node.blocks_pointer = blocks_pointer;
+            patch.hits = true;
+        }
+        if layout_changed {
+            patch.layout = true;
+            patch.hits = true;
+        }
+        if patch.layout {
+            patch.animate |= animates(&node.content);
+        }
+        patch
+    }
+}
+
+pub(crate) fn animates(content: &Content) -> bool {
+    matches!(
+        content,
+        Content::Toggle(_)
+            | Content::Checkbox(_)
+            | Content::Slider(_)
+            | Content::RangeSlider(_)
+            | Content::Segment(_)
+            | Content::Tabs(_)
+            | Content::ColorPicker(_)
+            | Content::Spinner(_)
+            | Content::Progress(_)
+    )
+}
+
+fn hit_affected(before: &Content, after: &Content) -> bool {
+    match (before, after) {
+        (Content::Slider(a), Content::Slider(b)) => a.label != b.label,
+        _ => true,
     }
 }
 

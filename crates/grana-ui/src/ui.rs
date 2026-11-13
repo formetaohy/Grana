@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use glam::Vec2;
 use grana_i18n::Language;
+use slotmap::SecondaryMap;
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
@@ -11,7 +12,7 @@ use crate::input::{Cursor, Input, Key as InputKey};
 use crate::layout::LayoutEngine;
 use crate::motion::{Animated, Motion};
 use crate::node::NodeId;
-use crate::paint::{Clip, Instance, LayerInstances, Painter};
+use crate::paint::{Clip, Instances, LayerBuffer, Painter};
 use crate::render::{PaintFrame, Renderer};
 use crate::text::{Text, TextLayout, TextStyle};
 use crate::theme::Theme;
@@ -21,15 +22,9 @@ pub(crate) const CLICK_SLOP: f32 = 3.0;
 pub(crate) const TOOLTIP_DELAY: f32 = 0.55;
 
 #[derive(Default)]
-pub(crate) struct LayerChange {
-    pub hashes: [Option<u64>; Layer::ALL.len()],
-    pub orders: [u64; Layer::ALL.len()],
-    pub next_orders: [u64; Layer::ALL.len()],
-    pub touched: [bool; Layer::ALL.len()],
-    pub base: bool,
-    pub interface: bool,
+pub(crate) struct Change {
     pub reset: bool,
-    pub restructured: bool,
+    pub scene: bool,
 }
 
 pub struct Ui<A = ()> {
@@ -41,8 +36,12 @@ pub struct Ui<A = ()> {
     pub(crate) input: Input,
     pub(crate) tree: Tree<A>,
     pub(crate) animations: HashMap<u64, Animated>,
-    pub(crate) layers: [LayerInstances; Layer::ALL.len()],
-    pub(crate) change: LayerChange,
+    pub(crate) layers: [LayerBuffer; Layer::ALL.len()],
+    pub(crate) scratch: Instances,
+    pub(crate) overlay: Instances,
+    pub(crate) hud_node_len: usize,
+    pub(crate) hud_rebuilt: bool,
+    pub(crate) change: Change,
     pub(crate) scale: f32,
     pub(crate) size: Vec2,
     pub(crate) time: f32,
@@ -70,6 +69,8 @@ pub struct Ui<A = ()> {
     pub(crate) clipboard: Box<dyn Clipboard>,
     pub(crate) scene_revision: Option<u64>,
     pub(crate) preedit: Option<String>,
+    pub(crate) animation: Vec<NodeId>,
+    pub(crate) scrolling: Vec<NodeId>,
 }
 
 impl<A: Clone> Ui<A> {
@@ -83,8 +84,12 @@ impl<A: Clone> Ui<A> {
             input: Input::new(),
             tree: Tree::new(),
             animations: HashMap::new(),
-            layers: std::array::from_fn(|_| LayerInstances::default()),
-            change: LayerChange::default(),
+            layers: std::array::from_fn(|_| LayerBuffer::default()),
+            scratch: Instances::default(),
+            overlay: Instances::default(),
+            hud_node_len: 0,
+            hud_rebuilt: false,
+            change: Change::default(),
             scale: 1.0,
             size: Vec2::ZERO,
             time: 0.0,
@@ -112,6 +117,8 @@ impl<A: Clone> Ui<A> {
             clipboard: Box::new(NullClipboard),
             scene_revision: None,
             preedit: None,
+            animation: Vec::new(),
+            scrolling: Vec::new(),
         }
     }
 
@@ -219,7 +226,7 @@ impl<A: Clone> Ui<A> {
             return;
         }
         self.scene_revision = Some(revision);
-        self.change.base = true;
+        self.change.scene = true;
     }
 
     pub fn pointer_over_widget(&self) -> bool {
@@ -317,26 +324,34 @@ impl<A: Clone> Ui<A> {
             self.invalidate();
         }
         self.advance_scroll();
-        self.collect_focus();
+        if self.tree.focus {
+            self.collect_focus();
+            self.tree.focus = false;
+        }
         self.dispatch();
         self.animate_nodes();
         std::mem::take(&mut self.actions)
     }
 
     pub fn present<'a>(&mut self, element: Element<'a, A>) {
-        let mut canvases: HashMap<NodeId, CanvasPaint<'a>> = HashMap::new();
+        let mut canvases: SecondaryMap<NodeId, CanvasPaint<'a>> = SecondaryMap::new();
         let removed = self.tree.apply(element, &mut canvases);
-        self.change.restructured = !removed.is_empty() || self.tree.layout_dirty;
         self.prune(&removed);
-        self.sync_fields();
-        self.rebuild_popup_anchors();
-        if self.tree.layout_dirty {
+        if self.tree.fields {
+            self.sync_fields();
+            self.tree.fields = false;
+        }
+        if self.tree.popups {
+            self.rebuild_popup_anchors();
+            self.tree.popups = false;
+        }
+        if self.tree.layout {
             self.run_layout();
+            self.tree.layout = false;
         }
         self.paint_layers(&canvases);
         self.update_tooltip();
         self.paint_overlays();
-        self.change.touched[Layer::Hud.index()] = true;
     }
 
     fn run_layout(&mut self) {
@@ -345,16 +360,18 @@ impl<A: Clone> Ui<A> {
             theme: &self.theme,
             screen: self.size,
         };
-        engine.run(&mut self.tree);
+        let outcome = engine.run(&mut self.tree);
         self.update_scroll_metrics();
-        self.rebuild_hits();
+        if outcome.geometry || self.tree.hits {
+            self.rebuild_hits();
+            self.tree.hits = false;
+        }
     }
 
     pub fn finish(&mut self) -> bool {
         self.text.flush(self.renderer.queue());
         self.images.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
-        self.measure_layers();
         self.animating
     }
 
@@ -370,6 +387,7 @@ impl<A: Clone> Ui<A> {
                 text,
                 images,
                 layers,
+                change,
                 ..
             } = self;
             renderer.paint(
@@ -377,19 +395,23 @@ impl<A: Clone> Ui<A> {
                 PaintFrame {
                     target,
                     scene,
+                    scene_changed: change.scene,
+                    reset: change.reset,
                     atlases: crate::render::Atlases {
                         glyphs: text.atlas(),
                         images,
                     },
-                    content: &layers[Layer::Content.index()].material,
+                    content: &layers[Layer::Content.index()],
                     chrome: &layers[Layer::Chrome.index()],
                     popup: &layers[Layer::Popup.index()],
                     hud: &layers[Layer::Hud.index()],
                 },
             );
         }
-        self.change.base = false;
-        self.change.interface = false;
+        for layer in &mut self.layers {
+            layer.dirty = None;
+        }
+        self.change.scene = false;
         self.change.reset = false;
     }
 
@@ -398,13 +420,13 @@ impl<A: Clone> Ui<A> {
         size: Vec2,
         pixels_per_point: f32,
         content: impl FnOnce(&mut Painter),
-    ) -> Vec<Instance> {
+    ) -> Vec<crate::paint::Instance> {
         self.text.begin(pixels_per_point);
         let clip = Clip::new(
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
         );
-        let mut instances = LayerInstances::default();
+        let mut instances = Instances::default();
         {
             let mut painter =
                 Painter::new(&mut instances, &mut self.text, &mut self.images, clip, None);
@@ -425,7 +447,7 @@ impl<A: Clone> Ui<A> {
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
         );
-        let mut instances = LayerInstances::default();
+        let mut instances = Instances::default();
         let mut marks = Vec::new();
         {
             let mut painter = Painter::new(
@@ -457,9 +479,17 @@ impl<A: Clone> Ui<A> {
         }
     }
 
+    pub(crate) fn wake_animation(&mut self, id: NodeId) {
+        if self.tree.nodes[id].runtime.active {
+            return;
+        }
+        self.tree.nodes[id].runtime.active = true;
+        self.animation.push(id);
+    }
+
     fn invalidate(&mut self) {
-        for index in 0..self.tree.ids.len() {
-            self.tree.nodes[self.tree.ids[index]].paint_dirty = true;
+        for node in self.tree.nodes.values_mut() {
+            node.paint_dirty = true;
         }
         self.tree.mark_dirty();
         self.change.reset = true;
@@ -550,6 +580,10 @@ impl<A> BuildContext<'_, A> {
     }
 
     pub fn popup_open(&self, key: Key) -> bool {
+        self.popup_anchors_open(key)
+    }
+
+    fn popup_anchors_open(&self, key: Key) -> bool {
         self.tree
             .nodes
             .values()

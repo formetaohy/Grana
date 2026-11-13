@@ -121,6 +121,7 @@ pub fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
             palette.outline_variant.with_alpha(0.45),
         );
     })
+    .cached(grana_ui::CanvasKey::LAYOUT)
 }
 
 pub fn section_header<'a>(

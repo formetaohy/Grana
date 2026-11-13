@@ -2,11 +2,14 @@ use glam::Vec2;
 use slotmap::DefaultKey;
 
 use crate::edit::Edit;
-use crate::element::{Axis, Content, ContentKind, Interaction, Key, Layer, Layout, Popup, Scroll};
+use crate::element::{
+    Axis, CanvasKey, Content, ContentKind, Interaction, Key, Layer, Layout, Popup, Scroll,
+};
 use crate::geometry::{Corners, Rect};
 use crate::input::Cursor;
 use crate::motion::{Animated, Spring};
-use crate::paint::LayerInstances;
+use crate::paint::Clip;
+use crate::paint::Instances;
 use crate::style::Surface;
 
 pub type NodeId = DefaultKey;
@@ -27,6 +30,8 @@ pub(crate) struct Runtime {
     pub edit_prop: bool,
     pub thumb: u8,
     pub seeded: bool,
+    pub active: bool,
+    pub resnap: bool,
 }
 
 impl Runtime {
@@ -79,6 +84,8 @@ impl Runtime {
             edit_prop: false,
             thumb: 0,
             seeded,
+            active: false,
+            resnap: false,
         }
     }
 }
@@ -116,9 +123,19 @@ pub(crate) struct Node<A> {
     pub scroll: Option<crate::scroll::ScrollState>,
     pub clip: Rect,
     pub clip_corners: Corners,
-    pub paint: LayerInstances,
+    pub paint: Instances,
     pub paint_dirty: bool,
+    pub canvas: Option<CanvasKey>,
     pub visible: bool,
+    pub painted: bool,
+    pub layer_range: (u32, u32),
+    pub measure_dirty: bool,
+    pub measure_valid: bool,
+    pub measure_available: Vec2,
+    pub measure_loose: (bool, bool),
+    pub arrange_dirty: bool,
+    pub arranged: bool,
+    pub arranged_clip: Clip,
 }
 
 impl<A> Node<A> {
@@ -163,9 +180,19 @@ impl<A> Node<A> {
             scroll: None,
             clip: Rect::ZERO,
             clip_corners: Corners::ZERO,
-            paint: LayerInstances::default(),
+            paint: Instances::default(),
             paint_dirty: true,
+            canvas: None,
             visible: true,
+            painted: false,
+            layer_range: (0, 0),
+            measure_dirty: true,
+            measure_valid: false,
+            measure_available: Vec2::ZERO,
+            measure_loose: (false, false),
+            arrange_dirty: true,
+            arranged: false,
+            arranged_clip: Clip::new(Rect::ZERO, Corners::ZERO),
         }
     }
 

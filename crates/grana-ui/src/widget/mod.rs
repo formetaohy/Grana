@@ -210,7 +210,7 @@ pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut 
             Motion::effect_fast().spring(),
         );
         if node.runtime.seeded {
-            if motion.is_instant() {
+            if node.runtime.resnap || motion.is_instant() {
                 let changed =
                     node.runtime.value.value != target.0 || node.runtime.extent.value != target.1;
                 node.runtime.value.snap(target.0);
@@ -226,6 +226,7 @@ pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut 
             node.runtime.seeded = true;
             node.paint_dirty = true;
         }
+        node.runtime.resnap = false;
     }
     node.runtime.commit = None;
     let mut animating = false;

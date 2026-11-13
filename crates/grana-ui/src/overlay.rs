@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::element::{Axis, Layer};
 use crate::geometry::{Corners, Rect};
-use crate::paint::{Clip, LayerInstances, Painter};
+use crate::paint::{Clip, Painter};
 use crate::style::{Border, Fill, Shadow, State};
 use crate::text::TextStyle;
 use crate::theme::{Level, Role};
@@ -40,7 +40,8 @@ impl<A: Clone> Ui<A> {
         let focus_visible = self.focus_visible;
         let pointer = self.pointer;
         let size = self.size;
-        let mut instances = LayerInstances::default();
+        let mut instances = std::mem::take(&mut self.scratch);
+        instances.clear();
         {
             let clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
             let mut painter =
@@ -75,10 +76,9 @@ impl<A: Clone> Ui<A> {
             }
             let bars = self
                 .tree
-                .ids
-                .iter()
-                .filter_map(|id| {
-                    let node = &self.tree.nodes[*id];
+                .nodes
+                .values()
+                .filter_map(|node| {
                     let scroll = node.scroll?;
                     let spec = node.scroll_spec?;
                     if scroll.bar <= 0.01 || scroll.limit() <= 0.0 {
@@ -122,8 +122,17 @@ impl<A: Clone> Ui<A> {
                 );
             }
         }
-        let hud = Layer::Hud.index();
-        self.layers[hud].material.extend(instances.material);
+        let changed = self.overlay.material != instances.material;
+        if changed {
+            std::mem::swap(&mut self.overlay, &mut instances);
+        }
+        self.scratch = instances;
+        if changed || self.hud_rebuilt {
+            let layer = &mut self.layers[Layer::Hud.index()];
+            layer.truncate(self.hud_node_len);
+            layer.append(&self.overlay.material);
+            self.hud_rebuilt = false;
+        }
     }
 }
 

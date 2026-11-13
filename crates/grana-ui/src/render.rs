@@ -13,8 +13,9 @@ use wgpu::{
 };
 
 use crate::atlas::Atlas;
+use crate::element::Layer;
 use crate::image::ImageAtlas;
-use crate::paint::{FLAG_BACKDROP, Instance, LayerInstances};
+use crate::paint::{FLAG_BACKDROP, Instance, LayerBuffer};
 use grana_gpu::layout;
 
 const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
@@ -140,11 +141,13 @@ pub(crate) struct Atlases<'a> {
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
     pub scene: Option<&'a TextureView>,
+    pub scene_changed: bool,
+    pub reset: bool,
     pub atlases: Atlases<'a>,
-    pub content: &'a [Instance],
-    pub chrome: &'a LayerInstances,
-    pub popup: &'a LayerInstances,
-    pub hud: &'a LayerInstances,
+    pub content: &'a LayerBuffer,
+    pub chrome: &'a LayerBuffer,
+    pub popup: &'a LayerBuffer,
+    pub hud: &'a LayerBuffer,
 }
 
 struct PaintTarget<'a> {
@@ -167,52 +170,54 @@ impl InstanceBuffer {
         }
     }
 
-    fn upload(&mut self, device: &Device, queue: &Queue, label: &str, instances: &[Instance]) {
-        upload_instances(
-            device,
-            queue,
-            label,
-            instances,
-            &mut self.buffer,
-            &mut self.capacity,
-        );
+    fn upload(&mut self, device: &Device, queue: &Queue, label: &str, layer: &LayerBuffer) {
+        if layer.material.is_empty() {
+            return;
+        }
+        let mut grown = false;
+        if self.capacity < layer.material.len() {
+            self.capacity = layer
+                .material
+                .len()
+                .next_power_of_two()
+                .max(MINIMUM_INSTANCES);
+            self.buffer = instance_buffer(device, label, self.capacity);
+            grown = true;
+        }
+        let total = layer.material.len();
+        match layer.dirty {
+            Some((start, end)) if !grown && end > start && end - start < total => {
+                queue.write_buffer(
+                    &self.buffer,
+                    (start * size_of::<Instance>()) as u64,
+                    bytemuck::cast_slice(&layer.material[start..end]),
+                );
+            }
+            _ => {
+                queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&layer.material));
+            }
+        }
     }
 }
 
 struct Buffers {
-    content: InstanceBuffer,
-    chrome: InstanceBuffer,
-    popup: InstanceBuffer,
-    hud: InstanceBuffer,
+    buffers: [InstanceBuffer; Layer::ALL.len()],
 }
 
 impl Buffers {
     fn new(device: &Device) -> Self {
         Self {
-            content: InstanceBuffer::new(device, "grana.ui.instances.content"),
-            chrome: InstanceBuffer::new(device, "grana.ui.instances.chrome"),
-            popup: InstanceBuffer::new(device, "grana.ui.instances.popup"),
-            hud: InstanceBuffer::new(device, "grana.ui.instances.hud"),
+            buffers: std::array::from_fn(|index| {
+                let label = match index {
+                    0 => "grana.ui.instances.content",
+                    1 => "grana.ui.instances.chrome",
+                    2 => "grana.ui.instances.popup",
+                    _ => "grana.ui.instances.hud",
+                };
+                InstanceBuffer::new(device, label)
+            }),
         }
     }
-}
-
-fn upload_instances(
-    device: &Device,
-    queue: &Queue,
-    label: &str,
-    instances: &[Instance],
-    buffer: &mut Buffer,
-    capacity: &mut usize,
-) {
-    if instances.is_empty() {
-        return;
-    }
-    if *capacity < instances.len() {
-        *capacity = instances.len().next_power_of_two().max(MINIMUM_INSTANCES);
-        *buffer = instance_buffer(device, label, *capacity);
-    }
-    queue.write_buffer(buffer, 0, bytemuck::cast_slice(instances));
 }
 
 pub struct Renderer {
@@ -238,6 +243,12 @@ pub struct Renderer {
     figure_instances: Buffer,
     figure_capacity: usize,
     figure_uniforms: Buffer,
+    revisions: [u64; Layer::ALL.len()],
+    uniform_state: Option<(f32, [u32; 2])>,
+    canvas_generation: u64,
+    blit_cache: Option<(u64, BindGroup)>,
+    content_blur: bool,
+    interface_blur: bool,
 }
 
 impl Renderer {
@@ -385,6 +396,12 @@ impl Renderer {
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            revisions: [u64::MAX; Layer::ALL.len()],
+            uniform_state: None,
+            canvas_generation: 0,
+            blit_cache: None,
+            content_blur: false,
+            interface_blur: false,
         }
     }
 
@@ -397,6 +414,10 @@ impl Renderer {
         let device = self.device.clone();
         self.canvas = Some(Surface::new(&device, "grana.ui.canvas", size, self.encoded));
         self.backdrop = Some(BlurPyramid::new(&device, size, raw(self.encoded)));
+        self.canvas_generation = self.canvas_generation.wrapping_add(1);
+        self.blit_cache = None;
+        self.content_blur = false;
+        self.interface_blur = false;
         true
     }
 
@@ -461,6 +482,10 @@ impl Renderer {
 
     pub fn write_uniforms(&mut self, scale: f32) {
         self.scale = scale;
+        if self.uniform_state == Some((scale, self.size)) {
+            return;
+        }
+        self.uniform_state = Some((scale, self.size));
         let uniforms = Uniforms {
             viewport: [self.size[0] as f32, self.size[1] as f32],
             scale,
@@ -474,6 +499,8 @@ impl Renderer {
         let PaintFrame {
             target: target_view,
             scene,
+            scene_changed,
+            reset,
             atlases,
             content,
             chrome,
@@ -486,95 +513,115 @@ impl Renderer {
         );
         let scene = scene.unwrap_or(&self.dummy);
         let canvas = self.canvas.as_ref().expect("the renderer is sized");
-        let backdrop = self.backdrop.as_ref().expect("the renderer is sized");
         let canvas_linear = canvas.linear.clone();
         let canvas_encoded = canvas.encoded.clone();
+        let backdrop = self.backdrop.as_ref().expect("the renderer is sized");
         let backdrop_sampled = backdrop.sampled.clone();
 
-        self.buffers.content.upload(
-            &self.device,
-            &self.queue,
-            "grana.ui.instances.content",
-            content,
-        );
-        self.buffers.chrome.upload(
-            &self.device,
-            &self.queue,
-            "grana.ui.instances.chrome",
-            &chrome.material,
-        );
-        self.buffers.popup.upload(
-            &self.device,
-            &self.queue,
-            "grana.ui.instances.popup",
-            &popup.material,
-        );
-        self.buffers.hud.upload(
-            &self.device,
-            &self.queue,
-            "grana.ui.instances.hud",
-            &hud.material,
-        );
-
-        clear(encoder, &canvas_linear);
-        self.paint_material(
-            encoder,
-            atlases,
-            &PaintTarget {
-                target: &canvas_linear,
-                scene,
-                backdrop: &self.dummy,
-                load: LoadOp::Load,
-            },
-            &self.buffers.content.buffer,
-            content.len(),
-        );
-
-        if has_backdrop(&chrome.material) {
-            self.update_backdrop(encoder, &canvas_linear);
+        let layers = [content, chrome, popup, hud];
+        let changed: [bool; Layer::ALL.len()] =
+            std::array::from_fn(|index| self.revisions[index] != layers[index].revision);
+        let reupload = changed.iter().any(|changed| *changed);
+        let content_refresh = reset || scene_changed || changed[Layer::Content.index()];
+        let interface_refresh = content_refresh
+            || changed[Layer::Chrome.index()]
+            || changed[Layer::Popup.index()]
+            || changed[Layer::Hud.index()];
+        if reupload {
+            for index in 0..Layer::ALL.len() {
+                if !changed[index] {
+                    continue;
+                }
+                self.buffers.buffers[index].upload(
+                    &self.device,
+                    &self.queue,
+                    "grana.ui.instances",
+                    layers[index],
+                );
+                self.revisions[index] = layers[index].revision;
+            }
         }
-        self.paint_material(
-            encoder,
-            atlases,
-            &PaintTarget {
-                target: &canvas_linear,
-                scene,
-                backdrop: &backdrop_sampled,
-                load: LoadOp::Load,
-            },
-            &self.buffers.chrome.buffer,
-            chrome.material.len(),
-        );
-
-        if has_backdrop(&popup.material) || has_backdrop(&hud.material) {
-            self.update_backdrop(encoder, &canvas_linear);
+        if reupload || reset || scene_changed {
+            clear(encoder, &canvas_linear);
+            self.paint_material(
+                encoder,
+                atlases,
+                &PaintTarget {
+                    target: &canvas_linear,
+                    scene,
+                    backdrop: &self.dummy,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.buffers[Layer::Content.index()].buffer,
+                content.material.len(),
+            );
+            if has_backdrop(&chrome.material) {
+                if content_refresh || !self.content_blur {
+                    self.update_backdrop(encoder, &canvas_linear);
+                    self.content_blur = true;
+                }
+            } else {
+                self.content_blur = false;
+            }
+            self.paint_material(
+                encoder,
+                atlases,
+                &PaintTarget {
+                    target: &canvas_linear,
+                    scene,
+                    backdrop: &backdrop_sampled,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.buffers[Layer::Chrome.index()].buffer,
+                chrome.material.len(),
+            );
+            if has_backdrop(&popup.material) || has_backdrop(&hud.material) {
+                if interface_refresh || !self.interface_blur {
+                    self.update_backdrop(encoder, &canvas_linear);
+                    self.interface_blur = true;
+                }
+            } else {
+                self.interface_blur = false;
+            }
+            self.paint_material(
+                encoder,
+                atlases,
+                &PaintTarget {
+                    target: &canvas_linear,
+                    scene,
+                    backdrop: &backdrop_sampled,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.buffers[Layer::Popup.index()].buffer,
+                popup.material.len(),
+            );
+            self.paint_material(
+                encoder,
+                atlases,
+                &PaintTarget {
+                    target: &canvas_linear,
+                    scene,
+                    backdrop: &backdrop_sampled,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.buffers[Layer::Hud.index()].buffer,
+                hud.material.len(),
+            );
         }
-        self.paint_material(
-            encoder,
-            atlases,
-            &PaintTarget {
-                target: &canvas_linear,
-                scene,
-                backdrop: &backdrop_sampled,
-                load: LoadOp::Load,
-            },
-            &self.buffers.popup.buffer,
-            popup.material.len(),
-        );
-        self.paint_material(
-            encoder,
-            atlases,
-            &PaintTarget {
-                target: &canvas_linear,
-                scene,
-                backdrop: &backdrop_sampled,
-                load: LoadOp::Load,
-            },
-            &self.buffers.hud.buffer,
-            hud.material.len(),
-        );
 
-        let group = self.blit_group(&canvas_encoded);
+        if self
+            .blit_cache
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != self.canvas_generation)
+        {
+            let group = self.blit_group(&canvas_encoded);
+            self.blit_cache = Some((self.canvas_generation, group));
+        }
+        let group = &self
+            .blit_cache
+            .as_ref()
+            .expect("the blit group is cached")
+            .1;
         let pipeline = if self.format.is_srgb() {
             &self.present_linear
         } else {
@@ -583,7 +630,7 @@ impl Renderer {
         fullscreen(
             encoder,
             pipeline,
-            &group,
+            group,
             target_view,
             LoadOp::Clear(wgpu::Color::BLACK),
         );

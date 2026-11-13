@@ -8,10 +8,15 @@ use crate::widget::FrameAnimation;
 impl<A: Clone> Ui<A> {
     pub(crate) fn animate_nodes(&mut self) {
         let elapsed = self.elapsed;
-        for index in 0..self.tree.ids.len() {
-            let id = self.tree.ids[index];
+        let mut animation = std::mem::take(&mut self.animation);
+        animation.append(&mut self.tree.activated);
+        let mut next = Vec::with_capacity(animation.len());
+        for id in animation {
+            if !self.tree.nodes.contains_key(id) {
+                continue;
+            }
             if !self.tree.nodes[id].visible {
-                self.tree.nodes[id].runtime.commit = None;
+                self.tree.nodes[id].runtime.active = false;
                 continue;
             }
             let frame = FrameAnimation {
@@ -21,19 +26,24 @@ impl<A: Clone> Ui<A> {
                 pointer: self.pointer,
                 elapsed,
             };
-            let animating =
+            let mut animating =
                 crate::widget::animate(&mut self.tree.nodes[id], &frame, &mut self.text);
             if self.edit == Some(id) {
                 self.tree.nodes[id].paint_dirty = true;
-                self.animating = true;
+                animating = true;
+            }
+            self.tree.nodes[id].runtime.active = animating;
+            if animating {
+                next.push(id);
             }
             self.animating |= animating;
         }
+        self.animation = next;
     }
 
     pub(crate) fn sync_fields(&mut self) {
-        for index in 0..self.tree.ids.len() {
-            let id = self.tree.ids[index];
+        let ids = self.tree.nodes.keys().collect::<Vec<_>>();
+        for id in ids {
             let visible = self.tree.nodes[id].visible;
             let active = self.tree.nodes[id].runtime.edit.is_some();
             if !visible {
@@ -65,17 +75,11 @@ impl<A: Clone> Ui<A> {
     pub(crate) fn rebuild_hits(&mut self) {
         let mut hits = std::mem::take(&mut self.hits);
         hits.clear();
-        crate::hit::collect(
-            &self.tree,
-            self.tree.root,
-            &mut hits,
-            &mut self.text,
-            &self.theme,
-        );
+        let root = self.tree.root;
+        crate::hit::collect(&self.tree, root, &mut hits, &mut self.text, &self.theme);
         self.hits = hits;
         self.occluders.clear();
-        for &id in &self.tree.ids {
-            let node = &self.tree.nodes[id];
+        for node in self.tree.nodes.values() {
             if !node.visible || node.rect.is_empty() || node.layer == Layer::Content {
                 continue;
             }
@@ -91,9 +95,8 @@ impl<A: Clone> Ui<A> {
 
     pub(crate) fn rebuild_popup_anchors(&mut self) {
         self.popup_anchors.clear();
-        for index in 0..self.tree.ids.len() {
-            let id = self.tree.ids[index];
-            if let Some(spec) = self.tree.nodes[id].popup_spec
+        for (id, node) in self.tree.nodes.iter() {
+            if let Some(spec) = node.popup_spec
                 && let Some(previous) = self.popup_anchors.insert(spec.anchor, id)
                 && previous != id
             {

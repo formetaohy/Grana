@@ -10,7 +10,18 @@ use crate::ui::Ui;
 impl<A: Clone> Ui<A> {
     pub(crate) fn dispatch(&mut self) {
         let pointer = self.pointer;
-        self.hover = hit::resolve(&self.hits, pointer).map(|hit| hit.node);
+        let hover = hit::resolve(&self.hits, pointer).map(|hit| hit.node);
+        if hover != self.hover {
+            if let Some(previous) = self.hover
+                && self.tree.nodes.contains_key(previous)
+            {
+                self.wake_animation(previous);
+            }
+            if let Some(node) = hover {
+                self.wake_animation(node);
+            }
+            self.hover = hover;
+        }
         if let Some(node) = self.hover {
             let content_cursor = crate::widget::cursor(&self.tree.nodes[node].content);
             if let Some(cursor) = self.tree.nodes[node].cursor.or(content_cursor) {
@@ -23,8 +34,11 @@ impl<A: Clone> Ui<A> {
                 let content = &self.tree.nodes[node].content;
                 let rect = self.tree.nodes[node].rect;
                 let index = crate::widget::segment::cell_at(content, rect, pointer, &mut self.text);
-                self.tree.nodes[node].runtime.thumb =
-                    index.map_or(0, |index| index.min(u8::MAX as usize) as u8);
+                let thumb = index.map_or(0, |index| index.min(u8::MAX as usize) as u8);
+                if thumb != self.tree.nodes[node].runtime.thumb {
+                    self.tree.nodes[node].runtime.thumb = thumb;
+                    self.wake_animation(node);
+                }
             }
         }
         let primary = self.input.button(Button::Primary);
@@ -35,7 +49,13 @@ impl<A: Clone> Ui<A> {
         {
             self.edit_press(node);
         } else if primary.pressed {
+            if let Some(previous) = self.press {
+                self.wake_animation(previous);
+            }
             self.press = self.hover;
+            if let Some(node) = self.press {
+                self.wake_animation(node);
+            }
             self.press_at = pointer;
             self.drag = None;
             self.focus_visible = false;
@@ -49,6 +69,7 @@ impl<A: Clone> Ui<A> {
             && (pointer - self.press_at).length() > crate::ui::CLICK_SLOP
         {
             self.drag = Some(press);
+            self.wake_animation(press);
         }
         self.drag_values();
         if primary.down
@@ -65,6 +86,7 @@ impl<A: Clone> Ui<A> {
         }
         if primary.released {
             if let Some(press) = self.press {
+                self.wake_animation(press);
                 let dragged = self.drag == Some(press);
                 let toggle = matches!(
                     self.tree.nodes[press].interaction,
@@ -133,7 +155,8 @@ impl<A: Clone> Ui<A> {
             scroll.scroll_by(amount * 42.0);
         }
         self.tree.nodes[node].paint_dirty = true;
-        self.tree.layout_dirty = true;
+        self.tree.invalidate_arrange(node);
+        self.wake_scroll(node);
         self.animating = true;
     }
 
@@ -396,7 +419,7 @@ impl<A: Clone> Ui<A> {
     fn set_popup(&mut self, node: NodeId, open: bool) {
         self.tree.nodes[node].runtime.open = open;
         self.tree.nodes[node].paint_dirty = true;
-        self.tree.mark_dirty();
+        self.tree.invalidate_layout(node);
     }
 
     pub(crate) fn begin_edit(&mut self, node: NodeId, at_pointer: bool) {
@@ -424,6 +447,7 @@ impl<A: Clone> Ui<A> {
         self.focus = Some(node);
         self.focus_visible = false;
         self.input.clear_preedit();
+        self.wake_animation(node);
     }
 
     fn edit_press(&mut self, node: NodeId) {

@@ -34,8 +34,8 @@ pub use clipboard::Clipboard;
 pub use color::Color;
 pub use edit::{Edit, Outcome as EditOutcome};
 pub use element::{
-    Axis, CanvasInfo, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase, Pointer, Size,
-    canvas, column, place, row, spacer, stack, text,
+    Axis, CanvasInfo, CanvasKey, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase,
+    Pointer, Size, canvas, column, place, row, spacer, stack, text,
 };
 pub use geometry::{Corners, Edges, Rect};
 pub use glam::Vec2;

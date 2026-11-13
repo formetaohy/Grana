@@ -24,7 +24,7 @@ pub const FLAG_BORDER: u32 = 1 << 1;
 pub const FLAG_BACKDROP: u32 = 1 << 2;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct Instance {
     pub rect: [f32; 4],
     pub corners: [f32; 4],
@@ -77,9 +77,50 @@ impl Instance {
             extra: [0.0; 4],
         }
     }
+
+    fn touches(&self, clip: crate::geometry::Rect) -> bool {
+        let (min, max) = match self.meta[0] {
+            KIND_SEGMENT => {
+                let width = 0.5 * self.extra[0].max(0.0);
+                let from = Vec2::new(self.rect[0], self.rect[1]);
+                let to = Vec2::new(self.rect[2], self.rect[3]);
+                (
+                    from.min(to) - Vec2::splat(width),
+                    from.max(to) + Vec2::splat(width),
+                )
+            }
+            KIND_RING => {
+                let center = Vec2::new(self.rect[0], self.rect[1]);
+                let radius = self.rect[2].max(0.0) + self.rect[3].max(0.0);
+                (center - Vec2::splat(radius), center + Vec2::splat(radius))
+            }
+            KIND_TRIANGLE => {
+                let a = Vec2::new(self.uv[0], self.uv[1]);
+                let b = Vec2::new(self.uv[2], self.uv[3]);
+                let c = Vec2::new(self.extra[0], self.extra[1]);
+                (a.min(b).min(c), a.max(b).max(c))
+            }
+            _ => {
+                let border = if (self.meta[1] & FLAG_BORDER) != 0 {
+                    self.extra[0].max(0.0)
+                } else {
+                    0.0
+                };
+                (
+                    Vec2::new(self.rect[0] - border, self.rect[1] - border),
+                    Vec2::new(
+                        self.rect[0] + self.rect[2] + border,
+                        self.rect[1] + self.rect[3] + border,
+                    ),
+                )
+            }
+        };
+        let bounds = crate::geometry::Rect::from_min_max(min, max);
+        !bounds.is_empty() && bounds.intersects(clip)
+    }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clip {
     pub rect: Rect,
     pub corners: Corners,
@@ -105,18 +146,75 @@ impl Clip {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct LayerInstances {
+pub(crate) struct Instances {
     pub material: Vec<Instance>,
 }
 
-impl LayerInstances {
+impl Instances {
     pub fn clear(&mut self) {
         self.material.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.material.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.material.is_empty()
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct LayerBuffer {
+    pub material: Vec<Instance>,
+    pub rebuild: bool,
+    pub dirty: Option<(usize, usize)>,
+    pub revision: u64,
+}
+
+impl LayerBuffer {
+    fn replace(&mut self, start: usize, instances: &[Instance]) {
+        if instances.is_empty() {
+            return;
+        }
+        self.material[start..start + instances.len()].copy_from_slice(instances);
+    }
+
+    pub(crate) fn patch(&mut self, start: usize, instances: &[Instance]) {
+        self.replace(start, instances);
+        self.mark(start, instances.len());
+        self.touch();
+    }
+
+    fn mark(&mut self, start: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let end = start + len;
+        self.dirty = Some(match self.dirty {
+            Some((low, high)) => (low.min(start), high.max(end)),
+            None => (start, end),
+        });
+    }
+
+    pub(crate) fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.material.truncate(len);
+    }
+
+    pub(crate) fn append(&mut self, instances: &[Instance]) {
+        let start = self.material.len();
+        self.material.extend_from_slice(instances);
+        self.mark(start, instances.len());
+        self.touch();
     }
 }
 
 pub struct Painter<'a> {
-    instances: &'a mut LayerInstances,
+    instances: &'a mut Instances,
     text: &'a mut Text,
     images: &'a mut ImageAtlas,
     clip: Clip,
@@ -126,7 +224,7 @@ pub struct Painter<'a> {
 
 impl<'a> Painter<'a> {
     pub(crate) fn new(
-        instances: &'a mut LayerInstances,
+        instances: &'a mut Instances,
         text: &'a mut Text,
         images: &'a mut ImageAtlas,
         clip: Clip,
@@ -166,6 +264,9 @@ impl<'a> Painter<'a> {
 
     fn push(&mut self, instance: Instance) {
         let clip = self.clip;
+        if !instance.touches(clip.rect) {
+            return;
+        }
         self.instances.material.push(clipped(instance, clip));
     }
 
@@ -467,7 +568,9 @@ impl<'a> Painter<'a> {
             instance.color = plot.color.to_array();
             instance.uv = plot.slot.uv;
             instance.extra = [gamma, 0.0, 0.0, 0.0];
-            instances.material.push(clipped(instance, clip));
+            if instance.touches(clip.rect) {
+                instances.material.push(clipped(instance, clip));
+            }
         });
     }
 

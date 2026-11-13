@@ -6,8 +6,8 @@ use grana_object::{Link, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
-    Role, State, TextStyle, TypeStyle, icon,
+    Align, Axis, BuildContext, CanvasKey, Color, Corners, Cursor, Element, Icon, Key, Length,
+    Level, Rect, Role, State, TextStyle, TypeStyle, icon,
 };
 
 use crate::message::Message;
@@ -476,11 +476,8 @@ fn lineage<'a>(
         rect.max - Vec2::new(SIDE + 6.0, 6.0),
     );
     let layout = grana_object::TrackLayout::of(set);
-    let order = layout.order().to_vec();
-    let lane_of = (0..set.len())
-        .map(|index| layout.lane(index))
-        .collect::<Vec<_>>();
-    let content = order.len() as f32 * ROW;
+    let lane_count = layout.len();
+    let content = lane_count as f32 * ROW;
     let limit = (content - inner.height()).max(0.0);
     let key = Key::new("tracks.tree");
     let offset = ctx.scroll_offset(key).clamp(0.0, limit);
@@ -491,9 +488,10 @@ fn lineage<'a>(
             let lane = ((pointer.y - inner.min.y + offset) / ROW).floor();
             (lane >= 0.0)
                 .then_some(lane as usize)
-                .filter(|lane| *lane < order.len())
+                .filter(|lane| *lane < lane_count)
         })
         .flatten();
+    let hovered_index = hovered.and_then(|lane| layout.order().get(lane).copied());
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let span = frames.max(2) - 1;
@@ -504,104 +502,100 @@ fn lineage<'a>(
     let merge = state.workspace.merge;
     let merge_parents = state.workspace.merge_parents.clone();
     let reparent = state.workspace.reparent;
-    let colors = (0..set.len())
-        .map(|index| object.track_color(index))
-        .collect::<Vec<_>>();
-    let background = grana_ui::canvas(Length::Fill, rect.height(), {
-        let order = order.clone();
-        move |painter, info| {
-            let rect = info.rect;
-            painter.rect(
-                rect,
-                Corners::all(theme.metrics.corner_lg),
-                palette.surface_container,
-            );
-            let clip = painter.clip();
-            painter.push_clip(inner, Corners::ZERO);
-            for part in 1..4 {
-                let grid = x(span * part / 4);
-                painter.segment(
-                    Vec2::new(grid, inner.min.y),
-                    Vec2::new(grid, inner.max.y),
-                    0.5,
-                    palette.outline_variant.with_alpha(0.35),
-                );
-            }
+    let revision = object.revision().raw();
+    let background = grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
+        let rect = info.rect;
+        painter.rect(
+            rect,
+            Corners::all(theme.metrics.corner_lg),
+            palette.surface_container,
+        );
+        let clip = painter.clip();
+        painter.push_clip(inner, Corners::ZERO);
+        for part in 1..4 {
+            let grid = x(span * part / 4);
             painter.segment(
-                Vec2::new(x(time), inner.min.y),
-                Vec2::new(x(time), inner.max.y),
-                1.2,
-                accent.with_alpha(0.55),
+                Vec2::new(grid, inner.min.y),
+                Vec2::new(grid, inner.max.y),
+                0.5,
+                palette.outline_variant.with_alpha(0.35),
             );
-            if let Some(lane) = hovered {
-                painter.rect(
-                    Rect::from_min_size(
-                        Vec2::new(inner.min.x, lane_y(lane) - ROW * 0.5),
-                        Vec2::new(inner.width(), ROW),
-                    ),
-                    Corners::capsule(),
-                    palette.on_surface.with_alpha(0.06),
-                );
-            }
-            painter.pop_clip(clip);
-            if limit > 0.0 {
-                let bar = Rect::from_min_size(
-                    Vec2::new(rect.max.x - 5.0, inner.min.y),
-                    Vec2::new(3.0, inner.height()),
-                );
-                let thumb = (inner.height() * inner.height() / content).max(24.0);
-                let travel = (bar.height() - thumb).max(0.0);
-                painter.rect(bar, Corners::capsule(), Color::white_alpha(0.05));
-                painter.rect(
-                    Rect::from_min_size(
-                        Vec2::new(bar.min.x, bar.min.y + travel * offset / limit),
-                        Vec2::new(3.0, thumb),
-                    ),
-                    Corners::capsule(),
-                    palette.outline.with_alpha(0.55),
-                );
-            }
-            let label = TextStyle::new(TypeStyle::new(10.0, 500.0, 13.0), tertiary);
-            for part in 0..4 {
-                let tick = span * part / 3;
-                let centre = Vec2::new(x(tick), inner.min.y - AXIS * 0.5);
-                let tick_rect = if part == 3 {
-                    Rect::from_min_max(
-                        centre - Vec2::new(64.0, AXIS * 0.5),
-                        centre + Vec2::new(0.0, AXIS * 0.5),
-                    )
+        }
+        painter.segment(
+            Vec2::new(x(time), inner.min.y),
+            Vec2::new(x(time), inner.max.y),
+            1.2,
+            accent.with_alpha(0.55),
+        );
+        if let Some(lane) = hovered {
+            painter.rect(
+                Rect::from_min_size(
+                    Vec2::new(inner.min.x, lane_y(lane) - ROW * 0.5),
+                    Vec2::new(inner.width(), ROW),
+                ),
+                Corners::capsule(),
+                palette.on_surface.with_alpha(0.06),
+            );
+        }
+        painter.pop_clip(clip);
+        if limit > 0.0 {
+            let bar = Rect::from_min_size(
+                Vec2::new(rect.max.x - 5.0, inner.min.y),
+                Vec2::new(3.0, inner.height()),
+            );
+            let thumb = (inner.height() * inner.height() / content).max(24.0);
+            let travel = (bar.height() - thumb).max(0.0);
+            painter.rect(bar, Corners::capsule(), Color::white_alpha(0.05));
+            painter.rect(
+                Rect::from_min_size(
+                    Vec2::new(bar.min.x, bar.min.y + travel * offset / limit),
+                    Vec2::new(3.0, thumb),
+                ),
+                Corners::capsule(),
+                palette.outline.with_alpha(0.55),
+            );
+        }
+        let label = TextStyle::new(TypeStyle::new(10.0, 500.0, 13.0), tertiary);
+        for part in 0..4 {
+            let tick = span * part / 3;
+            let centre = Vec2::new(x(tick), inner.min.y - AXIS * 0.5);
+            let tick_rect = if part == 3 {
+                Rect::from_min_max(
+                    centre - Vec2::new(64.0, AXIS * 0.5),
+                    centre + Vec2::new(0.0, AXIS * 0.5),
+                )
+            } else {
+                Rect::from_center_size(centre, Vec2::new(64.0, AXIS))
+            };
+            painter.text_in(
+                tick_rect,
+                &format!("F{}", tick + 1),
+                if part == 3 {
+                    label.aligned(Align::End)
                 } else {
-                    Rect::from_center_size(centre, Vec2::new(64.0, AXIS))
-                };
-                painter.text_in(
-                    tick_rect,
-                    &format!("F{}", tick + 1),
-                    if part == 3 {
-                        label.aligned(Align::End)
-                    } else {
-                        label.aligned(Align::Center)
-                    },
-                    Align::Center,
-                );
-            }
-            if let (Some(lane), true) = (
-                hovered,
-                source.is_none() && divide.is_none() && merge.is_none() && reparent.is_none(),
-            ) {
-                painter.text_in(
-                    Rect::from_min_size(
-                        Vec2::new(pointer.x + 10.0, lane_y(lane) - ROW * 0.5),
-                        Vec2::new(64.0, ROW),
-                    ),
-                    &format!("#{}", order[lane] + 1),
-                    TextStyle::new(TypeStyle::new(10.0, 600.0, 13.0), palette.on_surface),
-                    Align::Center,
-                );
-            }
+                    label.aligned(Align::Center)
+                },
+                Align::Center,
+            );
+        }
+        if let (Some(lane), Some(index), true) = (
+            hovered,
+            hovered_index,
+            source.is_none() && divide.is_none() && merge.is_none() && reparent.is_none(),
+        ) {
+            painter.text_in(
+                Rect::from_min_size(
+                    Vec2::new(pointer.x + 10.0, lane_y(lane) - ROW * 0.5),
+                    Vec2::new(64.0, ROW),
+                ),
+                &format!("#{}", index + 1),
+                TextStyle::new(TypeStyle::new(10.0, 600.0, 13.0), palette.on_surface),
+                Align::Center,
+            );
         }
     })
     .at(rect);
-    let click = hovered.and_then(|lane| order.get(lane).copied());
+    let click = hovered_index;
     let select = |index: usize| {
         Some(Message::Command(Command::SelectTrack {
             set: id,
@@ -691,136 +685,142 @@ fn lineage<'a>(
         }
         None => (None, None),
     };
-    let tracks = grana_ui::canvas(Length::Fill, content.max(1.0), {
-        let order = order.clone();
-        let lane_of = lane_of.clone();
-        move |painter, info| {
-            for (lane, index) in order.iter().enumerate() {
-                let y = info.rect.min.y + lane as f32 * ROW + ROW * 0.5;
-                let Some(track) = set.track(*index) else {
+    let tracks = grana_ui::canvas(Length::Fill, content.max(1.0), move |painter, info| {
+        let order = layout.order();
+        let first = (offset / ROW).floor().max(0.0) as usize;
+        let visible = (inner.height() / ROW).ceil() as usize + 2;
+        let last = (first + visible).min(order.len());
+        for (position, index) in order[first..last].iter().copied().enumerate() {
+            let lane = first + position;
+            let y = info.rect.min.y + lane as f32 * ROW + ROW * 0.5;
+            let Some(track) = set.track(index) else {
+                continue;
+            };
+            let start = info.rect.min.x
+                + (track.start() as f32 / frames.max(2).saturating_sub(1) as f32)
+                    * info.rect.width();
+            let end = info.rect.min.x
+                + (track.end() as f32 / frames.max(2).saturating_sub(1) as f32) * info.rect.width();
+            let chosen = selected == Some(index);
+            let tint = if chosen {
+                accent
+            } else {
+                Color::from_rgb_f32(object.track_color(index))
+            };
+            for link in set.parents(index) {
+                let parent = link.parent() as usize;
+                let Some(parent_track) = set.track(parent) else {
                     continue;
                 };
-                let start = info.rect.min.x
-                    + (track.start() as f32 / frames.max(2).saturating_sub(1) as f32)
+                let parent_end = info.rect.min.x
+                    + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
                         * info.rect.width();
-                let end = info.rect.min.x
-                    + (track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
-                        * info.rect.width();
-                let chosen = selected == Some(*index);
-                let tint = if chosen {
-                    accent
-                } else {
-                    Color::from_rgb_f32(colors.get(*index).copied().unwrap_or([0.6, 0.6, 0.6]))
-                };
-                for link in set.parents(*index) {
-                    let parent = link.parent() as usize;
-                    let Some(parent_track) = set.track(parent) else {
-                        continue;
-                    };
-                    let parent_end = info.rect.min.x
-                        + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
-                            * info.rect.width();
-                    let parent_y = info.rect.min.y + lane_of[parent] as f32 * ROW + ROW * 0.5;
-                    draw_link(
-                        painter,
-                        Vec2::new(parent_end, parent_y),
-                        Vec2::new(start, y),
-                        link.kind(),
+                let parent_y = info.rect.min.y + layout.lane(parent) as f32 * ROW + ROW * 0.5;
+                draw_link(
+                    painter,
+                    Vec2::new(parent_end, parent_y),
+                    Vec2::new(start, y),
+                    link.kind(),
+                    tint,
+                );
+            }
+            painter.segment(
+                Vec2::new(start, y),
+                Vec2::new(end.max(start + 1.0), y),
+                if chosen { 2.6 } else { 1.6 },
+                tint,
+            );
+            let nodes = track.nodes();
+            let spacing = if nodes.len() > 1 {
+                (end - start) / (nodes.len() - 1) as f32
+            } else {
+                0.0
+            };
+            if spacing >= 2.6 {
+                for node in nodes {
+                    painter.rect(
+                        Rect::from_center_size(
+                            Vec2::new(
+                                info.rect.min.x
+                                    + (node.time() as f32 / frames.max(2).saturating_sub(1) as f32)
+                                        * info.rect.width(),
+                                y,
+                            ),
+                            Vec2::splat(2.6),
+                        ),
+                        Corners::capsule(),
+                        tint.with_alpha(0.88),
+                    );
+                }
+            } else if let (Some(first), Some(last)) = (nodes.first(), nodes.last()) {
+                for node in [first, last] {
+                    painter.rect(
+                        Rect::from_center_size(
+                            Vec2::new(
+                                info.rect.min.x
+                                    + (node.time() as f32 / frames.max(2).saturating_sub(1) as f32)
+                                        * info.rect.width(),
+                                y,
+                            ),
+                            Vec2::splat(3.0),
+                        ),
+                        Corners::capsule(),
                         tint,
                     );
                 }
-                painter.segment(
-                    Vec2::new(start, y),
-                    Vec2::new(end.max(start + 1.0), y),
-                    if chosen { 2.6 } else { 1.6 },
-                    tint,
-                );
-                let nodes = track.nodes();
-                let spacing = if nodes.len() > 1 {
-                    (end - start) / (nodes.len() - 1) as f32
-                } else {
-                    0.0
-                };
-                if spacing >= 2.6 {
-                    for node in nodes {
-                        painter.rect(
-                            Rect::from_center_size(
-                                Vec2::new(
-                                    info.rect.min.x
-                                        + (node.time() as f32
-                                            / frames.max(2).saturating_sub(1) as f32)
-                                            * info.rect.width(),
-                                    y,
-                                ),
-                                Vec2::splat(2.6),
-                            ),
-                            Corners::capsule(),
-                            tint.with_alpha(0.88),
-                        );
-                    }
-                } else if let (Some(first), Some(last)) = (nodes.first(), nodes.last()) {
-                    for node in [first, last] {
-                        painter.rect(
-                            Rect::from_center_size(
-                                Vec2::new(
-                                    info.rect.min.x
-                                        + (node.time() as f32
-                                            / frames.max(2).saturating_sub(1) as f32)
-                                            * info.rect.width(),
-                                    y,
-                                ),
-                                Vec2::splat(3.0),
-                            ),
-                            Corners::capsule(),
-                            tint,
-                        );
-                    }
-                }
             }
-            if let Some(source) = source
-                && let Some(track) = set.track_at(source.0, source.1)
-            {
-                let y = info.rect.min.y + lane_of[track] as f32 * ROW + ROW * 0.5;
-                painter.ring(
-                    Vec2::new(
-                        info.rect.min.x
-                            + (source.0 as f32 / frames.max(2).saturating_sub(1) as f32)
-                                * info.rect.width(),
-                        y,
-                    ),
-                    4.5,
-                    1.4,
-                    0.0,
-                    std::f32::consts::TAU,
-                    accent,
-                );
-                for (lane, index) in order.iter().enumerate() {
-                    let Some(track) = set.track(*index) else {
-                        continue;
-                    };
-                    let Some(first) = track.nodes().first() else {
-                        continue;
-                    };
-                    if set.can_join(source, (first.time(), first.object())) {
-                        painter.rect(
-                            Rect::from_center_size(
-                                Vec2::new(
-                                    info.rect.min.x
-                                        + (first.time() as f32
-                                            / frames.max(2).saturating_sub(1) as f32)
-                                            * info.rect.width(),
-                                    info.rect.min.y + lane as f32 * ROW + ROW * 0.5,
-                                ),
-                                Vec2::splat(4.0),
+        }
+        if let Some(source) = source
+            && let Some(track) = set.track_at(source.0, source.1)
+        {
+            let y = info.rect.min.y + layout.lane(track) as f32 * ROW + ROW * 0.5;
+            painter.ring(
+                Vec2::new(
+                    info.rect.min.x
+                        + (source.0 as f32 / frames.max(2).saturating_sub(1) as f32)
+                            * info.rect.width(),
+                    y,
+                ),
+                4.5,
+                1.4,
+                0.0,
+                std::f32::consts::TAU,
+                accent,
+            );
+            for (position, index) in order[first..last].iter().copied().enumerate() {
+                let lane = first + position;
+                let Some(track) = set.track(index) else {
+                    continue;
+                };
+                let Some(head) = track.nodes().first() else {
+                    continue;
+                };
+                if set.can_join(source, (head.time(), head.object())) {
+                    painter.rect(
+                        Rect::from_center_size(
+                            Vec2::new(
+                                info.rect.min.x
+                                    + (head.time() as f32 / frames.max(2).saturating_sub(1) as f32)
+                                        * info.rect.width(),
+                                info.rect.min.y + lane as f32 * ROW + ROW * 0.5,
                             ),
-                            Corners::capsule(),
-                            accent,
-                        );
-                    }
+                            Vec2::splat(4.0),
+                        ),
+                        Corners::capsule(),
+                        accent,
+                    );
                 }
             }
         }
     })
+    .cached(CanvasKey::new((
+        revision,
+        lane_count,
+        selected,
+        offset.to_bits(),
+        source,
+        frames,
+    )))
     .on_pointer(move |pointer| match pointer.phase {
         grana_ui::Phase::Down => down_message.clone(),
         grana_ui::Phase::Up if inner.contains(pointer.position) => up_message.clone(),

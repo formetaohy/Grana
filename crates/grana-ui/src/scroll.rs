@@ -1,5 +1,6 @@
 use crate::element::Axis;
 use crate::motion::{Animated, Motion};
+use crate::node::NodeId;
 use crate::ui::Ui;
 
 #[derive(Clone, Copy, Debug)]
@@ -79,44 +80,65 @@ impl<A: Clone> Ui<A> {
     pub(crate) fn advance_scroll(&mut self) {
         let elapsed = self.elapsed;
         let motion = Motion::quick();
-        for index in 0..self.tree.ids.len() {
-            let id = self.tree.ids[index];
-            let Some(scroll) = self.tree.nodes[id].scroll.as_mut() else {
-                continue;
-            };
-            if scroll.settled() {
+        let mut scrolling = std::mem::take(&mut self.scrolling);
+        let mut moving = Vec::with_capacity(scrolling.len());
+        for id in scrolling.drain(..) {
+            if !self.tree.nodes.contains_key(id) {
                 continue;
             }
-            scroll.update(elapsed, motion);
-            self.tree.nodes[id].paint_dirty = true;
-            self.tree.layout_dirty = true;
-            self.animating = true;
+            let (moved, settled) = {
+                let Some(scroll) = self.tree.nodes[id].scroll.as_mut() else {
+                    continue;
+                };
+                if scroll.settled() {
+                    continue;
+                }
+                let before = scroll.offset;
+                scroll.update(elapsed, motion);
+                (scroll.offset != before, scroll.settled())
+            };
+            if moved || !settled {
+                self.tree.nodes[id].paint_dirty = true;
+                self.tree.invalidate_arrange(id);
+                self.animating = true;
+            }
+            if !settled {
+                moving.push(id);
+            }
         }
+        self.scrolling = moving;
     }
 
     pub(crate) fn update_scroll_metrics(&mut self) {
-        for index in 0..self.tree.ids.len() {
-            let id = self.tree.ids[index];
-            let (spec, content, viewport) = {
-                let node = &self.tree.nodes[id];
-                let Some(spec) = node.scroll_spec else {
-                    continue;
-                };
-                (
-                    spec,
-                    node.content_main,
-                    match spec.axis {
-                        Axis::Column => node.rect.height(),
-                        Axis::Row => node.rect.width(),
-                    },
-                )
+        let mut wake = Vec::new();
+        for (id, node) in self.tree.nodes.iter_mut() {
+            let Some(spec) = node.scroll_spec else {
+                continue;
             };
-            let scroll = self.tree.nodes[id]
-                .scroll
-                .get_or_insert_with(ScrollState::new);
+            let viewport = match spec.axis {
+                Axis::Column => node.rect.height(),
+                Axis::Row => node.rect.width(),
+            };
+            let content = spec.content.unwrap_or(node.content_main).max(viewport);
+            let scroll = node.scroll.get_or_insert_with(ScrollState::new);
             scroll.viewport = viewport;
-            scroll.content = spec.content.unwrap_or(content).max(viewport);
+            scroll.content = content;
             scroll.target = scroll.target.clamp(0.0, scroll.limit());
+            if (scroll.target - scroll.offset).abs() > 1.0e-4 {
+                scroll.moving = true;
+            }
+            if scroll.moving {
+                wake.push(id);
+            }
+        }
+        for id in wake {
+            self.wake_scroll(id);
+        }
+    }
+
+    pub(crate) fn wake_scroll(&mut self, id: NodeId) {
+        if !self.scrolling.contains(&id) {
+            self.scrolling.push(id);
         }
     }
 }

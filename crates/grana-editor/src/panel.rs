@@ -458,6 +458,7 @@ fn dock<'a>(
             palette.outline_variant.lerp(palette.outline, engaged),
         );
     })
+    .cached(grana_ui::CanvasKey::LAYOUT)
     .at(grip)
     .cursor(grana_ui::Cursor::ResizeVertical)
     .on_pointer(|pointer| {

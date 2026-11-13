@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::geometry::{Corners, Rect};
 use crate::image::ImageAtlas;
-use crate::paint::{Clip, LayerInstances, Painter};
+use crate::paint::{Clip, Instances, Painter};
 use crate::record::Mark;
 use crate::text::Text;
 use crate::theme::Theme;
@@ -11,7 +11,7 @@ pub struct Recorder {
     text: Text,
     images: ImageAtlas,
     theme: Theme,
-    instances: LayerInstances,
+    instances: Instances,
     marks: Vec<Mark>,
 }
 
@@ -21,7 +21,7 @@ impl Recorder {
             text: Text::detached(),
             images: ImageAtlas::detached(),
             theme,
-            instances: LayerInstances::default(),
+            instances: Instances::default(),
             marks: Vec::new(),
         }
     }
@@ -36,7 +36,7 @@ impl Recorder {
             "a recorded surface covers at least one point"
         );
         self.text.begin(1.0);
-        self.instances = LayerInstances::default();
+        self.instances = Instances::default();
         self.marks.clear();
         {
             let clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
