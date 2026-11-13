@@ -583,8 +583,7 @@ impl SplatPasses {
                 .get(&entry)
                 .is_none_or(|slot| slot.len != chunk.len());
             if resize {
-                let base = self.next_base;
-                self.next_base += chunk.len() as u32;
+                let base = self.base_for(entry, chunk.len());
                 let slot = SplatSlot::new(
                     device,
                     queue,
@@ -609,6 +608,27 @@ impl SplatPasses {
                 .push((slot.base, slot.base + slot.len as u32, entry.0, entry.1));
         }
         self.ranges.sort_unstable();
+    }
+
+    fn base_for(&mut self, entry: (u64, u8), len: usize) -> u32 {
+        let len = len as u32;
+        let held = self.slots.get(&entry).map(|slot| slot.base);
+        let free = held.filter(|base| {
+            let end = base.saturating_add(len);
+            end > *base
+                && !self.slots.iter().any(|(key, slot)| {
+                    *key != entry
+                        && slot.base < end
+                        && *base < slot.base.saturating_add(slot.len as u32)
+                })
+        });
+        free.unwrap_or_else(|| {
+            let base = self.next_base;
+            self.next_base = base
+                .checked_add(len)
+                .expect("the splat instance space is exhausted");
+            base
+        })
     }
 
     pub fn resolve(&self, index: u32) -> Option<(u64, u8, u32)> {
