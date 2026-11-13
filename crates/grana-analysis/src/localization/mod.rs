@@ -14,6 +14,7 @@ mod frc;
 mod grid;
 mod group;
 mod image;
+mod layout;
 mod nena;
 mod report;
 mod stack;
@@ -25,6 +26,7 @@ pub use depth::LocalizationDepth;
 use grid::Grid;
 pub use group::{GroupStat, Groups};
 pub use image::LocalizationRenderer;
+pub use layout::LocalizationLayout;
 pub use report::{Frc, LocalizationGeometry, LocalizationImage, LocalizationReport, NeNa};
 pub use stack::LocalizationStack;
 
@@ -133,19 +135,16 @@ pub fn localization_report(
         frames.iter().all(|frame| frame.filter() == filter),
         "a localization report filters every frame alike"
     );
-    let survey = Survey::of(frames);
-    if survey.localizations == 0 {
+    let Some(layout) = LocalizationLayout::new(frames, spec, camera_pixel)? else {
         return Err("the frame range holds no visible localization".to_string());
-    }
-    let (low, high) = survey
-        .bounds
-        .ok_or_else(|| "the localizations lie at an infinite position".to_string())?;
-    let span = [0, 1].map(|axis| (high[axis] - low[axis]).max(FLOOR));
-    let blur = spec.blur() * 0.001;
-    let pixel = spec.pixel() * 0.001;
-    let geometry = rasterize(&spec, low, span, pixel, blur)?;
-    let depth = survey.depth(spec.depth() * 0.001)?;
-    let preview = preview_geometry(low, span, pixel, blur, depth)?;
+    };
+    let survey = layout.survey();
+    let low = layout.low();
+    let span = layout.span();
+    let blur = layout.blur();
+    let depth = layout.depth();
+    let geometry = layout.geometry();
+    let preview = preview_geometry(low, span, spec.pixel() * 0.001, blur, depth)?;
     let preview_geometry = LocalizationGeometry::new(
         preview.origin(),
         preview.pixel(),
@@ -220,13 +219,13 @@ pub fn localization_report(
         pixel: geometry.pixel() * 1000.0,
         origin: geometry.origin(),
         extent: [0, 1].map(|axis| geometry.size()[axis] as f32 * geometry.pixel()),
-        localizations: survey.localizations,
+        localizations: layout.localizations(),
         geometry,
         density,
         nena,
         frc,
         suggested,
-        groups: survey.groups,
+        groups: layout.groups().clone(),
         stack,
     }))
 }

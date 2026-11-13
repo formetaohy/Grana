@@ -18,7 +18,8 @@ use grana_object::{
 use grana_object::{IntensityTable, SampleStatistics};
 use grana_pipeline::Channels;
 use grana_scene::{
-    Dataset, Drift, LocalizationSource, ObjectFrame, ObjectKind, ObjectParams, Scene,
+    Dataset, Drift, LocalizationAlignment, LocalizationSource, ObjectFrame, ObjectKind,
+    ObjectParams, Registration, Scene,
 };
 use grana_volume::{
     Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
@@ -672,7 +673,7 @@ fn realigns_localizations_when_drift_changes() {
             false,
             true,
             grana_object::LocalizationSpec::cover(2),
-            Drift::default(),
+            LocalizationAlignment::new(0, Drift::default(), Registration::default()),
         ),
     );
     let drift = Drift::new(
@@ -716,6 +717,87 @@ fn realigns_localizations_when_drift_changes() {
         .expect("the frame carries spots")
         .spots()[0];
     assert!((restored.center()[0] - spots[0].center()[0]).abs() < 1.0e-6);
+}
+
+#[test]
+fn aligns_localizations_with_channel_registration() {
+    let extent = Extent::new(16, 16, 4);
+    let data = VoxelData::F32(vec![0.0; extent.voxel_count() as usize]);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![
+            Channel::new("first", [0.0, 1.0, 0.0], data.clone()),
+            Channel::new("second", [0.0, 0.0, 1.0], data),
+        ],
+    );
+    let pyramid = VolumeSeries::new(vec![volume.clone(), volume], 1.0)
+        .pyramid()
+        .clone();
+    let mut scene = Scene::new(Dataset::synthetic("registration", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 1);
+    let center = [0.4, -0.2, 0.1];
+    let statistics = SampleStatistics::new(1.0, 1.0, 1.0, 1.0, 1.0);
+    for time in 0..2 {
+        scene.install(
+            set,
+            time,
+            ObjectFrame::Spots(grana_object::SpotSet::new(
+                0,
+                vec![Spot::grouped(center, [0.02; 3], 1.0, None)],
+                IntensityTable::new(2, vec![statistics; 2]),
+            )),
+        );
+    }
+    scene.set_localization(
+        set,
+        LocalizationSource::new(
+            100.0,
+            16,
+            16,
+            false,
+            true,
+            grana_object::LocalizationSpec::cover(2),
+            LocalizationAlignment::new(1, Drift::default(), Registration::default()),
+        ),
+    );
+    let registration = Registration::new(
+        0,
+        vec![
+            grana_warp::Warp::IDENTITY,
+            grana_warp::Warp::shift([0.5, 0.0, 0.0]),
+        ],
+    );
+    assert!(scene.set_registration(registration));
+    let aligned = scene
+        .objects
+        .get(set)
+        .expect("the spot set stays")
+        .frame(0)
+        .expect("the frame stays")
+        .spots()
+        .expect("the frame carries spots")
+        .spots()[0]
+        .center();
+    assert!(
+        (aligned[0] - (center[0] - 0.5)).abs() < 1.0e-6,
+        "the channel registration moves the localizations onto the reference channel"
+    );
+    assert!(scene.set_registration(Registration::default()));
+    let restored = scene
+        .objects
+        .get(set)
+        .expect("the spot set stays")
+        .frame(0)
+        .expect("the frame stays")
+        .spots()
+        .expect("the frame carries spots")
+        .spots()[0]
+        .center();
+    assert!(
+        (restored[0] - center[0]).abs() < 1.0e-6,
+        "clearing the registration restores the measured positions"
+    );
 }
 
 fn texture(dims: [usize; 3]) -> Vec<f32> {
@@ -2414,7 +2496,7 @@ fn projects_localizations_over_their_frame_range() {
             false,
             true,
             LocalizationSpec::new([0, 2], 10.0, 20.0),
-            Drift::default(),
+            LocalizationAlignment::new(0, Drift::default(), Registration::default()),
         ),
     );
     scene.set_time(1);

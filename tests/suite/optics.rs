@@ -1,4 +1,4 @@
-﻿use glam::Vec3;
+use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
 use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, SplatChunk, Splats};
 use grana_volume::{

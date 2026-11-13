@@ -203,6 +203,9 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             }
         }
     }
+    if let Some(composition) = task.protocol.composition() {
+        run.compose(&run.sets, composition)?;
+    }
     let Run {
         mut scene,
         sets,
@@ -451,9 +454,9 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             if !file.is_file() {
                 continue;
             }
-            let mut detail = format!("{} 路 {}", dataset.group(), dataset.scene_label());
+            let mut detail = format!("{} · {}", dataset.group(), dataset.scene_label());
             if let Some(view) = spec.views().get(index) {
-                detail.push_str(&format!(" 路 {view}"));
+                detail.push_str(&format!(" · {view}"));
             }
             recorded.push(grana_page::Recorded::picture(
                 &file,
@@ -738,7 +741,7 @@ impl Run<'_, '_> {
             label: format!("importing the localizations of {name}"),
         });
         let reader = &self.channels;
-        let drift = self.scene.drift().clone();
+        let alignment = self.alignment(id)?;
         let frames = self.scene.frame_count() as usize;
         let progress = &self.progress;
         let mut localization = None;
@@ -752,16 +755,16 @@ impl Run<'_, '_> {
                     height,
                     volume,
                     photons,
-                    drift,
+                    alignment,
                 } = event
                 {
-                    localization = Some((pixel, width, height, volume, photons, drift));
+                    localization = Some((pixel, width, height, volume, photons, alignment));
                 }
             },
             |sink| {
                 crate::run::localization(
                     reader,
-                    crate::run::LocalizationRequest::new(file, drift),
+                    crate::run::LocalizationRequest::new(file, alignment),
                     task.cancel,
                     sink,
                 )
@@ -775,17 +778,31 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
             }
         }
-        let (pixel, width, height, volume, photons, drift) = localization
+        let (pixel, width, height, volume, photons, alignment) = localization
             .ok_or_else(|| format!("the localization table of {name} holds no localization"))?;
         let spec = grana_object::LocalizationSpec::cover(self.scene.frame_count());
         self.scene.set_localization(
             id,
             grana_scene::LocalizationSource::new(
-                pixel, width, height, volume, photons, spec, drift,
+                pixel, width, height, volume, photons, spec, alignment,
             ),
         );
         self.scene.rebuild_molecule_tracks(id)?;
         Ok(())
+    }
+
+    fn alignment(&self, id: ObjectSetId) -> Result<grana_scene::LocalizationAlignment, String> {
+        let channel = self
+            .scene
+            .objects
+            .get(id)
+            .ok_or_else(|| "the object set left the scene".to_string())?
+            .channel();
+        Ok(grana_scene::LocalizationAlignment::new(
+            channel,
+            self.scene.drift().clone(),
+            self.scene.registration().clone(),
+        ))
     }
 
     fn localize(
@@ -839,98 +856,76 @@ impl Run<'_, '_> {
         };
         let name = object.name().to_string();
         let key = object.key().as_str().to_string();
+        let window = run::LocalizationWindow::of(object, spec.frames());
         let pixel = source.pixel() * 0.001;
-        let [start, end] = spec.frames();
-        let frames = (start..=end)
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
-        let masked = object.filtered() || object.hidden_count() > 0;
-        let visible = (start..=end)
-            .map(|time| {
-                if !masked {
-                    return None;
-                }
-                object.frame(time).map(|frame| {
-                    (0..frame.object_count())
-                        .map(|index| object.visible_object(time, index))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
-        let held = frames
-            .iter()
-            .zip(&visible)
-            .map(|(frame, mask)| {
-                let spots = frame
-                    .as_deref()
-                    .and_then(ObjectFrame::spots)
-                    .map_or(&[][..], grana_object::SpotSet::spots);
-                grana_analysis::localization::LocalizationFrame::new(
-                    spots,
-                    mask.as_deref(),
-                    spec.filter(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let grouped = !source.clustered();
+        let path = self.folder.join(format!("{key}-superres.ome.tif"));
         let _ = self.task.events.send(Event::Step {
             index: self.task.index,
             label: format!("rendering the super-resolution image of {name}"),
         });
-        let Some(report) = grana_analysis::localization::localization_report(
-            &held,
-            spec,
-            pixel,
-            grouped,
-            self.scene.region_scope(),
-            &mut |_, _| true,
-        )?
-        else {
-            return Ok(());
-        };
-        let geometry = report.geometry();
-        if !geometry.renderable() {
-            return Err(format!(
-                "the super-resolution image of {name} needs more than {} pixels on an axis",
-                grana_analysis::localization::LocalizationGeometry::MAXIMUM
+        let request = run::LocalizationImageRequest::new(window, spec, pixel, &name, 0, &path)?;
+        let progress = &self.progress;
+        run::localization_image(request, self.task.cancel, &mut |event| {
+            if let RunEvent::Progress { done, total, .. } = event
+                && progress.hold()
+            {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+        })
+    }
+
+    fn compose(
+        &self,
+        sets: &[ObjectSetId],
+        composition: &grana_protocol::CompositionSpec,
+    ) -> Result<(), String> {
+        let mut sources = Vec::with_capacity(composition.sets.len());
+        for key in &composition.sets {
+            let index = self
+                .task
+                .protocol
+                .sets()
+                .iter()
+                .position(|spec| &spec.key == key)
+                .ok_or_else(|| format!("the composition names the missing object set {key}"))?;
+            let object = self
+                .scene
+                .objects
+                .get(sets[index])
+                .ok_or_else(|| format!("the object set {key} left the scene"))?;
+            let source = object.localization().ok_or_else(|| {
+                format!("the composition names {key}, which carries no localization table")
+            })?;
+            let spec = source.spec().fitted(self.scene.frame_count());
+            sources.push(run::CompositionSource::new(
+                run::LocalizationWindow::of(object, spec.frames()),
+                spec,
+                object.color(),
             ));
         }
-        let depth = report.depth();
-        let progress = |_: usize, _: usize| true;
-        let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
-            &held,
-            geometry,
-            depth,
-            report.groups().clone(),
-            &progress,
-        )?;
-        renderer.at_density(report.density());
-        let step = geometry.pixel();
-        let slice = if depth.step() > 0.0 {
-            depth.step()
-        } else {
-            step
-        };
-        let mut current = u32::MAX;
-        grana_tiff::write_stack(
-            &self.folder.join(format!("{key}-superres.ome.tif")),
-            &grana_tiff::Stack {
-                size: geometry.size(),
-                samples: 3,
-                name: &name,
-                physical: Some([step, step, slice]),
-                interval: None,
-                depth: depth.layers(),
-            },
-            &mut |layer, _, bytes| {
-                if layer != current {
-                    renderer.begin(layer)?;
-                    current = layer;
-                }
-                renderer.row_rgb(bytes)
-            },
-        )
-        .map_err(|error| error.to_string())
+        let name = self.scene.dataset.name().to_string();
+        let path = self.folder.join(grana_protocol::CompositionSpec::FILE);
+        let request = run::LocalizationCompositionRequest::new(sources, &name, &path)?;
+        let _ = self.task.events.send(Event::Step {
+            index: self.task.index,
+            label: format!("composing the super-resolution image of {name}"),
+        });
+        let progress = &self.progress;
+        run::localization_composition(request, self.task.cancel, &mut |event| {
+            if let RunEvent::Progress { done, total, .. } = event
+                && progress.hold()
+            {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+        })
     }
 
     fn cluster(&mut self, id: ObjectSetId, spec: grana_object::ClusterSpec) -> Result<(), String> {
@@ -948,22 +943,7 @@ impl Run<'_, '_> {
                 source.spec().filter()
             });
         let revision = object.revision();
-        let frames = (0..self.scene.frame_count())
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
-        let masked = object.filtered() || object.hidden_count() > 0;
-        let visible = (0..self.scene.frame_count())
-            .map(|time| {
-                if !masked {
-                    return None;
-                }
-                object.frame(time).map(|frame| {
-                    (0..frame.object_count())
-                        .map(|index| object.visible_object(time, index))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
+        let window = run::LocalizationWindow::of(object, [0, self.scene.frame_count() - 1]);
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("clustering the localizations of {name}"),
@@ -985,12 +965,7 @@ impl Run<'_, '_> {
         };
         crate::run::localization_cluster(
             crate::run::LocalizationClusterRequest::new(
-                id,
-                revision,
-                crate::run::LocalizationWindow::new(frames, visible),
-                spec,
-                filter,
-                grouped,
+                id, revision, window, spec, filter, grouped,
             ),
             task.cancel,
             &mut sink,
@@ -1593,6 +1568,9 @@ pub(super) fn artifacts(
             artifacts.push(format!("{}-superres.ome.tif", set.key()));
         }
     }
+    if protocol.composition().is_some() {
+        artifacts.push(grana_protocol::CompositionSpec::FILE.to_string());
+    }
     for relation in protocol.relations() {
         artifacts.push(grana_measure::PairExport::file_name(
             &relation.source,
@@ -1846,7 +1824,7 @@ fn colocalization(
     let statistics = result.statistics();
     let manders = statistics.manders();
     let caption = format!(
-        "Pearson {} 路 Overlap {} 路 M1 {} 路 M2 {} 路 p {}",
+        "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
         number(statistics.pearson()),
         number(statistics.overlap()),
         number(manders[0]),
@@ -1861,7 +1839,7 @@ fn colocalization(
         format!("Y: {y}"),
         format!("X: {x}"),
     )
-    .with_summary(format!("{name} 路 {caption}"))
+    .with_summary(format!("{name} · {caption}"))
     .with_language(language);
     grana_chart::Page::Joint(Box::new(grana_chart::Joint::total(
         heading,

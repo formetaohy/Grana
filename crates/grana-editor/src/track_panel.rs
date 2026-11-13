@@ -884,7 +884,7 @@ fn summary<'a>(
     let parent = if parents.is_empty() {
         grana_i18n::track::root(language).to_string()
     } else {
-        parents.join(" 路 ")
+        parents.join(" · ")
     };
     let children = set.children(index).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
@@ -894,7 +894,7 @@ fn summary<'a>(
             .iter()
             .map(|child| format!("#{}", child + 1))
             .collect::<Vec<_>>()
-            .join(" 路 ")
+            .join(" · ")
     };
     let detail = grana_i18n::track::frame_count(language, statistics.frames());
     let title = view::card_title(

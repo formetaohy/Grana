@@ -65,7 +65,7 @@ impl Session {
                 height: u32,
                 volume: bool,
                 photons: bool,
-                drift: grana_scene::Drift,
+                alignment: grana_scene::LocalizationAlignment,
             },
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
@@ -110,7 +110,7 @@ impl Session {
                         height,
                         volume,
                         photons,
-                        drift,
+                        alignment,
                     }) => {
                         updates.push((
                             index,
@@ -121,7 +121,7 @@ impl Session {
                                 height,
                                 volume,
                                 photons,
-                                drift,
+                                alignment,
                             },
                         ));
                     }
@@ -235,14 +235,14 @@ impl Session {
                     height,
                     volume,
                     photons,
-                    drift,
+                    alignment,
                 } => {
                     if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
                         let spec = grana_object::LocalizationSpec::cover(scene.frame_count());
                         scene.set_localization(
                             set,
                             grana_scene::LocalizationSource::new(
-                                pixel, width, height, volume, photons, spec, drift,
+                                pixel, width, height, volume, photons, spec, alignment,
                             ),
                         );
                     }

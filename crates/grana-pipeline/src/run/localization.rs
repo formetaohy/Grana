@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_object::{IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet};
 use grana_readout::localization::{self, Localization};
-use grana_scene::{Drift, ObjectFrame};
+use grana_scene::{LocalizationAlignment, ObjectFrame};
 use grana_warp::Warp;
 
 use crate::channels::Channels;
@@ -15,18 +15,18 @@ const SAMPLE_LEVEL: usize = 0;
 
 pub struct LocalizationRequest {
     file: String,
-    drift: Drift,
+    alignment: LocalizationAlignment,
 }
 
 impl LocalizationRequest {
-    pub fn new(file: &str, drift: Drift) -> Self {
+    pub fn new(file: &str, alignment: LocalizationAlignment) -> Self {
         assert!(
             !file.trim().is_empty(),
             "an import names a localization table"
         );
         Self {
             file: file.to_string(),
-            drift,
+            alignment,
         }
     }
 
@@ -57,7 +57,7 @@ pub fn localization(
         height: table.height(),
         volume: table.volume(),
         photons: table.photons(),
-        drift: request.drift.clone(),
+        alignment: request.alignment.clone(),
     });
     let total = table.rows();
     let mut done = 0u64;
@@ -74,7 +74,7 @@ pub fn localization(
         let time = frame.time();
         let rows = frame.rows();
         done += rows.len() as u64;
-        if let Some(set) = spots(reader, time, rows, request.drift.warp(time))? {
+        if let Some(set) = spots(reader, time, rows, &request.alignment.warp(time))? {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Spots(set),

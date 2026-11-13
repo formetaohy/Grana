@@ -346,6 +346,30 @@ impl Protocol {
                 "a protocol measures one object set".to_string(),
             ));
         }
+        if let Some(composition) = &self.composition {
+            composition.checked()?;
+            for key in &composition.sets {
+                let Some(set) = self.sets.iter().find(|set| &set.key == key) else {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the super-resolution composition names the missing object set {key}"
+                    )));
+                };
+                if !matches!(set.source, SourceSpec::Localizations { .. }) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the super-resolution composition layers {key}, which reads no localization table"
+                    )));
+                }
+            }
+            if self
+                .sets
+                .iter()
+                .any(|set| format!("{}-superres.ome.tif", set.key) == crate::CompositionSpec::FILE)
+            {
+                return Err(ProtocolError::Invalid(
+                    "an object set key borrows the file name of the composed image".to_string(),
+                ));
+            }
+        }
         if let Some(origin) = &self.origin {
             origin.checked(&set_keys)?;
         }

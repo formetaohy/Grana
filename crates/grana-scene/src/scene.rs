@@ -9,6 +9,7 @@ use grana_object::{Shape, TrackParams};
 use grana_optics::Psf;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
 
+use crate::alignment::LocalizationAlignment;
 use crate::annotation::Annotations;
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
@@ -1093,7 +1094,8 @@ impl Scene {
             return false;
         }
         self.drift = drift;
-        self.objects.realign_localizations(&self.drift);
+        self.objects
+            .realign_localizations(&self.drift, &self.registration);
         self.clear_object_coloc_all();
         true
     }
@@ -1178,7 +1180,12 @@ impl Scene {
     }
 
     pub fn realign_localization(&mut self, id: ObjectSetId) {
-        self.objects.realign_localization(id, &self.drift);
+        let Some(channel) = self.objects.get(id).map(|set| set.channel()) else {
+            return;
+        };
+        let next =
+            LocalizationAlignment::new(channel, self.drift.clone(), self.registration.clone());
+        self.objects.realign_localization(id, &next);
     }
 
     pub fn registration(&self) -> &Registration {
@@ -1190,6 +1197,8 @@ impl Scene {
             return false;
         }
         self.registration = registration;
+        self.objects
+            .realign_localizations(&self.drift, &self.registration);
         self.coloc.clear();
         self.clear_object_coloc_all();
         true

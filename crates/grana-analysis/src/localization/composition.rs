@@ -1,3 +1,5 @@
+use grana_object::LocalizationSpec;
+
 use super::{
     FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry,
     LocalizationRenderer, Survey, margin_pixels, preview_geometry,
@@ -27,6 +29,26 @@ impl CompositionSpec {
             "a composed image slices a bounded depth"
         );
         Self { pixel, blur, depth }
+    }
+
+    pub fn covering(specs: &[LocalizationSpec]) -> Option<Self> {
+        specs.first()?;
+        let pixel = specs
+            .iter()
+            .map(LocalizationSpec::pixel)
+            .fold(f32::MIN, f32::max);
+        let blur = specs.iter().map(LocalizationSpec::blur).fold(0.0, f32::max);
+        let depth = specs
+            .iter()
+            .map(LocalizationSpec::depth)
+            .filter(|depth| *depth > 0.0)
+            .fold(f32::INFINITY, f32::min);
+        let depth = if depth.is_finite() {
+            depth * 0.001
+        } else {
+            0.0
+        };
+        Some(Self::new(pixel * 0.001, blur * 0.001, depth))
     }
 
     pub fn pixel(&self) -> f32 {

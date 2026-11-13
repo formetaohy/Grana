@@ -564,9 +564,11 @@ impl Builder<'_> {
             | SourceSpec::Segments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
             SourceSpec::External { file } => self.external(file, name, named, track),
-            SourceSpec::Localizations { file, molecules } => {
-                self.localizations(file, molecules, name, named, track)
-            }
+            SourceSpec::Localizations {
+                channel,
+                file,
+                molecules,
+            } => self.localizations(channel, file, molecules, name, named, track),
             SourceSpec::Filtered {
                 source: reference,
                 group,
@@ -760,13 +762,18 @@ impl Builder<'_> {
 
     fn localizations(
         &mut self,
+        name_of: &str,
         file: &str,
         molecules: &crate::MoleculesSpec,
         name: &str,
         named: bool,
         track: Option<crate::TrackSpec>,
     ) -> Result<ObjectSetId, ProtocolError> {
+        let channel = channel(self.names, name_of)?;
+        let previous = self.scene.selected;
+        self.scene.select_channel(channel);
         let id = self.scene.import_localizations(file);
+        self.scene.select_channel(previous);
         self.rename(id, name, named)?;
         self.apply_track(id, track);
         self.steps.push(Step::Import { set: id });

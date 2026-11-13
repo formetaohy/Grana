@@ -340,6 +340,7 @@ impl Protocol {
             sets,
             relations,
             coloc,
+            composition: None,
             label_images,
             view,
             views,
@@ -369,6 +370,7 @@ fn source(
         }),
         Provenance::Interop { file } => Ok(match set.localization() {
             Some(localizations) => SourceSpec::Localizations {
+                channel: channels[set.channel()].clone(),
                 file: file.clone(),
                 molecules: crate::MoleculesSpec::of(localizations),
             },

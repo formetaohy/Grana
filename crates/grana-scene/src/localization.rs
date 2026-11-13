@@ -1,6 +1,6 @@
 use grana_object::{ClusterSpec, LocalizationSpec};
 
-use crate::drift::Drift;
+use crate::alignment::LocalizationAlignment;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalizationSource {
@@ -14,7 +14,7 @@ pub struct LocalizationSource {
     group_colored: bool,
     projected: bool,
     clustered: bool,
-    applied: Drift,
+    applied: LocalizationAlignment,
 }
 
 impl LocalizationSource {
@@ -25,7 +25,7 @@ impl LocalizationSource {
         volume: bool,
         photons: bool,
         spec: LocalizationSpec,
-        applied: Drift,
+        applied: LocalizationAlignment,
     ) -> Self {
         assert!(
             pixel.is_finite() && pixel > 0.0,
@@ -90,7 +90,7 @@ impl LocalizationSource {
         self.clustered
     }
 
-    pub fn applied(&self) -> &Drift {
+    pub fn applied(&self) -> &LocalizationAlignment {
         &self.applied
     }
 
@@ -137,7 +137,7 @@ impl LocalizationSource {
         }
     }
 
-    pub(crate) fn set_applied(&mut self, applied: Drift) {
+    pub(crate) fn set_applied(&mut self, applied: LocalizationAlignment) {
         self.applied = applied;
     }
 }

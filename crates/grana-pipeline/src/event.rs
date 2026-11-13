@@ -2,7 +2,7 @@ use grana_analysis::localization::{Clusters, LocalizationReport};
 use grana_measure::{ColocSeries, ObjectColoc};
 use grana_object::{RelationFrame, TrackSet};
 use grana_optics::MeasuredPsf;
-use grana_scene::{Drift, ObjectFrame, ObjectSetId, Registration, Revision};
+use grana_scene::{Drift, LocalizationAlignment, ObjectFrame, ObjectSetId, Registration, Revision};
 use grana_volume::Region;
 
 pub enum Event {
@@ -21,7 +21,7 @@ pub enum Event {
         height: u32,
         volume: bool,
         photons: bool,
-        drift: Drift,
+        alignment: LocalizationAlignment,
     },
     LocalizationReport {
         set: ObjectSetId,

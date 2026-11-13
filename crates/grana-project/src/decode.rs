@@ -25,11 +25,11 @@ use grana_profile::{Line, Profile, Sample};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
     ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
-    LabelExport, LassoPath, LocalizationSource, MaskFilter, MeasureState, ObjectAnchor,
-    ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation,
-    Provenance, RatioSpec, Recipe, Registration, RelationState, RestoreSpec, SceneState, Seeds,
-    SelectionState, SetState, SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor,
-    TrackEdit, TrackStyle,
+    LabelExport, LassoPath, LocalizationAlignment, LocalizationSource, MaskFilter, MeasureState,
+    ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey,
+    Operation, Provenance, RatioSpec, Recipe, Registration, RelationState, RestoreSpec, SceneState,
+    Seeds, SelectionState, SetState, SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor,
+    TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
@@ -1076,13 +1076,27 @@ impl Decode for LocalizationSource {
             volume,
             photons,
             spec,
-            Drift::decode(reader)?,
+            LocalizationAlignment::decode(reader)?,
         );
         Ok(source
             .with_clusters(grana_object::ClusterSpec::new(radius, dark, minimum))
             .with_group_colored(group_colored)
             .with_projected(projected)
             .with_clustered(clustered))
+    }
+}
+
+impl Decode for LocalizationAlignment {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let channel = reader.u32()? as usize;
+        if channel >= CHANNEL_LIMIT {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(
+            channel,
+            Drift::decode(reader)?,
+            Registration::decode(reader)?,
+        ))
     }
 }
 

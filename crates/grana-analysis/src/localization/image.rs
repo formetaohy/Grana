@@ -1,4 +1,4 @@
-﻿use super::LocalizationFrame;
+use super::LocalizationFrame;
 use super::depth::LocalizationDepth;
 use super::grid::Grid;
 use super::group::Groups;
@@ -34,7 +34,7 @@ impl<'a> LocalizationRenderer<'a> {
         if !geometry.renderable() {
             let [width, height] = geometry.size();
             return Err(format!(
-                "the localization image would span {width}脳{height} pixels; raise the pixel size"
+                "the localization image would span {width}x{height} pixels; raise the pixel size"
             ));
         }
         let cells = Cells::build(frames, geometry, depth, &groups, progress)?;

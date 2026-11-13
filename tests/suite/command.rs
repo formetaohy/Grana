@@ -651,30 +651,43 @@ fn batches_localizations_into_a_super_resolution_image() {
     let datasets = temp.path().join("datasets");
     std::fs::create_dir_all(&datasets).expect("the dataset folder is created");
     crate::support::localization_dataset(&datasets.join("sample.ome.zarr"), 2);
-    let table = temp.path().join("localizations.hdf5");
-    let mut rows = Vec::new();
-    let mut noise = crate::support::Noise::new(0x51ee_71a1);
-    for frame in 0..2u32 {
-        for _ in 0..200 {
-            rows.push(crate::support::Localization {
-                frame,
-                position: [1.0 + 28.0 * noise.value(), 1.0 + 28.0 * noise.value(), 0.0],
-                photons: 1500.0,
-                precision: [0.02, 0.02, 0.02],
-                group: -1,
-            });
+    let table = |name: &str, offset: f32, seed: u32| {
+        let path = temp.path().join(name);
+        let mut noise = crate::support::Noise::new(seed);
+        let molecules = (0..200)
+            .map(|_| [offset + 14.0 * noise.value(), 1.0 + 28.0 * noise.value()])
+            .collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for frame in 0..2u32 {
+            for molecule in &molecules {
+                rows.push(crate::support::Localization {
+                    frame,
+                    position: [
+                        molecule[0] + 0.02 * noise.value(),
+                        molecule[1] + 0.02 * noise.value(),
+                        0.0,
+                    ],
+                    photons: 1500.0,
+                    precision: [0.02, 0.02, 0.02],
+                    group: -1,
+                });
+            }
         }
-    }
-    crate::support::picasso(&table, 100.0, &rows);
+        crate::support::picasso(&path, 100.0, &rows);
+        path
+    };
+    let green = table("green.hdf5", 1.0, 0x51ee_71a1);
+    let red = table("red.hdf5", 16.0, 0x1f2e_3d4c);
     let protocol = grana_protocol::Protocol::from_json(&format!(
         r#"{{
             "sets": [{{
-                "key": "localizations",
-                "name": "Localizations",
-                "color": [0.2, 0.6, 0.9],
+                "key": "green",
+                "name": "Green",
+                "color": [0.2, 0.9, 0.3],
                 "source": {{
                     "kind": "localizations",
-                    "file": {:?},
+                    "channel": "GFP",
+                    "file": {green:?},
                     "molecules": {{
                         "frames": [0, 1],
                         "pixel": 10.0,
@@ -685,9 +698,27 @@ fn batches_localizations_into_a_super_resolution_image() {
                         "clustered": true
                     }}
                 }}
-            }}]
-        }}"#,
-        table.to_string_lossy()
+            }}, {{
+                "key": "red",
+                "name": "Red",
+                "color": [0.9, 0.2, 0.2],
+                "source": {{
+                    "kind": "localizations",
+                    "channel": "RFP",
+                    "file": {red:?},
+                    "molecules": {{
+                        "frames": [0, 1],
+                        "pixel": 10.0,
+                        "blur": 20.0,
+                        "radius": 0.05,
+                        "dark": 1,
+                        "minimum": 2,
+                        "clustered": true
+                    }}
+                }}
+            }}],
+            "composition": {{ "sets": ["green", "red"] }}
+        }}"#
     ))
     .expect("the localization protocol parses");
     let output = temp.path().join("runs");
@@ -717,7 +748,7 @@ fn batches_localizations_into_a_super_resolution_image() {
         }
     }
     assert!(done, "the batch stopped before it finished");
-    let image = find(&output, "localizations-superres.ome.tif")
+    let image = find(&output, "green-superres.ome.tif")
         .expect("the batch renders the super-resolution image");
     let picture = grana_tiff::Image::open(&image).expect("the super-resolution image reads");
     let level = picture.pyramid().level(0);
@@ -740,11 +771,39 @@ fn batches_localizations_into_a_super_resolution_image() {
         pixels.iter().any(|sample| *sample > 0),
         "the image paints the localizations"
     );
-    let table = find(&output, "localizations-objects.csv")
-        .expect("the batch writes the localization statistics");
-    let text = std::fs::read_to_string(table).expect("the statistics read");
+    let composed = find(&output, "composite-superres.ome.tif")
+        .expect("the batch composes the localization channels");
+    let picture = grana_tiff::Image::open(&composed).expect("the composed image reads");
+    let level = picture.pyramid().level(0);
+    let data = picture
+        .read_region(0, 0, 0, 0..level.extent().x(), 0..level.extent().y(), 0..1)
+        .expect("the composed plane reads");
+    let grana_volume::VoxelData::U8(pixels) = data else {
+        panic!("the composed image stores eight bit voxels");
+    };
+    let mut hues = [false; 3];
+    for texel in pixels.chunks(3) {
+        let Some(brightest) = texel
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value > 16)
+            .max_by_key(|(_, value)| **value)
+        else {
+            continue;
+        };
+        hues[brightest.0] = true;
+    }
     assert!(
-        text.lines().count() > 1,
-        "the statistics hold the clustered localizations"
+        hues.iter().filter(|held| **held).count() >= 2,
+        "both channels paint their own color into the composed image"
     );
+    for key in ["green", "red"] {
+        let table = find(&output, &format!("{key}-objects.csv"))
+            .expect("the batch writes the localization statistics");
+        let text = std::fs::read_to_string(table).expect("the statistics read");
+        assert!(
+            text.lines().count() > 1,
+            "the statistics of {key} hold the clustered localizations"
+        );
+    }
 }

@@ -1271,6 +1271,35 @@ impl MoleculesSpec {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompositionSpec {
+    pub sets: Vec<String>,
+}
+
+impl CompositionSpec {
+    pub const FILE: &'static str = "composite-superres.ome.tif";
+
+    pub fn checked(&self) -> Result<(), ProtocolError> {
+        if self.sets.len() < 2 {
+            return Err(ProtocolError::Invalid(
+                "a super-resolution composition layers at least two object sets".to_string(),
+            ));
+        }
+        if self
+            .sets
+            .iter()
+            .enumerate()
+            .any(|(index, set)| self.sets[..index].contains(set))
+        {
+            return Err(ProtocolError::Invalid(
+                "a super-resolution composition layers each object set once".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSpec {
@@ -1326,6 +1355,7 @@ pub enum SourceSpec {
         file: String,
     },
     Localizations {
+        channel: String,
         file: String,
         molecules: MoleculesSpec,
     },
@@ -3076,10 +3106,10 @@ impl SourceSpec {
             | Self::Surfaces { channel, .. }
             | Self::Filaments { channel, .. }
             | Self::Cells { channel, .. }
-            | Self::Segments { channel, .. } => Some(channel),
+            | Self::Segments { channel, .. }
+            | Self::Localizations { channel, .. } => Some(channel),
             Self::Labels { .. }
             | Self::External { .. }
-            | Self::Localizations { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3394,7 +3424,12 @@ impl SourceSpec {
             Self::External { file } => {
                 validate(file, &format!("the object file of {set}"))?;
             }
-            Self::Localizations { file, molecules } => {
+            Self::Localizations {
+                channel,
+                file,
+                molecules,
+            } => {
+                validate(channel, &format!("the channel of {set}"))?;
                 validate(file, &format!("the localization table of {set}"))?;
                 molecules.checked(set)?;
             }

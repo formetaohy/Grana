@@ -1,3 +1,4 @@
+mod alignment;
 mod annotation;
 mod channel;
 mod coloc;
@@ -31,6 +32,7 @@ mod track_color;
 mod track_layer;
 mod validate;
 
+pub use alignment::LocalizationAlignment;
 pub use annotation::{Annotation, AnnotationKind, AnnotationState, AnnotationTag, Annotations};
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};

@@ -1,4 +1,4 @@
-﻿use std::time::{Duration, Instant};
+use std::time::{Duration, Instant};
 
 use grana_display::Camera;
 use grana_engine::{Display, Engine};

@@ -29,6 +29,7 @@ mod level;
 mod localization;
 mod localization_cluster;
 mod localization_drift;
+mod localization_image;
 mod localization_report;
 mod localization_window;
 mod mask;
@@ -45,6 +46,10 @@ pub use self::interop::{InteropRequest, interop};
 pub use self::localization::{LocalizationRequest, localization};
 pub use self::localization_cluster::{LocalizationClusterRequest, localization_cluster};
 pub use self::localization_drift::{LocalizationDriftRequest, localization_drift};
+pub use self::localization_image::{
+    CompositionSource, LocalizationCompositionRequest, LocalizationImageRequest,
+    localization_composition, localization_image,
+};
 pub use self::localization_report::{LocalizationReportRequest, localization_report};
 pub use self::localization_window::LocalizationWindow;
 pub use self::mask::{MaskRequest, mask};

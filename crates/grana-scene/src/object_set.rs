@@ -7,10 +7,10 @@ use grana_object::TrackParams;
 use grana_object::match_anchor;
 use grana_object::{RelationFrame, SpotSet, TrackSet};
 
+use crate::alignment::LocalizationAlignment;
 use crate::color::ObjectColor;
 use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
-use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::localization::LocalizationSource;
@@ -335,6 +335,11 @@ impl ObjectSet {
         if self.kind != ObjectKind::Spots {
             return false;
         }
+        assert_eq!(
+            source.applied().channel(),
+            self.channel,
+            "a localization table belongs to the channel it was measured in"
+        );
         if self.localization.as_ref() == Some(&source) {
             return false;
         }
@@ -2144,7 +2149,7 @@ impl ObjectSet {
         changed
     }
 
-    pub(crate) fn realign(&mut self, next: &Drift, stamps: &mut Revisions) -> bool {
+    pub(crate) fn realign(&mut self, next: &LocalizationAlignment, stamps: &mut Revisions) -> bool {
         let Some(applied) = self
             .localization
             .as_ref()
@@ -2152,6 +2157,11 @@ impl ObjectSet {
         else {
             return false;
         };
+        assert_eq!(
+            next.channel(),
+            self.channel,
+            "a localization realigns inside the channel it was measured in"
+        );
         if self.kind != ObjectKind::Spots || &applied == next {
             return false;
         }

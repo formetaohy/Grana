@@ -275,11 +275,14 @@ impl SceneState {
             ));
         }
         if let Some(localization) = &set.localization {
+            let applied = localization.applied();
             if set.kind != ObjectKind::Spots
                 || localization.spec() != localization.spec().fitted(set.frames.len().max(1) as u32)
-                || !localization.applied().is_empty()
-                    && (localization.applied().frames() as usize != set.frames.len()
-                        || localization.applied().reference() as usize >= set.frames.len())
+                || !applied.is_empty()
+                    && (applied.channel() != set.channel
+                        || !applied.drift().is_empty()
+                            && (applied.drift().frames() as usize != set.frames.len()
+                                || applied.drift().reference() as usize >= set.frames.len()))
             {
                 return Err(fault(
                     "the localization source covers another set of frames",

@@ -17,9 +17,9 @@ use grana_object::{
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
-    LocalizationSource, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
-    Registration, RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor,
-    TrackColor, TrackEdit, TrackStyle,
+    LocalizationAlignment, LocalizationSource, MeasureState, ObjectColor, ObjectFrame,
+    ObjectParams, Provenance, Recipe, Registration, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 use grana_warp::Warp;
@@ -538,6 +538,14 @@ impl Encode for LocalizationSource {
         writer.bool(self.projected());
         writer.bool(self.clustered());
         self.applied().encode(writer);
+    }
+}
+
+impl Encode for LocalizationAlignment {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.channel() as u32);
+        self.drift().encode(writer);
+        self.registration().encode(writer);
     }
 }
 

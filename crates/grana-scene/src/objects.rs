@@ -5,6 +5,7 @@ use grana_display::{CATEGORICAL as PALETTE, Extent};
 use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 
+use crate::alignment::LocalizationAlignment;
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
@@ -14,6 +15,7 @@ use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::provenance::{Criteria, Provenance};
+use crate::registration::Registration;
 use crate::revision::Revisions;
 use crate::segment::SegmentParams;
 use crate::slug::slug;
@@ -791,7 +793,7 @@ impl Objects {
         frames > 0
     }
 
-    pub fn realign_localization(&mut self, id: ObjectSetId, next: &Drift) {
+    pub fn realign_localization(&mut self, id: ObjectSetId, next: &LocalizationAlignment) {
         let mut frames = 0;
         if let Some(set) = self.sets.iter_mut().find(|set| set.id() == id) {
             let count = set.frame_count();
@@ -804,13 +806,15 @@ impl Objects {
         }
     }
 
-    pub fn realign_localizations(&mut self, next: &Drift) {
+    pub fn realign_localizations(&mut self, drift: &Drift, registration: &Registration) {
         let mut aligned = Vec::new();
         for set in &mut self.sets {
             if set.localization().is_none() {
                 continue;
             }
-            if set.realign(next, &mut self.revisions) {
+            let next =
+                LocalizationAlignment::new(set.channel(), drift.clone(), registration.clone());
+            if set.realign(&next, &mut self.revisions) {
                 aligned.push((set.id(), set.frame_count()));
             }
         }

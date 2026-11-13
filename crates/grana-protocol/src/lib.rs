@@ -16,14 +16,14 @@ pub use origin::{AlgorithmSpec, ExpectedSpec, OriginSpec};
 
 pub use spec::{
     AnchorSpec, AnnotationSpec, BackgroundSpec, BleachSpec, CameraSpec, ChannelSpec,
-    ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec,
-    DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
-    LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec,
-    MetricSpec, MoleculesSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec, ProfileSampleSpec,
-    ProfileSpec, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RemovalSpec, RenderSpec,
-    RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
-    StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
-    VolumeSpec, WarpSpec, WindowSpec,
+    ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CompositionSpec,
+    CurationSpec, DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec,
+    LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec,
+    MeasuredSpec, MetricSpec, MoleculesSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec,
+    ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec,
+    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec,
+    SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec,
+    TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -58,6 +58,8 @@ pub struct Protocol {
     relations: Vec<RelationSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     coloc: Option<ColocSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    composition: Option<CompositionSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     label_images: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +146,10 @@ impl Protocol {
         self.coloc.as_ref()
     }
 
+    pub fn composition(&self) -> Option<&CompositionSpec> {
+        self.composition.as_ref()
+    }
+
     pub fn label_images(&self) -> &[String] {
         &self.label_images
     }
@@ -213,14 +219,18 @@ impl Protocol {
                     (SourceSpec::External { file }, _) => {
                         format!("{} from the object file {file}", set.name)
                     }
-                    (SourceSpec::Localizations { file, molecules }, _) => {
+                    (SourceSpec::Localizations {
+                        file,
+                        molecules,
+                        channel,
+                    }, _) => {
                         let clustered = if molecules.clustered {
                             " clustered"
                         } else {
                             ""
                         };
                         format!(
-                            "{} from the localization table {file}{clustered} at {:.0} nm/px",
+                            "{} from the localization table {file} on {channel}{clustered} at {:.0} nm/px",
                             set.name, molecules.pixel
                         )
                     }

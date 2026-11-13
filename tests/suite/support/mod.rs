@@ -392,11 +392,18 @@ impl Snapshot {
 }
 
 pub fn localization_dataset(path: &Path, frames: u32) {
-    let channels = [grana_zarr::WriteChannel {
-        name: "GFP",
-        tint: [0.0, 1.0, 0.0],
-        range: grana_volume::Intensity::new(0.0, 255.0),
-    }];
+    let channels = [
+        grana_zarr::WriteChannel {
+            name: "GFP",
+            tint: [0.0, 1.0, 0.0],
+            range: grana_volume::Intensity::new(0.0, 255.0),
+        },
+        grana_zarr::WriteChannel {
+            name: "RFP",
+            tint: [1.0, 0.0, 0.0],
+            range: grana_volume::Intensity::new(0.0, 255.0),
+        },
+    ];
     let levels = [grana_volume::Level::new(
         Extent::new(32, 32, 2),
         Spacing::new(0.1, 0.1, 0.1),

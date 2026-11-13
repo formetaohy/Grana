@@ -1939,7 +1939,7 @@ fn reads_a_batch_run_record() {
                         {"key": "volume_um3", "label": "volume", "unit": "cubic_micrometer", "decimals": 3, "level": "object"},
                         {"key": "area_um2", "label": "area", "unit": "square_micrometer", "decimals": 3, "level": "object"},
                         {"key": "diameter_um", "label": "diameter", "unit": "micrometer", "decimals": 3, "level": "object"},
-                        {"key": "nuclei_intensity_mean", "label": "Nuclei 路 mean", "unit": "count", "decimals": 2, "level": "object"}
+                        {"key": "nuclei_intensity_mean", "label": "Nuclei · mean", "unit": "count", "decimals": 2, "level": "object"}
                     ],
                     "values": [
                         {"objects": 1, "mean": objects},

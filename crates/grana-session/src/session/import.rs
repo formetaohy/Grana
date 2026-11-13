@@ -49,6 +49,11 @@ impl Session {
         };
         let provenance = object.provenance().clone();
         let drift = scene.drift().clone();
+        let alignment = grana_scene::LocalizationAlignment::new(
+            object.channel(),
+            drift.clone(),
+            scene.registration().clone(),
+        );
         self.message = None;
         match provenance {
             Provenance::Imported { label } => {
@@ -65,7 +70,7 @@ impl Session {
                     self.analysis.push(crate::localize(
                         Job::Import(set),
                         channels,
-                        LocalizationRequest::new(&file, drift),
+                        LocalizationRequest::new(&file, alignment),
                     ));
                 } else {
                     self.analysis.push(crate::interop(
