@@ -166,10 +166,11 @@ pub fn localization_report(
     if !progress.tick() {
         return Ok(None);
     }
+    let precision = nena.as_ref().map_or(survey.sigma, |nena| nena.precision()) * 0.001;
+    let suggested = cluster::estimate(frames, precision);
     if !progress.tick() {
         return Ok(None);
     }
-    let precision = nena.as_ref().map_or(survey.sigma, |nena| nena.precision()) * 0.001;
     Ok(Some(LocalizationReport {
         spec,
         pixel: geometry.pixel() * 1000.0,
@@ -180,7 +181,7 @@ pub fn localization_report(
         density,
         nena,
         frc,
-        suggested: cluster::estimate(frames, precision),
+        suggested,
         groups: survey.groups,
         image,
     }))
