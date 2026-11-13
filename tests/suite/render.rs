@@ -5,15 +5,15 @@ use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::{
-    Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, Splat, SplatChunk, Splats,
-    Style, Versions,
+    Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, SplatChunk, Splats, Style,
+    Versions,
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
     Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
-use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, versions};
+use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, splat, versions};
 
 const SIDE: u32 = 128;
 const SAMPLES: u32 = 4;
@@ -1933,8 +1933,8 @@ fn picks_only_the_objects_of_the_slice_plane() {
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
     let channels = channels(&pyramid, &transfers);
     let markers = [
-        Splat::point([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
-        Splat::point([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
+        splat([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
+        splat([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
     ];
     let chunks = [SplatChunk::single(0, revision(), markers.to_vec())];
     let scene = SceneFrame {
@@ -1996,8 +1996,8 @@ fn composites_soft_splats_through_the_depth_layers() {
     let far = (forward * 0.3).to_array();
     let splats = |alpha: f32| {
         vec![
-            Splat::point(near, 0.4, [1.0, 0.1, 0.1], alpha),
-            Splat::point(far, 0.4, [0.1, 0.2, 1.0], alpha),
+            splat(near, 0.4, [1.0, 0.1, 0.1], alpha),
+            splat(far, 0.4, [0.1, 0.2, 1.0], alpha),
         ]
     };
     let solid_chunks = [SplatChunk::single(0, revision(), splats(1.0))];
@@ -2169,7 +2169,7 @@ fn converges_the_brightness_of_overlapping_splats() {
     let core = [cx - 1, cy - 1, cx + 2, cy + 2];
     let mut brightness = |count: usize| {
         let splats = (0..count)
-            .map(|_| Splat::point([0.0, 0.0, 0.0], 0.4, [1.0, 0.0, 0.0], 0.25))
+            .map(|_| splat([0.0, 0.0, 0.0], 0.4, [1.0, 0.0, 0.0], 0.25))
             .collect::<Vec<_>>();
         let chunks = [SplatChunk::single(0, revision(), splats)];
         let scene = SceneFrame {
@@ -2434,7 +2434,7 @@ fn keeps_the_spot_geometry_while_a_selection_changes() {
 }
 
 #[test]
-fn keeps_both_spot_levels_resident_across_magnification() {
+fn keeps_every_spot_level_resident_across_magnification() {
     let volume = sphere_volume();
     let scene = spot_scene(volume.pyramid(), 16);
     let mut far = Camera::new(35.0);
@@ -2442,6 +2442,7 @@ fn keeps_both_spot_levels_resident_across_magnification() {
     let mut near = Camera::new(35.0);
     near.fit(Vec3::splat(0.2), 1.0);
     let mut cache = grana_engine::SplatCache::new();
+    let levels = grana_render::SPLAT_LEVELS as usize;
     let mut view = |camera: &Camera| {
         let lens = grana_engine::Lens {
             camera,
@@ -2450,50 +2451,75 @@ fn keeps_both_spot_levels_resident_across_magnification() {
         let targets = grana_engine::plan(&scene, Some(lens));
         grana_engine::frame(&scene, &targets, &mut cache).expect("the spot scene builds")
     };
+    let active = |rendered: &grana_engine::RenderedScene| {
+        rendered
+            .splats
+            .iter()
+            .filter(|chunk| chunk.active())
+            .map(|chunk| chunk.level())
+            .collect::<Vec<_>>()
+    };
+    let geometry = |rendered: &grana_engine::RenderedScene, level: u8| {
+        rendered
+            .splats
+            .iter()
+            .find(|chunk| chunk.level() == level)
+            .expect("the ladder holds its level")
+            .data()
+            .geometry()
+            .as_ptr()
+    };
     let exact = view(&near);
-    assert_eq!(exact.splats.len(), 1, "a near view holds its exact level");
+    assert_eq!(
+        exact.splats.len(),
+        levels,
+        "a near view holds the whole spot ladder"
+    );
+    assert_eq!(
+        active(&exact),
+        vec![0],
+        "the near view draws the exact level"
+    );
     assert_eq!(exact.splat_count(), 16 * 16 * 16);
     let proxied = view(&far);
-    assert_eq!(proxied.splats.len(), 2, "the far view adds the proxy level");
+    assert_eq!(
+        proxied.splats.len(),
+        levels,
+        "a far view keeps the whole spot ladder"
+    );
+    assert_eq!(active(&proxied).len(), 1, "one level of the ladder draws");
+    assert!(
+        active(&proxied)[0] > 0,
+        "the far view draws a proxy level of the ladder"
+    );
     assert!(
         proxied
             .splats
             .iter()
             .any(|chunk| chunk.level() == 0 && !chunk.active()),
-        "the exact level stays resident while the proxy draws"
-    );
-    assert!(
-        proxied
-            .splats
-            .iter()
-            .filter(|chunk| chunk.active())
-            .all(|chunk| chunk.level() == 1),
-        "the far view draws the proxy level"
+        "the exact level stays resident while a proxy draws"
     );
     assert!(proxied.splat_count() < exact.splat_count());
+    let furthest = view(&far);
+    assert_eq!(
+        active(&furthest),
+        active(&proxied),
+        "the far view keeps its proxy level"
+    );
+    assert_eq!(
+        geometry(&furthest, active(&proxied)[0]),
+        geometry(&proxied, active(&proxied)[0]),
+        "a far view reuses the proxy it aggregated once"
+    );
     let again = view(&near);
-    assert_eq!(again.splats.len(), 2, "the proxy level stays resident");
-    assert!(
-        again
-            .splats
-            .iter()
-            .filter(|chunk| chunk.active())
-            .all(|chunk| chunk.level() == 0),
+    assert_eq!(
+        active(&again),
+        vec![0],
         "returning to the near view draws the exact level"
     );
-    let exact_geometry = |scene: &grana_engine::RenderedScene| {
-        scene
-            .splats
-            .iter()
-            .find(|chunk| chunk.level() == 0 && chunk.active())
-            .expect("the exact level is drawn")
-            .data()
-            .geometry()
-            .as_ptr()
-    };
     assert_eq!(
-        exact_geometry(&exact),
-        exact_geometry(&again),
+        geometry(&again, 0),
+        geometry(&exact, 0),
         "returning to the near view reuses the resident exact geometry"
     );
 }

@@ -23,6 +23,7 @@ labels! {
     segments_unlicensed => "Segments · unlicensed" / "分割 · 未授权";
     import_labels => "Import Labels" / "导入标签";
     import_tracks => "Import Tracks" / "导入轨迹";
+    import_localizations => "Import Localizations" / "导入定位表";
     import_geff => "GEFF Graph" / "GEFF 图谱";
     clear_objects => "Clear Objects" / "清空对象";
     hide_set => "Hide object set" / "隐藏对象集";

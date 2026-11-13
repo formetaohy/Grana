@@ -71,6 +71,7 @@ pub enum Measurement {
     Position(usize),
     Diameter,
     Contrast,
+    Precision(usize),
     Volume,
     Area,
     Sphericity,
@@ -96,7 +97,16 @@ pub enum Measurement {
 
 impl Measurement {
     pub fn spots(channels: usize) -> Vec<Self> {
-        Self::tail(channels, &[Self::Diameter, Self::Contrast])
+        Self::tail(
+            channels,
+            &[
+                Self::Diameter,
+                Self::Contrast,
+                Self::Precision(0),
+                Self::Precision(1),
+                Self::Precision(2),
+            ],
+        )
     }
 
     pub fn surfaces(channels: usize) -> Vec<Self> {
@@ -158,6 +168,7 @@ impl Measurement {
             Self::Position(axis) => ["x", "y", "z"][axis].to_string(),
             Self::Diameter => "diameter".to_string(),
             Self::Contrast => "contrast".to_string(),
+            Self::Precision(axis) => format!("precision {}", ["x", "y", "z"][axis]),
             Self::Volume => "volume".to_string(),
             Self::Area => "area".to_string(),
             Self::Sphericity => "sphericity".to_string(),
@@ -186,6 +197,7 @@ impl Measurement {
             Self::Position(axis) => format!("{}_um", ["x", "y", "z"][axis]),
             Self::Diameter => "diameter_um".to_string(),
             Self::Contrast => "contrast".to_string(),
+            Self::Precision(axis) => format!("precision_{}_um", ["x", "y", "z"][axis]),
             Self::Volume => "volume_um3".to_string(),
             Self::Area => "area_um2".to_string(),
             Self::Sphericity => "sphericity".to_string(),
@@ -215,7 +227,8 @@ impl Measurement {
             | Self::Diameter
             | Self::Length
             | Self::MaxDiameter
-            | Self::Ellipsoid(_) => Unit::Micrometer,
+            | Self::Ellipsoid(_)
+            | Self::Precision(_) => Unit::Micrometer,
             Self::Volume | Self::HullVolume | Self::NucleusVolume | Self::CytoplasmVolume => {
                 Unit::CubicMicrometer
             }
@@ -237,6 +250,7 @@ impl Measurement {
         match self {
             Self::Position(_) | Self::Diameter | Self::Length => 3,
             Self::MaxDiameter | Self::Ellipsoid(_) | Self::HullVolume => 3,
+            Self::Precision(_) => 4,
             Self::Contrast | Self::Sphericity | Self::NucleusSphericity => 4,
             Self::NuclearRatio => 3,
             Self::Volume | Self::Area | Self::NucleusVolume | Self::NucleusArea => 3,
@@ -263,6 +277,7 @@ impl Measurement {
                     Self::Position(axis) => spot.center()[axis],
                     Self::Diameter => 2.0 * spot.radius(),
                     Self::Contrast => spot.quality(),
+                    Self::Precision(axis) => spot.sigma()[axis],
                     Self::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
                     }

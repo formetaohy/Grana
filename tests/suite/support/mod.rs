@@ -56,6 +56,15 @@ impl Deref for Gpu {
     }
 }
 
+pub fn splat(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> grana_render::Splat {
+    grana_render::Splat::gaussian(
+        center,
+        grana_object::Spot::new(center, radius, 0.0).sigma(),
+        grana_display::srgb_to_linear(color),
+        alpha,
+    )
+}
+
 pub fn gpu() -> Option<Gpu> {
     static SHARED: OnceLock<Option<(wgpu::Device, wgpu::Queue)>> = OnceLock::new();
     static SERIAL: Mutex<()> = Mutex::new(());

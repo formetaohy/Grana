@@ -372,12 +372,13 @@ impl ObjectFrame {
                 .iter()
                 .map(|spot| {
                     let center = spot.center();
-                    let radius = spot.radius();
+                    let reach =
+                        [0, 1, 2].map(|axis| spot.sigma()[axis] * grana_object::RADIUS_PER_SIGMA);
                     ObjectAnchor::new(
                         center,
                         Bounds::new(
-                            [0, 1, 2].map(|axis| center[axis] - radius),
-                            [0, 1, 2].map(|axis| center[axis] + radius),
+                            [0, 1, 2].map(|axis| center[axis] - reach[axis]),
+                            [0, 1, 2].map(|axis| center[axis] + reach[axis]),
                         ),
                     )
                 })

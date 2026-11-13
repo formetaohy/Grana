@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Camera, Shading};
+use grana_display::{Camera, Shading, srgb_to_linear};
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, SplatLevel, Splats, Style,
     Versions,
@@ -125,6 +125,7 @@ pub fn key(scene: &Scene) -> u64 {
 pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
     let mut detail = Vec::new();
     let mut splats = Vec::new();
+    let world = scene.dataset.world_size();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
@@ -148,7 +149,7 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
                 let pixels = lens
                     .camera
                     .world_per_point(lens.height as f32, lens.camera.distance());
-                spot::choose(spots, pixels)
+                spot::choose(spots, world, pixels)
             }
             _ => Choice::Full,
         });
@@ -197,8 +198,10 @@ pub fn frame(
         objects.mix(detail as u64);
         objects.mix(choice.digest());
         let mut seeded = Vec::new();
+        let seed_sigma = seed_radius / grana_object::RADIUS_PER_SIGMA;
+        let seed_color = srgb_to_linear(SEED_COLOR);
         for seed in scene.seeds(set.id()) {
-            seeded.push(Splat::point(*seed, seed_radius, SEED_COLOR, 1.0));
+            seeded.push(Splat::gaussian(*seed, [seed_sigma; 3], seed_color, 1.0));
         }
         if !seeded.is_empty() {
             let key = splat_key(set.id().raw(), SEED_PART);

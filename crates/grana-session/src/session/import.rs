@@ -1,6 +1,8 @@
 use super::*;
 
-use grana_pipeline::run::{ImportRequest, InteropRequest};
+use std::path::Path;
+
+use grana_pipeline::run::{ImportRequest, InteropRequest, LocalizationRequest};
 use grana_scene::Provenance;
 
 impl Session {
@@ -59,11 +61,19 @@ impl Session {
             }
             Provenance::Interop { file } => {
                 self.record_progress(Job::Import(set), 0, 0, 0);
-                self.analysis.push(crate::interop(
-                    Job::Import(set),
-                    channels,
-                    InteropRequest::new(&file, drift, Arc::clone(&self.store)),
-                ));
+                if localization_table(&file) {
+                    self.analysis.push(crate::localize(
+                        Job::Import(set),
+                        channels,
+                        LocalizationRequest::new(&file, drift),
+                    ));
+                } else {
+                    self.analysis.push(crate::interop(
+                        Job::Import(set),
+                        channels,
+                        InteropRequest::new(&file, drift, Arc::clone(&self.store)),
+                    ));
+                }
             }
             Provenance::Detection
             | Provenance::Segmented { .. }
@@ -79,4 +89,9 @@ impl Session {
             }
         }
     }
+}
+
+pub(super) fn localization_table(file: &str) -> bool {
+    let path = Path::new(file);
+    path.is_file() && grana_readout::localization::has_extension(path)
 }

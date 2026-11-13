@@ -1,21 +1,32 @@
 use crate::IntensityTable;
 
+pub const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
     center: [f32; 3],
-    radius: f32,
+    sigma: [f32; 3],
     quality: f32,
 }
 
 impl Spot {
     pub fn new(center: [f32; 3], radius: f32, quality: f32) -> Self {
         assert!(
+            radius.is_finite() && radius > 0.0,
+            "a spot radius must be a positive length"
+        );
+        let sigma = radius / RADIUS_PER_SIGMA;
+        Self::gaussian(center, [sigma; 3], quality)
+    }
+
+    pub fn gaussian(center: [f32; 3], sigma: [f32; 3], quality: f32) -> Self {
+        assert!(
             center.iter().all(|value| value.is_finite()),
             "a spot center must be finite"
         );
         assert!(
-            radius.is_finite() && radius > 0.0,
-            "a spot radius must be a positive length"
+            sigma.iter().all(|value| value.is_finite() && *value > 0.0),
+            "a spot sigma is a positive length on every axis"
         );
         assert!(
             quality.is_finite(),
@@ -23,7 +34,7 @@ impl Spot {
         );
         Self {
             center,
-            radius,
+            sigma,
             quality,
         }
     }
@@ -32,8 +43,12 @@ impl Spot {
         self.center
     }
 
+    pub fn sigma(self) -> [f32; 3] {
+        self.sigma
+    }
+
     pub fn radius(self) -> f32 {
-        self.radius
+        self.sigma.iter().copied().fold(0.0, f32::max) * RADIUS_PER_SIGMA
     }
 
     pub fn quality(self) -> f32 {

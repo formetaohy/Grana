@@ -2,6 +2,7 @@ mod error;
 mod family;
 mod image;
 mod imaris;
+pub mod localization;
 mod open;
 mod plane;
 mod probe;

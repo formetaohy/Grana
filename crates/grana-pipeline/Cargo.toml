@@ -29,6 +29,7 @@ grana-profile = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }
 grana-raster = { workspace = true }
+grana-readout = { workspace = true }
 grana-report = { workspace = true }
 grana-restore = { workspace = true }
 grana-scene = { workspace = true }

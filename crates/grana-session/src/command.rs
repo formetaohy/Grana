@@ -140,6 +140,7 @@ pub enum Command {
         label: String,
     },
     ImportTracks,
+    ImportLocalizations,
     ExportGeff(ObjectSetId),
     RemoveObject(ObjectSetId),
     AddSeed {
@@ -712,7 +713,9 @@ impl Command {
         let edit = match self {
             Self::AddObject(_) | Self::AddSegment => Edit::new(Action::AddObject),
             Self::SetSegment { set, .. } => Edit::targeted(Action::ObjectParameters, set.raw()),
-            Self::ImportLabels { .. } | Self::ImportTracks => Edit::new(Action::AddObject),
+            Self::ImportLabels { .. } | Self::ImportTracks | Self::ImportLocalizations => {
+                Edit::new(Action::AddObject)
+            }
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
             Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
             Self::ReorderObject { .. } => Edit::new(Action::ReorderObject),

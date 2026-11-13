@@ -35,6 +35,25 @@ impl Session {
         true
     }
 
+    pub fn import_localizations(&mut self, path: &Path) -> bool {
+        if self.loading.is_some() {
+            return false;
+        }
+        if !path.is_file() || !grana_readout::localization::has_extension(path) {
+            self.message = Some(Message::error(format!(
+                "{} is not a localization table",
+                path.display()
+            )));
+            return false;
+        }
+        let Some(scene) = self.scene.as_mut() else {
+            return false;
+        };
+        let set = scene.import_localizations(&path.display().to_string());
+        self.start_import(set);
+        true
+    }
+
     pub fn export_geff(&mut self, set: ObjectSetId, path: &Path) -> Result<(), String> {
         let image = self
             .source
@@ -66,6 +85,17 @@ impl Session {
             return;
         };
         self.import_tracks(&path);
+    }
+
+    pub(super) fn choose_import_localizations(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Open a localization table")
+            .add_filter("Localization table", &["csv", "tsv", "txt", "dat"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.import_localizations(&path);
     }
 
     pub(super) fn choose_export_geff(&mut self, set: ObjectSetId) {

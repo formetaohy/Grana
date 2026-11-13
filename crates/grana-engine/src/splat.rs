@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_render::{Digest, SPLAT_LEVELS, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
+use grana_render::{Digest, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
 use grana_scene::{Item, ObjectSet, ObjectSetId, Scene};
 
-use crate::spot::{self, Appearance, Choice};
+use crate::spot::{self, Appearance, Choice, LEVEL_COUNT};
 
-const FULL: usize = 0;
-const PROXY: usize = 1;
-
-const _: () = assert!(SPLAT_LEVELS == 2);
+const _: () = assert!(LEVEL_COUNT == grana_render::SPLAT_LEVELS);
 
 pub struct SplatCache {
     sets: Vec<SetLevels>,
@@ -58,7 +55,7 @@ impl SplatCache {
             }
         };
         let entry = &mut self.sets[index];
-        if set.frame(time).and_then(|frame| frame.spots()).is_none() {
+        let Some(spots) = set.frame(time).and_then(|frame| frame.spots()) else {
             entry.levels = std::array::from_fn(|_| None);
             return Prepared {
                 chunks: Vec::new(),
@@ -68,36 +65,30 @@ impl SplatCache {
                     levels: std::array::from_fn(|_| None),
                 },
             };
-        }
-        for slot in 0..SPLAT_LEVELS as usize {
-            let stale = entry.levels[slot].as_ref().is_some_and(|level| {
-                let stamp = stamps(set, level.choice, world, time);
-                stamp.geometry != level.geometry_stamp || stamp.style != level.style_stamp
-            });
-            if stale {
-                entry.levels[slot] = None;
-            }
-        }
-        let active = match choice {
-            Choice::Full => FULL,
-            Choice::Grid(_) => PROXY,
         };
-        match choice {
-            Choice::Full => {
-                if entry.levels[FULL].is_none() {
-                    entry.levels[FULL] = Some(build(scene, set, Choice::Full, world, time));
-                }
+        let rungs = if spot::aggregated(spots) {
+            LEVEL_COUNT
+        } else {
+            1
+        };
+        for (_, level) in entry.levels.iter_mut().enumerate().skip(rungs as usize) {
+            *level = None;
+        }
+        for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
+            if level.as_ref().is_some_and(|level| {
+                let stamp = stamps(set, slot as u8, world, time);
+                stamp.geometry != level.geometry_stamp || stamp.style != level.style_stamp
+            }) {
+                *level = None;
             }
-            Choice::Grid(_) => {
-                let settled = entry.levels[PROXY]
-                    .as_ref()
-                    .is_some_and(|level| level.choice == choice);
-                if !settled {
-                    entry.levels[PROXY] = Some(build(scene, set, choice, world, time));
-                }
+        }
+        for (slot, level) in entry.levels.iter_mut().enumerate().take(rungs as usize) {
+            if level.is_none() {
+                *level = Some(build(scene, set, slot as u8, world, time));
             }
         }
         let levels = &entry.levels;
+        let active = choice.level();
         let mut chunks = Vec::new();
         for (slot, level) in levels.iter().enumerate() {
             let Some(level) = level else {
@@ -106,7 +97,7 @@ impl SplatCache {
             chunks.push(SplatChunk::new(
                 key,
                 slot as u8,
-                slot == active,
+                slot as u8 == active,
                 SplatLevel::new(
                     level.geometry_stamp,
                     level.style_stamp,
@@ -120,14 +111,11 @@ impl SplatCache {
             members: SplatMembers {
                 key,
                 set: set.id(),
-                levels: [
-                    levels[FULL]
+                levels: std::array::from_fn(|slot| {
+                    levels[slot]
                         .as_ref()
-                        .map(|level| Arc::clone(&level.members)),
-                    levels[PROXY]
-                        .as_ref()
-                        .map(|level| Arc::clone(&level.members)),
-                ],
+                        .map(|level| Arc::clone(&level.members))
+                }),
             },
         }
     }
@@ -142,16 +130,14 @@ pub(crate) struct Prepared {
 pub struct SplatMembers {
     key: u64,
     set: ObjectSetId,
-    levels: [Option<Arc<Vec<u32>>>; SPLAT_LEVELS as usize],
+    levels: [Option<Arc<Vec<u32>>>; LEVEL_COUNT as usize],
 }
 
 impl SplatMembers {
     pub(crate) fn new(key: u64, set: ObjectSetId, members: Vec<u32>) -> Self {
-        Self {
-            key,
-            set,
-            levels: [Some(Arc::new(members)), None],
-        }
+        let mut levels = std::array::from_fn(|_| None);
+        levels[0] = Some(Arc::new(members));
+        Self { key, set, levels }
     }
 
     pub(crate) fn standalone(key: u64, set: ObjectSetId, count: usize) -> Self {
@@ -179,11 +165,10 @@ impl SplatMembers {
 
 struct SetLevels {
     set: u64,
-    levels: [Option<Level>; SPLAT_LEVELS as usize],
+    levels: [Option<Level>; LEVEL_COUNT as usize],
 }
 
 struct Level {
-    choice: Choice,
     geometry_stamp: u64,
     style_stamp: u64,
     geometry: Arc<Vec<SplatGeometry>>,
@@ -197,8 +182,12 @@ struct Stamps {
     style: u64,
 }
 
-fn build(scene: &Scene, set: &ObjectSet, choice: Choice, world: Vec3, time: u32) -> Level {
-    let stamp = stamps(set, choice, world, time);
+fn build(scene: &Scene, set: &ObjectSet, level: u8, world: Vec3, time: u32) -> Level {
+    let choice = match level {
+        0 => Choice::Full,
+        level => Choice::Level(level),
+    };
+    let stamp = stamps(set, level, world, time);
     let spots = set
         .frame(time)
         .and_then(|frame| frame.spots())
@@ -213,7 +202,6 @@ fn build(scene: &Scene, set: &ObjectSet, choice: Choice, world: Vec3, time: u32)
     };
     let detections = spot::detections(spots, choice, world, set.opacity(), appearance);
     Level {
-        choice,
         geometry_stamp: stamp.geometry,
         style_stamp: stamp.style,
         geometry: Arc::new(detections.geometry),
@@ -222,8 +210,7 @@ fn build(scene: &Scene, set: &ObjectSet, choice: Choice, world: Vec3, time: u32)
     }
 }
 
-fn stamps(set: &ObjectSet, choice: Choice, world: Vec3, time: u32) -> Stamps {
-    let proxy = matches!(choice, Choice::Grid(_));
+fn stamps(set: &ObjectSet, level: u8, world: Vec3, time: u32) -> Stamps {
     let mut geometry = Digest::new();
     geometry.mix(set.id().raw());
     geometry.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
@@ -231,18 +218,13 @@ fn stamps(set: &ObjectSet, choice: Choice, world: Vec3, time: u32) -> Stamps {
     geometry.real(world.x);
     geometry.real(world.y);
     geometry.real(world.z);
-    if proxy {
-        geometry.mix(choice.digest());
-        geometry.mix(set.document().raw());
-    }
+    geometry.mix(u64::from(level));
     let mut style = Digest::new();
     style.mix(set.id().raw());
     style.mix(set.document().raw());
     style.real(set.opacity());
     style.mix(u64::from(time));
-    if proxy {
-        style.mix(choice.digest());
-    }
+    style.mix(u64::from(level));
     Stamps {
         geometry: geometry.finish(),
         style: style.finish(),

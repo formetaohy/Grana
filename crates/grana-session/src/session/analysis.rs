@@ -309,7 +309,11 @@ impl Session {
                 .as_ref()
                 .and_then(|scene| scene.objects.get(set))
                 .is_some_and(|object| {
-                    object.provenance().is_interop() || object.tracks().is_some()
+                    let localized = object
+                        .provenance()
+                        .file()
+                        .is_some_and(super::import::localization_table);
+                    !localized && (object.provenance().is_interop() || object.tracks().is_some())
                 });
             if !imported_tracks {
                 self.start_tracks(set);

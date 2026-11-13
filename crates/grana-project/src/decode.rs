@@ -1304,6 +1304,7 @@ impl Decode for Measurement {
             18 => Self::NucleusSphericity,
             19 => Self::CytoplasmVolume,
             20 => Self::NuclearRatio,
+            21 => Self::Precision(reader.u8()? as usize),
             _ => return Err(FAULT_SHAPE),
         };
         if let Self::Position(axis) = measurement
@@ -1312,6 +1313,11 @@ impl Decode for Measurement {
             return Err(FAULT_VALUE);
         }
         if let Self::Ellipsoid(axis) = measurement
+            && axis >= 3
+        {
+            return Err(FAULT_VALUE);
+        }
+        if let Self::Precision(axis) = measurement
             && axis >= 3
         {
             return Err(FAULT_VALUE);
@@ -1515,11 +1521,11 @@ impl Decode for Spot {
         for value in &mut center {
             *value = finite(reader.f32()?)?;
         }
-        Ok(Self::new(
-            center,
-            positive(reader.f32()?)?,
-            finite(reader.f32()?)?,
-        ))
+        let mut sigma = [0.0; 3];
+        for value in &mut sigma {
+            *value = positive(reader.f32()?)?;
+        }
+        Ok(Self::gaussian(center, sigma, finite(reader.f32()?)?))
     }
 }
 

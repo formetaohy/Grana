@@ -1,15 +1,15 @@
 use glam::Vec3;
 use grana_display::srgb_to_linear;
 use grana_object::{Spot, SpotSet};
-use grana_render::{SIGMA_PER_RADIUS, SplatGeometry, SplatStyle};
+use grana_render::{SplatGeometry, SplatStyle};
 
 const RAW_PIXELS: f32 = 3.0;
 const CELL_PIXELS: f32 = 4.0;
 const CELL_BUDGET: u64 = 1 << 15;
 const AXIS_LIMIT: f32 = 32.0;
-const STEP_LIMIT: u8 = 24;
 const SAMPLE_LIMIT: usize = 1024;
 const AGGREGATE_FLOOR: usize = 512;
+const LADDER: u8 = 4;
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
@@ -17,18 +17,24 @@ const EMPTY: u32 = u32::MAX;
 
 pub(crate) const STANDALONE: u32 = u32::MAX;
 
+pub(crate) const LEVEL_COUNT: u8 = LADDER + 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     Full,
-    Grid(u8),
+    Level(u8),
 }
 
 impl Choice {
-    pub(crate) fn digest(self) -> u64 {
+    pub(crate) fn level(self) -> u8 {
         match self {
-            Self::Full => u64::MAX,
-            Self::Grid(step) => u64::from(step),
+            Self::Full => 0,
+            Self::Level(level) => level,
         }
+    }
+
+    pub(crate) fn digest(self) -> u64 {
+        u64::from(self.level())
     }
 }
 
@@ -56,21 +62,56 @@ impl Detections {
     }
 }
 
-pub(crate) fn choose(spots: &SpotSet, world_per_pixel: f32) -> Choice {
-    if spots.len() < AGGREGATE_FLOOR || !(world_per_pixel.is_finite() && world_per_pixel > 0.0) {
+pub(crate) struct Ladder {
+    diameter: f32,
+    cells: [f32; LADDER as usize],
+}
+
+impl Ladder {
+    pub(crate) fn new(spots: &[Spot], world: Vec3) -> Option<Self> {
+        let diameter = diameter(spots)?;
+        let mut cells = [0.0f32; LADDER as usize];
+        for (slot, exponent) in cells.iter_mut().zip(1..=LADDER) {
+            *slot = cell_size(diameter * 2f32.powi(i32::from(exponent)), world);
+        }
+        Some(Self { diameter, cells })
+    }
+
+    pub(crate) fn cell(&self, level: u8) -> f32 {
+        assert!(
+            (1..=LADDER).contains(&level),
+            "a proxy level names one of the ladder rungs"
+        );
+        self.cells[level as usize - 1]
+    }
+
+    pub(crate) fn diameter(&self) -> f32 {
+        self.diameter
+    }
+}
+
+pub(crate) fn aggregated(spots: &SpotSet) -> bool {
+    spots.len() >= AGGREGATE_FLOOR
+}
+
+pub(crate) fn choose(spots: &SpotSet, world: Vec3, world_per_pixel: f32) -> Choice {
+    if !aggregated(spots) || !(world_per_pixel.is_finite() && world_per_pixel > 0.0) {
         return Choice::Full;
     }
-    let Some(diameter) = diameter(spots.spots()) else {
+    let Some(ladder) = Ladder::new(spots.spots(), world) else {
         return Choice::Full;
     };
-    let pixels = diameter / world_per_pixel;
+    let pixels = ladder.diameter() / world_per_pixel;
     if !pixels.is_finite() || pixels >= RAW_PIXELS {
         return Choice::Full;
     }
-    let step = (2.0 * (CELL_PIXELS / pixels).log2())
-        .ceil()
-        .clamp(1.0, f32::from(STEP_LIMIT)) as u8;
-    Choice::Grid(step)
+    let wanted = CELL_PIXELS * world_per_pixel;
+    for level in 1..=LADDER {
+        if ladder.cell(level) >= wanted {
+            return Choice::Level(level);
+        }
+    }
+    Choice::Level(LADDER)
 }
 
 pub(crate) fn detections<F>(
@@ -84,15 +125,14 @@ where
     F: Fn(usize) -> Appearance,
 {
     let entries = spots.spots();
-    let step = match choice {
-        Choice::Full => return raw(entries, opacity, &style),
-        Choice::Grid(step) => step,
-    };
-    let Some(diameter) = diameter(entries) else {
+    let Some(ladder) = Ladder::new(entries, world) else {
         return Detections::default();
     };
-    let cell = cell_size(step, diameter, world);
-    let Some(mut grid) = Grid::new(world, cell) else {
+    let level = match choice {
+        Choice::Full => return raw(entries, opacity, &style),
+        Choice::Level(level) => level,
+    };
+    let Some(mut grid) = Grid::new(world, ladder.cell(level)) else {
         return raw(entries, opacity, &style);
     };
     let mut palette = Palette::default();
@@ -133,11 +173,9 @@ where
         if !visible(index) {
             continue;
         }
+        let sigma = spot.sigma().map(|value| SELECTED_SCALE * value);
         detections.push(
-            SplatGeometry::gaussian(
-                spot.center(),
-                [SELECTED_SCALE * spot.radius() * SIGMA_PER_RADIUS; 3],
-            ),
+            SplatGeometry::gaussian(spot.center(), sigma),
             SplatStyle::new(highlight, opacity),
             Some(index),
         );
@@ -158,7 +196,7 @@ where
     for (index, spot) in entries.iter().enumerate() {
         let look = style(index);
         detections.push(
-            SplatGeometry::gaussian(spot.center(), [spot.radius() * SIGMA_PER_RADIUS; 3]),
+            SplatGeometry::gaussian(spot.center(), spot.sigma()),
             SplatStyle::new(
                 palette.radiance(look.color),
                 if look.visible { opacity } else { 0.0 },
@@ -201,9 +239,8 @@ fn diameter(entries: &[Spot]) -> Option<f32> {
     Some(2.0 * radii[radii.len() / 2])
 }
 
-fn cell_size(step: u8, diameter: f32, world: Vec3) -> f32 {
-    let mut cell = diameter * 2f32.powf(0.5 * f32::from(step));
-    cell = cell.max(world.max_element() / AXIS_LIMIT);
+fn cell_size(cell: f32, world: Vec3) -> f32 {
+    let mut cell = cell.max(world.max_element() / AXIS_LIMIT);
     while cells(world, cell) > CELL_BUDGET {
         cell *= 2.0;
     }
@@ -225,7 +262,7 @@ struct Cell {
     count: u32,
     sum: [f64; 3],
     square: [f64; 3],
-    sigma: f64,
+    sigma: [f64; 3],
     radiance: [f64; 3],
     member: u32,
     reach: f64,
@@ -236,7 +273,7 @@ impl Cell {
         count: 0,
         sum: [0.0; 3],
         square: [0.0; 3],
-        sigma: 0.0,
+        sigma: [0.0; 3],
         radiance: [0.0; 3],
         member: EMPTY,
         reach: f64::INFINITY,
@@ -292,18 +329,18 @@ impl Grid {
                 offset * offset
             })
             .sum::<f64>();
-        let sigma = f64::from(spot.radius() * SIGMA_PER_RADIUS).powi(2);
+        let sigma = spot.sigma();
         let cell = &mut self.cells[slot];
         if reach < cell.reach {
             cell.reach = reach;
             cell.member = index as u32;
         }
         cell.count += 1;
-        cell.sigma += sigma;
         for axis in 0..3 {
             let value = f64::from(center[axis]);
             cell.sum[axis] += value;
             cell.square[axis] += value * value;
+            cell.sigma[axis] += f64::from(sigma[axis]).powi(2);
             cell.radiance[axis] += f64::from(radiance[axis]);
         }
     }
@@ -318,7 +355,7 @@ impl Grid {
             let sigma = [0, 1, 2].map(|axis| {
                 let mean = cell.sum[axis] / count;
                 let variance = (cell.square[axis] / count - mean * mean).max(0.0);
-                ((variance + cell.sigma / count).sqrt() as f32).max(f32::MIN_POSITIVE)
+                ((variance + cell.sigma[axis] / count).sqrt() as f32).max(f32::MIN_POSITIVE)
             });
             let radiance = cell.radiance.map(|sum| (sum / count) as f32);
             let alpha = (1.0 - (1.0 - opacity).powi(cell.count as i32)).clamp(0.0, 1.0);

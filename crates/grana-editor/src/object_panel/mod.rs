@@ -269,6 +269,18 @@ fn add_menu<'a>(
         grana_i18n::object::import_geff(language),
         message,
     ));
+    let message = if loading {
+        Message::Noop
+    } else {
+        Message::Command(Command::ImportLocalizations)
+    };
+    rows.push(action_row(
+        ctx,
+        "add.localizations",
+        Icon::Layers,
+        grana_i18n::object::import_localizations(language),
+        message,
+    ));
     vec![view::menu(ctx, Key::new("objects.add"), 192.0, rows)]
 }
 

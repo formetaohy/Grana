@@ -26,6 +26,7 @@ mod import;
 mod interop;
 mod labelled;
 mod level;
+mod localization;
 mod mask;
 mod segment;
 
@@ -37,6 +38,7 @@ use self::frames::frames as pipeline;
 pub use self::grow::{GrowRequest, grow};
 pub use self::import::{ImportRequest, import};
 pub use self::interop::{InteropRequest, interop};
+pub use self::localization::{LocalizationRequest, localization};
 pub use self::mask::{MaskRequest, mask};
 pub use self::segment::{SegmentRequest, segment};
 

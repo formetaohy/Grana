@@ -16,7 +16,6 @@ use crate::layout::Layouts;
 use crate::renderer::VolumeTargets;
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
-use grana_display::srgb_to_linear;
 
 const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
@@ -31,13 +30,10 @@ const SPLAT_SHADER: &str = concat!(
     include_str!("shader/splat.wgsl")
 );
 
-const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
 const CULL_WORKGROUP: u32 = 64;
 const VERTEX_COUNT: u32 = 6;
 
-pub const SIGMA_PER_RADIUS: f32 = 1.0 / RADIUS_PER_SIGMA;
-
-pub const SPLAT_LEVELS: u8 = 2;
+pub const SPLAT_LEVELS: u8 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -92,20 +88,11 @@ pub struct Splat {
 }
 
 impl Splat {
-    pub fn point(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> Self {
-        assert!(
-            radius.is_finite() && radius > 0.0,
-            "a splat radius must be a positive length"
-        );
-        assert!(
-            color.iter().all(|value| (0.0..=1.0).contains(value)),
-            "a splat color is an srgb triple"
-        );
-        let sigma = radius * SIGMA_PER_RADIUS;
-        Self::gaussian(center, [sigma; 3], srgb_to_linear(color), alpha)
-    }
-
     pub fn gaussian(center: [f32; 3], sigma: [f32; 3], radiance: [f32; 3], alpha: f32) -> Self {
+        assert!(
+            radiance.iter().all(|value| (0.0..=1.0).contains(value)),
+            "a splat radiance is a linear triple"
+        );
         Self {
             geometry: SplatGeometry::gaussian(center, sigma),
             style: SplatStyle::new(radiance, alpha),

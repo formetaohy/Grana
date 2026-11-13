@@ -367,7 +367,7 @@ fn source(
         Provenance::Imported { label } => Ok(SourceSpec::Labels {
             label: label.clone(),
         }),
-        Provenance::Interop { file } => Ok(SourceSpec::Tracks { file: file.clone() }),
+        Provenance::Interop { file } => Ok(SourceSpec::External { file: file.clone() }),
         Provenance::Attached { .. } => Err(ProtocolError::Invalid(format!(
             "{} is attached to its file and does not belong to a protocol",
             set.name()
@@ -456,7 +456,7 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
         Provenance::Imported { label } => SourceSpec::Labels {
             label: label.clone(),
         },
-        Provenance::Interop { file } => SourceSpec::Tracks { file: file.clone() },
+        Provenance::Interop { file } => SourceSpec::External { file: file.clone() },
         Provenance::Attached { .. } => {
             return Err(ProtocolError::Invalid(format!(
                 "{} is attached to its file and does not belong to a protocol",
@@ -688,7 +688,7 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         SourceSpec::Spots { .. }
         | SourceSpec::Filaments { .. }
         | SourceSpec::Labels { .. }
-        | SourceSpec::Tracks { .. } => {}
+        | SourceSpec::External { .. } => {}
     }
 }
 

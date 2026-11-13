@@ -981,3 +981,28 @@ fn round_trips_a_filament_geff_graph() {
     assert_eq!(*branches, 1);
     assert_eq!(*terminals, 2);
 }
+
+#[test]
+fn reads_one_based_localization_tables() {
+    let temp = Temp::new("suite-localization-table");
+    let path = temp.path().join("localizations.txt");
+    std::fs::write(
+        &path,
+        "frame\tx [nm]\ty [nm]\tsx [nm]\tsy [nm]\tsz [nm]\n\
+         1\t1000\t500\t18\t22\t40\n\
+         2\t2000\t1000\t20\t20\t40\n",
+    )
+    .expect("the localization table writes");
+    let level = Level::new(Extent::new(64, 32, 32), Spacing::new(0.1, 0.1, 0.1));
+    let found = grana_readout::localization::read(&path, level, 2, &mut |_, _| true)
+        .expect("the table reads")
+        .expect("the table finishes");
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].time(), 0, "a one based table starts on frame one");
+    assert_eq!(found[1].time(), 1);
+    assert!((found[0].center()[0] + 2.2).abs() < 1.0e-4);
+    assert!((found[0].center()[1] + 1.1).abs() < 1.0e-4);
+    assert!((found[0].sigma()[0] - 0.018).abs() < 1.0e-7);
+    assert!((found[0].sigma()[1] - 0.022).abs() < 1.0e-7);
+    assert!((found[0].sigma()[2] - 0.04).abs() < 1.0e-7);
+}

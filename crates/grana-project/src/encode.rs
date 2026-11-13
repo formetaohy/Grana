@@ -856,6 +856,10 @@ impl Encode for Measurement {
             }
             Self::Diameter => writer.u8(1),
             Self::Contrast => writer.u8(2),
+            Self::Precision(axis) => {
+                writer.u8(21);
+                writer.u8(*axis as u8);
+            }
             Self::Volume => writer.u8(3),
             Self::Area => writer.u8(4),
             Self::Sphericity => writer.u8(5),
@@ -1041,7 +1045,9 @@ impl Encode for Spot {
         for value in self.center() {
             writer.f32(value);
         }
-        writer.f32(self.radius());
+        for value in self.sigma() {
+            writer.f32(value);
+        }
         writer.f32(self.quality());
     }
 }

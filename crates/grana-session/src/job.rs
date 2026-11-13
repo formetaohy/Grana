@@ -10,7 +10,7 @@ use crate::task::{Poll, Task};
 use grana_pipeline::Event;
 use grana_pipeline::run::{
     self, ColocRequest, DetectRequest, DriftRequest, GrowRequest, ImportRequest, InteropRequest,
-    RegisterRequest, SegmentRequest,
+    LocalizationRequest, RegisterRequest, SegmentRequest,
 };
 
 pub struct Analysis {
@@ -55,6 +55,12 @@ pub fn import(job: Job, channels: Arc<Channels>, request: ImportRequest) -> Anal
 pub fn interop(job: Job, channels: Arc<Channels>, request: InteropRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::interop(&channels, request, cancel, sink)
+    })
+}
+
+pub fn localize(job: Job, channels: Arc<Channels>, request: LocalizationRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::localization(&channels, request, cancel, sink)
     })
 }
 

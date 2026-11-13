@@ -1,11 +1,11 @@
 use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
-use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, Splat, SplatChunk, Splats};
+use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, SplatChunk, Splats};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
 };
 
-use crate::support::{Gpu, gpu, read_pixels, spheres, versions};
+use crate::support::{Gpu, gpu, read_pixels, spheres, splat, versions};
 
 const SIDE: u32 = 384;
 const SAMPLES: u32 = 48;
@@ -48,13 +48,13 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
     let right = camera.right();
     let focus = camera.focus();
     let markers = vec![
-        Splat::point(
+        splat(
             (eye + forward * focus - right * 2.0).to_array(),
             0.25,
             [1.0, 0.1, 0.1],
             1.0,
         ),
-        Splat::point(
+        splat(
             (eye + forward * (1.5 * focus) + right * 2.0).to_array(),
             0.25,
             [0.1, 1.0, 0.1],

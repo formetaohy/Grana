@@ -139,6 +139,7 @@ impl Session {
             Command::RemoveDerivedChannel { channel } => self.remove_derived_channel(channel),
             Command::ImportLabels { label } => self.import_labels(&label),
             Command::ImportTracks => self.choose_import_tracks(),
+            Command::ImportLocalizations => self.choose_import_localizations(),
             Command::RenameObject { set, name } => {
                 let renamed = self
                     .scene

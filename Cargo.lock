@@ -3760,6 +3760,7 @@ dependencies = [
  "grana-project",
  "grana-protocol",
  "grana-raster",
+ "grana-readout",
  "grana-report",
  "grana-restore",
  "grana-scene",

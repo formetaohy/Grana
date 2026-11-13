@@ -30,7 +30,7 @@ pub use params::{
 };
 pub use relation::{RelationFrame, RelationPair};
 pub use shape::Shape;
-pub use spot::{Spot, SpotSet};
+pub use spot::{RADIUS_PER_SIGMA, Spot, SpotSet};
 pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
     SurfaceTopology, TopologyInfo,

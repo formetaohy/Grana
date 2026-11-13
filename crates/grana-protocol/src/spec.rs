@@ -1218,7 +1218,7 @@ pub enum SourceSpec {
     Labels {
         label: String,
     },
-    Tracks {
+    External {
         file: String,
     },
     Filtered {
@@ -2938,7 +2938,7 @@ impl MeasureSpec {
 impl SourceSpec {
     pub fn kind(&self) -> Option<ObjectKind> {
         match self {
-            Self::Spots { .. } | Self::Tracks { .. } => Some(ObjectKind::Spots),
+            Self::Spots { .. } | Self::External { .. } => Some(ObjectKind::Spots),
             Self::Surfaces { .. } | Self::Segments { .. } | Self::Labels { .. } => {
                 Some(ObjectKind::Surfaces)
             }
@@ -2960,7 +2960,7 @@ impl SourceSpec {
             | Self::Cells { channel, .. }
             | Self::Segments { channel, .. } => Some(channel),
             Self::Labels { .. }
-            | Self::Tracks { .. }
+            | Self::External { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -2973,7 +2973,7 @@ impl SourceSpec {
         match self {
             Self::Labels { label } => Some(label),
             Self::Spots { .. }
-            | Self::Tracks { .. }
+            | Self::External { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
             | Self::Cells { .. }
@@ -2988,7 +2988,7 @@ impl SourceSpec {
 
     pub fn file(&self) -> Option<&str> {
         match self {
-            Self::Tracks { file } => Some(file),
+            Self::External { file } => Some(file),
             Self::Spots { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
@@ -3033,7 +3033,7 @@ impl SourceSpec {
             Self::Cells { reach, grain, .. } => ObjectParams::Cells(CellParams::new(reach, grain)),
             Self::Labels { .. }
             | Self::Segments { .. }
-            | Self::Tracks { .. }
+            | Self::External { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3075,7 +3075,7 @@ impl SourceSpec {
             | Self::Filaments { .. }
             | Self::Cells { .. }
             | Self::Labels { .. }
-            | Self::Tracks { .. }
+            | Self::External { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3093,7 +3093,7 @@ impl SourceSpec {
             Self::Spots { .. }
             | Self::Filaments { .. }
             | Self::Labels { .. }
-            | Self::Tracks { .. }
+            | Self::External { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
@@ -3261,8 +3261,8 @@ impl SourceSpec {
             Self::Labels { label } => {
                 validate(label, &format!("the label image of {set}"))?;
             }
-            Self::Tracks { file } => {
-                validate(file, &format!("the track file of {set}"))?;
+            Self::External { file } => {
+                validate(file, &format!("the object file of {set}"))?;
             }
             Self::Filtered {
                 source,
@@ -3405,7 +3405,7 @@ impl Protocol {
             | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
-            | SourceSpec::Tracks { .. } => source.kind(),
+            | SourceSpec::External { .. } => source.kind(),
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
             | SourceSpec::Edited { source, .. }
@@ -3434,7 +3434,7 @@ impl Protocol {
             | SourceSpec::Filaments { .. }
             | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. } => source.channel(),
-            SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
+            SourceSpec::Labels { .. } | SourceSpec::External { .. } => None,
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
             | SourceSpec::Edited { source, .. }

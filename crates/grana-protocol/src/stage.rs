@@ -266,10 +266,10 @@ impl Protocol {
                     ));
                 }
             }
-            SourceSpec::Tracks { file } => {
+            SourceSpec::External { file } => {
                 if file.trim().is_empty() {
                     return Err(ProtocolError::Invalid(
-                        "a track import names a track file".to_string(),
+                        "an external object import names its file".to_string(),
                     ));
                 }
             }
@@ -555,7 +555,7 @@ impl Builder<'_> {
             | SourceSpec::Cells { .. }
             | SourceSpec::Segments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
-            SourceSpec::Tracks { file } => self.tracks(file, name, named, track),
+            SourceSpec::External { file } => self.external(file, name, named, track),
             SourceSpec::Filtered {
                 source: reference,
                 group,
@@ -728,7 +728,7 @@ impl Builder<'_> {
         Ok(id)
     }
 
-    fn tracks(
+    fn external(
         &mut self,
         file: &str,
         name: &str,
@@ -736,10 +736,9 @@ impl Builder<'_> {
         track: Option<crate::TrackSpec>,
     ) -> Result<ObjectSetId, ProtocolError> {
         let kind = match grana_interop::geff::kind(Path::new(file)) {
-            Ok(grana_interop::Kind::Points) => ObjectKind::Spots,
+            Ok(grana_interop::Kind::Points) | Err(_) => ObjectKind::Spots,
             Ok(grana_interop::Kind::Surfaces) => ObjectKind::Surfaces,
             Ok(grana_interop::Kind::Filaments) => ObjectKind::Filaments,
-            Err(_) => ObjectKind::Spots,
         };
         let id = self.scene.import_graph(file, kind);
         self.rename(id, name, named)?;

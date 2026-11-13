@@ -446,6 +446,106 @@ fn round_trips_detected_surfaces_through_geff() {
 }
 
 #[test]
+fn imports_anisotropic_localizations_and_round_trips_them() {
+    let temp = Temp::new("session-localizations");
+    let path = temp.path().join("localizations.csv");
+    std::fs::write(
+        &path,
+        "frame,\"x [nm]\",\"y [nm]\",\"z [nm]\",\"uncertainty_xy [nm]\",\"uncertainty_z [nm]\",\"intensity [photon]\"\n\
+         0,1000,500,1600,20,40,3000\n\
+         0,2000,1000,800,25,45,2000\n\
+         1,1000,500,1600,20,40,2500\n",
+    )
+    .expect("the localization table writes");
+    let volume = support::spheres(
+        Extent::new(64, 32, 32),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[([10.0, 5.0, 16.0], 4.0)],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "localizations",
+        VolumeSeries::new(vec![volume.clone(), volume], 1.0),
+    );
+    assert!(session.import_localizations(&path), "the table imports");
+    settle(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let set = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the localization set lands")
+        .id();
+    let object = scene.objects.get(set).expect("the localization set stays");
+    let frame = object.frame(0).expect("the first frame lands");
+    let spots = frame.spots().expect("the frame carries spots");
+    assert_eq!(spots.len(), 2, "the first frame carries its two spots");
+    assert_eq!(
+        object.frames().count(),
+        2,
+        "the table spans both frames of the series"
+    );
+    let spot = spots.spots()[0];
+    for (axis, expected) in spot.center().iter().zip([-2.2, -1.1, 0.0]) {
+        assert!(
+            (axis - expected).abs() < 1.0e-4,
+            "the localization lands at {axis} instead of {expected}"
+        );
+    }
+    for (axis, expected) in spot.sigma().iter().zip([0.02, 0.02, 0.04]) {
+        assert!(
+            (axis - expected).abs() < 1.0e-5,
+            "the localization carries the precision {axis} instead of {expected}"
+        );
+    }
+    assert!((spot.quality() - 3000.0).abs() < 1.0e-3);
+    assert!(
+        (spots.intensities().object(0, 0).mean() - f32::from(HIGH)).abs() < 1.0,
+        "the localization samples the voxel it lands on"
+    );
+    assert!(
+        object
+            .tracks()
+            .is_some_and(|tracks| !tracks.set().is_empty()),
+        "the imported localizations track across their frames"
+    );
+    let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
+        .expect("the localization scene captures");
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(
+        text.contains("localizations.csv"),
+        "the protocol records the localization table"
+    );
+    assert_eq!(
+        Protocol::from_json(&text).expect("the protocol parses"),
+        protocol
+    );
+    let project = Project::capture(
+        scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "localizations".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([5; 32]),
+    );
+    let document = temp.path().join("localizations.grana");
+    project
+        .write(&document, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &document,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    assert_eq!(loaded, project);
+}
+
+#[test]
 fn imports_imaris_filaments() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/imaris-filaments.ims");
