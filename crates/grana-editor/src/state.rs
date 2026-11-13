@@ -248,6 +248,7 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub palette: Option<Palette>,
     pub language: grana_i18n::Language,
+    pub chrome: crate::chrome::ChromeView,
     pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
@@ -292,6 +293,7 @@ impl Default for Workspace {
             comparison_open: None,
             palette: None,
             language: grana_i18n::Language::English,
+            chrome: crate::chrome::ChromeView::default(),
             palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }

@@ -7,6 +7,7 @@ mod preference;
 pub mod render;
 mod stitch;
 pub mod stream;
+mod window;
 
 pub use app::App;
 pub use capture::OfflineCapture;

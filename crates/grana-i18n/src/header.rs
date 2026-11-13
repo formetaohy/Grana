@@ -10,6 +10,10 @@ labels! {
     nothing_to_undo => "Nothing to undo" / "没有可撤销的操作";
     nothing_to_redo => "Nothing to redo" / "没有可重做的操作";
     recent => "Recent" / "最近";
+    minimize_window => "Minimize" / "最小化";
+    maximize_window => "Maximize" / "最大化";
+    restore_window => "Restore" / "还原";
+    close_window => "Close" / "关闭";
 }
 
 use crate::messages;

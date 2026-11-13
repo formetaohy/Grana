@@ -48,7 +48,7 @@ fn collect_with_window<A>(
     let interactive = node.interactive();
     let scroll = node.scroll_spec.is_some();
     let popup = node.popup_spec.is_some() && node.runtime.open;
-    let blocking = !interactive && !scroll && !popup && opaque(node);
+    let blocking = node.blocks_pointer || (!interactive && !scroll && !popup && opaque(node));
     if visible && (interactive || scroll || popup || blocking) && (node.enabled || blocking) {
         let rect = if interactive {
             crate::widget::hit_rect(node, text, theme)

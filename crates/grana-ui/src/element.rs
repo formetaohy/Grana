@@ -220,6 +220,7 @@ pub struct Element<'a, A> {
     pub(crate) cursor: Option<Cursor>,
     pub(crate) enabled: bool,
     pub(crate) focus_ring: Option<Corners>,
+    pub(crate) blocks_pointer: bool,
 }
 
 impl<'a, A> Element<'a, A> {
@@ -240,6 +241,7 @@ impl<'a, A> Element<'a, A> {
             cursor: None,
             enabled: true,
             focus_ring: None,
+            blocks_pointer: false,
         }
     }
 
@@ -366,6 +368,11 @@ impl<'a, A> Element<'a, A> {
         self
     }
 
+    pub fn blocks_pointer(mut self) -> Self {
+        self.blocks_pointer = true;
+        self
+    }
+
     pub fn shaped(mut self, corners: Corners) -> Self {
         match &mut self.content {
             Content::Button(button) => button.corners = Some(corners),
@@ -486,6 +493,7 @@ impl<'a, A> Element<'a, A> {
         node.cursor = self.cursor;
         node.enabled = self.enabled;
         node.focus_ring = self.focus_ring;
+        node.blocks_pointer = self.blocks_pointer;
         node
     }
 
@@ -497,7 +505,8 @@ impl<'a, A> Element<'a, A> {
             || node.position != self.position
             || node.scroll_spec != self.scroll
             || node.popup_spec != self.popup
-            || node.enabled != self.enabled;
+            || node.enabled != self.enabled
+            || node.blocks_pointer != self.blocks_pointer;
         if layout_changed {
             node.content = std::mem::replace(&mut self.content, Content::Empty);
             node.layout = self.layout;
@@ -505,6 +514,7 @@ impl<'a, A> Element<'a, A> {
             node.scroll_spec = self.scroll;
             node.popup_spec = self.popup;
             node.enabled = self.enabled;
+            node.blocks_pointer = self.blocks_pointer;
         }
         if let Some(layer) = self.layer
             && node.layer != layer

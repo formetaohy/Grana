@@ -260,6 +260,14 @@ impl<A: Clone> Ui<A> {
         }
     }
 
+    pub fn close_popups(&mut self) {
+        for popup in self.popup_anchors.values().copied().collect::<Vec<_>>() {
+            if self.tree.nodes[popup].runtime.open {
+                self.set_popup(popup, false);
+            }
+        }
+    }
+
     fn dismiss_popups(&mut self) {
         let pointer = self.pointer;
         let pressed = self.press;
@@ -519,11 +527,7 @@ impl<A: Clone> Ui<A> {
             return;
         }
         if keys.contains(&InputKey::Escape) {
-            for popup in self.popup_anchors.values().copied().collect::<Vec<_>>() {
-                if self.tree.nodes[popup].runtime.open {
-                    self.set_popup(popup, false);
-                }
-            }
+            self.close_popups();
             self.focus = None;
             self.focus_visible = false;
             return;

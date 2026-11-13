@@ -3,6 +3,7 @@ use grana_scene::ObjectSetId;
 use grana_session::Command;
 use grana_ui::Key;
 
+use crate::chrome::WindowAction;
 use crate::panel::Panel;
 use crate::state::AnnotationTool;
 
@@ -125,4 +126,5 @@ pub enum Message {
         side: usize,
         delta: f32,
     },
+    Window(WindowAction),
 }

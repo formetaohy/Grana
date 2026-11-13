@@ -2,6 +2,7 @@ mod animation_panel;
 mod annotation_panel;
 mod batch_panel;
 mod chart;
+mod chrome;
 mod coloc_panel;
 mod coloring;
 mod command;
@@ -25,11 +26,12 @@ mod view;
 pub use grana_ui::widget;
 
 pub use chart::{comparison_page, page as chart_page};
+pub use chrome::{ChromeView, WindowAction, title_band};
 pub use command::shortcut;
 pub use fitting::slice_step;
 pub use grana_chart::Page as ChartPage;
 pub use message::{Message, PlotEvent};
-pub use panel::{Panel, apply, build};
+pub use panel::{Frame, Panel, apply, build};
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
     AnnotationTool, Disclosures, MaskBrush, MaskBrushTool, Palette, Playback, RelationMetric, View,

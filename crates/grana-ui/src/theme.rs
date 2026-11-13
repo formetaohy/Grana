@@ -17,6 +17,7 @@ pub enum Role {
     SurfaceHigh,
     Outlined,
     Standard,
+    Destructive,
     Field,
     Error,
 }
@@ -545,6 +546,28 @@ impl Theme {
                     p.on_surface.with_alpha(0.38)
                 } else if hovered || pressed || selected {
                     p.on_surface
+                } else {
+                    p.on_surface_variant
+                },
+            },
+            Role::Destructive => Surface {
+                fill: Fill::Solid(if disabled {
+                    Color::TRANSPARENT
+                } else if pressed {
+                    p.error_container.with_alpha(0.92)
+                } else if hovered || selected {
+                    p.error_container.with_alpha(0.68)
+                } else {
+                    Color::TRANSPARENT
+                }),
+                backdrop: 0.0,
+                corners: button_corners,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    p.on_surface.with_alpha(0.38)
+                } else if hovered || pressed {
+                    p.on_error_container
                 } else {
                     p.on_surface_variant
                 },

@@ -58,6 +58,9 @@ pub enum Icon {
     Pencil,
     Ruler,
     Sphere,
+    WindowMinimize,
+    WindowMaximize,
+    WindowRestore,
 }
 
 pub fn chevron(
@@ -506,6 +509,20 @@ pub fn paint(
             arc(painter, 10.0, 10.0, 6.6, 0.0, TAU);
             line(painter, (3.4, 10.0), (16.6, 10.0));
             arc(painter, 10.0, 10.0, 3.1, 0.0, TAU);
+        }
+        Icon::WindowMinimize => line(painter, (4.4, 10.0), (15.6, 10.0)),
+        Icon::WindowMaximize => rounded(
+            painter,
+            Rect::from_min_max(point(4.6, 4.6), point(15.4, 15.4)),
+            1.0,
+        ),
+        Icon::WindowRestore => {
+            rounded(
+                painter,
+                Rect::from_min_max(point(7.4, 7.4), point(15.4, 15.4)),
+                1.0,
+            );
+            path(painter, &[(12.6, 4.6), (4.6, 4.6), (4.6, 12.6)]);
         }
     }
 }

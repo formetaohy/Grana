@@ -86,6 +86,12 @@ impl Panel {
     }
 }
 
+#[derive(Default)]
+pub struct Frame {
+    pub commands: Vec<Command>,
+    pub window: Vec<crate::chrome::WindowAction>,
+}
+
 pub fn build(
     ui: &mut grana_ui::Ui<Message>,
     actions: Vec<Message>,
@@ -93,9 +99,9 @@ pub fn build(
     camera: &mut grana_display::Camera,
     stage: &mut Stage,
     workspace: &mut Workspace,
-) -> Vec<Command> {
-    let mut commands = Vec::new();
-    apply(ui, actions, view, camera, stage, workspace, &mut commands);
+) -> Frame {
+    let mut frame = Frame::default();
+    apply(ui, actions, view, camera, stage, workspace, &mut frame);
     ui.set_language(workspace.language);
     if let Some(panel) = workspace.panel {
         workspace.last_panel = panel;
@@ -107,19 +113,20 @@ pub fn build(
         let elements = {
             let mut ctx = ui.build();
             let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
+            elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
             if let Some(palette) = palette.as_ref() {
                 elements.extend(crate::palette::view(&mut ctx, full, palette));
             }
             elements
         };
         ui.present(grana_ui::place(full, elements));
-        return commands;
+        return frame;
     };
     if workspace.panel == Some(Panel::Statistics)
         && view.measure.set().is_none()
         && let Some(set) = scene.objects.iter().find(|set| set.detected() > 0)
     {
-        commands.push(Command::SetMeasureSet(Some(set.id())));
+        frame.commands.push(Command::SetMeasureSet(Some(set.id())));
     }
     let palette = crate::palette::resolve(ui, view, workspace);
     let state = View {
@@ -150,7 +157,7 @@ pub fn build(
         view_elements(&mut ctx, &layout, &state, full)
     };
     ui.present(grana_ui::place(full, elements));
-    commands
+    frame
 }
 
 fn view_elements<'a>(
@@ -160,6 +167,7 @@ fn view_elements<'a>(
     full: Rect,
 ) -> Vec<Element<'a, Message>> {
     let mut elements = stage::view(ctx, layout, state, full);
+    elements.extend(crate::chrome::view(ctx, full, state.workspace.chrome));
     elements.extend(header::view(ctx, layout, state));
     if layout.sidebar_visible {
         elements.push(sidebar(ctx, layout, state));
@@ -197,13 +205,19 @@ pub struct Layout {
 
 impl Layout {
     fn new(ctx: &mut BuildContext<'_, Message>, state: &View<'_>, full: Rect) -> Self {
+        let chrome = state.workspace.chrome;
         let top = full.min.y + MARGIN;
         let toolbar_left = Rect::from_min_size(
-            Vec2::new(full.min.x + MARGIN, top),
+            Vec2::new(full.min.x + MARGIN + chrome.leading, top),
             Vec2::new(TOOLBAR_LEFT, TOOLBAR_HEIGHT),
         );
+        let controls = if chrome.controls {
+            crate::chrome::CONTROLS_WIDTH + GAP
+        } else {
+            0.0
+        };
         let toolbar_right = Rect::from_min_size(
-            Vec2::new(full.max.x - MARGIN - TOOLBAR_RIGHT, top),
+            Vec2::new(full.max.x - MARGIN - controls - TOOLBAR_RIGHT, top),
             Vec2::new(TOOLBAR_RIGHT, TOOLBAR_HEIGHT),
         );
         let sidebar_open = !state.workspace.sidebar_hidden;
@@ -542,8 +556,9 @@ pub fn apply(
     camera: &mut grana_display::Camera,
     stage: &mut Stage,
     workspace: &mut Workspace,
-    commands: &mut Vec<Command>,
+    frame: &mut Frame,
 ) {
+    let commands = &mut frame.commands;
     let mut queue = std::collections::VecDeque::from(actions);
     while let Some(action) = queue.pop_front() {
         match action {
@@ -938,6 +953,7 @@ pub fn apply(
                     commands.push(Command::SetRegion(region));
                 }
             }
+            Message::Window(action) => frame.window.push(action),
         }
     }
 }

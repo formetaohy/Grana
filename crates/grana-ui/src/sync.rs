@@ -83,7 +83,7 @@ impl<A: Clone> Ui<A> {
                 .background
                 .is_some_and(|surface| surface.fill.is_visible() || surface.backdrop > 0.0);
             let popup_open = node.popup_spec.is_some() && node.runtime.open;
-            if surface_visible || popup_open {
+            if surface_visible || popup_open || node.blocks_pointer {
                 self.occluders.push(node.rect);
             }
         }

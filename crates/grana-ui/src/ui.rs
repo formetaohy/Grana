@@ -223,7 +223,11 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn pointer_over_widget(&self) -> bool {
-        crate::hit::resolve(&self.hits, self.pointer).is_some()
+        self.pointer_over_widget_at(self.pointer)
+    }
+
+    pub fn pointer_over_widget_at(&self, position: Vec2) -> bool {
+        crate::hit::resolve(&self.hits, position).is_some()
     }
 
     pub fn pointer_over_chrome(&self) -> bool {

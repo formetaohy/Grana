@@ -17,6 +17,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+mod chrome;
 mod command;
 mod editor;
 mod export;
@@ -30,6 +31,7 @@ use self::export::Export;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
 use crate::stream::Stream;
+use crate::window;
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
@@ -88,6 +90,8 @@ pub struct App {
     language: Language,
     interacting: bool,
     animating: bool,
+    chrome: window::Chrome,
+    closing: bool,
 }
 
 impl App {
@@ -140,6 +144,8 @@ impl App {
             language,
             interacting: false,
             animating: false,
+            chrome: window::Chrome::new(),
+            closing: false,
         }
     }
 
@@ -148,14 +154,14 @@ impl App {
             .expect("the brand mark rasterizes to a window icon");
         let window = Arc::new(
             event_loop
-                .create_window(
+                .create_window(window::attributes(
                     Window::default_attributes()
                         .with_title("Grana")
                         .with_window_icon(Some(icon))
                         .with_visible(self.capture.is_none())
                         .with_inner_size(LogicalSize::new(1440.0, 900.0))
                         .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
-                )
+                ))
                 .expect("failed to create the window"),
         );
         let size = window.inner_size();
@@ -200,14 +206,16 @@ impl App {
         self.exchange_bricks();
         self.poll_pick();
         self.session.sync_measure();
-        let (commands, animating) = self.run_ui();
+        let (frame, animating) = self.run_ui();
         self.animating = animating;
         self.sync_preference();
         self.sync_ime();
         self.interact_viewport();
-        if self.apply(commands) {
+        self.sync_window_cursor();
+        if self.apply(frame.commands) {
             return;
         }
+        self.perform_window(frame.window);
         self.session.apply_measure();
         self.sync_title();
         self.autosave();
@@ -330,29 +338,24 @@ impl ApplicationHandler for App {
         if self.surface.is_none() {
             return;
         }
+        self.track_window(&event);
+        if let Some(press) = self.claim_window(&event) {
+            self.apply_window_press(press);
+            return;
+        }
         self.push_event(&event);
         match event {
-            WindowEvent::CloseRequested => {
-                if self.capture.is_some() {
-                    event_loop.exit();
-                    return;
-                }
-                if self.export.running() {
-                    self.confirm_export_close();
-                    return;
-                }
-                if self.release_document(Resume::Exit) {
-                    event_loop.exit();
-                }
-            }
+            WindowEvent::CloseRequested => self.request_close(event_loop),
             WindowEvent::Resized(size) => {
                 if let Some(surface) = self.surface.as_mut() {
                     surface.gpu.resize([size.width, size.height]);
+                    self.chrome.refresh(&surface.window);
                     surface.window.request_redraw();
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(surface) = &self.surface {
+                    self.chrome.refresh(&surface.window);
                     surface.window.request_redraw();
                 }
             }
@@ -376,6 +379,14 @@ impl ApplicationHandler for App {
         if self.exiting {
             event_loop.exit();
             return;
+        }
+        if self.closing {
+            self.closing = false;
+            self.request_close(event_loop);
+            if self.exiting {
+                event_loop.exit();
+                return;
+            }
         }
         if self.capture.is_some() {
             self.pump_capture(event_loop);
