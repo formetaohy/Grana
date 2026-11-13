@@ -162,22 +162,6 @@ impl Palette {
         }
     }
 
-    pub fn contrasted(self) -> Self {
-        Self {
-            on_surface: Color::WHITE,
-            on_surface_variant: Color::bytes(224, 228, 240),
-            outline: Color::bytes(184, 190, 206),
-            outline_variant: Color::bytes(108, 114, 132),
-            surface_container_low: Color::bytes(24, 29, 40),
-            surface_container: Color::bytes(32, 38, 52),
-            surface_container_high: Color::bytes(44, 52, 68),
-            surface_container_highest: Color::bytes(58, 67, 86),
-            primary: Color::bytes(196, 218, 255),
-            secondary_container: Color::bytes(64, 84, 116),
-            ..self
-        }
-    }
-
     pub fn series(self) -> [Color; 6] {
         [
             self.primary,
@@ -342,7 +326,6 @@ pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
     pub metrics: Metrics,
-    pub reduce_motion: bool,
 }
 
 impl Theme {
@@ -351,25 +334,6 @@ impl Theme {
             palette: Palette::dark(),
             typography: Typography::expressive(),
             metrics: Metrics::expressive(),
-            reduce_motion: false,
-        }
-    }
-
-    pub fn with_contrast(self, contrast: bool) -> Self {
-        if contrast {
-            Self {
-                palette: self.palette.contrasted(),
-                ..self
-            }
-        } else {
-            self
-        }
-    }
-
-    pub fn with_reduce_motion(self, reduce_motion: bool) -> Self {
-        Self {
-            reduce_motion,
-            ..self
         }
     }
 

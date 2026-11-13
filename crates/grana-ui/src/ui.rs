@@ -32,12 +32,6 @@ pub(crate) struct LayerChange {
     pub restructured: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Accessibility {
-    pub reduce_motion: bool,
-    pub increase_contrast: bool,
-}
-
 pub struct Ui<A = ()> {
     pub(crate) renderer: Renderer,
     pub(crate) text: Text,
@@ -74,10 +68,8 @@ pub struct Ui<A = ()> {
     pub(crate) hovered_since: Option<(NodeId, f32)>,
     pub(crate) tooltip: Option<(NodeId, String)>,
     pub(crate) clipboard: Box<dyn Clipboard>,
-    pub(crate) theme_stamp: Theme,
     pub(crate) scene_revision: Option<u64>,
     pub(crate) preedit: Option<String>,
-    pub(crate) accessibility: Accessibility,
 }
 
 impl<A: Clone> Ui<A> {
@@ -118,19 +110,13 @@ impl<A: Clone> Ui<A> {
             hovered_since: None,
             tooltip: None,
             clipboard: Box::new(NullClipboard),
-            theme_stamp: Theme::dark(),
             scene_revision: None,
             preedit: None,
-            accessibility: Accessibility::default(),
         }
     }
 
     pub fn theme(&self) -> &Theme {
         &self.theme
-    }
-
-    pub fn theme_mut(&mut self) -> &mut Theme {
-        &mut self.theme
     }
 
     pub fn language(&self) -> Language {
@@ -167,16 +153,6 @@ impl<A: Clone> Ui<A> {
 
     pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
         self.clipboard = clipboard;
-    }
-
-    pub fn set_accessibility(&mut self, accessibility: Accessibility) {
-        if self.accessibility == accessibility {
-            return;
-        }
-        self.accessibility = accessibility;
-        self.theme = Theme::dark()
-            .with_contrast(accessibility.increase_contrast)
-            .with_reduce_motion(accessibility.reduce_motion);
     }
 
     pub fn copy(&mut self, text: &str) {
@@ -334,10 +310,6 @@ impl<A: Clone> Ui<A> {
             self.change.reset = true;
         }
         if rescaled {
-            self.invalidate();
-        }
-        if self.theme != self.theme_stamp {
-            self.theme_stamp = self.theme;
             self.invalidate();
         }
         self.advance_scroll();
@@ -544,11 +516,6 @@ impl<A> BuildContext<'_, A> {
     }
 
     pub fn animate(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
-        let motion = if self.theme.reduce_motion {
-            motion.reduced()
-        } else {
-            motion
-        };
         let spring = self
             .animations
             .entry(key)

@@ -216,15 +216,12 @@ pub(crate) fn value_segment<A>(
     dragging: bool,
     pointer: Vec2,
     text: &mut crate::text::Text,
-    theme: &Theme,
 ) -> Option<(Motion, (f32, f32))> {
     let Content::Segment(_) = &node.content else {
         return None;
     };
     let motion = if dragging {
         Motion::INSTANT
-    } else if theme.reduce_motion {
-        Motion::effect_default()
     } else {
         Motion::spatial_fast()
     };
@@ -243,15 +240,12 @@ pub(crate) fn value_tabs<A>(
     dragging: bool,
     pointer: Vec2,
     text: &mut crate::text::Text,
-    theme: &Theme,
 ) -> Option<(Motion, (f32, f32))> {
     let Content::Tabs(_) = &node.content else {
         return None;
     };
     let motion = if dragging {
         Motion::INSTANT
-    } else if theme.reduce_motion {
-        Motion::effect_default()
     } else {
         Motion::spatial_fast()
     };

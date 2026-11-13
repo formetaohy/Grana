@@ -22,10 +22,6 @@ impl App {
         let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
         surface.ui.resize(size);
         surface.ui.set_language(workspace.language);
-        surface.ui.set_accessibility(grana_ui::Accessibility {
-            reduce_motion: workspace.reduce_motion,
-            increase_contrast: workspace.contrast,
-        });
         let actions = surface
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());

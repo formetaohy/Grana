@@ -86,8 +86,6 @@ pub struct App {
     changed_at: Option<Instant>,
     revision: Revision,
     language: Language,
-    contrast: bool,
-    reduce_motion: bool,
     interacting: bool,
     animating: bool,
 }
@@ -107,8 +105,6 @@ impl App {
         let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
         workspace.language = language;
-        workspace.contrast = preference.contrast;
-        workspace.reduce_motion = preference.reduce_motion;
         Self {
             surface: None,
             session,
@@ -142,8 +138,6 @@ impl App {
             changed_at: None,
             revision: Revision::ZERO,
             language,
-            contrast: preference.contrast,
-            reduce_motion: preference.reduce_motion,
             interacting: false,
             animating: false,
         }
@@ -185,7 +179,6 @@ impl App {
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
         self.engine = Some(engine);
-        self.sync_theme();
     }
 
     pub(super) fn redraw(&mut self) {

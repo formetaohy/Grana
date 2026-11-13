@@ -3,7 +3,6 @@ mod language;
 pub mod animation;
 pub mod annotation;
 pub mod app;
-pub mod appearance;
 pub mod batch;
 pub mod coloc;
 pub mod common;

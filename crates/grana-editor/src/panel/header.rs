@@ -66,10 +66,7 @@ fn navigation<'a>(
         .children([toggle, project, open, project_menu, open_menu])
 }
 
-fn settings_menu<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    state: &'a View<'a>,
-) -> Element<'a, Message> {
+fn settings_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     let key = Key::new("settings.menu");
     let width = 264.0;
     if !ctx.popup_open(key) {
@@ -78,20 +75,6 @@ fn settings_menu<'a>(
     let language = ctx.language();
     let english = grana_i18n::Language::English;
     let chinese = grana_i18n::Language::Chinese;
-    let contrast = grana_ui::widget::toggle_row(
-        ctx.theme(),
-        grana_i18n::appearance::increase_contrast(language),
-        state.workspace.contrast,
-    )
-    .named("settings.contrast")
-    .on_toggle(Message::SetContrast);
-    let motion = grana_ui::widget::toggle_row(
-        ctx.theme(),
-        grana_i18n::appearance::reduce_motion(language),
-        state.workspace.reduce_motion,
-    )
-    .named("settings.motion")
-    .on_toggle(Message::SetReduceMotion);
     grana_ui::popover::popup(
         key,
         width,
@@ -110,9 +93,6 @@ fn settings_menu<'a>(
                 language == chinese,
                 Some(Message::SetLanguage(chinese)),
             ),
-            menu_separator(ctx),
-            contrast,
-            motion,
         ],
     )
     .persistent()
@@ -361,7 +341,7 @@ fn actions<'a>(
         .align(Align::Center)
         .children([fit, slice_btn, settings]);
 
-    let settings_popup = settings_menu(ctx, state);
+    let settings_popup = settings_menu(ctx);
     let pending = state.io.pending > 0 || !state.jobs.is_empty();
     let mut children = Vec::new();
     if pending {

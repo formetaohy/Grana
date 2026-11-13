@@ -21,12 +21,8 @@ impl<A: Clone> Ui<A> {
                 pointer: self.pointer,
                 elapsed,
             };
-            let animating = crate::widget::animate(
-                &mut self.tree.nodes[id],
-                &frame,
-                &mut self.text,
-                &self.theme,
-            );
+            let animating =
+                crate::widget::animate(&mut self.tree.nodes[id], &frame, &mut self.text);
             if self.edit == Some(id) {
                 self.tree.nodes[id].paint_dirty = true;
                 self.animating = true;

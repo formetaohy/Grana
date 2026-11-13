@@ -35,24 +35,17 @@ impl From<StoredLanguage> for Language {
 struct Stored {
     #[serde(default)]
     language: Option<StoredLanguage>,
-    contrast: bool,
-    #[serde(default)]
-    reduce_motion: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
     pub language: Language,
-    pub contrast: bool,
-    pub reduce_motion: bool,
 }
 
 impl Default for Preference {
     fn default() -> Self {
         Self {
             language: Language::system(),
-            contrast: false,
-            reduce_motion: false,
         }
     }
 }
@@ -71,8 +64,6 @@ impl Preference {
         };
         Self {
             language: stored.language.map_or_else(Language::system, Into::into),
-            contrast: stored.contrast,
-            reduce_motion: stored.reduce_motion,
         }
     }
 
@@ -86,8 +77,6 @@ impl Preference {
         }
         let stored = Stored {
             language: Some(self.language.into()),
-            contrast: self.contrast,
-            reduce_motion: self.reduce_motion,
         };
         let bytes = serde_json::to_vec_pretty(&stored)
             .map_err(|error| format!("failed to encode the preferences: {error}"))?;

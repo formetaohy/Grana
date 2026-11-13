@@ -2,44 +2,21 @@ use std::time::{Duration, Instant};
 
 use grana_editor::Panel;
 use grana_project::ViewState;
-use grana_ui::Theme;
 
 use super::{AUTOSAVE_IDLE, AUTOSAVE_INTERVAL, App};
 use crate::preference::Preference;
 impl App {
-    pub(super) fn sync_theme(&mut self) {
-        let Some(surface) = self.surface.as_mut() else {
-            return;
-        };
-        let theme = Theme::dark()
-            .with_contrast(self.contrast)
-            .with_reduce_motion(self.reduce_motion);
-        if *surface.ui.theme() == theme {
-            return;
-        }
-        *surface.ui.theme_mut() = theme;
-        surface.window.request_redraw();
-    }
-
     pub(super) fn sync_preference(&mut self) {
-        if self.workspace.language == self.language
-            && self.workspace.contrast == self.contrast
-            && self.workspace.reduce_motion == self.reduce_motion
-        {
+        if self.workspace.language == self.language {
             return;
         }
         self.language = self.workspace.language;
-        self.contrast = self.workspace.contrast;
-        self.reduce_motion = self.workspace.reduce_motion;
         let preference = Preference {
             language: self.language,
-            contrast: self.contrast,
-            reduce_motion: self.reduce_motion,
         };
         if let Err(detail) = preference.save() {
             self.output = Some(detail);
         }
-        self.sync_theme();
         self.request_redraw();
     }
 

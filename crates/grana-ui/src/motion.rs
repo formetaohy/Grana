@@ -196,10 +196,6 @@ impl Motion {
         Self::effect_fast()
     }
 
-    pub const fn reduced(self) -> Self {
-        Self::response(self.duration, 0.0)
-    }
-
     pub const fn spring(self) -> Spring {
         Spring::new(self.duration, self.bounce)
     }

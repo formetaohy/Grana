@@ -188,19 +188,12 @@ pub(crate) fn paint(
     }
 }
 
-pub(crate) fn animate<A>(
-    node: &mut Node<A>,
-    frame: &FrameAnimation,
-    text: &mut Text,
-    theme: &Theme,
-) -> bool {
+pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut Text) -> bool {
     let interactive = node.interaction.is_interactive();
     let hovered = frame.hovered && interactive;
     let active = frame.pressed && interactive;
     let press = if active {
         Motion::effect_fast()
-    } else if theme.reduce_motion {
-        Motion::effect_default()
     } else {
         Motion::spatial_fast()
     };
@@ -211,12 +204,7 @@ pub(crate) fn animate<A>(
     node.runtime
         .press
         .animate_to(if active { 1.0 } else { 0.0 }, press.spring());
-    if let Some((motion, target)) = value_target(node, frame, text, theme) {
-        let motion = if theme.reduce_motion {
-            motion.reduced()
-        } else {
-            motion
-        };
+    if let Some((motion, target)) = value_target(node, frame, text) {
         node.runtime.engaged.animate_to(
             if hovered || active { 1.0 } else { 0.0 },
             Motion::effect_fast().spring(),
@@ -253,7 +241,7 @@ pub(crate) fn animate<A>(
             animating = true;
         }
     }
-    if matches!(node.content, Content::Spinner(_) | Content::Progress(_)) && !theme.reduce_motion {
+    if matches!(node.content, Content::Spinner(_) | Content::Progress(_)) {
         node.paint_dirty = true;
         animating = true;
     }
@@ -267,17 +255,14 @@ fn value_target<A>(
     node: &Node<A>,
     frame: &FrameAnimation,
     text: &mut Text,
-    theme: &Theme,
 ) -> Option<(Motion, (f32, f32))> {
     match &node.content {
         Content::Toggle(_) => toggle::value_toggle(node, frame.dragging),
         Content::Checkbox(_) => toggle::value_checkbox(node),
         Content::Slider(_) => slider::value_slider(node, frame.pressed),
         Content::RangeSlider(_) => slider::value_range(node, frame.pressed),
-        Content::Segment(_) => {
-            segment::value_segment(node, frame.dragging, frame.pointer, text, theme)
-        }
-        Content::Tabs(_) => segment::value_tabs(node, frame.dragging, frame.pointer, text, theme),
+        Content::Segment(_) => segment::value_segment(node, frame.dragging, frame.pointer, text),
+        Content::Tabs(_) => segment::value_tabs(node, frame.dragging, frame.pointer, text),
         Content::ColorPicker(_) => color::value(node),
         _ => None,
     }
