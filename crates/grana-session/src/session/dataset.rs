@@ -151,9 +151,10 @@ impl super::Session {
         let name = scene.dataset.name().to_string();
         let suggested = format!("{}.ome.zarr", crate::slug(&name));
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export the dataset as an OME-Zarr image")
+            .set_title("Export the dataset as an OME-Zarr or OME-TIFF archive")
             .set_file_name(&suggested)
             .add_filter("OME-Zarr", &["zarr"])
+            .add_filter("OME-TIFF pyramid", &["tif", "tiff"])
             .save_file()
         else {
             return;
@@ -182,11 +183,19 @@ impl super::Session {
                 } else {
                     ""
                 };
+                let archive = if grana_archive::Format::of(written.path())
+                    == Some(grana_archive::Format::Tiff)
+                {
+                    "an OME-TIFF archive"
+                } else {
+                    "an OME-Zarr image"
+                };
                 crate::Message::info(format!(
-                    "wrote {} channels and {} labels over {} frames{scope} to {}",
+                    "wrote {} channels and {} labels over {} frames at {} resolutions{scope} to {archive} {}",
                     written.channels(),
                     written.labels(),
                     written.frames(),
+                    written.levels(),
                     written.path().display()
                 ))
             }

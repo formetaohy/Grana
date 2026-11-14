@@ -8,6 +8,7 @@ use grana_analysis::{
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
     local::{BlockField, BlockLevels},
 };
+use grana_archive::{Channel as WriteChannel, ImageSpec};
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
@@ -25,7 +26,7 @@ use grana_volume::{
     Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
     VolumeSeries, VoxelData, VoxelFormat,
 };
-use grana_zarr::{ImageSpec, WriteChannel, write_image};
+use grana_zarr::write_image;
 
 use crate::support;
 
@@ -1051,7 +1052,7 @@ fn registers_channels_from_fiducial_beads() {
     assert_eq!(fiducial.pairs(), reference.len());
     assert!(
         fiducial.residual() < 0.05,
-        "the fiducial fit leaves {:.3} µm",
+        "the fiducial fit leaves {:.3} 碌m",
         fiducial.residual()
     );
     for (expected, moving) in reference.iter().zip(&moving) {
@@ -1653,7 +1654,7 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
     let mut progress = |_, _| {};
     write_image(
         &path,
-        ImageSpec {
+        &mut ImageSpec {
             name: "sheared",
             channels: &channels,
             levels: &[level],

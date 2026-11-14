@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
+use grana_archive::{Channel as WriteChannel, ImageSpec};
 use grana_image::{Format, Image, Source};
 use grana_interop::{Detection, Edge, Lineage, geff};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
@@ -12,7 +13,7 @@ use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
     Basis, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
 };
-use grana_zarr::{ImageSpec, WriteChannel, write_image};
+use grana_zarr::write_image;
 
 use crate::support;
 use crate::support::Temp;
@@ -22,6 +23,139 @@ fn fixture(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
+}
+
+#[test]
+fn exports_a_tiled_pyramid_ome_tiff() {
+    let temp = Temp::new("suite-ome-tiff-archive");
+    let levels = [
+        Level::new(Extent::new(300, 270, 3), Spacing::new(0.2, 0.2, 0.5)),
+        Level::new(Extent::new(150, 135, 3), Spacing::new(0.4, 0.4, 0.5)),
+        Level::new(Extent::new(75, 68, 3), Spacing::new(0.8, 0.8, 0.5)),
+    ];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [0.2, 0.7, 1.0],
+        range: Intensity::new(0.0, 4096.0),
+    }];
+    let mut fill =
+        |level, _frame, _channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
+            let scale = 1u32 << level;
+            for z in 0..extent[2] {
+                for y in 0..extent[1] {
+                    for x in 0..extent[0] {
+                        let index = x as usize
+                            + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
+                        data[index] = ((origin[0] + x) * scale
+                            + 1000 * (origin[1] + y) * scale
+                            + 1000000 * (origin[2] + z))
+                            as f32;
+                    }
+                }
+            }
+            Ok(())
+        };
+    let mut progress = |_, _| {};
+    let path = temp.path().join("pyramid.ome.tif");
+    let written = grana_tiff::write_archive(
+        &path,
+        &mut ImageSpec {
+            name: "pyramid",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 2,
+            interval: 0.5,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the pyramid archive writes");
+    assert_eq!(written.channels(), 1);
+    assert_eq!(written.frames(), 2);
+    assert_eq!(written.levels(), 3);
+    assert_eq!(
+        std::fs::metadata(&path).expect("the archive exists").len(),
+        written.bytes(),
+        "the archive reports the bytes it wrote"
+    );
+    let image = grana_tiff::Image::open(&path).expect("the archive opens");
+    assert_eq!(image.pyramid().level_count(), 3);
+    for (index, level) in levels.iter().enumerate() {
+        assert_eq!(
+            image.pyramid().level(index).extent(),
+            level.extent(),
+            "level {index} keeps its extent"
+        );
+        assert!(
+            (image.pyramid().level(index).spacing().x() - level.spacing().x()).abs() <= 1.0e-5,
+            "level {index} keeps its spacing"
+        );
+    }
+    let coarse = image
+        .read_region(1, 2, 0, 0..75, 0..68, 0..3)
+        .expect("the coarsest level reads");
+    let VoxelData::F32(values) = coarse else {
+        panic!("the archive stores float voxels");
+    };
+    assert_eq!(values[0], 0.0, "the first voxel of the coarsest level");
+    assert_eq!(
+        values[5 + 75 * 4],
+        (5 * 4 + 1000 * 4 * 4) as f32,
+        "a coarsest level voxel keeps its frame and scale"
+    );
+
+    let extent = Extent::new(24, 16, 8);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "signal",
+            [1.0, 1.0, 1.0],
+            VoxelData::U16(vec![7u16; extent.voxel_count() as usize]),
+        )],
+    );
+    let image = Arc::new(
+        Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+            .expect("the image opens"),
+    );
+    let mut progress = |_, _| {};
+    let summary = grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: temp.path().join("export.ome.tif"),
+            name: "export".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                range: Intensity::new(0.0, 255.0),
+            }],
+            levels: image.pyramid().levels().to_vec(),
+            origins: vec![[0, 0, 0]; image.pyramid().level_count()],
+            placement: image.pyramid().placement(),
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: Vec::new(),
+        },
+        &Channels::stored(Arc::clone(&image)),
+        &AtomicBool::new(false),
+        &mut progress,
+    )
+    .expect("the dataset exports as an archive");
+    assert_eq!(summary.channels(), 1);
+    assert_eq!(summary.frames(), 1);
+    let exported = grana_tiff::Image::open(summary.path()).expect("the exported archive opens");
+    let data = exported
+        .read_region(0, 0, 0, 0..24, 0..16, 0..8)
+        .expect("the exported channel reads");
+    let VoxelData::F32(values) = data else {
+        panic!("the exported channel stores float voxels");
+    };
+    assert!(
+        values.iter().all(|value| *value == 7.0),
+        "the exported channel keeps its voxels"
+    );
 }
 
 #[test]
@@ -258,7 +392,7 @@ fn write_zarr(root: &std::path::Path) {
     let mut progress = |_, _| {};
     write_image(
         root,
-        ImageSpec {
+        &mut ImageSpec {
             name: "fixture",
             channels: &channels,
             levels: &levels,
@@ -467,7 +601,7 @@ fn round_trips_a_rotated_placement() {
     let mut progress = |_, _| {};
     write_image(
         &path,
-        ImageSpec {
+        &mut ImageSpec {
             name: "rotated",
             channels: &channels,
             levels: &[level],
@@ -512,7 +646,7 @@ fn round_trips_a_rotated_placement() {
     let sheared_path = temp.path().join("sheared.ome.zarr");
     write_image(
         &sheared_path,
-        ImageSpec {
+        &mut ImageSpec {
             name: "sheared",
             channels: &channels,
             levels: &[sheared],

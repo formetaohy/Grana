@@ -24,6 +24,7 @@ grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
+grana-archive = { workspace = true }
 grana-pipeline = { workspace = true }
 grana-preview = { workspace = true }
 grana-profile = { workspace = true }

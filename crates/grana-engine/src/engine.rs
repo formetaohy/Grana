@@ -1,12 +1,10 @@
-use std::time::{Duration, Instant};
-
 use grana_display::CameraState;
 use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
-use crate::display::View;
+use crate::display::{Display, View};
 use crate::frame;
 use crate::image::ViewportImage;
 use crate::splat::{SplatCache, SplatMembers};
@@ -14,13 +12,6 @@ use crate::view::{self, RenderedScene};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
 pub const SAMPLE_LIMIT: u32 = 32;
-
-const DRAFT_BUDGET: Duration = Duration::from_millis(10);
-const DRAFT_HOLD: Duration = Duration::from_millis(150);
-const DRAFT_DEFAULT: f32 = 0.5;
-const DRAFT_MINIMUM: f32 = 0.25;
-const SAMPLE_FLOOR: Duration = Duration::from_millis(20);
-const SAMPLE_BLEND: f64 = 0.5;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Request {
@@ -30,13 +21,7 @@ struct Request {
     size: [u32; 2],
     level_cap: usize,
     generation: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase {
-    Draft,
-    Refine,
-    Ready,
+    display: Display,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,12 +50,6 @@ pub struct Engine {
     splats: SplatCache,
     image: Option<ViewportImage>,
     request: Option<Request>,
-    display: [u32; 2],
-    phase: Phase,
-    draft: f32,
-    sample: Option<Duration>,
-    drawn_at: Option<Instant>,
-    changed_at: Option<Instant>,
     generation: u64,
     image_revision: u64,
     info: FrameInfo,
@@ -85,12 +64,6 @@ impl Engine {
             splats: SplatCache::new(),
             image: None,
             request: None,
-            display: [0, 0],
-            phase: Phase::Ready,
-            draft: DRAFT_DEFAULT,
-            sample: None,
-            drawn_at: None,
-            changed_at: None,
             generation: 0,
             image_revision: 0,
             info: FrameInfo::default(),
@@ -104,10 +77,6 @@ impl Engine {
         self.prepared = None;
         self.splats.clear();
         self.request = None;
-        self.phase = Phase::Ready;
-        self.drawn_at = None;
-        self.changed_at = None;
-        self.generation = 0;
         self.info = FrameInfo::default();
     }
 
@@ -134,7 +103,6 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        let now = Instant::now();
         let scene_key = view::key(view.scene);
         let request = Request {
             scene: scene_key,
@@ -143,43 +111,12 @@ impl Engine {
             size: view.size,
             level_cap: view.level_cap,
             generation: self.generation,
+            display: view.display,
         };
-        let animating = view.display == crate::display::Display::Interactive;
-        if self.request != Some(request) {
-            self.request = None;
-            self.phase = if animating {
-                Phase::Draft
-            } else {
-                Phase::Refine
-            };
-            self.changed_at = Some(now);
-            self.drawn_at = None;
-        } else {
-            match self.phase {
-                Phase::Ready => return Ok(()),
-                Phase::Draft => {
-                    let held = self
-                        .changed_at
-                        .is_some_and(|at| now.saturating_duration_since(at) >= DRAFT_HOLD);
-                    if animating || !held {
-                        self.drawn_at = None;
-                        return Ok(());
-                    }
-                    self.phase = Phase::Refine;
-                    self.drawn_at = None;
-                }
-                Phase::Refine => {
-                    if animating {
-                        self.drawn_at = None;
-                        return Ok(());
-                    }
-                }
-            }
+        if self.request == Some(request) && self.resolved(view.display) {
+            return Ok(());
         }
-        let size = match self.phase {
-            Phase::Draft => draft_size(view.size, self.draft),
-            _ => view.size,
-        };
+        let size = view.size;
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
@@ -187,7 +124,7 @@ impl Engine {
             view.scene,
             Some(view::Lens {
                 camera: view.camera,
-                height: view.size[1],
+                height: size[1],
             }),
             &mut self.splats,
         );
@@ -232,19 +169,8 @@ impl Engine {
         };
         self.info = info;
         self.request = Some(request);
-        self.display = view.size;
         if info.samples != 0 {
             self.image_revision = self.image_revision.wrapping_add(1);
-        }
-        if self.phase == Phase::Refine {
-            if let Some(last) = self.drawn_at {
-                self.observe(now.saturating_duration_since(last));
-            }
-            self.drawn_at = Some(now);
-            if self.resolved(view.display) {
-                self.phase = Phase::Ready;
-                self.drawn_at = None;
-            }
         }
         Ok(())
     }
@@ -261,20 +187,11 @@ impl Engine {
         self.info
     }
 
-    fn observe(&mut self, interval: Duration) {
-        if interval <= SAMPLE_FLOOR {
-            self.draft = 1.0;
-            return;
-        }
-        let blended = self.sample.map_or(interval, |sample| {
-            sample.mul_f64(1.0 - SAMPLE_BLEND) + interval.mul_f64(SAMPLE_BLEND)
-        });
-        self.sample = Some(blended);
-        self.draft = draft_scale(blended);
-    }
-
-    fn resolved(&self, display: crate::display::Display) -> bool {
+    fn resolved(&self, display: Display) -> bool {
         let info = self.info;
+        if display == Display::Interactive {
+            return info.samples != 0;
+        }
         if display.awaits() {
             return info.samples != 0 && !info.fading;
         }
@@ -288,11 +205,9 @@ impl Engine {
         let Some(image) = self.image.as_ref() else {
             return false;
         };
-        let display = self.display;
-        let point = [
-            (u64::from(point[0]) * u64::from(image.size[0]) / u64::from(display[0].max(1))) as u32,
-            (u64::from(point[1]) * u64::from(image.size[1]) / u64::from(display[1].max(1))) as u32,
-        ];
+        if point[0] >= image.size[0] || point[1] >= image.size[1] {
+            return false;
+        }
         let Self {
             renderer,
             pending_pick,
@@ -352,18 +267,4 @@ fn overlay_key(overlays: &[grana_render::Overlay<'_>]) -> u64 {
         key.mix(overlay.digest());
     }
     key.finish()
-}
-
-fn draft_size(size: [u32; 2], scale: f32) -> [u32; 2] {
-    let scale = scale.clamp(DRAFT_MINIMUM, 1.0);
-    [
-        ((size[0] as f32 * scale).round() as u32).max(1),
-        ((size[1] as f32 * scale).round() as u32).max(1),
-    ]
-}
-
-fn draft_scale(interval: Duration) -> f32 {
-    (DRAFT_BUDGET.as_secs_f64() / interval.as_secs_f64())
-        .sqrt()
-        .clamp(f64::from(DRAFT_MINIMUM), 1.0) as f32
 }

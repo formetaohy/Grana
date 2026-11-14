@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
+use grana_archive::{Channel as WriteChannel, Format, ImageSpec};
 use grana_scene::ObjectSet;
 use grana_volume::{Extent, Intensity, Level, Region};
 use grana_warp::Warps;
-use grana_zarr::{ImageSpec, LabelSpec, WriteChannel};
+use grana_zarr::LabelSpec;
 
 use crate::channels::Channels;
 
@@ -143,6 +144,7 @@ pub struct Summary {
     channels: usize,
     labels: usize,
     frames: u32,
+    levels: usize,
     cropped: bool,
 }
 
@@ -161,6 +163,10 @@ impl Summary {
 
     pub fn frames(&self) -> u32 {
         self.frames
+    }
+
+    pub fn levels(&self) -> usize {
+        self.levels
     }
 
     pub fn cropped(&self) -> bool {
@@ -197,6 +203,27 @@ pub fn write_dataset(
         levels.len(),
         "every exported level names the voxel its crop starts at"
     );
+    let format = Format::of(&path).ok_or_else(|| {
+        format!(
+            "an archive path ends with .ome.zarr or .ome.tif, not {}",
+            path.display()
+        )
+    })?;
+    let (levels, origins) = match format {
+        Format::Zarr => (levels, origins),
+        Format::Tiff => {
+            let depth = levels[0].extent().z();
+            let kept = levels
+                .iter()
+                .position(|level| level.extent().z() != depth)
+                .unwrap_or(levels.len());
+            let mut levels = levels;
+            let mut origins = origins;
+            levels.truncate(kept);
+            origins.truncate(kept);
+            (levels, origins)
+        }
+    };
     let write_channels = layers
         .iter()
         .map(|layer| WriteChannel {
@@ -245,64 +272,77 @@ pub fn write_dataset(
         image_total = total;
         progress(done, total);
     };
-    grana_zarr::write_image(
-        &path,
-        ImageSpec {
-            name: &name,
-            channels: &write_channels,
-            levels: &levels,
-            placement,
-            frames,
-            interval,
-            fill: &mut fill,
-            progress: &mut image_progress,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    let format = Format::of(&path).ok_or_else(|| {
+        format!(
+            "an archive path ends with .ome.zarr or .ome.tif, not {}",
+            path.display()
+        )
+    })?;
+    let mut image = ImageSpec {
+        name: &name,
+        channels: &write_channels,
+        levels: &levels,
+        placement,
+        frames,
+        interval,
+        fill: &mut fill,
+        progress: &mut image_progress,
+    };
+    match format {
+        Format::Zarr => {
+            grana_zarr::write_image(&path, &mut image).map_err(|error| error.to_string())?;
+        }
+        Format::Tiff => {
+            grana_tiff::write_archive(&path, &mut image).map_err(|error| error.to_string())?;
+        }
+    }
     let mut base = image_total;
     let mut written = 0usize;
-    for mut layer in labels {
-        let name = layer.name().to_string();
-        let frames = layer.frames().to_vec();
-        let count = layer.labels();
-        let color = layer.color();
-        let opacity = layer.opacity();
-        let properties = layer.properties();
-        let mut fill =
-            |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("the dataset export was cancelled".to_string());
-                }
-                layer.fill(level, time, origin, extent, data)
+    if format == Format::Zarr {
+        for mut layer in labels {
+            let name = layer.name().to_string();
+            let frames = layer.frames().to_vec();
+            let count = layer.labels();
+            let color = layer.color();
+            let opacity = layer.opacity();
+            let properties = layer.properties();
+            let mut fill =
+                |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("the dataset export was cancelled".to_string());
+                    }
+                    layer.fill(level, time, origin, extent, data)
+                };
+            let mut total = 0usize;
+            let mut label_progress = |done: usize, total_seen: usize| {
+                total = total_seen;
+                progress(base + done, base + total_seen);
             };
-        let mut total = 0usize;
-        let mut label_progress = |done: usize, total_seen: usize| {
-            total = total_seen;
-            progress(base + done, base + total_seen);
-        };
-        grana_zarr::write_group_labels(
-            &path,
-            "/",
-            LabelSpec {
-                name: &name,
-                frames: &frames,
-                labels: count,
-                color,
-                opacity,
-                properties: &properties,
-                fill: &mut fill,
-                progress: &mut label_progress,
-            },
-        )
-        .map_err(|error| error.to_string())?;
-        base += total;
-        written += 1;
+            grana_zarr::write_group_labels(
+                &path,
+                "/",
+                LabelSpec {
+                    name: &name,
+                    frames: &frames,
+                    labels: count,
+                    color,
+                    opacity,
+                    properties: &properties,
+                    fill: &mut fill,
+                    progress: &mut label_progress,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            base += total;
+            written += 1;
+        }
     }
     Ok(Summary {
         path,
         channels: layers.len(),
         labels: written,
         frames,
+        levels: levels.len(),
         cropped: origins.iter().any(|origin| *origin != [0, 0, 0]),
     })
 }

@@ -44,6 +44,7 @@ sha2 = "0.10"
 ureq = "3"
 zstd = "0.13"
 grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
+grana-archive = { version = "0.1.1", path = "crates/grana-archive" }
 grana-brand = { version = "0.1.1", path = "crates/grana-brand" }
 grana-calibration = { version = "0.1.1", path = "crates/grana-calibration" }
 grana-chart = { version = "0.1.1", path = "crates/grana-chart" }
@@ -132,6 +133,7 @@ hdf5-pure = { workspace = true }
 serde_json = { workspace = true }
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
+grana-archive = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
 grana-figure = { workspace = true }

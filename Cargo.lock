@@ -3373,6 +3373,7 @@ dependencies = [
  "grana-analysis",
  "grana-animation",
  "grana-app",
+ "grana-archive",
  "grana-display",
  "grana-engine",
  "grana-figure",
@@ -3472,6 +3473,13 @@ dependencies = [
  "toml",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "grana-archive"
+version = "0.1.1"
+dependencies = [
+ "grana-volume",
 ]
 
 [[package]]
@@ -3748,6 +3756,7 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-archive",
  "grana-calibration",
  "grana-chart",
  "grana-display",
@@ -3946,6 +3955,7 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-archive",
  "grana-calibration",
  "grana-dir",
  "grana-display",
@@ -3983,6 +3993,7 @@ dependencies = [
 name = "grana-stitch"
 version = "0.1.1"
 dependencies = [
+ "grana-archive",
  "grana-image",
  "grana-volume",
  "grana-warp",
@@ -4010,6 +4021,7 @@ name = "grana-tiff"
 version = "0.1.1"
 dependencies = [
  "flate2",
+ "grana-archive",
  "grana-file",
  "grana-volume",
  "quick-xml",
@@ -4077,6 +4089,7 @@ dependencies = [
 name = "grana-zarr"
 version = "0.1.1"
 dependencies = [
+ "grana-archive",
  "grana-file",
  "grana-net",
  "grana-volume",

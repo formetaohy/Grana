@@ -1,4 +1,4 @@
-use std::ops::Deref;
+﻿use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -450,12 +450,12 @@ impl Snapshot {
 
 pub fn localization_dataset(path: &Path, frames: u32) {
     let channels = [
-        grana_zarr::WriteChannel {
+        grana_archive::Channel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
             range: grana_volume::Intensity::new(0.0, 255.0),
         },
-        grana_zarr::WriteChannel {
+        grana_archive::Channel {
             name: "RFP",
             tint: [1.0, 0.0, 0.0],
             range: grana_volume::Intensity::new(0.0, 255.0),
@@ -478,7 +478,7 @@ pub fn localization_dataset(path: &Path, frames: u32) {
     let mut progress = |_, _| {};
     grana_zarr::write_image(
         path,
-        grana_zarr::ImageSpec {
+        &mut grana_archive::ImageSpec {
             name: "sample",
             channels: &channels,
             levels: &levels,
@@ -853,7 +853,7 @@ fn group(root: &Path, path: &str, attributes: serde_json::Value) {
 }
 
 fn field(path: &Path, extent: Extent) {
-    let channels = [grana_zarr::WriteChannel {
+    let channels = [grana_archive::Channel {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
         range: grana_volume::Intensity::new(0.0, 255.0),
@@ -875,7 +875,7 @@ fn field(path: &Path, extent: Extent) {
     let mut progress = |_, _| {};
     grana_zarr::write_image(
         path,
-        grana_zarr::ImageSpec {
+        &mut grana_archive::ImageSpec {
             name: "field",
             channels: &channels,
             levels: &levels,

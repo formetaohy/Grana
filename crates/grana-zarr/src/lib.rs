@@ -20,4 +20,4 @@ pub use label::{
     write_group_labels,
 };
 pub use root::Root;
-pub use write::{ChunkFill as ImageFill, ImageSpec, ImageWritten, WriteChannel, write_image};
+pub use write::write_image;

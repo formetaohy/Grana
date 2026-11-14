@@ -1,7 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
-use grana_volume::{Intensity, Level};
+use grana_archive::{ImageSpec, Written};
+use grana_volume::Level;
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
 use zarrs::array::{Array, ArrayBuilder, data_type};
@@ -15,89 +16,8 @@ const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
-pub type ChunkFill<'a> =
-    dyn FnMut(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String> + 'a;
-
-pub struct WriteChannel<'a> {
-    pub name: &'a str,
-    pub tint: [f32; 3],
-    pub range: Intensity,
-}
-
-pub struct ImageSpec<'a> {
-    pub name: &'a str,
-    pub channels: &'a [WriteChannel<'a>],
-    pub levels: &'a [Level],
-    pub placement: [f32; 3],
-    pub frames: u32,
-    pub interval: f32,
-    pub fill: &'a mut ChunkFill<'a>,
-    pub progress: &'a mut dyn FnMut(usize, usize),
-}
-
-pub struct ImageWritten {
-    path: PathBuf,
-    name: String,
-    channels: usize,
-    frames: u32,
-    levels: usize,
-    bytes: u64,
-}
-
-impl ImageWritten {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn channels(&self) -> usize {
-        self.channels
-    }
-
-    pub fn frames(&self) -> u32 {
-        self.frames
-    }
-
-    pub fn levels(&self) -> usize {
-        self.levels
-    }
-
-    pub fn bytes(&self) -> u64 {
-        self.bytes
-    }
-}
-
-pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten, Error> {
-    assert!(
-        !spec.name.trim().is_empty(),
-        "an exported image carries a name"
-    );
-    assert!(
-        !spec.channels.is_empty(),
-        "an exported image carries at least one channel"
-    );
-    assert!(
-        spec.channels
-            .iter()
-            .all(|channel| !channel.name.trim().is_empty()),
-        "every exported channel carries a name"
-    );
-    assert!(
-        !spec.levels.is_empty(),
-        "an exported image carries at least one level"
-    );
-    assert!(spec.frames > 0, "an exported image carries a frame");
-    assert!(
-        spec.interval.is_finite() && spec.interval > 0.0,
-        "an exported image carries a positive frame interval"
-    );
-    assert!(
-        spec.placement.iter().all(|value| value.is_finite()),
-        "an exported image carries a finite placement"
-    );
+pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Error> {
+    spec.check();
     if path.is_file() {
         return Err(Error::Write {
             path: path.display().to_string(),
@@ -108,7 +28,7 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
         path: path.display().to_string(),
         detail: error.to_string(),
     })?;
-    let bytes = build(atomic.staging(), &mut spec).map_err(|detail| Error::Write {
+    let bytes = build(atomic.staging(), spec).map_err(|detail| Error::Write {
         path: path.display().to_string(),
         detail,
     })?;
@@ -116,14 +36,14 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
         path: path.display().to_string(),
         detail: format!("failed to move the dataset into place: {error}"),
     })?;
-    Ok(ImageWritten {
-        path: path.to_path_buf(),
-        name: spec.name.to_string(),
-        channels: spec.channels.len(),
-        frames: spec.frames,
-        levels: spec.levels.len(),
+    Ok(Written::new(
+        path.to_path_buf(),
+        spec.name.to_string(),
+        spec.channels.len(),
+        spec.frames,
+        spec.levels.len(),
         bytes,
-    })
+    ))
 }
 
 fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<u64, String> {

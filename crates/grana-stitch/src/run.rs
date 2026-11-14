@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
+use grana_archive::{Channel as WriteChannel, ImageSpec};
 use grana_image::{Image, Source};
 use grana_volume::{Extent, Intensity, Level, Spacing};
-use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
 use crate::Error;
 use crate::mosaic::{self, Edge, Offset, Plane, Side};
@@ -112,20 +112,18 @@ pub fn stitch(request: &Request) -> Result<Summary, Error> {
          length: [u32; 3],
          out: &mut [f32]| { mosaic.fill(level, time, channel, origin, length, out) };
     let mut progress = |_: usize, _: usize| {};
-    let written = write_image(
-        &request.output,
-        ImageSpec {
-            name: &name,
-            channels: &channels,
-            levels: &levels,
-            placement: mosaic.placement,
-            frames: mosaic.frames,
-            interval: mosaic.interval,
-            fill: &mut fill,
-            progress: &mut progress,
-        },
-    )
-    .map_err(|error| Error::new(error.to_string()))?;
+    let mut image = ImageSpec {
+        name: &name,
+        channels: &channels,
+        levels: &levels,
+        placement: mosaic.placement,
+        frames: mosaic.frames,
+        interval: mosaic.interval,
+        fill: &mut fill,
+        progress: &mut progress,
+    };
+    let written = grana_zarr::write_image(&request.output, &mut image)
+        .map_err(|error| Error::new(error.to_string()))?;
     Ok(Summary {
         width: mosaic.extent.x(),
         height: mosaic.extent.y(),
