@@ -51,6 +51,13 @@ impl ObjectSource {
         self.frames.len() as u32
     }
 
+    pub fn counts(&self) -> Vec<Option<usize>> {
+        self.frames
+            .iter()
+            .map(|frame| frame.as_ref().map(Frame::objects))
+            .collect()
+    }
+
     pub fn object_count(&self, time: u32) -> usize {
         self.frames
             .get(time as usize)

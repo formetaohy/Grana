@@ -58,10 +58,6 @@ impl Relation {
             .and_then(|frame| frame.as_deref())
     }
 
-    pub(crate) fn frame_shared(&self, time: u32) -> Option<Arc<RelationFrame>> {
-        self.frames.get(time as usize).and_then(Option::clone)
-    }
-
     pub fn frames(&self) -> impl Iterator<Item = (u32, &RelationFrame)> + '_ {
         self.frames
             .iter()

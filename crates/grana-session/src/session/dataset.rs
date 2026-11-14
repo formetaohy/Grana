@@ -144,7 +144,7 @@ impl super::Session {
         let labels = scene
             .objects
             .iter()
-            .filter_map(LabelLayer::of)
+            .filter_map(|set| LabelLayer::of(set, &cropped.levels))
             .collect::<Vec<_>>();
         let frames = scene.frame_count();
         let drift = (0..frames).map(|time| scene.drift_warps(time)).collect();

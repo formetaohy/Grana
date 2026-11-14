@@ -4,7 +4,7 @@ use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::{
     Mask, MaskEdit, MaskMode, MaskTool, ObjectAnchor, Roi, Shape, SurfaceSet, assign,
 };
-use grana_scene::{Drifts, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame, ObjectSource};
 use grana_volume::{Level, VoxelData};
 
 use crate::channels::Channels;
@@ -16,47 +16,50 @@ const BLOCK_LIMIT: u64 = 512 << 20;
 
 pub struct MaskRequest<'a> {
     pub channel: usize,
-    pub level: usize,
     pub strokes: &'a [MaskEdit],
     pub drifts: &'a Drifts,
 }
 
 pub fn mask(
     reader: &Channels,
-    frames: &[Option<Arc<ObjectFrame>>],
+    source: &ObjectSource,
     voxel: f32,
     request: &MaskRequest<'_>,
-) -> Result<Vec<Option<Arc<ObjectFrame>>>, String> {
-    let mut edited = frames.to_vec();
+) -> Result<Vec<crate::run::EditedFrame>, String> {
+    let mut edited = Vec::new();
     for (frame, strokes) in grouped(request.strokes) {
-        let next = {
-            let Some(entry) = edited.get(frame as usize) else {
-                return Err(format!(
-                    "the mask edits name frame {frame}, which the object set does not hold"
-                ));
-            };
-            let Some(ObjectFrame::Surfaces(current)) = entry.as_deref() else {
-                return Err("only surfaces carry an editable mask".to_string());
-            };
-            let targets = targets(current, &strokes, voxel, frame)?;
-            let mut edits = Vec::with_capacity(targets.len());
-            for (object, strokes) in targets {
-                edits.push((
-                    object,
-                    edit_object(reader, current, object, &strokes, frame, request)?,
-                ));
-            }
-            let patches = edits
-                .iter()
-                .map(|(object, replacement)| (*object, replacement.as_ref()))
-                .collect::<Vec<_>>();
-            current
-                .edited(&patches)
-                .map_err(|error| error.to_string())?
+        if frame >= source.frames() {
+            return Err(format!(
+                "the mask edits name frame {frame}, which the object set does not hold"
+            ));
+        }
+        let Some(current) = source.frame(frame) else {
+            return Err(format!(
+                "the mask edits name frame {frame}, which detected no objects"
+            ));
         };
-        edited[frame as usize] = next
-            .filter(|set| !set.is_empty())
-            .map(|set| Arc::new(ObjectFrame::Surfaces(set)));
+        let ObjectFrame::Surfaces(set) = current.as_ref() else {
+            return Err("only surfaces carry an editable mask".to_string());
+        };
+        let level = set.level();
+        let targets = targets(set, &strokes, voxel, frame)?;
+        let mut edits = Vec::with_capacity(targets.len());
+        for (object, strokes) in targets {
+            edits.push((
+                object,
+                edit_object(reader, set, object, &strokes, frame, request, level)?,
+            ));
+        }
+        let patches = edits
+            .iter()
+            .map(|(object, replacement)| (*object, replacement.as_ref()))
+            .collect::<Vec<_>>();
+        let next = set.edited(&patches).map_err(|error| error.to_string())?;
+        edited.push((
+            frame,
+            next.filter(|set| !set.is_empty())
+                .map(|set| Arc::new(ObjectFrame::Surfaces(set))),
+        ));
     }
     Ok(edited)
 }
@@ -113,14 +116,15 @@ fn edit_object(
     strokes: &[&MaskEdit],
     frame: u32,
     request: &MaskRequest<'_>,
+    level: usize,
 ) -> Result<Option<SurfaceSet>, String> {
-    let level = level_of(reader, request.level)?;
+    let inspected = level_of(reader, level)?;
     let roi = Roi::new(vec![Some(single_shape(current, object)?)]);
-    let base = roi.mask(level, 0)?;
+    let base = roi.mask(inspected, 0)?;
     if base.is_empty() {
         return Ok(None);
     }
-    let block = block(level, &base, strokes);
+    let block = block(inspected, &base, strokes);
     let mut mask = base.extended(block.origin, block.extent);
     for stroke in strokes {
         match (stroke.tool(), stroke.mode()) {
@@ -135,7 +139,7 @@ fn edit_object(
                 }
             }
             (MaskTool::Wand, mode) => {
-                let region = flood(reader, request, stroke, &mask, frame)?;
+                let region = flood(reader, request, stroke, &mask, frame, level)?;
                 match mode {
                     MaskMode::Add => mask.united(&region),
                     MaskMode::Remove => mask.subtracting(&region),
@@ -205,9 +209,10 @@ fn flood(
     stroke: &MaskEdit,
     block: &Mask,
     frame: u32,
+    level: usize,
 ) -> Result<Mask, String> {
-    let level = level_of(reader, request.level)?;
-    let limits = level.extent();
+    let inspected = level_of(reader, level)?;
+    let limits = inspected.extent();
     let limits = [limits.x(), limits.y(), limits.z()];
     let span = channel_span(reader, request.channel)?;
     let mut origin = block.origin();
@@ -221,14 +226,14 @@ fn flood(
         let data = reader
             .read_region(
                 frame,
-                request.level,
+                level,
                 request.channel,
                 &ranges,
                 request.drifts.warp(request.channel, frame),
             )
             .map_err(|error| error.to_string())?;
         let region = grow(
-            level,
+            inspected,
             origin,
             extent,
             &values_of(&data),
@@ -329,11 +334,12 @@ fn touches(region: &Mask, origin: [u32; 3], extent: [u32; 3]) -> bool {
 
 fn rebuild(
     reader: &Channels,
-    level: Level,
+    level: usize,
     mask: &Mask,
     frame: u32,
     request: &MaskRequest<'_>,
 ) -> Result<SurfaceSet, String> {
+    let inspected = level_of(reader, level)?;
     let origin = mask.origin();
     let extent = mask.extent();
     let voxels = extent
@@ -346,7 +352,7 @@ fn rebuild(
         ));
     }
     let channels = reader.pyramid().channel_count();
-    let mut builder = LabelBuilder::new(request.level, level, channels);
+    let mut builder = LabelBuilder::new(level, inspected, channels);
     let mut start = 0;
     while start < extent[2] {
         let core = SLAB.min(extent[2] - start);
@@ -363,7 +369,7 @@ fn rebuild(
                 reader
                     .read_region(
                         frame,
-                        request.level,
+                        level,
                         channel,
                         &ranges,
                         request.drifts.warp(request.channel, frame),

@@ -8,7 +8,7 @@ use grana_interop::{Detection, Edge, Lineage, geff};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
-use grana_scene::ObjectFrame;
+use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
     Basis, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
 };
@@ -362,16 +362,22 @@ fn exports_a_region_of_the_channels_and_labels() {
         vec![Spot::new(center, 0.9, 1.0)],
         IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]),
     );
-    let label = LabelLayer {
-        name: "spot".to_string(),
-        frames: vec![0],
-        labels: 1,
-        color: [1.0, 0.0, 0.0],
-        opacity: 1.0,
-        properties: vec![(1, "spot 1".to_string())],
-        shapes: vec![Some(Arc::new(ObjectFrame::from_spots(spots)))],
-        visible: vec![vec![true]],
-    };
+    let mut label_scene = Scene::new(Dataset::synthetic("crop", image.pyramid().clone()));
+    let label_set = label_scene.add_object(ObjectKind::Spots, 0);
+    label_scene.install(label_set, 0, ObjectFrame::from_spots(spots));
+    label_scene
+        .objects
+        .get_mut(label_set)
+        .expect("the label set exists")
+        .set_name("spot");
+    let label = LabelLayer::of(
+        label_scene
+            .objects
+            .get(label_set)
+            .expect("the label set exists"),
+        &cropped.levels,
+    )
+    .expect("the label layer builds");
     let channels = Channels::stored(Arc::clone(&image));
     let mut progress = |_, _| {};
     grana_pipeline::write_dataset(

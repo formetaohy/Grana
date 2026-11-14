@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use grana_pipeline::label::Labeling;
-use grana_scene::ObjectFrame;
 use grana_scene::ObjectSetId;
 use grana_volume::Level;
 use grana_zarr::Written;
@@ -26,8 +24,7 @@ struct Request {
     labels: usize,
     color: [f32; 3],
     opacity: f32,
-    shapes: Vec<Option<Arc<ObjectFrame>>>,
-    visible: Vec<Vec<bool>>,
+    objects: grana_scene::ObjectSource,
     levels: Vec<Level>,
     title: String,
 }
@@ -42,13 +39,12 @@ impl Labels {
             labels,
             color,
             opacity,
-            shapes,
-            visible,
+            objects,
             levels,
             title,
         } = request;
         let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
-            let mut labeling = Labeling::new(shapes, visible, labels, levels, title);
+            let mut labeling = Labeling::new(objects, labels, levels, title);
             let properties = labeling.properties();
             let mut fill =
                 |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
@@ -196,17 +192,10 @@ impl super::Session {
                 "a uint16 label image addresses at most {LABEL_LIMIT} objects"
             ));
         }
-        let shapes = (0..scene.frame_count())
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
-        let visible = (0..scene.frame_count())
-            .map(|time| {
-                (0..object.object_count(time))
-                    .map(|index| object.visible_object(time, index))
-                    .collect::<Vec<bool>>()
-            })
-            .collect::<Vec<_>>();
-        if visible.iter().flatten().all(|shown| !shown) {
+        let visible = (0..scene.frame_count()).any(|time| {
+            (0..object.object_count(time)).any(|index| object.visible_object(time, index))
+        });
+        if !visible {
             return Err(format!("{} hides every object it labels", object.name()));
         }
         let levels = scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()].to_vec();
@@ -227,8 +216,7 @@ impl super::Session {
             labels,
             color: object.color(),
             opacity: object.opacity(),
-            shapes,
-            visible,
+            objects: object.source(),
             levels,
             title: object.name().to_string(),
         };

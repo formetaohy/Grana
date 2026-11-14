@@ -833,17 +833,18 @@ impl Scene {
                 filtered.name()
             ));
         }
-        let frames = (0..self.frame_count())
-            .map(|time| filtered.frame_shared(time))
-            .collect::<Vec<_>>();
-        for (time, frame) in frames.into_iter().enumerate() {
+        for time in 0..self.frame_count() {
+            let frame = self
+                .objects
+                .get(source)
+                .and_then(|set| set.frame_shared(time));
             let pruned = match frame {
                 Some(frame) => frame
-                    .retain(&keep[time])
+                    .retain(&keep[time as usize])
                     .map_err(|error| error.to_string())?,
                 None => None,
             };
-            self.install_optional(id, time as u32, pruned);
+            self.install_optional(id, time, pruned);
         }
         if let Some(set) = self.objects.get_mut(id) {
             set.set_params(params);

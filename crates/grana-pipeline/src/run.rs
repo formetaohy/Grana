@@ -57,6 +57,8 @@ pub use self::localization_window::LocalizationWindow;
 pub use self::mask::{MaskRequest, mask};
 pub use self::segment::{SegmentRequest, segment};
 
+pub type EditedFrame = (u32, Option<Arc<ObjectFrame>>);
+
 const FRAME_WORKERS: usize = 4;
 
 const MINIMUM_AGREEMENT: f32 = 0.1;
@@ -178,25 +180,23 @@ pub struct RelationRequest {
 }
 
 pub fn relation(
-    source: Vec<Option<Arc<ObjectFrame>>>,
-    target: Vec<Option<Arc<ObjectFrame>>>,
+    source: &ObjectSource,
+    target: &ObjectSource,
     request: RelationRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) {
-    let total = source.len().min(target.len());
+    let total = source.frames().min(target.frames()) as usize;
     sink(Event::Progress {
         time: 0,
         done: 0,
         total,
     });
-    let counts = (0..total)
-        .map(|time| source[time].as_deref().map(ObjectFrame::object_count))
-        .collect::<Vec<_>>();
+    let source_counts = source.counts();
     let frames = match relate_frames(
-        &counts,
-        |time| shape(source.get(time).and_then(Option::as_deref)),
-        |time| shape(target.get(time).and_then(Option::as_deref)),
+        &source_counts[..total],
+        |time| shape(source.frame(time as u32)),
+        |time| shape(target.frame(time as u32)),
         RelationRun {
             shift: request.shift,
             gate: request.gate,
@@ -231,7 +231,7 @@ pub fn relation(
     sink(Event::Done);
 }
 
-fn shape(frame: Option<&ObjectFrame>) -> Result<Option<grana_object::Shape>, String> {
+fn shape(frame: Option<Arc<ObjectFrame>>) -> Result<Option<grana_object::Shape>, String> {
     let Some(frame) = frame else {
         return Ok(None);
     };

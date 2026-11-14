@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Child, ChildField, ColocMetric, Frame, Group, ObjectColoc};
-use grana_measure::{RelationRow, Table};
+use grana_measure::{
+    Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Kind, ObjectColoc,
+    Objects, RelationRow, Table, channel_keys,
+};
 use grana_object::{RelationFrame, TrackSet};
 
-use crate::object::ObjectFrame;
+use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::ObjectSetId;
-use crate::objects::{Objects, members_of};
+use crate::objects::members_of;
 use crate::scene::Scene;
+use crate::source::ObjectSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureKey {
@@ -46,35 +49,113 @@ impl MeasureKey {
     }
 }
 
-#[derive(Clone)]
-struct Relation {
+struct RelationSource {
     key: String,
     target: String,
     shift: i32,
-    frame: Option<Arc<RelationFrame>>,
+    frames: Vec<Option<Arc<RelationFrame>>>,
 }
 
-#[derive(Clone)]
-struct ChildSet {
+struct ChildSource {
     key: String,
     name: String,
     fields: Vec<ChildField>,
-    frame: Option<Arc<ObjectFrame>>,
-    members: Option<Vec<u32>>,
+    objects: ObjectSource,
+    members: Vec<Option<Arc<RelationFrame>>>,
 }
 
-struct Row {
-    time: u32,
-    objects: Arc<ObjectFrame>,
-    relations: Vec<Relation>,
-    children: Vec<ChildSet>,
+struct TableSource {
+    kind: Kind,
+    channels: Vec<String>,
+    relations: Vec<RelationSource>,
+    children: Vec<ChildSource>,
+    objects: ObjectSource,
+}
+
+impl FrameSource for TableSource {
+    fn frames(&self) -> u32 {
+        self.objects.frames()
+    }
+
+    fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    fn channels(&self) -> &[String] {
+        &self.channels
+    }
+
+    fn relations(&self) -> Vec<RelationRow<'_>> {
+        self.relations
+            .iter()
+            .map(|relation| RelationRow::new(&relation.key, &relation.target, relation.shift, None))
+            .collect()
+    }
+
+    fn children(&self) -> Vec<Child<'_>> {
+        self.children
+            .iter()
+            .map(|child| Child::new(&child.key, &child.name, child.fields.clone(), None, None))
+            .collect()
+    }
+
+    fn visit(&self, time: u32, visit: &mut dyn FnMut(Frame<'_>)) {
+        let Some(objects) = self.objects.frame(time) else {
+            return;
+        };
+        let relation_frames = self
+            .relations
+            .iter()
+            .map(|relation| relation.frames.get(time as usize).cloned().flatten())
+            .collect::<Vec<Option<Arc<RelationFrame>>>>();
+        let relations = self
+            .relations
+            .iter()
+            .zip(&relation_frames)
+            .map(|(relation, frame)| {
+                RelationRow::new(
+                    &relation.key,
+                    &relation.target,
+                    relation.shift,
+                    frame.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let child_frames = self
+            .children
+            .iter()
+            .map(|child| child.objects.frame(time))
+            .collect::<Vec<Option<Arc<ObjectFrame>>>>();
+        let children = self
+            .children
+            .iter()
+            .zip(&child_frames)
+            .map(|(child, frame)| {
+                let members = frame.as_ref().and_then(|frame| {
+                    child
+                        .members
+                        .get(time as usize)
+                        .and_then(Option::as_deref)
+                        .filter(|relation| relation.objects() == frame.object_count())
+                        .map(members_of)
+                });
+                Child::new(
+                    &child.key,
+                    &child.name,
+                    child.fields.clone(),
+                    frame.as_ref().map(|frame| frame.objects()),
+                    members,
+                )
+            })
+            .collect::<Vec<_>>();
+        visit(Frame::new(time, objects.objects(), &relations, &children));
+    }
 }
 
 pub struct TableRequest {
     key: MeasureKey,
-    rows: Vec<Row>,
+    source: TableSource,
     tracks: Option<TrackSet>,
-    channels: Vec<String>,
     frame_interval: f32,
     classifier: Option<grana_measure::Classifier>,
     coloc: Option<ObjectColoc>,
@@ -90,48 +171,45 @@ impl TableRequest {
         if group == Group::Track && set.tracks().is_none() {
             return None;
         }
+        if set.detected() == 0 {
+            return None;
+        }
+        let relations = set
+            .relations()
+            .iter()
+            .map(|relation| RelationSource {
+                key: relation.key().to_string(),
+                target: scene
+                    .objects
+                    .get(relation.target())
+                    .map_or_else(|| "target".to_string(), |target| target.name().to_string()),
+                shift: relation.shift(),
+                frames: relation.shared_frames().to_vec(),
+            })
+            .collect();
         let children = match group {
-            Group::Object => scene.objects.child_sets(id),
+            Group::Object => scene
+                .objects
+                .child_sets(id)
+                .into_iter()
+                .filter_map(|child| child_source(&scene.objects, id, child))
+                .collect(),
             Group::Track | Group::Timepoint | Group::Molecule => Vec::new(),
         };
-        let mut rows = Vec::new();
-        for time in 0..set.frame_count() {
-            let Some(objects) = set.frame_shared(time) else {
-                continue;
-            };
-            let relations = set
-                .relations()
-                .iter()
-                .map(|relation| Relation {
-                    key: relation.key().to_string(),
-                    target: scene
-                        .objects
-                        .get(relation.target())
-                        .map_or_else(|| "target".to_string(), |target| target.name().to_string()),
-                    shift: relation.shift(),
-                    frame: relation.frame_shared(time),
-                })
-                .collect();
-            let children = children
-                .iter()
-                .filter_map(|child| child_row(&scene.objects, id, *child, time))
-                .collect();
-            rows.push(Row {
-                time,
-                objects,
-                relations,
-                children,
-            });
-        }
         let channels = scene.dataset.channels()[..set.measured_channels()]
             .iter()
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         Some(Self {
             key: MeasureKey::of(scene, id, group, aggregate)?,
-            rows,
+            source: TableSource {
+                kind: kind_of(set.kind()),
+                channels,
+                relations,
+                children,
+                objects: set.plain_source(),
+            },
             tracks: set.tracks().map(|layer| layer.set().clone()),
-            channels,
             frame_interval: scene.dataset.frame_interval(),
             classifier: set.classifier().cloned(),
             coloc: set.object_coloc().cloned(),
@@ -149,56 +227,15 @@ impl TableRequest {
     }
 
     pub fn build(&self) -> Option<Table> {
-        if self.rows.is_empty() {
-            return None;
-        }
-        let mut rows = Vec::with_capacity(self.rows.len());
-        for row in &self.rows {
-            let relations = row
-                .relations
-                .iter()
-                .map(|relation| {
-                    RelationRow::new(
-                        &relation.key,
-                        &relation.target,
-                        relation.shift,
-                        relation.frame.as_deref(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let children = row
-                .children
-                .iter()
-                .map(|child| {
-                    Child::new(
-                        &child.key,
-                        &child.name,
-                        child.fields.clone(),
-                        child.frame.as_deref().map(ObjectFrame::objects),
-                        child.members.clone(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            rows.push((relations, children));
-        }
-        let frames = self
-            .rows
-            .iter()
-            .zip(&rows)
-            .map(|(row, (relations, children))| {
-                Frame::new(row.time, row.objects.objects(), relations, children)
-            })
-            .collect::<Vec<_>>();
         let mut table = Table::build(
-            &frames,
+            &self.source,
             self.tracks.as_ref(),
-            &self.channels,
             self.frame_interval,
             self.key.group,
             self.key.aggregate,
             self.basis.clone(),
-        );
-        let keys = grana_measure::channel_keys(&self.channels);
+        )?;
+        let keys = channel_keys(self.source.channels());
         if let Some(classifier) = &self.classifier {
             let column = match self.key.group {
                 Group::Object => Some((classifier.column(), classifier.scores(&table, &keys))),
@@ -213,7 +250,7 @@ impl TableRequest {
         }
         if let Some(coloc) = &self.coloc {
             for metric in ColocMetric::ALL {
-                let column = metric.column(coloc.pair(), &self.channels, &keys);
+                let column = metric.column(coloc.pair(), self.source.channels(), &keys);
                 let values = match self.key.group {
                     Group::Object => (0..table.rows())
                         .map(|row| {
@@ -247,34 +284,40 @@ impl TableRequest {
                     return Vec::new();
                 };
                 let mut collected = vec![Vec::<f32>::new(); tracks.len()];
-                for row in &self.rows {
-                    let objects = row.objects.objects();
-                    for index in 0..row.objects.object_count() {
-                        let Some(track) = tracks.track_at(row.time, index) else {
+                self.source.visit_all(&mut |frame: Frame<'_>| {
+                    for object in 0..frame.objects().count() {
+                        let Some(track) = tracks.track_at(frame.time(), object) else {
                             continue;
                         };
-                        collected[track].push(classifier.score(objects, index));
+                        collected[track].push(classifier.score(frame.objects(), object));
                     }
-                }
+                });
                 collected
                     .iter()
                     .map(|values| aggregate.apply(values))
                     .collect()
             }
-            Group::Timepoint => self
-                .rows
-                .iter()
-                .map(|row| {
-                    let objects = row.objects.objects();
-                    let mut collected = Vec::with_capacity(row.objects.object_count());
-                    for index in 0..row.objects.object_count() {
-                        collected.push(classifier.score(objects, index));
+            Group::Timepoint => {
+                let rows = (0..table.rows())
+                    .filter_map(|row| table.observation(row).time().map(|time| (time, row)))
+                    .collect::<HashMap<_, _>>();
+                let mut collected = vec![Vec::<f32>::new(); table.rows()];
+                self.source.visit_all(&mut |frame: Frame<'_>| {
+                    let Some(row) = rows.get(&frame.time()).copied() else {
+                        return;
+                    };
+                    let values = &mut collected[row];
+                    for object in 0..frame.objects().count() {
+                        values.push(classifier.score(frame.objects(), object));
                     }
-                    aggregate.apply(&collected)
-                })
-                .collect(),
-            Group::Molecule => self.aggregate_members(table, |row, index| {
-                Some(classifier.score(row.objects.objects(), index))
+                });
+                collected
+                    .iter()
+                    .map(|values| aggregate.apply(values))
+                    .collect()
+            }
+            Group::Molecule => self.aggregate_members(table, |_, objects, index| {
+                Some(classifier.score(objects, index))
             }),
         }
     }
@@ -287,47 +330,42 @@ impl TableRequest {
                 let Some(tracks) = self.tracks.as_ref() else {
                     return Vec::new();
                 };
-                let mut collected = vec![Vec::<f32>::new(); tracks.len()];
-                for row in &self.rows {
-                    let Some(values) = coloc.objects(row.time) else {
-                        continue;
-                    };
-                    for (index, value) in values.iter().enumerate().take(row.objects.object_count())
-                    {
-                        let Some(value) = value.metric(metric) else {
-                            continue;
+                (0..table.rows())
+                    .map(|row| {
+                        let Some(track) = table.observation(row).track() else {
+                            return f32::NAN;
                         };
-                        let Some(track) = tracks.track_at(row.time, index) else {
-                            continue;
+                        let Some(track) = tracks.track(track) else {
+                            return f32::NAN;
                         };
-                        collected[track].push(value as f32);
-                    }
-                }
-                collected
-                    .iter()
-                    .map(|values| aggregate.apply(values))
+                        let values = track
+                            .nodes()
+                            .iter()
+                            .filter_map(|node| {
+                                coloc
+                                    .metric(node.time(), node.object(), metric)
+                                    .map(|v| v as f32)
+                            })
+                            .collect::<Vec<_>>();
+                        aggregate.apply(&values)
+                    })
                     .collect()
             }
-            Group::Timepoint => self
-                .rows
-                .iter()
+            Group::Timepoint => (0..table.rows())
                 .map(|row| {
-                    let mut collected = Vec::with_capacity(row.objects.object_count());
-                    let values = coloc.objects(row.time).unwrap_or_default();
-                    for value in values.iter().take(row.objects.object_count()) {
-                        if let Some(value) = value.metric(metric) {
-                            collected.push(value as f32);
-                        }
-                    }
+                    let Some(time) = table.observation(row).time() else {
+                        return f32::NAN;
+                    };
+                    let values = coloc.objects(time).unwrap_or_default();
+                    let collected = values
+                        .iter()
+                        .filter_map(|value| value.metric(metric).map(|value| value as f32))
+                        .collect::<Vec<_>>();
                     aggregate.apply(&collected)
                 })
                 .collect(),
-            Group::Molecule => self.aggregate_members(table, |row, index| {
-                coloc
-                    .objects(row.time)?
-                    .get(index)?
-                    .metric(metric)
-                    .map(|value| value as f32)
+            Group::Molecule => self.aggregate_members(table, |time, _, index| {
+                coloc.metric(time, index, metric).map(|value| value as f32)
             }),
         }
     }
@@ -335,7 +373,7 @@ impl TableRequest {
     fn aggregate_members(
         &self,
         table: &Table,
-        value: impl Fn(&Row, usize) -> Option<f32>,
+        value: impl Fn(u32, Objects<'_>, usize) -> Option<f32>,
     ) -> Vec<f32> {
         let mut rows = HashMap::with_capacity(table.rows());
         for row in 0..table.rows() {
@@ -344,20 +382,20 @@ impl TableRequest {
             }
         }
         let mut collected = vec![Vec::<f32>::new(); table.rows()];
-        for row in &self.rows {
-            let objects = row.objects.objects();
-            for index in 0..row.objects.object_count() {
+        self.source.visit_all(&mut |frame: Frame<'_>| {
+            let objects = frame.objects();
+            for index in 0..objects.count() {
                 let Some(molecule) = objects.molecule(index) else {
                     continue;
                 };
                 let Some(at) = rows.get(&molecule).copied() else {
                     continue;
                 };
-                if let Some(value) = value(row, index) {
-                    collected[at].push(value);
+                if let Some(score) = value(frame.time(), objects, index) {
+                    collected[at].push(score);
                 }
             }
-        }
+        });
         let aggregate = self.key.aggregate;
         collected
             .iter()
@@ -366,26 +404,27 @@ impl TableRequest {
     }
 }
 
-fn child_row(
-    objects: &Objects,
+fn kind_of(kind: ObjectKind) -> Kind {
+    match kind {
+        ObjectKind::Spots => Kind::Spots,
+        ObjectKind::Surfaces => Kind::Surfaces,
+        ObjectKind::Filaments => Kind::Filaments,
+        ObjectKind::Cells => Kind::Cells,
+    }
+}
+
+fn child_source(
+    objects: &crate::objects::Objects,
     parent: ObjectSetId,
     child: ObjectSetId,
-    time: u32,
-) -> Option<ChildSet> {
+) -> Option<ChildSource> {
     let set = objects.get(child)?;
     let relation = set.relation(parent, 0)?;
-    let frame = set.frame_shared(time);
-    let members = frame.as_ref().and_then(|frame| {
-        relation
-            .frame(time)
-            .filter(|relation| relation.objects() == frame.object_count())
-            .map(members_of)
-    });
-    Some(ChildSet {
+    Some(ChildSource {
         key: set.key().as_str().to_string(),
         name: set.name().to_string(),
         fields: set.child_fields(),
-        frame,
-        members,
+        objects: set.plain_source(),
+        members: relation.shared_frames().to_vec(),
     })
 }

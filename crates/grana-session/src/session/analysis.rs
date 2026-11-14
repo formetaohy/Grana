@@ -748,6 +748,7 @@ impl Session {
         if self.loading.is_some() || self.analysis.iter().any(|analysis| analysis.job() == job) {
             return;
         }
+        let same = source == target;
         let prepared = {
             let Some(scene) = self.scene.as_ref() else {
                 return;
@@ -762,28 +763,15 @@ impl Session {
                 ));
                 return;
             }
-            let frames = scene.frame_count();
             let gate = scene.relation_gate(source, target);
-            let source_frames = (0..frames)
-                .map(|time| from.frame_shared(time))
-                .collect::<Vec<_>>();
-            let target_frames = (0..frames)
-                .map(|time| to.frame_shared(time))
-                .collect::<Vec<_>>();
-            (source_frames, target_frames, gate, frames as usize)
+            let total = scene.frame_count() as usize;
+            (from.source(), to.source(), gate, total)
         };
-        let (source_frames, target_frames, gate, total) = prepared;
+        let (from, to, gate, total) = prepared;
         self.message = None;
         self.record_progress(job, 0, 0, total);
-        self.analysis.push(crate::relation(
-            job,
-            source_frames,
-            target_frames,
-            shift,
-            source == target,
-            gate,
-            0,
-        ));
+        self.analysis
+            .push(crate::relation(job, from, to, shift, same, gate, 0));
     }
 
     pub(super) fn begin_calibration(&mut self, source: usize, threshold: f32, separation: f32) {
@@ -1016,9 +1004,7 @@ impl Session {
                 ));
                 return;
             }
-            let sources = (0..scene.frame_count())
-                .map(|time| nuclei.frame_shared(time))
-                .collect::<Vec<_>>();
+            let sources = nuclei.source();
             self.message = None;
             self.record_progress(Job::Detect(set), 0, 0, 0);
             if let Some(scene) = self.scene.as_mut() {
@@ -1158,16 +1144,14 @@ impl Session {
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let frames = (0..scene.frame_count())
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
-        if frames.iter().all(Option::is_none) {
+        let source = object.source();
+        if source.counts().iter().all(Option::is_none) {
             return;
         }
         self.message = None;
-        self.record_progress(Job::Recut(set), 0, 0, frames.len());
+        self.record_progress(Job::Recut(set), 0, 0, source.frames() as usize);
         self.analysis
-            .push(crate::recut(Job::Recut(set), frames, cut, 0, self.store()));
+            .push(crate::recut(Job::Recut(set), source, cut, 0, self.store()));
     }
 
     pub(super) fn store(&self) -> Arc<SpillStore> {

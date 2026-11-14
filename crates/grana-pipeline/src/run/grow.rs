@@ -1,10 +1,9 @@
 use std::ops::Range;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
 use grana_object::{CellParams, CellSet, Roi, SurfaceSet};
-use grana_scene::{Drifts, ObjectFrame};
+use grana_scene::{Drifts, ObjectFrame, ObjectSource};
 use grana_volume::Region;
 use grana_warp::Warp;
 
@@ -20,7 +19,7 @@ pub struct GrowRequest {
     region: Region,
     drifts: Drifts,
     roi: Option<Roi>,
-    sources: Vec<Option<Arc<ObjectFrame>>>,
+    sources: ObjectSource,
 }
 
 impl GrowRequest {
@@ -30,7 +29,7 @@ impl GrowRequest {
         region: Region,
         drifts: Drifts,
         roi: Option<Roi>,
-        sources: Vec<Option<Arc<ObjectFrame>>>,
+        sources: ObjectSource,
     ) -> Self {
         Self {
             channel,
@@ -80,11 +79,11 @@ pub fn grow(
         return Err("the cell membrane channel has no intensity range".to_string());
     }
     let mut radius = 0.0f32;
-    for source in &request.sources {
-        let Some(frame) = source.as_deref() else {
+    for time in 0..request.sources.frames() {
+        let Some(frame) = request.sources.frame(time) else {
             continue;
         };
-        if !matches!(frame, ObjectFrame::Surfaces(_)) {
+        if !matches!(frame.as_ref(), ObjectFrame::Surfaces(_)) {
             return Err("the cells grow from a surface object set".to_string());
         }
         for detection in frame.detections() {
@@ -127,14 +126,10 @@ pub fn grow(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let Some(frame) = request
-            .sources
-            .get(time as usize)
-            .and_then(Option::as_deref)
-        else {
+        let Some(frame) = request.sources.frame(time) else {
             continue;
         };
-        let ObjectFrame::Surfaces(nuclei) = frame else {
+        let ObjectFrame::Surfaces(nuclei) = frame.as_ref() else {
             return Err("the cells grow from a surface object set".to_string());
         };
         if nuclei.is_empty() {

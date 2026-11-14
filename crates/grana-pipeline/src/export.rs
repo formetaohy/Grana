@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
-use grana_object::{LabelRaster, Shape};
-use grana_scene::{ObjectFrame, ObjectSet};
+use grana_scene::ObjectSet;
 use grana_volume::{Extent, Intensity, Level, Region};
 use grana_warp::Warps;
 use grana_zarr::{ImageSpec, LabelSpec, WriteChannel};
@@ -52,18 +50,15 @@ pub struct ChannelLayer {
 }
 
 pub struct LabelLayer {
-    pub name: String,
-    pub frames: Vec<u32>,
-    pub labels: usize,
-    pub color: [f32; 3],
-    pub opacity: f32,
-    pub properties: Vec<(u32, String)>,
-    pub shapes: Vec<Option<Arc<ObjectFrame>>>,
-    pub visible: Vec<Vec<bool>>,
+    name: String,
+    frames: Vec<u32>,
+    color: [f32; 3],
+    opacity: f32,
+    labeling: crate::label::Labeling,
 }
 
 impl LabelLayer {
-    pub fn of(set: &ObjectSet) -> Option<Self> {
+    pub fn of(set: &ObjectSet, levels: &[Level]) -> Option<Self> {
         let frames = (0..set.frame_count())
             .filter(|time| set.frame_stamp(*time).is_some())
             .collect::<Vec<_>>();
@@ -75,32 +70,58 @@ impl LabelLayer {
         if labels == 0 || labels > LABEL_LIMIT {
             return None;
         }
-        let shapes = (0..set.frame_count())
-            .map(|time| set.frame_shared(time))
-            .collect::<Vec<_>>();
-        let visible = (0..set.frame_count())
-            .map(|time| {
-                {
-                    (0..set.object_count(time))
-                        .map(|index| set.visible_object(time, index))
-                        .collect()
-                }
-            })
-            .collect::<Vec<_>>();
-        let title = set.name().to_string();
-        let properties = (1..=labels)
-            .map(|label| (label as u32, format!("{title} {label}")))
-            .collect();
+        if !(0..set.frame_count())
+            .any(|time| (0..set.object_count(time)).any(|index| set.visible_object(time, index)))
+        {
+            return None;
+        }
         Some(Self {
             name: grana_scene::slug(set.name()),
             frames,
-            labels,
             color: set.color(),
             opacity: set.opacity(),
-            properties,
-            shapes,
-            visible,
+            labeling: crate::label::Labeling::new(
+                set.source(),
+                labels,
+                levels.to_vec(),
+                set.name().to_string(),
+            ),
         })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn frames(&self) -> &[u32] {
+        &self.frames
+    }
+
+    pub fn labels(&self) -> usize {
+        self.labeling.labels()
+    }
+
+    pub fn color(&self) -> [f32; 3] {
+        self.color
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn properties(&self) -> Vec<(u32, String)> {
+        self.labeling.properties()
+    }
+
+    pub fn fill(
+        &mut self,
+        level: usize,
+        time: u32,
+        origin: [u32; 3],
+        extent: [u32; 3],
+        data: &mut [u16],
+    ) -> Result<(), String> {
+        self.labeling.fill(level, time, origin, extent, data)
     }
 }
 
@@ -240,52 +261,19 @@ pub fn write_dataset(
     .map_err(|error| error.to_string())?;
     let mut base = image_total;
     let mut written = 0usize;
-    for layer in labels {
-        let LabelLayer {
-            name: label_name,
-            frames: label_frames,
-            labels: count,
-            color,
-            opacity,
-            properties,
-            shapes,
-            visible,
-        } = layer;
-        let mut cached: Option<(u32, Shape)> = None;
+    for mut layer in labels {
+        let name = layer.name().to_string();
+        let frames = layer.frames().to_vec();
+        let count = layer.labels();
+        let color = layer.color();
+        let opacity = layer.opacity();
+        let properties = layer.properties();
         let mut fill =
             |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("the dataset export was cancelled".to_string());
                 }
-                if cached.as_ref().map(|(cached, _)| *cached) != Some(time) {
-                    let frame = shapes
-                        .get(time as usize)
-                        .and_then(|frame| frame.as_ref())
-                        .ok_or_else(|| {
-                            format!("the object set holds no objects at frame {time}")
-                        })?;
-                    let shape = frame.shape().map_err(|error| error.to_string())?;
-                    if shape.objects() > LABEL_LIMIT {
-                        return Err(format!(
-                            "a uint16 label image addresses at most {LABEL_LIMIT} objects"
-                        ));
-                    }
-                    cached = Some((time, shape));
-                }
-                let shape = &cached.as_ref().expect("the frame shape is cached").1;
-                let level = levels.get(level).copied().ok_or_else(|| {
-                    "the label image names a level the dataset does not hold".to_string()
-                })?;
-                let raster = LabelRaster::new(shape, level);
-                let keep = visible.get(time as usize).map(Vec::as_slice);
-                let rendered = raster.render_visible(
-                    keep,
-                    origin[0]..origin[0] + extent[0],
-                    origin[1]..origin[1] + extent[1],
-                    origin[2]..origin[2] + extent[2],
-                );
-                data.copy_from_slice(&rendered);
-                Ok(())
+                layer.fill(level, time, origin, extent, data)
             };
         let mut total = 0usize;
         let mut label_progress = |done: usize, total_seen: usize| {
@@ -296,8 +284,8 @@ pub fn write_dataset(
             &path,
             "/",
             LabelSpec {
-                name: &label_name,
-                frames: &label_frames,
+                name: &name,
+                frames: &frames,
                 labels: count,
                 color,
                 opacity,

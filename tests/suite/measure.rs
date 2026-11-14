@@ -1,8 +1,10 @@
 use grana_measure::{
-    Aggregate, DENSITY_POINTS, Frame, Group, Mask, MeasureView, Objects, Plot, Table, Window,
+    Aggregate, DENSITY_POINTS, Group, Kind, Mask, MeasureView, Objects, Plot, Table, Window,
 };
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_scene::{Curation, TrackAnchor, TrackEdit};
+
+use crate::support::measure_source;
 
 const CHANNEL: &str = "EGFP 488";
 
@@ -13,17 +15,9 @@ fn window() -> Window {
 #[test]
 fn lists_no_track_rows_without_a_track_set() {
     let first = spots();
-    let frames = [Frame::new(0, Objects::Spots(&first), &[], &[])];
-    let channels = [CHANNEL.to_string()];
-    let table = Table::build(
-        &frames,
-        None,
-        &channels,
-        2.0,
-        Group::Track,
-        Aggregate::MEAN,
-        None,
-    );
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [Objects::Spots(&first)]);
+    let table = Table::build(&frames, None, 2.0, Group::Track, Aggregate::MEAN, None)
+        .expect("the track table builds");
     assert_eq!(
         table.rows(),
         0,
@@ -40,20 +34,20 @@ fn summarises_spots_and_exports_a_csv() {
     let first = spots();
     let second = spots();
     let tracks = tracks();
-    let channels = [CHANNEL.to_string()];
-    let frames = [
-        Frame::new(0, Objects::Spots(&first), &[], &[]),
-        Frame::new(1, Objects::Spots(&second), &[], &[]),
-    ];
+    let frames = measure_source(
+        Kind::Spots,
+        &[CHANNEL],
+        [Objects::Spots(&first), Objects::Spots(&second)],
+    );
     let table = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Object,
         Aggregate::MEAN,
         None,
-    );
+    )
+    .expect("the object table builds");
     assert_eq!(table.rows(), 4);
     assert_eq!(value(&table, 0, "frame"), 1.0);
     assert_eq!(value(&table, 0, "time_s"), 0.0);
@@ -70,12 +64,12 @@ fn summarises_spots_and_exports_a_csv() {
     let per_track = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Track,
         Aggregate::MEAN,
         None,
-    );
+    )
+    .expect("the track table builds");
     assert_eq!(per_track.rows(), 2);
     assert_eq!(value(&per_track, 0, "nodes"), 2.0);
     assert_eq!(value(&per_track, 0, "duration_s"), 1.0);
@@ -85,33 +79,35 @@ fn summarises_spots_and_exports_a_csv() {
     let per_frame = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Timepoint,
         Aggregate::SUM,
         None,
-    );
+    )
+    .expect("the timepoint table builds");
     assert_eq!(per_frame.rows(), 2);
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
     assert_eq!(value(&per_frame, 0, "diameter_um_sum"), 2.0);
-    let basis = std::sync::Arc::new(Table::build(
-        &frames,
-        Some(&tracks),
-        &channels,
-        2.0,
-        Group::Object,
-        Aggregate::MEAN,
-        None,
-    ));
+    let basis = std::sync::Arc::new(
+        Table::build(
+            &frames,
+            Some(&tracks),
+            2.0,
+            Group::Object,
+            Aggregate::MEAN,
+            None,
+        )
+        .expect("the object table builds"),
+    );
     let reused = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Timepoint,
         Aggregate::SUM,
         Some(std::sync::Arc::clone(&basis)),
-    );
+    )
+    .expect("the timepoint table reuses its basis");
     assert_eq!(reused.rows(), per_frame.rows());
     for row in 0..reused.rows() {
         for column in 0..reused.columns().len() {
@@ -130,19 +126,13 @@ fn summarises_spots_and_exports_a_csv() {
 
     let first_group = grouped(3.0);
     let second_group = grouped(5.0);
-    let frame_of = [
-        Frame::new(0, Objects::Spots(&first_group), &[], &[]),
-        Frame::new(1, Objects::Spots(&second_group), &[], &[]),
-    ];
-    let molecules = Table::build(
-        &frame_of,
-        None,
-        &channels,
-        2.0,
-        Group::Molecule,
-        Aggregate::MEAN,
-        None,
+    let frame_of = measure_source(
+        Kind::Spots,
+        &[CHANNEL],
+        [Objects::Spots(&first_group), Objects::Spots(&second_group)],
     );
+    let molecules = Table::build(&frame_of, None, 2.0, Group::Molecule, Aggregate::MEAN, None)
+        .expect("the molecule table builds");
     assert_eq!(
         molecules.rows(),
         2,
@@ -169,20 +159,20 @@ fn trends_raw_frames_of_every_grouping() {
     let first = spots();
     let second = spots();
     let tracks = tracks();
-    let channels = [CHANNEL.to_string()];
-    let frames = [
-        Frame::new(0, Objects::Spots(&first), &[], &[]),
-        Frame::new(1, Objects::Spots(&second), &[], &[]),
-    ];
+    let frames = measure_source(
+        Kind::Spots,
+        &[CHANNEL],
+        [Objects::Spots(&first), Objects::Spots(&second)],
+    );
     let per_frame = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Timepoint,
         Aggregate::MEAN,
         None,
-    );
+    )
+    .expect("the timepoint table builds");
     let column = per_frame
         .column("egfp_488_intensity_mean_mean")
         .expect("the timepoints aggregate the raw intensity");
@@ -197,12 +187,12 @@ fn trends_raw_frames_of_every_grouping() {
     let per_track = Table::build(
         &frames,
         Some(&tracks),
-        &channels,
         2.0,
         Group::Track,
         Aggregate::MEAN,
         None,
-    );
+    )
+    .expect("the track table builds");
     let column = per_track
         .column("egfp_488_intensity_mean_mean")
         .expect("the tracks aggregate the raw intensity");
@@ -225,20 +215,13 @@ fn trends_raw_frames_of_every_grouping() {
 fn estimates_spatial_point_patterns() {
     let first = spots();
     let second = spots();
-    let channels = [CHANNEL.to_string()];
-    let frames = [
-        Frame::new(0, Objects::Spots(&first), &[], &[]),
-        Frame::new(1, Objects::Spots(&second), &[], &[]),
-    ];
-    let table = Table::build(
-        &frames,
-        None,
-        &channels,
-        2.0,
-        Group::Object,
-        Aggregate::MEAN,
-        None,
+    let frames = measure_source(
+        Kind::Spots,
+        &[CHANNEL],
+        [Objects::Spots(&first), Objects::Spots(&second)],
     );
+    let table = Table::build(&frames, None, 2.0, Group::Object, Aggregate::MEAN, None)
+        .expect("the object table builds");
     let rows = Mask::all(table.rows());
     let plot = table
         .plot(MeasureView::Ripley, [0, 0], &rows, window())
@@ -310,20 +293,13 @@ fn estimates_spatial_point_patterns() {
 fn groups_measurements_by_frame_for_distributions() {
     let first = spots();
     let second = spots();
-    let channels = [CHANNEL.to_string()];
-    let frames = [
-        Frame::new(0, Objects::Spots(&first), &[], &[]),
-        Frame::new(1, Objects::Spots(&second), &[], &[]),
-    ];
-    let table = Table::build(
-        &frames,
-        None,
-        &channels,
-        2.0,
-        Group::Object,
-        Aggregate::MEAN,
-        None,
+    let frames = measure_source(
+        Kind::Spots,
+        &[CHANNEL],
+        [Objects::Spots(&first), Objects::Spots(&second)],
     );
+    let table = Table::build(&frames, None, 2.0, Group::Object, Aggregate::MEAN, None)
+        .expect("the object table builds");
     let column = table
         .column("egfp_488_intensity_mean")
         .expect("the spots carry their mean intensity");

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use super::*;
 
 use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor};
-use grana_scene::{ObjectFrame, ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKind};
+use grana_scene::{ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKind};
 
 type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
 
@@ -468,7 +468,7 @@ impl Session {
     }
 
     pub(super) fn apply_edit_plan(&mut self, set: ObjectSetId) -> Result<(), String> {
-        let Some((source, voxel, channel)) = self
+        let Some((source, voxel, channel, provenance)) = self
             .scene
             .as_ref()
             .and_then(|scene| scene.objects.get(set))
@@ -477,6 +477,7 @@ impl Session {
                     object.provenance().source(),
                     object.voxel(),
                     object.channel(),
+                    object.provenance().clone(),
                 )
             })
         else {
@@ -485,41 +486,19 @@ impl Session {
         let Some(source) = source else {
             return Err("the object set carries no edits".to_string());
         };
-        let frames = {
-            let Some(scene) = self.scene.as_ref() else {
-                return Err("no dataset is open".to_string());
-            };
-            (0..scene.frame_count())
-                .map(|time| {
-                    scene
-                        .objects
-                        .get(source)
-                        .and_then(|object| object.frame_shared(time))
-                })
-                .collect::<Vec<_>>()
-        };
-        let edited = match self
+        let objects = self
             .scene
             .as_ref()
-            .and_then(|scene| scene.objects.get(set))
-            .map(|object| object.provenance().clone())
-        {
-            Some(Provenance::Edited { edits, .. }) => {
-                grana_pipeline::run::edit(&frames, &edits, voxel, Some(&self.store))?
+            .and_then(|scene| scene.objects.get(source))
+            .map(|object| object.source())
+            .ok_or_else(|| "the edited object set left the scene".to_string())?;
+        let edited = match provenance {
+            Provenance::Edited { edits, .. } => {
+                grana_pipeline::run::edit(&objects, &edits, voxel, Some(&self.store))?
             }
-            Some(Provenance::Masked { strokes, .. }) => {
+            Provenance::Masked { strokes, .. } => {
                 let Some(reader) = self.analysis_channels() else {
                     return Err("open a dataset before painting a mask".to_string());
-                };
-                let level = frames
-                    .iter()
-                    .flatten()
-                    .find_map(|frame| match frame.as_ref() {
-                        ObjectFrame::Surfaces(set) => Some(set.level()),
-                        _ => None,
-                    });
-                let Some(level) = level else {
-                    return Err("the painted object set carries no surface frame".to_string());
                 };
                 let drifts = self
                     .scene
@@ -527,11 +506,10 @@ impl Session {
                     .map_or_else(Default::default, |scene| scene.drifts().clone());
                 grana_pipeline::run::mask(
                     reader.as_ref(),
-                    &frames,
+                    &objects,
                     voxel,
                     &grana_pipeline::run::MaskRequest {
                         channel,
-                        level,
                         strokes: &strokes,
                         drifts: &drifts,
                     },
@@ -540,10 +518,10 @@ impl Session {
             _ => return Err("the object set carries no edits".to_string()),
         };
         if let Some(scene) = self.scene.as_mut() {
-            for (time, frame) in edited.into_iter().enumerate() {
+            for (time, frame) in edited {
                 match frame {
-                    Some(frame) => scene.install_shared(set, time as u32, frame),
-                    None => scene.install_optional(set, time as u32, None),
+                    Some(frame) => scene.install_shared(set, time, frame),
+                    None => scene.install_optional(set, time, None),
                 }
             }
             scene.clear_tracks(set);

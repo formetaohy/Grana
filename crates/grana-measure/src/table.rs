@@ -8,6 +8,7 @@ use crate::child::Child;
 use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
+use crate::frame::{Frame, FrameSource, Kind};
 use crate::lasso::Lasso;
 use crate::mask::Mask;
 use crate::metric::{Measurement, TrackMeasurement};
@@ -54,12 +55,12 @@ impl Group {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Aggregate {
-    kind: Kind,
+    kind: AggregateKind,
     percent: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Kind {
+enum AggregateKind {
     Mean,
     Sum,
     Minimum,
@@ -71,32 +72,32 @@ enum Kind {
 
 impl Aggregate {
     pub const MEAN: Self = Self {
-        kind: Kind::Mean,
+        kind: AggregateKind::Mean,
         percent: 0,
     };
 
     pub const SUM: Self = Self {
-        kind: Kind::Sum,
+        kind: AggregateKind::Sum,
         percent: 0,
     };
 
     pub const MINIMUM: Self = Self {
-        kind: Kind::Minimum,
+        kind: AggregateKind::Minimum,
         percent: 0,
     };
 
     pub const MAXIMUM: Self = Self {
-        kind: Kind::Maximum,
+        kind: AggregateKind::Maximum,
         percent: 0,
     };
 
     pub const DEVIATION: Self = Self {
-        kind: Kind::Deviation,
+        kind: AggregateKind::Deviation,
         percent: 0,
     };
 
     pub const MAD: Self = Self {
-        kind: Kind::Mad,
+        kind: AggregateKind::Mad,
         percent: 0,
     };
 
@@ -120,7 +121,7 @@ impl Aggregate {
 
     const fn quantile_unchecked(percent: u8) -> Self {
         Self {
-            kind: Kind::Quantile,
+            kind: AggregateKind::Quantile,
             percent,
         }
     }
@@ -144,40 +145,40 @@ impl Aggregate {
 
     pub fn name(self) -> &'static str {
         match self.kind {
-            Kind::Mean => "mean",
-            Kind::Sum => "sum",
-            Kind::Minimum => "minimum",
-            Kind::Maximum => "maximum",
-            Kind::Deviation => "deviation",
-            Kind::Mad => "MAD",
-            Kind::Quantile if self.percent == 50 => "median",
-            Kind::Quantile => "quantile",
+            AggregateKind::Mean => "mean",
+            AggregateKind::Sum => "sum",
+            AggregateKind::Minimum => "minimum",
+            AggregateKind::Maximum => "maximum",
+            AggregateKind::Deviation => "deviation",
+            AggregateKind::Mad => "MAD",
+            AggregateKind::Quantile if self.percent == 50 => "median",
+            AggregateKind::Quantile => "quantile",
         }
     }
 
     pub fn label(self) -> String {
         match self.kind {
-            Kind::Mean => "Mean".to_string(),
-            Kind::Sum => "Sum".to_string(),
-            Kind::Minimum => "Min".to_string(),
-            Kind::Maximum => "Max".to_string(),
-            Kind::Deviation => "SD (σ)".to_string(),
-            Kind::Mad => "MAD".to_string(),
-            Kind::Quantile if self.percent == 50 => "Median".to_string(),
-            Kind::Quantile => format!("P{}", self.percent),
+            AggregateKind::Mean => "Mean".to_string(),
+            AggregateKind::Sum => "Sum".to_string(),
+            AggregateKind::Minimum => "Min".to_string(),
+            AggregateKind::Maximum => "Max".to_string(),
+            AggregateKind::Deviation => "SD (σ)".to_string(),
+            AggregateKind::Mad => "MAD".to_string(),
+            AggregateKind::Quantile if self.percent == 50 => "Median".to_string(),
+            AggregateKind::Quantile => format!("P{}", self.percent),
         }
     }
 
     pub fn key(self) -> String {
         match self.kind {
-            Kind::Mean => "mean".to_string(),
-            Kind::Sum => "sum".to_string(),
-            Kind::Minimum => "min".to_string(),
-            Kind::Maximum => "max".to_string(),
-            Kind::Deviation => "std".to_string(),
-            Kind::Mad => "mad".to_string(),
-            Kind::Quantile if self.percent == 50 => "median".to_string(),
-            Kind::Quantile => format!("p{:02}", self.percent),
+            AggregateKind::Mean => "mean".to_string(),
+            AggregateKind::Sum => "sum".to_string(),
+            AggregateKind::Minimum => "min".to_string(),
+            AggregateKind::Maximum => "max".to_string(),
+            AggregateKind::Deviation => "std".to_string(),
+            AggregateKind::Mad => "mad".to_string(),
+            AggregateKind::Quantile if self.percent == 50 => "median".to_string(),
+            AggregateKind::Quantile => format!("p{:02}", self.percent),
         }
     }
 
@@ -190,7 +191,7 @@ impl Aggregate {
     pub fn apply(self, values: &[f32]) -> f32 {
         let finite = || values.iter().copied().filter(|value| value.is_finite());
         match self.kind {
-            Kind::Mean => {
+            AggregateKind::Mean => {
                 let mut count = 0u64;
                 let mut sum = 0.0f64;
                 for value in finite() {
@@ -203,21 +204,21 @@ impl Aggregate {
                     (sum / count as f64) as f32
                 }
             }
-            Kind::Sum => finite().map(f64::from).sum::<f64>() as f32,
-            Kind::Minimum => finite().fold(f32::NAN, f32::min),
-            Kind::Maximum => finite().fold(f32::NAN, f32::max),
-            Kind::Deviation => {
+            AggregateKind::Sum => finite().map(f64::from).sum::<f64>() as f32,
+            AggregateKind::Minimum => finite().fold(f32::NAN, f32::min),
+            AggregateKind::Maximum => finite().fold(f32::NAN, f32::max),
+            AggregateKind::Deviation => {
                 let collected = finite().map(f64::from).collect::<Vec<_>>();
                 let Some(sample) = Sample::new(collected) else {
                     return f32::NAN;
                 };
                 sample.deviation().unwrap_or(0.0) as f32
             }
-            Kind::Mad => {
+            AggregateKind::Mad => {
                 let collected = finite().map(f64::from).collect::<Vec<_>>();
                 Sample::new(collected).map_or(f32::NAN, |sample| sample.mad() as f32)
             }
-            Kind::Quantile => {
+            AggregateKind::Quantile => {
                 let collected = finite().map(f64::from).collect::<Vec<_>>();
                 Sample::new(collected).map_or(f32::NAN, |sample| {
                     sample.quantile(self.percent as f64) as f32
@@ -228,21 +229,21 @@ impl Aggregate {
 
     pub(crate) fn of_sample(self, sample: &Sample) -> (f64, Option<(f64, f64)>) {
         match self.kind {
-            Kind::Mean => (sample.mean(), sample.mean_interval(0.95)),
-            Kind::Sum => (
+            AggregateKind::Mean => (sample.mean(), sample.mean_interval(0.95)),
+            AggregateKind::Sum => (
                 sample.mean() * sample.len() as f64,
                 sample.mean_interval(0.95).map(|(lower, upper)| {
                     (lower * sample.len() as f64, upper * sample.len() as f64)
                 }),
             ),
-            Kind::Quantile => (
+            AggregateKind::Quantile => (
                 sample.quantile(self.percent as f64),
                 sample.quantile_interval(self.percent as f64, 0.95),
             ),
-            Kind::Minimum => (sample.minimum(), None),
-            Kind::Maximum => (sample.maximum(), None),
-            Kind::Deviation => (sample.deviation().unwrap_or(0.0), None),
-            Kind::Mad => (sample.mad(), None),
+            AggregateKind::Minimum => (sample.minimum(), None),
+            AggregateKind::Maximum => (sample.maximum(), None),
+            AggregateKind::Deviation => (sample.deviation().unwrap_or(0.0), None),
+            AggregateKind::Mad => (sample.mad(), None),
         }
     }
 }
@@ -316,6 +317,13 @@ impl<'a> Objects<'a> {
         self.intensities().channels()
     }
 
+    pub fn spots(self) -> Option<&'a SpotSet> {
+        match self {
+            Self::Spots(set) => Some(set),
+            Self::Surfaces(_) | Self::Cells(_) | Self::Filaments(_) => None,
+        }
+    }
+
     pub fn molecule(self, object: usize) -> Option<u32> {
         match self {
             Self::Spots(set) => set.spots()[object].group(),
@@ -330,37 +338,6 @@ impl<'a> Objects<'a> {
             Self::Cells(set) => set.intensities(),
             Self::Filaments(set) => set.intensities(),
         }
-    }
-}
-
-pub struct Frame<'a> {
-    time: u32,
-    objects: Objects<'a>,
-    relations: &'a [RelationRow<'a>],
-    children: &'a [Child<'a>],
-}
-
-impl<'a> Frame<'a> {
-    pub fn new(
-        time: u32,
-        objects: Objects<'a>,
-        relations: &'a [RelationRow<'a>],
-        children: &'a [Child<'a>],
-    ) -> Self {
-        Self {
-            time,
-            objects,
-            relations,
-            children,
-        }
-    }
-
-    pub fn time(&self) -> u32 {
-        self.time
-    }
-
-    pub fn objects(&self) -> Objects<'a> {
-        self.objects
     }
 }
 
@@ -408,14 +385,14 @@ impl ObjectCell {
         children: &[Vec<Vec<f32>>],
     ) -> f32 {
         match self {
-            Self::Frame => (frame.time + 1) as f32,
-            Self::Time => frame.time as f32 * frame_interval,
+            Self::Frame => (frame.time() + 1) as f32,
+            Self::Time => frame.time() as f32 * frame_interval,
             Self::Object => (object + 1) as f32,
             Self::Track => tracks
-                .and_then(|set| set.track_at(frame.time, object))
+                .and_then(|set| set.track_at(frame.time(), object))
                 .map_or(0.0, |track| (track + 1) as f32),
-            Self::Measure(measurement) => measurement.value(frame.objects, object),
-            Self::Relation { index, field } => field.value(frame.relations[*index], object),
+            Self::Measure(measurement) => measurement.value(frame.objects(), object),
+            Self::Relation { index, field } => field.value(frame.relations()[*index], object),
             Self::Child { index, field } => children[*index][*field][object],
         }
     }
@@ -441,9 +418,9 @@ impl TimeField {
 
     fn value(self, frame: &Frame<'_>, frame_interval: f32) -> f32 {
         match self {
-            Self::Frame => (frame.time + 1) as f32,
-            Self::Time => frame.time as f32 * frame_interval,
-            Self::Objects => frame.objects.count() as f32,
+            Self::Frame => (frame.time() + 1) as f32,
+            Self::Time => frame.time() as f32 * frame_interval,
+            Self::Objects => frame.objects().count() as f32,
         }
     }
 }
@@ -461,75 +438,49 @@ pub struct Table {
 
 impl Table {
     pub fn build(
-        frames: &[Frame<'_>],
+        source: &dyn FrameSource,
         tracks: Option<&TrackSet>,
-        channels: &[String],
         frame_interval: f32,
         group: Group,
         aggregate: Aggregate,
         basis: Option<Arc<Table>>,
-    ) -> Self {
-        assert!(!frames.is_empty(), "a table covers at least one frame");
-        assert!(!channels.is_empty(), "a table names at least one channel");
+    ) -> Option<Self> {
+        assert!(
+            !source.channels().is_empty(),
+            "a table names at least one channel"
+        );
         assert!(
             frame_interval.is_finite() && frame_interval > 0.0,
             "the frame interval is a positive duration"
         );
-        for frame in &frames[1..] {
-            assert!(
-                same_kind(frames[0].objects, frame.objects),
-                "a table covers one object kind"
-            );
-        }
-        for frame in frames {
-            assert_eq!(
-                frame.objects.channels(),
-                channels.len(),
-                "every frame measures every named channel"
-            );
-            assert!(
-                frame.relations.len() == frames[0].relations.len()
-                    && frame
-                        .relations
-                        .iter()
-                        .zip(frames[0].relations)
-                        .all(|(row, first)| row.target() == first.target()
-                            && row.shift() == first.shift()),
-                "every frame carries the relations of its object set"
-            );
-            assert!(
-                same_children(frame.children, frames[0].children),
-                "every frame carries the children of its object set"
-            );
-        }
-        let keys = channel_keys(channels);
-        let measured = || {
-            let mut table = object_table(frames, tracks, channels, &keys, frame_interval);
-            table.attach_neighbours(Observation::time);
-            Arc::new(table)
-        };
         match group {
             Group::Object => {
-                let mut table = object_table(frames, tracks, channels, &keys, frame_interval);
+                let mut table = object_table(source, tracks, frame_interval)?;
                 table.attach_neighbours(Observation::time);
-                table
+                Some(table)
             }
             Group::Track => {
-                let basis = basis.unwrap_or_else(measured);
-                let mut table = track_table(frames, tracks, channels, &keys, aggregate);
+                let basis = match basis {
+                    Some(basis) => basis,
+                    None => object_basis(source, tracks, frame_interval)?,
+                };
+                let mut table = track_table(source, tracks, aggregate);
                 table.attach(basis);
-                table
+                Some(table)
             }
             Group::Timepoint => {
-                let basis = basis.unwrap_or_else(measured);
-                let mut table = timepoint_table(frames, channels, &keys, frame_interval, aggregate);
+                let basis = match basis {
+                    Some(basis) => basis,
+                    None => object_basis(source, tracks, frame_interval)?,
+                };
+                let mut table = timepoint_table(source, frame_interval, aggregate)?;
                 table.attach(basis);
-                table
+                Some(table)
             }
             Group::Molecule => {
-                let mut table = molecule_table(frames, channels, &keys, aggregate);
+                let mut table = molecule_table(source, aggregate)?;
                 table.attach_neighbours(|_| Some(0));
-                table
+                Some(table)
             }
         }
     }
@@ -1038,18 +989,16 @@ impl Molecule {
     }
 }
 
-fn molecule_table(
-    frames: &[Frame<'_>],
-    channels: &[String],
-    keys: &[String],
-    aggregate: Aggregate,
-) -> Table {
+fn molecule_table(source: &dyn FrameSource, aggregate: Aggregate) -> Option<Table> {
     assert!(
-        matches!(frames[0].objects, Objects::Spots(_)),
+        source.kind() == Kind::Spots,
         "a molecule table groups the localizations of a spot object set"
     );
-    let measurements = aggregated_measurements(frames[0].objects, channels.len());
-    let relations = aggregated_relations(frames[0].relations);
+    let channels = source.channels();
+    let keys = channel_keys(channels);
+    let relations = source.relations();
+    let measurements = aggregated_measurements(source.kind(), channels.len());
+    let fields = aggregated_relations(&relations);
     let mut columns = MoleculeField::ALL
         .iter()
         .map(|field| field.column())
@@ -1059,29 +1008,34 @@ fn molecule_table(
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(relations.iter().map(|(index, field)| {
-        aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
-    }));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
     let width = columns.len();
     let identity = MoleculeField::ALL.len() + 6;
     let mut molecules = Vec::<Molecule>::new();
     let mut index = HashMap::<u32, usize>::new();
-    for frame in frames {
-        let Objects::Spots(set) = frame.objects else {
-            continue;
+    source.visit_all(&mut |frame: Frame<'_>| {
+        let Some(set) = frame.objects().spots() else {
+            return;
         };
         for spot in set.spots() {
             let Some(group) = spot.group() else {
                 continue;
             };
             let row = *index.entry(group).or_insert_with(|| {
-                molecules.push(Molecule::new(group, frame.time));
+                molecules.push(Molecule::new(group, frame.time()));
                 molecules.len() - 1
             });
-            molecules[row].push(frame.time, spot.center());
+            molecules[row].push(frame.time(), spot.center());
         }
+    });
+    if molecules.is_empty() {
+        return None;
     }
     let mut offsets = Vec::with_capacity(molecules.len() + 1);
     offsets.push(0usize);
@@ -1105,13 +1059,13 @@ fn molecule_table(
     let total = *offsets.last().expect("a molecule table starts at zero");
     let mut gathered = vec![f32::NAN; total];
     let mut cursors = vec![0usize; molecules.len()];
-    let slots = measurements.len() + relations.len();
+    let slots = measurements.len() + fields.len();
     for slot in 0..slots {
         gathered.fill(f32::NAN);
         cursors.copy_from_slice(&offsets[..molecules.len()]);
-        for frame in frames {
-            let Objects::Spots(set) = frame.objects else {
-                continue;
+        source.visit_all(&mut |frame: Frame<'_>| {
+            let Some(set) = frame.objects().spots() else {
+                return;
             };
             for (object, spot) in set.spots().iter().enumerate() {
                 let Some(group) = spot.group() else {
@@ -1121,14 +1075,14 @@ fn molecule_table(
                     continue;
                 };
                 gathered[cursors[row]] = if slot < measurements.len() {
-                    measurements[slot].value(frame.objects, object)
+                    measurements[slot].value(frame.objects(), object)
                 } else {
-                    let (relation, field) = relations[slot - measurements.len()];
-                    field.value(frame.relations[relation], object)
+                    let (relation, field) = fields[slot - measurements.len()];
+                    field.value(frame.relations()[relation], object)
                 };
                 cursors[row] += 1;
             }
-        }
+        });
         for row in 0..molecules.len() {
             data[identity + slot][row] = aggregate.apply(&gathered[offsets[row]..offsets[row + 1]]);
         }
@@ -1137,23 +1091,35 @@ fn molecule_table(
         .iter()
         .map(|molecule| Observation::new(Some(molecule.first), None, None, Some(molecule.group)))
         .collect::<Vec<_>>();
-    Table::new(
+    Some(Table::new(
         columns,
         identity,
         observations,
         data,
         Group::Molecule,
         aggregate,
-    )
+    ))
+}
+
+fn object_basis(
+    source: &dyn FrameSource,
+    tracks: Option<&TrackSet>,
+    frame_interval: f32,
+) -> Option<Arc<Table>> {
+    let mut table = object_table(source, tracks, frame_interval)?;
+    table.attach_neighbours(Observation::time);
+    Some(Arc::new(table))
 }
 
 fn object_table(
-    frames: &[Frame<'_>],
+    source: &dyn FrameSource,
     tracks: Option<&TrackSet>,
-    channels: &[String],
-    keys: &[String],
     frame_interval: f32,
-) -> Table {
+) -> Option<Table> {
+    let channels = source.channels();
+    let keys = channel_keys(channels);
+    let relations = source.relations();
+    let children = source.children();
     let mut cells = vec![
         ObjectCell::Frame,
         ObjectCell::Time,
@@ -1161,71 +1127,72 @@ fn object_table(
         ObjectCell::Track,
     ];
     cells.extend(
-        measurements(frames[0].objects, channels.len())
+        source
+            .kind()
+            .measurements(channels.len())
             .into_iter()
             .map(ObjectCell::Measure),
     );
-    for index in 0..frames[0].relations.len() {
+    for index in 0..relations.len() {
         for field in RelationField::ALL {
             cells.push(ObjectCell::Relation { index, field });
         }
     }
-    for (index, child) in frames[0].children.iter().enumerate() {
+    for (index, child) in children.iter().enumerate() {
         for field in 0..child.fields().len() {
             cells.push(ObjectCell::Child { index, field });
         }
     }
     let columns = cells
         .iter()
-        .map(|cell| cell.column(channels, keys, frames[0].relations, frames[0].children))
+        .map(|cell| cell.column(channels, &keys, &relations, &children))
         .collect::<Vec<_>>();
-    let rows = frames
-        .iter()
-        .map(|frame| frame.objects.count())
-        .sum::<usize>();
-    let mut observations = Vec::with_capacity(rows);
-    let mut data = (0..cells.len())
-        .map(|_| Vec::with_capacity(rows))
-        .collect::<Vec<_>>();
-    for frame in frames {
-        let parents = frame.objects.count();
+    let mut observations = Vec::new();
+    let mut data = (0..cells.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+    source.visit_all(&mut |frame: Frame<'_>| {
+        assert_eq!(
+            frame.objects().channels(),
+            channels.len(),
+            "every frame measures every named channel"
+        );
+        let parents = frame.objects().count();
         let children = frame
-            .children
+            .children()
             .iter()
             .map(|child| child.columns(parents))
             .collect::<Vec<_>>();
         for object in 0..parents {
-            let track = tracks.and_then(|set| set.track_at(frame.time, object));
+            let track = tracks.and_then(|set| set.track_at(frame.time(), object));
             observations.push(Observation::new(
-                Some(frame.time),
+                Some(frame.time()),
                 Some(object),
                 track,
                 None,
             ));
             for (index, cell) in cells.iter().enumerate() {
-                data[index].push(cell.value(frame, object, tracks, frame_interval, &children));
+                data[index].push(cell.value(&frame, object, tracks, frame_interval, &children));
             }
         }
+    });
+    if observations.is_empty() {
+        return None;
     }
-    Table::new(
+    Some(Table::new(
         columns,
         4,
         observations,
         data,
         Group::Object,
         Aggregate::MEAN,
-    )
+    ))
 }
 
-fn track_table(
-    frames: &[Frame<'_>],
-    tracks: Option<&TrackSet>,
-    channels: &[String],
-    keys: &[String],
-    aggregate: Aggregate,
-) -> Table {
-    let measurements = aggregated_measurements(frames[0].objects, channels.len());
-    let relations = aggregated_relations(frames[0].relations);
+fn track_table(source: &dyn FrameSource, tracks: Option<&TrackSet>, aggregate: Aggregate) -> Table {
+    let channels = source.channels();
+    let keys = channel_keys(channels);
+    let relations = source.relations();
+    let measurements = aggregated_measurements(source.kind(), channels.len());
+    let fields = aggregated_relations(&relations);
     let mut columns = TrackMeasurement::ALL
         .iter()
         .map(|field| field.column())
@@ -1233,11 +1200,13 @@ fn track_table(
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(relations.iter().map(|(index, field)| {
-        aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
-    }));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
     let Some(set) = tracks else {
         let data = columns.iter().map(|_| Vec::new()).collect::<Vec<_>>();
         return Table::new(
@@ -1251,22 +1220,22 @@ fn track_table(
     };
     let rows = set.len();
     let identity = TrackMeasurement::ALL.len();
-    let slots = measurements.len() + relations.len();
+    let slots = measurements.len() + fields.len();
     let mut collected = vec![Vec::<f32>::new(); rows * slots];
-    for frame in frames {
-        for object in 0..frame.objects.count() {
-            let Some(track) = set.track_at(frame.time, object) else {
+    source.visit_all(&mut |frame: Frame<'_>| {
+        for object in 0..frame.objects().count() {
+            let Some(track) = set.track_at(frame.time(), object) else {
                 continue;
             };
             for (index, measurement) in measurements.iter().enumerate() {
-                collected[track * slots + index].push(measurement.value(frame.objects, object));
+                collected[track * slots + index].push(measurement.value(frame.objects(), object));
             }
-            for (slot, (index, field)) in relations.iter().enumerate() {
+            for (slot, (index, field)) in fields.iter().enumerate() {
                 collected[track * slots + measurements.len() + slot]
-                    .push(field.value(frame.relations[*index], object));
+                    .push(field.value(frame.relations()[*index], object));
             }
         }
-    }
+    });
     let mut observations = Vec::with_capacity(rows);
     let mut data = (0..columns.len())
         .map(|_| Vec::with_capacity(rows))
@@ -1291,14 +1260,15 @@ fn track_table(
 }
 
 fn timepoint_table(
-    frames: &[Frame<'_>],
-    channels: &[String],
-    keys: &[String],
+    source: &dyn FrameSource,
     frame_interval: f32,
     aggregate: Aggregate,
-) -> Table {
-    let measurements = aggregated_measurements(frames[0].objects, channels.len());
-    let relations = aggregated_relations(frames[0].relations);
+) -> Option<Table> {
+    let channels = source.channels();
+    let keys = channel_keys(channels);
+    let relations = source.relations();
+    let measurements = aggregated_measurements(source.kind(), channels.len());
+    let fields = aggregated_relations(&relations);
     let mut columns = TimeField::ALL
         .iter()
         .map(|field| field.column())
@@ -1306,58 +1276,51 @@ fn timepoint_table(
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(relations.iter().map(|(index, field)| {
-        aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
-    }));
-    let rows = frames.len();
-    let mut observations = Vec::with_capacity(rows);
-    let mut data = (0..columns.len())
-        .map(|_| Vec::with_capacity(rows))
-        .collect::<Vec<_>>();
-    for frame in frames {
-        observations.push(Observation::new(Some(frame.time), None, None, None));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
+    let mut observations = Vec::new();
+    let mut data = (0..columns.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+    source.visit_all(&mut |frame: Frame<'_>| {
+        observations.push(Observation::new(Some(frame.time()), None, None, None));
         for (index, field) in TimeField::ALL.iter().enumerate() {
-            data[index].push(field.value(frame, frame_interval));
+            data[index].push(field.value(&frame, frame_interval));
         }
         for (slot, measurement) in measurements.iter().enumerate() {
-            let mut collected = Vec::with_capacity(frame.objects.count());
-            for object in 0..frame.objects.count() {
-                collected.push(measurement.value(frame.objects, object));
+            let mut collected = Vec::with_capacity(frame.objects().count());
+            for object in 0..frame.objects().count() {
+                collected.push(measurement.value(frame.objects(), object));
             }
             data[TimeField::ALL.len() + slot].push(aggregate.apply(&collected));
         }
-        for (slot, (index, field)) in relations.iter().enumerate() {
-            let mut collected = Vec::with_capacity(frame.objects.count());
-            for object in 0..frame.objects.count() {
-                collected.push(field.value(frame.relations[*index], object));
+        for (slot, (index, field)) in fields.iter().enumerate() {
+            let mut collected = Vec::with_capacity(frame.objects().count());
+            for object in 0..frame.objects().count() {
+                collected.push(field.value(frame.relations()[*index], object));
             }
             data[TimeField::ALL.len() + measurements.len() + slot]
                 .push(aggregate.apply(&collected));
         }
+    });
+    if observations.is_empty() {
+        return None;
     }
-    Table::new(
+    Some(Table::new(
         columns,
         TimeField::ALL.len(),
         observations,
         data,
         Group::Timepoint,
         aggregate,
-    )
+    ))
 }
 
-fn measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
-    match objects {
-        Objects::Spots(_) => Measurement::spots(channels),
-        Objects::Surfaces(_) => Measurement::surfaces(channels),
-        Objects::Cells(_) => Measurement::cells(channels),
-        Objects::Filaments(_) => Measurement::filaments(channels),
-    }
-}
-
-fn aggregated_measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
-    measurements(objects, channels)
+fn aggregated_measurements(kind: Kind, channels: usize) -> Vec<Measurement> {
+    kind.measurements(channels)
         .into_iter()
         .filter(|measurement| measurement.aggregates())
         .collect()
@@ -1400,24 +1363,6 @@ fn aggregated_source(basis: &Table, column: &Column, aggregate: Aggregate) -> Op
     let suffix = format!("_{}", aggregate.key());
     let base = column.key().strip_suffix(&suffix)?;
     basis.column(base)
-}
-
-fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
-    matches!(
-        (left, right),
-        (Objects::Spots(_), Objects::Spots(_))
-            | (Objects::Surfaces(_), Objects::Surfaces(_))
-            | (Objects::Cells(_), Objects::Cells(_))
-            | (Objects::Filaments(_), Objects::Filaments(_))
-    )
-}
-
-fn same_children(left: &[Child<'_>], right: &[Child<'_>]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.key() == right.key() && left.fields() == right.fields())
 }
 
 pub fn channel_keys(channels: &[String]) -> Vec<String> {

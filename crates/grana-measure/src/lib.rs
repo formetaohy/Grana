@@ -6,6 +6,7 @@ mod column;
 mod correlation;
 pub mod csv;
 mod filter;
+mod frame;
 mod lasso;
 mod mask;
 mod math;
@@ -31,6 +32,7 @@ pub use coloc::{
 };
 pub use column::{Column, Unit};
 pub use filter::Filter;
+pub use frame::{Frame, FrameSource, Kind};
 pub use lasso::Lasso;
 pub use mask::Mask;
 pub use math::student_two_sided;
@@ -48,6 +50,5 @@ pub use significance::{
 };
 pub use spatial::{Ripley, RipleyPoint, RipleyTest, Window, neighbour_distances};
 pub use table::{
-    Aggregate, Frame, Group, NEIGHBOUR_KEY, NEIGHBOUR_LABEL, Objects, Observation, Table,
-    channel_keys,
+    Aggregate, Group, NEIGHBOUR_KEY, NEIGHBOUR_LABEL, Objects, Observation, Table, channel_keys,
 };

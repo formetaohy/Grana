@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_object::{SurfaceCut, TrackParams};
 use grana_pipeline::Channels;
-use grana_scene::{Job, ObjectFrame};
+use grana_scene::{Job, ObjectFrame, ObjectSource};
 use grana_store::SpillStore;
 
 use crate::task::{Poll, Task};
@@ -67,13 +67,13 @@ pub fn localize(job: Job, channels: Arc<Channels>, request: LocalizationRequest)
 
 pub fn recut(
     job: Job,
-    frames: Vec<Option<Arc<ObjectFrame>>>,
+    source: ObjectSource,
     cut: SurfaceCut,
     workers: usize,
     store: Arc<SpillStore>,
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
-        let total = frames.len();
+        let total = source.frames() as usize;
         if total == 0 {
             sink(Event::Done);
             return Ok(());
@@ -83,11 +83,14 @@ pub fn recut(
             done: 0,
             total,
         });
-        for (time, frame) in frames.iter().enumerate() {
+        for time in 0..total {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            let Some(ObjectFrame::Surfaces(set)) = frame.as_deref() else {
+            let Some(frame) = source.frame(time as u32) else {
+                continue;
+            };
+            let ObjectFrame::Surfaces(set) = frame.as_ref() else {
                 continue;
             };
             let Some(frame) = grana_analysis::recut(set, cut, workers, Some(&store))? else {
@@ -127,8 +130,8 @@ pub fn track(
 
 pub fn relation(
     job: Job,
-    source: Vec<Option<Arc<ObjectFrame>>>,
-    target: Vec<Option<Arc<ObjectFrame>>>,
+    source: ObjectSource,
+    target: ObjectSource,
     shift: i32,
     same: bool,
     gate: f32,
@@ -136,8 +139,8 @@ pub fn relation(
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::relation(
-            source,
-            target,
+            &source,
+            &target,
             run::RelationRequest {
                 shift,
                 same,

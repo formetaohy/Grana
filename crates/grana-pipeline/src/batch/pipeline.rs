@@ -610,14 +610,11 @@ impl Run<'_, '_> {
         let seeds = self.scene.seed_frames(id);
         let seed_source = self.scene.seed_source(id);
         let sources = seed_source.map(|source| {
-            let nuclei = self
-                .scene
+            self.scene
                 .objects
                 .get(source)
-                .expect("the staged seed source exists");
-            (0..nuclei.frame_count())
-                .map(|time| nuclei.frame_shared(time))
-                .collect::<Vec<_>>()
+                .expect("the staged seed source exists")
+                .source()
         });
         let policy = match seed_source {
             Some(_) => crate::SeedPolicy::Sourced,
@@ -1039,43 +1036,30 @@ impl Run<'_, '_> {
                 })
             })
             .ok_or_else(|| format!("{name} carries no edits"))?;
-        let frames = (0..self.scene.frame_count())
-            .map(|time| {
-                self.scene
-                    .objects
-                    .get(source)
-                    .and_then(|object| object.frame_shared(time))
-            })
-            .collect::<Vec<_>>();
+        let objects = self
+            .scene
+            .objects
+            .get(source)
+            .map(|object| object.source())
+            .ok_or_else(|| format!("{name} carries an edited object set that left the scene"))?;
         let edited = match &provenance {
             grana_scene::Provenance::Edited { edits, .. } => {
-                crate::run::edit(&frames, edits, voxel, Some(self.store))?
+                crate::run::edit(&objects, edits, voxel, Some(self.store))?
             }
             grana_scene::Provenance::Masked { strokes, .. } => {
-                let level = frames
-                    .iter()
-                    .flatten()
-                    .find_map(|frame| match frame.as_ref() {
-                        ObjectFrame::Surfaces(set) => Some(set.level()),
-                        _ => None,
-                    });
-                let Some(level) = level else {
-                    return Err(format!("{name} carries no surface frame"));
-                };
                 let request = crate::run::MaskRequest {
                     channel,
-                    level,
                     strokes,
                     drifts: self.scene.drifts(),
                 };
-                crate::run::mask(&self.channels, &frames, voxel, &request)?
+                crate::run::mask(&self.channels, &objects, voxel, &request)?
             }
             _ => return Err(format!("{name} carries no edits")),
         };
-        for (time, frame) in edited.into_iter().enumerate() {
+        for (time, frame) in edited {
             match frame {
-                Some(frame) => self.scene.install_shared(id, time as u32, frame),
-                None => self.scene.install_optional(id, time as u32, None),
+                Some(frame) => self.scene.install_shared(id, time, frame),
+                None => self.scene.install_optional(id, time, None),
             }
         }
         self.scene.clear_tracks(id);
@@ -1148,8 +1132,18 @@ impl Run<'_, '_> {
             .expect("the staged relation target exists")
             .name()
             .to_string();
-        let source_frames = frames_of(&self.scene, source_id);
-        let target_frames = frames_of(&self.scene, target_id);
+        let source_frames = self
+            .scene
+            .objects
+            .get(source_id)
+            .expect("the staged relation source exists")
+            .source();
+        let target_frames = self
+            .scene
+            .objects
+            .get(target_id)
+            .expect("the staged relation target exists")
+            .source();
         let gate = self.scene.relation_gate(source_id, target_id);
         let _ = task.events.send(Event::Step {
             index: task.index,
@@ -1173,8 +1167,8 @@ impl Run<'_, '_> {
             _ => {}
         };
         run::relation(
-            source_frames,
-            target_frames,
+            &source_frames,
+            &target_frames,
             run::RelationRequest {
                 shift,
                 same: source_id == target_id,
@@ -1226,24 +1220,13 @@ impl Run<'_, '_> {
                 u16::MAX
             ));
         }
-        let shapes = (0..self.scene.frame_count())
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
-        let visible = (0..self.scene.frame_count())
-            .map(|time| {
-                {
-                    (0..object.object_count(time))
-                        .map(|index| object.visible_object(time, index))
-                        .collect()
-                }
-            })
-            .collect::<Vec<_>>();
+        let shapes = object.source();
         let levels =
             self.scene.dataset.pyramid().levels()[..self.scene.dataset.stored_levels()].to_vec();
         if levels.is_empty() {
             return Err("the dataset holds no stored resolution level".to_string());
         }
-        let mut labeling = Labeling::new(shapes, visible, labels, levels, name.clone());
+        let mut labeling = Labeling::new(shapes, labels, levels, name.clone());
         let properties = labeling.properties();
         let cancel = task.cancel;
         let mut fill =
@@ -1434,12 +1417,6 @@ impl Run<'_, '_> {
         self.scene.install_object_coloc(set, *coloc);
         Ok(())
     }
-}
-
-fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
-    (0..scene.frame_count())
-        .map(|time| scene.objects.get(id).and_then(|set| set.frame_shared(time)))
-        .collect()
 }
 
 fn drain(
@@ -1715,7 +1692,7 @@ fn detect(
 fn grow_frames(
     reading: Reading<'_>,
     params: grana_object::CellParams,
-    sources: Vec<Option<Arc<ObjectFrame>>>,
+    sources: grana_scene::ObjectSource,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
     let frames = reading.reader.pyramid().frame_count() as usize;

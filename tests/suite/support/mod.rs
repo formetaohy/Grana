@@ -90,6 +90,58 @@ pub fn revision() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+pub struct MeasureSource<'a> {
+    kind: grana_measure::Kind,
+    channels: Vec<String>,
+    objects: Vec<(u32, grana_measure::Objects<'a>)>,
+}
+
+pub fn measure_source<'a>(
+    kind: grana_measure::Kind,
+    channels: &[&str],
+    objects: impl IntoIterator<Item = grana_measure::Objects<'a>>,
+) -> MeasureSource<'a> {
+    MeasureSource {
+        kind,
+        channels: channels
+            .iter()
+            .map(|channel| (*channel).to_string())
+            .collect(),
+        objects: objects
+            .into_iter()
+            .enumerate()
+            .map(|(time, objects)| (time as u32, objects))
+            .collect(),
+    }
+}
+
+impl grana_measure::FrameSource for MeasureSource<'_> {
+    fn frames(&self) -> u32 {
+        self.objects.len() as u32
+    }
+
+    fn kind(&self) -> grana_measure::Kind {
+        self.kind
+    }
+
+    fn channels(&self) -> &[String] {
+        &self.channels
+    }
+
+    fn relations(&self) -> Vec<grana_measure::RelationRow<'_>> {
+        Vec::new()
+    }
+
+    fn children(&self) -> Vec<grana_measure::Child<'_>> {
+        Vec::new()
+    }
+
+    fn visit(&self, time: u32, visit: &mut dyn FnMut(grana_measure::Frame<'_>)) {
+        let (time, objects) = self.objects[time as usize];
+        visit(grana_measure::Frame::new(time, objects, &[], &[]));
+    }
+}
+
 pub struct Noise(u32);
 
 impl Noise {
