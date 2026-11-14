@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
+
+use glam::Vec2;
 
 use grana_display::Camera;
 use grana_editor::{Frame, Stage, Workspace};
@@ -70,6 +73,7 @@ pub struct App {
     surface: Option<Surface>,
     session: Session,
     engine: Option<Engine>,
+    pending_engine: Option<Receiver<Engine>>,
     start: Instant,
     capture: Option<PathBuf>,
     startup: Option<String>,
@@ -105,6 +109,7 @@ pub struct App {
     closing: bool,
     window_fit: WindowFit,
     window_fitted: bool,
+    startup_size: Option<Vec2>,
 }
 
 impl App {
@@ -126,6 +131,8 @@ impl App {
             surface: None,
             session,
             engine: None,
+            pending_engine: None,
+            startup_size: None,
             start: Instant::now(),
             capture,
             startup,
@@ -186,7 +193,12 @@ impl App {
         let mut ui: Ui<grana_editor::Message> =
             Ui::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
-        let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
+        self.pending_engine = Some(spawn_engine(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            gpu.format(),
+            gpu.pipelines().clone(),
+        ));
         if let Some(target) = self.startup.take() {
             if grana_session::is_remote(&target) {
                 self.session.begin_remote(target);
@@ -194,17 +206,38 @@ impl App {
                 self.session.open_path(PathBuf::from(target));
             }
         }
-        if let Some(scene) = self.session.scene() {
-            engine.set_dataset(&gpu.device, scene.dataset.pyramid());
-        }
         self.replaced = self.session.replaced();
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
+    }
+
+    fn sync_engine(&mut self) {
+        if self.engine.is_some() {
+            return;
+        }
+        let Some(pending) = self.pending_engine.take() else {
+            return;
+        };
+        let engine = if self.session.scene().is_some() {
+            pending
+                .recv()
+                .unwrap_or_else(|_| panic!("the renderer failed to initialize"))
+        } else {
+            match pending.try_recv() {
+                Ok(engine) => engine,
+                Err(TryRecvError::Empty) => {
+                    self.pending_engine = Some(pending);
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => panic!("the renderer failed to initialize"),
+            }
+        };
         self.engine = Some(engine);
     }
 
     pub(super) fn redraw(&mut self) {
         self.session.poll();
+        self.sync_engine();
         if self.follow_resume() {
             return;
         }
@@ -323,13 +356,11 @@ impl App {
         if self.window_fit != fit {
             self.window_fit = fit;
             self.window_fitted = false;
+            self.startup_size = None;
         }
     }
 
     fn fit_window(&mut self, frame: &Frame) {
-        if self.window_fitted {
-            return;
-        }
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
@@ -339,16 +370,18 @@ impl App {
                 let Some(size) = frame.startup else {
                     return;
                 };
+                if self.startup_size == Some(size) {
+                    return;
+                }
+                self.startup_size = Some(size);
                 let size = LogicalSize::new(size.x as f64, size.y as f64);
                 window.set_min_inner_size(Some(size));
-                let current = window.inner_size().to_logical::<f64>(window.scale_factor());
-                let settled = (current.width - size.width).abs() < 1.0
-                    && (current.height - size.height).abs() < 1.0;
-                if !settled {
-                    let _ = window.request_inner_size(size);
-                }
+                let _ = window.request_inner_size(size);
             }
             WindowFit::Editor => {
+                if self.window_fitted {
+                    return;
+                }
                 window.set_min_inner_size(Some(EDITOR_MINIMUM));
                 let scale = window.scale_factor();
                 let current = window.inner_size().to_logical::<f64>(scale);
@@ -358,12 +391,12 @@ impl App {
                         current.height.max(EDITOR_SIZE.height),
                     ));
                 }
+                self.window_fitted = true;
             }
         }
         if self.capture.is_none() {
             window.set_visible(true);
         }
-        self.window_fitted = true;
     }
 
     pub(super) fn request_redraw(&self) {
@@ -490,4 +523,25 @@ impl ApplicationHandler for App {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         }
     }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(pending) = self.pending_engine.take() {
+            let _ = pending.recv();
+        }
+    }
+}
+
+fn spawn_engine(
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+    pipelines: grana_gpu::Pipelines,
+) -> Receiver<Engine> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(Engine::new(&device, &queue, format, &pipelines));
+    });
+    receiver
 }

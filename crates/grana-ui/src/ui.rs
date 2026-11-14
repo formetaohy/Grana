@@ -236,6 +236,11 @@ impl<A: Clone> Ui<A> {
         self.pointer_over_widget_at(self.pointer)
     }
 
+    pub fn bounds(&self, name: &str) -> Option<Rect> {
+        let node = self.tree.node_at(Key::new(name))?;
+        Some(self.tree.nodes[node].rect)
+    }
+
     pub fn pointer_over_widget_at(&self, position: Vec2) -> bool {
         crate::hit::resolve(&self.hits, position).is_some()
     }

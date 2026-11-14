@@ -15,7 +15,6 @@ const HERO_HEIGHT: f32 = 52.0;
 const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 42.0;
 const RECOVERY_HEIGHT: f32 = 88.0;
-const STITCH_ROW: f32 = 30.0;
 const STITCH_GAP: f32 = 8.0;
 
 struct Status {
@@ -34,7 +33,7 @@ pub(crate) fn view<'a>(
     view: &SessionView<'_>,
     workspace: &Workspace,
     full: Rect,
-) -> (Vec<Element<'a, Message>>, Vec2) {
+) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let status = status(view, workspace.language);
@@ -48,58 +47,20 @@ pub(crate) fn view<'a>(
         },
     )
     .wrapping();
-    let detail = ctx.layout_text(
-        &status.detail,
-        detail_style,
-        PANEL_WIDTH - 2.0 * PANEL_PADDING,
-    );
-    let detail_height = detail.size.y.max(18.0);
-    let button = theme.metrics.control_height;
     let shown = view.recent.len().min(crate::RECENT_LIMIT);
-    let recents = if shown > 0 {
-        PANEL_GAP
-            + RECENT_HEADER
-            + RECENT_ROW * shown as f32
-            + theme.metrics.group_gap * (shown as f32 - 1.0)
-    } else {
-        0.0
-    };
-    let recovered = if view.recovery.is_some() {
-        PANEL_GAP + RECOVERY_HEIGHT
-    } else {
-        0.0
-    };
-    let actions_height = match view.stitch.as_ref() {
-        Some(stitch) => {
-            let rows =
-                3 + usize::from(stitch.channels.len() > 1) + usize::from(stitch.series_count > 1);
-            STITCH_ROW * rows as f32 + STITCH_GAP * (rows as f32 - 1.0) + PANEL_GAP
-        }
-        None => 38.0 + 8.0 + button + PANEL_GAP,
-    };
-    let height = 2.0 * PANEL_PADDING
-        + HERO_HEIGHT
-        + PANEL_GAP
-        + detail_height
-        + PANEL_GAP
-        + actions_height
-        + recovered
-        + recents;
-    let rect = Rect::from_min_size(
-        Vec2::new(
-            full.center().x - 0.5 * PANEL_WIDTH,
-            crate::chrome::TITLE_HEIGHT,
-        ),
-        Vec2::new(PANEL_WIDTH, height),
-    );
     let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.58 * full.height()));
     let primary = palette.primary;
-    let panel = palette.surface_container_low;
+    let panel_color = palette.surface_container_low;
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height())
             .view_static(move |painter, info| {
-                painter.rect(info.rect, Corners::ZERO, panel);
-                painter.gradient(glow, Corners::ZERO, panel.lerp(primary, 0.09), panel);
+                painter.rect(info.rect, Corners::ZERO, panel_color);
+                painter.gradient(
+                    glow,
+                    Corners::ZERO,
+                    panel_color.lerp(primary, 0.09),
+                    panel_color,
+                );
             })
             .named("shell.backdrop")
             .at(full)
@@ -179,13 +140,23 @@ pub(crate) fn view<'a>(
     let panel = grana_ui::column()
         .padding(Edges::all(PANEL_PADDING))
         .gap(PANEL_GAP)
+        .width(Length::Fixed(PANEL_WIDTH))
         .children(children)
-        .at(rect)
         .named("shell.panel");
-    elements.push(panel);
+    elements.push(
+        grana_ui::column()
+            .padding(Edges {
+                left: ((full.width() - PANEL_WIDTH) * 0.5).max(0.0),
+                top: crate::chrome::TITLE_HEIGHT,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .at(full)
+            .children([panel]),
+    );
     elements.extend(popups);
     elements.extend(crate::panel::remote(ctx, full, workspace.remote_open));
-    (elements, Vec2::new(PANEL_WIDTH, height))
+    elements
 }
 
 fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a, Message> {

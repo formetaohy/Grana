@@ -241,19 +241,28 @@ impl Text {
                 flush(&mut lines, &mut glyphs, &mut pen);
             }
             for token in tokenize(paragraph) {
-                let character = token.chars().next().unwrap_or(' ');
-                let face = if style.monospace {
-                    self.fonts.face_for_mono(character)
-                } else {
-                    self.fonts.face_for(character)
-                };
-                let run = self.fonts.shape(face, token, glyph_style, 1.0);
                 let whitespace = token.starts_with(' ');
-                if wrap && bounded && !whitespace && pen > 0.0 && pen + run.width > max_width + 0.01
-                {
+                let runs = if style.monospace {
+                    self.fonts.monospace_runs(token)
+                } else {
+                    self.fonts.runs(token)
+                };
+                let mut shaped = Vec::with_capacity(runs.len());
+                let mut width = 0.0f32;
+                for run in runs {
+                    let glyphs = self.fonts.shape(run.face, run.text, glyph_style, 1.0);
+                    width += glyphs.width;
+                    shaped.push((run.face as u16, glyphs));
+                }
+                if wrap && bounded && !whitespace && pen > 0.0 && pen + width > max_width + 0.01 {
                     flush(&mut lines, &mut glyphs, &mut pen);
                 }
-                if truncate && !wrap && bounded && pen + run.width > max_width {
+                if truncate && !wrap && bounded && pen + width > max_width {
+                    let face = if style.monospace {
+                        self.fonts.face_for_mono('\u{2026}')
+                    } else {
+                        self.fonts.face_for('\u{2026}')
+                    };
                     let ellipsis = self.fonts.shape(face, "\u{2026}", glyph_style, 1.0);
                     if pen + ellipsis.width <= max_width {
                         for glyph in &ellipsis.glyphs {
@@ -270,15 +279,17 @@ impl Text {
                     flush(&mut lines, &mut glyphs, &mut pen);
                     break 'paragraphs;
                 }
-                for glyph in &run.glyphs {
-                    glyphs.push(PlacedGlyph {
-                        face: face as u16,
-                        id: glyph.id,
-                        x: pen + glyph.x,
-                        baseline: 0.0,
-                    });
+                for (face, run) in &shaped {
+                    for glyph in &run.glyphs {
+                        glyphs.push(PlacedGlyph {
+                            face: *face,
+                            id: glyph.id,
+                            x: pen + glyph.x,
+                            baseline: 0.0,
+                        });
+                    }
+                    pen += run.width;
                 }
-                pen += run.width;
             }
             if !glyphs.is_empty() {
                 flush(&mut lines, &mut glyphs, &mut pen);

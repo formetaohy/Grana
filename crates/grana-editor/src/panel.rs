@@ -113,8 +113,7 @@ pub fn build(
         let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
             let mut ctx = ui.build();
-            let (mut elements, card) = crate::shell::view(&mut ctx, view, workspace, full);
-            frame.startup = Some(crate::shell::window_size(card));
+            let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
             elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
             if let Some(palette) = palette.as_ref() {
                 elements.extend(crate::palette::view(&mut ctx, full, palette));
@@ -122,6 +121,9 @@ pub fn build(
             elements
         };
         ui.present(grana_ui::place(full, elements));
+        frame.startup = ui
+            .bounds("shell.panel")
+            .map(|panel| crate::shell::window_size(panel.size()));
         return frame;
     };
     if workspace.panel == Some(Panel::Statistics)

@@ -89,35 +89,33 @@ impl App {
     pub(super) fn render(&mut self, display: Display) -> Option<Duration> {
         let viewport = self.viewport();
         let cap = self.level_cap();
-        let App {
-            surface,
-            engine,
-            session,
-            camera,
-            output,
-            ..
-        } = self;
-        let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
-            return None;
-        };
-        let overlays = super::overlay::overlays(session);
-        let outcome = match session.scene() {
-            Some(scene) => engine.draw(
-                &surface.gpu.device,
-                &surface.gpu.queue,
-                grana_engine::View {
-                    scene,
-                    camera,
-                    size: [viewport.region[2], viewport.region[3]],
-                    display,
-                    level_cap: cap,
-                    overlays: &overlays,
-                },
-            ),
-            None => Ok(()),
+        let overlays = super::overlay::overlays(&self.session);
+        let scene = self.session.scene();
+        let outcome = {
+            let App {
+                surface,
+                engine,
+                camera,
+                ..
+            } = self;
+            match (surface.as_ref(), engine.as_mut(), scene) {
+                (Some(surface), Some(engine), Some(scene)) => engine.draw(
+                    &surface.gpu.device,
+                    &surface.gpu.queue,
+                    grana_engine::View {
+                        scene,
+                        camera,
+                        size: [viewport.region[2], viewport.region[3]],
+                        display,
+                        level_cap: cap,
+                        overlays: &overlays,
+                    },
+                ),
+                _ => Ok(()),
+            }
         };
         if let Err(detail) = outcome {
-            *output = Some(detail);
+            self.output = Some(detail);
             self.present_ui();
             return None;
         }
@@ -151,7 +149,7 @@ impl App {
         let App {
             surface, engine, ..
         } = self;
-        let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_ref()) else {
+        let Some(surface) = surface.as_mut() else {
             return;
         };
         let Some(frame) = surface.gpu.acquire() else {
@@ -167,8 +165,14 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
-        surface.ui.set_scene_revision(engine.image_revision());
-        surface.ui.render(&mut encoder, &view, engine.view());
+        if let Some(engine) = engine.as_ref() {
+            surface.ui.set_scene_revision(engine.image_revision());
+        }
+        surface.ui.render(
+            &mut encoder,
+            &view,
+            engine.as_ref().and_then(grana_engine::Engine::view),
+        );
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
         surface.gpu.pipelines().save();

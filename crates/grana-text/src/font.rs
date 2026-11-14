@@ -78,6 +78,46 @@ impl Fonts {
         self.face_for(character)
     }
 
+    pub fn runs<'a>(&mut self, text: &'a str) -> Vec<FaceRun<'a>> {
+        self.split(text, false)
+    }
+
+    pub fn monospace_runs<'a>(&mut self, text: &'a str) -> Vec<FaceRun<'a>> {
+        self.split(text, true)
+    }
+
+    fn split<'a>(&mut self, text: &'a str, monospace: bool) -> Vec<FaceRun<'a>> {
+        let mut runs = Vec::new();
+        let mut start = 0usize;
+        let mut face = None;
+        for (offset, character) in text.char_indices() {
+            let chosen = if monospace {
+                self.face_for_mono(character)
+            } else {
+                self.face_for(character)
+            };
+            match face {
+                None => face = Some(chosen),
+                Some(current) if current != chosen => {
+                    runs.push(FaceRun {
+                        face: current,
+                        text: &text[start..offset],
+                    });
+                    start = offset;
+                    face = Some(chosen);
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(face) = face {
+            runs.push(FaceRun {
+                face,
+                text: &text[start..],
+            });
+        }
+        runs
+    }
+
     fn font(&self, index: usize) -> FontRef<'static> {
         self.faces[index].font
     }
@@ -227,6 +267,12 @@ impl GlyphStyle {
         self.hint = hint;
         self
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FaceRun<'a> {
+    pub face: usize,
+    pub text: &'a str,
 }
 
 #[derive(Clone, Copy, Debug)]
