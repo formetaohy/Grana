@@ -46,7 +46,7 @@ fn assembles_slices_by_overlap() {
         second[index] = 1;
     }
     second[2] = 2;
-    let volume = grana_segment::assemble(&mut [first, second], width, height, 0.5)
+    let volume = grana_segment::assemble(&mut [first, second], width, height, 0.5, 0)
         .expect("the slices assemble");
     assert_eq!(volume.count(), 2, "the overlap joins one object only");
     assert_eq!(
@@ -59,6 +59,34 @@ fn assembles_slices_by_overlap() {
         volume.labels()[10],
         "the unmatched object keeps its own label"
     );
+}
+
+#[test]
+fn measures_the_minimum_size_of_an_assembled_object() {
+    let width = 4u32;
+    let height = 1u32;
+    let mut lower = vec![0u32; 4];
+    let mut upper = vec![0u32; 4];
+    for slice in [&mut lower, &mut upper] {
+        slice[0] = 1;
+        slice[1] = 1;
+        slice[2] = 1;
+        slice[3] = 2;
+    }
+    let volume = grana_segment::assemble(&mut [lower, upper], width, height, 0.5, 4)
+        .expect("the slices assemble");
+    assert_eq!(
+        volume.count(),
+        1,
+        "the minimum size measures objects once they are assembled"
+    );
+    assert_eq!(volume.labels()[0], volume.labels()[4]);
+    assert_eq!(
+        volume.labels()[3],
+        0,
+        "the thin object falls below the minimum size"
+    );
+    assert_eq!(volume.labels()[7], 0);
 }
 
 #[test]

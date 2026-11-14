@@ -266,6 +266,7 @@ struct Base {
 struct SplatSlot {
     base: u32,
     len: usize,
+    capacity: usize,
     geometry_stamp: u64,
     style_stamp: u64,
     geometry: Buffer,
@@ -282,14 +283,17 @@ impl SplatSlot {
         queue: &Queue,
         layouts: &Layouts,
         base: u32,
+        capacity: usize,
         data: &SplatLevel,
         scratch: &mut Vec<SplatGeometry>,
     ) -> Self {
-        let len = data.len();
-        assert!(len > 0, "a splat slot holds at least one instance");
-        let geometry = storage_buffer::<SplatGeometry>(device, "grana.splat.geometry", len);
-        let style = storage_buffer::<SplatStyle>(device, "grana.splat.style", len);
-        let order = storage_buffer::<u32>(device, "grana.splat.order", len);
+        assert!(
+            capacity >= data.len() && capacity > 0,
+            "a splat slot holds every one of its instances"
+        );
+        let geometry = storage_buffer::<SplatGeometry>(device, "grana.splat.geometry", capacity);
+        let style = storage_buffer::<SplatStyle>(device, "grana.splat.style", capacity);
+        let order = storage_buffer::<u32>(device, "grana.splat.order", capacity);
         let args = InstanceCommands::new(device, "grana.splat.args");
         let base_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("grana.splat.base"),
@@ -354,7 +358,8 @@ impl SplatSlot {
         });
         let mut slot = Self {
             base,
-            len,
+            len: 0,
+            capacity,
             geometry_stamp: u64::MAX,
             style_stamp: u64::MAX,
             geometry,
@@ -369,6 +374,10 @@ impl SplatSlot {
     }
 
     fn write(&mut self, queue: &Queue, data: &SplatLevel, scratch: &mut Vec<SplatGeometry>) {
+        assert!(
+            data.len() <= self.capacity,
+            "a splat level fits the resident slot it writes"
+        );
         if self.geometry_stamp != data.geometry_stamp() {
             scratch.clear();
             scratch.extend_from_slice(data.geometry());
@@ -382,6 +391,7 @@ impl SplatSlot {
             queue.write_buffer(&self.style, 0, cast_slice(data.style()));
             self.style_stamp = data.style_stamp();
         }
+        self.len = data.len();
     }
 }
 
@@ -390,7 +400,7 @@ pub(crate) struct SplatPasses {
     active: Vec<(u64, u8)>,
     pickable: Vec<(u64, u8)>,
     ranges: Vec<(u32, u32, u64, u8)>,
-    next_base: u32,
+    seen: HashSet<(u64, u8)>,
     count: u32,
     scratch: Vec<SplatGeometry>,
     cull: ComputePipeline,
@@ -556,7 +566,7 @@ impl SplatPasses {
             active: Vec::new(),
             pickable: Vec::new(),
             ranges: Vec::new(),
-            next_base: 0,
+            seen: HashSet::new(),
             count: 0,
             scratch: Vec::new(),
             cull,
@@ -569,7 +579,7 @@ impl SplatPasses {
     }
 
     pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, splats: Splats<'_>) {
-        let mut seen = HashSet::new();
+        self.seen.clear();
         self.active.clear();
         self.pickable.clear();
         let mut count = 0usize;
@@ -578,25 +588,36 @@ impl SplatPasses {
                 continue;
             }
             let entry = (chunk.key(), chunk.level());
-            seen.insert(entry);
+            self.seen.insert(entry);
             count = count.max(chunk.len());
-            let resize = self
+            let fitted = self
                 .slots
                 .get(&entry)
-                .is_none_or(|slot| slot.len != chunk.len());
-            if resize {
-                let base = self.base_for(entry, chunk.len());
+                .is_some_and(|slot| slot.capacity >= chunk.len());
+            if fitted {
+                if let Some(slot) = self.slots.get_mut(&entry) {
+                    slot.write(queue, chunk.data(), &mut self.scratch);
+                }
+            } else {
+                self.slots.remove(&entry);
+                let mut occupied = self
+                    .slots
+                    .values()
+                    .map(|slot| (slot.base, slot.base.saturating_add(slot.capacity as u32)))
+                    .collect::<Vec<_>>();
+                let len =
+                    u32::try_from(chunk.len()).expect("a splat chunk fits the instance space");
+                let base = place(&mut occupied, len);
                 let slot = SplatSlot::new(
                     device,
                     queue,
                     layouts,
                     base,
+                    chunk.len(),
                     chunk.data(),
                     &mut self.scratch,
                 );
                 self.slots.insert(entry, slot);
-            } else if let Some(slot) = self.slots.get_mut(&entry) {
-                slot.write(queue, chunk.data(), &mut self.scratch);
             }
             if chunk.active() {
                 self.active.push(entry);
@@ -605,7 +626,8 @@ impl SplatPasses {
                 }
             }
         }
-        self.slots.retain(|entry, _| seen.contains(entry));
+        let Self { slots, seen, .. } = self;
+        slots.retain(|entry, _| seen.contains(entry));
         self.count = count as u32;
         self.ranges.clear();
         for (entry, slot) in &self.slots {
@@ -613,27 +635,6 @@ impl SplatPasses {
                 .push((slot.base, slot.base + slot.len as u32, entry.0, entry.1));
         }
         self.ranges.sort_unstable();
-    }
-
-    fn base_for(&mut self, entry: (u64, u8), len: usize) -> u32 {
-        let len = len as u32;
-        let held = self.slots.get(&entry).map(|slot| slot.base);
-        let free = held.filter(|base| {
-            let end = base.saturating_add(len);
-            end > *base
-                && !self.slots.iter().any(|(key, slot)| {
-                    *key != entry
-                        && slot.base < end
-                        && *base < slot.base.saturating_add(slot.len as u32)
-                })
-        });
-        free.unwrap_or_else(|| {
-            let base = self.next_base;
-            self.next_base = base
-                .checked_add(len)
-                .expect("the splat instance space is exhausted");
-            base
-        })
     }
 
     pub fn resolve(&self, index: u32) -> Option<(u64, u8, u32)> {
@@ -787,5 +788,39 @@ impl SplatPasses {
             pass.set_bind_group(2, &slot.pick, &[]);
             pass.draw_indirect(slot.args.buffer(), 0);
         }
+    }
+}
+
+fn place(occupied: &mut [(u32, u32)], len: u32) -> u32 {
+    assert!(
+        len > 0,
+        "a splat instance range holds at least one instance"
+    );
+    occupied.sort_unstable();
+    let mut base = 0u32;
+    for (start, end) in occupied.iter().copied() {
+        if end <= base {
+            continue;
+        }
+        if start >= base.saturating_add(len) {
+            break;
+        }
+        base = end;
+    }
+    base.checked_add(len)
+        .expect("the splat instance space is exhausted");
+    base
+}
+
+#[cfg(test)]
+mod test {
+    use super::place;
+
+    #[test]
+    fn packs_resident_instances_into_the_first_gap() {
+        assert_eq!(place(&mut [], 3), 0);
+        assert_eq!(place(&mut [(4, 9), (0, 2)], 2), 2);
+        assert_eq!(place(&mut [(0, 10), (20, 25)], 10), 10);
+        assert_eq!(place(&mut [(0, 10), (20, 25)], 12), 25);
     }
 }

@@ -53,6 +53,7 @@ pub(super) fn segment(
                 warp: request.drifts.warp(request.channel, time),
                 time,
                 settings,
+                minimum: request.params.minimum_size(),
             };
             let total = prompts.len();
             sink(Event::Progress {
@@ -151,6 +152,7 @@ struct Grow<'a> {
     warp: &'a grana_warp::Warp,
     time: u32,
     settings: Settings,
+    minimum: u32,
 }
 
 impl Grow<'_> {
@@ -213,7 +215,7 @@ impl Grow<'_> {
             slices.push((z, mask));
             below = slices.len() - 1;
         }
-        Block::of(&slices, info)
+        Block::of(&slices, info, self.minimum)
     }
 
     fn slice(&self, z: u32, center: [f32; 2]) -> Result<Option<Mask2d>, String> {
@@ -403,7 +405,7 @@ struct Block {
 }
 
 impl Block {
-    fn of(slices: &[(u32, Mask2d)], info: Level) -> Result<Option<Self>, String> {
+    fn of(slices: &[(u32, Mask2d)], info: Level, minimum: u32) -> Result<Option<Self>, String> {
         if slices.is_empty() {
             return Ok(None);
         }
@@ -442,6 +444,9 @@ impl Block {
                 sum[2] += depth as f64;
                 count += 1;
             }
+        }
+        if count < u64::from(minimum) {
+            return Ok(None);
         }
         let count = count.max(1) as f64;
         let centroid = info.voxel_center([

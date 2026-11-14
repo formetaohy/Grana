@@ -1,15 +1,15 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use std::collections::BTreeMap;
-
 use grana_display::srgb_to_linear;
-use grana_object::{Spot, SpotSet};
+use grana_object::{Spot, SpotSet, SpotWeight};
 use grana_render::{SplatGeometry, SplatStyle};
 
 const RAW_PIXELS: f32 = 3.0;
 const CELL_PIXELS: f32 = 4.0;
 const SAMPLE_LIMIT: usize = 1024;
 pub(crate) const AGGREGATE_FLOOR: usize = 512;
+pub(crate) const SPLAT_LIMIT: usize = 1 << 21;
 const LADDER: u8 = 4;
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
@@ -19,6 +19,8 @@ const EMPTY: u32 = u32::MAX;
 pub(crate) const STANDALONE: u32 = u32::MAX;
 
 pub(crate) const LEVEL_COUNT: u8 = LADDER + 1;
+
+const _: () = assert!(LEVEL_COUNT == grana_render::SPLAT_LEVELS);
 
 #[derive(Clone)]
 pub(crate) struct Frame {
@@ -51,12 +53,44 @@ impl Choice {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Spots,
+    Cells,
+}
+
 #[derive(Clone, Copy)]
-pub(crate) struct Appearance {
-    pub(crate) color: [f32; 3],
-    pub(crate) visible: bool,
+pub(crate) struct Look<'a> {
+    pub(crate) color: &'a dyn Fn(usize, &Spot) -> [f32; 3],
+    pub(crate) visible: &'a dyn Fn(u32, usize) -> bool,
+    pub(crate) weight: Option<SpotWeight>,
     pub(crate) categorical: bool,
-    pub(crate) weight: f32,
+}
+
+#[derive(Clone)]
+pub(crate) struct Geometry {
+    pub(crate) cells: Arc<Vec<SplatGeometry>>,
+    pub(crate) paint: Paint,
+    pub(crate) members: Option<Vec<u32>>,
+}
+
+impl Geometry {
+    pub(crate) fn len(&self) -> usize {
+        self.cells.len()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum Paint {
+    Spots { time: u32, spots: Arc<SpotSet> },
+    Cells { cells: Vec<CellPaint> },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CellPaint {
+    count: u32,
+    radiance: [f32; 3],
+    weight: f32,
 }
 
 #[derive(Default)]
@@ -74,10 +108,6 @@ impl Detections {
             Some(index) => index as u32,
             None => STANDALONE,
         });
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.geometry.len()
     }
 }
 
@@ -165,21 +195,103 @@ pub(crate) fn choose(
     Choice::Level(LADDER)
 }
 
-pub(crate) fn detections<F>(frames: &[Frame], choice: Choice, opacity: f32, style: F) -> Detections
-where
-    F: Fn(u32, usize, &Spot) -> Appearance,
-{
-    if frames.len() == 1 {
-        let frame = &frames[0];
-        return match choice {
-            Choice::Full => raw(&frame.spots, opacity, &|index: usize, spot| {
-                style(frame.time, index, spot)
-            }),
-            Choice::Level(level) => binned(frames, level, opacity, &style, true),
-        };
+pub(crate) fn kind(frames: &[Frame], choice: Choice) -> Kind {
+    match choice {
+        Choice::Full if frames.len() == 1 && frames[0].spots.len() <= SPLAT_LIMIT => Kind::Spots,
+        _ => Kind::Cells,
     }
-    let level = choice.level().max(1);
-    binned(frames, level, opacity, &style, false)
+}
+
+pub(crate) fn geometry(
+    frames: &[Frame],
+    kind: Kind,
+    level: u8,
+    look: Look<'_>,
+    pickable: bool,
+) -> Geometry {
+    match kind {
+        Kind::Spots => spots(&frames[0]),
+        Kind::Cells => cells(frames, level, look, pickable),
+    }
+}
+
+pub(crate) fn styles(paint: &Paint, opacity: f32, look: Look<'_>) -> Vec<SplatStyle> {
+    match paint {
+        Paint::Spots { time, spots } => {
+            let mut palette = Palette::default();
+            spots
+                .spots()
+                .iter()
+                .enumerate()
+                .map(|(index, spot)| {
+                    let alpha = if (look.visible)(*time, index) {
+                        let weight = look.weight.map_or(1.0, |scale| scale.of(spot));
+                        (opacity * weight).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    SplatStyle::new(palette.radiance((look.color)(index, spot)), alpha)
+                })
+                .collect()
+        }
+        Paint::Cells { cells } => cells
+            .iter()
+            .map(|cell| SplatStyle::new(cell.radiance, cell.alpha(opacity)))
+            .collect(),
+    }
+}
+
+fn spots(frame: &Frame) -> Geometry {
+    let entries = frame.spots.spots();
+    Geometry {
+        cells: Arc::new(
+            entries
+                .iter()
+                .map(|spot| SplatGeometry::gaussian(spot.center(), spot.sigma()))
+                .collect(),
+        ),
+        paint: Paint::Spots {
+            time: frame.time,
+            spots: Arc::clone(&frame.spots),
+        },
+        members: Some((0..entries.len() as u32).collect()),
+    }
+}
+
+fn cells(frames: &[Frame], level: u8, look: Look<'_>, pickable: bool) -> Geometry {
+    let level = level.max(1);
+    let Some(ladder) = Ladder::over(frames) else {
+        return Geometry {
+            cells: Arc::new(Vec::new()),
+            paint: Paint::Cells { cells: Vec::new() },
+            members: None,
+        };
+    };
+    let mut grid = Grid::new(ladder.cell(level));
+    let mut palette = Palette::default();
+    for frame in frames {
+        for (index, spot) in frame.spots.spots().iter().enumerate() {
+            if !(look.visible)(frame.time, index) {
+                continue;
+            }
+            let radiance = palette.radiance((look.color)(index, spot));
+            let weight = look.weight.map_or(1.0, |scale| scale.of(spot));
+            let member = pickable.then_some(index);
+            grid.add(member, spot, radiance, look.categorical, weight);
+        }
+    }
+    let (cells, paint) = grid.finish();
+    let members = pickable.then(|| {
+        grid.cells
+            .values()
+            .map(|cell| cell.member)
+            .collect::<Vec<_>>()
+    });
+    Geometry {
+        cells: Arc::new(cells),
+        paint: Paint::Cells { cells: paint },
+        members,
+    }
 }
 
 pub(crate) fn highlights<F>(
@@ -213,68 +325,10 @@ where
     detections
 }
 
-fn raw<F>(spots: &SpotSet, opacity: f32, style: &F) -> Detections
-where
-    F: Fn(usize, &Spot) -> Appearance,
-{
-    let entries = spots.spots();
-    let mut palette = Palette::default();
-    let mut detections = Detections {
-        geometry: Vec::with_capacity(entries.len()),
-        style: Vec::with_capacity(entries.len()),
-        members: Vec::with_capacity(entries.len()),
-    };
-    for (index, spot) in entries.iter().enumerate() {
-        let look = style(index, spot);
-        detections.push(
-            SplatGeometry::gaussian(spot.center(), spot.sigma()),
-            SplatStyle::new(
-                palette.radiance(look.color),
-                if look.visible {
-                    (opacity * look.weight).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                },
-            ),
-            Some(index),
-        );
+impl CellPaint {
+    fn alpha(&self, opacity: f32) -> f32 {
+        (1.0 - (1.0 - opacity * self.weight).powi(self.count as i32)).clamp(0.0, 1.0)
     }
-    detections
-}
-
-fn binned<F>(frames: &[Frame], level: u8, opacity: f32, style: &F, pickable: bool) -> Detections
-where
-    F: Fn(u32, usize, &Spot) -> Appearance,
-{
-    let Some(ladder) = Ladder::over(frames) else {
-        return Detections::default();
-    };
-    let mut grid = Grid::new(ladder.cell(level));
-    let mut palette = Palette::default();
-    for frame in frames {
-        for (index, spot) in frame.spots.spots().iter().enumerate() {
-            let look = style(frame.time, index, spot);
-            if !look.visible {
-                continue;
-            }
-            let member = pickable.then_some(index);
-            grid.add(
-                member,
-                spot,
-                palette.radiance(look.color),
-                look.categorical,
-                look.weight,
-            );
-        }
-    }
-    let count = grid.len();
-    let mut detections = Detections {
-        geometry: Vec::with_capacity(count),
-        style: Vec::with_capacity(count),
-        members: Vec::with_capacity(count),
-    };
-    grid.finish(opacity, &mut detections);
-    detections
 }
 
 #[derive(Default)]
@@ -341,10 +395,6 @@ impl Grid {
         }
     }
 
-    fn len(&self) -> usize {
-        self.cells.len()
-    }
-
     fn slot(&self, point: [f32; 3]) -> [i64; 3] {
         point.map(|value| (value / self.cell).floor() as i64)
     }
@@ -390,7 +440,9 @@ impl Grid {
         }
     }
 
-    fn finish(&self, opacity: f32, detections: &mut Detections) {
+    fn finish(&self) -> (Vec<SplatGeometry>, Vec<CellPaint>) {
+        let mut geometry = Vec::with_capacity(self.cells.len());
+        let mut paint = Vec::with_capacity(self.cells.len());
         for cell in self.cells.values() {
             let count = f64::from(cell.count);
             let center = [0, 1, 2].map(|axis| (cell.sum[axis] / count) as f32);
@@ -405,12 +457,13 @@ impl Grid {
                 cell.radiance.map(|sum| (sum / count) as f32)
             };
             let weight = ((cell.weight / count) as f32).clamp(0.0, 1.0);
-            let alpha = (1.0 - (1.0 - opacity * weight).powi(cell.count as i32)).clamp(0.0, 1.0);
-            detections.push(
-                SplatGeometry::gaussian(center, sigma),
-                SplatStyle::new(radiance, alpha),
-                (cell.member != EMPTY).then_some(cell.member as usize),
-            );
+            geometry.push(SplatGeometry::gaussian(center, sigma));
+            paint.push(CellPaint {
+                count: cell.count,
+                radiance,
+                weight,
+            });
         }
+        (geometry, paint)
     }
 }

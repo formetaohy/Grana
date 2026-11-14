@@ -2357,7 +2357,7 @@ fn converges_the_brightness_of_overlapping_splats() {
     );
 }
 
-fn spot_scene(pyramid: Pyramid, side: usize) -> Scene {
+fn spot_scene(pyramid: Pyramid, side: usize) -> (Scene, grana_scene::ObjectSetId) {
     let mut scene = Scene::new(Dataset::synthetic("lod", pyramid));
     let set = scene.add_object(ObjectKind::Spots, 0);
     let spacing = 0.04;
@@ -2389,7 +2389,7 @@ fn spot_scene(pyramid: Pyramid, side: usize) -> Scene {
             IntensityTable::new(1, vec![statistics; count]),
         )),
     );
-    scene
+    (scene, set)
 }
 
 #[test]
@@ -2397,7 +2397,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
     let volume = sphere_volume();
     let pyramid = volume.pyramid();
     let side = 16;
-    let scene = spot_scene(pyramid.clone(), side);
+    let (scene, _) = spot_scene(pyramid.clone(), side);
     let mut far = Camera::new(35.0);
     far.fit(Vec3::splat(6.0), 1.0);
     let mut near = Camera::new(35.0);
@@ -2506,13 +2506,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
 #[test]
 fn keeps_the_spot_geometry_while_a_selection_changes() {
     let volume = sphere_volume();
-    let mut scene = spot_scene(volume.pyramid(), 8);
-    let set = scene
-        .objects
-        .iter()
-        .next()
-        .expect("the spot set exists")
-        .id();
+    let (mut scene, set) = spot_scene(volume.pyramid(), 8);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::splat(0.2), 1.0);
     let lens = |camera| grana_engine::Lens {
@@ -2566,9 +2560,73 @@ fn keeps_the_spot_geometry_while_a_selection_changes() {
 }
 
 #[test]
+fn rebuilds_the_spot_proxies_that_an_object_visibility_changes() {
+    let volume = sphere_volume();
+    let (mut scene, set) = spot_scene(volume.pyramid(), 16);
+    let mut far = Camera::new(35.0);
+    far.fit(Vec3::splat(6.0), 1.0);
+    let lens = grana_engine::Lens {
+        camera: &far,
+        height: SIDE,
+    };
+    let targets = grana_engine::plan(&scene, Some(lens));
+    let mut cache = grana_engine::SplatCache::new();
+    let plain = grana_engine::frame(&scene, &targets, &mut cache).expect("the spot proxies build");
+    let proxied = plain
+        .splats
+        .iter()
+        .find(|chunk| chunk.active())
+        .expect("a proxy level draws");
+    let geometry = proxied.data().geometry().as_ptr();
+    let geometry_stamp = proxied.data().geometry_stamp();
+    let style_stamp = proxied.data().style_stamp();
+    scene
+        .objects
+        .get_mut(set)
+        .expect("the spot set exists")
+        .set_opacity(0.4);
+    let styled = grana_engine::frame(&scene, &targets, &mut cache).expect("the spot proxies build");
+    let proxied = styled
+        .splats
+        .iter()
+        .find(|chunk| chunk.active())
+        .expect("a proxy level draws");
+    assert_eq!(
+        proxied.data().geometry().as_ptr(),
+        geometry,
+        "a spot opacity rebuilt the proxy geometry"
+    );
+    assert_eq!(
+        proxied.data().geometry_stamp(),
+        geometry_stamp,
+        "a spot opacity changed the proxy geometry stamp"
+    );
+    assert_ne!(
+        proxied.data().style_stamp(),
+        style_stamp,
+        "a spot opacity kept the splat styles"
+    );
+    assert!(
+        scene.set_object_hidden(set, 0, &[0], true),
+        "the spot set hides an object"
+    );
+    let hidden = grana_engine::frame(&scene, &targets, &mut cache).expect("the spot proxies build");
+    let proxied = hidden
+        .splats
+        .iter()
+        .find(|chunk| chunk.active())
+        .expect("a proxy level draws");
+    assert_ne!(
+        proxied.data().geometry_stamp(),
+        geometry_stamp,
+        "a hidden object kept the aggregated proxies"
+    );
+}
+
+#[test]
 fn keeps_every_spot_level_resident_across_magnification() {
     let volume = sphere_volume();
-    let scene = spot_scene(volume.pyramid(), 16);
+    let (scene, _) = spot_scene(volume.pyramid(), 16);
     let mut far = Camera::new(35.0);
     far.fit(Vec3::splat(6.0), 1.0);
     let mut near = Camera::new(35.0);

@@ -17,7 +17,6 @@ const SEED_REACH: f32 = 6.0;
 pub struct Settings {
     cellprob_threshold: f32,
     flow_threshold: f32,
-    minimum_size: u32,
     tile_overlap: u32,
     slice_overlap: f32,
 }
@@ -26,14 +25,12 @@ impl Settings {
     pub fn new(
         cellprob_threshold: f32,
         flow_threshold: f32,
-        minimum_size: u32,
         tile_overlap: u32,
         slice_overlap: f32,
     ) -> Self {
         Self {
             cellprob_threshold,
             flow_threshold,
-            minimum_size,
             tile_overlap,
             slice_overlap,
         }
@@ -45,10 +42,6 @@ impl Settings {
 
     pub fn flow_threshold(self) -> f32 {
         self.flow_threshold
-    }
-
-    pub fn minimum_size(self) -> u32 {
-        self.minimum_size
     }
 
     pub fn tile_overlap(self) -> u32 {
@@ -107,7 +100,6 @@ impl Segmenter {
     fn finish(&self, flow: &Flow, labels: &mut [u32], width: u32, height: u32) {
         let settings = self.settings;
         dynamics::remove_bad_flow_masks(flow, labels, settings.flow_threshold());
-        dynamics::remove_small_masks(labels, settings.minimum_size());
         dynamics::fill_holes(labels, width as usize, height as usize);
         dynamics::renumber(labels);
     }
@@ -267,7 +259,13 @@ impl Volume {
     }
 }
 
-pub fn assemble(slices: &mut [Vec<u32>], width: u32, height: u32, overlap: f32) -> Result<Volume> {
+pub fn assemble(
+    slices: &mut [Vec<u32>],
+    width: u32,
+    height: u32,
+    overlap: f32,
+    minimum_size: u32,
+) -> Result<Volume> {
     let length = image_length(width, height)?;
     if slices.is_empty() {
         return Err(Error::input("a volume must contain at least one slice"));
@@ -324,6 +322,18 @@ pub fn assemble(slices: &mut [Vec<u32>], width: u32, height: u32, overlap: f32) 
         }
     }
 
+    let mut totals = vec![0u64; forest.len()];
+    for (index, node) in nodes.iter().enumerate() {
+        let area = &areas[index];
+        for (label, &node) in node.iter().enumerate().skip(1) {
+            if node == u32::MAX {
+                continue;
+            }
+            let root = forest.find(node);
+            totals[root as usize] += u64::from(area[label]);
+        }
+    }
+
     let mut roots = vec![u32::MAX; forest.len()];
     let mut numbering: Vec<Vec<u32>> = Vec::with_capacity(slices.len());
     let mut count = 0u32;
@@ -334,6 +344,9 @@ pub fn assemble(slices: &mut [Vec<u32>], width: u32, height: u32, overlap: f32) 
                 continue;
             }
             let root = forest.find(node);
+            if totals[root as usize] < u64::from(minimum_size) {
+                continue;
+            }
             let slot = &mut roots[root as usize];
             if *slot == u32::MAX {
                 count += 1;

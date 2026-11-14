@@ -34,7 +34,7 @@ pub const SEGMENT_FIELDS: [ParamField; 5] = [
     },
     ParamField {
         label: "minimum size",
-        suffix: " px",
+        suffix: " vox",
         minimum: ParamScale::Absolute(SIZE_MINIMUM),
         maximum: ParamScale::Absolute(SIZE_MAXIMUM),
         logarithmic: true,
@@ -172,7 +172,7 @@ impl SegmentParams {
     pub fn set_minimum_size(&mut self, size: u32) {
         assert!(
             size <= SIZE_MAXIMUM as u32,
-            "a segmented object holds a bounded number of pixels"
+            "a segmented object holds a bounded number of voxels"
         );
         self.minimum_size = size;
     }

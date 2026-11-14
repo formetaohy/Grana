@@ -54,7 +54,6 @@ pub(super) fn segmenter(
     let settings = Settings::new(
         params.cellprob_threshold(),
         params.flow_threshold(),
-        params.minimum_size(),
         params.tile_overlap(),
         params.slice_overlap(),
     );
@@ -148,8 +147,14 @@ pub fn segment(
             let done = time as usize * depth as usize + offset + 1;
             sink(Event::Progress { time, done, total });
         }
-        let volume = assemble(&mut slices, width, height, request.params.slice_overlap())
-            .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
+        let volume = assemble(
+            &mut slices,
+            width,
+            height,
+            request.params.slice_overlap(),
+            request.params.minimum_size(),
+        )
+        .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
         if volume.count() == 0 {
             continue;
         }

@@ -596,41 +596,6 @@ struct Geometry {
     sum_x: u64,
 }
 
-pub(crate) fn remove_small_masks(labels: &mut [u32], minimum_size: u32) {
-    if minimum_size == 0 {
-        return;
-    }
-    let mut max_label = 0u32;
-    for &label in labels.iter() {
-        max_label = max_label.max(label);
-    }
-    if max_label == 0 {
-        return;
-    }
-    let mut counts = vec![0u32; max_label as usize + 1];
-    for &label in labels.iter() {
-        if label > 0 {
-            counts[label as usize] += 1;
-        }
-    }
-    let mut remove = vec![false; counts.len()];
-    let mut removed = false;
-    for label in 1..counts.len() {
-        if counts[label] > 0 && counts[label] < minimum_size {
-            remove[label] = true;
-            removed = true;
-        }
-    }
-    if removed {
-        for label in labels.iter_mut() {
-            if *label > 0 && remove[*label as usize] {
-                *label = 0;
-            }
-        }
-        renumber(labels);
-    }
-}
-
 pub(crate) fn fill_holes(labels: &mut [u32], width: usize, height: usize) {
     if width == 0 || height == 0 {
         return;
