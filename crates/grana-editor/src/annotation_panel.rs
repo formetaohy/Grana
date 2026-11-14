@@ -126,7 +126,6 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     if !state.access.author() {
         return view::card(ctx, 8.0, children);
     }
-    children.push(view::divider(ctx));
     let selected = scene.annotations.selected();
     let inner = ctx.theme().metrics.corner_sm;
     let remove = view::button_shaped(

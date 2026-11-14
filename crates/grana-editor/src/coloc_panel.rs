@@ -7,9 +7,7 @@ use grana_measure::{
 };
 use grana_scene::{Job, ObjectSetId, Progress};
 use grana_session::Command;
-use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle,
-};
+use grana_ui::{Align, BuildContext, Element, Icon, Key, Length, Level, Rect, Role, TextStyle};
 
 use crate::message::Message;
 use crate::state::View;
@@ -382,15 +380,6 @@ fn diagnostics<'a>(
                     );
                     left += width;
                 }
-                let line_y = info.rect.min.y + 18.0 + 4.0;
-                painter.rect(
-                    Rect::from_min_size(
-                        Vec2::new(info.rect.min.x, line_y),
-                        Vec2::new(info.rect.width(), 1.0),
-                    ),
-                    Corners::ZERO,
-                    palette.outline_variant.with_alpha(0.45),
-                );
                 let mut y = info.rect.min.y + 18.0 + 9.0;
                 painter.text_in(
                     Rect::from_min_size(Vec2::new(info.rect.min.x, y), Vec2::new(widths[0], 20.0)),

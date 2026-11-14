@@ -1,5 +1,4 @@
 use grana_session::Command;
-use grana_ui::popover::separator as separator_widget;
 use grana_ui::{BuildContext, Corners, Edges, Element, Icon, Key, Length, Motion, Role};
 
 use crate::message::Message;
@@ -32,10 +31,6 @@ pub fn card_title<'a>(
     detail: Option<&str>,
 ) -> View<'a> {
     ctx.card_title(symbol, title, detail)
-}
-
-pub fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
-    ctx.divider()
 }
 
 pub fn section_header<'a>(
@@ -124,11 +119,6 @@ pub fn menu_row<'a>(
         Some(message) => row.press(message),
         None => row,
     }
-}
-
-pub fn menu_separator<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
-    let _ = ctx;
-    separator_widget()
 }
 
 pub fn labelled<'a>(ctx: &mut BuildContext<'_, Message>, label: &str, value: &str) -> View<'a> {

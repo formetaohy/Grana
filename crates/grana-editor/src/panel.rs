@@ -90,6 +90,7 @@ impl Panel {
 pub struct Frame {
     pub commands: Vec<Command>,
     pub window: Vec<crate::chrome::WindowAction>,
+    pub startup: Option<Vec2>,
 }
 
 pub fn build(
@@ -112,7 +113,8 @@ pub fn build(
         let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
             let mut ctx = ui.build();
-            let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
+            let (mut elements, card) = crate::shell::view(&mut ctx, view, workspace, full);
+            frame.startup = Some(crate::shell::window_size(card));
             elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
             if let Some(palette) = palette.as_ref() {
                 elements.extend(crate::palette::view(&mut ctx, full, palette));

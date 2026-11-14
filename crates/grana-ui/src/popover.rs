@@ -18,4 +18,4 @@ pub fn popup<'a, A>(
     .children(children)
 }
 
-pub use crate::widget::{action_row, menu_row, separator};
+pub use crate::widget::{action_row, menu_row};

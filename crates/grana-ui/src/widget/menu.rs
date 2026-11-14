@@ -12,7 +12,6 @@ use crate::theme::{Level, Theme};
 use super::PaintInfo;
 
 pub const MENU_ROW: f32 = 32.0;
-pub const SEPARATOR: f32 = 8.0;
 
 pub fn menu_row<'a, A>(theme: &Theme, label: &str, checked: bool) -> Element<'a, A> {
     Element::new(Layout {
@@ -70,14 +69,6 @@ pub fn disclosure_row<'a, A>(
             open,
         }),
     }))
-}
-
-pub fn separator<'a, A>() -> Element<'a, A> {
-    Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(SEPARATOR)),
-        ..Layout::row()
-    })
-    .with_content(Content::Separator)
 }
 
 pub(super) fn paint_menu_row(
@@ -239,15 +230,4 @@ pub(super) fn paint_action_row(
             1.6,
         );
     }
-}
-
-pub(super) fn paint_separator(painter: &mut Painter, info: &PaintInfo<'_>) {
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(info.rect.min.x + 8.0, info.rect.center().y),
-            Vec2::new(info.rect.width() - 16.0, 1.0),
-        ),
-        Corners::ZERO,
-        info.theme.palette.outline_variant.with_alpha(0.55),
-    );
 }

@@ -212,7 +212,6 @@ pub(super) fn card<'a>(
     if let Some(report) = report {
         let groups = report.groups();
         if !groups.stats().is_empty() {
-            children.push(view::divider(ctx));
             let held = grana_i18n::localization::group_count(language, groups.stats().len());
             children.push(view::section_header(
                 ctx,
@@ -222,7 +221,6 @@ pub(super) fn card<'a>(
             children.push(group_rows(ctx, language, groups));
         }
         if let Some(nena) = report.nena() {
-            children.push(view::divider(ctx));
             let pairs = grana_i18n::localization::neighbour_pairs(language, nena.pairs());
             children.push(view::section_header(
                 ctx,
@@ -231,7 +229,6 @@ pub(super) fn card<'a>(
             ));
             children.push(neighbours_chart(ctx, language, nena));
         }
-        children.push(view::divider(ctx));
         children.push(view::section_header(
             ctx,
             grana_i18n::localization::correlation(language),
@@ -245,7 +242,6 @@ pub(super) fn card<'a>(
             ));
         }
     }
-    children.push(view::divider(ctx));
     let molecules = set.tracks().map_or(0, |tracks| tracks.set().len());
     let detail =
         (molecules > 0).then(|| grana_i18n::localization::molecule_count(language, molecules));

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use grana_display::Camera;
-use grana_editor::{Stage, Workspace};
+use grana_editor::{Frame, Stage, Workspace};
 use grana_engine::{Engine, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_i18n::Language;
@@ -44,6 +44,10 @@ const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
 const AUTOSAVE_IDLE: Duration = Duration::from_secs(8);
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
+const EDITOR_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
+const EDITOR_MINIMUM: LogicalSize<f64> = LogicalSize::new(1080.0, 700.0);
+const STARTUP_MINIMUM: LogicalSize<f64> = LogicalSize::new(360.0, 260.0);
+
 struct Surface {
     window: Arc<Window>,
     gpu: Gpu,
@@ -54,6 +58,12 @@ struct Surface {
 enum Resume {
     Exit,
     Command(Command),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowFit {
+    Startup,
+    Editor,
 }
 
 pub struct App {
@@ -93,6 +103,9 @@ pub struct App {
     animating: bool,
     chrome: window::Chrome,
     closing: bool,
+    window_fit: WindowFit,
+    window_fitted: bool,
+    reveal: bool,
 }
 
 impl App {
@@ -147,6 +160,9 @@ impl App {
             animating: false,
             chrome: window::Chrome::new(),
             closing: false,
+            window_fit: WindowFit::Startup,
+            window_fitted: false,
+            reveal: false,
         }
     }
 
@@ -159,9 +175,9 @@ impl App {
                     Window::default_attributes()
                         .with_title("Grana")
                         .with_window_icon(Some(icon))
-                        .with_visible(self.capture.is_none())
-                        .with_inner_size(LogicalSize::new(1440.0, 900.0))
-                        .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
+                        .with_visible(false)
+                        .with_inner_size(EDITOR_SIZE)
+                        .with_min_inner_size(STARTUP_MINIMUM),
                 ))
                 .expect("failed to create the window"),
         );
@@ -193,6 +209,7 @@ impl App {
         if self.follow_resume() {
             return;
         }
+        self.sync_window_fit();
         self.track_changes();
         self.poll_export();
         self.sync_plate_panel();
@@ -208,6 +225,7 @@ impl App {
         self.poll_pick();
         self.session.sync_measure();
         let (frame, animating) = self.run_ui();
+        self.fit_window(&frame);
         self.animating = animating;
         self.sync_preference();
         self.sync_ime();
@@ -297,6 +315,63 @@ impl App {
         }
     }
 
+    fn sync_window_fit(&mut self) {
+        let fit = if self.session.scene().is_some() {
+            WindowFit::Editor
+        } else {
+            WindowFit::Startup
+        };
+        if self.window_fit != fit {
+            self.window_fit = fit;
+            self.window_fitted = false;
+        }
+    }
+
+    fn fit_window(&mut self, frame: &Frame) {
+        if self.window_fitted {
+            return;
+        }
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let window = &surface.window;
+        match self.window_fit {
+            WindowFit::Startup => {
+                let Some(size) = frame.startup else {
+                    return;
+                };
+                let size = LogicalSize::new(size.x as f64, size.y as f64);
+                window.set_min_inner_size(Some(size));
+                let current = window.inner_size().to_logical::<f64>(window.scale_factor());
+                let settled = (current.width - size.width).abs() < 1.0
+                    && (current.height - size.height).abs() < 1.0;
+                if settled {
+                    if self.capture.is_none() {
+                        window.set_visible(true);
+                    }
+                } else {
+                    let _ = window.request_inner_size(size);
+                    self.reveal = self.capture.is_none();
+                }
+            }
+            WindowFit::Editor => {
+                window.set_min_inner_size(Some(EDITOR_MINIMUM));
+                let scale = window.scale_factor();
+                let current = window.inner_size().to_logical::<f64>(scale);
+                if current.width < EDITOR_SIZE.width || current.height < EDITOR_SIZE.height {
+                    let _ = window.request_inner_size(LogicalSize::new(
+                        current.width.max(EDITOR_SIZE.width),
+                        current.height.max(EDITOR_SIZE.height),
+                    ));
+                }
+            }
+        }
+        if self.capture.is_none() && self.window_fit == WindowFit::Editor {
+            window.set_visible(true);
+        }
+        self.window_fitted = true;
+    }
+
     pub(super) fn request_redraw(&self) {
         if let Some(surface) = &self.surface {
             surface.window.request_redraw();
@@ -352,6 +427,12 @@ impl ApplicationHandler for App {
                     surface.gpu.resize([size.width, size.height]);
                     self.chrome.refresh(&surface.window);
                     surface.window.request_redraw();
+                }
+                if self.reveal {
+                    self.reveal = false;
+                    if let Some(surface) = self.surface.as_ref() {
+                        surface.window.set_visible(true);
+                    }
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {

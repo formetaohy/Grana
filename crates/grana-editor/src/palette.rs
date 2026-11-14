@@ -16,7 +16,7 @@ const FIELD: f32 = 40.0;
 const ROW: f32 = 32.0;
 const HEADER: f32 = 22.0;
 const FOOTER: f32 = 20.0;
-const DIVIDER: f32 = 8.0;
+const SECTION_GAP: f32 = 8.0;
 pub(crate) const VISIBLE: usize = 9;
 
 pub struct Entry {
@@ -232,7 +232,7 @@ pub(crate) fn view<'a>(
     }
     let height = 2.0 * PADDING
         + FIELD
-        + DIVIDER
+        + SECTION_GAP
         + ROW * (listed.max(1)) as f32
         + HEADER * headers as f32
         + FOOTER;
@@ -274,7 +274,7 @@ pub(crate) fn view<'a>(
             .height(Length::Fixed(FIELD))
             .padding(Edges::symmetric(6.0, 0.0))
             .children([search, field]),
-        divider(ctx),
+        grana_ui::spacer(SECTION_GAP),
     ];
     let mut previous = None;
     for (offset, entry) in palette.entries[palette.start..palette.start + listed]
@@ -318,20 +318,6 @@ pub(crate) fn view<'a>(
             .children(children),
     );
     elements
-}
-
-fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let color = ctx.theme().palette.outline_variant.with_alpha(0.5);
-    grana_ui::canvas(Length::Fill, DIVIDER).view_static(move |painter, info| {
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(info.rect.min.x, info.rect.center().y),
-                Vec2::new(info.rect.width(), 1.0),
-            ),
-            Corners::ZERO,
-            color,
-        );
-    })
 }
 
 fn group_header<'a>(ctx: &mut BuildContext<'_, Message>, group: Group) -> Element<'a, Message> {

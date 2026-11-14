@@ -10,11 +10,13 @@ pub const TITLE_HEIGHT: f32 = MARGIN + TOOLBAR_HEIGHT;
 const CONTROL: f32 = 30.0;
 const PADDING: f32 = 6.0;
 const GAP: f32 = 2.0;
+const CLOSE_WIDTH: f32 = CONTROL + PADDING * 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ChromeView {
     pub maximized: bool,
     pub controls: bool,
+    pub close_only: bool,
     pub leading: f32,
 }
 
@@ -51,9 +53,35 @@ pub fn view<'a>(
             .blocks_pointer(),
     ];
     if chrome.controls {
-        elements.push(controls(ctx, full, chrome.maximized));
+        if chrome.close_only {
+            elements.push(close(ctx, full));
+        } else {
+            elements.push(controls(ctx, full, chrome.maximized));
+        }
     }
     elements
+}
+
+fn close<'a>(ctx: &mut BuildContext<'_, Message>, full: Rect) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let surface = theme.surface(Role::FloatingToolbar, State::Rest);
+    grana_ui::row()
+        .at(Rect::from_min_size(
+            Vec2::new(full.max.x - MARGIN - CLOSE_WIDTH, full.min.y + MARGIN),
+            Vec2::new(CLOSE_WIDTH, TOOLBAR_HEIGHT),
+        ))
+        .padding(Edges::all(PADDING))
+        .align(Align::Center)
+        .background(surface)
+        .children([grana_ui::widget::icon_button(
+            Icon::Close,
+            CONTROL,
+            Role::Destructive,
+            grana_i18n::header::close_window(ctx.language()),
+        )
+        .named("window.close")
+        .press(Message::Window(WindowAction::Close))])
+        .named("window.controls")
 }
 
 fn controls<'a>(

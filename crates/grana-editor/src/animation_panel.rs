@@ -416,7 +416,6 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         view::form_row(ctx, grana_i18n::animation::width(language), width_combo),
         view::form_row(ctx, grana_i18n::animation::frame_rate(language), fps_row),
         view::form_row(ctx, grana_i18n::animation::duration(language), duration_row),
-        view::divider(ctx),
     ];
     match running {
         Some((frame, total)) => {
@@ -532,7 +531,6 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             grana_i18n::animation::sequence(language),
             &grana_i18n::animation::png_frames(language, frames),
         ),
-        view::divider(ctx),
     ];
     let idle = running.is_none();
     let save = grana_ui::widget::button_enabled(

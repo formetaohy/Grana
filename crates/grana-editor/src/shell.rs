@@ -2,15 +2,15 @@ use glam::Vec2;
 use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
     Align, BuildContext, Corners, Edges, Element, Fill, Icon, Key, Layer, Length, Level, Rect,
-    Role, Shadow, State, TextStyle,
+    Role, State, TextStyle,
 };
 
 use crate::message::Message;
 use crate::state::Workspace;
 
-const CARD_WIDTH: f32 = 472.0;
-const CARD_PADDING: f32 = 24.0;
-const CARD_GAP: f32 = 14.0;
+const PANEL_WIDTH: f32 = 472.0;
+const PANEL_PADDING: f32 = 24.0;
+const PANEL_GAP: f32 = 14.0;
 const HERO_HEIGHT: f32 = 52.0;
 const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 42.0;
@@ -25,15 +25,18 @@ struct Status {
     error: bool,
 }
 
+pub(crate) fn window_size(panel: Vec2) -> Vec2 {
+    Vec2::new(panel.x, crate::chrome::TITLE_HEIGHT + panel.y)
+}
+
 pub(crate) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     view: &SessionView<'_>,
     workspace: &Workspace,
     full: Rect,
-) -> Vec<Element<'a, Message>> {
+) -> (Vec<Element<'a, Message>>, Vec2) {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let backdrop = palette.surface_dim;
     let status = status(view, workspace.language);
     let language = workspace.language;
     let detail_style = TextStyle::new(
@@ -48,13 +51,13 @@ pub(crate) fn view<'a>(
     let detail = ctx.layout_text(
         &status.detail,
         detail_style,
-        CARD_WIDTH - 2.0 * CARD_PADDING,
+        PANEL_WIDTH - 2.0 * PANEL_PADDING,
     );
     let detail_height = detail.size.y.max(18.0);
     let button = theme.metrics.control_height;
     let shown = view.recent.len().min(crate::RECENT_LIMIT);
     let recents = if shown > 0 {
-        CARD_GAP
+        PANEL_GAP
             + RECENT_HEADER
             + RECENT_ROW * shown as f32
             + theme.metrics.group_gap * (shown as f32 - 1.0)
@@ -62,7 +65,7 @@ pub(crate) fn view<'a>(
         0.0
     };
     let recovered = if view.recovery.is_some() {
-        CARD_GAP + RECOVERY_HEIGHT
+        PANEL_GAP + RECOVERY_HEIGHT
     } else {
         0.0
     };
@@ -70,32 +73,33 @@ pub(crate) fn view<'a>(
         Some(stitch) => {
             let rows =
                 3 + usize::from(stitch.channels.len() > 1) + usize::from(stitch.series_count > 1);
-            STITCH_ROW * rows as f32 + STITCH_GAP * (rows as f32 - 1.0) + CARD_GAP
+            STITCH_ROW * rows as f32 + STITCH_GAP * (rows as f32 - 1.0) + PANEL_GAP
         }
-        None => 38.0 + 8.0 + button + CARD_GAP,
+        None => 38.0 + 8.0 + button + PANEL_GAP,
     };
-    let height = 2.0 * CARD_PADDING
+    let height = 2.0 * PANEL_PADDING
         + HERO_HEIGHT
-        + CARD_GAP
+        + PANEL_GAP
         + detail_height
-        + CARD_GAP
+        + PANEL_GAP
         + actions_height
         + recovered
         + recents;
     let rect = Rect::from_min_size(
         Vec2::new(
-            full.center().x - 0.5 * CARD_WIDTH,
-            full.center().y - 0.52 * height,
+            full.center().x - 0.5 * PANEL_WIDTH,
+            crate::chrome::TITLE_HEIGHT,
         ),
-        Vec2::new(CARD_WIDTH, height),
+        Vec2::new(PANEL_WIDTH, height),
     );
     let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.58 * full.height()));
     let primary = palette.primary;
+    let panel = palette.surface_container_low;
     let mut elements = vec![
         grana_ui::canvas(Length::Fill, full.height())
             .view_static(move |painter, info| {
-                painter.rect(info.rect, Corners::ZERO, backdrop);
-                painter.gradient(glow, Corners::ZERO, backdrop.lerp(primary, 0.09), backdrop);
+                painter.rect(info.rect, Corners::ZERO, panel);
+                painter.gradient(glow, Corners::ZERO, panel.lerp(primary, 0.09), panel);
             })
             .named("shell.backdrop")
             .at(full)
@@ -114,7 +118,7 @@ pub(crate) fn view<'a>(
                 children.push(recovery_block(ctx, recovery));
             }
             let inner = theme.metrics.corner_sm;
-            let third = (CARD_WIDTH - 2.0 * CARD_PADDING - 2.0 * theme.metrics.group_gap) / 3.0;
+            let third = (PANEL_WIDTH - 2.0 * PANEL_PADDING - 2.0 * theme.metrics.group_gap) / 3.0;
             children.push(
                 grana_ui::row().gap(theme.metrics.group_gap).children([
                     grana_ui::widget::action_button(
@@ -172,21 +176,16 @@ pub(crate) fn view<'a>(
     if shown > 0 {
         children.push(recent_block(ctx, view));
     }
-    let surface = theme
-        .surface(Role::Sheet, State::Rest)
-        .with_corners(Corners::all(theme.metrics.corner_xxl))
-        .with_shadow(Shadow::new(grana_ui::Color::black_alpha(0.58), 32.0, 10.0));
-    let card = grana_ui::column()
-        .padding(Edges::all(CARD_PADDING))
-        .gap(CARD_GAP)
-        .background(surface)
+    let panel = grana_ui::column()
+        .padding(Edges::all(PANEL_PADDING))
+        .gap(PANEL_GAP)
         .children(children)
         .at(rect)
-        .named("shell.card");
-    elements.push(card);
+        .named("shell.panel");
+    elements.push(panel);
     elements.extend(popups);
     elements.extend(crate::panel::remote(ctx, full, workspace.remote_open));
-    elements
+    (elements, Vec2::new(PANEL_WIDTH, height))
 }
 
 fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a, Message> {
@@ -213,7 +212,7 @@ fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Elem
     ));
     let title_col = grana_ui::column()
         .width(Length::Fixed(
-            CARD_WIDTH - 2.0 * CARD_PADDING - 48.0 - 124.0 - 24.0,
+            PANEL_WIDTH - 2.0 * PANEL_PADDING - 48.0 - 124.0 - 24.0,
         ))
         .gap(2.0)
         .justify(Align::Center)
@@ -255,7 +254,7 @@ fn primary_actions<'a>(
     let inner = theme.metrics.corner_xs;
     let menu_key = Key::new("shell.open.menu");
     let open = ctx.popup_open(menu_key);
-    let lead_w = CARD_WIDTH - 2.0 * CARD_PADDING - 38.0 - theme.metrics.group_gap;
+    let lead_w = PANEL_WIDTH - 2.0 * PANEL_PADDING - 38.0 - theme.metrics.group_gap;
     let lead = grana_ui::widget::action_button(
         &theme,
         Icon::Cube,
@@ -318,7 +317,7 @@ fn primary_actions<'a>(
                 None,
                 Message::BeginRemote,
             ),
-            crate::view::menu_separator(ctx),
+            grana_ui::spacer(8.0),
             crate::view::action_menu_message(
                 ctx,
                 "shell.menu.project",

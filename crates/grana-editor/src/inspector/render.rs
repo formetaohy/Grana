@@ -244,7 +244,6 @@ pub(super) fn rendering<'a>(
                 })
             },
         ));
-        children.push(view::divider(ctx));
         let lighting = Key::new("rendering.lighting");
         let lighting_open = state.workspace.disclosures.is_open(lighting);
         let mut light = Vec::new();

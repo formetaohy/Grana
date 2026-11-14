@@ -25,13 +25,11 @@ pub use button::{
     Split, action_button, button, button_enabled, button_width, icon_button, split_button,
 };
 pub use color::color_picker;
-pub use display::{
-    card, card_title, combo, divider, empty_state, form_row, group_card, section_header,
-};
+pub use display::{card, card_title, combo, empty_state, form_row, group_card, section_header};
 pub use field::text_field;
 pub use icon::icon;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
-pub use menu::{action_row, disclosure_row, menu_row, separator};
+pub use menu::{action_row, disclosure_row, menu_row};
 pub use segment::{segmented, segmented_fill, tabs};
 pub use slider::{drag_value, gradient_bar, progress, range_slider, slider_readout, slider_sized};
 pub use toggle::{checkbox, toggle, toggle_row};
@@ -86,7 +84,6 @@ pub(crate) fn measure(
         Content::Labelled(_) => (Vec2::new(available.x, 22.0), None),
         Content::ColorSwatch(swatch) => (Vec2::splat(swatch.size), None),
         Content::ColorPicker(_) => (color::measure(), None),
-        Content::Separator => (Vec2::new(available.x, menu::SEPARATOR), None),
         Content::Empty | Content::Canvas | Content::Text(_) => (
             Vec2::new(
                 layout.size.width.resolve(available.x),
@@ -190,10 +187,6 @@ pub(crate) fn paint(
         }
         Content::ColorPicker(color) => {
             color::paint(color, runtime, painter, info);
-            None
-        }
-        Content::Separator => {
-            menu::paint_separator(painter, info);
             None
         }
     }

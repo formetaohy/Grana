@@ -38,6 +38,7 @@ impl Chrome {
         ChromeView {
             maximized: window.is_maximized(),
             controls: custom_controls(),
+            close_only: false,
             leading: leading(),
         }
     }

@@ -227,7 +227,6 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             || grana_i18n::batch::dataset_fallback(language).to_string(),
             |dataset| dataset.name.clone(),
         );
-        children.push(view::divider(ctx));
         children.push(view::caption(
             ctx,
             &grana_i18n::batch::reviewing(language, &name),
@@ -362,7 +361,6 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             Command::SetBatchChannels,
         ));
     }
-    children.push(view::divider(ctx));
     if state.batch_running() {
         let paused = state.batch_paused();
         let mut actions = vec![
@@ -658,7 +656,6 @@ fn comparison<'a>(
                 .copied()
         });
     if let Some(row) = open {
-        children.push(view::divider(ctx));
         children.extend(detail(ctx, state, row, metric, selected));
     }
     children.push(view::weak(

@@ -207,10 +207,6 @@ impl<'a, A> BuildContext<'a, A> {
         widget::menu_row(&self.copy(), label, checked)
     }
 
-    pub fn separator<'e>(&self) -> Element<'e, A> {
-        widget::separator()
-    }
-
     pub fn card<'e>(
         &self,
         role: Role,
@@ -230,10 +226,6 @@ impl<'a, A> BuildContext<'a, A> {
         children: impl IntoIterator<Item = Element<'e, A>>,
     ) -> Element<'e, A> {
         widget::group_card(&self.copy(), slot, active, padding, gap, children)
-    }
-
-    pub fn divider<'e>(&self) -> Element<'e, A> {
-        widget::divider(&self.copy())
     }
 
     pub fn card_title<'e>(

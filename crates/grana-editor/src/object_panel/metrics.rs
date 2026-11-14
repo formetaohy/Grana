@@ -182,10 +182,11 @@ pub(super) fn measure<'a>(
         .map_or(0, |object| object.channel());
     let language = ctx.language();
     let property = |english: &str| grana_i18n::object::property(language, english);
-    let mut children = vec![
-        view::divider(ctx),
-        view::section_header(ctx, grana_i18n::object::selected_object(language), None),
-    ];
+    let mut children = vec![view::section_header(
+        ctx,
+        grana_i18n::object::selected_object(language),
+        None,
+    )];
     let rows = match frame.as_ref() {
         ObjectFrame::Spots(spots) => {
             let Some(spot) = spots.spots().get(index).copied() else {

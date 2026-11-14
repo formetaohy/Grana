@@ -365,7 +365,7 @@ pub(super) fn object_menu<'a>(
         }
     }
     if authoring && !merges.is_empty() {
-        rows.push(view::menu_separator(ctx));
+        rows.push(grana_ui::spacer(8.0));
         rows.push(view::caption(ctx, grana_i18n::object::merge_into(language)));
         for (index, (candidate, label)) in merges.iter().enumerate() {
             rows.push(view::menu_row(
@@ -382,7 +382,7 @@ pub(super) fn object_menu<'a>(
     }
     if authoring {
         rows.extend(object_edit_rows(ctx, state, id, set));
-        rows.push(view::menu_separator(ctx));
+        rows.push(grana_ui::spacer(8.0));
         if position > 0 {
             rows.push(action_row(
                 ctx,
@@ -456,7 +456,7 @@ pub(super) fn object_edit_rows<'a>(
         return Vec::new();
     }
     let mut rows = vec![
-        view::menu_separator(ctx),
+        grana_ui::spacer(8.0),
         view::caption(ctx, grana_i18n::object::edit_objects(language)),
     ];
     if selected.len() > 1 {

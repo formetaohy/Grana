@@ -316,7 +316,6 @@ pub(super) fn display<'a>(
         .flatten()
         .map(|entry| entry.spec().clone());
     if let Some(operation) = derived.as_ref().map(|spec| spec.operation().clone()) {
-        children.push(view::divider(ctx));
         match &operation {
             grana_scene::Operation::Restore(restore) => children.extend(restore_fields(
                 ctx,
@@ -372,7 +371,6 @@ pub(super) fn display<'a>(
         }
     }
     if state.access.author() {
-        children.push(view::divider(ctx));
         let voxel = scene.dataset.voxel_size().min_element();
         let sigma = voxel.max(0.05);
         let radius = (10.0 * voxel).max(1.0);
@@ -474,7 +472,6 @@ pub(super) fn display<'a>(
             ratio_rows,
         ));
     }
-    children.push(view::divider(ctx));
     children.push(
         view::button_with(
             ctx,
@@ -572,7 +569,6 @@ pub(super) fn display<'a>(
                 ]),
         );
     }
-    children.push(view::divider(ctx));
     let key = Key::new("display.transfer");
     let open = state.workspace.disclosures.is_open(key);
     let mut curve = Vec::new();

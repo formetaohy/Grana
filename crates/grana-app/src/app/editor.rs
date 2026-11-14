@@ -25,6 +25,7 @@ impl App {
         surface.ui.resize(size);
         surface.ui.set_language(workspace.language);
         workspace.chrome = chrome.view(&surface.window);
+        workspace.chrome.close_only = session.scene().is_none();
         let actions = surface
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());

@@ -375,7 +375,7 @@ impl LayoutEngine<'_> {
             Vec2::new(width.max(0.0), height.max(0.0))
         };
         let (auto_cross, auto_main) = if forced.is_some() {
-            (false, true)
+            (false, false)
         } else {
             (
                 match layout.flow {

@@ -1170,7 +1170,6 @@ fn parameter_rows<'a>(
             },
         ));
     }
-    children.push(view::divider(ctx));
     children.push(view::toggle_row(
         ctx,
         &format!("{prefix}.visible"),

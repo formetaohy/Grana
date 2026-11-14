@@ -8,7 +8,7 @@ use grana_ui::{
 use crate::message::Message;
 use crate::panel::Layout;
 use crate::state::View;
-use crate::view::{menu, menu_separator};
+use crate::view::menu;
 
 pub(super) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -128,8 +128,14 @@ fn project_split<'a>(
         .x + inset * 2.0
             + 20.0;
     let open_split_w = open_lead_w + theme.metrics.group_gap + theme.metrics.control_height;
-    let available_lead =
-        (crate::panel::TOOLBAR_LEFT - 12.0 - 30.0 - 12.0 - open_split_w - 28.0).max(84.0);
+    let trail_span = theme.metrics.control_height + theme.metrics.group_gap;
+    let available_lead = (crate::panel::TOOLBAR_LEFT
+        - 12.0
+        - theme.metrics.control_height
+        - 12.0
+        - open_split_w
+        - trail_span)
+        .max(84.0);
     let lead_width = available_lead;
     let measured = (lead_width - 34.0 - if dirty { 12.0 } else { 0.0 }).max(32.0);
     let menu_key = Key::new("project.menu");
@@ -206,7 +212,7 @@ fn project_split<'a>(
     };
     let trail = grana_ui::widget::icon_button(
         trail_icon,
-        26.0,
+        theme.metrics.control_height,
         if open { Role::Tonal } else { Role::SurfaceHigh },
         "",
     )
@@ -352,17 +358,25 @@ fn actions<'a>(
         settings_popup,
     ]);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
-    grana_ui::row()
-        .at(layout.toolbar_right)
+    let actions = grana_ui::row()
         .named("header.actions")
         .padding(Edges::symmetric(6.0, 6.0))
         .gap(6.0)
         .align(Align::Center)
-        .justify(Align::End)
-        .width(Length::Fill)
         .height(Length::Fill)
         .background(surface)
-        .children(children)
+        .children(children);
+    let band = Rect::from_min_max(
+        Vec2::new(layout.toolbar_left.min.x, layout.toolbar_right.min.y),
+        layout.toolbar_right.max,
+    );
+    grana_ui::row()
+        .at(band)
+        .named("header.actions.band")
+        .align(Align::Center)
+        .justify(Align::End)
+        .height(Length::Fill)
+        .children([actions])
 }
 
 fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
@@ -409,14 +423,14 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         command_row(ctx, "open.tiles"),
         command_row(ctx, "open.folder"),
         command_row(ctx, "open.remote"),
-        menu_separator(ctx),
+        grana_ui::spacer(8.0),
         command_row(ctx, "open.project"),
     ];
     if state.access.viewer() {
         rows.remove(1);
     }
     if !state.recent.is_empty() {
-        rows.push(menu_separator(ctx));
+        rows.push(grana_ui::spacer(8.0));
         rows.push(crate::view::section_header(
             ctx,
             grana_i18n::header::recent(ctx.language()),
@@ -452,7 +466,7 @@ fn project_menu<'a>(
     if state.access.author() {
         rows.push(command_row(ctx, "save.project"));
         rows.push(command_row(ctx, "save.as"));
-        rows.push(menu_separator(ctx));
+        rows.push(grana_ui::spacer(8.0));
     }
     rows.push(command_row(ctx, "snapshot"));
     rows.push(command_row(ctx, "figure"));

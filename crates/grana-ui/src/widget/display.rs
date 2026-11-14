@@ -52,15 +52,6 @@ pub fn group_card<'a, A>(
         .children(children)
 }
 
-pub fn divider<'a, A>(theme: &Theme) -> Element<'a, A> {
-    Element::column()
-        .width(Length::Fill)
-        .height(Length::Fixed(1.0))
-        .background(Surface::fill(
-            theme.palette.outline_variant.with_alpha(0.45),
-        ))
-}
-
 pub fn card_title<'a, A>(
     theme: &Theme,
     symbol: Icon,

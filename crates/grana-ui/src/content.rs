@@ -31,7 +31,6 @@ pub(crate) enum ContentKind {
     Labelled,
     ColorSwatch,
     ColorPicker,
-    Separator,
 }
 
 pub(crate) enum Content {
@@ -58,7 +57,6 @@ pub(crate) enum Content {
     Labelled(LabelledContent),
     ColorSwatch(ColorSwatchContent),
     ColorPicker(ColorPickerContent),
-    Separator,
 }
 
 impl Content {
@@ -87,7 +85,6 @@ impl Content {
             Self::Labelled(_) => ContentKind::Labelled,
             Self::ColorSwatch(_) => ContentKind::ColorSwatch,
             Self::ColorPicker(_) => ContentKind::ColorPicker,
-            Self::Separator => ContentKind::Separator,
         }
     }
 
@@ -95,7 +92,6 @@ impl Content {
         match (self, other) {
             (Self::Empty, Self::Empty) | (Self::Canvas, Self::Canvas) => true,
             (Self::Spinner(a), Self::Spinner(b)) => a == b,
-            (Self::Separator, Self::Separator) => true,
             (Self::Text(a), Self::Text(b)) => a == b,
             (Self::Icon(a), Self::Icon(b)) => a == b,
             (Self::Button(a), Self::Button(b)) => a == b,

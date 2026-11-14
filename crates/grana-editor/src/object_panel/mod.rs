@@ -234,7 +234,7 @@ fn add_menu<'a>(
         message,
     ));
     if !state.labels.is_empty() {
-        rows.push(view::menu_separator(ctx));
+        rows.push(grana_ui::spacer(8.0));
         rows.push(view::caption(
             ctx,
             grana_i18n::object::import_labels(language),
@@ -256,7 +256,7 @@ fn add_menu<'a>(
             ));
         }
     }
-    rows.push(view::menu_separator(ctx));
+    rows.push(grana_ui::spacer(8.0));
     rows.push(view::caption(
         ctx,
         grana_i18n::object::import_tracks(language),
@@ -368,7 +368,6 @@ fn object<'a>(
     let mut children = Vec::new();
     children.push(header_row(ctx, state, id, position, sets));
     if expanded {
-        children.push(view::divider(ctx));
         children.extend(appearance_fields(ctx, state, id, width));
         if let Some(element) = origin(ctx, state, id) {
             children.push(element);
@@ -421,7 +420,6 @@ fn object<'a>(
         }
         children.extend(measure(ctx, state, id, time));
         if detected > 0 && state.access.author() {
-            children.push(view::divider(ctx));
             children.push(
                 view::button_with(
                     ctx,

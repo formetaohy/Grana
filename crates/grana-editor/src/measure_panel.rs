@@ -363,7 +363,7 @@ fn columns_menu<'a>(
         )
         .named("measure.show.all")
         .press(Message::Command(Command::ShowAllColumns)),
-        grana_ui::widget::separator().named("measure.columns.separator"),
+        grana_ui::spacer(8.0),
     ];
     for (index, column) in table.columns().iter().enumerate() {
         let shown = visible.get(index).copied().unwrap_or(false);
