@@ -589,7 +589,11 @@ fn region(
         path: PathBuf::new(),
         detail: "the region holds more voxels than this platform addresses".to_string(),
     })?;
-    let plane = (width * height) as usize;
+    let plane =
+        usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| Error::Region {
+            path: PathBuf::new(),
+            detail: "the plane holds more voxels than this platform addresses".to_string(),
+        })?;
     let mut data = match levels[request.level]
         .slots
         .first()

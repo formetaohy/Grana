@@ -8,6 +8,7 @@ use super::detection::Detections;
 
 const PASSES: usize = 3;
 const DUMMY_COST: f64 = 1.0;
+const GAP_COST: f64 = 0.25;
 
 pub(super) struct Matching {
     successor: Vec<Option<usize>>,
@@ -129,7 +130,7 @@ fn candidates(
                     }
                     rows[source].push(Edge {
                         column: candidate,
-                        cost: 1.0 - f64::from(closeness) / reach as f64,
+                        cost: 1.0 - f64::from(closeness) + GAP_COST * (reach as f64 - 1.0),
                     });
                 });
             }

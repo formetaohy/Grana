@@ -171,7 +171,7 @@ impl Session {
         else {
             return;
         };
-        match std::fs::write(&path, csv) {
+        match grana_file::write(&path, csv.as_bytes()) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
@@ -275,7 +275,7 @@ impl Session {
         else {
             return;
         };
-        self.message = match std::fs::write(&path, text) {
+        self.message = match grana_file::write(&path, text.as_bytes()) {
             Ok(()) => None,
             Err(error) => Some(Message::error(format!(
                 "failed to export the Ripley curve to {}: {error}",
@@ -381,7 +381,7 @@ impl Session {
         else {
             return;
         };
-        match std::fs::write(&path, export.text()) {
+        match grana_file::write(&path, export.text().as_bytes()) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(

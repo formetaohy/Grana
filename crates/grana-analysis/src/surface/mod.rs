@@ -41,7 +41,9 @@ const TILE_Z_FLOOR: u32 = 8;
 const SLAB_BUDGET: u64 = 256 << 20;
 const DETECTION_CACHE: u64 = 768 << 20;
 const DISTANCE_LIMIT: u32 = 12;
-const DISTANCE_LIMIT_MAX: u32 = 48;
+pub(super) const METRIC_SCALE: u32 = 64;
+
+const DISTANCE_LIMIT_MAX: u32 = 48 * METRIC_SCALE;
 const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
@@ -167,7 +169,7 @@ pub struct SurfaceBuilder {
     tile: [u32; 3],
     tiles: [u32; 3],
     tile_count: usize,
-    anisotropy: [u32; 3],
+    metric: [u32; 3],
     kernels: [Vec<f32>; 3],
     opening: Option<Element>,
     closing: Option<Element>,
@@ -198,8 +200,12 @@ impl SurfaceBuilder {
         let region = region.unwrap_or([0..0, 0..0, 0..0]);
         let narrowest = spacing.iter().copied().fold(f32::INFINITY, f32::min);
         let grain = params.grain().min(GRAIN_LIMIT * narrowest);
-        let anisotropy =
-            spacing.map(|value| ((value / narrowest).round() as u32).clamp(1, ANISOTROPY_LIMIT));
+        let metric = spacing.map(|value| {
+            ((value / narrowest) * METRIC_SCALE as f32).round().clamp(
+                METRIC_SCALE as f32,
+                (ANISOTROPY_LIMIT * METRIC_SCALE) as f32,
+            ) as u32
+        });
         let kernels = spacing.map(|value| gaussian((grain / value).min(GRAIN_LIMIT)));
         let opening = Element::new(level, params.opening());
         let closing = Element::new(level, params.closing());
@@ -237,7 +243,7 @@ impl SurfaceBuilder {
             tile,
             tiles,
             tile_count,
-            anisotropy,
+            metric,
             kernels,
             opening,
             closing,
@@ -265,6 +271,14 @@ impl SurfaceBuilder {
             (self.region[1].end - self.region[1].start) as usize,
             (self.region[2].end - self.region[2].start) as usize,
         ]
+    }
+
+    pub(super) fn metric(&self, axis: usize) -> u32 {
+        self.metric[axis]
+    }
+
+    fn widest(&self) -> u32 {
+        self.metric.iter().copied().max().expect("three axes exist")
     }
 
     pub(super) fn blocks(&self) -> [usize; 3] {
@@ -451,13 +465,7 @@ impl SurfaceBuilder {
             return Ok(None);
         };
         let seeds = &seeds[..];
-        let widest = self
-            .anisotropy
-            .iter()
-            .copied()
-            .max()
-            .expect("three axes exist");
-        let base = (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX);
+        let base = (DISTANCE_LIMIT * self.widest()).min(DISTANCE_LIMIT_MAX);
         let distance = Distance::build(&self, &mask.solid, desired);
         let ceiling = base * 4;
         let margin = distance.margin().ceil() as u32 + 1;

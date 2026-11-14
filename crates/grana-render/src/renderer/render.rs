@@ -235,6 +235,7 @@ impl Renderer {
         );
         let replan = planned.as_ref() != Some(&residency);
         info.settled = *settled == Some(residency);
+        info.view.level = ladder.base;
         info.truncated = info.view.level == ladder.base && info.view.visible > info.view.demand;
         let ready_at_time = info.settled && (!assured || !info.truncated);
         let ready = if awaits || assured {
@@ -844,7 +845,6 @@ impl Renderer {
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
         }
-        info.view.level = ladder.base;
         info.seeded = target.seeded;
         info.history = temporal.is_some()
             && target

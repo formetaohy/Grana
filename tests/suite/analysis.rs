@@ -1413,6 +1413,30 @@ fn links_motion_and_splits_lineages() {
 }
 
 #[test]
+fn keeps_a_gap_link_inside_the_step_gate() {
+    let linked = tracked(
+        &[
+            (&[[0.0, 0.0, 0.0]][..], 1.0),
+            (&[] as &[[f32; 3]], 1.0),
+            (&[[0.5, 0.0, 0.0]][..], 1.0),
+        ],
+        TrackParams::new(1.0, 1, events(false, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(linked.links().len(), 1, "a close gap links the detections");
+    let apart = tracked(
+        &[
+            (&[[0.0, 0.0, 0.0]][..], 1.0),
+            (&[] as &[[f32; 3]], 1.0),
+            (&[[1.9, 0.0, 0.0]][..], 1.0),
+        ],
+        TrackParams::new(1.0, 1, events(false, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(apart.links().len(), 0, "a distant gap ends the track");
+}
+
+#[test]
 fn rejects_a_division_whose_daughters_do_not_persist() {
     let set = tracked(
         &[

@@ -25,7 +25,7 @@ pub(super) fn write(scene: &Scene, folder: &Path, language: Language) -> Result<
             grana_scene::slug(annotation.name())
         );
         let csv = format!("{stem}.csv");
-        std::fs::write(folder.join(&csv), table(profile))
+        grana_file::write(&folder.join(&csv), table(profile).as_bytes())
             .map_err(|error| format!("failed to write {csv}: {error}"))?;
         let page = page(annotation, profile, &tints, scene.dataset.name(), language);
         grana_page::write_page(&page, &folder.join(format!("{stem}.svg")))?;

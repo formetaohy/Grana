@@ -100,7 +100,7 @@ pub(super) fn write(
             status,
         ]));
     }
-    std::fs::write(plan.output.join(MANIFEST), lines.concat())
+    grana_file::write(&plan.output.join(MANIFEST), lines.concat().as_bytes())
         .map_err(|error| format!("failed to write the quality sheet manifest: {error}"))
 }
 

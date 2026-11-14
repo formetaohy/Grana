@@ -151,7 +151,7 @@ impl Recent {
         };
         let text = toml::to_string_pretty(&stored)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        std::fs::write(root, text)
+        grana_file::write(root, text.as_bytes())
     }
 }
 

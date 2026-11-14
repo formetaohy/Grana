@@ -167,7 +167,7 @@ pub fn record(run: &Path, dataset: &Path, scene: usize, protocol: &Protocol) -> 
         .to_json()
         .map_err(|error| format!("the correction does not serialize: {error}"))?;
     let path = folder.join(CORRECTION);
-    std::fs::write(&path, text)
+    grana_file::write(&path, text.as_bytes())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
     entry.correction = Some(protocol.digest());
     write_run(run, &record)

@@ -34,7 +34,20 @@ impl Atomic {
 
     pub fn commit(mut self) -> io::Result<()> {
         if self.directory && self.target.exists() {
-            fs::remove_dir_all(&self.target)?;
+            let backup = self.staging.with_extension("old");
+            let _ = fs::remove_dir_all(&backup);
+            fs::rename(&self.target, &backup)?;
+            return match fs::rename(&self.staging, &self.target) {
+                Ok(()) => {
+                    self.committed = true;
+                    let _ = fs::remove_dir_all(&backup);
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = fs::rename(&backup, &self.target);
+                    Err(error)
+                }
+            };
         }
         fs::rename(&self.staging, &self.target)?;
         self.committed = true;

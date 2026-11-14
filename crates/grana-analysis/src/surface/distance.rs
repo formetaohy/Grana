@@ -1,5 +1,5 @@
 use super::mask::SolidMask;
-use super::{Envelope, SurfaceBuilder};
+use super::{Envelope, METRIC_SCALE, SurfaceBuilder};
 
 const SCALE: u32 = 4;
 const UNREACHED: f32 = 1.0e12;
@@ -38,21 +38,24 @@ impl Distance {
             }
         });
         let weights = [0, 1, 2].map(|axis| {
-            let value = f64::from(plan.anisotropy[axis]);
+            let value = f64::from(plan.metric(axis)) / f64::from(METRIC_SCALE);
             value * value
         });
         transform(&mut values, padded, weights, workers);
+        let metric = f64::from(METRIC_SCALE * METRIC_SCALE);
         let limit = (0..3).fold(0.0f64, |accumulated, axis| {
             accumulated + weights[axis] * (dims[axis] * dims[axis]) as f64
-        }) + 1.0;
+        }) * metric
+            + 1.0;
         let reach = values
             .iter()
             .map(|value| f64::from(*value))
             .fold(0.0f64, f64::max)
             .max(0.0)
             .sqrt()
-            * f64::from(SCALE);
-        let margin = (weights[0] + weights[1] + weights[2]).sqrt() * f64::from(SCALE);
+            * f64::from(SCALE * METRIC_SCALE);
+        let margin =
+            (weights[0] + weights[1] + weights[2]).sqrt() * f64::from(SCALE * METRIC_SCALE);
         Self {
             origin: plan.anchor,
             dims: coarse,
@@ -99,7 +102,8 @@ impl Distance {
                 }
             }
         }
-        let fine = f64::from(peak).sqrt() * f64::from(SCALE) + self.margin;
+        let fine =
+            f64::from(peak).sqrt() * f64::from(SCALE) + self.margin / f64::from(METRIC_SCALE);
         fine.ceil() as u32
     }
 
@@ -118,7 +122,8 @@ impl Distance {
         }
         let padded = [self.dims[0] + 2, self.dims[1] + 2, self.dims[2] + 2];
         let index = (cell[0] + 1) + padded[0] * ((cell[1] + 1) + padded[1] * (cell[2] + 1));
-        let value = f64::from(self.values[index]) * f64::from(SCALE * SCALE);
+        let value =
+            f64::from(self.values[index]) * f64::from(SCALE * SCALE * METRIC_SCALE * METRIC_SCALE);
         value.min(self.limit) as u32
     }
 }

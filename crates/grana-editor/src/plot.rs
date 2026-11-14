@@ -95,16 +95,16 @@ impl PlotView<'_> {
     fn highlight(&self) -> Option<Highlight> {
         let row = self.selection?;
         match self.plot {
-            Plot::Histogram(histogram) => {
-                Some(Highlight::Value(self.table.value(row, histogram.column())))
-            }
+            Plot::Histogram(histogram) => Some(Highlight::Value(
+                self.table.cached_value(row, histogram.column())?,
+            )),
             Plot::Scatter(scatter) => Some(Highlight::Point(Vec2::new(
-                self.table.value(row, scatter.x()),
-                self.table.value(row, scatter.y()),
+                self.table.cached_value(row, scatter.x())?,
+                self.table.cached_value(row, scatter.y())?,
             ))),
             Plot::Distribution(distribution) => {
                 let observation = self.table.observation(row);
-                let value = self.table.value(row, distribution.column());
+                let value = self.table.cached_value(row, distribution.column())?;
                 group_index(distribution, observation)
                     .map(|index| Highlight::Group { index, value })
             }
@@ -112,7 +112,7 @@ impl PlotView<'_> {
                 let time = self.table.observation(row).time()?;
                 Some(Highlight::Point(Vec2::new(
                     time as f32 + 1.0,
-                    self.table.value(row, trend.column()),
+                    self.table.cached_value(row, trend.column())?,
                 )))
             }
             Plot::Ripley(_) => None,
@@ -613,10 +613,13 @@ fn scatter_readout(
         .nearest_row([x, y], [frame.width(), frame.height()])
         .map(|row| row as usize)
         .filter(|row| {
-            let centre = Vec2::new(
-                x_axis.x(frame, table.value(*row, scatter.x())),
-                y_axis.y(frame, table.value(*row, scatter.y())),
-            );
+            let (Some(x_value), Some(y_value)) = (
+                table.cached_value(*row, scatter.x()),
+                table.cached_value(*row, scatter.y()),
+            ) else {
+                return false;
+            };
+            let centre = Vec2::new(x_axis.x(frame, x_value), y_axis.y(frame, y_value));
             centre.distance(pointer) <= HOVER_REACH
         })
         .map(|row| table.observation(row));
@@ -1026,14 +1029,14 @@ fn nearest_trend_row(
     time: u32,
     value: f32,
 ) -> Option<u32> {
-    let values = table.materialize(trend.column());
+    let column = trend.column();
     let mut best = None;
     let mut closest = f32::INFINITY;
     for row in rows {
         if table.observation(*row as usize).time() != Some(time) {
             continue;
         }
-        let current = values[*row as usize];
+        let current = table.cached_value(*row as usize, column)?;
         if !current.is_finite() {
             continue;
         }
@@ -1069,14 +1072,13 @@ fn nearest_group_row(
     let target = groups.get(group)?.time();
     let split = groups.len() > 1;
     let column = distribution.column();
-    let values = table.materialize(column);
     let mut best = None;
     let mut closest = f32::INFINITY;
     for row in rows {
         if split && table.observation(*row as usize).time() != target {
             continue;
         }
-        let current = values[*row as usize];
+        let current = table.cached_value(*row as usize, column)?;
         if !current.is_finite() {
             continue;
         }

@@ -115,8 +115,11 @@ fn splat_slice(input: SplatVertex) -> Shaded {
     let ray = splat_ray(input.world);
     let normal = frame.slice.xyz;
     let rate = dot(normal, ray.direction);
+    if (abs(rate) < 1.0e-9) {
+        discard;
+    }
     let travel = (frame.slice.w - dot(normal, ray.origin)) / rate;
-    if (abs(rate) < 1.0e-9 || (travel <= 0.0 && !orthographic())) {
+    if (travel <= 0.0 && !orthographic()) {
         discard;
     }
     let point = ray.origin + ray.direction * travel;

@@ -541,6 +541,11 @@ impl Session {
                 self.tasks.start_plot(request);
             }
         }
+        if !self.tasks.materializing()
+            && let Some(request) = self.measure.materialize_request()
+        {
+            self.tasks.start_materialize(request);
+        }
     }
     pub fn settle_measure(&mut self) -> bool {
         let Some(slot) = self.tasks.measure.as_mut() else {
@@ -607,6 +612,9 @@ impl Session {
 
     pub fn listing(&self) -> bool {
         self.tasks.listing()
+    }
+    pub fn materializing(&self) -> bool {
+        self.tasks.materializing()
     }
     pub fn plotting(&self) -> bool {
         self.tasks.plotting()

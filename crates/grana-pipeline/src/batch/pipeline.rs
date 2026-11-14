@@ -1686,7 +1686,7 @@ fn number(value: Option<f64>) -> String {
 }
 
 fn write(path: &Path, text: &str) -> Result<(), String> {
-    std::fs::write(path, text)
+    grana_file::write(path, text.as_bytes())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 

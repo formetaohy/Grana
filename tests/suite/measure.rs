@@ -196,6 +196,63 @@ fn materialises_measurement_columns_on_demand() {
 }
 
 #[test]
+fn scans_and_installs_a_batch_of_columns() {
+    let tracks = Arc::new(tracks());
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [spots(), spots()]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
+        2.0,
+        Group::Track,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the track table builds");
+    let columns = ["nodes", "duration_s", "egfp_488_intensity_mean_mean"]
+        .map(|key| table.column(key).expect("the column exists"))
+        .to_vec();
+    let values = table.scan(&columns);
+    assert_eq!(values.len(), columns.len(), "each column is scanned once");
+    table.install(values);
+    assert_eq!(
+        table.cached_value(0, columns[0]),
+        Some(2.0),
+        "the scan fills the nodes"
+    );
+    assert_eq!(
+        table.cached_value(0, columns[1]),
+        Some(1.0),
+        "the scan aggregates the duration"
+    );
+    assert_eq!(
+        table.cached_value(0, columns[2]),
+        Some(10.0),
+        "the scan aggregates the intensity"
+    );
+    assert!(
+        table.cached_extent(columns[2]).is_some(),
+        "an installed column carries its extent"
+    );
+}
+
+#[test]
+fn sums_only_finite_measurements() {
+    assert!(
+        Aggregate::SUM.apply(&[]).is_nan(),
+        "an empty group carries no sum"
+    );
+    assert!(
+        Aggregate::SUM.apply(&[f32::NAN]).is_nan(),
+        "a missing measurement carries no sum"
+    );
+    assert_eq!(
+        Aggregate::SUM.apply(&[1.0, f32::NAN, 2.0]),
+        3.0,
+        "a sum ignores the missing measurements"
+    );
+}
+
+#[test]
 fn trends_raw_frames_of_every_grouping() {
     let first = spots();
     let second = spots();

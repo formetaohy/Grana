@@ -3154,6 +3154,60 @@ fn masks_the_visibility_of_gated_objects() {
 }
 
 #[test]
+fn materialises_the_visible_statistics_columns_in_the_background() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::SetMeasureSet(Some(set)));
+    measure(&mut session);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let loaded = loop {
+        session.poll();
+        session.sync_measure();
+        let measure = session.measure();
+        let ready = match (
+            measure.table(),
+            measure.visible().iter().position(|visible| *visible),
+        ) {
+            (Some(table), Some(column)) => table.cached(column),
+            _ => false,
+        };
+        if ready {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert!(loaded, "the background job materialises a visible column");
+    let column = session
+        .measure()
+        .visible()
+        .iter()
+        .position(|visible| *visible)
+        .expect("the table shows a column");
+    assert!(
+        session.measure().value(0, column).is_some(),
+        "the installed column serves its cells without another scan"
+    );
+}
+
+#[test]
 fn replays_a_localization_protocol() {
     let temp = Temp::new("session-localization-protocol");
     let path = temp.path().join("localizations.hdf5");

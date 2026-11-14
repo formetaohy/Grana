@@ -3632,6 +3632,7 @@ dependencies = [
 name = "grana-interop"
 version = "0.1.1"
 dependencies = [
+ "grana-file",
  "grana-object",
  "serde_json",
  "thiserror 2.0.21",
@@ -3831,6 +3832,7 @@ dependencies = [
  "glam",
  "grana-animation",
  "grana-display",
+ "grana-file",
  "grana-geometry",
  "grana-interop",
  "grana-measure",

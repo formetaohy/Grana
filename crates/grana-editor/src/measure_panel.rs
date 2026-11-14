@@ -921,10 +921,11 @@ fn table<'a>(
                         .iter()
                         .zip(widths.iter())
                         .map(|((column_index, column), width)| {
-                            (
-                                column.format(table.value(index as usize, *column_index)),
-                                *width,
-                            )
+                            let text = match state.measure.value(index as usize, *column_index) {
+                                Some(value) => column.format(value),
+                                None => String::from("…"),
+                            };
+                            (text, *width)
                         })
                         .collect::<Vec<_>>();
                     children.push(

@@ -189,7 +189,7 @@ impl Protocol {
     }
 
     pub fn write(&self, path: &Path) -> Result<(), ProtocolError> {
-        std::fs::write(path, self.to_json()?).map_err(|error| ProtocolError::Write {
+        grana_file::write(path, self.to_json()?.as_bytes()).map_err(|error| ProtocolError::Write {
             path: path.display().to_string(),
             detail: error.to_string(),
         })

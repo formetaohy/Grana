@@ -1,8 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use grana_measure::{Plot, Table};
+use grana_measure::{ColumnValues, Plot, Table};
 use grana_pipeline::export::Summary;
-use grana_scene::{MeasureKey, ObjectSetId, PlotKey, PlotRequest, Rows, RowsRequest, TableRequest};
+use grana_scene::{
+    MaterializeRequest, MeasureKey, ObjectSetId, PlotKey, PlotRequest, Rows, RowsRequest,
+    TableRequest,
+};
 use grana_volume::Intensity;
 use grana_zarr::Written;
 
@@ -30,6 +34,10 @@ pub(super) enum Completion {
         plot: Option<Plot>,
     },
     Rows(Rows),
+    Materialized {
+        table: Arc<Table>,
+        values: ColumnValues,
+    },
     Document {
         path: PathBuf,
         hash: Option<u64>,
@@ -120,10 +128,30 @@ impl RowsJob {
     }
 }
 
+pub(super) struct MaterializeJob {
+    task: Progress<(Arc<Table>, ColumnValues)>,
+}
+
+impl MaterializeJob {
+    fn start(request: MaterializeRequest) -> Self {
+        let task = Progress::spawn(grana_exec::Role::Compute, move |_, _| request.build());
+        Self { task }
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<(Arc<Table>, ColumnValues)> {
+        self.task.poll()
+    }
+
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Tasks {
     pub measure: Option<Measure>,
     pub rows: Option<RowsJob>,
+    pub materialize: Option<MaterializeJob>,
     pub plot: Option<PlotJob>,
     pub document: Option<Document>,
     pub labels: Option<Labels>,
@@ -184,6 +212,17 @@ impl Tasks {
                 }
                 Poll::Empty => {}
                 Poll::Closed => self.rows = None,
+            }
+        }
+        if let Some(slot) = self.materialize.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event((table, values)) => {
+                    self.materialize = None;
+                    completions.push(Completion::Materialized { table, values });
+                }
+                Poll::Empty => {}
+                Poll::Closed => self.materialize = None,
             }
         }
         if let Some(slot) = self.document.as_mut() {
@@ -434,6 +473,10 @@ impl Tasks {
         self.rows.is_some()
     }
 
+    pub(super) fn materializing(&self) -> bool {
+        self.materialize.is_some()
+    }
+
     pub(super) fn start_previews(&mut self, previews: Previews) {
         if self.previews.is_none() {
             self.previews = Some(previews);
@@ -525,6 +568,10 @@ impl Tasks {
         self.rows = Some(RowsJob::start(request));
     }
 
+    pub(super) fn start_materialize(&mut self, request: MaterializeRequest) {
+        self.materialize = Some(MaterializeJob::start(request));
+    }
+
     pub(super) fn defer_csv(&mut self, path: PathBuf) {
         self.pending_csv = Some(path);
     }
@@ -540,6 +587,7 @@ impl Tasks {
     pub(super) fn clear(&mut self) {
         self.measure = None;
         self.rows = None;
+        self.materialize = None;
         self.plot = None;
         self.document = None;
         self.labels = None;
@@ -563,6 +611,10 @@ impl Session {
             Completion::Measure { key, table } => self.finish_measure(key, table),
             Completion::Plot { key, plot } => self.finish_plot(key, plot),
             Completion::Rows(rows) => self.finish_rows(rows),
+            Completion::Materialized { table, values } => {
+                self.measure.install_materialized(&table, values);
+                self.touch();
+            }
             Completion::Document {
                 path,
                 hash,

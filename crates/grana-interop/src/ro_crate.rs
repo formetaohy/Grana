@@ -351,7 +351,7 @@ impl Crate {
         })?;
         let text = serde_json::to_string_pretty(&self.json()).expect("a crate serializes");
         let path = root.join(METADATA);
-        std::fs::write(&path, format!("{text}\n")).map_err(|error| Error::Write {
+        grana_file::write(&path, format!("{text}\n").as_bytes()).map_err(|error| Error::Write {
             detail: format!("failed to write {}: {error}", path.display()),
         })?;
         Ok(path)

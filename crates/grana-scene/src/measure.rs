@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Nearest, Plot, PlotAxis, Scope, Table,
-    Window,
+    Aggregate, ColumnValues, Filter, Group, Lasso, Mask, MeasureView, Nearest, Plot, PlotAxis,
+    Scope, Table, Window,
 };
 
 use grana_volume::Region;
@@ -54,6 +54,8 @@ pub struct Measure {
     plot_stamp: u64,
     origin: Option<MeasureKey>,
     pending: Option<MeasureKey>,
+    materialize_pending: Option<Vec<usize>>,
+    deferred_filter: Option<FilterIntent>,
     time: u32,
     dirty: bool,
 }
@@ -92,6 +94,8 @@ impl Measure {
             plot_stamp: 0,
             origin: None,
             pending: None,
+            materialize_pending: None,
+            deferred_filter: None,
             time: 0,
             dirty: false,
         }
@@ -331,7 +335,10 @@ impl Measure {
                 !(key.starts_with("x_um") || key.starts_with("y_um") || key.starts_with("z_um"))
             })
             .unwrap_or(table.identity_columns());
-        let Some((minimum, maximum)) = table.extent(column) else {
+        let Some((minimum, maximum)) = table.cached_extent(column) else {
+            self.deferred_filter = Some(FilterIntent::Add(column));
+            self.dirty = true;
+            self.pin();
             return;
         };
         self.filters.push(Filter::new(column, minimum, maximum));
@@ -367,7 +374,13 @@ impl Measure {
         let Some(table) = self.table.as_ref() else {
             return;
         };
-        let Some((minimum, maximum)) = table.extent(column) else {
+        if column >= table.columns().len() {
+            return;
+        }
+        let Some((minimum, maximum)) = table.cached_extent(column) else {
+            self.deferred_filter = Some(FilterIntent::Retarget { index, column });
+            self.dirty = true;
+            self.pin();
             return;
         };
         self.set_filter(index, Filter::new(column, minimum, maximum));
@@ -423,11 +436,9 @@ impl Measure {
     }
 
     pub fn nearest_row(&self, target: [f32; 2], pixels: [f32; 2]) -> Option<u32> {
-        let table = self.table.as_deref()?;
-        let rows = self.rows.as_deref()?;
         match self.nearest.as_ref() {
             Some((axes, nearest)) if *axes == self.axes => nearest.nearest(target, pixels),
-            _ => table.nearest(rows.rows(), &self.axes, &target, &pixels),
+            _ => None,
         }
     }
 
@@ -495,6 +506,8 @@ impl Measure {
         self.table = None;
         self.basis = None;
         self.retained = None;
+        self.materialize_pending = None;
+        self.deferred_filter = None;
         self.clear_rows();
         self.visible.clear();
         self.scope = Scope::All;
@@ -814,6 +827,8 @@ impl Measure {
     fn invalidate(&mut self) {
         self.dirty = true;
         self.pending = None;
+        self.materialize_pending = None;
+        self.deferred_filter = None;
         self.origin = None;
         self.clear_plot();
         if let Some(table) = self.table.take() {
@@ -827,6 +842,8 @@ impl Measure {
 
     fn adopt(&mut self, table: Option<Arc<Table>>) {
         self.dirty = true;
+        self.materialize_pending = None;
+        self.deferred_filter = None;
         self.clear_plot();
         self.clear_rows();
         let previous = self
@@ -948,6 +965,74 @@ impl Measure {
         self.refresh_plot();
     }
 
+    pub fn materialize_request(&mut self) -> Option<MaterializeRequest> {
+        let table = Arc::clone(self.table.as_ref()?);
+        let missing = self
+            .required_columns()
+            .into_iter()
+            .filter(|column| !table.cached(*column))
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            self.materialize_pending = None;
+            self.commit_filter();
+            return None;
+        }
+        if self.materialize_pending.as_ref() == Some(&missing) {
+            return None;
+        }
+        self.materialize_pending = Some(missing.clone());
+        Some(MaterializeRequest::new(table, missing))
+    }
+
+    pub fn install_materialized(&mut self, table: &Arc<Table>, values: ColumnValues) {
+        if self
+            .table
+            .as_ref()
+            .is_none_or(|held| !Arc::ptr_eq(held, table))
+        {
+            return;
+        }
+        table.install(values);
+        if self
+            .materialize_pending
+            .as_ref()
+            .is_some_and(|held| held.iter().all(|column| table.cached(*column)))
+        {
+            self.materialize_pending = None;
+        }
+        self.commit_filter();
+        self.refresh_nearest();
+        self.dirty = true;
+    }
+
+    fn commit_filter(&mut self) {
+        let Some(intent) = self.deferred_filter else {
+            return;
+        };
+        let Some(table) = self.table.as_deref() else {
+            self.deferred_filter = None;
+            return;
+        };
+        let Some((minimum, maximum)) = table.cached_extent(intent.column()) else {
+            return;
+        };
+        self.deferred_filter = None;
+        let filter = Filter::new(intent.column(), minimum, maximum);
+        match intent {
+            FilterIntent::Add(_) => self.filters.push(filter),
+            FilterIntent::Retarget { index, .. } => {
+                if let Some(slot) = self.filters.get_mut(index) {
+                    *slot = filter;
+                }
+            }
+        }
+        self.relayout();
+    }
+
+    pub fn value(&self, row: usize, column: usize) -> Option<f32> {
+        self.table.as_deref()?.cached_value(row, column)
+    }
+
     fn relayout(&mut self) {
         self.dirty = true;
         self.pin();
@@ -958,12 +1043,20 @@ impl Measure {
         let Some(table) = self.table.as_deref() else {
             return;
         };
-        let mut columns = Vec::new();
-        for (index, visible) in self.visible.iter().enumerate() {
-            if *visible {
-                columns.push(index);
-            }
-        }
+        table.retain(self.required_columns());
+    }
+
+    fn required_columns(&self) -> Vec<usize> {
+        let Some(table) = self.table.as_deref() else {
+            return Vec::new();
+        };
+        let count = table.columns().len();
+        let mut columns = self
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(index, visible)| (*visible && index < count).then_some(index))
+            .collect::<Vec<_>>();
         columns.extend(self.filters.iter().map(|filter| filter.column()));
         if let Some((column, _)) = self.sort {
             columns.push(column);
@@ -973,6 +1066,9 @@ impl Measure {
             columns.push(lasso.x());
             columns.push(lasso.y());
         }
+        if let Some(deferred) = self.deferred_filter {
+            columns.push(deferred.column());
+        }
         if self.roi.is_some_and(Region::enabled) {
             for key in ["x_um", "y_um", "z_um"] {
                 if let Some(column) = table.column(key) {
@@ -980,7 +1076,8 @@ impl Measure {
                 }
             }
         }
-        table.retain(columns);
+        columns.retain(|column| *column < count);
+        columns
     }
 
     fn retained_keys(&self) -> Vec<String> {
@@ -1037,6 +1134,9 @@ impl Measure {
         if self.spec().as_ref() != Some(rows.spec()) {
             return;
         }
+        if self.axes.iter().any(|column| !table.cached(*column)) {
+            return;
+        }
         if let Some(nearest) = Nearest::of(table, rows.rows(), self.axes) {
             self.nearest = Some((self.axes, nearest));
         }
@@ -1065,6 +1165,37 @@ impl Measure {
         self.plot = None;
         self.plot_wanted = false;
         self.plot_pending = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilterIntent {
+    Add(usize),
+    Retarget { index: usize, column: usize },
+}
+
+impl FilterIntent {
+    fn column(self) -> usize {
+        match self {
+            Self::Add(column) => column,
+            Self::Retarget { column, .. } => column,
+        }
+    }
+}
+
+pub struct MaterializeRequest {
+    table: Arc<Table>,
+    columns: Vec<usize>,
+}
+
+impl MaterializeRequest {
+    fn new(table: Arc<Table>, columns: Vec<usize>) -> Self {
+        Self { table, columns }
+    }
+
+    pub fn build(self) -> (Arc<Table>, ColumnValues) {
+        let values = self.table.scan(&self.columns);
+        (self.table, values)
     }
 }
 

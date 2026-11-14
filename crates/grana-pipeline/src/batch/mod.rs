@@ -320,13 +320,16 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             summary.push(row_line(dataset, row));
         }
     }
-    if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.concat()) {
+    if let Err(error) = grana_file::write(
+        &plan.output.join("summary.csv"),
+        summary.concat().as_bytes(),
+    ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch summary: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join("quality.csv"),
+    if let Err(error) = grana_file::write(
+        &plan.output.join("quality.csv"),
         grana_report::table(
             &plan
                 .datasets
@@ -346,7 +349,8 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                         .map_or(&[][..], |row| row.quality.as_slice()),
                 })
                 .collect::<Vec<_>>(),
-        ),
+        )
+        .as_bytes(),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch quality report: {error}"
@@ -356,38 +360,38 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         let settled = row.status == "ok" || row.status == "resumed";
         row.quality.iter().filter(move |_| settled)
     }));
-    if let Err(error) = std::fs::write(plan.output.join("comparison.csv"), csv) {
+    if let Err(error) = grana_file::write(&plan.output.join("comparison.csv"), csv.as_bytes()) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join("comparison_significance.csv"),
-        grana_report::significance_table(&report.tests),
+    if let Err(error) = grana_file::write(
+        &plan.output.join("comparison_significance.csv"),
+        grana_report::significance_table(&report.tests).as_bytes(),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch significance: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join(TREND),
-        grana_report::interaction_table(&report.interactions),
+    if let Err(error) = grana_file::write(
+        &plan.output.join(TREND),
+        grana_report::interaction_table(&report.interactions).as_bytes(),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch time interaction: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join("comparison_frames.csv"),
-        grana_report::comparison_frames(&report.metrics, &report.groups),
+    if let Err(error) = grana_file::write(
+        &plan.output.join("comparison_frames.csv"),
+        grana_report::comparison_frames(&report.metrics, &report.groups).as_bytes(),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison frames: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join("samples.csv"),
-        grana_report::samples(&report.metrics, &report.groups),
+    if let Err(error) = grana_file::write(
+        &plan.output.join("samples.csv"),
+        grana_report::samples(&report.metrics, &report.groups).as_bytes(),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison samples: {error}"

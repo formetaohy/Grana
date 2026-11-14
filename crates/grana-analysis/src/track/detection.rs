@@ -99,6 +99,9 @@ impl Detections {
 
 fn stretch(radii: [f32; 3]) -> [f32; 3] {
     let smallest = radii.into_iter().fold(f32::INFINITY, f32::min);
+    if !(smallest.is_finite() && smallest > 0.0) {
+        return [1.0; 3];
+    }
     radii.map(|radius| radius / smallest)
 }
 

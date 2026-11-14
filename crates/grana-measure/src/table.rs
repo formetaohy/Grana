@@ -19,6 +19,8 @@ use crate::spatial;
 pub const NEIGHBOUR_KEY: &str = "nearest_distance_um";
 pub const NEIGHBOUR_LABEL: &str = "nearest neighbour";
 
+pub type ColumnValues = Vec<(usize, Arc<Vec<f32>>)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
     Object,
@@ -204,7 +206,15 @@ impl Aggregate {
                     (sum / count as f64) as f32
                 }
             }
-            AggregateKind::Sum => finite().map(f64::from).sum::<f64>() as f32,
+            AggregateKind::Sum => {
+                let mut count = 0u64;
+                let mut sum = 0.0f64;
+                for value in finite() {
+                    count += 1;
+                    sum += f64::from(value);
+                }
+                if count == 0 { f32::NAN } else { sum as f32 }
+            }
             AggregateKind::Minimum => finite().fold(f32::NAN, f32::min),
             AggregateKind::Maximum => finite().fold(f32::NAN, f32::max),
             AggregateKind::Deviation => {
@@ -756,8 +766,17 @@ impl Table {
     }
 
     pub fn materialize_many(&self, columns: &[usize]) {
-        let mut missing = Vec::new();
+        let missing = self.missing(columns);
+        if missing.is_empty() {
+            return;
+        }
+        let values = self.scan(&missing);
+        self.install(values);
+    }
+
+    fn missing(&self, columns: &[usize]) -> Vec<usize> {
         let mut seen = vec![false; self.columns.len()];
+        let mut missing = Vec::new();
         for column in columns {
             assert!(
                 *column < self.columns.len(),
@@ -770,32 +789,203 @@ impl Table {
                 missing.push(*column);
             }
         }
-        if missing.is_empty() {
-            return;
+        missing
+    }
+
+    pub fn scan(&self, columns: &[usize]) -> ColumnValues {
+        let mut computed = vec![None; self.columns.len()];
+        let mut objects = Vec::new();
+        let mut aggregates = Vec::new();
+        let mut singles = Vec::new();
+        for &column in columns {
+            assert!(
+                column < self.columns.len(),
+                "a column lies inside its table"
+            );
+            if computed[column].is_some() {
+                continue;
+            }
+            match &self.plan[column] {
+                Plan::Object(_) => objects.push(column),
+                Plan::TrackAggregate(measurement) => {
+                    aggregates.push((column, Value::Measurement(*measurement)))
+                }
+                Plan::TrackRelation { index, field } => aggregates.push((
+                    column,
+                    Value::Relation {
+                        index: *index,
+                        field: *field,
+                    },
+                )),
+                Plan::TimeAggregate(measurement) => {
+                    aggregates.push((column, Value::Measurement(*measurement)))
+                }
+                Plan::TimeRelation { index, field } => aggregates.push((
+                    column,
+                    Value::Relation {
+                        index: *index,
+                        field: *field,
+                    },
+                )),
+                Plan::MoleculeAggregate(measurement) => {
+                    aggregates.push((column, Value::Measurement(*measurement)))
+                }
+                Plan::MoleculeRelation { index, field } => aggregates.push((
+                    column,
+                    Value::Relation {
+                        index: *index,
+                        field: *field,
+                    },
+                )),
+                _ => singles.push(column),
+            }
         }
-        if self.group == Group::Object {
-            let objects = missing
+        if !objects.is_empty() {
+            let values = self.object_block(&objects);
+            for (column, values) in objects.into_iter().zip(values) {
+                computed[column] = Some(Arc::new(values));
+            }
+        }
+        if !aggregates.is_empty() {
+            let values = match self.group {
+                Group::Track => Some(self.track_block(&aggregates)),
+                Group::Timepoint => Some(self.time_block(&aggregates)),
+                Group::Molecule => Some(self.molecule_block(&aggregates)),
+                Group::Object => None,
+            };
+            if let Some(values) = values {
+                for ((column, _), values) in aggregates.into_iter().zip(values) {
+                    computed[column] = Some(Arc::new(values));
+                }
+            } else {
+                singles.extend(aggregates.into_iter().map(|(column, _)| column));
+            }
+        }
+        for column in singles {
+            if computed[column].is_none() {
+                computed[column] = Some(self.compute(column));
+            }
+        }
+        (0..self.columns.len())
+            .filter_map(|column| computed[column].take().map(|values| (column, values)))
+            .collect()
+    }
+
+    fn track_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+        let Some(tracks) = self.tracks.as_deref() else {
+            return entries
                 .iter()
-                .copied()
-                .filter(|column| matches!(self.plan[*column], Plan::Object(_)))
-                .collect::<Vec<_>>();
-            if objects.len() > 1 {
-                let mut values = self.object_block(&objects);
-                let mut store = self.store.write().expect("a table store writes");
-                for (column, values) in objects.into_iter().zip(values.drain(..)) {
-                    if store.values[column].is_some() {
-                        continue;
-                    }
-                    store.extents[column] = span(&values);
-                    store.values[column] = Some(Arc::new(values));
+                .map(|_| vec![f32::NAN; self.rows()])
+                .collect();
+        };
+        let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
+        self.source.visit_all(&mut |frame: Frame<'_>| {
+            for object in 0..frame.objects().count() {
+                let Some(track) = tracks.track_at(frame.time(), object) else {
+                    continue;
+                };
+                let Some(row) = self.row_of_track(track) else {
+                    continue;
+                };
+                let row = row as usize;
+                for (slot, (_, value)) in entries.iter().enumerate() {
+                    collected[slot][row].push(value.of(&frame, object));
                 }
             }
-        }
-        for column in missing {
-            if !self.cached(column) {
-                self.materialize(column);
+        });
+        collected
+            .into_iter()
+            .map(|rows| self.aggregate_columns(rows))
+            .collect()
+    }
+
+    fn time_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+        let mut rows = std::collections::HashMap::with_capacity(self.rows());
+        for row in 0..self.rows() {
+            if let Some(time) = self.observations[row].time() {
+                rows.insert(time, row);
             }
         }
+        let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
+        self.source.visit_all(&mut |frame: Frame<'_>| {
+            let Some(&row) = rows.get(&frame.time()) else {
+                return;
+            };
+            for (slot, (_, value)) in entries.iter().enumerate() {
+                let values = &mut collected[slot][row];
+                values.clear();
+                for object in 0..frame.objects().count() {
+                    values.push(value.of(&frame, object));
+                }
+            }
+        });
+        collected
+            .into_iter()
+            .map(|rows| {
+                rows.iter()
+                    .map(|values| self.aggregate.apply(values))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn molecule_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+        let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
+        self.source.visit_all(&mut |frame: Frame<'_>| {
+            let Some(spots) = frame.objects().spots() else {
+                return;
+            };
+            for (object, spot) in spots.spots().iter().enumerate() {
+                let Some(group) = spot.group() else {
+                    continue;
+                };
+                let Some(row) = self.row_of_molecule(group) else {
+                    continue;
+                };
+                let row = row as usize;
+                for (slot, (_, value)) in entries.iter().enumerate() {
+                    collected[slot][row].push(value.of(&frame, object));
+                }
+            }
+        });
+        collected
+            .into_iter()
+            .map(|rows| self.aggregate_columns(rows))
+            .collect()
+    }
+
+    pub fn install(&self, values: ColumnValues) {
+        let mut store = self.store.write().expect("a table store writes");
+        for (column, values) in values {
+            assert!(
+                column < self.columns.len(),
+                "a column lies inside its table"
+            );
+            assert_eq!(
+                values.len(),
+                self.rows(),
+                "an installed column covers every observation"
+            );
+            if store.values[column].is_some() {
+                continue;
+            }
+            store.extents[column] = span(&values);
+            store.values[column] = Some(values);
+        }
+    }
+
+    pub fn cached_value(&self, row: usize, column: usize) -> Option<f32> {
+        assert!(
+            row < self.rows() && column < self.columns.len(),
+            "the cell lies inside the table"
+        );
+        let store = self.store.read().expect("a table store reads");
+        store.values[column].as_ref().map(|values| values[row])
+    }
+
+    pub fn cached_extent(&self, column: usize) -> Option<(f32, f32)> {
+        assert!(column < self.columns.len(), "the column exists");
+        self.store.read().expect("a table store reads").extents[column]
     }
 
     pub fn retain(&self, columns: impl IntoIterator<Item = usize>) {
@@ -1559,6 +1749,21 @@ impl Table {
             |column| self.materialize(column),
             report,
         )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Value {
+    Measurement(Measurement),
+    Relation { index: usize, field: RelationField },
+}
+
+impl Value {
+    fn of(self, frame: &Frame<'_>, object: usize) -> f32 {
+        match self {
+            Self::Measurement(measurement) => measurement.value(frame.objects(), object),
+            Self::Relation { index, field } => field.value(frame.relations()[index], object),
+        }
     }
 }
 

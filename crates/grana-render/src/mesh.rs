@@ -553,7 +553,6 @@ impl MeshPasses {
         pass.set_scissor_rect(0, 0, width, height);
         pass.set_pipeline(&self.ao_pipeline);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.uniform_group, &[]);
         for key in &self.active {
             self.slots[key].draw_gbuffer(&mut pass);
         }

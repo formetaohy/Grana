@@ -119,7 +119,7 @@ impl Tile<'_> {
                 }
             }
         }
-        let anisotropy = plan.anisotropy;
+        let anisotropy = [0, 1, 2].map(|axis| plan.metric(axis));
         for axis in 0..3 {
             let weight = f64::from(anisotropy[axis] * anisotropy[axis]);
             let reach = (f64::from(cap) / weight).sqrt().ceil() as usize;

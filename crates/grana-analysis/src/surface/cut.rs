@@ -15,7 +15,7 @@ use crate::schedule;
 use grana_object::SurfaceCut;
 
 const EMPTY: u32 = u32::MAX;
-const SPLIT_FLOOR: f64 = 1.0;
+const SPLIT_FLOOR: f64 = super::METRIC_SCALE as f64;
 const MAX_FOLD: u32 = 8;
 
 fn cancelled(cancel: Option<&AtomicBool>) -> bool {

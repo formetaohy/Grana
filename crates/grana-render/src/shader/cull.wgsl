@@ -2,20 +2,6 @@
 @group(1) @binding(1) var<uniform> schedule: ScheduleData;
 @group(2) @binding(0) var<storage, read_write> plan: array<atomic<u32>>;
 
-fn brick_opacity(at: u32) -> u32 {
-    let channels_count = u32(frame.march.z);
-    for (var channel = 0u; channel < channels_count; channel += 1u) {
-        if (channels[channel].opacity <= 0.0) {
-            continue;
-        }
-        let maximum = bricks[at].maxima[channel / 4u][channel % 4u];
-        if (channel_sample(channel, maximum).a > 0.004) {
-            return 1u;
-        }
-    }
-    return 0u;
-}
-
 fn level_dims() -> vec3<f32> {
     return frame.dims[schedule.band].xyz;
 }
@@ -123,9 +109,6 @@ fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
     let bucket = volume_bucket(0.5 * (bounds[0] + bounds[1]));
     atomicAdd(&plan[0], 1u);
     atomicAdd(&plan[VISIBLE_BASE + bucket], 1u);
-    if (brick_slot(bricks[schedule.base + index]) != 0u) {
-        bricks[schedule.base + index].flags = brick_opacity(schedule.base + index);
-    }
 }
 
 @compute @workgroup_size(64)

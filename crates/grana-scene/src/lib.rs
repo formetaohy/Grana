@@ -58,7 +58,7 @@ pub use key::ObjectSetKey;
 pub use label_export::LabelExport;
 pub use localization::LocalizationSource;
 pub use mask::{MaskFilter, MaskGate};
-pub use measure::{Measure, MeasureState, PlotKey, PlotRequest};
+pub use measure::{MaterializeRequest, Measure, MeasureState, PlotKey, PlotRequest};
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
