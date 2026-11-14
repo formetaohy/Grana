@@ -101,8 +101,8 @@ impl App {
             return None;
         };
         let overlays = super::overlay::overlays(session);
-        if let Some(scene) = session.scene()
-            && let Err(detail) = engine.draw(
+        let outcome = match session.scene() {
+            Some(scene) => engine.draw(
                 &surface.gpu.device,
                 &surface.gpu.queue,
                 grana_engine::View {
@@ -113,10 +113,13 @@ impl App {
                     level_cap: cap,
                     overlays: &overlays,
                 },
-            )
-        {
+            ),
+            None => Ok(()),
+        };
+        if let Err(detail) = outcome {
             *output = Some(detail);
-            return Some(Duration::ZERO);
+            self.present_ui();
+            return None;
         }
         self.present_ui();
         Some(Duration::MAX)

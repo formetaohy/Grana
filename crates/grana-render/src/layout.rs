@@ -46,6 +46,7 @@ pub(crate) struct Layouts {
     pub ao_surface: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub section: BindGroupLayout,
+    pub section_style: BindGroupLayout,
     pub section_pipeline: PipelineLayout,
     pub oit_resolve: PipelineLayout,
 }
@@ -395,10 +396,23 @@ impl Layouts {
         let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
         let section = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.section.layout"),
-            entries: &[storage(0, ShaderStages::VERTEX, true)],
+            entries: &[
+                storage(0, ShaderStages::VERTEX, true),
+                storage(1, ShaderStages::VERTEX, true),
+            ],
         });
-        let section_pipeline =
-            pipeline_layout(device, "grana.section.pipeline.layout", &[&scene, &section]);
+        let section_style = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.section.style.layout"),
+            entries: &[
+                uniform(0, ShaderStages::VERTEX),
+                storage(1, ShaderStages::VERTEX, true),
+            ],
+        });
+        let section_pipeline = pipeline_layout(
+            device,
+            "grana.section.pipeline.layout",
+            &[&scene, &section, &section_style],
+        );
         let oit_resolve = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.oit.resolve.layout"),
             bind_group_layouts: &[Some(&scene), None, None, None, Some(&oit_read)],
@@ -441,6 +455,7 @@ impl Layouts {
             ao_pipeline,
             ao_surface,
             section,
+            section_style,
             section_pipeline,
             oit_resolve,
         }

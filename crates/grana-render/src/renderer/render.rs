@@ -1,4 +1,6 @@
-use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
+use super::signature::{
+    ShadowKeys, channel_style, digest, hash_camera, shadow_bounds, shadow_visibility,
+};
 use super::*;
 
 const AMBIENT_REACH: f32 = 40.0;
@@ -134,6 +136,7 @@ impl Renderer {
         *sliced = slice;
         sections.prepare(
             device,
+            queue,
             layouts,
             scene,
             camera.slice().map(|frame| frame.plane(camera.pivot())),
@@ -285,6 +288,7 @@ impl Renderer {
         );
         let shadow_keys = ShadowKeys::of(
             versions.objects(),
+            shadow_visibility(scene.layers, scene.styles),
             *generation,
             time,
             channel_key,

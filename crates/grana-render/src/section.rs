@@ -4,16 +4,16 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_display::{Plane, srgb_to_linear};
 use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, SectionPlane};
-use grana_gpu::Pipelines;
+use grana_gpu::{Pipelines, Table};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BlendComponent, BlendFactor, BlendOperation,
     BlendState, Buffer, BufferUsages, ColorTargetState, ColorWrites, Device, FragmentState,
-    MultisampleState, PrimitiveState, RenderPass, RenderPipeline, RenderPipelineDescriptor,
-    ShaderModuleDescriptor, ShaderSource, VertexState, util::DeviceExt,
+    IndexFormat, MultisampleState, PrimitiveState, Queue, RenderPass, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, VertexState, util::DeviceExt,
 };
 
 use crate::layout::Layouts;
-use crate::schema::{LayerKey, SceneFrame, Style};
+use crate::schema::{Digest, LayerKey, SceneFrame, Style};
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = concat!(
@@ -22,7 +22,8 @@ const SHADER: &str = concat!(
     include_str!("shader/section.wgsl")
 );
 
-const QUAD_LIMIT: usize = 1 << 16;
+const CHUNK_QUADS: usize = 1 << 16;
+const INDICES: [usize; 6] = [0, 1, 2, 0, 2, 3];
 
 const BLEND: BlendState = BlendState {
     color: BlendComponent {
@@ -39,10 +40,17 @@ const BLEND: BlendState = BlendState {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-struct Vertex {
-    position: [f32; 4],
+struct SectionStyle {
     color: [f32; 4],
-    pick: [u32; 4],
+    flags: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct SectionPlaneData {
+    right: [f32; 4],
+    up: [f32; 4],
+    origin: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,28 +70,112 @@ impl PlaneKey {
     }
 }
 
-#[derive(Clone, PartialEq)]
-struct Stamp {
-    plane: Option<PlaneKey>,
-    layers: Vec<LayerKey>,
-    styles: Vec<Style>,
-}
-
 struct Indices {
     normal: [u32; 3],
     objects: Vec<SectionIndex>,
 }
 
+struct Chunk {
+    corners: Table<[f32; 2]>,
+    styles: Table<u32>,
+    group: Option<BindGroup>,
+    quads: u32,
+}
+
+impl Chunk {
+    fn new(device: &Device) -> Self {
+        Self {
+            corners: Table::new(device, "grana.section.corners"),
+            styles: Table::new(device, "grana.section.quads"),
+            group: None,
+            quads: 0,
+        }
+    }
+
+    fn write(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        corners: &[[f32; 2]],
+        styles: &[u32],
+    ) {
+        let grown = self.corners.write(device, queue, corners);
+        let grown = self.styles.write(device, queue, styles) || grown;
+        if grown || self.group.is_none() {
+            self.group = Some(group(
+                device,
+                layouts,
+                &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: self.corners.buffer().as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.styles.buffer().as_entire_binding(),
+                    },
+                ],
+            ));
+        }
+        self.quads = u32::try_from(styles.len()).expect("a section chunk holds u32 quads");
+    }
+}
+
+struct StyleTable {
+    styles: Table<SectionStyle>,
+    plane: Buffer,
+    group: Option<BindGroup>,
+}
+
+impl StyleTable {
+    fn new(device: &Device) -> Self {
+        Self {
+            styles: Table::new(device, "grana.section.styles"),
+            plane: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("grana.section.plane"),
+                size: size_of::<SectionPlaneData>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            group: None,
+        }
+    }
+
+    fn write(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        styles: &[SectionStyle],
+    ) {
+        let grown = self.styles.write(device, queue, styles);
+        if grown || self.group.is_none() {
+            self.group = Some(style_group(device, layouts, self));
+        }
+    }
+
+    fn write_plane(&self, queue: &Queue, plane: SectionPlaneData) {
+        queue.write_buffer(&self.plane, 0, bytemuck::bytes_of(&plane));
+    }
+
+    fn group(&self) -> Option<&BindGroup> {
+        self.group.as_ref()
+    }
+}
+
 pub(crate) struct Sections {
     color: RenderPipeline,
     pick: RenderPipeline,
-    stamp: Option<Stamp>,
+    geometry: Option<u64>,
+    styles: Option<u64>,
     indices: HashMap<LayerKey, Indices>,
     cutter: SectionCutter,
-    vertices: Vec<Vertex>,
-    buffer: Option<Buffer>,
-    group: Option<BindGroup>,
-    count: u32,
+    chunks: Vec<Chunk>,
+    index: Buffer,
+    style: StyleTable,
+    corners: Vec<[f32; 2]>,
+    quad_styles: Vec<u32>,
 }
 
 impl Sections {
@@ -142,31 +234,44 @@ impl Sections {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
+        let indices = (0..CHUNK_QUADS * 6)
+            .map(|index| (index / 6 * 4 + INDICES[index % 6]) as u32)
+            .collect::<Vec<_>>();
+        let index = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grana.section.indices"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: BufferUsages::INDEX,
+        });
         Self {
             color,
             pick,
-            stamp: None,
+            geometry: None,
+            styles: None,
             indices: HashMap::new(),
             cutter: SectionCutter::new(),
-            vertices: Vec::new(),
-            buffer: None,
-            group: None,
-            count: 0,
+            chunks: Vec::new(),
+            index,
+            style: StyleTable::new(device),
+            corners: Vec::new(),
+            quad_styles: Vec::new(),
         }
     }
 
     pub fn clear(&mut self) {
-        self.stamp = None;
+        self.geometry = None;
+        self.styles = None;
         self.indices.clear();
-        self.vertices.clear();
-        self.buffer = None;
-        self.group = None;
-        self.count = 0;
+        for chunk in &mut self.chunks {
+            chunk.quads = 0;
+        }
+        self.corners.clear();
+        self.quad_styles.clear();
     }
 
     pub fn prepare(
         &mut self,
         device: &Device,
+        queue: &Queue,
         layouts: &Layouts,
         scene: &SceneFrame<'_>,
         plane: Option<Plane>,
@@ -176,57 +281,50 @@ impl Sections {
             SectionPlane::new(normal, normal.any_orthonormal_vector(), plane.offset())
         });
         let key = plane.map(PlaneKey::of);
-        let unchanged = self.stamp.as_ref().is_some_and(|stamp| {
-            stamp.plane == key
-                && stamp.layers.len() == scene.layers.len()
-                && stamp
-                    .layers
-                    .iter()
-                    .zip(scene.layers)
-                    .all(|(key, layer)| *key == layer.key)
-                && stamp.styles == scene.styles
-        });
-        if unchanged {
-            return;
+        let geometry = geometry_stamp(scene, key);
+        if self.geometry != Some(geometry) {
+            self.geometry = Some(geometry);
+            self.corners.clear();
+            self.quad_styles.clear();
+            if let Some(plane) = plane {
+                self.cut(scene, plane);
+            }
+            self.write_geometry(device, queue, layouts);
         }
-        let vertices = match plane {
-            Some(plane) => self.vertices_of(scene, plane),
-            None => Vec::new(),
+        let Some(plane) = plane else {
+            return;
         };
-        self.count = u32::try_from(vertices.len()).expect("a section holds u32 vertices");
-        self.buffer = (!vertices.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("grana.section.vertices"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: BufferUsages::STORAGE,
-            })
-        });
-        self.group = self.buffer.as_ref().map(|buffer| {
-            device.create_bind_group(&BindGroupDescriptor {
-                label: Some("grana.section.group"),
-                layout: &layouts.section,
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            })
-        });
-        self.vertices = vertices;
-        self.stamp = Some(Stamp {
-            plane: key,
-            layers: scene.layers.iter().map(|layer| layer.key).collect(),
-            styles: scene.styles.to_vec(),
-        });
+        let origin = Vec3::from(plane.normal) * plane.offset;
+        self.style.write_plane(
+            queue,
+            SectionPlaneData {
+                right: Vec3::from(plane.right).extend(0.0).to_array(),
+                up: Vec3::from(plane.up).extend(0.0).to_array(),
+                origin: origin.extend(0.0).to_array(),
+            },
+        );
+        let styles = style_stamp(scene.styles);
+        if self.styles != Some(styles) {
+            self.styles = Some(styles);
+            let rows = scene
+                .styles
+                .iter()
+                .map(|style| {
+                    let [red, green, blue] = srgb_to_linear(style.color());
+                    SectionStyle {
+                        color: [red, green, blue, style.opacity()],
+                        flags: [f32::from(u8::from(style.visible())), 0.0, 0.0, 0.0],
+                    }
+                })
+                .collect::<Vec<_>>();
+            self.style.write(device, queue, layouts, &rows);
+        }
     }
 
-    fn vertices_of(&mut self, scene: &SceneFrame<'_>, plane: SectionPlane) -> Vec<Vertex> {
-        let normal = Vec3::from(plane.normal);
-        let right = Vec3::from(plane.right);
-        let up = Vec3::from(plane.up);
-        let origin = normal * plane.offset;
+    fn cut(&mut self, scene: &SceneFrame<'_>, plane: SectionPlane) {
         self.indices
             .retain(|key, _| scene.layers.iter().any(|layer| layer.key == *key));
-        let mut vertices = Vec::new();
+        let mut quads = Vec::new();
         for layer in scene.layers {
             let indices = self
                 .indices
@@ -237,56 +335,141 @@ impl Sections {
                     }
                 })
                 .or_insert_with(|| Indices::new(&layer.mesh, plane.normal));
-            let mut quads = Vec::new();
             for (object, index) in indices.objects.iter().enumerate() {
-                let style = scene.styles[layer.style_start + object];
-                if !style.visible() || style.opacity() <= 0.0 {
+                let style_index = layer.style_start + object;
+                if !scene.styles[style_index].visible() {
                     continue;
                 }
                 quads.clear();
                 self.cutter
                     .cut_indexed(&layer.mesh, object, &plane, index, &mut quads);
-                let [red, green, blue] = srgb_to_linear(style.color());
-                let color = [red, green, blue, style.opacity()];
-                let pick = [layer.style_start as u32 + object as u32 + 1, 0, 0, 0];
                 for quad in quads.as_chunks::<4>().0 {
-                    let corners = (*quad).map(|point| {
-                        let world = origin + right * point[0] + up * point[1];
-                        [world.x, world.y, world.z, 1.0]
-                    });
-                    for corner in [0usize, 1, 2, 0, 2, 3] {
-                        vertices.push(Vertex {
-                            position: corners[corner],
-                            color,
-                            pick,
-                        });
-                    }
+                    self.corners.extend_from_slice(quad);
+                    self.quad_styles.push(style_index as u32);
                 }
             }
         }
-        vertices.truncate(QUAD_LIMIT * 6);
-        vertices
+    }
+
+    fn write_geometry(&mut self, device: &Device, queue: &Queue, layouts: &Layouts) {
+        let quads = self.quad_styles.len();
+        let chunks = quads.div_ceil(CHUNK_QUADS);
+        while self.chunks.len() < chunks {
+            self.chunks.push(Chunk::new(device));
+        }
+        for (index, chunk) in self.chunks.iter_mut().enumerate() {
+            let start = index * CHUNK_QUADS;
+            let end = ((index + 1) * CHUNK_QUADS).min(quads);
+            if start >= end {
+                chunk.quads = 0;
+                continue;
+            }
+            chunk.write(
+                device,
+                queue,
+                layouts,
+                &self.corners[start * 4..end * 4],
+                &self.quad_styles[start..end],
+            );
+        }
     }
 
     pub fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        let (Some(group), pipeline) = (self.group.as_ref(), &self.color) else {
+        let Some(styles) = self.style.group() else {
             return;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&self.color);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, group, &[]);
-        pass.draw(0..self.count, 0..1);
+        pass.set_bind_group(2, styles, &[]);
+        pass.set_index_buffer(self.index.slice(..), IndexFormat::Uint32);
+        for chunk in &self.chunks {
+            let Some(group) = chunk.group.as_ref() else {
+                continue;
+            };
+            if chunk.quads == 0 {
+                continue;
+            }
+            pass.set_bind_group(1, group, &[]);
+            pass.draw_indexed(0..chunk.quads * 6, 0, 0..1);
+        }
     }
 
     pub fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        let (Some(group), pipeline) = (self.group.as_ref(), &self.pick) else {
+        let Some(styles) = self.style.group() else {
             return;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&self.pick);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, group, &[]);
-        pass.draw(0..self.count, 0..1);
+        pass.set_bind_group(2, styles, &[]);
+        pass.set_index_buffer(self.index.slice(..), IndexFormat::Uint32);
+        for chunk in &self.chunks {
+            let Some(group) = chunk.group.as_ref() else {
+                continue;
+            };
+            if chunk.quads == 0 {
+                continue;
+            }
+            pass.set_bind_group(1, group, &[]);
+            pass.draw_indexed(0..chunk.quads * 6, 0, 0..1);
+        }
     }
+}
+
+fn group(device: &Device, layouts: &Layouts, entries: &[BindGroupEntry<'_>]) -> BindGroup {
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.section.group"),
+        layout: &layouts.section,
+        entries,
+    })
+}
+
+fn style_group(device: &Device, layouts: &Layouts, style: &StyleTable) -> BindGroup {
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.section.style.group"),
+        layout: &layouts.section_style,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: style.plane.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: style.styles.buffer().as_entire_binding(),
+            },
+        ],
+    })
+}
+
+fn geometry_stamp(scene: &SceneFrame<'_>, plane: Option<PlaneKey>) -> u64 {
+    let mut digest = Digest::new();
+    match plane {
+        Some(key) => {
+            for value in key.normal.into_iter().chain(key.right).chain([key.offset]) {
+                digest.mix(u64::from(value));
+            }
+        }
+        None => digest.mix(u64::MAX),
+    }
+    for layer in scene.layers {
+        digest.mix(layer.key.digest());
+        digest.mix(layer.style_start as u64);
+        for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
+            digest.flag(style.visible());
+        }
+    }
+    digest.finish()
+}
+
+fn style_stamp(styles: &[Style]) -> u64 {
+    let mut digest = Digest::new();
+    for style in styles {
+        for value in style.color() {
+            digest.real(value);
+        }
+        digest.real(style.opacity());
+        digest.flag(style.visible());
+    }
+    digest.finish()
 }
 
 impl Indices {

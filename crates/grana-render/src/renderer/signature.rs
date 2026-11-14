@@ -1,4 +1,5 @@
 use super::*;
+use crate::schema::{Digest, Layer, Style};
 use grana_display::CameraState;
 
 #[derive(Clone, Copy)]
@@ -154,6 +155,7 @@ pub(super) struct ShadowKeys {
 impl ShadowKeys {
     pub(super) fn of(
         objects: u64,
+        visibility: u64,
         generation: u64,
         time: u32,
         style: u64,
@@ -170,7 +172,7 @@ impl ShadowKeys {
                 generation,
                 space,
             ]),
-            objects: digest(&[objects, space]),
+            objects: digest(&[objects, visibility, space]),
         }
     }
 
@@ -181,6 +183,16 @@ impl ShadowKeys {
     pub(super) fn objects(self) -> u64 {
         self.objects
     }
+}
+
+pub(super) fn shadow_visibility(layers: &[Layer], styles: &[Style]) -> u64 {
+    let mut digest = Digest::new();
+    for layer in layers {
+        for style in &styles[layer.style_start..layer.style_start + layer.style_count] {
+            digest.flag(style.visible());
+        }
+    }
+    digest.finish()
 }
 
 pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {

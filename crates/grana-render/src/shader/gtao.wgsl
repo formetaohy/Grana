@@ -89,11 +89,9 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
         across_length > FLOOR,
     );
     let bitangent = cross(facing, tangent);
-    let radius = select(
-        ao.extent.z,
-        ao.extent.z * length(position - ao.eye.xyz) / max(ao.noise.y, FLOOR),
-        ao.noise.z > 0.5,
-    );
+    let focal = max(ao.noise.y, FLOOR);
+    let depth_scale = select(1.0, length(position - ao.eye.xyz), ao.noise.z > 0.5);
+    let radius = max(ao.extent.z * depth_scale / focal, FLOOR);
     let rotation = dither(vec2<f32>(f32(pixel.x), f32(pixel.y))) * 6.2831853
         + ao.noise.x * 2.39996323;
     var occlusion = 0.0;

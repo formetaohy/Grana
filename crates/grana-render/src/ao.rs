@@ -213,7 +213,12 @@ impl Ao {
             inverse_view_projection: frame.inv_view_projection,
             eye: frame.eye,
             extent: [self.size[0] as f32, self.size[1] as f32, reach, strength],
-            noise: [sample as f32, frame.march[3], 0.0, 0.0],
+            noise: [
+                sample as f32,
+                frame.march[3],
+                1.0 - frame.projection[0],
+                0.0,
+            ],
             region: frame.viewport,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));
