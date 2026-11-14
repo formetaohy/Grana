@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 
 use glam::Vec3;
-use grana_object::Spot;
 pub use grana_object::{ClusterSpec, LocalizationFilter, LocalizationSpec, SpotWeight};
 use grana_volume::Region;
 
@@ -10,6 +9,7 @@ mod composition;
 mod depth;
 mod fit;
 mod fourier;
+mod frame;
 mod frc;
 mod grid;
 mod group;
@@ -17,18 +17,24 @@ mod image;
 mod layout;
 mod nena;
 mod report;
+mod sample;
+mod source;
 mod stack;
+mod survey;
 mod tone;
 
 pub use cluster::{Clusters, cluster};
 pub use composition::{CompositionEntry, CompositionSpec, LocalizationComposition};
 pub use depth::LocalizationDepth;
+pub use frame::LocalizationFrame;
 use grid::Grid;
 pub use group::{GroupStat, Groups};
 pub use image::LocalizationRenderer;
 pub use layout::LocalizationLayout;
 pub use report::{Frc, LocalizationGeometry, LocalizationImage, LocalizationReport, NeNa};
+pub use source::LocalizationSource;
 pub use stack::LocalizationStack;
+pub use survey::LocalizationSurvey;
 
 const PREVIEW: u32 = 2048;
 
@@ -42,11 +48,13 @@ const REACH: f32 = 1.0;
 
 const MARGIN: f32 = 3.0;
 
-const SAMPLE: usize = 100_000;
-
 const FLOOR: f32 = 1.0e-6;
 
 const UNGROUPED: u32 = u32::MAX;
+
+const FRAME_PASSES: usize = 5;
+
+const NANOMETRES_PER_MICROMETRE: f32 = 1000.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Point {
@@ -54,85 +62,8 @@ pub(super) struct Point {
     group: u32,
 }
 
-#[derive(Clone, Copy)]
-pub struct LocalizationFrame<'a> {
-    spots: &'a [Spot],
-    visible: Option<&'a [bool]>,
-    filter: LocalizationFilter,
-}
-
-impl<'a> LocalizationFrame<'a> {
-    pub fn new(spots: &'a [Spot], visible: Option<&'a [bool]>, filter: LocalizationFilter) -> Self {
-        if let Some(visible) = visible {
-            assert_eq!(
-                visible.len(),
-                spots.len(),
-                "a localization frame marks every spot it holds"
-            );
-        }
-        Self {
-            spots,
-            visible,
-            filter,
-        }
-    }
-
-    pub fn spots(&self) -> &'a [Spot] {
-        self.spots
-    }
-
-    pub fn filter(&self) -> LocalizationFilter {
-        self.filter
-    }
-
-    fn visible(&self, index: usize) -> bool {
-        let spot = &self.spots[index];
-        (self
-            .visible
-            .is_none_or(|mask| mask.get(index).copied().unwrap_or(false)))
-            && self.filter.keeps(spot.quality(), spot.sigma())
-    }
-
-    fn count(&self) -> usize {
-        (0..self.spots.len())
-            .filter(|index| self.visible(*index))
-            .count()
-    }
-
-    fn visible_spots(&self) -> impl Iterator<Item = &'a Spot> + '_ {
-        self.spots
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.visible(*index))
-            .map(|(_, spot)| spot)
-    }
-
-    fn points(&self, grouped: bool) -> Vec<Point> {
-        self.spots
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.visible(*index))
-            .map(|(_, spot)| {
-                let center = spot.center();
-                Point {
-                    center: [center[0], center[1]],
-                    group: spot.group().filter(|_| grouped).unwrap_or(UNGROUPED),
-                }
-            })
-            .collect()
-    }
-}
-
-pub fn localization_weight(frames: &[LocalizationFrame<'_>]) -> SpotWeight {
-    let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
-    SpotWeight::measure(
-        total,
-        frames.iter().flat_map(LocalizationFrame::visible_spots),
-    )
-}
-
 pub fn localization_report(
-    frames: &[LocalizationFrame<'_>],
+    source: &dyn LocalizationSource,
     spec: LocalizationSpec,
     camera_pixel: f32,
     grouped: bool,
@@ -143,15 +74,16 @@ pub fn localization_report(
         camera_pixel.is_finite() && camera_pixel > 0.0,
         "a localization report knows its camera pixel"
     );
-    if frames.is_empty() {
+    if source.is_empty() {
         return Err("the frame range holds no frame".to_string());
     }
-    let filter = frames[0].filter();
-    assert!(
-        frames.iter().all(|frame| frame.filter() == filter),
-        "a localization report filters every frame alike"
-    );
-    let Some(layout) = LocalizationLayout::new(frames, spec, camera_pixel)? else {
+    let filter = spec.filter();
+    let ticker = RefCell::new(Ticker::new(frame_steps(source.len()), report));
+    let tick = |_: usize, _: usize| ticker.borrow_mut().tick();
+    let Some(layout) = LocalizationLayout::new(source, spec, camera_pixel, &tick)? else {
+        if ticker.borrow().cancelled() {
+            return Ok(None);
+        }
         return Err("the frame range holds no visible localization".to_string());
     };
     let survey = layout.survey();
@@ -169,17 +101,16 @@ pub fn localization_report(
         blur,
         margin_pixels(blur, preview.pixel()),
     );
-    let ticker = RefCell::new(Ticker::new(
-        total_steps(frames.len(), depth, preview.size()),
-        report,
-    ));
-    let tick = |_: usize, _: usize| ticker.borrow_mut().tick();
+    ticker
+        .borrow_mut()
+        .retotal(total_steps(source.len(), depth, preview.size()));
     let (density, stack) = {
         let mut renderer = LocalizationRenderer::new(
-            frames,
+            source,
+            filter,
             preview_geometry,
             depth,
-            survey.groups.clone(),
+            layout.groups().clone(),
             weight,
             &tick,
         )?;
@@ -200,12 +131,13 @@ pub fn localization_report(
             LocalizationStack::new(preview_geometry, depth, layers),
         )
     };
-    let nena = if frames.len() > 1 {
+    let nena = if source.len() > 1 {
         let mut progress = |_: usize, _: usize| ticker.borrow_mut().tick();
         match nena::measure(
-            frames,
+            source,
+            filter,
             REACH * camera_pixel,
-            survey.sigma,
+            survey.sigma() * NANOMETRES_PER_MICROMETRE,
             grouped,
             &mut progress,
         )? {
@@ -217,15 +149,7 @@ pub fn localization_report(
     };
     let frc = {
         let mut advance = || ticker.borrow_mut().tick();
-        match measure_frc(
-            frames,
-            low,
-            span,
-            survey.sigma,
-            weight,
-            region,
-            &mut advance,
-        )? {
+        match measure_frc(&layout, source, filter, region, &mut advance)? {
             Some(frc) => frc,
             None => return Ok(None),
         }
@@ -233,8 +157,10 @@ pub fn localization_report(
     if !ticker.borrow_mut().tick() {
         return Ok(None);
     }
-    let precision = nena.as_ref().map_or(survey.sigma, |nena| nena.precision()) * 0.001;
-    let suggested = cluster::estimate(frames, precision);
+    let precision = nena
+        .as_ref()
+        .map_or(survey.sigma(), |nena| nena.precision() * 0.001);
+    let suggested = cluster::estimate(source, filter, precision, survey.axes());
     if !ticker.borrow_mut().tick() {
         return Ok(None);
     }
@@ -256,66 +182,11 @@ pub fn localization_report(
     }))
 }
 
-struct Survey {
-    localizations: u64,
-    bounds: Option<([f32; 2], [f32; 2])>,
-    heights: Option<[f32; 2]>,
-    sigma: f32,
-    groups: Groups,
-}
-
-impl Survey {
-    fn of(frames: &[LocalizationFrame<'_>]) -> Self {
-        let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
-        let stride = (total / SAMPLE).max(1);
-        let mut low = [f32::INFINITY; 2];
-        let mut high = [f32::NEG_INFINITY; 2];
-        let mut sigmas = Vec::with_capacity(total.div_ceil(stride).min(SAMPLE) + 1);
-        let mut heights = [f32::INFINITY, f32::NEG_INFINITY];
-        let mut seen = 0usize;
-        for frame in frames {
-            for (index, spot) in frame.spots.iter().enumerate() {
-                if !frame.visible(index) {
-                    continue;
-                }
-                let center = spot.center();
-                for (axis, value) in center[..2].iter().enumerate() {
-                    low[axis] = low[axis].min(*value);
-                    high[axis] = high[axis].max(*value);
-                }
-                heights[0] = heights[0].min(center[2]);
-                heights[1] = heights[1].max(center[2]);
-                if seen.is_multiple_of(stride) {
-                    let sigma = spot.sigma();
-                    sigmas.push(0.5 * (sigma[0] + sigma[1]) * 1000.0);
-                }
-                seen += 1;
-            }
-        }
-        sigmas.sort_by(|left, right| left.total_cmp(right));
-        Self {
-            localizations: total as u64,
-            bounds: (seen > 0).then_some((low, high)),
-            heights: (seen > 0).then_some(heights),
-            sigma: sigmas.get(sigmas.len() / 2).copied().unwrap_or(0.0),
-            groups: Groups::measure(frames),
-        }
-    }
-
-    fn depth(&self, thickness: f32) -> Result<LocalizationDepth, String> {
-        let [low, high] = self.heights.unwrap_or([0.0; 2]);
-        if thickness > 0.0 {
-            LocalizationDepth::sliced(low, high, thickness)
-        } else {
-            Ok(LocalizationDepth::projection(low))
-        }
-    }
-}
-
 struct Ticker<'a> {
     done: usize,
     total: usize,
     report: &'a mut dyn FnMut(usize, usize) -> bool,
+    cancelled: bool,
 }
 
 impl Ticker<'_> {
@@ -324,23 +195,39 @@ impl Ticker<'_> {
             done: 0,
             total,
             report,
+            cancelled: false,
         }
+    }
+
+    fn retotal(&mut self, total: usize) {
+        self.total = total.max(self.done);
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancelled
     }
 
     fn tick(&mut self) -> bool {
         self.done += 1;
-        (self.report)(self.done, self.total)
+        if !(self.report)(self.done, self.total) {
+            self.cancelled = true;
+        }
+        !self.cancelled
     }
+}
+
+fn frame_steps(frames: usize) -> usize {
+    frames
+        * if frames > 1 {
+            FRAME_PASSES
+        } else {
+            FRAME_PASSES - 1
+        }
 }
 
 fn total_steps(frames: usize, depth: LocalizationDepth, size: [u32; 2]) -> usize {
     let bands = (size[1] as usize).div_ceil(512);
-    frames
-        + 2 * depth.layers() as usize
-        + bands * depth.layers() as usize
-        + if frames > 1 { frames } else { 0 }
-        + frames
-        + 2
+    frame_steps(frames) + 2 * depth.layers() as usize + bands * depth.layers() as usize + 2
 }
 
 struct Preview {
@@ -451,14 +338,16 @@ fn margin_pixels(blur: f32, pixel: f32) -> u32 {
 }
 
 fn measure_frc(
-    frames: &[LocalizationFrame<'_>],
-    origin: [f32; 2],
-    span: [f32; 2],
-    sigma: f32,
-    weight: SpotWeight,
+    layout: &LocalizationLayout,
+    source: &dyn LocalizationSource,
+    filter: LocalizationFilter,
     region: Option<Region>,
     report: &mut dyn FnMut() -> bool,
 ) -> Result<Option<Frc>, String> {
+    let origin = layout.low();
+    let span = layout.span();
+    let sigma = layout.survey().sigma();
+    let weight = layout.weight();
     let (side, corner) = match region {
         Some(region) => {
             let (low, high) = region.bounds();
@@ -479,7 +368,7 @@ fn measure_frc(
     if !(side.is_finite() && side > 0.0) {
         return Err("the region of interest spans no square to correlate".to_string());
     }
-    let preferred = sigma * 0.0005;
+    let preferred = 0.5 * sigma;
     let grid = ((side / preferred).ceil() as usize)
         .next_power_of_two()
         .clamp(FRC_MINIMUM, FRC_LIMIT);
@@ -488,8 +377,9 @@ fn measure_frc(
     let mut second = Grid::empty([grid as u32; 2], pixel, corner);
     let mut index = 0u64;
     let mut kept = 0usize;
-    for frame in frames {
-        for (spot_index, spot) in frame.spots.iter().enumerate() {
+    for frame_index in 0..source.len() {
+        let frame = source.frame(frame_index, filter);
+        for (spot_index, spot) in frame.spots().iter().enumerate() {
             if !frame.visible(spot_index) {
                 continue;
             }

@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use grana_display::{CATEGORICAL, group_tint, srgb_to_linear};
 
-use super::LocalizationFrame;
-
 const TRACKED: usize = 32;
 
 const NANOMETRES_PER_MICROMETRE: f64 = 1000.0;
@@ -66,28 +64,9 @@ impl Groups {
             .get(slot as usize)
             .map_or(grana_display::GROUP_NEUTRAL, |stat| stat.tint)
     }
-
-    pub(super) fn measure(frames: &[LocalizationFrame<'_>]) -> Self {
-        let mut tally = Tally::default();
-        for frame in frames {
-            for (index, spot) in frame.spots().iter().enumerate() {
-                if !frame.visible(index) {
-                    continue;
-                }
-                let sigma = spot.sigma();
-                tally.push(
-                    spot.group(),
-                    0.5 * (f64::from(sigma[0]) + f64::from(sigma[1])),
-                    f64::from(spot.quality()),
-                );
-            }
-        }
-        tally.finish()
-    }
 }
 
-#[derive(Default)]
-struct Tally {
+pub(super) struct Tally {
     entries: Vec<Entry>,
     index: HashMap<Option<u32>, usize>,
     held: Option<(Option<u32>, usize)>,
@@ -102,7 +81,16 @@ struct Entry {
 }
 
 impl Tally {
-    fn push(&mut self, group: Option<u32>, sigma: f64, quality: f64) {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            index: HashMap::new(),
+            held: None,
+            overflow: false,
+        }
+    }
+
+    pub(super) fn push(&mut self, group: Option<u32>, sigma: f64, quality: f64) {
         let at = match self.held {
             Some((known, at)) if known == group => at,
             _ => {
@@ -134,7 +122,7 @@ impl Tally {
         entry.quality += quality;
     }
 
-    fn finish(mut self) -> Groups {
+    pub(super) fn finish(mut self) -> Groups {
         if self.overflow {
             return Groups::default();
         }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use grana_analysis::localization::{
-    Clusters, LocalizationFilter, LocalizationReport, LocalizationSpec,
+    Clusters, LocalizationFilter, LocalizationReport, LocalizationSource, LocalizationSpec,
 };
 use grana_object::ClusterSpec;
 use grana_pipeline::Event;

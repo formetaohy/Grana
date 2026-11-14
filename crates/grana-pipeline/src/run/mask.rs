@@ -39,30 +39,24 @@ pub fn mask(
                 return Err("only surfaces carry an editable mask".to_string());
             };
             let targets = targets(current, &strokes, voxel, frame)?;
-            let mut next = current.clone();
-            let mut removed = Vec::new();
+            let mut edits = Vec::with_capacity(targets.len());
             for (object, strokes) in targets {
-                match edit_object(reader, current, object, &strokes, frame, request)? {
-                    Some(replacement) => {
-                        next = next
-                            .replaced(object, &replacement)
-                            .map_err(|error| error.to_string())?
-                            .ok_or_else(|| {
-                                "the edited surface does not fit its object set".to_string()
-                            })?;
-                    }
-                    None => removed.push(object),
-                }
+                edits.push((
+                    object,
+                    edit_object(reader, current, object, &strokes, frame, request)?,
+                ));
             }
-            for object in removed.into_iter().rev() {
-                let Some(pruned) = next.without(object).map_err(|error| error.to_string())? else {
-                    break;
-                };
-                next = pruned;
-            }
-            next
+            let patches = edits
+                .iter()
+                .map(|(object, replacement)| (*object, replacement.as_ref()))
+                .collect::<Vec<_>>();
+            current
+                .edited(&patches)
+                .map_err(|error| error.to_string())?
         };
-        edited[frame as usize] = (!next.is_empty()).then(|| Arc::new(ObjectFrame::Surfaces(next)));
+        edited[frame as usize] = next
+            .filter(|set| !set.is_empty())
+            .map(|set| Arc::new(ObjectFrame::Surfaces(set)));
     }
     Ok(edited)
 }

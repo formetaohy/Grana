@@ -839,6 +839,10 @@ impl ObjectSet {
         self.frames.get(time as usize)?.shared()
     }
 
+    pub fn frame_handle(&self, time: u32) -> Option<Frame> {
+        self.frames.get(time as usize)?.frame.clone()
+    }
+
     pub fn spot_frame(&self, time: u32) -> Option<Arc<SpotSet>> {
         self.frames.get(time as usize)?.frame.as_ref()?.spot_frame()
     }
@@ -1368,7 +1372,11 @@ impl ObjectSet {
     }
 
     pub fn filtered(&self) -> bool {
-        !matches!(self.visibility, Visibility::All) || self.localization_filter().active()
+        self.restricted() || self.localization_filter().active()
+    }
+
+    pub fn restricted(&self) -> bool {
+        !matches!(self.visibility, Visibility::All) || self.hidden_count() > 0
     }
 
     pub fn localization_filter(&self) -> grana_object::LocalizationFilter {

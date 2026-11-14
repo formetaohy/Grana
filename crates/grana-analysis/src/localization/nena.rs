@@ -1,4 +1,6 @@
-use super::LocalizationFrame;
+use grana_object::LocalizationFilter;
+
+use super::LocalizationSource;
 use super::fit::{PARAMETERS, fit};
 use super::report::NeNa;
 
@@ -9,16 +11,17 @@ const MINIMUM_PAIRS: f64 = 100.0;
 const FLOOR: f64 = 1.0e-9;
 
 pub(super) fn measure(
-    frames: &[LocalizationFrame<'_>],
+    source: &dyn LocalizationSource,
+    filter: LocalizationFilter,
     reach: f32,
     sigma: f32,
     grouped: bool,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<NeNa>, String> {
-    if frames.len() < 2 {
+    if source.len() < 2 {
         return Err("the localizations span one frame to estimate a precision".to_string());
     }
-    let Some(counts) = histogram(frames, reach, grouped, report)? else {
+    let Some(counts) = histogram(source, filter, reach, grouped, report)? else {
         return Ok(None);
     };
     let total: f64 = counts.iter().sum();
@@ -78,7 +81,8 @@ pub(super) fn measure(
 }
 
 fn histogram(
-    frames: &[LocalizationFrame<'_>],
+    source: &dyn LocalizationSource,
+    filter: LocalizationFilter,
     reach: f32,
     grouped: bool,
     report: &mut dyn FnMut(usize, usize) -> bool,
@@ -87,17 +91,20 @@ fn histogram(
         reach.is_finite() && reach > 0.0,
         "a next-frame neighbour distance reaches a positive length"
     );
-    let pairs = frames.len() - 1;
+    let frames = source.len();
+    let pairs = frames - 1;
     let mut counts = vec![0.0f64; BINS];
-    let mut next = Lattice::new(frames[1].points(grouped), reach);
+    let mut current = source.frame(0, filter).points(grouped);
+    let mut following = source.frame(1, filter).points(grouped);
     for pair in 0..pairs {
         if !report(pair, pairs) {
             return Ok(None);
         }
-        let source = frames[pair].points(grouped);
-        accumulate(&source, &next, reach, &mut counts);
-        if pair + 2 < frames.len() {
-            next = Lattice::new(frames[pair + 2].points(grouped), reach);
+        let lattice = Lattice::new(&following, reach);
+        accumulate(&current, &lattice, reach, &mut counts);
+        current = std::mem::take(&mut following);
+        if pair + 2 < frames {
+            following = source.frame(pair + 2, filter).points(grouped);
         }
         if counts.iter().any(|count| !count.is_finite()) {
             return Err("the next-frame neighbour histogram overflows".to_string());
@@ -107,7 +114,7 @@ fn histogram(
     Ok(Some(counts))
 }
 
-fn accumulate(source: &[super::Point], target: &Lattice, reach: f32, counts: &mut [f64]) {
+fn accumulate(source: &[super::Point], target: &Lattice<'_>, reach: f32, counts: &mut [f64]) {
     let width = f64::from(reach) / BINS as f64;
     for point in source {
         target.visit_near(*point, reach, |other| {
@@ -125,16 +132,16 @@ fn accumulate(source: &[super::Point], target: &Lattice, reach: f32, counts: &mu
     }
 }
 
-struct Lattice {
+struct Lattice<'a> {
     low: [f32; 2],
     cell: f32,
     dims: [usize; 2],
-    points: Vec<super::Point>,
+    points: &'a [super::Point],
     cells: Vec<Vec<u32>>,
 }
 
-impl Lattice {
-    fn new(points: Vec<super::Point>, cell: f32) -> Self {
+impl<'a> Lattice<'a> {
+    fn new(points: &'a [super::Point], cell: f32) -> Self {
         assert!(
             cell.is_finite() && cell > 0.0,
             "a neighbour lattice spans a positive cell"
@@ -150,7 +157,7 @@ impl Lattice {
         }
         let mut low = [f32::INFINITY; 2];
         let mut high = [f32::NEG_INFINITY; 2];
-        for point in &points {
+        for point in points {
             for (axis, value) in point.center.iter().enumerate() {
                 low[axis] = low[axis].min(*value);
                 high[axis] = high[axis].max(*value);

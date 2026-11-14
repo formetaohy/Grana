@@ -831,3 +831,44 @@ fn field(path: &Path, extent: Extent) {
     )
     .expect("the plate field writes");
 }
+
+pub struct Localizations {
+    frames: Vec<Arc<[grana_object::Spot]>>,
+}
+
+impl Localizations {
+    pub fn of(frames: impl IntoIterator<Item = Vec<grana_object::Spot>>) -> Self {
+        Self {
+            frames: frames.into_iter().map(Arc::from).collect(),
+        }
+    }
+
+    pub fn weight(&self) -> grana_object::SpotWeight {
+        self.survey().weight()
+    }
+
+    pub fn survey(&self) -> grana_analysis::localization::LocalizationSurvey {
+        grana_analysis::localization::LocalizationSurvey::measure(
+            self,
+            grana_analysis::localization::LocalizationFilter::NONE,
+        )
+    }
+}
+
+impl grana_analysis::localization::LocalizationSource for Localizations {
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    fn frame(
+        &self,
+        index: usize,
+        filter: grana_analysis::localization::LocalizationFilter,
+    ) -> grana_analysis::localization::LocalizationFrame {
+        grana_analysis::localization::LocalizationFrame::new(
+            Arc::clone(&self.frames[index]),
+            None,
+            filter,
+        )
+    }
+}

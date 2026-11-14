@@ -455,7 +455,7 @@ impl ObjectFrame {
 
     pub fn shape(&self) -> Result<Shape, grana_geometry::Error> {
         Ok(match self {
-            Self::Spots(set) => Shape::spots(Arc::from(set.spots())),
+            Self::Spots(set) => Shape::spots(set.shared_spots()),
             Self::Surfaces(set) => Shape::mesh(set.geometry()?),
             Self::Filaments(set) => Shape::mesh(set.geometry()?),
             Self::Cells(set) => Shape::mesh(set.geometry()?),

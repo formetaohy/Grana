@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::IntensityTable;
 
 pub const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
@@ -81,7 +83,7 @@ impl Spot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpotSet {
     level: usize,
-    spots: Vec<Spot>,
+    spots: Arc<[Spot]>,
     intensities: IntensityTable,
 }
 
@@ -94,7 +96,7 @@ impl SpotSet {
         );
         Self {
             level,
-            spots,
+            spots: spots.into(),
             intensities,
         }
     }
@@ -105,6 +107,10 @@ impl SpotSet {
 
     pub fn spots(&self) -> &[Spot] {
         &self.spots
+    }
+
+    pub fn shared_spots(&self) -> Arc<[Spot]> {
+        Arc::clone(&self.spots)
     }
 
     pub fn intensities(&self) -> &IntensityTable {
@@ -131,8 +137,9 @@ impl SpotSet {
         if object >= self.spots.len() {
             return None;
         }
-        let mut spots = self.spots.clone();
-        spots.remove(object);
+        let mut spots = Vec::with_capacity(self.spots.len() - 1);
+        spots.extend_from_slice(&self.spots[..object]);
+        spots.extend_from_slice(&self.spots[object + 1..]);
         Some(Self::new(
             self.level,
             spots,
@@ -160,7 +167,8 @@ impl SpotSet {
             self.level, other.level,
             "a merged spot set holds one resolution level"
         );
-        let mut spots = self.spots.clone();
+        let mut spots = Vec::with_capacity(self.spots.len() + other.spots.len());
+        spots.extend_from_slice(&self.spots);
         spots.extend_from_slice(&other.spots);
         Self::new(
             self.level,

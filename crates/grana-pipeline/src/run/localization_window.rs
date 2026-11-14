@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
-use grana_scene::{ObjectFrame, ObjectSet};
+use grana_analysis::localization::{LocalizationFrame, LocalizationSource};
+use grana_object::{LocalizationFilter, Spot};
+use grana_scene::{Frame, ObjectSet};
 
 pub struct LocalizationWindow {
-    frames: Vec<Option<Arc<ObjectFrame>>>,
-    visible: Vec<Option<Vec<bool>>>,
+    frames: Vec<Option<Frame>>,
+    visible: Vec<Option<Arc<Vec<bool>>>>,
+    empty: Arc<[Spot]>,
 }
 
 impl LocalizationWindow {
-    pub fn new(frames: Vec<Option<Arc<ObjectFrame>>>, visible: Vec<Option<Vec<bool>>>) -> Self {
+    pub fn new(frames: Vec<Option<Frame>>, visible: Vec<Option<Arc<Vec<bool>>>>) -> Self {
         assert!(
             !frames.is_empty(),
             "a localization window names the frames of its range"
@@ -18,7 +21,11 @@ impl LocalizationWindow {
             visible.len(),
             "a localization window marks every frame it ranges over"
         );
-        Self { frames, visible }
+        Self {
+            frames,
+            visible,
+            empty: Vec::new().into(),
+        }
     }
 
     pub fn of(set: &ObjectSet, frames: [u32; 2]) -> Self {
@@ -27,37 +34,43 @@ impl LocalizationWindow {
             "a localization window ranges over the frames of its object set"
         );
         let held = (frames[0]..=frames[1])
-            .map(|time| set.frame_shared(time))
+            .map(|time| set.frame_handle(time))
             .collect::<Vec<_>>();
-        let masked = set.filtered() || set.hidden_count() > 0;
+        let masked = set.restricted();
         let visible = (frames[0]..=frames[1])
             .map(|time| {
                 if !masked {
                     return None;
                 }
-                Some(
+                Some(Arc::new(
                     (0..set.object_count(time))
-                        .map(|index| set.visible_object(time, index))
+                        .map(|index| {
+                            set.filtered_object(time, index) && !set.hidden_object(time, index)
+                        })
                         .collect::<Vec<_>>(),
-                )
+                ))
             })
             .collect::<Vec<_>>();
         Self::new(held, visible)
     }
+}
 
-    pub fn len(&self) -> usize {
+impl LocalizationSource for LocalizationWindow {
+    fn len(&self) -> usize {
         self.frames.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
-    }
-
-    pub fn frame(&self, index: usize) -> Option<&Arc<ObjectFrame>> {
-        self.frames.get(index).and_then(Option::as_ref)
-    }
-
-    pub fn visible(&self, index: usize) -> Option<&[bool]> {
-        self.visible.get(index).and_then(Option::as_deref)
+    fn frame(&self, index: usize, filter: LocalizationFilter) -> LocalizationFrame {
+        let spots = self
+            .frames
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(Frame::spot_frame)
+            .map_or_else(|| Arc::clone(&self.empty), |set| set.shared_spots());
+        LocalizationFrame::new(
+            spots,
+            self.visible.get(index).and_then(Option::clone),
+            filter,
+        )
     }
 }

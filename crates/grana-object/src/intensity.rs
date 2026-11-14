@@ -260,19 +260,4 @@ impl IntensityTable {
         values.extend_from_slice(&other.values);
         Self::new(self.channels, values)
     }
-
-    pub fn replaced(&self, object: usize, other: &Self) -> Self {
-        assert!(
-            object < self.objects() && other.objects() == 1,
-            "a replaced object is measured by both intensity tables"
-        );
-        assert_eq!(
-            self.channels, other.channels,
-            "a replaced object measures the channels of its table"
-        );
-        let mut values = self.values.clone();
-        let range = object * self.channels..(object + 1) * self.channels;
-        values.splice(range, other.values.iter().copied());
-        Self::new(self.channels, values)
-    }
 }

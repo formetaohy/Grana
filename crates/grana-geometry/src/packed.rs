@@ -462,42 +462,32 @@ impl PackedMesh {
         }
     }
 
-    pub fn without(&self, object: usize) -> Self {
+    pub fn edited(&self, edits: &[(usize, Option<&Self>)]) -> Self {
         assert!(
-            object < self.groups.len(),
-            "the removed object names a packed object"
+            edits.iter().all(|(object, _)| *object < self.groups.len()),
+            "an edited packed mesh names its own objects"
         );
-        let mut groups = Vec::with_capacity(self.groups.len() - 1);
-        let mut vertices = Vec::with_capacity(self.vertices.len());
-        let mut narrow = Vec::with_capacity(self.narrow.len());
-        let mut wide = Vec::with_capacity(self.wide.len());
-        for (index, group) in self.groups.iter().enumerate() {
-            if index == object {
-                continue;
-            }
-            let first_vertex = vertices.len() as u32;
-            let start = group.first_vertex as usize;
-            vertices.extend_from_slice(&self.vertices[start..start + group.vertex_count as usize]);
-            let first_index = if group.wide {
-                let first = wide.len() as u32;
-                let start = group.first_index as usize;
-                wide.extend_from_slice(&self.wide[start..start + group.index_count as usize]);
-                first
-            } else {
-                let first = narrow.len() as u32;
-                let start = group.first_index as usize;
-                narrow.extend_from_slice(&self.narrow[start..start + group.index_count as usize]);
-                first
+        let mut groups = Vec::with_capacity(self.groups.len());
+        let mut vertices = Vec::new();
+        let mut narrow = Vec::new();
+        let mut wide = Vec::new();
+        for (object, group) in self.groups.iter().enumerate() {
+            let replacement = edits
+                .iter()
+                .find(|(target, _)| *target == object)
+                .map(|(_, mesh)| *mesh);
+            let (source, group) = match replacement {
+                Some(None) => continue,
+                Some(Some(replacement)) => {
+                    assert!(
+                        replacement.groups.len() == 1,
+                        "an edited object is replaced by one packed object"
+                    );
+                    (replacement, &replacement.groups[0])
+                }
+                None => (self, group),
             };
-            groups.push(GeometryGroup::new(
-                group.min,
-                group.scale,
-                first_vertex,
-                group.vertex_count,
-                first_index,
-                group.index_count,
-                group.wide,
-            ));
+            source.push_group(*group, &mut groups, &mut vertices, &mut narrow, &mut wide);
         }
         Self {
             groups,
@@ -507,50 +497,60 @@ impl PackedMesh {
         }
     }
 
+    fn push_group(
+        &self,
+        group: GeometryGroup,
+        groups: &mut Vec<GeometryGroup>,
+        vertices: &mut Vec<PackedVertex>,
+        narrow: &mut Vec<u16>,
+        wide: &mut Vec<u32>,
+    ) {
+        let first_vertex = vertices.len() as u32;
+        let start = group.first_vertex as usize;
+        vertices.extend_from_slice(&self.vertices[start..start + group.vertex_count as usize]);
+        let first_index = if group.wide {
+            let first = wide.len() as u32;
+            let start = group.first_index as usize;
+            wide.extend_from_slice(&self.wide[start..start + group.index_count as usize]);
+            first
+        } else {
+            let first = narrow.len() as u32;
+            let start = group.first_index as usize;
+            narrow.extend_from_slice(&self.narrow[start..start + group.index_count as usize]);
+            first
+        };
+        groups.push(GeometryGroup::new(
+            group.min,
+            group.scale,
+            first_vertex,
+            group.vertex_count,
+            first_index,
+            group.index_count,
+            group.wide,
+        ));
+    }
+
+    pub fn without(&self, object: usize) -> Self {
+        assert!(
+            object < self.groups.len(),
+            "the removed object names a packed object"
+        );
+        self.edited(&[(object, None)])
+    }
+
     pub fn retain(&self, keep: &[bool]) -> Self {
         assert_eq!(
             keep.len(),
             self.groups.len(),
             "the kept objects cover every packed object"
         );
-        let mut groups = Vec::with_capacity(keep.iter().filter(|kept| **kept).count());
-        let mut vertices = Vec::new();
-        let mut narrow = Vec::new();
-        let mut wide = Vec::new();
-        for (index, group) in self.groups.iter().enumerate() {
-            if !keep[index] {
-                continue;
-            }
-            let first_vertex = vertices.len() as u32;
-            let start = group.first_vertex as usize;
-            vertices.extend_from_slice(&self.vertices[start..start + group.vertex_count as usize]);
-            let first_index = if group.wide {
-                let first = wide.len() as u32;
-                let start = group.first_index as usize;
-                wide.extend_from_slice(&self.wide[start..start + group.index_count as usize]);
-                first
-            } else {
-                let first = narrow.len() as u32;
-                let start = group.first_index as usize;
-                narrow.extend_from_slice(&self.narrow[start..start + group.index_count as usize]);
-                first
-            };
-            groups.push(GeometryGroup::new(
-                group.min,
-                group.scale,
-                first_vertex,
-                group.vertex_count,
-                first_index,
-                group.index_count,
-                group.wide,
-            ));
-        }
-        Self {
-            groups,
-            vertices,
-            narrow,
-            wide,
-        }
+        let edits = keep
+            .iter()
+            .enumerate()
+            .filter(|(_, kept)| !**kept)
+            .map(|(object, _)| (object, None))
+            .collect::<Vec<_>>();
+        self.edited(&edits)
     }
 
     pub fn vertex_count(&self) -> usize {

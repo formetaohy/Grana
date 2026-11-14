@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use grana_animation::Timeline;
 use grana_display::Camera;
 use grana_image::{Format, Image, Source};
-use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
+use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_mesh::Format as MeshFormat;
 use grana_object::Roi;
 use grana_project::{Export, NamedView, Project, Source as ProjectSource, ViewState};
@@ -242,9 +242,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 Lasso::new(x, y, lasso.points.clone())
             });
         let mut rows = table.matching(&filters, lasso.as_ref(), None);
-        if spec.group() == Group::Object
-            && let Some(region) = scene.region_scope()
-        {
+        if let Some(region) = scene.region_scope() {
             rows.retain(|row| {
                 table
                     .position(*row)

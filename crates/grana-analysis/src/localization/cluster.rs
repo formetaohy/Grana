@@ -2,7 +2,10 @@ pub use grana_object::ClusterSpec;
 
 use std::collections::HashMap;
 
-use super::LocalizationFrame;
+use grana_object::LocalizationFilter;
+
+use super::LocalizationSource;
+use super::sample::Decimator;
 
 const CELL_LIMIT: usize = 27;
 
@@ -42,19 +45,21 @@ impl Clusters {
 }
 
 pub fn cluster(
-    frames: &[LocalizationFrame<'_>],
+    source: &dyn LocalizationSource,
     spec: ClusterSpec,
+    filter: LocalizationFilter,
     grouped: bool,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<Clusters>, String> {
-    if frames.is_empty() {
+    if source.is_empty() {
         return Err("the frame range holds no frame".to_string());
     }
-    let total = frames.len();
-    let reach = Precision::measured(frames).reach(spec.radius());
+    let total = source.len();
+    let reach = Precision::measured(source, filter).reach(spec.radius());
     let mut points = Vec::new();
     let mut groups = Vec::with_capacity(total);
-    for (time, frame) in frames.iter().enumerate() {
+    for time in 0..total {
+        let frame = source.frame(time, filter);
         for (index, spot) in frame.spots().iter().enumerate() {
             if !frame.visible(index) {
                 continue;
@@ -150,37 +155,49 @@ pub fn cluster(
     }))
 }
 
-pub(super) fn estimate(frames: &[LocalizationFrame<'_>], precision: f32) -> ClusterSpec {
+pub(super) fn estimate(
+    source: &dyn LocalizationSource,
+    filter: LocalizationFilter,
+    precision: f32,
+    axes: [f32; 3],
+) -> ClusterSpec {
     assert!(
         precision.is_finite() && precision > 0.0,
         "a localization precision is a positive length"
     );
     let radius = (2.0 * precision).clamp(ClusterSpec::RADIUS_MINIMUM, ClusterSpec::RADIUS_MAXIMUM);
-    let dark = dark_frames(frames, radius);
+    let dark = dark_frames(source, filter, Precision { axis: axes }.reach(radius));
     ClusterSpec::new(radius, dark, ClusterSpec::DEFAULT_MINIMUM)
 }
 
-fn dark_frames(frames: &[LocalizationFrame<'_>], radius: f32) -> u32 {
-    let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
-    let reach = Precision::measured(frames).reach(radius);
-    let stride = (total / ESTIMATE).max(1);
-    let mut points = Vec::with_capacity(total.div_ceil(stride).min(ESTIMATE) + 1);
+fn dark_frames(
+    source: &dyn LocalizationSource,
+    filter: LocalizationFilter,
+    reach: [f32; 3],
+) -> u32 {
+    let mut samples = Decimator::new(ESTIMATE);
     let mut seen = 0usize;
-    for (time, frame) in frames.iter().enumerate() {
+    let mut points = Vec::new();
+    for time in 0..source.len() {
+        let frame = source.frame(time, filter);
         for (index, spot) in frame.spots().iter().enumerate() {
             if !frame.visible(index) {
                 continue;
             }
-            if seen.is_multiple_of(stride) {
-                let center = spot.center();
-                points.push(Sample {
-                    center: [center[0], center[1]],
+            samples.push(
+                seen,
+                Sample {
+                    center: {
+                        let center = spot.center();
+                        [center[0], center[1]]
+                    },
                     time: time as u32,
-                });
-            }
+                },
+            );
             seen += 1;
         }
     }
+    points.extend(samples.into_values());
     if points.len() < 2 {
         return ClusterSpec::DEFAULT_DARK;
     }
@@ -265,24 +282,22 @@ struct Precision {
 }
 
 impl Precision {
-    fn measured(frames: &[LocalizationFrame<'_>]) -> Self {
-        let total = frames.iter().map(LocalizationFrame::count).sum::<usize>();
-        let stride = (total / ESTIMATE).max(1);
-        let mut sigmas = Vec::with_capacity(total.div_ceil(stride).min(ESTIMATE) + 1);
+    fn measured(source: &dyn LocalizationSource, filter: LocalizationFilter) -> Self {
+        let mut samples = Decimator::new(ESTIMATE);
         let mut seen = 0usize;
-        for frame in frames {
-            for (index, spot) in frame.spots().iter().enumerate() {
-                if !frame.visible(index) {
+        for index in 0..source.len() {
+            let frame = source.frame(index, filter);
+            for (at, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(at) {
                     continue;
                 }
-                if seen.is_multiple_of(stride) {
-                    sigmas.push(spot.sigma());
-                }
+                samples.push(seen, spot.sigma());
                 seen += 1;
             }
         }
+        let sigmas = samples.into_values();
         Self {
-            axis: [0, 1, 2].map(|axis| median(&mut sigmas, axis)),
+            axis: [0, 1, 2].map(|axis| median(&sigmas, axis)),
         }
     }
 
@@ -300,7 +315,7 @@ impl Precision {
     }
 }
 
-fn median(sigmas: &mut [[f32; 3]], axis: usize) -> f32 {
+fn median(sigmas: &[[f32; 3]], axis: usize) -> f32 {
     let mut values = sigmas.iter().map(|sigma| sigma[axis]).collect::<Vec<_>>();
     values.sort_by(f32::total_cmp);
     values.get(values.len() / 2).copied().unwrap_or(0.0)

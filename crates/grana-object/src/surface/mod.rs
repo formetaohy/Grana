@@ -4,7 +4,7 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, Mesh, MeshVertex, PackedMesh, SurfaceShape};
+use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh, SurfaceShape};
 use grana_store::SpillStore;
 
 use crate::IntensityTable;
@@ -374,58 +374,111 @@ impl SurfaceSet {
         })
     }
 
-    pub fn replaced(
+    pub fn edited(
         &self,
-        object: usize,
-        other: &Self,
+        edits: &[(usize, Option<&Self>)],
     ) -> Result<Option<Self>, grana_geometry::Error> {
-        if object >= self.objects.len() || other.object_count() != 1 {
-            return Ok(None);
+        if edits.is_empty() {
+            return Ok(Some(self.clone()));
         }
-        assert_eq!(
-            self.level, other.level,
-            "a replaced surface holds the level of its object set"
+        assert!(
+            edits.iter().all(|(object, _)| *object < self.objects.len()),
+            "an edited surface names an object of its set"
         );
+        for (_, replacement) in edits {
+            if let Some(replacement) = replacement {
+                assert!(
+                    replacement.object_count() == 1,
+                    "an edited surface replaces one object with one surface"
+                );
+                assert_eq!(
+                    replacement.level, self.level,
+                    "an edited surface keeps the level of its object set"
+                );
+            }
+        }
+        let replacements = edits
+            .iter()
+            .map(|(object, replacement)| {
+                Ok((
+                    *object,
+                    replacement
+                        .map(|replacement| replacement.geometry.load())
+                        .transpose()?,
+                ))
+            })
+            .collect::<Result<Vec<_>, grana_geometry::Error>>()?;
         let base = self.geometry.load()?;
-        let replacement = other.geometry.load()?;
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for group in 0..self.objects.len() {
-            let (source, source_object) = if group == object {
-                (&replacement, 0)
-            } else {
-                (&base, group)
-            };
-            let triangles = source.groups()[source_object].index_count() as usize / 3;
-            let mut mapped: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-            for triangle in 0..triangles {
-                for vertex in source.triangle_vertices(source_object, triangle) {
-                    let target = match mapped.get(&vertex) {
-                        Some(target) => *target,
-                        None => {
-                            let target = vertices.len() as u32;
-                            vertices.push(MeshVertex::new(
-                                source.position(source_object, vertex as usize),
-                                source.normal(source_object, vertex as usize),
-                                group as u32,
-                            ));
-                            mapped.insert(vertex, target);
-                            target
-                        }
-                    };
-                    indices.push(target);
+        let packed = replacements
+            .iter()
+            .map(|(object, mesh)| (*object, mesh.as_deref()))
+            .collect::<Vec<_>>();
+        let edited = base.edited(&packed);
+        let triangles = edited.triangle_count();
+        let geometry = self.geometry.replace(edited)?;
+        let dropped = edits
+            .iter()
+            .filter(|(_, replacement)| replacement.is_none())
+            .map(|(object, _)| *object)
+            .collect::<std::collections::BTreeSet<_>>();
+        let replaced = edits.iter().any(|(_, replacement)| replacement.is_some());
+        let channels = self.intensities.channels();
+        let mut objects = Vec::with_capacity(self.objects.len() - dropped.len());
+        let mut values = Vec::with_capacity(objects.capacity() * channels);
+        for object in 0..self.objects.len() {
+            if dropped.contains(&object) {
+                continue;
+            }
+            let held = edits
+                .iter()
+                .find(|(target, _)| *target == object)
+                .and_then(|(_, replacement)| replacement.as_ref());
+            match held {
+                Some(replacement) => {
+                    objects.push(replacement.objects[0]);
+                    values.extend(
+                        (0..channels).map(|channel| replacement.intensities.object(0, channel)),
+                    );
+                }
+                None => {
+                    objects.push(self.objects[object]);
+                    values.extend(
+                        (0..channels).map(|channel| self.intensities.object(object, channel)),
+                    );
                 }
             }
         }
-        let mut objects = self.objects.clone();
-        objects[object] = other.objects[0];
-        let intensities = self.intensities.replaced(object, &other.intensities);
-        Ok(Some(Self::new(
-            self.level,
-            Mesh::new(vertices, indices),
+        let intensities = IntensityTable::new(channels, values);
+        let cuttable = !replaced && self.leaves.len() == self.objects.len();
+        let mut leaves = Vec::new();
+        let mut removed = self.removed.clone();
+        if cuttable {
+            for (object, basins) in self.leaves.iter().enumerate() {
+                if dropped.contains(&object) {
+                    removed.extend_from_slice(basins);
+                } else {
+                    leaves.push(basins.clone());
+                }
+            }
+            removed.sort_unstable();
+            removed.dedup();
+        }
+        let topology = if cuttable {
+            self.topology.clone()
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            level: self.level,
+            geometry,
             objects,
             intensities,
-        )))
+            topology,
+            leaves,
+            removed,
+            triangles,
+            details: Arc::new(Details::new()),
+        }))
     }
 
     pub fn merge(&self, other: &Self) -> Result<Self, grana_geometry::Error> {

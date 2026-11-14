@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::localization::{
-    CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationFrame,
-    LocalizationLayout, LocalizationRenderer,
+    CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationLayout,
+    LocalizationRenderer,
 };
-use grana_object::{LocalizationFilter, LocalizationSpec, Spot};
+use grana_object::LocalizationSpec;
 
 use super::localization_window::LocalizationWindow;
 use crate::event::Event;
@@ -91,7 +91,6 @@ pub fn localization_image(
         done: 0,
         total: 0,
     });
-    let held = frames(&window, spec.filter());
     let report = std::cell::RefCell::new(&mut *sink);
     let tick = |done: usize, total: usize| {
         (report.borrow_mut())(Event::Progress {
@@ -101,14 +100,15 @@ pub fn localization_image(
         });
         !cancel.load(Ordering::Relaxed)
     };
-    let Some(layout) = LocalizationLayout::new(&held, spec, pixel)? else {
+    let Some(layout) = LocalizationLayout::new(&window, spec, pixel, &tick)? else {
         sink(Event::Done);
         return Ok(());
     };
     let geometry = layout.geometry();
     let depth = layout.depth();
     let mut renderer = LocalizationRenderer::new(
-        &held,
+        &window,
+        spec.filter(),
         geometry,
         depth,
         layout.groups().clone(),
@@ -214,15 +214,6 @@ pub fn localization_composition(
         done: 0,
         total: 0,
     });
-    let held = sources
-        .iter()
-        .map(|source| frames(&source.window, source.spec.filter()))
-        .collect::<Vec<_>>();
-    let entries = held
-        .iter()
-        .zip(&sources)
-        .map(|(frames, source)| CompositionEntry::new(frames, source.tint))
-        .collect::<Vec<_>>();
     let spec =
         CompositionSpec::covering(&sources.iter().map(|source| source.spec).collect::<Vec<_>>())
             .ok_or_else(|| "a composed image layers at least one source".to_string())?;
@@ -235,6 +226,10 @@ pub fn localization_composition(
         });
         !cancel.load(Ordering::Relaxed)
     };
+    let entries = sources
+        .iter()
+        .map(|source| CompositionEntry::new(&source.window, source.spec.filter(), source.tint))
+        .collect::<Vec<_>>();
     let mut composition = LocalizationComposition::new(&entries, spec, &tick)?;
     if cancel.load(Ordering::Relaxed) {
         sink(Event::Done);
@@ -270,17 +265,4 @@ pub fn localization_composition(
     .map_err(|error| error.to_string())?;
     sink(Event::Done);
     Ok(())
-}
-
-fn frames(window: &LocalizationWindow, filter: LocalizationFilter) -> Vec<LocalizationFrame<'_>> {
-    let empty: &[Spot] = &[];
-    (0..window.len())
-        .map(|index| {
-            let spots = window
-                .frame(index)
-                .and_then(|frame| frame.spots())
-                .map_or(empty, |set| set.spots());
-            LocalizationFrame::new(spots, window.visible(index), filter)
-        })
-        .collect()
 }

@@ -2,7 +2,7 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use grana_analysis::localization::{LocalizationFilter, LocalizationFrame, LocalizationSpec};
+use grana_analysis::localization::{LocalizationFilter, LocalizationSpec};
 use grana_analysis::{
     CellSeed, ColocScan, ColocScanConfig, FilamentScan, GrowField, Growth, Reference, Sources,
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
@@ -651,6 +651,29 @@ fn pages_localization_frames_beyond_the_resident_budget() {
         .map(|(_, frame)| frame.object_count())
         .sum::<usize>();
     assert_eq!(total, FRAMES as usize * PER_FRAME);
+    let window = grana_pipeline::run::LocalizationWindow::of(object, [0, 4]);
+    let report = grana_analysis::localization::localization_report(
+        &window,
+        LocalizationSpec::new([0, 4], 100.0, 0.0),
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the paged window renders")
+    .expect("the paged window completes");
+    assert_eq!(
+        report.localizations(),
+        5 * PER_FRAME as u64,
+        "the paged window reads every localization of its range"
+    );
+    assert!(
+        report
+            .stack()
+            .layer(0)
+            .is_some_and(|image| image.pixels().iter().any(|sample| *sample > 0)),
+        "the paged window paints its localizations"
+    );
 }
 
 #[test]
@@ -2299,11 +2322,7 @@ fn renders_and_measures_localizations() {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let held = slices
-        .iter()
-        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
-        .collect::<Vec<_>>();
+    let held = support::Localizations::of(frames);
     let spec = LocalizationSpec::new([0, 7], 10.0, 20.0);
     let mut reached = 0usize;
     let report = grana_analysis::localization::localization_report(
@@ -2385,11 +2404,7 @@ fn renders_localizations_past_the_preview_resolution() {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let held = slices
-        .iter()
-        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
-        .collect::<Vec<_>>();
+    let held = support::Localizations::of(frames);
     let spec = LocalizationSpec::new([0, 3], 3.0, 20.0);
     let report = grana_analysis::localization::localization_report(
         &held,
@@ -2416,10 +2431,11 @@ fn renders_localizations_past_the_preview_resolution() {
     let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
+        LocalizationFilter::NONE,
         geometry,
         report.depth(),
         report.groups().clone(),
-        grana_analysis::localization::localization_weight(&held),
+        held.weight(),
         &progress,
     )
     .expect("the renderer accepts the geometry");
@@ -2442,19 +2458,17 @@ fn weights_localizations_by_photons_and_precision() {
         Spot::gaussian([1.0, 1.0, 0.0], [precision; 3], 40_000.0),
         Spot::gaussian([6.0, 1.0, 0.0], [4.0 * precision; 3], 1_000.0),
     ];
-    let held = [LocalizationFrame::new(
-        &spots,
-        None,
-        LocalizationFilter::NONE,
-    )];
+    let held = support::Localizations::of([spots.to_vec()]);
     let spec = LocalizationSpec::new([0, 0], 10.0, 10.0);
-    let layout = grana_analysis::localization::LocalizationLayout::new(&held, spec, 0.1)
-        .expect("the layout measures")
-        .expect("the layout holds the localizations");
+    let layout =
+        grana_analysis::localization::LocalizationLayout::new(&held, spec, 0.1, &|_, _| true)
+            .expect("the layout measures")
+            .expect("the layout holds the localizations");
     let geometry = layout.geometry();
     let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
+        LocalizationFilter::NONE,
         geometry,
         layout.depth(),
         layout.groups().clone(),
@@ -2517,11 +2531,7 @@ fn renders_single_frame_localizations_grouped() {
             )
         })
         .collect::<Vec<_>>();
-    let held = [LocalizationFrame::new(
-        &frame,
-        None,
-        LocalizationFilter::NONE,
-    )];
+    let held = support::Localizations::of([frame]);
     let spec = LocalizationSpec::new([0, 0], 10.0, 20.0);
     let report = grana_analysis::localization::localization_report(
         &held,
@@ -2588,12 +2598,20 @@ fn composes_localization_channels_in_color() {
     let first = side(0.0);
     let second = side(2.0 * field);
     let channels = [
-        LocalizationFrame::new(&first, None, LocalizationFilter::NONE),
-        LocalizationFrame::new(&second, None, LocalizationFilter::NONE),
+        support::Localizations::of([first]),
+        support::Localizations::of([second]),
     ];
     let entries = [
-        grana_analysis::localization::CompositionEntry::new(&channels[..1], [1.0, 0.2, 0.1]),
-        grana_analysis::localization::CompositionEntry::new(&channels[1..], [0.1, 1.0, 0.3]),
+        grana_analysis::localization::CompositionEntry::new(
+            &channels[0],
+            LocalizationFilter::NONE,
+            [1.0, 0.2, 0.1],
+        ),
+        grana_analysis::localization::CompositionEntry::new(
+            &channels[1],
+            LocalizationFilter::NONE,
+            [0.1, 1.0, 0.3],
+        ),
     ];
     let spec = grana_analysis::localization::CompositionSpec::new(0.01, 0.02, 0.0);
     let mut composition =
@@ -2638,11 +2656,7 @@ fn slices_localizations_into_a_stack() {
             )
         })
         .collect::<Vec<_>>();
-    let held = [LocalizationFrame::new(
-        &spots,
-        None,
-        LocalizationFilter::NONE,
-    )];
+    let held = support::Localizations::of([spots]);
     let spec = LocalizationSpec::new([0, 0], 10.0, 20.0).at_depth(250.0);
     let report = grana_analysis::localization::localization_report(
         &held,
@@ -2678,10 +2692,11 @@ fn slices_localizations_into_a_stack() {
     let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
+        LocalizationFilter::NONE,
         report.geometry(),
         depth,
         report.groups().clone(),
-        grana_analysis::localization::localization_weight(&held),
+        held.weight(),
         &progress,
     )
     .expect("the renderer accepts the stack");
@@ -2710,15 +2725,17 @@ fn clusters_localizations_into_molecules() {
         Vec::new(),
         vec![spot(0.0)],
     ];
-    let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let held = slices
-        .iter()
-        .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
-        .collect::<Vec<_>>();
+    let held = support::Localizations::of(frames);
     let spec = grana_object::ClusterSpec::new(0.05, 2, 2);
-    let clusters = grana_analysis::localization::cluster(&held, spec, true, &mut |_, _| true)
-        .expect("the molecules cluster")
-        .expect("the molecules complete");
+    let clusters = grana_analysis::localization::cluster(
+        &held,
+        spec,
+        LocalizationFilter::NONE,
+        true,
+        &mut |_, _| true,
+    )
+    .expect("the molecules cluster")
+    .expect("the molecules complete");
     assert_eq!(
         clusters.molecules(),
         1,
@@ -2731,9 +2748,15 @@ fn clusters_localizations_into_molecules() {
     assert!(groups[2].is_empty());
     assert_eq!(groups[3], vec![Some(1)]);
     let short = grana_object::ClusterSpec::new(0.05, 1, 2);
-    let clusters = grana_analysis::localization::cluster(&held, short, true, &mut |_, _| true)
-        .expect("the short molecules cluster")
-        .expect("the short molecules complete");
+    let clusters = grana_analysis::localization::cluster(
+        &held,
+        short,
+        LocalizationFilter::NONE,
+        true,
+        &mut |_, _| true,
+    )
+    .expect("the short molecules cluster")
+    .expect("the short molecules complete");
     assert_eq!(clusters.molecules(), 1);
     assert_eq!(clusters.localizations(), 3);
     assert_eq!(clusters.groups()[3], vec![None]);
@@ -2746,14 +2769,11 @@ fn normalizes_the_cluster_reach_by_the_localization_precision() {
             vec![Spot::gaussian([0.0, 0.0, 0.0], sigma, 500.0)],
             vec![Spot::gaussian([0.0, 0.0, gap], sigma, 500.0)],
         ];
-        let slices = frames.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let held = slices
-            .iter()
-            .map(|spots| LocalizationFrame::new(spots, None, LocalizationFilter::NONE))
-            .collect::<Vec<_>>();
+        let held = support::Localizations::of(frames);
         grana_analysis::localization::cluster(
             &held,
             grana_object::ClusterSpec::new(0.05, 1, 2),
+            LocalizationFilter::NONE,
             false,
             &mut |_, _| true,
         )
@@ -2786,8 +2806,8 @@ fn filters_and_scopes_localization_reports() {
         Spot::grouped([2.0, 2.0, 0.0], [0.010; 3], 5000.0, Some(2)),
     ];
     let filter = LocalizationFilter::new(1000.0, 20.0);
-    let held = [LocalizationFrame::new(&frame, None, filter)];
-    let spec = LocalizationSpec::new([0, 0], 10.0, 0.0);
+    let held = support::Localizations::of([frame]);
+    let spec = LocalizationSpec::new([0, 0], 10.0, 0.0).at_filter(filter);
     let region = Region::axis_aligned(
         glam::Vec3::new(1.75, 1.75, -0.5),
         glam::Vec3::new(2.5, 2.5, 0.5),
@@ -2938,11 +2958,7 @@ fn exports_tiles_that_match_the_preview() {
             )
         })
         .collect::<Vec<_>>();
-    let held = [LocalizationFrame::new(
-        &frame,
-        None,
-        LocalizationFilter::NONE,
-    )];
+    let held = support::Localizations::of([frame]);
     let spec = LocalizationSpec::new([0, 0], 5.0, 20.0);
     let report = grana_analysis::localization::localization_report(
         &held,
@@ -2968,10 +2984,11 @@ fn exports_tiles_that_match_the_preview() {
     let progress = |_: usize, _: usize| true;
     let mut renderer = grana_analysis::localization::LocalizationRenderer::new(
         &held,
+        LocalizationFilter::NONE,
         geometry,
         report.depth(),
         report.groups().clone(),
-        grana_analysis::localization::localization_weight(&held),
+        held.weight(),
         &progress,
     )
     .expect("the renderer accepts the geometry");

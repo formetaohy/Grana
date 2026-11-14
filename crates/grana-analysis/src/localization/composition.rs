@@ -1,8 +1,8 @@
-use grana_object::LocalizationSpec;
+use grana_object::{LocalizationFilter, LocalizationSpec};
 
 use super::{
-    FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry,
-    LocalizationRenderer, Survey, localization_weight, margin_pixels, preview_geometry,
+    FLOOR, Groups, LocalizationDepth, LocalizationGeometry, LocalizationRenderer,
+    LocalizationSource, LocalizationSurvey, margin_pixels, preview_geometry,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,25 +66,38 @@ impl CompositionSpec {
 
 #[derive(Clone, Copy)]
 pub struct CompositionEntry<'a> {
-    frames: &'a [LocalizationFrame<'a>],
+    source: &'a dyn LocalizationSource,
+    filter: LocalizationFilter,
     tint: [f32; 3],
 }
 
 impl<'a> CompositionEntry<'a> {
-    pub fn new(frames: &'a [LocalizationFrame<'a>], tint: [f32; 3]) -> Self {
+    pub fn new(
+        source: &'a dyn LocalizationSource,
+        filter: LocalizationFilter,
+        tint: [f32; 3],
+    ) -> Self {
         assert!(
-            !frames.is_empty(),
+            !source.is_empty(),
             "a composed channel holds at least one frame"
         );
         assert!(
             tint.iter().all(|value| (0.0..=1.0).contains(value)),
             "a composed channel tints within the unit interval"
         );
-        Self { frames, tint }
+        Self {
+            source,
+            filter,
+            tint,
+        }
     }
 
-    pub fn frames(&self) -> &'a [LocalizationFrame<'a>] {
-        self.frames
+    pub fn source(&self) -> &'a dyn LocalizationSource {
+        self.source
+    }
+
+    pub fn filter(&self) -> LocalizationFilter {
+        self.filter
     }
 
     pub fn tint(&self) -> [f32; 3] {
@@ -117,20 +130,22 @@ impl<'a> LocalizationComposition<'a> {
         let mut high = [f32::NEG_INFINITY; 2];
         let mut bottom = f32::INFINITY;
         let mut top = f32::NEG_INFINITY;
+        let mut surveys = Vec::with_capacity(entries.len());
         for entry in entries {
-            let survey = Survey::of(entry.frames());
+            let survey = LocalizationSurvey::measure(entry.source(), entry.filter());
             let (frame_low, frame_high) = survey
-                .bounds
+                .bounds()
                 .ok_or_else(|| "a composed channel lies at an infinite position".to_string())?;
             for axis in 0..2 {
                 low[axis] = low[axis].min(frame_low[axis]);
                 high[axis] = high[axis].max(frame_high[axis]);
             }
             let [below, above] = survey
-                .heights
+                .heights()
                 .ok_or_else(|| "a composed channel lies at an infinite height".to_string())?;
             bottom = bottom.min(below);
             top = top.max(above);
+            surveys.push(survey);
         }
         let span = [0, 1].map(|axis| (high[axis] - low[axis]).max(FLOOR));
         let depth = if spec.depth() > 0.0 {
@@ -153,11 +168,12 @@ impl<'a> LocalizationComposition<'a> {
                 return Err("the composed image was cancelled".to_string());
             }
             let mut renderer = LocalizationRenderer::new(
-                entry.frames(),
+                entry.source(),
+                entry.filter(),
                 geometry,
                 depth,
                 Groups::default(),
-                localization_weight(entry.frames()),
+                surveys[index].weight(),
                 progress,
             )?;
             let density = renderer.survey()?;

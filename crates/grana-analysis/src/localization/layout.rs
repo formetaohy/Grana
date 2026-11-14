@@ -1,43 +1,44 @@
 use grana_object::{LocalizationSpec, SpotWeight};
 
 use super::{
-    FLOOR, Groups, LocalizationDepth, LocalizationFrame, LocalizationGeometry, Survey,
-    localization_weight, rasterize,
+    FLOOR, LocalizationDepth, LocalizationGeometry, LocalizationSource, LocalizationSurvey,
+    rasterize,
 };
 
 pub struct LocalizationLayout {
-    survey: Survey,
+    survey: LocalizationSurvey,
     low: [f32; 2],
     span: [f32; 2],
     blur: f32,
     geometry: LocalizationGeometry,
     depth: LocalizationDepth,
-    weight: SpotWeight,
 }
 
 impl LocalizationLayout {
     pub fn new(
-        frames: &[LocalizationFrame<'_>],
+        source: &dyn LocalizationSource,
         spec: LocalizationSpec,
         camera_pixel: f32,
+        progress: &dyn Fn(usize, usize) -> bool,
     ) -> Result<Option<Self>, String> {
         assert!(
             camera_pixel.is_finite() && camera_pixel > 0.0,
             "a localization layout knows its camera pixel"
         );
-        let survey = Survey::of(frames);
-        if survey.localizations == 0 {
+        let Some(survey) = LocalizationSurvey::scan(source, spec.filter(), progress) else {
+            return Ok(None);
+        };
+        if survey.localizations() == 0 {
             return Ok(None);
         }
         let (low, high) = survey
-            .bounds
+            .bounds()
             .ok_or_else(|| "the localizations lie at an infinite position".to_string())?;
         let span = [0, 1].map(|axis| (high[axis] - low[axis]).max(FLOOR));
         let blur = spec.blur() * 0.001;
         let pixel = spec.pixel() * 0.001;
         let geometry = rasterize(&spec, low, span, pixel, blur)?;
         let depth = survey.depth(spec.depth() * 0.001)?;
-        let weight = localization_weight(frames);
         Ok(Some(Self {
             survey,
             low,
@@ -45,7 +46,6 @@ impl LocalizationLayout {
             blur,
             geometry,
             depth,
-            weight,
         }))
     }
 
@@ -57,19 +57,19 @@ impl LocalizationLayout {
         self.depth
     }
 
-    pub fn groups(&self) -> &Groups {
-        &self.survey.groups
+    pub fn groups(&self) -> &super::Groups {
+        self.survey.groups()
     }
 
     pub fn weight(&self) -> SpotWeight {
-        self.weight
+        self.survey.weight()
     }
 
     pub fn localizations(&self) -> u64 {
-        self.survey.localizations
+        self.survey.localizations()
     }
 
-    pub(super) fn survey(&self) -> &Survey {
+    pub(super) fn survey(&self) -> &LocalizationSurvey {
         &self.survey
     }
 

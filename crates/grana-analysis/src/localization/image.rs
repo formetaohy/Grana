@@ -1,10 +1,11 @@
-use super::LocalizationFrame;
+use super::LocalizationSource;
 use super::SpotWeight;
 use super::depth::LocalizationDepth;
 use super::grid::Grid;
 use super::group::Groups;
 use super::report::LocalizationGeometry;
 use super::tone::{Histogram, Tone};
+use grana_object::LocalizationFilter;
 
 const SIDE: usize = 512;
 
@@ -26,7 +27,8 @@ pub struct LocalizationRenderer<'a> {
 
 impl<'a> LocalizationRenderer<'a> {
     pub fn new(
-        frames: &[LocalizationFrame<'_>],
+        source: &dyn LocalizationSource,
+        filter: LocalizationFilter,
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: Groups,
@@ -39,7 +41,7 @@ impl<'a> LocalizationRenderer<'a> {
                 "the localization image would span {width}x{height} pixels; raise the pixel size"
             ));
         }
-        let cells = Cells::build(frames, geometry, depth, &groups, weight, progress)?;
+        let cells = Cells::build(source, filter, geometry, depth, &groups, weight, progress)?;
         Ok(Self {
             geometry,
             depth,
@@ -245,7 +247,8 @@ struct Layer {
 
 impl Cells {
     fn build(
-        frames: &[LocalizationFrame<'_>],
+        source: &dyn LocalizationSource,
+        filter: LocalizationFilter,
         geometry: LocalizationGeometry,
         depth: LocalizationDepth,
         groups: &Groups,
@@ -259,21 +262,23 @@ impl Cells {
         let cells = columns * rows;
         let layers = depth.layers() as usize;
         let chromatic = groups.chromatic();
+        let frames = source.len();
         let mut cursors = vec![0u32; cells * layers];
-        for (done, frame) in frames.iter().enumerate() {
-            for (index, spot) in frame.spots().iter().enumerate() {
-                if !frame.visible(index) {
+        for index in 0..frames {
+            let frame = source.frame(index, filter);
+            for (at, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(at) {
                     continue;
                 }
                 let center = spot.center();
                 let tile = tile_of([center[0], center[1]], &geometry, columns);
-                let at = depth.layer_of(center[2]) as usize * cells + tile;
-                cursors[at] = cursors[at].checked_add(1).ok_or_else(|| {
+                let slot = depth.layer_of(center[2]) as usize * cells + tile;
+                cursors[slot] = cursors[slot].checked_add(1).ok_or_else(|| {
                     "the localizations crowd a tile with more points than a raster addresses"
                         .to_string()
                 })?;
             }
-            if !progress(done + 1, frames.len()) {
+            if !progress(index + 1, frames) {
                 return Err("the localization image render was cancelled".to_string());
             }
         }
@@ -300,17 +305,18 @@ impl Cells {
                 tints: vec![0u8; held as usize],
             });
         }
-        for frame in frames {
-            for (index, spot) in frame.spots().iter().enumerate() {
-                if !frame.visible(index) {
+        for index in 0..frames {
+            let frame = source.frame(index, filter);
+            for (at, spot) in frame.spots().iter().enumerate() {
+                if !frame.visible(at) {
                     continue;
                 }
                 let center = spot.center();
                 let tile = tile_of([center[0], center[1]], &geometry, columns);
                 let layer = depth.layer_of(center[2]) as usize;
-                let at = layer * cells + tile;
-                let cursor = cursors[at] as usize;
-                cursors[at] += 1;
+                let slot = layer * cells + tile;
+                let cursor = cursors[slot] as usize;
+                cursors[slot] += 1;
                 let held = &mut layers_out[layer];
                 held.centers[cursor] = [center[0], center[1]];
                 held.weights[cursor] = weight.of(spot);
@@ -319,6 +325,9 @@ impl Cells {
                 } else {
                     0
                 };
+            }
+            if !progress(index + 1, frames) {
+                return Err("the localization image render was cancelled".to_string());
             }
         }
         Ok(Self {

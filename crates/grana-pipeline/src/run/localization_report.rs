@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_analysis::localization::{LocalizationFrame, LocalizationSpec};
-use grana_object::Spot;
+use grana_analysis::localization::LocalizationSource;
+use grana_analysis::localization::LocalizationSpec;
 use grana_scene::{ObjectSetId, Revision};
 use grana_volume::Region;
 
@@ -67,17 +67,6 @@ pub fn localization_report(
         done: 0,
         total: 0,
     });
-    let filter = spec.filter();
-    let empty: &[Spot] = &[];
-    let held = (0..window.len())
-        .map(|index| {
-            let spots = window
-                .frame(index)
-                .and_then(|frame| frame.spots())
-                .map_or(empty, |set| set.spots());
-            LocalizationFrame::new(spots, window.visible(index), filter)
-        })
-        .collect::<Vec<_>>();
     let mut report = |done: usize, total: usize| {
         sink(Event::Progress {
             time: 0,
@@ -87,7 +76,7 @@ pub fn localization_report(
         !cancel.load(Ordering::Relaxed)
     };
     let Some(found) = grana_analysis::localization::localization_report(
-        &held,
+        &window,
         spec,
         pixel,
         grouped,
