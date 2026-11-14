@@ -10,6 +10,7 @@ use wgpu::{
     TextureViewDimension, VertexState,
 };
 
+use grana_gpu::Pipelines;
 use grana_render::{Image16, read_image16};
 
 const FORMAT: TextureFormat = TextureFormat::Rgba32Float;
@@ -31,7 +32,7 @@ pub(crate) struct Composer {
 }
 
 impl Composer {
-    pub(crate) fn new(device: &Device) -> Self {
+    pub(crate) fn new(device: &Device, pipelines: &Pipelines) -> Self {
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.compose.layout"),
             entries: &[
@@ -81,7 +82,7 @@ impl Composer {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let uniforms = device.create_buffer(&BufferDescriptor {
             label: Some("grana.compose.uniforms"),

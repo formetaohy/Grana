@@ -7,6 +7,7 @@ mod offline;
 mod page;
 mod plan;
 mod sink;
+mod surface;
 mod task;
 mod worker;
 

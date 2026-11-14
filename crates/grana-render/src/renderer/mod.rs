@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_display::Camera;
+use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use grana_volume::{BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region};
 use wgpu::{
@@ -110,7 +111,6 @@ pub(crate) struct VolumeTargets<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct Lighting<'a> {
     pub(crate) shadow: &'a BindGroup,
-    pub(crate) ao: &'a BindGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,13 +168,11 @@ pub struct Renderer {
     planner: Option<Planner>,
     shadow: Option<Shadow>,
     volume: VolumePass,
-    oit_resolve: OitResolve,
-    gtao: crate::ao::AoPipeline,
-    meshes: MeshPasses,
-    splats: SplatPasses,
+    oit_resolve: Option<OitResolve>,
+    meshes: Option<MeshPasses>,
+    splats: Option<SplatPasses>,
     dummy: TextureView,
     dummy_oit: Oit,
-    dummy_ao: BindGroup,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -203,7 +201,7 @@ pub struct Renderer {
     prefetch_rate: f32,
     transparent: bool,
     exporting: bool,
-    convergence: Convergence,
+    convergence: Option<Convergence>,
     temporal: TemporalPass,
     fade: Option<Fade>,
     object_key: Option<u64>,
@@ -219,15 +217,21 @@ pub struct Renderer {
     pick_pending: bool,
     sequence: u64,
     info: FrameInfo,
+    pipelines: Pipelines,
 }
 
 impl Renderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat, budget: u64) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        format: TextureFormat,
+        budget: u64,
+        pipelines: &Pipelines,
+    ) -> Self {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
-        let dummy_ao = crate::ao::dummy(device, queue, &layouts);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -238,9 +242,13 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        let sections = Sections::new(device, &layouts);
+        let sections = Sections::new(device, &layouts, pipelines);
+        let present = Present::new(device, format, pipelines);
+        let volume = VolumePass::new(device, &layouts, pipelines);
+        let temporal = TemporalPass::new(device, pipelines);
+        let overlay = Overlays::new(device, pipelines);
         Self {
-            present: Present::new(device, format),
+            present,
             target: None,
             scene: None,
             atlas: None,
@@ -254,15 +262,13 @@ impl Renderer {
             bricks: Vec::new(),
             planner: None,
             shadow: None,
-            volume: VolumePass::new(device, &layouts),
-            oit_resolve: OitResolve::new(device, &layouts),
-            gtao: crate::ao::AoPipeline::new(device, &layouts),
-            meshes: MeshPasses::new(device, &layouts, budget / 2),
-            splats: SplatPasses::new(device, &layouts),
+            volume,
+            oit_resolve: None,
+            meshes: None,
+            splats: None,
             layouts,
             dummy,
             dummy_oit,
-            dummy_ao,
             atlas_sampler,
             pyramid: None,
             channels: 0,
@@ -291,13 +297,13 @@ impl Renderer {
             prefetch_rate: 1.0,
             transparent: false,
             exporting: false,
-            convergence: Convergence::new(device),
-            temporal: TemporalPass::new(device, queue),
+            convergence: None,
+            temporal,
             fade: None,
             object_key: None,
             sections,
             sliced: false,
-            overlay: Overlays::new(device),
+            overlay,
             settled: None,
             planned: None,
             demand: None,
@@ -307,9 +313,9 @@ impl Renderer {
             pick_pending: false,
             sequence: 0,
             info: FrameInfo::default(),
+            pipelines: pipelines.clone(),
         }
     }
-
     pub fn format(&self) -> TextureFormat {
         self.present.format()
     }
@@ -371,7 +377,9 @@ impl Renderer {
     pub fn begin_export(&mut self) {
         self.target = None;
         self.resident = None;
-        self.convergence.forget();
+        if let Some(convergence) = self.convergence.as_mut() {
+            convergence.forget();
+        }
         self.settled = None;
         self.demand = None;
         self.exporting = true;
@@ -427,7 +435,13 @@ impl Renderer {
         );
         let slots = atlas.slots();
         let occupancy = Occupancy::new(device, slots);
-        let bake = Bake::new(device, &self.layouts, atlas.structure(), slots);
+        let bake = Bake::new(
+            device,
+            &self.layouts,
+            atlas.structure(),
+            slots,
+            &self.pipelines,
+        );
         let limit = (self.budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
         let arena = BrickArena::new(device, pyramid, limit)
             .expect("the record budget holds the coarsest level");
@@ -457,7 +471,7 @@ impl Renderer {
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
-        let mut planner = Planner::new(device, &self.layouts, slots);
+        let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
         planner.bind_arena(device, &self.layouts, &arena);
         self.planner = Some(planner);
         let finest = pyramid.level(0);
@@ -468,6 +482,7 @@ impl Renderer {
             device,
             &self.layouts,
             shadow::resolution(world, voxel),
+            &self.pipelines,
         ));
         self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
@@ -490,12 +505,16 @@ impl Renderer {
         self.volume_measure = vec![None; pyramid.level_count()];
         self.volume_rejection = None;
         self.fit_cache = None;
-        self.meshes.clear();
+        if let Some(meshes) = self.meshes.as_mut() {
+            meshes.clear();
+        }
         self.sections.clear();
         self.sliced = false;
         self.target = None;
         self.viewport = None;
-        self.convergence.forget();
+        if let Some(convergence) = self.convergence.as_mut() {
+            convergence.forget();
+        }
         self.pick_readback = None;
         self.pick_pending = false;
         self.epoch += 1;
@@ -516,7 +535,12 @@ impl Renderer {
         self.info = FrameInfo::default();
     }
 
-    pub fn draw(&mut self, device: &Device, queue: &Queue, frame: Frame<'_, '_>) -> FrameInfo {
+    pub fn draw(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        frame: Frame<'_, '_>,
+    ) -> Result<FrameInfo, String> {
         assert!(
             frame.size[0] > 0 && frame.size[1] > 0,
             "the surface is not empty"
@@ -533,7 +557,9 @@ impl Renderer {
             .is_none_or(|target| target.size != size)
         {
             self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
-            self.convergence.forget();
+            if let Some(convergence) = self.convergence.as_mut() {
+                convergence.forget();
+            }
             self.settled = None;
         }
         let mut target = self.target.take().expect("the frame target is ready");
@@ -640,7 +666,9 @@ impl Renderer {
                     1.0,
                 );
                 pass.set_scissor_rect(0, 0, 1, 1);
-                splats.draw_pick_slice(&mut pass, group);
+                if let Some(splats) = splats.as_ref() {
+                    splats.draw_pick_slice(&mut pass, group);
+                }
             }
         } else {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -673,8 +701,12 @@ impl Renderer {
                 1.0,
             );
             pass.set_scissor_rect(0, 0, 1, 1);
-            meshes.draw_pick(&mut pass);
-            splats.draw_pick(&mut pass, group);
+            if let Some(meshes) = meshes.as_ref() {
+                meshes.draw_pick(&mut pass);
+            }
+            if let Some(splats) = splats.as_ref() {
+                splats.draw_pick(&mut pass, group);
+            }
         }
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);
@@ -693,7 +725,11 @@ impl Renderer {
         Some(match pick::decode(&bytes) {
             pick::Raw::None => PickId::None,
             pick::Raw::Style(index) => PickId::Style(index),
-            pick::Raw::Splat(index) => match self.splats.resolve(index) {
+            pick::Raw::Splat(index) => match self
+                .splats
+                .as_ref()
+                .and_then(|splats| splats.resolve(index))
+            {
                 Some((key, level, index)) => PickId::Splat { key, level, index },
                 None => PickId::None,
             },
@@ -705,7 +741,9 @@ impl Renderer {
     }
 
     pub fn convergence(&mut self, device: &Device) -> Option<(u32, f32)> {
-        self.convergence.read(device)
+        self.convergence
+            .as_mut()
+            .and_then(|convergence| convergence.read(device))
     }
 
     pub fn wide_picture(

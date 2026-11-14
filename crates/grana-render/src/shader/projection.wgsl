@@ -21,8 +21,10 @@ fn march_projected(
     let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
     var t = begin;
     var samples = 0u;
+    var cells = 0u;
     var complete = false;
-    while (t < finish && samples < SAMPLE_LIMIT && !complete) {
+    while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
+        cells += 1u;
         let found = volume_reachable(origin, band_for(t, dither), t, direction);
         if (!found.usable) {
             let skip = ray_uvw(origin, found.band, t, direction);
@@ -47,7 +49,7 @@ fn march_projected(
             + (clamp(found.uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick))
             + vec3<f32>(1.0)) / extent;
         var cursor = t;
-        while (cursor < boundary && samples < SAMPLE_LIMIT && !complete) {
+        while (cursor < boundary && samples < frame.bounds.x && !complete) {
             let step = local_step(cursor);
             var tau = 0.0;
             var emission = vec3<f32>(0.0);

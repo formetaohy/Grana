@@ -1,3 +1,4 @@
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, ColorTargetState,
     ColorWrites, CommandEncoder, CompareFunction, DepthStencilState, Device, FragmentState, LoadOp,
@@ -96,7 +97,7 @@ pub(crate) enum VolumePath {
 
 pub(crate) struct VolumePass {
     composite: RenderPipeline,
-    projection: RenderPipeline,
+    projection: Option<RenderPipeline>,
 }
 
 pub(crate) struct VolumeFrame<'a> {
@@ -113,21 +114,29 @@ pub(crate) struct VolumeFrame<'a> {
 }
 
 impl VolumePass {
-    pub fn new(device: &Device, layouts: &Layouts) -> Self {
-        let composite = pipeline(device, &layouts.volume, "grana.volume", COMPOSITE);
-        let projection = pipeline(
+    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
+        let composite = pipeline(
             device,
             &layouts.volume,
-            "grana.volume.projection",
-            PROJECTION,
+            "grana.volume",
+            COMPOSITE,
+            pipelines,
         );
         Self {
             composite,
-            projection,
+            projection: None,
         }
     }
 
-    pub fn draw(&self, encoder: &mut CommandEncoder, frame: VolumeFrame<'_>, path: VolumePath) {
+    pub fn draw(
+        &mut self,
+        device: &Device,
+        layouts: &Layouts,
+        pipelines: &Pipelines,
+        encoder: &mut CommandEncoder,
+        frame: VolumeFrame<'_>,
+        path: VolumePath,
+    ) {
         let region = frame.region;
         let width = region[2].max(1);
         let height = region[3].max(1);
@@ -165,10 +174,19 @@ impl VolumePass {
             1.0,
         );
         pass.set_scissor_rect(region[0], region[1], width, height);
-        pass.set_pipeline(match path {
+        let pipeline = match path {
             VolumePath::Composite => &self.composite,
-            VolumePath::Projection => &self.projection,
-        });
+            VolumePath::Projection => self.projection.get_or_insert_with(|| {
+                pipeline(
+                    device,
+                    &layouts.volume,
+                    "grana.volume.projection",
+                    PROJECTION,
+                    pipelines,
+                )
+            }),
+        };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.level, &[]);
         pass.set_bind_group(2, frame.atlas, &[]);
@@ -185,6 +203,7 @@ fn pipeline(
     layout: &PipelineLayout,
     label: &str,
     source: &'static str,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some(label),
@@ -220,7 +239,7 @@ fn pipeline(
             ],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }
 

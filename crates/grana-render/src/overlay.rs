@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
+use grana_gpu::Pipelines;
 use grana_gpu::layout::{sampler, texture};
 use wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
@@ -73,7 +74,7 @@ pub(crate) struct Overlays {
 }
 
 impl Overlays {
-    pub fn new(device: &Device) -> Self {
+    pub fn new(device: &Device, pipelines: &Pipelines) -> Self {
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.overlay.layout"),
             entries: &[
@@ -117,7 +118,7 @@ impl Overlays {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.overlay.sampler"),

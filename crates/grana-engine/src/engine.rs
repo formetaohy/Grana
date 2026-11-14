@@ -1,4 +1,5 @@
 use grana_display::CameraState;
+use grana_gpu::Pipelines;
 use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
 use grana_volume::{BrickData, BrickRequest, Pyramid};
@@ -56,9 +57,14 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        format: TextureFormat,
+        pipelines: &Pipelines,
+    ) -> Self {
         Self {
-            renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET),
+            renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET, pipelines),
             pending_pick: None,
             prepared: None,
             splats: SplatCache::new(),
@@ -165,7 +171,7 @@ impl Engine {
                     overlays: view.overlays,
                 },
                 &prepared.scene,
-            )
+            )?
         };
         self.info = info;
         self.request = Some(request);

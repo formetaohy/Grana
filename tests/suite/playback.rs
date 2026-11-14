@@ -26,7 +26,12 @@ fn play(display: Display, seconds: f64, advancing: bool) -> (u32, usize) {
             "the dataset never opened"
         );
     }
-    let mut engine = Engine::new(gpu.device(), gpu.queue(), wgpu::TextureFormat::Rgba8Unorm);
+    let mut engine = Engine::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
     engine.set_dataset(
         gpu.device(),
         session.scene().expect("a scene").dataset.pyramid(),
@@ -120,7 +125,12 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
         );
     }
     let scene = session.scene().expect("a scene");
-    let mut engine = Engine::new(gpu.device(), gpu.queue(), wgpu::TextureFormat::Rgba8Unorm);
+    let mut engine = Engine::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
     engine.set_dataset(gpu.device(), scene.dataset.pyramid());
     let mut camera = Camera::new(35.0);
     camera.fit(scene.dataset.world_size(), 1.0);

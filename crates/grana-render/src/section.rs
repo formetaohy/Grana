@@ -4,6 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_display::{Plane, srgb_to_linear};
 use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, SectionPlane};
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BlendComponent, BlendFactor, BlendOperation,
     BlendState, Buffer, BufferUsages, ColorTargetState, ColorWrites, Device, FragmentState,
@@ -86,7 +87,7 @@ pub(crate) struct Sections {
 }
 
 impl Sections {
-    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.section"),
             source: ShaderSource::Wgsl(SHADER.into()),
@@ -114,7 +115,7 @@ impl Sections {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let pick = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.section.pick"),
@@ -139,7 +140,7 @@ impl Sections {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         Self {
             color,

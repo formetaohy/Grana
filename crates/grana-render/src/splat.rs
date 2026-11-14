@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
+use grana_gpu::Pipelines;
 use grana_gpu::{InstanceCommands, storage_buffer};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BlendState, Buffer, BufferDescriptor,
@@ -401,7 +402,7 @@ pub(crate) struct SplatPasses {
 }
 
 impl SplatPasses {
-    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.splat.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -412,7 +413,7 @@ impl SplatPasses {
             module: &cull_module,
             entry_point: Some("splat_cull_volume"),
             compilation_options: Default::default(),
-            cache: None,
+            cache: pipelines.cache(),
         });
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.splat"),
@@ -444,7 +445,7 @@ impl SplatPasses {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let key = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.oit.key"),
@@ -468,7 +469,7 @@ impl SplatPasses {
                 targets: &[],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let color = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.oit.color"),
@@ -492,7 +493,7 @@ impl SplatPasses {
                 targets: &crate::oit::residual_targets(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let pick = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.pick"),
@@ -520,7 +521,7 @@ impl SplatPasses {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         let slice_pick = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.pick.slice"),
@@ -548,7 +549,7 @@ impl SplatPasses {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         Self {
             slots: HashMap::new(),

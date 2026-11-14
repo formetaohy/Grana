@@ -56,6 +56,7 @@ fn offline(gpu: &Gpu) -> Offline {
         gpu.device().clone(),
         gpu.queue().clone(),
         TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
     )
 }
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferDescriptor,
     BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
@@ -47,6 +48,7 @@ impl Bake {
         layouts: &Layouts,
         structure: &TextureView,
         capacity: usize,
+        pipelines: &Pipelines,
     ) -> Self {
         assert!(capacity > 0, "a bake pass stages at least one slot");
         let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -59,7 +61,7 @@ impl Bake {
             module: &module,
             entry_point: Some("bake_main"),
             compilation_options: Default::default(),
-            cache: None,
+            cache: pipelines.cache(),
         });
         let entries = device.create_buffer(&BufferDescriptor {
             label: Some("grana.bake.entries"),

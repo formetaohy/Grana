@@ -3565,6 +3565,7 @@ version = "0.1.1"
 dependencies = [
  "glam",
  "grana-display",
+ "grana-gpu",
  "grana-object",
  "grana-render",
  "grana-scene",
@@ -3608,6 +3609,7 @@ name = "grana-gpu"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
+ "grana-dir",
  "pollster",
  "wgpu",
 ]

@@ -185,9 +185,10 @@ impl App {
         window.set_ime_allowed(false);
         window.set_theme(Some(winit::window::Theme::Dark));
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
-        let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut ui: Ui<grana_editor::Message> =
+            Ui::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
-        let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
         if let Some(target) = self.startup.take() {
             if grana_session::is_remote(&target) {
                 self.session.begin_remote(target);

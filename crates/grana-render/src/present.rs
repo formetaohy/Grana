@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
@@ -46,7 +47,7 @@ pub(crate) struct Present {
 }
 
 impl Present {
-    pub fn new(device: &Device, format: TextureFormat) -> Self {
+    pub fn new(device: &Device, format: TextureFormat, pipelines: &Pipelines) -> Self {
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.present.layout"),
             entries: &[
@@ -75,7 +76,7 @@ impl Present {
             label: Some("grana.present"),
             source: ShaderSource::Wgsl(SHADER.into()),
         });
-        let accumulate = accumulate_pipeline(device, &shader, &sourced_layout);
+        let accumulate = accumulate_pipeline(device, &shader, &sourced_layout, pipelines);
         let present = pipeline(
             device,
             "grana.present",
@@ -83,6 +84,7 @@ impl Present {
             "fs_present",
             format,
             &sourced_layout,
+            pipelines,
         );
         let quantize = pipeline(
             device,
@@ -91,6 +93,7 @@ impl Present {
             "fs_present",
             crate::target::WIDE_FORMAT,
             &sourced_layout,
+            pipelines,
         );
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.present.uniforms"),
@@ -282,6 +285,7 @@ fn pipeline(
     fragment: &str,
     format: TextureFormat,
     layout: &wgpu::PipelineLayout,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -306,7 +310,7 @@ fn pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }
 
@@ -314,6 +318,7 @@ fn accumulate_pipeline(
     device: &Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some("grana.present.accumulate"),
@@ -345,6 +350,6 @@ fn accumulate_pipeline(
             ],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }

@@ -210,7 +210,7 @@ impl Export {
         let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
         let frame = rendered.frame(&[]);
-        let info = renderer.draw(
+        let info = match renderer.draw(
             device,
             queue,
             grana_render::Frame {
@@ -228,7 +228,10 @@ impl Export {
                 level_cap: usize::MAX,
                 temporal: self.temporal,
             },
-        );
+        ) {
+            Ok(info) => info,
+            Err(detail) => return self.fail(detail),
+        };
         self.attempts += 1;
         self.history = info.history;
         if self.history {

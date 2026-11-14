@@ -1,10 +1,10 @@
-mod ao;
 mod atlas;
 mod bake;
 mod brick;
 mod converge;
 mod detail;
 mod frame;
+mod guide;
 mod image;
 mod layout;
 mod mesh;

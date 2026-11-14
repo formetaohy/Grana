@@ -1,4 +1,4 @@
-﻿use std::ops::Deref;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -35,6 +35,7 @@ impl Drop for Temp {
 pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    pipelines: grana_gpu::Pipelines,
     _serial: MutexGuard<'static, ()>,
 }
 
@@ -45,6 +46,10 @@ impl Gpu {
 
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    pub fn pipelines(&self) -> &grana_gpu::Pipelines {
+        &self.pipelines
     }
 }
 
@@ -66,12 +71,16 @@ pub fn splat(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> gran
 }
 
 pub fn gpu() -> Option<Gpu> {
-    static SHARED: OnceLock<Option<(wgpu::Device, wgpu::Queue)>> = OnceLock::new();
+    static SHARED: OnceLock<Option<(wgpu::Device, wgpu::Queue, grana_gpu::Pipelines)>> =
+        OnceLock::new();
     static SERIAL: Mutex<()> = Mutex::new(());
     let serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
-    let (device, queue) = SHARED
+    let (device, queue, pipelines) = SHARED
         .get_or_init(|| match grana_gpu::Headless::new() {
-            Ok(headless) => Some((headless.device, headless.queue)),
+            Ok(headless) => {
+                let pipelines = headless.pipelines().clone();
+                Some((headless.device, headless.queue, pipelines))
+            }
             Err(detail) => {
                 println!("{detail}, skipping");
                 None
@@ -81,6 +90,7 @@ pub fn gpu() -> Option<Gpu> {
     Some(Gpu {
         device,
         queue,
+        pipelines,
         _serial: serial,
     })
 }

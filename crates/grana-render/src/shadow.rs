@@ -1,4 +1,5 @@
 use glam::{Mat4, Vec3};
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, CommandEncoder,
     CompareFunction, ComputePipeline, ComputePipelineDescriptor, Device, Extent3d,
@@ -146,7 +147,7 @@ pub(crate) struct Shadow {
 }
 
 impl Shadow {
-    pub fn new(device: &Device, layouts: &Layouts, dims: [u32; 3]) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, dims: [u32; 3], pipelines: &Pipelines) -> Self {
         let tau = volume(device, "grana.shadow.tau", dims);
         let objects = depth(device, "grana.shadow.objects", OBJECT_SIDE);
         let sampler = linear(device);
@@ -188,7 +189,14 @@ impl Shadow {
                 resource: BindingResource::TextureView(&tau),
             }],
         });
-        let tau_pipeline = pipeline(device, layouts, TAU_SHADER, "tau_main", "grana.shadow.tau");
+        let tau_pipeline = pipeline(
+            device,
+            layouts,
+            TAU_SHADER,
+            "tau_main",
+            "grana.shadow.tau",
+            pipelines,
+        );
         Self {
             objects,
             read,
@@ -290,6 +298,7 @@ fn pipeline(
     source: &str,
     entry: &str,
     label: &str,
+    pipelines: &Pipelines,
 ) -> ComputePipeline {
     let module = device.create_shader_module(ShaderModuleDescriptor {
         label: Some(label),
@@ -301,6 +310,6 @@ fn pipeline(
         module: &module,
         entry_point: Some(entry),
         compilation_options: Default::default(),
-        cache: None,
+        cache: pipelines.cache(),
     })
 }

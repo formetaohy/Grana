@@ -14,7 +14,6 @@ struct SeedData {
 @group(0) @binding(3) var fresh: texture_2d<f32>;
 @group(0) @binding(4) var object_depth: texture_depth_2d;
 @group(0) @binding(5) var volume_normal: texture_2d<f32>;
-@group(0) @binding(6) var pane_normal: texture_2d<f32>;
 
 const NORMAL_LIMIT: f32 = 0.9;
 
@@ -56,7 +55,7 @@ fn current_geometry(surface: vec2<i32>, local: vec2<i32>) -> Geometry {
     let object = textureLoad(object_depth, surface, 0);
     let volume = textureLoad(volume_normal, surface, 0);
     if (object < 1.0 && (volume.w >= 1.0 || object <= volume.w)) {
-        return Geometry(object, textureLoad(pane_normal, local, 0).xyz, true);
+        return Geometry(object, vec3<f32>(0.0), true);
     }
     if (volume.w < 1.0) {
         return Geometry(volume.w, volume.xyz, true);

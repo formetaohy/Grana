@@ -28,8 +28,6 @@ pub(crate) struct Layouts {
     pub splat_pick_slot: BindGroupLayout,
     pub oit_write: BindGroupLayout,
     pub oit_read: BindGroupLayout,
-    pub ao_read: BindGroupLayout,
-    pub ao_compute: BindGroupLayout,
     pub source: BindGroupLayout,
     pub occupancy: BindGroupLayout,
     pub bake: BindGroupLayout,
@@ -43,8 +41,6 @@ pub(crate) struct Layouts {
     pub splat_pick: PipelineLayout,
     pub splat_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
-    pub ao_pipeline: PipelineLayout,
-    pub ao_surface: PipelineLayout,
     pub section: BindGroupLayout,
     pub section_pipeline: PipelineLayout,
     pub oit_resolve: PipelineLayout,
@@ -263,56 +259,6 @@ impl Layouts {
                 texture(4, ShaderStages::FRAGMENT),
             ],
         });
-        let ao_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.ao.read.layout"),
-            entries: &[texture(0, ShaderStages::FRAGMENT)],
-        });
-        let ao_compute = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.ao.compute.layout"),
-            entries: &[
-                uniform(0, ShaderStages::COMPUTE),
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Depth,
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba8Unorm,
-                        view_dimension: TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
@@ -391,8 +337,6 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
-        let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao_compute]);
-        let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
         let section = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.section.layout"),
             entries: &[storage(0, ShaderStages::VERTEX, true)],
@@ -423,8 +367,6 @@ impl Layouts {
             splat_pick_slot,
             oit_write,
             oit_read,
-            ao_read,
-            ao_compute,
             source,
             occupancy,
             bake,
@@ -438,8 +380,6 @@ impl Layouts {
             splat_pick,
             splat_cull_pipeline,
             shadow_pipeline,
-            ao_pipeline,
-            ao_surface,
             section,
             section_pipeline,
             oit_resolve,

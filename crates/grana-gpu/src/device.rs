@@ -5,6 +5,7 @@ use wgpu::{
     TextureFormat, TextureUsages, Trace,
 };
 
+use crate::Pipelines;
 use crate::REQUIRED_FEATURES;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -34,11 +35,13 @@ pub struct Gpu {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub adapter: String,
+    pipelines: Pipelines,
 }
 
 pub struct Headless {
     pub device: Device,
     pub queue: Queue,
+    pipelines: Pipelines,
 }
 
 impl Headless {
@@ -48,7 +51,14 @@ impl Headless {
             for backends in BACKEND_ORDER {
                 let instance = instance(*backends);
                 match acquire(&instance, None, fallback) {
-                    Ok((_, device, queue)) => return Ok(Self { device, queue }),
+                    Ok((_, device, queue)) => {
+                        let pipelines = Pipelines::new(&device);
+                        return Ok(Self {
+                            device,
+                            queue,
+                            pipelines,
+                        });
+                    }
                     Err(detail) => failures.push(format!("{backends:?}: {detail}")),
                 }
             }
@@ -61,6 +71,10 @@ impl Headless {
 
     pub fn format(&self) -> TextureFormat {
         HEADLESS_FORMAT
+    }
+
+    pub fn pipelines(&self) -> &Pipelines {
+        &self.pipelines
     }
 }
 
@@ -119,17 +133,23 @@ impl Gpu {
             view_formats: vec![],
         };
         surface.configure(&device, &config);
+        let pipelines = Pipelines::new(&device);
         Self {
             surface,
             device,
             queue,
             config,
             adapter: description,
+            pipelines,
         }
     }
 
     pub fn format(&self) -> TextureFormat {
         self.config.format
+    }
+
+    pub fn pipelines(&self) -> &Pipelines {
+        &self.pipelines
     }
 
     pub fn size(&self) -> [u32; 2] {
@@ -186,6 +206,9 @@ fn acquire(
     let mut features = REQUIRED_FEATURES;
     if adapter.features().contains(TIMING_FEATURES) {
         features |= TIMING_FEATURES;
+    }
+    if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        features |= wgpu::Features::PIPELINE_CACHE;
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("grana"),

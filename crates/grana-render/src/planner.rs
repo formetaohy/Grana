@@ -1,5 +1,6 @@
 use bytemuck::{bytes_of, cast_slice};
 use glam::Vec3;
+use grana_gpu::Pipelines;
 use grana_volume::{BRICK_SIDE, BrickGrid, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
@@ -223,7 +224,7 @@ pub(crate) struct Planner {
 }
 
 impl Planner {
-    pub fn new(device: &Device, layouts: &Layouts, capacity: usize) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, capacity: usize, pipelines: &Pipelines) -> Self {
         let cull = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -239,7 +240,7 @@ impl Planner {
                 module,
                 entry_point: Some(entry),
                 compilation_options: Default::default(),
-                cache: None,
+                cache: pipelines.cache(),
             })
         };
         let plan_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -248,7 +249,7 @@ impl Planner {
             module: &plan,
             entry_point: Some("plan_main"),
             compilation_options: Default::default(),
-            cache: None,
+            cache: pipelines.cache(),
         });
         Self {
             plan: plan_pipeline,

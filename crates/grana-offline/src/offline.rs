@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_engine::RenderedScene;
-use grana_gpu::Headless;
+use grana_gpu::{Headless, Pipelines};
 use grana_render::{EXPORT_CEILING, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
@@ -28,24 +28,32 @@ pub struct Offline {
     format: TextureFormat,
     renderer: Renderer,
     composer: Composer,
+    pipelines: Pipelines,
 }
 
 impl Offline {
-    pub fn new(device: Device, queue: Queue, format: TextureFormat) -> Self {
-        let renderer = Renderer::new(&device, &queue, format, TEXTURE_BUDGET);
-        let composer = Composer::new(&device);
+    pub fn new(device: Device, queue: Queue, format: TextureFormat, pipelines: &Pipelines) -> Self {
+        let renderer = Renderer::new(&device, &queue, format, TEXTURE_BUDGET, pipelines);
+        let composer = Composer::new(&device, pipelines);
         Self {
             device,
             queue,
             format,
             renderer,
             composer,
+            pipelines: pipelines.clone(),
         }
     }
 
     pub fn headless() -> Result<Self, String> {
-        let Headless { device, queue } = Headless::new()?;
-        Ok(Self::new(device, queue, grana_gpu::HEADLESS_FORMAT))
+        let headless = Headless::new()?;
+        let pipelines = headless.pipelines().clone();
+        Ok(Self::new(
+            headless.device,
+            headless.queue,
+            grana_gpu::HEADLESS_FORMAT,
+            &pipelines,
+        ))
     }
 
     pub fn run(
@@ -76,19 +84,19 @@ impl Offline {
         }
         if let Destination::Lineage { path, set } = &plan.destination {
             progress(0, 1);
-            let outcome = match crate::lineage::write(
-                &self.device,
-                &self.queue,
-                self.format,
-                &scene,
-                *set,
-                path,
-                plan.size.to_array(),
-            ) {
-                Ok(path) => Outcome::Complete { path },
-                Err(detail) => Outcome::Failed { detail },
+            let surface = crate::surface::Surface {
+                device: &self.device,
+                queue: &self.queue,
+                format: self.format,
+                pipelines: &self.pipelines,
             };
+            let outcome =
+                match crate::lineage::write(&surface, &scene, *set, path, plan.size.to_array()) {
+                    Ok(path) => Outcome::Complete { path },
+                    Err(detail) => Outcome::Failed { detail },
+                };
             if matches!(outcome, Outcome::Complete { .. }) {
+                self.pipelines.save();
                 progress(1, 1);
             }
             return outcome;
@@ -120,7 +128,7 @@ impl Offline {
             Ok(export) => export,
             Err(detail) => return Outcome::Failed { detail },
         };
-        let mut ui: Ui<()> = Ui::new(&self.device, &self.queue, self.format);
+        let mut ui: Ui<()> = Ui::new(&self.device, &self.queue, self.format, &self.pipelines);
         ui.resize(export.size());
         progress(0, export.progress().1);
         let mut prepared: Option<(u32, grana_engine::Targets, RenderedScene)> = None;
@@ -163,12 +171,14 @@ impl Offline {
             ) {
                 Step::Running => {}
                 Step::Complete(path) => {
+                    self.pipelines.save();
                     let (frame, total) = export.progress();
                     progress(frame, total);
                     return Outcome::Complete { path };
                 }
                 Step::Failed(detail) => return Outcome::Failed { detail },
             }
+            self.pipelines.save();
             let (frame, total) = export.progress();
             progress(frame, total);
         }

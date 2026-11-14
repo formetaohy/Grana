@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 glam = { workspace = true }
 grana-display = { workspace = true }
+grana-gpu = { workspace = true }
 grana-object = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }

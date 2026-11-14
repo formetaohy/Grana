@@ -16,6 +16,7 @@ use crate::atlas::Atlas;
 use crate::element::Layer;
 use crate::image::ImageAtlas;
 use crate::paint::{FLAG_BACKDROP, Instance, LayerBuffer};
+use grana_gpu::Pipelines;
 use grana_gpu::layout;
 
 const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
@@ -256,7 +257,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        format: TextureFormat,
+        pipelines: &Pipelines,
+    ) -> Self {
         let encoded = srgb(format);
         let linear = raw(encoded);
         let ui_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -320,6 +326,7 @@ impl Renderer {
             &blit_shader,
             "fs_present_encoded",
             format,
+            pipelines,
         );
         let present_linear = fullscreen_pipeline(
             device,
@@ -328,6 +335,7 @@ impl Renderer {
             &blit_shader,
             "fs_present_linear",
             format,
+            pipelines,
         );
         let downsample = fullscreen_pipeline(
             device,
@@ -336,6 +344,7 @@ impl Renderer {
             &blit_shader,
             "fs_downsample",
             linear,
+            pipelines,
         );
         let ui = instance_pipeline(
             device,
@@ -344,6 +353,7 @@ impl Renderer {
             &ui_shader,
             linear,
             PREMULTIPLIED,
+            pipelines,
         );
         let figure = instance_pipeline(
             device,
@@ -352,6 +362,7 @@ impl Renderer {
             &ui_shader,
             format,
             PREMULTIPLIED,
+            pipelines,
         );
         let uniforms = device.create_buffer(&BufferDescriptor {
             label: Some("grana.ui.uniforms"),
@@ -947,6 +958,7 @@ fn fullscreen_pipeline(
     shader: &ShaderModule,
     fragment: &str,
     format: TextureFormat,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -971,7 +983,7 @@ fn fullscreen_pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }
 
@@ -982,6 +994,7 @@ fn instance_pipeline(
     shader: &ShaderModule,
     format: TextureFormat,
     blend: BlendState,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -1006,6 +1019,6 @@ fn instance_pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }

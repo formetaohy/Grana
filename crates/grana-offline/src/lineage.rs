@@ -2,17 +2,22 @@ use std::path::{Path, PathBuf};
 
 use grana_scene::{ObjectSetId, Scene};
 use grana_ui::Ui;
-use wgpu::{Device, Queue, TextureFormat};
+
+use crate::surface::Surface;
 
 pub(crate) fn write(
-    device: &Device,
-    queue: &Queue,
-    device_format: TextureFormat,
+    surface: &Surface<'_>,
     scene: &Scene,
     set: ObjectSetId,
     path: &Path,
     size: [u32; 2],
 ) -> Result<PathBuf, String> {
+    let Surface {
+        device,
+        queue,
+        format,
+        pipelines,
+    } = *surface;
     let Some(object) = scene.objects.get(set) else {
         return Err("the lineage names an object set the scene does not hold".to_string());
     };
@@ -42,12 +47,12 @@ pub(crate) fn write(
             size[1]
         ));
     }
-    let format = grana_page::Format::of(path)
+    let page_format = grana_page::Format::of(path)
         .ok_or_else(|| grana_page::Format::error(path, "a lineage page"))?;
     let colors = (0..tracks.len())
         .map(|track| object.track_color(track))
         .collect::<Vec<_>>();
-    let mut ui: Ui<()> = Ui::new(device, queue, device_format);
+    let mut ui: Ui<()> = Ui::new(device, queue, format, pipelines);
     ui.resize(size);
     let marks = grana_figure::lineage::marks(
         &mut ui,
@@ -60,6 +65,6 @@ pub(crate) fn write(
             time: scene.time(),
         },
     );
-    grana_page::write(path, format, size, &marks)?;
+    grana_page::write(path, page_format, size, &marks)?;
     Ok(path.to_path_buf())
 }

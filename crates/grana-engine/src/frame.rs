@@ -25,7 +25,7 @@ pub(crate) fn draw(
     queue: &Queue,
     frame: View<'_>,
     rendered: &view::RenderedScene,
-) -> FrameInfo {
+) -> Result<FrameInfo, String> {
     renderer.set_transparent(false);
     let scene = rendered.frame(frame.overlays);
     renderer.draw(

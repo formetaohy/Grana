@@ -73,9 +73,14 @@ pub struct Ui<A = ()> {
 }
 
 impl<A: Clone> Ui<A> {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        pipelines: &grana_gpu::Pipelines,
+    ) -> Self {
         Self {
-            renderer: Renderer::new(device, queue, format),
+            renderer: Renderer::new(device, queue, format, pipelines),
             text: Text::new(device),
             images: ImageAtlas::new(device),
             theme: Theme::dark(),

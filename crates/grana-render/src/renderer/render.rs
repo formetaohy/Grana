@@ -1,9 +1,6 @@
 use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
 use super::*;
 
-const AMBIENT_REACH: f32 = 40.0;
-const AMBIENT_STRENGTH: f32 = 0.9;
-
 impl Renderer {
     pub(super) fn render(
         &mut self,
@@ -11,7 +8,7 @@ impl Renderer {
         queue: &Queue,
         target: &mut FrameTarget,
         frame: Frame<'_, '_>,
-    ) -> FrameInfo {
+    ) -> Result<FrameInfo, String> {
         let Frame {
             target: surface,
             size,
@@ -42,6 +39,8 @@ impl Renderer {
                 .iter()
                 .any(|style| style.visible() && style.transparent())
                 || !scene.splats.is_empty());
+        let surfaces = !scene.layers.is_empty();
+        let splats_present = !scene.splats.is_empty();
         let motion = view_motion(camera, viewport, bounds, time, exposure);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
@@ -60,7 +59,6 @@ impl Renderer {
             planner,
             volume,
             oit_resolve,
-            gtao,
             meshes,
             splats,
             pyramid,
@@ -89,7 +87,6 @@ impl Renderer {
             object_key,
             info,
             dummy_oit,
-            dummy_ao,
             budget,
             sections,
             sliced,
@@ -97,6 +94,7 @@ impl Renderer {
             bake,
             baked,
             overlay,
+            pipelines,
             ..
         } = self;
         let (
@@ -117,7 +115,7 @@ impl Renderer {
         else {
             clear(&mut encoder, surface);
             queue.submit([encoder.finish()]);
-            return *info;
+            return Ok(*info);
         };
         assert_eq!(
             scene.channels.len(),
@@ -253,7 +251,7 @@ impl Renderer {
             info.samples = 0;
             info.rebuilt = false;
             info.fading = false;
-            return *info;
+            return Ok(*info);
         }
         let slot_grid = atlas.slot_grid();
         let mut prepared = [usize::MAX; BAND + 2];
@@ -292,6 +290,14 @@ impl Renderer {
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
             .collect::<Vec<&BrickTable>>();
+        let step = crate::frame::step_length(camera, tables[0], scene.step_scale);
+        let ray_bounds =
+            crate::frame::sample_bounds(camera, tables[0], step, scene.step_scale, height)?;
+        let ray = crate::frame::Ray {
+            step,
+            bounds: ray_bounds,
+            channels: *channels,
+        };
         let mut data = FrameData::new(
             VolumeView {
                 camera,
@@ -304,8 +310,7 @@ impl Renderer {
             ladder,
             &tables,
             scene.shading,
-            scene.step_scale,
-            *channels,
+            ray,
             space,
         );
         data.viewport = [
@@ -397,8 +402,7 @@ impl Renderer {
                         counts: &target.count_view,
                         fresh: target.scene.color(),
                         depth: target.scene.depth(),
-                        volume: target.ao.as_ref().map(crate::ao::Ao::volume_normal),
-                        normal: target.ao.as_ref().map(crate::ao::Ao::normal),
+                        volume: target.guide.view(),
                     },
                 );
                 seeding = true;
@@ -408,7 +412,7 @@ impl Renderer {
             }
             target.shot = Some(shot);
         }
-        if reset {
+        if reset && let Some(convergence) = convergence.as_mut() {
             convergence.reset();
         }
         info.samples = target.samples;
@@ -416,16 +420,28 @@ impl Renderer {
         if reset {
             info.rebuilt = stale;
             if stale {
-                meshes.set(device, queue, layouts, scene);
-                splats.set(device, queue, layouts, scene.splats);
+                if surfaces {
+                    meshes
+                        .get_or_insert_with(|| {
+                            MeshPasses::new(device, layouts, *budget / 2, pipelines)
+                        })
+                        .set(device, queue, layouts, scene);
+                }
+                if splats_present {
+                    splats
+                        .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))
+                        .set(device, queue, layouts, scene.splats);
+                }
                 *resident = Some(next);
             }
-            splats.rewind(queue);
-            splats.cull_volume(&mut encoder, scene_table.group());
-            if !slice {
-                meshes.cull_volume(&mut encoder, scene_table.group());
+            if let Some(splat_passes) = splats.as_mut() {
+                splat_passes.rewind(queue);
+                splat_passes.cull_volume(&mut encoder, scene_table.group());
+            }
+            if !slice && let Some(mesh_passes) = meshes.as_mut() {
+                mesh_passes.cull_volume(&mut encoder, scene_table.group());
                 if scene.shading.shadows > 0.0 {
-                    meshes.cull_shadow(&mut encoder, scene_table.group());
+                    mesh_passes.cull_shadow(&mut encoder, scene_table.group());
                 }
             }
         }
@@ -442,7 +458,7 @@ impl Renderer {
             scene.step_scale.max(1.0e-3),
         ];
         data.lens = crate::frame::lens(camera, sample_index, samples, aspect);
-        data.tag[2] = splats.count();
+        data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
         scene_table.write_frame(queue, data);
         if replan {
             let scale = bucket_scale(
@@ -476,7 +492,6 @@ impl Renderer {
         if target.samples < samples && ready {
             target.samples += 1;
             info.samples = target.samples;
-            let surfaces = !scene.layers.is_empty();
             let volume_visible = scene
                 .channels
                 .iter()
@@ -486,46 +501,6 @@ impl Renderer {
                     && row.opacity > 0.0
                     && row.volume.mode() == grana_display::VolumeMode::Maximum
             });
-            if surfaces || volume_visible {
-                if target
-                    .ao
-                    .as_ref()
-                    .is_none_or(|ao| ao.size() != [width, height] || ao.volume_size() != size)
-                {
-                    target.ao = Some(crate::ao::Ao::new(
-                        device,
-                        layouts,
-                        gtao.pipeline(),
-                        [width, height],
-                        size,
-                    ));
-                }
-                let ao = target
-                    .ao
-                    .as_ref()
-                    .expect("the ambient occlusion target is ready");
-                if reset {
-                    ao.clear_volume(&mut encoder);
-                }
-                ao.clear(&mut encoder);
-                if !slice {
-                    meshes.draw_gbuffer(
-                        &mut encoder,
-                        ao.normal(),
-                        ao.depth(),
-                        viewport,
-                        scene_table.group(),
-                    );
-                    ao.evaluate(
-                        queue,
-                        &mut encoder,
-                        &data,
-                        AMBIENT_REACH,
-                        AMBIENT_STRENGTH,
-                        sample_index,
-                    );
-                }
-            }
             scene_table.write_shadow_frame(queue, data);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
@@ -537,7 +512,9 @@ impl Renderer {
                     let object = shadow_keys.objects();
                     if *object_key != Some(object) {
                         *object_key = Some(object);
-                        meshes.draw_shadow(&mut encoder, shadow.objects());
+                        if let Some(mesh_passes) = meshes.as_ref() {
+                            mesh_passes.draw_shadow(&mut encoder, shadow.objects());
+                        }
                     }
                     shadow.encode_tau(&mut encoder, groups, shadow_keys.volume());
                 }
@@ -548,22 +525,21 @@ impl Renderer {
                 .map(Shadow::group)
                 .expect("the shadow is ready");
             let group = scene_table.group();
-            meshes.write_uniforms(queue, &data, scene.shading);
-            let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
+            if let Some(mesh_passes) = meshes.as_mut() {
+                mesh_passes.write_uniforms(queue, &data, scene.shading);
+            }
             let oit = target.oit.as_ref().filter(|_| translucent);
             let oit_group: &BindGroup = oit.map_or(dummy_oit.read_group(), Oit::read_group);
             if slice {
                 if volume_visible {
-                    let normal = target
-                        .ao
-                        .as_ref()
-                        .expect("the ambient occlusion target is ready")
-                        .volume_normal();
                     volume.draw(
+                        device,
+                        layouts,
+                        pipelines,
                         &mut encoder,
                         crate::volume::VolumeFrame {
                             target: target.scene.color(),
-                            normal,
+                            normal: target.guide.view(),
                             region: viewport,
                             scene: group,
                             level: level_group,
@@ -602,17 +578,19 @@ impl Renderer {
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     sections.draw(&mut pass, group);
                 }
-                splats.draw_slice(
-                    &mut encoder,
-                    VolumeTargets {
-                        color: target.scene.color(),
-                        depth: target.scene.depth(),
-                    },
-                    viewport,
-                    group,
-                );
-            } else {
-                meshes.draw_volume(
+                if let Some(splat_passes) = splats.as_ref() {
+                    splat_passes.draw_slice(
+                        &mut encoder,
+                        VolumeTargets {
+                            color: target.scene.color(),
+                            depth: target.scene.depth(),
+                        },
+                        viewport,
+                        group,
+                    );
+                }
+            } else if let Some(mesh_passes) = meshes.as_ref() {
+                mesh_passes.draw_volume(
                     &mut encoder,
                     VolumeTargets {
                         color: target.scene.color(),
@@ -621,7 +599,6 @@ impl Renderer {
                     viewport,
                     Lighting {
                         shadow: shadow_group,
-                        ao: ao_group,
                     },
                 );
             }
@@ -650,8 +627,12 @@ impl Renderer {
                         1.0,
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
-                    meshes.draw_oit(&mut pass, shadow_group, oit.write_group(), ao_group);
-                    splats.draw_oit(&mut pass, group, oit.write_group());
+                    if let Some(mesh_passes) = meshes.as_ref() {
+                        mesh_passes.draw_oit(&mut pass, shadow_group, oit.write_group());
+                    }
+                    if let Some(splat_passes) = splats.as_ref() {
+                        splat_passes.draw_oit(&mut pass, group, oit.write_group());
+                    }
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -695,17 +676,23 @@ impl Renderer {
                         1.0,
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
-                    meshes.draw_color(&mut pass, shadow_group, oit.write_group(), ao_group);
-                    splats.draw_color(&mut pass, group, oit.write_group());
+                    if let Some(mesh_passes) = meshes.as_ref() {
+                        mesh_passes.draw_color(&mut pass, shadow_group, oit.write_group());
+                    }
+                    if let Some(splat_passes) = splats.as_ref() {
+                        splat_passes.draw_color(&mut pass, group, oit.write_group());
+                    }
                 }
                 if !volume_visible {
-                    oit_resolve.draw(
-                        &mut encoder,
-                        target.scene.color(),
-                        viewport,
-                        group,
-                        oit.read_group(),
-                    );
+                    oit_resolve
+                        .get_or_insert_with(|| OitResolve::new(device, layouts, pipelines))
+                        .draw(
+                            &mut encoder,
+                            target.scene.color(),
+                            viewport,
+                            group,
+                            oit.read_group(),
+                        );
                 }
             }
             if volume_visible && !slice {
@@ -723,14 +710,9 @@ impl Renderer {
                         );
                     }
                 }
-                let normal = target
-                    .ao
-                    .as_ref()
-                    .expect("the ambient occlusion target is ready")
-                    .volume_normal();
                 let volume_frame = crate::volume::VolumeFrame {
                     target: target.scene.color(),
-                    normal,
+                    normal: target.guide.view(),
                     region: viewport,
                     scene: group,
                     level: level_group,
@@ -745,7 +727,7 @@ impl Renderer {
                 } else {
                     crate::volume::VolumePath::Composite
                 };
-                volume.draw(&mut encoder, volume_frame, path);
+                volume.draw(device, layouts, pipelines, &mut encoder, volume_frame, path);
             }
             if !scene.overlays.is_empty() {
                 overlay.prepare(
@@ -757,14 +739,16 @@ impl Renderer {
                 overlay.draw(&mut encoder, target.scene.color(), viewport);
             }
             if *exporting && target.samples > 1 {
-                convergence.encode(
-                    device,
-                    &mut encoder,
-                    target.size,
-                    target.scene.color(),
-                    &target.accumulation_view,
-                    target.samples,
-                );
+                convergence
+                    .get_or_insert_with(|| Convergence::new(device, pipelines))
+                    .encode(
+                        device,
+                        &mut encoder,
+                        target.size,
+                        target.scene.color(),
+                        &target.accumulation_view,
+                        target.samples,
+                    );
             }
             present.accumulate(
                 &mut encoder,
@@ -793,8 +777,7 @@ impl Renderer {
                             counts: &target.count_view,
                             fresh: target.scene.color(),
                             depth: target.scene.depth(),
-                            volume: target.ao.as_ref().map(crate::ao::Ao::volume_normal),
-                            normal: target.ao.as_ref().map(crate::ao::Ao::normal),
+                            volume: target.guide.view(),
                         },
                     },
                 );
@@ -841,7 +824,9 @@ impl Renderer {
             }
         }
         queue.submit([encoder.finish()]);
-        convergence.register();
+        if let Some(convergence) = convergence.as_mut() {
+            convergence.register();
+        }
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
         }
@@ -852,7 +837,7 @@ impl Renderer {
                 .as_ref()
                 .is_some_and(crate::temporal::History::ready);
         target.view = view_now;
-        *info
+        Ok(*info)
     }
 }
 

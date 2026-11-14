@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
@@ -45,6 +45,7 @@ pub(crate) struct FrameData {
     pub slice: [f32; 4],
     pub slice_view: [f32; 4],
     pub occupancy: [f32; 4],
+    pub bounds: [u32; 4],
 }
 
 #[repr(C)]
@@ -65,7 +66,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1360);
+    assert!(size_of::<FrameData>() == 1376);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -94,6 +95,12 @@ pub(crate) struct VolumeView<'a> {
     pub time: u32,
 }
 
+pub(crate) struct Ray {
+    pub(crate) step: f32,
+    pub(crate) bounds: [u32; 4],
+    pub(crate) channels: usize,
+}
+
 const UNREACHED: f32 = 1.0e19;
 
 impl FrameData {
@@ -102,14 +109,21 @@ impl FrameData {
         ladder: Ladder,
         tables: &[&BrickTable],
         shading: Shading,
-        step_scale: f32,
-        channels: usize,
+        ray: Ray,
         space: ShadowSpace,
     ) -> Self {
         assert_eq!(
             tables.len(),
             ladder.count,
             "the ladder carries one table per band"
+        );
+        assert!(
+            ray.step.is_finite() && ray.step > 0.0,
+            "a frame marches at a positive step"
+        );
+        assert!(
+            ray.bounds[0] > 0 && ray.bounds[1] >= ray.bounds[0],
+            "a frame carries a usable ray bound"
         );
         let VolumeView {
             camera,
@@ -132,7 +146,6 @@ impl FrameData {
             }
             None => ([0.0; 4], [0.0; 4]),
         };
-        let step = step_length(camera, first, step_scale);
         let pixel_scale = camera.pixels_per_world(height);
         let sampling = pixel_scale;
         let orthographic = camera.projection().orthographic();
@@ -185,7 +198,7 @@ impl FrameData {
             }),
             atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
             shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
-            march: [step, shading.shadows, channels as f32, pixel_scale],
+            march: [ray.step, shading.shadows, ray.channels as f32, pixel_scale],
             viewport: [0.0; 4],
             jitter: [0.0; 4],
             planes: planes(view_projection),
@@ -217,6 +230,7 @@ impl FrameData {
             slice,
             slice_view,
             occupancy: [1.0, 0.0, 0.0, 0.0],
+            bounds: ray.bounds,
         }
     }
 }
@@ -237,13 +251,13 @@ pub(crate) fn lens(camera: &Camera, index: u32, samples: u32, aspect: f32) -> [f
     ]
 }
 
-fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
-    let rate = table.rate(camera.forward());
+pub(super) fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
+    let direction = camera.forward();
     let mut voxel_world = f32::INFINITY;
     for axis in 0..3 {
-        let rate = rate[axis].abs();
-        if rate > 1.0e-6 {
-            voxel_world = voxel_world.min((1.0 / table.dims[axis]) / rate);
+        let reach = direction[axis].abs();
+        if reach > 1.0e-6 {
+            voxel_world = voxel_world.min(table.voxel[axis] / reach);
         }
     }
     let voxel_world = if voxel_world.is_finite() {
@@ -252,6 +266,37 @@ fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
         table.voxel.min_element()
     };
     (voxel_world * step_scale.max(1.0e-3)).max(1.0e-7)
+}
+
+pub(super) const SAMPLE_CEILING: u32 = 4096;
+
+pub(super) fn sample_bounds(
+    camera: &Camera,
+    table: &BrickTable,
+    step: f32,
+    step_scale: f32,
+    height: u32,
+) -> Result<[u32; 4], String> {
+    let diagonal = table.world.length();
+    let focal = camera.pixels_per_world(height).max(1.0e-6);
+    let nearest = if camera.projection().orthographic() {
+        0.0
+    } else {
+        let centre = 0.5 * (table.bounds.0 + table.bounds.1);
+        let half = 0.5 * (table.bounds.1 - table.bounds.0);
+        ((camera.eye() - centre).abs() - half)
+            .max(Vec3::ZERO)
+            .length()
+    };
+    let pixel = 0.5 * step_scale.max(1.0e-3) * nearest / focal;
+    let minimum = step.max(pixel);
+    let samples = (diagonal / minimum).ceil() as u32 + 2;
+    if samples > SAMPLE_CEILING {
+        return Err(format!(
+            "a ray crosses {samples} samples at this step, above the {SAMPLE_CEILING} sample ceiling; raise the step scale or zoom out"
+        ));
+    }
+    Ok([samples, samples.saturating_mul(4).saturating_add(8), 0, 0])
 }
 
 pub(crate) fn planes(view_projection: Mat4) -> [[f32; 4]; 6] {

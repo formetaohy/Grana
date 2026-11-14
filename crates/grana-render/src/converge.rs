@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
@@ -20,7 +21,7 @@ const LEVEL_LIMIT: u32 = 16;
 const STALL_LIMIT: u32 = 4;
 
 pub(crate) struct Convergence {
-    pipelines: Pipelines,
+    pipelines: Stages,
     target: Option<Target>,
     readback: Readback,
     queued: VecDeque<(u64, u32)>,
@@ -28,7 +29,7 @@ pub(crate) struct Convergence {
     stalls: u32,
 }
 
-struct Pipelines {
+struct Stages {
     error: RenderPipeline,
     reduce: RenderPipeline,
     error_layout: BindGroupLayout,
@@ -44,7 +45,7 @@ struct Target {
 }
 
 impl Convergence {
-    pub(crate) fn new(device: &Device) -> Self {
+    pub(crate) fn new(device: &Device, pipelines: &Pipelines) -> Self {
         let error_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.converge.error.layout"),
             entries: &[texture_entry(0), texture_entry(1)],
@@ -63,6 +64,7 @@ impl Convergence {
             &shader,
             &error_layout,
             "fs_error",
+            pipelines,
         );
         let reduce = pipeline(
             device,
@@ -70,9 +72,10 @@ impl Convergence {
             &shader,
             &reduce_layout,
             "fs_reduce",
+            pipelines,
         );
         Self {
-            pipelines: Pipelines {
+            pipelines: Stages {
                 error,
                 reduce,
                 error_layout,
@@ -219,7 +222,7 @@ fn sample(bytes: &[u8], index: usize) -> f32 {
 impl Target {
     fn new(
         device: &Device,
-        pipelines: &Pipelines,
+        stages: &Stages,
         size: [u32; 2],
         color: &TextureView,
         accumulation: &TextureView,
@@ -254,7 +257,7 @@ impl Target {
             .collect::<Vec<_>>();
         let error = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.converge.error.group"),
-            layout: &pipelines.error_layout,
+            layout: &stages.error_layout,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
@@ -270,7 +273,7 @@ impl Target {
             .map(|level| {
                 device.create_bind_group(&BindGroupDescriptor {
                     label: Some("grana.converge.reduce.group"),
-                    layout: &pipelines.reduce_layout,
+                    layout: &stages.reduce_layout,
                     entries: &[BindGroupEntry {
                         binding: 0,
                         resource: BindingResource::TextureView(&views[level - 1]),
@@ -307,6 +310,7 @@ fn pipeline(
     shader: &wgpu::ShaderModule,
     layout: &BindGroupLayout,
     fragment: &str,
+    pipelines: &Pipelines,
 ) -> RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some(label),
@@ -336,6 +340,6 @@ fn pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache: pipelines.cache(),
     })
 }

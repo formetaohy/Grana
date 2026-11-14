@@ -175,14 +175,6 @@ impl BrickTable {
         }
     }
 
-    pub fn rate(&self, direction: Vec3) -> Vec3 {
-        Vec3::new(
-            self.inverses[0].dot(direction),
-            self.inverses[1].dot(direction),
-            self.inverses[2].dot(direction),
-        )
-    }
-
     pub fn record_base(&self) -> u32 {
         self.base
     }

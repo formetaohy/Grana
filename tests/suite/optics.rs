@@ -24,6 +24,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         256 << 20,
+        gpu.pipelines(),
     );
     renderer.set_dataset(gpu.device(), &pyramid);
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -173,10 +174,14 @@ fn spread(pixels: &[[u8; 4]]) -> (f32, f32) {
 
 fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Volume) {
     for _ in 0..64 {
-        let mut info = renderer.draw(gpu.device(), gpu.queue(), copy(frame));
+        let mut info = renderer
+            .draw(gpu.device(), gpu.queue(), copy(frame))
+            .expect("the frame draws");
         if !renderer.requests_pending() {
             while info.samples < SAMPLES || info.fading {
-                info = renderer.draw(gpu.device(), gpu.queue(), copy(frame));
+                info = renderer
+                    .draw(gpu.device(), gpu.queue(), copy(frame))
+                    .expect("the frame draws");
             }
             return;
         }

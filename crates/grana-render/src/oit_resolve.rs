@@ -1,3 +1,4 @@
+use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, ColorTargetState, ColorWrites, CommandEncoder, Device, FragmentState, LoadOp,
     MultisampleState, Operations, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
@@ -22,7 +23,7 @@ pub(crate) struct OitResolve {
 }
 
 impl OitResolve {
-    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.oit.resolve"),
             source: ShaderSource::Wgsl(RESOLVE.into()),
@@ -50,7 +51,7 @@ impl OitResolve {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache: pipelines.cache(),
         });
         Self { pipeline }
     }

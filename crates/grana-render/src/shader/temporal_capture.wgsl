@@ -8,7 +8,6 @@ struct CaptureData {
 @group(0) @binding(2) var counts: texture_2d<f32>;
 @group(0) @binding(3) var object_depth: texture_depth_2d;
 @group(0) @binding(4) var volume_normal: texture_2d<f32>;
-@group(0) @binding(5) var pane_normal: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -37,7 +36,7 @@ fn surface_geometry(surface: vec2<i32>, local: vec2<i32>) -> vec4<f32> {
     let object = textureLoad(object_depth, surface, 0);
     let volume = textureLoad(volume_normal, surface, 0);
     if (object < 1.0 && (volume.w >= 1.0 || object <= volume.w)) {
-        return vec4<f32>(textureLoad(pane_normal, local, 0).xyz, object);
+        return vec4<f32>(0.0, 0.0, 0.0, object);
     }
     if (volume.w < 1.0) {
         return volume;

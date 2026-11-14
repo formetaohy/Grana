@@ -1,8 +1,6 @@
 @group(5) @binding(0) var<storage, read> occupied: array<u32>;
 
 const OCCUPANCY_WORDS: u32 = 65u;
-const SAMPLE_LIMIT: u32 = 1024u;
-const CELL_LIMIT: u32 = 1024u;
 const SEGMENT_ERROR: f32 = 0.02;
 const SEGMENT_STRIDE: f32 = 8.0;
 
@@ -97,13 +95,14 @@ fn march_volume(
     var samples = 0u;
     var cells = 0u;
     var complete = false;
-    while (t < finish && samples < SAMPLE_LIMIT && cells < CELL_LIMIT && !complete) {
+    while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
         let found = volume_reachable(origin, band_for(t, dither), t, direction);
         if (!found.usable) {
             let skip = ray_uvw(origin, found.band, t, direction);
             let rate = level_rate(found.band, direction);
             let edge = boundary_delta(found.band, skip, rate, local_step(t) * 0.25);
             t = min(t + edge, finish);
+            cells += 1u;
             continue;
         }
         let band = found.band;
@@ -122,7 +121,7 @@ fn march_volume(
             + (clamp(found.uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick))
             + vec3<f32>(1.0)) / extent;
         var cursor = t;
-        while (cursor < boundary && cells < CELL_LIMIT && !complete) {
+        while (cursor < boundary && cells < frame.bounds.y && !complete) {
             cells += 1u;
             let step = local_step(cursor);
             let local = ray_uvw(origin, band, cursor, direction);
@@ -136,7 +135,7 @@ fn march_volume(
                 cursor = limit;
                 continue;
             }
-            while (cursor < limit && samples < SAMPLE_LIMIT) {
+            while (cursor < limit && samples < frame.bounds.x) {
                 let sample = optical_sample(texel);
                 let stride = clamp(
                     SEGMENT_ERROR / max(sample.a * voxels_per_world, 1.0e-9),

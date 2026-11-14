@@ -86,6 +86,7 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         BUDGET,
+        gpu.pipelines(),
     );
     renderer.set_dataset(gpu.device(), pyramid);
     renderer
@@ -138,10 +139,14 @@ fn settle_with<'a, 'b: 'a>(
 ) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..64 {
-        let mut info = renderer.draw(gpu.device(), gpu.queue(), build());
+        let mut info = renderer
+            .draw(gpu.device(), gpu.queue(), build())
+            .expect("the frame draws");
         if !renderer.requests_pending() {
             while info.samples < SAMPLES || info.fading {
-                info = renderer.draw(gpu.device(), gpu.queue(), build());
+                info = renderer
+                    .draw(gpu.device(), gpu.queue(), build())
+                    .expect("the frame draws");
             }
             return latest;
         }
@@ -264,13 +269,17 @@ fn measures_the_convergence_of_a_volume() {
     let mut reset = frame(&view);
     reset.samples = 12;
     reset.exposure = 1.4;
-    renderer.draw(gpu.device(), gpu.queue(), reset);
+    renderer
+        .draw(gpu.device(), gpu.queue(), reset)
+        .expect("the frame draws");
     let mut metrics = Vec::new();
     for _ in 0..24 {
         let mut drawn = frame(&view);
         drawn.samples = 12;
         drawn.exposure = 1.4;
-        let info = renderer.draw(gpu.device(), gpu.queue(), drawn);
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), drawn)
+            .expect("the frame draws");
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
@@ -297,7 +306,9 @@ fn measures_the_convergence_of_a_volume() {
         let mut drawn = frame(&view);
         drawn.samples = 12;
         drawn.exposure = 1.8;
-        renderer.draw(gpu.device(), gpu.queue(), drawn);
+        renderer
+            .draw(gpu.device(), gpu.queue(), drawn)
+            .expect("the frame draws");
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
@@ -783,7 +794,9 @@ fn assure(
     volume: &Volume,
     grid: &BrickGrid,
 ) -> grana_render::FrameInfo {
-    let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+    let mut info = renderer
+        .draw(gpu.device(), gpu.queue(), frame(view))
+        .expect("the frame draws");
     for _ in 0..512 {
         if info.samples >= SAMPLES && info.settled {
             assert!(
@@ -800,7 +813,9 @@ fn assure(
                 .collect::<Vec<_>>();
             renderer.upload(gpu.queue(), &bricks);
         }
-        info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(view))
+            .expect("the frame draws");
     }
     panic!("the assured frame never settled");
 }
@@ -834,7 +849,9 @@ fn assured_pixels(
         display: grana_render::Display::Export,
     };
     for _ in 0..4 {
-        let info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the frame draws");
         assert_eq!(
             info.samples, 0,
             "an assured frame consumed samples before its bricks arrived"
@@ -1106,10 +1123,14 @@ fn stream_levels(
     volumes: &[Volume],
 ) -> grana_render::FrameInfo {
     for _ in 0..64 {
-        let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        let mut info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(view))
+            .expect("the frame draws");
         if !renderer.requests_pending() {
             while info.samples < SAMPLES || info.fading {
-                info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+                info = renderer
+                    .draw(gpu.device(), gpu.queue(), frame(view))
+                    .expect("the frame draws");
             }
             return info;
         }
@@ -1170,6 +1191,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         400 << 10,
+        gpu.pipelines(),
     );
     renderer.set_dataset(gpu.device(), &pyramid);
     let target = texture(&gpu, SIDE);
@@ -1236,6 +1258,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         1 << 20,
+        gpu.pipelines(),
     );
     renderer.set_dataset(gpu.device(), &pyramid);
     let budget = grana_render::residency_budget(
@@ -1300,7 +1323,9 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
 
 fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
     for _ in 0..4 {
-        let info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(view))
+            .expect("the frame draws");
         assert!(info.settled, "an idle fitted frame replans");
         assert_eq!(info.samples, SAMPLES, "an idle fitted frame resamples");
         assert!(!info.truncated, "an idle fitted frame truncates");
@@ -1359,7 +1384,9 @@ fn take(
     };
     let mut info = grana_render::FrameInfo::default();
     for _ in 0..256 {
-        info = renderer.draw(gpu.device(), gpu.queue(), build());
+        info = renderer
+            .draw(gpu.device(), gpu.queue(), build())
+            .expect("the frame draws");
         if renderer.requests_pending() {
             if let Some(requests) = next_demand(gpu, renderer) {
                 let grid = BrickGrid::new(volume.extent());
@@ -1705,7 +1732,9 @@ fn separates_data_object_and_style_versions() {
     let view = target.create_view(&Default::default());
     let mut renderer = build_renderer(&gpu, &pyramid);
     let draw = |renderer: &mut Renderer, scene: &SceneFrame<'_>| {
-        renderer.draw(gpu.device(), gpu.queue(), drawn(&view, &camera, scene))
+        renderer
+            .draw(gpu.device(), gpu.queue(), drawn(&view, &camera, scene))
+            .expect("the frame draws")
     };
     let first = draw(&mut renderer, &bare_scene(base, &channels));
     assert!(first.rebuilt, "the first frame reused an empty scene");
@@ -1721,11 +1750,13 @@ fn separates_data_object_and_style_versions() {
     assert_eq!(still.samples, 2, "an unchanged scene dropped its samples");
     let mut shifted = camera.clone();
     shifted.orbit(glam::Vec2::new(0.2, 0.1));
-    let orbiting = renderer.draw(
-        gpu.device(),
-        gpu.queue(),
-        drawn(&view, &shifted, &bare_scene(base, &channels)),
-    );
+    let orbiting = renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            drawn(&view, &shifted, &bare_scene(base, &channels)),
+        )
+        .expect("the frame draws");
     assert!(
         !orbiting.rebuilt,
         "a moved camera rebuilt the object buffers"

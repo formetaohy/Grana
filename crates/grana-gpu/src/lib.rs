@@ -2,6 +2,7 @@ mod buffer;
 mod command;
 mod device;
 pub mod layout;
+mod pipeline;
 mod readback;
 mod table;
 
@@ -12,5 +13,6 @@ pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_AR
 pub use buffer::storage as storage_buffer;
 pub use command::{IndexedCommands, InstanceCommands};
 pub use device::{Gpu, HEADLESS_FORMAT, Headless};
+pub use pipeline::Pipelines;
 pub use readback::Readback;
 pub use table::Table;
