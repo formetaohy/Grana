@@ -134,7 +134,11 @@ impl Session {
             .map(|time| vec![false; object.object_count(time)])
             .collect::<Vec<_>>();
         let rows = if scope {
-            self.measure.rows().to_vec()
+            self.measure
+                .current_rows()
+                .ok_or("the object set holds no measurement table")?
+                .rows()
+                .to_vec()
         } else {
             table.matching(self.measure.filters(), self.measure.lasso(), None)
         };

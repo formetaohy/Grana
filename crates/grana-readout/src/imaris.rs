@@ -205,6 +205,18 @@ pub enum Frame {
     Filaments(Vec<Filament>),
 }
 
+impl Frame {
+    pub fn measured(&self, channels: usize) -> bool {
+        let complete =
+            |samples: Option<&[Sample]>| samples.is_some_and(|samples| samples.len() == channels);
+        match self {
+            Self::Surfaces(items) => items.iter().all(|item| complete(item.intensities())),
+            Self::Spots(items) => items.iter().all(|item| complete(item.intensities())),
+            Self::Filaments(items) => items.iter().all(|item| complete(item.intensities())),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Object {
     name: String,

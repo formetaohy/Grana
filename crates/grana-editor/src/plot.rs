@@ -174,7 +174,22 @@ pub fn view<'a>(
     let heading = Heading::new("", title_y, title_x)
         .with_summary(summary_text(plot, table, readout, language))
         .with_empty(empty_text(language, plot));
-    let selection = selected_row(table, measure.rows(), state.scene, measure.set());
+    let selection = state.scene.selection().map(|selection| {
+        let item = match selection.item {
+            Item::Object(index) => index as u64 * 2,
+            Item::Track(index) => index as u64 * 2 + 1,
+        };
+        (selection.set.raw(), item)
+    });
+    let scene = state.scene;
+    let set = measure.set();
+    let rows = measure.rows();
+    let filters = measure.filters();
+    let lasso = measure.lasso();
+    let vertices = drag.vertices.as_slice();
+    let origin = drag.origin.filter(|_| drag.view == Some(plot.view()));
+    let gate = drag.gate;
+    let moved = drag.moved;
     let props = (
         measure.document_hash(),
         measure
@@ -182,42 +197,26 @@ pub fn view<'a>(
             .and_then(|set| state.scene.objects.get(set))
             .map_or(0, |set| set.revision().raw()),
         table.rows(),
-        measure.rows().len(),
-        selection,
+        rows.len(),
+        (selection, scene.time()),
         matches!(
             state.workspace.distribution_style,
             grana_chart::DistributionStyle::Violin
         ),
         hovering.then(|| (pointer.x.to_bits(), pointer.y.to_bits())),
-        drag.origin
-            .filter(|_| drag.view == Some(plot.view()))
-            .map(|point| (point.x.to_bits(), point.y.to_bits())),
-        drag.gate.map_or(0u8, |kind| match kind {
+        origin.map(|point| (point.x.to_bits(), point.y.to_bits())),
+        gate.map_or(0u8, |kind| match kind {
             BrushKind::Rectangle => 1,
             BrushKind::Lasso => 2,
         }),
-        drag.moved,
-        drag.vertices.len(),
-        drag.vertices.iter().fold(0u64, |hash, point| {
+        moved,
+        vertices.len(),
+        vertices.iter().fold(0u64, |hash, point| {
             hash.rotate_left(7)
                 ^ u64::from(point.x.to_bits())
                 ^ (u64::from(point.y.to_bits()) << 32)
         }),
     );
-    let chart = PlotView {
-        plot,
-        table,
-        rows: measure.rows(),
-        filters: measure.filters(),
-        lasso: measure.lasso(),
-        selection,
-        pointer,
-        hovering,
-        origin: drag.origin.filter(|_| drag.view == Some(plot.view())),
-        vertices: &drag.vertices,
-        gate: drag.gate,
-        moved: drag.moved,
-    };
     let canvas = grana_ui::canvas(Length::Fill, rect.height())
         .view(props, move |_, painter, info| {
             let card = info.rect;
@@ -230,6 +229,20 @@ pub fn view<'a>(
                 surface.shadow,
             );
             let style = Style::card(&theme, distribution).with_language(language);
+            let chart = PlotView {
+                plot,
+                table,
+                rows,
+                filters,
+                lasso,
+                selection: selected_row(table, rows, scene, set),
+                pointer,
+                hovering,
+                origin,
+                vertices,
+                gate,
+                moved,
+            };
             let view = ChartView {
                 heading: &heading,
                 plot: chart.plot,

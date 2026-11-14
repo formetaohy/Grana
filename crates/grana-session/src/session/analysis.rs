@@ -522,7 +522,10 @@ impl Session {
             ));
             return;
         }
-        let rows = self.measure.rows().to_vec();
+        let Some(rows) = self.measure.current_rows().map(|rows| rows.rows().to_vec()) else {
+            self.message = Some(Message::error("the object set holds no measurement table"));
+            return;
+        };
         if rows.is_empty() {
             self.message = Some(Message::error(
                 "gate the objects with statistics filters before training",

@@ -92,32 +92,57 @@ impl Session {
                 sampled: &mut sampled,
             };
             for object in imported.objects() {
-                let mut sampled_here = 0usize;
-                let built = match object.kind() {
-                    ImportedKind::Surfaces => surfaces(
-                        object,
-                        count,
-                        voxel,
-                        frames,
-                        &store,
-                        &mut sampling,
-                        &mut sampled_here,
-                    ),
-                    ImportedKind::Spots => {
-                        spots(object, count, frames, &mut sampling, &mut sampled_here)
-                    }
-                    ImportedKind::Filaments => filaments(
-                        object,
-                        count,
-                        frames,
-                        &store,
-                        &mut sampling,
-                        &mut sampled_here,
-                    ),
+                let intensities = if object
+                    .frames()
+                    .iter()
+                    .all(|(_, frame)| frame.measured(count))
+                {
+                    IntensitySource::Statistics
+                } else {
+                    IntensitySource::Sampled
                 };
-                let loaded = match built {
-                    Ok(loaded) if !loaded.is_empty() => loaded,
+                let set = scene.objects.attached(
+                    kind_of(object.kind()),
+                    object.name(),
+                    file,
+                    intensities,
+                    &scene.dataset,
+                );
+                let mut nodes = Vec::new();
+                let built = {
+                    let objects = &mut scene.objects;
+                    let mut install = |time: u32, frame: ObjectFrame| {
+                        nodes.extend(
+                            frame
+                                .centroids()
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, centroid)| (time, index, centroid)),
+                        );
+                        objects.install(set, time, frame);
+                    };
+                    match object.kind() {
+                        ImportedKind::Surfaces => surfaces(
+                            object,
+                            count,
+                            voxel,
+                            frames,
+                            &store,
+                            &mut sampling,
+                            &mut install,
+                        ),
+                        ImportedKind::Spots => {
+                            spots(object, count, frames, &mut sampling, &mut install)
+                        }
+                        ImportedKind::Filaments => {
+                            filaments(object, count, frames, &store, &mut sampling, &mut install)
+                        }
+                    }
+                };
+                match built {
+                    Ok(installed) if installed > 0 => {}
                     Ok(_) => {
+                        scene.objects.remove(set);
                         failed.push(ImportNote::new(
                             object.name(),
                             "the object holds no frame with geometry",
@@ -125,36 +150,10 @@ impl Session {
                         continue;
                     }
                     Err(detail) => {
+                        scene.objects.remove(set);
                         failed.push(ImportNote::new(object.name(), &detail));
                         continue;
                     }
-                };
-                let kind = match object.kind() {
-                    ImportedKind::Surfaces => ObjectKind::Surfaces,
-                    ImportedKind::Spots => ObjectKind::Spots,
-                    ImportedKind::Filaments => ObjectKind::Filaments,
-                };
-                let intensities = if sampled_here > 0 {
-                    IntensitySource::Sampled
-                } else {
-                    IntensitySource::Statistics
-                };
-                let set =
-                    scene
-                        .objects
-                        .attached(kind, object.name(), file, intensities, &scene.dataset);
-                let mut nodes = Vec::new();
-                for (time, frame) in &loaded {
-                    nodes.extend(
-                        frame
-                            .centroids()
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, centroid)| (*time, index, centroid)),
-                    );
-                }
-                for (time, frame) in loaded {
-                    scene.objects.install(set, time, frame);
                 }
                 if !object.links().is_empty() {
                     match grana_object::TrackSet::linked(
@@ -207,7 +206,15 @@ impl Session {
     }
 }
 
-type Loaded = Vec<(u32, ObjectFrame)>;
+type Install<'a> = &'a mut dyn FnMut(u32, ObjectFrame);
+
+fn kind_of(kind: ImportedKind) -> ObjectKind {
+    match kind {
+        ImportedKind::Surfaces => ObjectKind::Surfaces,
+        ImportedKind::Spots => ObjectKind::Spots,
+        ImportedKind::Filaments => ObjectKind::Filaments,
+    }
+}
 
 fn surfaces(
     object: &ImportedObject,
@@ -216,9 +223,9 @@ fn surfaces(
     frames: u32,
     store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
-    sampled: &mut usize,
-) -> Result<Loaded, String> {
-    let mut loaded = Vec::new();
+    install: Install<'_>,
+) -> Result<usize, String> {
+    let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
             continue;
@@ -238,10 +245,7 @@ fn surfaces(
                     .copied()
                     .map(statistics_sample)
                     .collect::<Vec<_>>(),
-                _ => {
-                    *sampled += 1;
-                    sampling.surface(*time, surface)?
-                }
+                _ => sampling.surface(*time, surface)?,
             };
             let base = u32::try_from(vertices.len())
                 .map_err(|_| "the surface holds more vertices than a mesh addresses".to_string())?;
@@ -269,9 +273,10 @@ fn surfaces(
         let table = IntensityTable::new(channels, intensities);
         let set =
             SurfaceSet::paged(0, store, mesh, objects, table).map_err(|error| error.to_string())?;
-        loaded.push((*time, ObjectFrame::Surfaces(set)));
+        install(*time, ObjectFrame::Surfaces(set));
+        installed += 1;
     }
-    Ok(loaded)
+    Ok(installed)
 }
 
 fn spots(
@@ -279,9 +284,9 @@ fn spots(
     channels: usize,
     frames: u32,
     sampling: &mut Sampling<'_, '_>,
-    sampled: &mut usize,
-) -> Result<Loaded, String> {
-    let mut loaded = Vec::new();
+    install: Install<'_>,
+) -> Result<usize, String> {
+    let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
             continue;
@@ -298,10 +303,7 @@ fn spots(
                     .copied()
                     .map(statistics_sample)
                     .collect::<Vec<_>>(),
-                _ => {
-                    *sampled += 1;
-                    sampling.spot(*time, spot)?
-                }
+                _ => sampling.spot(*time, spot)?,
             };
             held.push(Spot::new(spot.center(), spot.radius(), 0.0));
             intensities.extend(samples);
@@ -310,12 +312,13 @@ fn spots(
             continue;
         }
         let table = IntensityTable::new(channels, intensities);
-        loaded.push((
+        install(
             *time,
             ObjectFrame::Spots(Arc::new(SpotSet::new(0, held, table))),
-        ));
+        );
+        installed += 1;
     }
-    Ok(loaded)
+    Ok(installed)
 }
 
 fn filaments(
@@ -324,9 +327,9 @@ fn filaments(
     frames: u32,
     store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
-    sampled: &mut usize,
-) -> Result<Loaded, String> {
-    let mut loaded = Vec::new();
+    install: Install<'_>,
+) -> Result<usize, String> {
+    let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
             continue;
@@ -362,10 +365,7 @@ fn filaments(
                 Some(samples) if samples.len() == channels => {
                     samples.iter().copied().map(statistics_sample).collect()
                 }
-                _ => {
-                    *sampled += 1;
-                    sampling.filament(*time, filament)?
-                }
+                _ => sampling.filament(*time, filament)?,
             };
             intensities.extend(samples);
         }
@@ -376,9 +376,10 @@ fn filaments(
         let table = IntensityTable::new(channels, intensities);
         let set = FilamentSet::paged(0, store, mesh, objects, table)
             .map_err(|error| error.to_string())?;
-        loaded.push((*time, ObjectFrame::Filaments(set)));
+        install(*time, ObjectFrame::Filaments(set));
+        installed += 1;
     }
-    Ok(loaded)
+    Ok(installed)
 }
 
 fn joins(positions: &[[f32; 3]], edge: [u32; 2]) -> bool {

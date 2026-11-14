@@ -430,6 +430,7 @@ pub struct Table {
     identity: usize,
     observations: Vec<Observation>,
     data: Vec<Vec<f32>>,
+    extents: Vec<Option<(f32, f32)>>,
     group: Group,
     aggregate: Aggregate,
     basis: Option<Arc<Table>>,
@@ -504,12 +505,14 @@ impl Table {
         );
         assert!(!columns.is_empty(), "a table has at least one column");
         assert!(identity < columns.len(), "a table keeps an identity column");
+        let extents = data.iter().map(|column| span(column)).collect();
         let sources = vec![None; columns.len()];
         Self {
             columns,
             identity,
             observations,
             data,
+            extents,
             group,
             aggregate,
             basis: None,
@@ -537,6 +540,7 @@ impl Table {
         );
         self.columns.push(column);
         self.sources.push(source);
+        self.extents.push(span(&values));
         self.data.push(values);
     }
 
@@ -860,16 +864,7 @@ impl Table {
 
     pub fn extent(&self, column: usize) -> Option<(f32, f32)> {
         assert!(column < self.columns.len(), "the column exists");
-        (0..self.rows()).fold(None, |range, row| {
-            let value = self.value(row, column);
-            if !value.is_finite() {
-                return range;
-            }
-            Some(match range {
-                None => (value, value),
-                Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
-            })
-        })
+        self.extents[column]
     }
 
     pub fn write_csv(
@@ -1392,4 +1387,17 @@ pub(crate) fn sanitize(name: &str) -> String {
         })
         .collect::<String>();
     key.trim_matches('_').to_string()
+}
+
+fn span(values: &[f32]) -> Option<(f32, f32)> {
+    values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(None, |range, value| {
+            Some(match range {
+                None => (value, value),
+                Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
+            })
+        })
 }

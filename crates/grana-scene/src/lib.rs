@@ -22,6 +22,7 @@ mod provenance;
 mod registration;
 mod relation;
 mod revision;
+mod row;
 mod scene;
 mod seed;
 mod segment;
@@ -65,6 +66,7 @@ pub use provenance::{Criteria, FilterRange, IntensitySource, LassoPath, Provenan
 pub use registration::Registration;
 pub use relation::Relation;
 pub use revision::{Revision, Revisions};
+pub use row::{RowSpec, Rows, RowsRequest};
 pub use scene::{Item, Scene, Selection};
 pub use seed::Seeds;
 pub use segment::{License, SEGMENT_FIELDS, SegmentModel, SegmentParams};

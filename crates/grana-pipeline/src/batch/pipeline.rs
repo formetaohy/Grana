@@ -7,14 +7,11 @@ use grana_display::Camera;
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_mesh::Format as MeshFormat;
-use grana_object::Roi;
 use grana_project::{Export, NamedView, Project, Source as ProjectSource, ViewState};
-use grana_scene::{
-    Dataset, MaskFilter, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug,
-};
+use grana_scene::{Dataset, MaskFilter, Measure, ObjectParams, ObjectSetId, Scene, slug};
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{Pyramid, Region};
+use grana_volume::Pyramid;
 
 use crate::capture::{Capture, CaptureRequest, Kind as CaptureKind};
 use crate::channels::Channels;
@@ -625,34 +622,57 @@ impl Run<'_, '_> {
             index: task.index,
             label: format!("detecting {name}"),
         });
-        let reading = Reading {
-            reader: &self.channels,
-            channel,
-            region: self.scene.region,
-            roi,
-            drifts: self.scene.drifts().clone(),
-        };
-        let frames = match (segmented, params) {
-            (Some(params), _) => segment_frames(reading, params, seeds, &self.progress)?,
-            (None, ObjectParams::Cells(params)) => {
-                let sources = sources
-                    .ok_or_else(|| format!("the cells {name} grow from no nucleus object set"))?;
-                grow_frames(reading, params, sources, &self.progress)?
+        let region = self.scene.region;
+        let drifts = self.scene.drifts().clone();
+        let store = Arc::clone(self.store);
+        let progress = &self.progress;
+        let channels = &self.channels;
+        arrive(&mut self.scene, id, progress, &mut |_| {}, |sink| {
+            match (segmented, params) {
+                (Some(params), _) => run::segment(
+                    channels,
+                    run::SegmentRequest::new(channel, params, region, drifts.clone(), roi)
+                        .with_seeds(seeds),
+                    task.cancel,
+                    sink,
+                ),
+                (None, ObjectParams::Cells(params)) => {
+                    let sources = sources.ok_or_else(|| {
+                        format!("the cells {name} grow from no nucleus object set")
+                    })?;
+                    run::grow(
+                        channels,
+                        run::GrowRequest::new(
+                            channel,
+                            params,
+                            region,
+                            drifts.clone(),
+                            roi,
+                            sources,
+                        ),
+                        task.cancel,
+                        sink,
+                    )
+                }
+                (None, params) => run::detect(
+                    channels,
+                    run::DetectRequest::new(
+                        channel,
+                        params,
+                        region,
+                        roi,
+                        drifts.clone(),
+                        task.workers,
+                        store,
+                    )
+                    .with_seeds(seeds, policy),
+                    task.cancel,
+                    sink,
+                ),
             }
-            (None, params) => detect(
-                task,
-                reading,
-                params,
-                seeds,
-                policy,
-                self.store,
-                &self.progress,
-            )?,
-        };
-        for (time, frame) in frames.into_iter().enumerate() {
-            if let Some(frame) = frame {
-                self.scene.install_shared(id, time as u32, Arc::new(frame));
-            }
+        })?;
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
         }
         self.scene.apply_curation(id);
         self.track(id)
@@ -709,9 +729,8 @@ impl Run<'_, '_> {
         let reader = &self.channels;
         let drifts = self.scene.drifts().clone();
         let channel = self.scene.objects.get(id).map_or(0, |set| set.channel());
-        let frames = self.scene.frame_count() as usize;
         let progress = &self.progress;
-        let mut collected = drain(frames, progress, &mut |_| {}, |sink| {
+        arrive(&mut self.scene, id, progress, &mut |_| {}, |sink| {
             crate::run::import(
                 reader,
                 crate::run::ImportRequest::new(channel, label, drifts.clone()),
@@ -721,11 +740,6 @@ impl Run<'_, '_> {
         })?;
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
-        }
-        for (time, frame) in collected.iter_mut().enumerate() {
-            if let Some(frame) = frame.take() {
-                self.scene.install_shared(id, time as u32, Arc::new(frame));
-            }
         }
         Ok(())
     }
@@ -739,41 +753,31 @@ impl Run<'_, '_> {
         });
         let reader = &self.channels;
         let alignment = self.alignment(id)?;
-        let frames = self.scene.frame_count() as usize;
         let progress = &self.progress;
         let mut localization = None;
-        let mut collected = drain(
-            frames,
-            progress,
-            &mut |event| {
-                if let RunEvent::Localization {
-                    pixel,
-                    width,
-                    height,
-                    volume,
-                    photons,
-                    alignment,
-                } = event
-                {
-                    localization = Some((pixel, width, height, volume, photons, alignment));
-                }
-            },
-            |sink| {
-                crate::run::localization(
-                    reader,
-                    crate::run::LocalizationRequest::new(file, alignment),
-                    task.cancel,
-                    sink,
-                )
-            },
-        )?;
+        let mut extra = |event| {
+            if let RunEvent::Localization {
+                pixel,
+                width,
+                height,
+                volume,
+                photons,
+                alignment,
+            } = event
+            {
+                localization = Some((pixel, width, height, volume, photons, alignment));
+            }
+        };
+        arrive(&mut self.scene, id, progress, &mut extra, |sink| {
+            crate::run::localization(
+                reader,
+                crate::run::LocalizationRequest::new(file, alignment),
+                task.cancel,
+                sink,
+            )
+        })?;
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
-        }
-        for (time, frame) in collected.iter_mut().enumerate() {
-            if let Some(frame) = frame.take() {
-                self.scene.install_shared(id, time as u32, Arc::new(frame));
-            }
         }
         let (pixel, width, height, volume, photons, alignment) = localization
             .ok_or_else(|| format!("the localization table of {name} holds no localization"))?;
@@ -1419,35 +1423,35 @@ impl Run<'_, '_> {
     }
 }
 
-fn drain(
-    frames: usize,
+fn arrive(
+    scene: &mut Scene,
+    id: ObjectSetId,
     progress: &Progress<'_>,
     extra: &mut dyn FnMut(RunEvent),
     run: impl FnOnce(&mut dyn FnMut(RunEvent)) -> Result<(), String>,
-) -> Result<Vec<Option<ObjectFrame>>, String> {
-    let mut collected = vec![None; frames];
+) -> Result<(), String> {
     let mut failure = None;
-    {
+    let outcome = {
         let mut sink = |event: RunEvent| match event {
-            RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
-            RunEvent::Failed(detail) => failure = Some(detail),
-            RunEvent::Done => {}
-            RunEvent::Progress { done, total, .. } => {
-                if progress.hold() {
-                    let _ = progress.events.send(Event::Progress {
-                        index: progress.index,
-                        done,
-                        total,
-                    });
-                }
+            RunEvent::Frame { time, frame } => {
+                scene.install_shared(id, time, Arc::new(frame));
             }
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+            RunEvent::Progress { .. } => {}
+            RunEvent::Failed(detail) => failure = Some(detail),
             other => extra(other),
         };
-        run(&mut sink)?;
-    }
-    match failure {
-        Some(detail) => Err(detail),
-        None => Ok(collected),
+        run(&mut sink)
+    };
+    match outcome {
+        Ok(()) => failure.map_or(Ok(()), Err),
+        Err(detail) => Err(detail),
     }
 }
 
@@ -1625,166 +1629,6 @@ fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
             }
         }
     }
-}
-
-struct Reading<'a> {
-    reader: &'a Channels,
-    channel: usize,
-    region: Region,
-    roi: Option<Roi>,
-    drifts: grana_scene::Drifts,
-}
-
-fn detect(
-    task: &Task<'_>,
-    reading: Reading<'_>,
-    params: ObjectParams,
-    seeds: Vec<Vec<[f32; 3]>>,
-    policy: grana_analysis::SeedPolicy,
-    store: &Arc<SpillStore>,
-    progress: &Progress<'_>,
-) -> Result<Vec<Option<ObjectFrame>>, String> {
-    let frames = reading.reader.pyramid().frame_count() as usize;
-    let mut collected = vec![None; frames];
-    let mut sink = |event: RunEvent| match event {
-        RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
-        RunEvent::Progress { done, total, .. } if progress.hold() => {
-            let _ = progress.events.send(Event::Progress {
-                index: progress.index,
-                done,
-                total,
-            });
-        }
-        RunEvent::Progress { .. } => {}
-        RunEvent::Tracks(_)
-        | RunEvent::Relation { .. }
-        | RunEvent::Coloc { .. }
-        | RunEvent::ObjectColoc { .. }
-        | RunEvent::Drift(_)
-        | RunEvent::DriftSummary { .. }
-        | RunEvent::Registration(_)
-        | RunEvent::Fiducial { .. }
-        | RunEvent::Calibration { .. }
-        | RunEvent::Localization { .. }
-        | RunEvent::LocalizationReport { .. }
-        | RunEvent::LocalizationClusters { .. }
-        | RunEvent::Done
-        | RunEvent::Failed(_) => {}
-    };
-    run::detect(
-        reading.reader,
-        run::DetectRequest::new(
-            reading.channel,
-            params,
-            reading.region,
-            reading.roi,
-            reading.drifts.clone(),
-            task.workers,
-            Arc::clone(store),
-        )
-        .with_seeds(seeds, policy),
-        progress.cancel,
-        &mut sink,
-    )?;
-    Ok(collected)
-}
-
-fn grow_frames(
-    reading: Reading<'_>,
-    params: grana_object::CellParams,
-    sources: grana_scene::ObjectSource,
-    progress: &Progress<'_>,
-) -> Result<Vec<Option<ObjectFrame>>, String> {
-    let frames = reading.reader.pyramid().frame_count() as usize;
-    let mut collected = vec![None; frames];
-    let mut sink = |event: RunEvent| match event {
-        RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
-        RunEvent::Progress { done, total, .. } if progress.hold() => {
-            let _ = progress.events.send(Event::Progress {
-                index: progress.index,
-                done,
-                total,
-            });
-        }
-        RunEvent::Progress { .. } => {}
-        RunEvent::Tracks(_)
-        | RunEvent::Relation { .. }
-        | RunEvent::Coloc { .. }
-        | RunEvent::ObjectColoc { .. }
-        | RunEvent::Drift(_)
-        | RunEvent::DriftSummary { .. }
-        | RunEvent::Registration(_)
-        | RunEvent::Fiducial { .. }
-        | RunEvent::Calibration { .. }
-        | RunEvent::Localization { .. }
-        | RunEvent::LocalizationReport { .. }
-        | RunEvent::LocalizationClusters { .. }
-        | RunEvent::Done
-        | RunEvent::Failed(_) => {}
-    };
-    run::grow(
-        reading.reader,
-        run::GrowRequest::new(
-            reading.channel,
-            params,
-            reading.region,
-            reading.drifts.clone(),
-            reading.roi,
-            sources,
-        ),
-        progress.cancel,
-        &mut sink,
-    )?;
-    Ok(collected)
-}
-
-fn segment_frames(
-    reading: Reading<'_>,
-    params: grana_scene::SegmentParams,
-    seeds: Vec<Vec<[f32; 3]>>,
-    progress: &Progress<'_>,
-) -> Result<Vec<Option<ObjectFrame>>, String> {
-    let frames = reading.reader.pyramid().frame_count() as usize;
-    let mut collected = vec![None; frames];
-    let mut sink = |event: RunEvent| match event {
-        RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
-        RunEvent::Progress { done, total, .. } if progress.hold() => {
-            let _ = progress.events.send(Event::Progress {
-                index: progress.index,
-                done,
-                total,
-            });
-        }
-        RunEvent::Progress { .. } => {}
-        RunEvent::Tracks(_)
-        | RunEvent::Relation { .. }
-        | RunEvent::Coloc { .. }
-        | RunEvent::ObjectColoc { .. }
-        | RunEvent::Drift(_)
-        | RunEvent::DriftSummary { .. }
-        | RunEvent::Registration(_)
-        | RunEvent::Fiducial { .. }
-        | RunEvent::Calibration { .. }
-        | RunEvent::Localization { .. }
-        | RunEvent::LocalizationReport { .. }
-        | RunEvent::LocalizationClusters { .. }
-        | RunEvent::Done
-        | RunEvent::Failed(_) => {}
-    };
-    run::segment(
-        reading.reader,
-        run::SegmentRequest::new(
-            reading.channel,
-            params,
-            reading.region,
-            reading.drifts.clone(),
-            reading.roi,
-        )
-        .with_seeds(seeds),
-        progress.cancel,
-        &mut sink,
-    )?;
-    Ok(collected)
 }
 
 fn clear(path: &Path) -> Result<(), String> {

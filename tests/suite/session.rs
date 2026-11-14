@@ -397,12 +397,13 @@ fn settle(session: &mut Session) {
 fn measure(session: &mut Session) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
+        session.poll();
         session.sync_measure();
         session.apply_measure();
-        session.settle_measure();
         let settled = session
             .scene()
-            .is_some_and(|scene| session.measure().settled(scene));
+            .is_some_and(|scene| session.measure().settled(scene))
+            && !session.measure().rows_pending();
         if settled {
             return;
         }

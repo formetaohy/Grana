@@ -5,10 +5,10 @@ use grana_measure::{
     Aggregate, Filter, Group, Lasso, Mask, MeasureView, Plot, PlotAxis, Scope, Table, Window,
 };
 
-use glam::Vec3;
 use grana_volume::Region;
 
 use crate::object_set::{ObjectSetId, Visibility};
+use crate::row::{RowSpec, Rows, RowsRequest};
 use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
 use crate::table_request::{BasisKey, MeasureKey, TableRequest};
@@ -40,15 +40,9 @@ pub struct Measure {
     table: Option<Arc<Table>>,
     basis: Option<(BasisKey, Arc<Table>)>,
     retained: Option<(Vec<String>, Vec<bool>)>,
-    rows: Vec<usize>,
-    mask: Arc<Mask>,
-    frame_mask: Option<(Option<u32>, Mask)>,
-    region_mask: Option<(Option<Region>, Mask)>,
-    scope_mask: Mask,
-    filter_masks: Vec<(Filter, Mask)>,
-    lasso_mask: Option<(Lasso, Mask)>,
-    gate_mask: Mask,
-    total: usize,
+    rows: Option<Arc<Rows>>,
+    rows_pending: Option<RowSpec>,
+    generation: u64,
     visible: Vec<bool>,
     visibility: bool,
     view: MeasureView,
@@ -83,15 +77,9 @@ impl Measure {
             table: None,
             basis: None,
             retained: None,
-            rows: Vec::new(),
-            mask: Arc::new(Mask::none(0)),
-            frame_mask: None,
-            region_mask: None,
-            scope_mask: Mask::none(0),
-            filter_masks: Vec::new(),
-            lasso_mask: None,
-            gate_mask: Mask::none(0),
-            total: 0,
+            rows: None,
+            rows_pending: None,
+            generation: 0,
             visible: Vec::new(),
             visibility: true,
             view: MeasureView::Table,
@@ -173,8 +161,7 @@ impl Measure {
             return;
         }
         self.scope = scope;
-        self.dirty = true;
-        self.refresh();
+        self.relayout();
     }
 
     pub fn lasso(&self) -> Option<&Lasso> {
@@ -194,8 +181,7 @@ impl Measure {
             return;
         }
         self.roi = roi;
-        self.dirty = true;
-        self.refresh();
+        self.relayout();
     }
 
     pub fn set_lasso(&mut self, lasso: Option<Lasso>) {
@@ -211,11 +197,11 @@ impl Measure {
             return;
         }
         self.lasso = lasso;
-        self.refresh();
+        self.relayout();
     }
 
     pub fn total(&self) -> usize {
-        self.total
+        self.rows.as_ref().map_or(0, |rows| rows.total())
     }
 
     pub fn view(&self) -> MeasureView {
@@ -238,6 +224,7 @@ impl Measure {
             return None;
         }
         let table = Arc::clone(self.table.as_ref()?);
+        let mask = self.fresh_rows()?.admitted();
         self.plot_stamp += 1;
         let key = PlotKey(self.plot_stamp);
         self.plot_wanted = false;
@@ -245,7 +232,7 @@ impl Measure {
         Some(PlotRequest {
             key,
             table,
-            mask: Arc::clone(&self.mask),
+            mask,
             view: self.view,
             axes: self.axes,
             window,
@@ -284,7 +271,7 @@ impl Measure {
             .is_some_and(|lasso| lasso.x() != self.axes[0] || lasso.y() != self.axes[1])
         {
             self.lasso = None;
-            self.refresh();
+            self.relayout();
         } else {
             self.refresh_plot();
         }
@@ -311,7 +298,7 @@ impl Measure {
             }
             None => self.filters.push(filter),
         }
-        self.refresh();
+        self.relayout();
     }
 
     pub fn set_aggregate(&mut self, aggregate: Aggregate, scene: &Scene) {
@@ -343,7 +330,7 @@ impl Measure {
             return;
         };
         self.filters.push(Filter::new(column, minimum, maximum));
-        self.refresh();
+        self.relayout();
     }
 
     pub fn set_filter(&mut self, index: usize, filter: Filter) {
@@ -354,7 +341,7 @@ impl Measure {
             return;
         }
         *slot = filter;
-        self.refresh();
+        self.relayout();
     }
 
     pub fn remove_filter(&mut self, index: usize) {
@@ -362,7 +349,7 @@ impl Measure {
             return;
         }
         self.filters.remove(index);
-        self.refresh();
+        self.relayout();
     }
 
     pub fn retarget_filter(&mut self, index: usize, column: usize) {
@@ -410,7 +397,7 @@ impl Measure {
             return;
         }
         self.sort = sort;
-        self.refresh();
+        self.relayout();
     }
 
     pub fn toggle_sort(&mut self, column: usize) {
@@ -427,7 +414,11 @@ impl Measure {
     }
 
     pub fn rows(&self) -> &[usize] {
-        &self.rows
+        self.rows.as_ref().map_or(&[], |rows| rows.rows())
+    }
+
+    pub fn rows_pending(&self) -> bool {
+        self.rows_pending.is_some()
     }
 
     pub fn visible(&self) -> &[bool] {
@@ -454,9 +445,7 @@ impl Measure {
         self.table = None;
         self.basis = None;
         self.retained = None;
-        self.rows.clear();
-        self.total = 0;
-        self.clear_masks();
+        self.clear_rows();
         self.visible.clear();
         self.scope = Scope::All;
         self.filters.clear();
@@ -481,9 +470,7 @@ impl Measure {
             self.table = None;
             self.retained = None;
             self.clear_plot();
-            self.rows.clear();
-            self.total = 0;
-            self.clear_masks();
+            self.clear_rows();
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
@@ -512,7 +499,7 @@ impl Measure {
             return Some(request);
         }
         if moved && self.scope == Scope::Current {
-            self.refresh();
+            self.refresh_plot();
         }
         None
     }
@@ -568,9 +555,9 @@ impl Measure {
         if !self.settled(scene) {
             return None;
         }
-        self.table
-            .as_ref()
-            .map(|table| (Arc::clone(table), self.rows.clone()))
+        let table = Arc::clone(self.table.as_ref()?);
+        let rows = self.current_rows()?;
+        Some((table, rows.rows().to_vec()))
     }
 
     pub fn apply(&mut self, scene: &mut Scene) {
@@ -596,10 +583,7 @@ impl Measure {
         if table.rows() == 0 {
             return Some(Visibility::All);
         }
-        let mut mask = self.gate_mask.clone();
-        if let Some((_, region)) = &self.region_mask {
-            mask.intersect(region);
-        }
+        let mask = self.fresh_rows()?.restricted();
         Some(match self.group {
             Group::Object => {
                 let mut frames = (0..object.frame_count())
@@ -688,9 +672,7 @@ impl Measure {
         self.scope = scope;
         self.time = scene.time();
         self.table = None;
-        self.rows.clear();
-        self.total = 0;
-        self.clear_masks();
+        self.clear_rows();
         self.visible.clear();
         self.filters.clear();
         self.lasso = None;
@@ -710,7 +692,6 @@ impl Measure {
                     && axes == [0; 2],
                 "a measure state without an object set carries no table state"
             );
-            self.refresh();
             return;
         };
         self.set = Some(ObjectSetId::new(set));
@@ -747,7 +728,7 @@ impl Measure {
             Some(table) => readable_axes(table, axes),
             None => axes,
         };
-        self.refresh();
+        self.refresh_plot();
         self.dirty = true;
     }
 
@@ -788,9 +769,7 @@ impl Measure {
         self.dirty = true;
         self.pending = None;
         self.clear_plot();
-        self.rows.clear();
-        self.total = 0;
-        self.clear_masks();
+        self.clear_rows();
         self.origin = None;
         let Some(id) = self.set else {
             self.table = None;
@@ -830,9 +809,7 @@ impl Measure {
             let keys = column_keys(&table);
             self.retained = Some((keys, std::mem::take(&mut self.visible)));
         }
-        self.rows.clear();
-        self.total = 0;
-        self.clear_masks();
+        self.clear_rows();
         self.lasso = None;
         self.axes = [0; 2];
     }
@@ -840,9 +817,7 @@ impl Measure {
     fn adopt(&mut self, table: Option<Arc<Table>>) {
         self.dirty = true;
         self.clear_plot();
-        self.rows.clear();
-        self.total = 0;
-        self.clear_masks();
+        self.clear_rows();
         let previous = self
             .table
             .take()
@@ -899,123 +874,70 @@ impl Measure {
         if self.sort.is_some_and(|(column, _)| column >= columns) {
             self.sort = None;
         }
+        self.generation += 1;
         self.table = Some(table);
-        self.refresh();
-    }
-
-    fn refresh(&mut self) {
-        self.dirty = true;
-        let Some(table) = self.table.clone() else {
-            self.rows.clear();
-            self.total = 0;
-            self.clear_masks();
-            self.clear_plot();
-            return;
-        };
-        let frame = self.scope_frame();
-        let roi = self.roi.filter(|_| self.group != Group::Track);
-        let table = table.as_ref();
-        self.sync_scope(table, frame, roi);
-        self.sync_gate(table);
-        let mut mask = self.scope_mask.clone();
-        mask.intersect(&self.gate_mask);
-        self.total = self.scope_mask.count() as usize;
-        let mut rows = mask.to_rows();
-        if let Some((column, descending)) = self.sort
-            && column < table.columns().len()
-        {
-            table.sort(&mut rows, column, descending);
-        }
-        self.rows = rows;
-        self.mask = Arc::new(mask);
         self.refresh_plot();
     }
 
-    fn sync_scope(&mut self, table: &Table, frame: Option<u32>, roi: Option<Region>) {
-        let stale = match &self.frame_mask {
-            Some((cached, _)) => *cached != frame,
-            None => true,
-        };
-        if stale {
-            self.frame_mask = Some((frame, table.frame_mask(frame)));
-        }
-        let stale = match &self.region_mask {
-            Some((cached, _)) => *cached != roi,
-            None => true,
-        };
-        if stale {
-            let mask = roi.map_or_else(
-                || Mask::all(table.rows()),
-                |region| Mask::of(table.rows(), |row| holds_row(region, table, row)),
-            );
-            self.region_mask = Some((roi, mask));
-        }
-        let (_, frame_mask) = self
-            .frame_mask
-            .as_ref()
-            .expect("a refreshed measure frames its table");
-        let (_, region_mask) = self
-            .region_mask
-            .as_ref()
-            .expect("a refreshed measure bounds its table");
-        self.scope_mask.clone_from(frame_mask);
-        self.scope_mask.intersect(region_mask);
+    fn spec(&self) -> Option<RowSpec> {
+        Some(RowSpec::new(
+            self.generation,
+            self.scope_frame(),
+            self.roi.filter(|_| self.group != Group::Track),
+            self.filters.clone(),
+            self.lasso.clone(),
+            self.sort,
+        ))
     }
 
-    fn sync_gate(&mut self, table: &Table) {
-        if self.filters.is_empty() && self.lasso.is_none() {
-            if self.filter_masks.is_empty()
-                && self.lasso_mask.is_none()
-                && self.gate_mask.rows() == table.rows()
-            {
-                return;
-            }
-            self.filter_masks.clear();
-            self.lasso_mask = None;
-            self.gate_mask = Mask::all(table.rows());
+    fn fresh_rows(&self) -> Option<&Rows> {
+        let spec = self.spec()?;
+        self.rows.as_deref().filter(|rows| rows.spec() == &spec)
+    }
+
+    pub fn current_rows(&self) -> Option<Arc<Rows>> {
+        let table = self.table.as_ref()?;
+        let spec = self.spec()?;
+        match self.rows.as_ref().filter(|rows| rows.spec() == &spec) {
+            Some(rows) => Some(Arc::clone(rows)),
+            None => Some(Arc::new(Rows::build(table, spec))),
+        }
+    }
+
+    pub fn rows_request(&mut self) -> Option<RowsRequest> {
+        let table = Arc::clone(self.table.as_ref()?);
+        let spec = self.spec()?;
+        if self.rows.as_ref().is_some_and(|rows| rows.spec() == &spec) {
+            self.rows_pending = None;
+            return None;
+        }
+        if self.rows_pending.as_ref() == Some(&spec) {
+            return None;
+        }
+        self.rows_pending = Some(spec.clone());
+        Some(RowsRequest::new(table, spec))
+    }
+
+    pub fn install_rows(&mut self, rows: Rows) {
+        if self.rows_pending.as_ref() == Some(rows.spec()) {
+            self.rows_pending = None;
+        }
+        if self.spec().as_ref() != Some(rows.spec()) {
             return;
         }
-        let mut masks = Vec::with_capacity(self.filters.len());
-        for filter in &self.filters {
-            match self
-                .filter_masks
-                .iter()
-                .position(|(cached, _)| cached == filter)
-            {
-                Some(position) => masks.push(self.filter_masks.swap_remove(position)),
-                None => masks.push((*filter, table.filter_mask(*filter))),
-            }
-        }
-        self.filter_masks = masks;
-        let stale = match (&self.lasso, &self.lasso_mask) {
-            (None, None) => false,
-            (Some(lasso), Some((cached, _))) => cached != lasso,
-            _ => true,
-        };
-        if stale {
-            self.lasso_mask = self
-                .lasso
-                .as_ref()
-                .map(|lasso| (lasso.clone(), table.lasso_mask(lasso)));
-        }
-        let mut gate = Mask::all(table.rows());
-        for (_, mask) in &self.filter_masks {
-            gate.intersect(mask);
-        }
-        if let Some((_, mask)) = &self.lasso_mask {
-            gate.intersect(mask);
-        }
-        self.gate_mask = gate;
+        self.rows = Some(Arc::new(rows));
+        self.dirty = true;
+        self.refresh_plot();
     }
 
-    fn clear_masks(&mut self) {
-        self.mask = Arc::new(Mask::none(0));
-        self.frame_mask = None;
-        self.region_mask = None;
-        self.scope_mask = Mask::none(0);
-        self.filter_masks.clear();
-        self.lasso_mask = None;
-        self.gate_mask = Mask::none(0);
+    fn relayout(&mut self) {
+        self.dirty = true;
+        self.refresh_plot();
+    }
+
+    fn clear_rows(&mut self) {
+        self.rows = None;
+        self.rows_pending = None;
     }
 
     fn scope_frame(&self) -> Option<u32> {
@@ -1067,12 +989,6 @@ pub fn molecule_grouping(scene: &Scene, set: ObjectSetId) -> bool {
         .get(set)
         .and_then(|object| object.localization())
         .is_some_and(crate::LocalizationSource::clustered)
-}
-
-fn holds_row(region: Region, table: &Table, row: usize) -> bool {
-    table
-        .position(row)
-        .is_none_or(|position| region.contains(Vec3::from(position)))
 }
 
 fn column_keys(table: &Table) -> Vec<String> {

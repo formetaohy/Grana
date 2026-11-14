@@ -297,6 +297,10 @@ impl Session {
         self.start_csv_export(path);
     }
 
+    pub(super) fn finish_rows(&mut self, rows: grana_scene::Rows) {
+        self.measure.install_rows(rows);
+    }
+
     pub(super) fn finish_csv(&mut self, outcome: Result<PathBuf, String>) {
         self.message = Some(match outcome {
             Ok(path) => Message::info(format!(

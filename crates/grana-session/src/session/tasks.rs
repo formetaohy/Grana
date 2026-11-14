@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use grana_measure::{Plot, Table};
 use grana_pipeline::export::Summary;
-use grana_scene::{MeasureKey, ObjectSetId, PlotKey, PlotRequest, TableRequest};
+use grana_scene::{MeasureKey, ObjectSetId, PlotKey, PlotRequest, Rows, RowsRequest, TableRequest};
 use grana_volume::Intensity;
 use grana_zarr::Written;
 
@@ -29,6 +29,7 @@ pub(super) enum Completion {
         key: PlotKey,
         plot: Option<Plot>,
     },
+    Rows(Rows),
     Document {
         path: PathBuf,
         hash: Option<u64>,
@@ -100,9 +101,29 @@ impl PlotJob {
     }
 }
 
+pub(super) struct RowsJob {
+    task: Progress<Rows>,
+}
+
+impl RowsJob {
+    fn start(request: RowsRequest) -> Self {
+        let task = Progress::spawn(grana_exec::Role::Compute, move |_, _| request.build());
+        Self { task }
+    }
+
+    pub(super) fn poll(&mut self) -> Poll<Rows> {
+        self.task.poll()
+    }
+
+    pub(super) fn stepped(&mut self) -> bool {
+        self.task.stepped()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Tasks {
     pub measure: Option<Measure>,
+    pub rows: Option<RowsJob>,
     pub plot: Option<PlotJob>,
     pub document: Option<Document>,
     pub labels: Option<Labels>,
@@ -152,6 +173,17 @@ impl Tasks {
                     self.plot = None;
                     completions.push(Completion::Plot { key, plot: None });
                 }
+            }
+        }
+        if let Some(slot) = self.rows.as_mut() {
+            stepped |= slot.stepped();
+            match slot.poll() {
+                Poll::Event(rows) => {
+                    self.rows = None;
+                    completions.push(Completion::Rows(rows));
+                }
+                Poll::Empty => {}
+                Poll::Closed => self.rows = None,
             }
         }
         if let Some(slot) = self.document.as_mut() {
@@ -398,6 +430,10 @@ impl Tasks {
         self.plot.is_some()
     }
 
+    pub(super) fn listing(&self) -> bool {
+        self.rows.is_some()
+    }
+
     pub(super) fn start_previews(&mut self, previews: Previews) {
         if self.previews.is_none() {
             self.previews = Some(previews);
@@ -485,6 +521,10 @@ impl Tasks {
         self.plot = Some(PlotJob::start(request));
     }
 
+    pub(super) fn start_rows(&mut self, request: RowsRequest) {
+        self.rows = Some(RowsJob::start(request));
+    }
+
     pub(super) fn defer_csv(&mut self, path: PathBuf) {
         self.pending_csv = Some(path);
     }
@@ -499,6 +539,7 @@ impl Tasks {
 
     pub(super) fn clear(&mut self) {
         self.measure = None;
+        self.rows = None;
         self.plot = None;
         self.document = None;
         self.labels = None;
@@ -521,6 +562,7 @@ impl Session {
         match completion {
             Completion::Measure { key, table } => self.finish_measure(key, table),
             Completion::Plot { key, plot } => self.finish_plot(key, plot),
+            Completion::Rows(rows) => self.finish_rows(rows),
             Completion::Document {
                 path,
                 hash,

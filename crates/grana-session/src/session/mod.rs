@@ -528,6 +528,12 @@ impl Session {
             self.tasks.start_measure(request);
             return;
         }
+        if !self.tasks.listing()
+            && let Some(request) = self.measure.rows_request()
+        {
+            self.tasks.start_rows(request);
+            return;
+        }
         if !self.tasks.plotting() {
             let (low, high) = scene.region.bounds();
             let window = grana_measure::Window::new(low.to_array(), high.to_array());
@@ -597,6 +603,10 @@ impl Session {
     }
     pub fn measuring(&self) -> bool {
         self.tasks.measuring()
+    }
+
+    pub fn listing(&self) -> bool {
+        self.tasks.listing()
     }
     pub fn plotting(&self) -> bool {
         self.tasks.plotting()
