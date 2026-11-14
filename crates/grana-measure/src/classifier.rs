@@ -38,7 +38,7 @@ impl Classifier {
         table: &Table,
         keys: &[String],
         features: &[Measurement],
-        positives: &[usize],
+        positives: &[u32],
     ) -> Result<Self, String> {
         if features.is_empty() {
             return Err("a classifier trains on at least one measurement".to_string());
@@ -49,7 +49,7 @@ impl Classifier {
             let column = table
                 .column(&key)
                 .ok_or_else(|| format!("the table holds no {key} measurement"))?;
-            columns.push(column);
+            columns.push(table.materialize(column));
         }
         let rows = table.rows();
         if rows == 0 {
@@ -57,10 +57,12 @@ impl Classifier {
         }
         let mut positive = vec![false; rows];
         for row in positives {
-            if *row >= rows {
+            let row = usize::try_from(*row)
+                .map_err(|_| "a training row names a row a word addresses".to_string())?;
+            if row >= rows {
                 return Err("a training row lies outside the measurement table".to_string());
             }
-            positive[*row] = true;
+            positive[row] = true;
         }
         let mut samples = Vec::with_capacity(rows);
         let mut labels = Vec::with_capacity(rows);
@@ -68,7 +70,7 @@ impl Classifier {
             let mut sample = Vec::with_capacity(columns.len());
             let mut finite = true;
             for column in &columns {
-                let value = table.value(row, *column);
+                let value = column[row];
                 if !value.is_finite() {
                     finite = false;
                     break;
@@ -199,11 +201,15 @@ impl Classifier {
         let Some(columns) = columns else {
             return vec![f32::NAN; table.rows()];
         };
+        let values = columns
+            .iter()
+            .map(|column| table.materialize(*column))
+            .collect::<Vec<_>>();
         (0..table.rows())
             .map(|row| {
                 let mut logit = self.bias;
-                for (slot, column) in columns.iter().enumerate() {
-                    let value = f64::from(table.value(row, *column));
+                for (slot, column) in values.iter().enumerate() {
+                    let value = f64::from(column[row]);
                     if !value.is_finite() {
                         return f32::NAN;
                     }

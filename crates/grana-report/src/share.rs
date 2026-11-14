@@ -223,6 +223,7 @@ fn plot(panel: Panel<'_>) -> Result<String, String> {
 
 fn statistics(page: &mut String, table: &Table, name: &str) {
     let aggregates = aggregates();
+    table.materialize_many(&(0..table.columns().len()).collect::<Vec<_>>());
     let columns = table
         .columns()
         .iter()
@@ -230,8 +231,10 @@ fn statistics(page: &mut String, table: &Table, name: &str) {
         .skip(table.identity_columns())
         .filter(|(_, column)| !POSITION.contains(&column.key()))
         .filter_map(|(index, column)| {
-            let values = (0..table.rows())
-                .map(|row| table.value(row, index))
+            let values = table.materialize(index);
+            let values = values
+                .iter()
+                .copied()
                 .filter(|value| value.is_finite())
                 .collect::<Vec<_>>();
             (!values.is_empty()).then_some((column, values))

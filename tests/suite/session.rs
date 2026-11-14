@@ -1786,7 +1786,7 @@ fn colocalizes_every_object_and_carries_it_through_project_and_protocol() {
         .expect("the table carries the overlap column");
     let rows = table.matching(&[grana_measure::Filter::new(pearson, 0.5, 1.0)], None, None);
     assert_eq!(rows.len(), table.rows(), "the filter keeps every object");
-    assert_eq!(table.value(rows[0], overlap), 1.0);
+    assert_eq!(table.value(rows[0] as usize, overlap), 1.0);
 
     let mut coloring = grana_display::Coloring::new();
     coloring.set_metric(Some(grana_scene::ObjectColor::Coloc {
@@ -3097,6 +3097,59 @@ fn clusters_imported_localizations_into_molecules() {
     assert_eq!(
         extracted, 4,
         "the derived set keeps the localizations of one molecule"
+    );
+}
+
+#[test]
+fn masks_the_visibility_of_gated_objects() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "the two nuclei are detected");
+    session.execute(Command::SetMeasureSet(Some(set)));
+    measure(&mut session);
+    session.execute(Command::SetMeasureVisibility(true));
+    let column = session
+        .measure()
+        .table()
+        .expect("the surfaces measure themselves")
+        .column("object")
+        .expect("the table numbers its objects");
+    session.execute(Command::SetGate {
+        column,
+        minimum: 1.0,
+        maximum: 1.0,
+    });
+    measure(&mut session);
+    let scene = session.scene().expect("the series stays open");
+    let object = scene.objects.get(set).expect("the surface set stays");
+    let visible = (0..scene.frame_count())
+        .map(|time| {
+            let Some(frame) = object.frame_shared(time) else {
+                return 0;
+            };
+            (0..frame.object_count())
+                .filter(|index| object.visible_object(time, *index))
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        visible, 1,
+        "gating the first object of a frame hides the rest"
     );
 }
 

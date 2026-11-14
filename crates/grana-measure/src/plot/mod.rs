@@ -159,18 +159,9 @@ impl Table {
 }
 
 pub(crate) fn extent(table: &Table, column: usize) -> (f32, f32) {
-    let mut low = f32::INFINITY;
-    let mut high = f32::NEG_INFINITY;
-    for row in 0..table.rows() {
-        let value = table.value(row, column);
-        if value.is_finite() {
-            low = low.min(value);
-            high = high.max(value);
-        }
-    }
-    if !(low.is_finite() && high.is_finite()) {
+    let Some((low, high)) = table.extent(column) else {
         return (0.0, 1.0);
-    }
+    };
     if high > low {
         return (low, high);
     }

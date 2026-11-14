@@ -160,6 +160,7 @@ impl Table {
                 .filter_map(|row| self.observation(row).track())
                 .collect::<BTreeSet<_>>(),
         };
+        let values = basis.materialize(source);
         let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
         let mut total = 0u64;
         let mut span = 0u32;
@@ -168,7 +169,7 @@ impl Table {
                 continue;
             };
             span = span.max(time + 1);
-            let value = basis.value(row, source);
+            let value = values[row];
             if !value.is_finite() {
                 continue;
             }
@@ -196,16 +197,19 @@ impl Table {
     ) -> Option<(BTreeMap<u32, Vec<f64>>, u64, u32)> {
         let first = self.column("first_frame")?;
         let last = self.column("last_frame")?;
+        let values = self.materialize(column);
+        let first = self.materialize(first);
+        let last = self.materialize(last);
         let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
         let mut total = 0u64;
         let mut span = 0u32;
         for row in 0..self.rows() {
-            let value = self.value(row, column);
+            let value = values[row];
             if !value.is_finite() {
                 continue;
             }
-            let start = self.value(row, first);
-            let end = self.value(row, last);
+            let start = first[row];
+            let end = last[row];
             if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
                 continue;
             }
@@ -224,6 +228,7 @@ impl Table {
     }
 
     fn row_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
+        let values = self.materialize(column);
         let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
         let mut total = 0u64;
         let mut span = 0u32;
@@ -232,7 +237,7 @@ impl Table {
                 continue;
             };
             span = span.max(time + 1);
-            let value = self.value(row, column);
+            let value = values[row];
             if !value.is_finite() {
                 continue;
             }

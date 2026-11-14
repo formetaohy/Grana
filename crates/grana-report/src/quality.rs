@@ -237,7 +237,7 @@ fn default_columns(table: &Table, channel: usize, keys: &[String]) -> Vec<Column
 
 pub fn of(
     table: &Table,
-    rows: &[usize],
+    rows: &[u32],
     input: &QualityInput<'_>,
     keys: &[String],
     wanted: &[String],
@@ -257,7 +257,7 @@ pub fn of(
     values.extend(indices.iter().map(|index| summary(table, rows, *index)));
     let mut admitted = vec![false; table.rows()];
     for row in rows {
-        admitted[*row] = true;
+        admitted[*row as usize] = true;
     }
     let gated = Mask::of(table.rows(), |row| admitted[row]);
     Ok(Quality {
@@ -273,10 +273,11 @@ pub fn of(
     })
 }
 
-fn summary(table: &Table, rows: &[usize], column: usize) -> Option<Summary> {
+fn summary(table: &Table, rows: &[u32], column: usize) -> Option<Summary> {
+    let values = table.materialize(column);
     let values = rows
         .iter()
-        .map(|row| f64::from(table.value(*row, column)))
+        .map(|row| f64::from(values[*row as usize]))
         .collect::<Vec<_>>();
     Summary::of(&values)
 }
@@ -329,6 +330,8 @@ fn frame_series(
 fn frame_counts(table: &Table, gated: &Mask) -> BTreeMap<u32, u64> {
     let first = table.column("first_frame");
     let last = table.column("last_frame");
+    let starts = first.map(|column| table.materialize(column));
+    let ends = last.map(|column| table.materialize(column));
     let mut counts = BTreeMap::<u32, u64>::new();
     for row in gated.iter() {
         let observation = table.observation(row);
@@ -336,11 +339,11 @@ fn frame_counts(table: &Table, gated: &Mask) -> BTreeMap<u32, u64> {
             *counts.entry(time).or_default() += 1;
             continue;
         }
-        let (Some(first), Some(last)) = (first, last) else {
+        let (Some(starts), Some(ends)) = (starts.as_ref(), ends.as_ref()) else {
             continue;
         };
-        let start = table.value(row, first);
-        let end = table.value(row, last);
+        let start = starts[row];
+        let end = ends[row];
         if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
             continue;
         }

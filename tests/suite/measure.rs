@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use grana_measure::{
-    Aggregate, DENSITY_POINTS, Group, Kind, Mask, MeasureView, Objects, Plot, Table, Window,
+    Aggregate, DENSITY_POINTS, Group, Kind, Mask, MeasureView, Plot, Table, Window,
 };
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 use grana_scene::{Curation, TrackAnchor, TrackEdit};
@@ -15,9 +17,16 @@ fn window() -> Window {
 #[test]
 fn lists_no_track_rows_without_a_track_set() {
     let first = spots();
-    let frames = measure_source(Kind::Spots, &[CHANNEL], [Objects::Spots(&first)]);
-    let table = Table::build(&frames, None, 2.0, Group::Track, Aggregate::MEAN, None)
-        .expect("the track table builds");
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [first]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        2.0,
+        Group::Track,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the track table builds");
     assert_eq!(
         table.rows(),
         0,
@@ -33,15 +42,11 @@ fn lists_no_track_rows_without_a_track_set() {
 fn summarises_spots_and_exports_a_csv() {
     let first = spots();
     let second = spots();
-    let tracks = tracks();
-    let frames = measure_source(
-        Kind::Spots,
-        &[CHANNEL],
-        [Objects::Spots(&first), Objects::Spots(&second)],
-    );
+    let tracks = Arc::new(tracks());
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [first, second]);
     let table = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Object,
         Aggregate::MEAN,
@@ -62,8 +67,8 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(table.observation(3).track(), Some(1));
 
     let per_track = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Track,
         Aggregate::MEAN,
@@ -77,8 +82,8 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(value(&per_track, 0, "egfp_488_intensity_mean_mean"), 10.0);
 
     let per_frame = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Timepoint,
         Aggregate::SUM,
@@ -88,10 +93,10 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(per_frame.rows(), 2);
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
     assert_eq!(value(&per_frame, 0, "diameter_um_sum"), 2.0);
-    let basis = std::sync::Arc::new(
+    let basis = Arc::new(
         Table::build(
-            &frames,
-            Some(&tracks),
+            Arc::clone(&frames),
+            Some(Arc::clone(&tracks)),
             2.0,
             Group::Object,
             Aggregate::MEAN,
@@ -100,12 +105,12 @@ fn summarises_spots_and_exports_a_csv() {
         .expect("the object table builds"),
     );
     let reused = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Timepoint,
         Aggregate::SUM,
-        Some(std::sync::Arc::clone(&basis)),
+        Some(Arc::clone(&basis)),
     )
     .expect("the timepoint table reuses its basis");
     assert_eq!(reused.rows(), per_frame.rows());
@@ -126,13 +131,16 @@ fn summarises_spots_and_exports_a_csv() {
 
     let first_group = grouped(3.0);
     let second_group = grouped(5.0);
-    let frame_of = measure_source(
-        Kind::Spots,
-        &[CHANNEL],
-        [Objects::Spots(&first_group), Objects::Spots(&second_group)],
-    );
-    let molecules = Table::build(&frame_of, None, 2.0, Group::Molecule, Aggregate::MEAN, None)
-        .expect("the molecule table builds");
+    let frame_of = measure_source(Kind::Spots, &[CHANNEL], [first_group, second_group]);
+    let molecules = Table::build(
+        Arc::clone(&frame_of),
+        None,
+        2.0,
+        Group::Molecule,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the molecule table builds");
     assert_eq!(
         molecules.rows(),
         2,
@@ -155,18 +163,47 @@ fn summarises_spots_and_exports_a_csv() {
 }
 
 #[test]
+fn materialises_measurement_columns_on_demand() {
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [spots(), spots()]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the object table builds");
+    assert!(
+        (0..table.columns().len()).all(|column| !table.cached(column)),
+        "a built table keeps no column resident"
+    );
+    let diameter = table
+        .column("diameter_um")
+        .expect("the spots measure their diameter");
+    let frame = table.column("frame").expect("the table numbers its frames");
+    assert_eq!(table.value(0, diameter), 1.0);
+    assert_eq!(table.value(0, frame), 1.0);
+    assert!(table.cached(diameter) && table.cached(frame));
+    table.retain([frame]);
+    assert!(table.cached(frame), "a retained column stays resident");
+    assert!(
+        !table.cached(diameter),
+        "a released column leaves the table"
+    );
+    assert_eq!(table.value(0, diameter), 1.0);
+    assert!(table.cached(diameter));
+}
+
+#[test]
 fn trends_raw_frames_of_every_grouping() {
     let first = spots();
     let second = spots();
-    let tracks = tracks();
-    let frames = measure_source(
-        Kind::Spots,
-        &[CHANNEL],
-        [Objects::Spots(&first), Objects::Spots(&second)],
-    );
+    let tracks = Arc::new(tracks());
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [first, second]);
     let per_frame = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Timepoint,
         Aggregate::MEAN,
@@ -185,8 +222,8 @@ fn trends_raw_frames_of_every_grouping() {
     assert!(trend.points()[0].lower() < 15.0 && trend.points()[0].upper() > 15.0);
 
     let per_track = Table::build(
-        &frames,
-        Some(&tracks),
+        Arc::clone(&frames),
+        Some(Arc::clone(&tracks)),
         2.0,
         Group::Track,
         Aggregate::MEAN,
@@ -215,13 +252,16 @@ fn trends_raw_frames_of_every_grouping() {
 fn estimates_spatial_point_patterns() {
     let first = spots();
     let second = spots();
-    let frames = measure_source(
-        Kind::Spots,
-        &[CHANNEL],
-        [Objects::Spots(&first), Objects::Spots(&second)],
-    );
-    let table = Table::build(&frames, None, 2.0, Group::Object, Aggregate::MEAN, None)
-        .expect("the object table builds");
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [first, second]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the object table builds");
     let rows = Mask::all(table.rows());
     let plot = table
         .plot(MeasureView::Ripley, [0, 0], &rows, window())
@@ -293,13 +333,16 @@ fn estimates_spatial_point_patterns() {
 fn groups_measurements_by_frame_for_distributions() {
     let first = spots();
     let second = spots();
-    let frames = measure_source(
-        Kind::Spots,
-        &[CHANNEL],
-        [Objects::Spots(&first), Objects::Spots(&second)],
-    );
-    let table = Table::build(&frames, None, 2.0, Group::Object, Aggregate::MEAN, None)
-        .expect("the object table builds");
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [first, second]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        2.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the object table builds");
     let column = table
         .column("egfp_488_intensity_mean")
         .expect("the spots carry their mean intensity");
@@ -483,7 +526,7 @@ fn value(table: &Table, row: usize, key: &str) -> f32 {
     table.value(row, column)
 }
 
-fn csv_of(table: &Table, rows: &[usize]) -> String {
+fn csv_of(table: &Table, rows: &[u32]) -> String {
     let mut text = Vec::new();
     table
         .write_csv_rows(&mut text, rows, &mut |_, _| {})

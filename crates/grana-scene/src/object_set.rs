@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_measure::{
-    ChildField, ChildMetric, Classifier, Measurement, ObjectColoc, RelationField, TrackMeasurement,
+    ChildField, ChildMetric, Classifier, Mask, Measurement, ObjectColoc, RelationField,
+    TrackMeasurement,
 };
 use grana_object::TrackParams;
 use grana_object::match_anchor;
@@ -51,8 +53,33 @@ impl ObjectSetId {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Visibility {
     All,
-    Object(Arc<Vec<Vec<bool>>>),
-    Track(Arc<Vec<bool>>),
+    Objects {
+        mask: Arc<Mask>,
+        frames: Arc<Vec<u32>>,
+    },
+    Tracks(Arc<Mask>),
+    Molecules {
+        mask: Arc<Mask>,
+        rows: Arc<HashMap<u32, u32>>,
+    },
+}
+
+const ABSENT_ROW: u32 = u32::MAX;
+
+impl Visibility {
+    pub(crate) fn objects(mask: Arc<Mask>, frames: &[u32]) -> Self {
+        Self::Objects {
+            mask,
+            frames: Arc::new(frames.to_vec()),
+        }
+    }
+
+    pub(crate) fn molecules(mask: Arc<Mask>, rows: &HashMap<u32, u32>) -> Self {
+        Self::Molecules {
+            mask,
+            rows: Arc::new(rows.clone()),
+        }
+    }
 }
 
 struct FrameSlot {
@@ -1367,25 +1394,27 @@ impl ObjectSet {
         }
         match &visibility {
             Visibility::All => {}
-            Visibility::Object(frames) => {
+            Visibility::Objects { mask, frames } => {
                 assert_eq!(
                     frames.len(),
                     self.frames.len(),
                     "the visibility covers every frame"
                 );
-                for (mask, slot) in frames.iter().zip(&self.frames) {
-                    assert_eq!(
-                        mask.len(),
-                        slot.objects(),
-                        "the visibility covers every object"
-                    );
-                }
+                let objects = self.frames.iter().map(FrameSlot::objects).sum::<usize>();
+                assert_eq!(mask.rows(), objects, "the visibility covers every object");
             }
-            Visibility::Track(tracks) => {
+            Visibility::Tracks(mask) => {
                 assert_eq!(
-                    tracks.len(),
+                    mask.rows(),
                     self.tracks.as_ref().map_or(0, |layer| layer.set().len()),
                     "the visibility covers every track"
+                );
+            }
+            Visibility::Molecules { mask, rows } => {
+                assert_eq!(
+                    mask.rows(),
+                    rows.len(),
+                    "the visibility covers every molecule"
                 );
             }
         }
@@ -1412,14 +1441,21 @@ impl ObjectSet {
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {
         match &self.visibility {
             Visibility::All => true,
-            Visibility::Object(frames) => frames
+            Visibility::Objects { mask, frames } => frames
                 .get(time as usize)
-                .and_then(|mask| mask.get(object))
-                .copied()
-                .unwrap_or(false),
-            Visibility::Track(tracks) => self
+                .filter(|base| **base != ABSENT_ROW)
+                .and_then(|base| base.checked_add(u32::try_from(object).ok()?))
+                .is_some_and(|row| mask.contains(row as usize)),
+            Visibility::Tracks(mask) => self
                 .track_at(time, object)
-                .is_some_and(|track| tracks.get(track).copied().unwrap_or(false)),
+                .is_some_and(|track| mask.contains(track)),
+            Visibility::Molecules { mask, rows } => self
+                .frames
+                .get(time as usize)
+                .and_then(FrameSlot::spot_frame)
+                .and_then(|spots| spots.spots().get(object).and_then(|spot| spot.group()))
+                .and_then(|group| rows.get(&group).copied())
+                .is_some_and(|row| mask.contains(row as usize)),
         }
     }
 
@@ -1449,8 +1485,8 @@ impl ObjectSet {
 
     pub fn visible_track(&self, track: usize) -> bool {
         match &self.visibility {
-            Visibility::All | Visibility::Object(_) => true,
-            Visibility::Track(tracks) => tracks.get(track).copied().unwrap_or(false),
+            Visibility::Tracks(mask) => mask.contains(track),
+            Visibility::All | Visibility::Objects { .. } | Visibility::Molecules { .. } => true,
         }
     }
 
@@ -1842,17 +1878,7 @@ impl ObjectSet {
     ) {
         self.discard_object_coloc();
         let empty = pruned.as_ref().is_none_or(ObjectFrame::is_empty);
-        let mut visibility = match &self.visibility {
-            Visibility::All => Visibility::All,
-            Visibility::Object(frames) => {
-                let mut frames = frames.as_ref().clone();
-                if let Some(mask) = frames.get_mut(time as usize) {
-                    *mask = retained(mask, objects);
-                }
-                Visibility::Object(Arc::new(frames))
-            }
-            Visibility::Track(tracks) => Visibility::Track(Arc::clone(tracks)),
-        };
+        let mut visibility = Visibility::All;
         let pruned_tracks = self
             .tracks
             .as_ref()

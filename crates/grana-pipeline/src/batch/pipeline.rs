@@ -242,7 +242,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         if let Some(region) = scene.region_scope() {
             rows.retain(|row| {
                 table
-                    .position(*row)
+                    .position(*row as usize)
                     .is_none_or(|position| region.contains(glam::Vec3::from(position)))
             });
         }
@@ -1690,7 +1690,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
-fn stream(path: &Path, table: &grana_measure::Table, rows: &[usize]) -> Result<(), String> {
+fn stream(path: &Path, table: &grana_measure::Table, rows: &[u32]) -> Result<(), String> {
     let fault = |error: std::io::Error| format!("failed to write {}: {error}", path.display());
     let mut writer = std::io::BufWriter::new(std::fs::File::create(path).map_err(fault)?);
     table

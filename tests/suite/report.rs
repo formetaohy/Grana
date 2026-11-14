@@ -1,4 +1,6 @@
-use grana_measure::{Aggregate, Group, Kind, Objects, Table};
+use std::sync::Arc;
+
+use grana_measure::{Aggregate, Group, Kind, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_report::share::{Report, Section};
 
@@ -29,17 +31,16 @@ fn writes_a_self_contained_report() {
     let first = spots(0, 3);
     let second = spots(1, 4);
     let third = spots(2, 5);
-    let frames = measure_source(
-        Kind::Spots,
-        &["signal"],
-        [
-            Objects::Spots(&first),
-            Objects::Spots(&second),
-            Objects::Spots(&third),
-        ],
-    );
-    let table = Table::build(&frames, None, 1.0, Group::Object, Aggregate::MEAN, None)
-        .expect("the object table builds");
+    let frames = measure_source(Kind::Spots, &["signal"], [first, second, third]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the object table builds");
     let facts = vec![
         ("dimensions".to_string(), "64 × 32 × 32 voxels".to_string()),
         ("channels".to_string(), "signal".to_string()),

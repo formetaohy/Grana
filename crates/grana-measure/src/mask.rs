@@ -78,8 +78,10 @@ impl Mask {
             })
     }
 
-    pub fn to_rows(&self) -> Vec<usize> {
-        self.iter().collect()
+    pub fn to_rows(&self) -> Vec<u32> {
+        self.iter()
+            .map(|row| u32::try_from(row).expect("a mask row fits a word"))
+            .collect()
     }
 
     pub fn intersect(&mut self, other: &Self) {

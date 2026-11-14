@@ -6,6 +6,8 @@ use crate::frame::Frame;
 use crate::object::ObjectFrame;
 use crate::object_set::Visibility;
 
+const ABSENT_ROW: u32 = u32::MAX;
+
 pub struct ObjectSource {
     frames: Vec<Option<Frame>>,
     visibility: Visibility,
@@ -84,16 +86,21 @@ impl ObjectSource {
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {
         match &self.visibility {
             Visibility::All => true,
-            Visibility::Object(frames) => frames
+            Visibility::Objects { mask, frames } => frames
                 .get(time as usize)
-                .and_then(|mask| mask.get(object))
-                .copied()
-                .unwrap_or(false),
-            Visibility::Track(tracks) => self
+                .filter(|base| **base != ABSENT_ROW)
+                .and_then(|base| base.checked_add(u32::try_from(object).ok()?))
+                .is_some_and(|row| mask.contains(row as usize)),
+            Visibility::Tracks(mask) => self
                 .tracks
                 .as_deref()
                 .and_then(|set| set.track_at(time, object))
-                .is_some_and(|track| tracks.get(track).copied().unwrap_or(false)),
+                .is_some_and(|track| mask.contains(track)),
+            Visibility::Molecules { mask, rows } => self
+                .spot_frame(time)
+                .and_then(|spots| spots.spots().get(object).and_then(|spot| spot.group()))
+                .and_then(|group| rows.get(&group).copied())
+                .is_some_and(|row| mask.contains(row as usize)),
         }
     }
 
@@ -114,13 +121,32 @@ impl ObjectSource {
     }
 
     pub fn visible_spot(&self, time: u32, object: usize, spot: &Spot) -> bool {
-        self.admits(time, object)
+        self.admits_spot(time, object, spot)
             && (!self.localization.active()
                 || self.localization.keeps(spot.quality(), spot.sigma()))
     }
 
     fn admits(&self, time: u32, object: usize) -> bool {
         self.filtered_object(time, object)
+            && !self
+                .hidden
+                .get(time as usize)
+                .and_then(|mask| mask.get(object))
+                .copied()
+                .unwrap_or(false)
+    }
+
+    fn admits_spot(&self, time: u32, object: usize, spot: &Spot) -> bool {
+        let admitted = match &self.visibility {
+            Visibility::Molecules { mask, rows } => spot
+                .group()
+                .and_then(|group| rows.get(&group).copied())
+                .is_some_and(|row| mask.contains(row as usize)),
+            Visibility::All | Visibility::Objects { .. } | Visibility::Tracks(_) => {
+                self.filtered_object(time, object)
+            }
+        };
+        admitted
             && !self
                 .hidden
                 .get(time as usize)

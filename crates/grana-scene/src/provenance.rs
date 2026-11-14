@@ -160,7 +160,7 @@ impl Criteria {
         if self.group == Group::Molecule {
             let admitted = matched
                 .into_iter()
-                .filter_map(|row| table.observation(row).molecule())
+                .filter_map(|row| table.observation(row as usize).molecule())
                 .collect::<BTreeSet<_>>();
             for (time, groups) in groups.iter().enumerate() {
                 for (index, group) in groups.iter().enumerate() {
@@ -172,7 +172,7 @@ impl Criteria {
             return Ok(keep);
         }
         for row in matched {
-            let observation = table.observation(row);
+            let observation = table.observation(row as usize);
             match self.group {
                 Group::Object => {
                     if let (Some(time), Some(object)) = (observation.time(), observation.object())

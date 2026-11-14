@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Plot, PlotAxis, Scope, Table, Window,
+    Aggregate, Filter, Group, Lasso, Mask, MeasureView, Nearest, Plot, PlotAxis, Scope, Table,
+    Window,
 };
 
 use grana_volume::Region;
@@ -42,6 +42,7 @@ pub struct Measure {
     retained: Option<(Vec<String>, Vec<bool>)>,
     rows: Option<Arc<Rows>>,
     rows_pending: Option<RowSpec>,
+    nearest: Option<([usize; 2], Nearest)>,
     generation: u64,
     visible: Vec<bool>,
     visibility: bool,
@@ -79,6 +80,7 @@ impl Measure {
             retained: None,
             rows: None,
             rows_pending: None,
+            nearest: None,
             generation: 0,
             visible: Vec::new(),
             visibility: true,
@@ -253,6 +255,7 @@ impl Measure {
         }
         self.view = view;
         self.dirty = true;
+        self.refresh_nearest();
         self.refresh_plot();
     }
 
@@ -265,6 +268,7 @@ impl Measure {
         }
         self.axes[axis.index()] = column;
         self.dirty = true;
+        self.pin();
         if self
             .lasso
             .as_ref()
@@ -273,6 +277,7 @@ impl Measure {
             self.lasso = None;
             self.relayout();
         } else {
+            self.refresh_nearest();
             self.refresh_plot();
         }
     }
@@ -413,8 +418,51 @@ impl Measure {
         self.table.as_deref()
     }
 
-    pub fn rows(&self) -> &[usize] {
+    pub fn rows(&self) -> &[u32] {
         self.rows.as_ref().map_or(&[], |rows| rows.rows())
+    }
+
+    pub fn nearest_row(&self, target: [f32; 2], pixels: [f32; 2]) -> Option<u32> {
+        let table = self.table.as_deref()?;
+        let rows = self.rows.as_deref()?;
+        match self.nearest.as_ref() {
+            Some((axes, nearest)) if *axes == self.axes => nearest.nearest(target, pixels),
+            _ => table.nearest(rows.rows(), &self.axes, &target, &pixels),
+        }
+    }
+
+    pub fn row_of(
+        &self,
+        time: Option<u32>,
+        object: Option<usize>,
+        track: Option<usize>,
+    ) -> Option<u32> {
+        self.table.as_deref()?.row(time, object, track, None)
+    }
+
+    pub fn current_row(&self, scene: &Scene) -> Option<u32> {
+        let selection = scene.selection()?;
+        if Some(selection.set) != self.set {
+            return None;
+        }
+        let table = self.table.as_deref()?;
+        table.row(
+            Some(scene.time()),
+            match selection.item {
+                crate::Item::Object(object) => Some(object),
+                crate::Item::Track(_) => None,
+            },
+            match selection.item {
+                crate::Item::Track(track) => Some(track),
+                crate::Item::Object(_) => None,
+            },
+            None,
+        )
+    }
+
+    pub fn selected_row(&self, scene: &Scene) -> Option<u32> {
+        let row = self.current_row(scene)?;
+        self.fresh_rows()?.admits(row).then_some(row)
     }
 
     pub fn rows_pending(&self) -> bool {
@@ -430,10 +478,12 @@ impl Measure {
             return;
         };
         *slot = visible;
+        self.pin();
     }
 
     pub fn show_all_columns(&mut self) {
         self.visible.fill(true);
+        self.pin();
     }
 
     pub fn take_dirty(&mut self) -> bool {
@@ -496,7 +546,7 @@ impl Measure {
                 TableRequest::new(scene, id, self.group, self.aggregate)?,
             );
             self.pending = Some(request.key());
-            return Some(request);
+            return Some(request.with_retained(self.retained_keys()));
         }
         if moved && self.scope == Scope::Current {
             self.refresh_plot();
@@ -551,7 +601,7 @@ impl Measure {
         self.table.as_deref()
     }
 
-    pub fn export(&self, scene: &Scene) -> Option<(Arc<Table>, Vec<usize>)> {
+    pub fn export(&self, scene: &Scene) -> Option<(Arc<Table>, Vec<u32>)> {
         if !self.settled(scene) {
             return None;
         }
@@ -574,7 +624,7 @@ impl Measure {
     }
 
     fn restriction(&self, scene: &Scene, id: ObjectSetId) -> Option<Visibility> {
-        let object = scene.objects.get(id)?;
+        scene.objects.get(id)?;
         let roi = self.roi.filter(|_| self.group != Group::Track);
         if !self.visibility || (self.filters.is_empty() && self.lasso.is_none() && roi.is_none()) {
             return Some(Visibility::All);
@@ -583,55 +633,11 @@ impl Measure {
         if table.rows() == 0 {
             return Some(Visibility::All);
         }
-        let mask = self.fresh_rows()?.restricted();
+        let mask = Arc::new(self.fresh_rows()?.restricted().clone());
         Some(match self.group {
-            Group::Object => {
-                let mut frames = (0..object.frame_count())
-                    .map(|time| vec![false; object.object_count(time)])
-                    .collect::<Vec<_>>();
-                for row in mask.iter() {
-                    let observation = table.observation(row);
-                    if let (Some(time), Some(index)) = (observation.time(), observation.object())
-                        && let Some(frame) = frames.get_mut(time as usize)
-                        && let Some(value) = frame.get_mut(index)
-                    {
-                        *value = true;
-                    }
-                }
-                Visibility::Object(Arc::new(frames))
-            }
-            Group::Track => {
-                let count = object.tracks().map_or(0, |layer| layer.set().len());
-                let mut visible = vec![false; count];
-                for row in mask.iter() {
-                    if let Some(track) = table.observation(row).track()
-                        && let Some(value) = visible.get_mut(track)
-                    {
-                        *value = true;
-                    }
-                }
-                Visibility::Track(Arc::new(visible))
-            }
-            Group::Molecule => {
-                let admitted = mask
-                    .iter()
-                    .filter_map(|row| table.observation(row).molecule())
-                    .collect::<BTreeSet<_>>();
-                let mut frames = (0..object.frame_count())
-                    .map(|time| vec![false; object.object_count(time)])
-                    .collect::<Vec<_>>();
-                for (time, frame) in object.frames() {
-                    let Some(spots) = frame.spots() else {
-                        continue;
-                    };
-                    for (index, spot) in spots.spots().iter().enumerate() {
-                        if spot.group().is_some_and(|group| admitted.contains(&group)) {
-                            frames[time as usize][index] = true;
-                        }
-                    }
-                }
-                Visibility::Object(Arc::new(frames))
-            }
+            Group::Object => Visibility::objects(mask, table.frame_bases()?),
+            Group::Track => Visibility::Tracks(mask),
+            Group::Molecule => Visibility::molecules(mask, table.molecule_rows()?),
             Group::Timepoint => Visibility::All,
         })
     }
@@ -728,6 +734,8 @@ impl Measure {
             Some(table) => readable_axes(table, axes),
             None => axes,
         };
+        self.pin();
+        self.refresh_nearest();
         self.refresh_plot();
         self.dirty = true;
     }
@@ -793,7 +801,10 @@ impl Measure {
         let request = self.laid(scene, id, request);
         let key = request.key();
         self.origin = Some(key);
-        let table = request.build().map(Arc::new);
+        let table = request
+            .with_retained(self.retained_keys())
+            .build()
+            .map(Arc::new);
         if let Some(table) = table.as_ref() {
             self.remember_basis(key, table);
         }
@@ -876,6 +887,8 @@ impl Measure {
         }
         self.generation += 1;
         self.table = Some(table);
+        self.pin();
+        self.refresh_nearest();
         self.refresh_plot();
     }
 
@@ -900,7 +913,7 @@ impl Measure {
         let spec = self.spec()?;
         match self.rows.as_ref().filter(|rows| rows.spec() == &spec) {
             Some(rows) => Some(Arc::clone(rows)),
-            None => Some(Arc::new(Rows::build(table, spec))),
+            None => Some(Arc::new(Rows::build(table, spec, self.rows.as_deref()))),
         }
     }
 
@@ -915,7 +928,11 @@ impl Measure {
             return None;
         }
         self.rows_pending = Some(spec.clone());
-        Some(RowsRequest::new(table, spec))
+        Some(RowsRequest::new(
+            table,
+            spec,
+            self.rows.as_ref().map(Arc::clone),
+        ))
     }
 
     pub fn install_rows(&mut self, rows: Rows) {
@@ -927,17 +944,108 @@ impl Measure {
         }
         self.rows = Some(Arc::new(rows));
         self.dirty = true;
+        self.refresh_nearest();
         self.refresh_plot();
     }
 
     fn relayout(&mut self) {
         self.dirty = true;
+        self.pin();
         self.refresh_plot();
+    }
+
+    fn pin(&self) {
+        let Some(table) = self.table.as_deref() else {
+            return;
+        };
+        let mut columns = Vec::new();
+        for (index, visible) in self.visible.iter().enumerate() {
+            if *visible {
+                columns.push(index);
+            }
+        }
+        columns.extend(self.filters.iter().map(|filter| filter.column()));
+        if let Some((column, _)) = self.sort {
+            columns.push(column);
+        }
+        columns.extend(self.axes);
+        if let Some(lasso) = &self.lasso {
+            columns.push(lasso.x());
+            columns.push(lasso.y());
+        }
+        if self.roi.is_some_and(Region::enabled) {
+            for key in ["x_um", "y_um", "z_um"] {
+                if let Some(column) = table.column(key) {
+                    columns.push(column);
+                }
+            }
+        }
+        table.retain(columns);
+    }
+
+    fn retained_keys(&self) -> Vec<String> {
+        let Some(table) = self.table.as_deref() else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
+        for (index, visible) in self.visible.iter().enumerate() {
+            if let Some(column) = table.columns().get(index)
+                && *visible
+            {
+                keys.push(column.key().to_string());
+            }
+        }
+        for filter in &self.filters {
+            if let Some(column) = table.columns().get(filter.column()) {
+                keys.push(column.key().to_string());
+            }
+        }
+        let mut wanted = Vec::with_capacity(self.axes.len() + 1);
+        if let Some((column, _)) = self.sort {
+            wanted.push(column);
+        }
+        wanted.extend(self.axes);
+        for column in wanted {
+            if let Some(column) = table.columns().get(column) {
+                keys.push(column.key().to_string());
+            }
+        }
+        if let Some(lasso) = &self.lasso {
+            for column in [lasso.x(), lasso.y()] {
+                if let Some(column) = table.columns().get(column) {
+                    keys.push(column.key().to_string());
+                }
+            }
+        }
+        if self.roi.is_some_and(Region::enabled) {
+            keys.extend(["x_um", "y_um", "z_um"].map(str::to_string));
+        }
+        keys
+    }
+
+    fn refresh_nearest(&mut self) {
+        self.nearest = None;
+        if self.view != MeasureView::Scatter {
+            return;
+        }
+        let Some(table) = self.table.as_deref() else {
+            return;
+        };
+        let Some(rows) = self.rows.as_deref() else {
+            return;
+        };
+        if self.spec().as_ref() != Some(rows.spec()) {
+            return;
+        }
+        if let Some(nearest) = Nearest::of(table, rows.rows(), self.axes) {
+            self.nearest = Some((self.axes, nearest));
+        }
     }
 
     fn clear_rows(&mut self) {
         self.rows = None;
         self.rows_pending = None;
+        self.nearest = None;
     }
 
     fn scope_frame(&self) -> Option<u32> {
@@ -1015,53 +1123,62 @@ fn readable_axes(table: &Table, axes: [usize; 2]) -> [usize; 2] {
 fn preferred_axes(table: &Table) -> [usize; 2] {
     let columns = table.columns();
     let identity = table.identity_columns();
-    let varies = |index: usize| {
-        table
-            .extent(index)
-            .is_some_and(|(low, high)| low.is_finite() && high.is_finite() && high > low)
-    };
     let key_family = |key: &str| columns.iter().any(|column| column.key() == key);
-    let preferred: &[&str] = if key_family("contrast") {
+    let family: &[&str] = if key_family("contrast") {
         &["diameter_um", "contrast"]
     } else if key_family("junctions") {
         &["length_um", "diameter_um"]
     } else {
         &["volume_um3", "hull_volume_um3", "area_um2", "sphericity"]
     };
+    let fallback = [
+        "diameter_um",
+        "contrast",
+        "volume_um3",
+        "area_um2",
+        "sphericity",
+        "hull_volume_um3",
+        "max_diameter_um",
+        "length_um",
+        "speed_um_s",
+        "displacement_um",
+        "straightness",
+        "branches",
+        "terminals",
+        "junctions",
+        "nodes",
+    ];
     let mut chosen = Vec::with_capacity(2);
-    for key in preferred {
-        if chosen.len() == 2 {
-            break;
-        }
-        if let Some(index) = columns.iter().position(|column| column.key() == *key)
-            && varies(index)
-            && !chosen.contains(&index)
-        {
-            chosen.push(index);
-        }
-    }
-    let mut scored = Vec::new();
-    for index in identity..columns.len() {
-        if chosen.contains(&index) || positional(columns, index) {
-            continue;
-        }
-        let Some((low, high)) = table.extent(index) else {
+    for key in family {
+        let Some(index) = columns.iter().position(|column| column.key() == *key) else {
             continue;
         };
-        if !(low.is_finite() && high.is_finite()) {
+        if chosen.contains(&index) {
             continue;
         }
-        let span = high - low;
-        if span <= 0.0 {
-            continue;
-        }
-        let scale = low.abs().max(high.abs()).max(1.0e-6);
-        scored.push((span / scale, index));
-    }
-    scored.sort_by(|left, right| right.0.total_cmp(&left.0));
-    for (_, index) in scored {
+        chosen.push(index);
         if chosen.len() == 2 {
             break;
+        }
+    }
+    for key in fallback {
+        if chosen.len() == 2 {
+            break;
+        }
+        let Some(index) = columns.iter().position(|column| column.key() == key) else {
+            continue;
+        };
+        if chosen.contains(&index) {
+            continue;
+        }
+        chosen.push(index);
+    }
+    for index in identity..columns.len() {
+        if chosen.len() == 2 {
+            break;
+        }
+        if chosen.contains(&index) || positional(columns, index) {
+            continue;
         }
         chosen.push(index);
     }
@@ -1109,5 +1226,13 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key == grana_measure::SCORE_KEY
             }
         })
+        .collect()
+}
+
+pub(crate) fn default_retained(table: &Table) -> Vec<usize> {
+    default_visibility(table)
+        .iter()
+        .enumerate()
+        .filter_map(|(index, visible)| visible.then_some(index))
         .collect()
 }

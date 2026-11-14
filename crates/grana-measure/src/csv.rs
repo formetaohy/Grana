@@ -36,10 +36,11 @@ pub fn scientific(value: f64) -> String {
 pub(crate) fn write(
     writer: &mut impl Write,
     columns: &[Column],
-    rows: usize,
-    value: impl Fn(usize, usize) -> f32,
+    rows: &[u32],
+    values: impl Fn(usize) -> std::sync::Arc<Vec<f32>>,
     report: &mut dyn FnMut(usize, usize),
 ) -> io::Result<()> {
+    let total = rows.len();
     let mut text = String::with_capacity(BLOCK * columns.len() * FIELD);
     for (index, column) in columns.iter().enumerate() {
         if index > 0 {
@@ -49,27 +50,29 @@ pub(crate) fn write(
     }
     text.push('\n');
     writer.write_all(text.as_bytes())?;
-    report(0, rows);
-    let stride = rows.div_ceil(STEPS).max(BLOCK);
+    report(0, total);
+    let stride = total.div_ceil(STEPS).max(BLOCK);
     let mut reported = 0;
     let mut start = 0;
-    while start < rows {
-        let end = (start + BLOCK).min(rows);
+    while start < total {
+        let end = (start + BLOCK).min(total);
+        let block = (0..columns.len()).map(&values).collect::<Vec<_>>();
         text.clear();
-        for row in start..end {
+        for row in &rows[start..end] {
+            let row = *row as usize;
             for (index, column) in columns.iter().enumerate() {
                 if index > 0 {
                     text.push(',');
                 }
-                write!(text, "{:.*}", column.decimals() as usize, value(row, index))
+                write!(text, "{:.*}", column.decimals() as usize, block[index][row])
                     .expect("a csv field writes into a string");
             }
             text.push('\n');
         }
         writer.write_all(text.as_bytes())?;
         start = end;
-        if end - reported >= stride || end == rows {
-            report(end, rows);
+        if end - reported >= stride || end == total {
+            report(end, total);
             reported = end;
         }
     }

@@ -106,9 +106,9 @@ impl Grid {
         }
     }
 
-    fn cell(self, table: &Table, row: usize, x: usize, y: usize) -> Option<usize> {
-        let column = bins::index(table.value(row, x), self.x_low, self.x_high, self.x_bins)?;
-        let line = bins::index(table.value(row, y), self.y_low, self.y_high, self.y_bins)?;
+    fn cell(self, values: (&[f32], &[f32]), row: usize) -> Option<usize> {
+        let column = bins::index(values.0[row], self.x_low, self.x_high, self.x_bins)?;
+        let line = bins::index(values.1[row], self.y_low, self.y_high, self.y_bins)?;
         Some(line * self.x_bins + column)
     }
 }
@@ -116,9 +116,12 @@ impl Grid {
 impl Table {
     pub(crate) fn scatter(&self, x: usize, y: usize, gated: &Mask) -> Scatter {
         let grid = Grid::of(self, x, y);
+        let xs = self.materialize(x);
+        let ys = self.materialize(y);
+        let values = (xs.as_slice(), ys.as_slice());
         let mut total = vec![0u64; grid.x_bins * grid.y_bins];
         for row in 0..self.rows() {
-            if let Some(index) = grid.cell(self, row, x, y) {
+            if let Some(index) = grid.cell(values, row) {
                 total[index] += 1;
             }
         }
@@ -127,9 +130,9 @@ impl Table {
         let mut y_moments = Moments::new();
         let mut correlation = Pearson::default();
         for row in gated.iter() {
-            let first = self.value(row, x);
-            let second = self.value(row, y);
-            if let Some(index) = grid.cell(self, row, x, y) {
+            let first = xs[row];
+            let second = ys[row];
+            if let Some(index) = grid.cell(values, row) {
                 counts[index] += 1;
             }
             x_moments.push(first);

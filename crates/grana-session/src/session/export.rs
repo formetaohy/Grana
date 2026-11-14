@@ -12,19 +12,22 @@ use crate::task::Progress;
 fn write(
     path: &Path,
     table: &Table,
-    rows: &[usize],
+    rows: &[u32],
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PathBuf, String> {
     let fault = |error: std::io::Error| {
         format!("failed to export statistics to {}: {error}", path.display())
     };
     stream(path, |writer| table.write_csv_rows(writer, rows, progress)).map_err(fault)?;
+    table.release();
     Ok(path.to_path_buf())
 }
 
 pub(super) fn write_whole(path: &Path, table: &Table) -> Result<(), String> {
     let fault = |error: std::io::Error| format!("failed to write {}: {error}", path.display());
-    stream(path, |writer| table.write_csv(writer, &mut |_, _| {})).map_err(fault)
+    stream(path, |writer| table.write_csv(writer, &mut |_, _| {})).map_err(fault)?;
+    table.release();
+    Ok(())
 }
 
 fn stream(

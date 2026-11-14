@@ -915,13 +915,16 @@ fn table<'a>(
                     let Some(index) = state_index(rows, row) else {
                         continue;
                     };
-                    let observation = table.observation(index);
+                    let observation = table.observation(index as usize);
                     let selected = matches_selection(selection, set, observation, time);
                     let cells = columns
                         .iter()
                         .zip(widths.iter())
                         .map(|((column_index, column), width)| {
-                            (column.format(table.value(index, *column_index)), *width)
+                            (
+                                column.format(table.value(index as usize, *column_index)),
+                                *width,
+                            )
                         })
                         .collect::<Vec<_>>();
                     children.push(
@@ -987,7 +990,7 @@ fn table<'a>(
     elements
 }
 
-fn state_index(rows: &[usize], row: usize) -> Option<usize> {
+fn state_index(rows: &[u32], row: usize) -> Option<u32> {
     rows.get(row).copied()
 }
 

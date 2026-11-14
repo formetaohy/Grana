@@ -61,16 +61,17 @@ impl Table {
     pub(crate) fn histogram(&self, column: usize, gated: &Mask) -> Histogram {
         let (low, high) = extent(self, column);
         let bins = bins::histogram(self, column, high - low);
+        let values = self.materialize(column);
         let mut total = vec![0u64; bins];
         for row in 0..self.rows() {
-            if let Some(bin) = bins::index(self.value(row, column), low, high, bins) {
+            if let Some(bin) = bins::index(values[row], low, high, bins) {
                 total[bin] += 1;
             }
         }
         let mut counts = vec![0u64; bins];
         let mut moments = Moments::new();
         for row in gated.iter() {
-            let value = self.value(row, column);
+            let value = values[row];
             if let Some(bin) = bins::index(value, low, high, bins) {
                 counts[bin] += 1;
             }

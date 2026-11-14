@@ -145,7 +145,7 @@ impl Session {
         match self.measure.group() {
             Group::Object => {
                 for row in rows {
-                    let observation = table.observation(row);
+                    let observation = table.observation(row as usize);
                     if let (Some(time), Some(index)) = (observation.time(), observation.object())
                         && let Some(mask) = keep.get_mut(time as usize)
                         && let Some(slot) = mask.get_mut(index)
@@ -159,7 +159,7 @@ impl Session {
                     return Err("the object set carries no tracks".to_string());
                 };
                 for row in rows {
-                    let Some(track) = table.observation(row).track() else {
+                    let Some(track) = table.observation(row as usize).track() else {
                         continue;
                     };
                     let Some(track) = tracks.track(track) else {
@@ -177,7 +177,7 @@ impl Session {
             Group::Molecule => {
                 let admitted = rows
                     .into_iter()
-                    .filter_map(|row| table.observation(row).molecule())
+                    .filter_map(|row| table.observation(row as usize).molecule())
                     .collect::<BTreeSet<_>>();
                 for (time, frame) in object.frames() {
                     let Some(spots) = frame.spots() else {

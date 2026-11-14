@@ -43,12 +43,13 @@ fn sample(table: &Table, column: usize) -> Option<Sample> {
     if rows == 0 {
         return None;
     }
+    let values = table.materialize(column);
     let take = rows.min(SAMPLE_LIMIT);
     let span = rows - 1;
     Sample::new(
         (0..take)
             .map(|index| index * span / (take - 1).max(1))
-            .map(|row| f64::from(table.value(row, column)))
+            .map(|row| f64::from(values[row]))
             .collect(),
     )
 }

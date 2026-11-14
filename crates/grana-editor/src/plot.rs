@@ -7,7 +7,7 @@ use grana_measure::{
     Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Ripley, Scatter, Table,
     Trend,
 };
-use grana_scene::{Item, Measure, ObjectSetId, Scene, Selection};
+use grana_scene::{Item, Measure, ObjectSetId, Selection};
 use grana_session::Command;
 use grana_ui::{BuildContext, Cursor, Element, Key, Length, Phase, Rect, Role, State};
 
@@ -46,7 +46,7 @@ enum Readout {
 struct PlotView<'a> {
     plot: &'a Plot,
     table: &'a Table,
-    rows: &'a [usize],
+    rows: &'a [u32],
     filters: &'a [Filter],
     lasso: Option<&'a Lasso>,
     selection: Option<usize>,
@@ -182,10 +182,10 @@ pub fn view<'a>(
         (selection.set.raw(), item)
     });
     let scene = state.scene;
-    let set = measure.set();
     let rows = measure.rows();
     let filters = measure.filters();
     let lasso = measure.lasso();
+    let selected = measure.selected_row(scene);
     let vertices = drag.vertices.as_slice();
     let origin = drag.origin.filter(|_| drag.view == Some(plot.view()));
     let gate = drag.gate;
@@ -235,7 +235,7 @@ pub fn view<'a>(
                 rows,
                 filters,
                 lasso,
-                selection: selected_row(table, rows, scene, set),
+                selection: selected.map(|row| row as usize),
                 pointer,
                 hovering,
                 origin,
@@ -609,13 +609,9 @@ fn scatter_readout(
     let (x_axis, y_axis) = scatter_axes(scatter);
     let x = x_axis.value_at_x(frame, pointer.x);
     let y = y_axis.value_at_y(frame, pointer.y);
-    let observation = table
-        .nearest(
-            measure.rows(),
-            &[scatter.x(), scatter.y()],
-            &[x, y],
-            &[frame.width(), frame.height()],
-        )
+    let observation = measure
+        .nearest_row([x, y], [frame.width(), frame.height()])
+        .map(|row| row as usize)
         .filter(|row| {
             let centre = Vec2::new(
                 x_axis.x(frame, table.value(*row, scatter.x())),
@@ -683,32 +679,6 @@ fn push_vertex(vertices: &mut Vec<Vec2>, vertex: Vec2) {
     {
         vertices.push(vertex);
     }
-}
-
-fn selected_row(
-    table: &Table,
-    rows: &[usize],
-    scene: &Scene,
-    set: Option<ObjectSetId>,
-) -> Option<usize> {
-    let selection = scene.selection()?;
-    if Some(selection.set) != set {
-        return None;
-    }
-    rows.iter().copied().find(|row| {
-        let observation = table.observation(*row);
-        match (
-            observation.time(),
-            observation.object(),
-            observation.track(),
-        ) {
-            (Some(time), Some(object), _) => {
-                scene.time() == time && selection.item == Item::Object(object)
-            }
-            (_, _, Some(track)) => selection.item == Item::Track(track),
-            _ => false,
-        }
-    })
 }
 
 pub fn apply(
@@ -795,7 +765,7 @@ fn histogram_apply(
                     &[1.0],
                 )
             {
-                locate_observation(set, table.observation(row), commands);
+                locate_observation(set, table.observation(row as usize), commands);
             }
             workspace.drag.origin = None;
             workspace.drag.moved = false;
@@ -892,7 +862,7 @@ fn scatter_apply(
                     &[1.0, 1.0],
                 )
             {
-                locate_observation(set, table.observation(row), commands);
+                locate_observation(set, table.observation(row as usize), commands);
             }
             workspace.drag.origin = None;
             workspace.drag.moved = false;
@@ -959,7 +929,7 @@ fn distribution_apply(
                     distribution_value(distribution, position.y),
                 )
             {
-                locate_observation(set, table.observation(row), commands);
+                locate_observation(set, table.observation(row as usize), commands);
             }
             workspace.drag.origin = None;
             workspace.drag.moved = false;
@@ -1025,7 +995,7 @@ fn trend_apply(
                 && let Some((time, value)) = trend_target(trend, position)
                 && let Some(row) = nearest_trend_row(table, measure.rows(), trend, time, value)
             {
-                locate_observation(set, table.observation(row), commands);
+                locate_observation(set, table.observation(row as usize), commands);
             }
             workspace.drag.origin = None;
             workspace.drag.moved = false;
@@ -1051,18 +1021,19 @@ fn trend_target(trend: &Trend, position: Vec2) -> Option<(u32, f32)> {
 
 fn nearest_trend_row(
     table: &Table,
-    rows: &[usize],
+    rows: &[u32],
     trend: &Trend,
     time: u32,
     value: f32,
-) -> Option<usize> {
+) -> Option<u32> {
+    let values = table.materialize(trend.column());
     let mut best = None;
     let mut closest = f32::INFINITY;
     for row in rows {
-        if table.observation(*row).time() != Some(time) {
+        if table.observation(*row as usize).time() != Some(time) {
             continue;
         }
-        let current = table.value(*row, trend.column());
+        let current = values[*row as usize];
         if !current.is_finite() {
             continue;
         }
@@ -1089,22 +1060,23 @@ fn group_from_position(distribution: &Distribution, position: f32) -> Option<usi
 
 fn nearest_group_row(
     table: &Table,
-    rows: &[usize],
+    rows: &[u32],
     distribution: &Distribution,
     group: usize,
     value: f32,
-) -> Option<usize> {
+) -> Option<u32> {
     let groups = distribution.groups();
     let target = groups.get(group)?.time();
     let split = groups.len() > 1;
     let column = distribution.column();
+    let values = table.materialize(column);
     let mut best = None;
     let mut closest = f32::INFINITY;
     for row in rows {
-        if split && table.observation(*row).time() != target {
+        if split && table.observation(*row as usize).time() != target {
             continue;
         }
-        let current = table.value(*row, column);
+        let current = values[*row as usize];
         if !current.is_finite() {
             continue;
         }
@@ -1143,7 +1115,7 @@ pub fn locate(measure: &Measure, row: usize, commands: &mut Vec<Command>) {
     let Some(set) = measure.set() else {
         return;
     };
-    locate_observation(set, table.observation(index), commands);
+    locate_observation(set, table.observation(index as usize), commands);
 }
 
 fn locate_observation(set: ObjectSetId, observation: Observation, commands: &mut Vec<Command>) {

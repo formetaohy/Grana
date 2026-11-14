@@ -61,7 +61,7 @@ impl<'a> Frame<'a> {
     }
 }
 
-pub trait FrameSource {
+pub trait FrameSource: Send + Sync {
     fn frames(&self) -> u32;
 
     fn kind(&self) -> Kind;

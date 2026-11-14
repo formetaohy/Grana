@@ -1415,7 +1415,7 @@ impl Scene {
         &mut self,
         id: ObjectSetId,
         features: &[Measurement],
-        positives: &[usize],
+        positives: &[u32],
     ) -> Result<(), String> {
         if features.is_empty() {
             return Err("a classifier trains on at least one measurement".to_string());
