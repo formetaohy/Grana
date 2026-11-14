@@ -13,6 +13,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::cast_slice;
+use glam::Vec3;
 use grana_display::Camera;
 use grana_gpu::Pipelines;
 use grana_gpu::Readback;
@@ -45,6 +46,7 @@ use crate::present::Present;
 use crate::sample;
 use crate::schema::{SceneFrame, Versions};
 use crate::section::Sections;
+use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
 use crate::target::{self, SceneTarget};
 use crate::temporal::{FrameView, Temporal, TemporalPass};
@@ -64,6 +66,8 @@ const PREFETCH_SHARE: usize = 4;
 const RECORD_SHARE: u64 = 8;
 
 const FADE_DRAWS: f32 = 10.0;
+
+const UNIT: f32 = 65535.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -102,6 +106,12 @@ pub struct Requests {
 pub(crate) struct VolumeTargets<'a> {
     pub(crate) color: &'a TextureView,
     pub(crate) depth: &'a TextureView,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Lighting<'a> {
+    pub(crate) shadow: &'a BindGroup,
+    pub(crate) ao: &'a BindGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,12 +167,15 @@ pub struct Renderer {
     level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
+    shadow: Option<Shadow>,
     volume: VolumePass,
     oit_resolve: Option<OitResolve>,
+    gtao: crate::ao::AoPipeline,
     meshes: Option<MeshPasses>,
     splats: Option<SplatPasses>,
     dummy: TextureView,
     dummy_oit: Oit,
+    dummy_ao: BindGroup,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -194,6 +207,7 @@ pub struct Renderer {
     convergence: Option<Convergence>,
     temporal: TemporalPass,
     fade: Option<Fade>,
+    object_key: Option<u64>,
     sections: Sections,
     sliced: bool,
     overlay: Overlays,
@@ -221,6 +235,7 @@ impl Renderer {
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
+        let dummy_ao = crate::ao::dummy(device, queue, &layouts);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -234,7 +249,7 @@ impl Renderer {
         let sections = Sections::new(device, &layouts, pipelines);
         let present = Present::new(device, format, pipelines);
         let volume = VolumePass::new(device, &layouts, pipelines);
-        let temporal = TemporalPass::new(device, pipelines);
+        let temporal = TemporalPass::new(device, queue, pipelines);
         let overlay = Overlays::new(device, pipelines);
         Self {
             present,
@@ -250,13 +265,16 @@ impl Renderer {
             level_group: None,
             bricks: Vec::new(),
             planner: None,
+            shadow: None,
             volume,
             oit_resolve: None,
+            gtao: crate::ao::AoPipeline::new(device, &layouts, pipelines),
             meshes: None,
             splats: None,
             layouts,
             dummy,
             dummy_oit,
+            dummy_ao,
             atlas_sampler,
             pyramid: None,
             channels: 0,
@@ -288,6 +306,7 @@ impl Renderer {
             convergence: None,
             temporal,
             fade: None,
+            object_key: None,
             sections,
             sliced: false,
             overlay,
@@ -461,6 +480,17 @@ impl Renderer {
         let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
         planner.bind_arena(device, &self.layouts, &arena);
         self.planner = Some(planner);
+        let finest = pyramid.level(0);
+        let world = Vec3::from(finest.world_extent());
+        let spacing = finest.spacing();
+        let voxel = Vec3::new(spacing.x(), spacing.y(), spacing.z());
+        self.shadow = Some(Shadow::new(
+            device,
+            &self.layouts,
+            shadow::resolution(world, voxel),
+            &self.pipelines,
+        ));
+        self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,
@@ -532,7 +562,13 @@ impl Renderer {
             .as_ref()
             .is_none_or(|target| target.size != size)
         {
-            self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
+            self.target = Some(FrameTarget::new(
+                device,
+                queue,
+                &self.layouts,
+                &self.present,
+                size,
+            ));
             if let Some(convergence) = self.convergence.as_mut() {
                 convergence.forget();
             }

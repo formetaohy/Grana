@@ -95,6 +95,7 @@ pub fn key(scene: &Scene) -> u64 {
     }
     key.real(scene.shading.ambient);
     key.real(scene.shading.diffuse);
+    key.real(scene.shading.shadows);
     key.real(scene.shading.azimuth);
     key.real(scene.shading.elevation);
     key.real(scene.step_scale);

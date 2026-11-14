@@ -1,3 +1,4 @@
+mod ao;
 mod atlas;
 mod bake;
 mod brick;
@@ -19,6 +20,7 @@ mod renderer;
 mod sample;
 mod schema;
 mod section;
+mod shadow;
 mod splat;
 mod table;
 mod target;

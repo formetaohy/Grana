@@ -6,6 +6,9 @@ struct MeshUniforms {
     region_center: vec4<f32>,
     region_axis: array<vec4<f32>, 3>,
     jitter: vec4<f32>,
+    light_view: mat4x4<f32>,
+    light_reach: vec4<f32>,
+    shadow: vec4<f32>,
     viewport: vec4<f32>,
     oit: vec4<u32>,
     clip: vec4<f32>,
@@ -34,7 +37,21 @@ struct Style {
 @group(0) @binding(0) var<uniform> mesh: MeshUniforms;
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<Style>;
+@group(3) @binding(0) var shadow_tau: texture_3d<f32>;
+@group(3) @binding(1) var shadow_sampler: sampler;
+@group(3) @binding(3) var shadow_objects: texture_depth_2d;
+@group(3) @binding(4) var shadow_compare: sampler_comparison;
 @group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
+@group(7) @binding(0) var ao_map: texture_2d<f32>;
+
+fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
+    let size = vec2<i32>(mesh.viewport.zw);
+    let at = vec2<i32>(floor(pixel));
+    if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+        return 1.0;
+    }
+    return textureLoad(ao_map, at, 0).r;
+}
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -47,6 +64,10 @@ struct VertexOutput {
     @location(0) normal: vec3<f32>,
     @location(1) position: vec3<f32>,
     @location(2) @interpolate(flat) object: u32,
+}
+
+struct ShadowOutput {
+    @builtin(position) clip_position: vec4<f32>,
 }
 
 fn sgn(value: f32) -> f32 {
@@ -100,6 +121,19 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
+@vertex
+fn vs_shadow(input: VertexInput) -> ShadowOutput {
+    let coordinate = shadow_coordinate(mesh.light_view, object_position(input));
+    var output: ShadowOutput;
+    output.clip_position = vec4<f32>(
+        coordinate.x * 2.0 - 1.0,
+        1.0 - coordinate.y * 2.0,
+        coordinate.z,
+        1.0,
+    );
+    return output;
+}
+
 fn outside_region(point: vec3<f32>) -> bool {
     if (mesh.region_center.w <= 0.5) {
         return false;
@@ -124,11 +158,18 @@ fn is_outside(input: VertexOutput) -> bool {
     return dot(mesh.clip.xyz, input.position) > mesh.clip.w;
 }
 
-fn shade(input: VertexOutput) -> vec4<f32> {
+fn shade(input: VertexOutput, occlusion: f32) -> vec4<f32> {
     let style = styles[input.object];
     let normal = normalize(input.normal);
     let view = view_direction(input.position);
+    let lit_normal = select(normal, -normal, dot(normal, mesh.light.xyz) < 0.0);
     let facing_normal = select(normal, -normal, dot(normal, view) < 0.0);
+    let sun = sun_transmittance(
+        shadow_coordinate(mesh.light_view, input.position + lit_normal * mesh.light_reach.z),
+        shadow_bias(mesh.light_reach, lit_normal, mesh.light.xyz),
+    );
+    let strength = clamp(mesh.shadow.x, 0.0, 1.0);
+    let visibility = mix(1.0, sun, strength);
     var color = shade_surface(
         style.color.rgb,
         style.surface.x,
@@ -136,8 +177,10 @@ fn shade(input: VertexOutput) -> vec4<f32> {
         facing_normal,
         view,
         mesh.light.xyz,
+        visibility,
         mesh.shading.x,
         mesh.shading.y,
+        occlusion,
     );
     if (style.flags.y > 0.5) {
         color = mix(color, vec3<f32>(1.0, 0.86, 0.45), 0.55);
@@ -150,7 +193,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (is_outside(input)) {
         discard;
     }
-    return shade(input);
+    return shade(input, ambient_occlusion(input.clip_position.xy - mesh.viewport.xy));
 }
 
 @fragment
@@ -181,7 +224,7 @@ fn fs_oit_color(input: VertexOutput) -> Residual {
     if (index < 0) {
         return output;
     }
-    let sample = shade(input);
+    let sample = shade(input, ambient_occlusion(input.clip_position.xy - mesh.viewport.xy));
     let slot = oit_slot(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
     if (slot >= 0 && oit_claim(u32(index), mesh.oit.y, u32(slot))) {
         oit_write(

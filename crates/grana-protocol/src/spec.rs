@@ -93,6 +93,7 @@ pub struct MaterialSpec {
 pub struct ShadingSpec {
     pub ambient: f32,
     pub diffuse: f32,
+    pub shadows: f32,
     #[serde(default = "default_azimuth")]
     pub azimuth: f32,
     #[serde(default = "default_elevation")]
@@ -2750,6 +2751,7 @@ impl RenderSpec {
             shading: ShadingSpec {
                 ambient: shading.ambient,
                 diffuse: shading.diffuse,
+                shadows: shading.shadows,
                 azimuth: shading.azimuth,
                 elevation: shading.elevation,
             },
@@ -2767,6 +2769,7 @@ impl RenderSpec {
         Shading {
             ambient: self.shading.ambient,
             diffuse: self.shading.diffuse,
+            shadows: self.shading.shadows,
             azimuth: self.shading.azimuth,
             elevation: self.shading.elevation,
         }
@@ -2786,6 +2789,9 @@ impl RenderSpec {
             if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                 return invalid("carries unit lighting weights".to_string());
             }
+        }
+        if !shading.shadows.is_finite() || !(0.0..=1.0).contains(&shading.shadows) {
+            return invalid("carries a unit shadow strength".to_string());
         }
         if !shading.azimuth.is_finite() || shading.azimuth.abs() > grana_display::AZIMUTH_LIMIT {
             return invalid("stands its key light at a finite azimuth".to_string());

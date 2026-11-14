@@ -104,6 +104,7 @@ pub(super) struct FrameTarget {
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: Option<Oit>,
     pub(super) guide: crate::guide::Guide,
+    pub(super) ao: Option<crate::ao::Ao>,
     pub(super) size: [u32; 2],
     pub(super) samples: u32,
     pub(super) signature: Option<u64>,
@@ -125,6 +126,7 @@ pub(super) struct FadeTarget {
 impl FrameTarget {
     pub(super) fn new(
         device: &Device,
+        queue: &Queue,
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
@@ -158,7 +160,8 @@ impl FrameTarget {
             present_group,
             fade: None,
             oit: None,
-            guide: crate::guide::Guide::new(device, size),
+            guide: crate::guide::Guide::new(device, queue, size),
+            ao: None,
             size,
             samples: 0,
             signature: None,

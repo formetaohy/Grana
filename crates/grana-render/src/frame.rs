@@ -4,6 +4,7 @@ use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
 use crate::planner::{BAND, Ladder};
+use crate::shadow::ShadowSpace;
 use grana_display::{Camera, Shading};
 
 #[repr(C)]
@@ -24,6 +25,9 @@ pub(crate) struct FrameData {
     pub viewport: [f32; 4],
     pub jitter: [f32; 4],
     pub planes: [[f32; 4]; 6],
+    pub light_view: [[f32; 4]; 4],
+    pub light_inverse: [[f32; 4]; 4],
+    pub light_reach: [f32; 4],
     pub oit: [u32; 4],
     pub clip: [f32; 4],
     pub tag: [u32; 4],
@@ -62,23 +66,23 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1232);
+    assert!(size_of::<FrameData>() == 1376);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
-    assert!(std::mem::offset_of!(FrameData, oit) == 448);
-    assert!(std::mem::offset_of!(FrameData, dims) == 496);
-    assert!(std::mem::offset_of!(FrameData, origins) == 624);
-    assert!(std::mem::offset_of!(FrameData, axes) == 688);
-    assert!(std::mem::offset_of!(FrameData, inverses) == 880);
-    assert!(std::mem::offset_of!(FrameData, bases) == 1072);
-    assert!(std::mem::offset_of!(FrameData, bands) == 1088);
-    assert!(std::mem::offset_of!(FrameData, edge) == 1104);
-    assert!(std::mem::offset_of!(FrameData, projection) == 1120);
-    assert!(std::mem::offset_of!(FrameData, lens) == 1136);
-    assert!(std::mem::offset_of!(FrameData, sampling) == 1152);
-    assert!(std::mem::offset_of!(FrameData, slice) == 1168);
-    assert!(std::mem::offset_of!(FrameData, slice_view) == 1184);
-    assert!(std::mem::offset_of!(FrameData, occupancy) == 1200);
+    assert!(std::mem::offset_of!(FrameData, light_view) == 448);
+    assert!(std::mem::offset_of!(FrameData, dims) == 640);
+    assert!(std::mem::offset_of!(FrameData, origins) == 768);
+    assert!(std::mem::offset_of!(FrameData, axes) == 832);
+    assert!(std::mem::offset_of!(FrameData, inverses) == 1024);
+    assert!(std::mem::offset_of!(FrameData, bases) == 1216);
+    assert!(std::mem::offset_of!(FrameData, bands) == 1232);
+    assert!(std::mem::offset_of!(FrameData, edge) == 1248);
+    assert!(std::mem::offset_of!(FrameData, projection) == 1264);
+    assert!(std::mem::offset_of!(FrameData, lens) == 1280);
+    assert!(std::mem::offset_of!(FrameData, sampling) == 1296);
+    assert!(std::mem::offset_of!(FrameData, slice) == 1312);
+    assert!(std::mem::offset_of!(FrameData, slice_view) == 1328);
+    assert!(std::mem::offset_of!(FrameData, occupancy) == 1344);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -106,6 +110,7 @@ impl FrameData {
         tables: &[&BrickTable],
         shading: Shading,
         ray: Ray,
+        space: ShadowSpace,
     ) -> Self {
         assert_eq!(
             tables.len(),
@@ -193,10 +198,13 @@ impl FrameData {
             }),
             atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
             shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
-            march: [ray.step, 0.0, ray.channels as f32, pixel_scale],
+            march: [ray.step, shading.shadows, ray.channels as f32, pixel_scale],
             viewport: [0.0; 4],
             jitter: [0.0; 4],
             planes: planes(view_projection),
+            light_view: space.view().to_cols_array_2d(),
+            light_inverse: space.inverse().to_cols_array_2d(),
+            light_reach: space.reach(),
             oit: [0; 4],
             clip: {
                 let (normal, offset) = clip.parts();

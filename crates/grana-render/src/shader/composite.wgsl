@@ -148,7 +148,7 @@ fn march_volume(
                 if (tau > 0.0) {
                     let alpha = 1.0 - exp(-tau);
                     let absorbed = transmittance * alpha;
-                    radiance += absorbed * volume_lighting(sample.rgb, texel);
+                    radiance += absorbed * volume_lighting(sample.rgb, texel, origin + direction * cursor);
                     moment += absorbed * cursor;
                     mass += absorbed;
                     transmittance *= 1.0 - alpha;

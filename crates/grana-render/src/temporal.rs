@@ -8,7 +8,8 @@ use wgpu::{
     PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
     RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
     ShaderSource, ShaderStages, StoreOp, Texture, TextureDescriptor, TextureDimension,
-    TextureSampleType, TextureUsages, TextureView, TextureViewDimension, VertexState,
+    TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
+    VertexState,
 };
 
 use crate::frame::FrameData;
@@ -150,6 +151,7 @@ pub(crate) struct Inputs<'a> {
     pub(crate) fresh: &'a TextureView,
     pub(crate) depth: &'a TextureView,
     pub(crate) volume: &'a TextureView,
+    pub(crate) normal: Option<&'a TextureView>,
 }
 
 pub(crate) struct Reuse<'a> {
@@ -167,13 +169,21 @@ pub(crate) struct TemporalPass {
     seed_layout: BindGroupLayout,
     capture_uniforms: Buffer,
     seed_uniforms: Buffer,
+    dummy_float: TextureView,
 }
 
 impl TemporalPass {
-    pub(crate) fn new(device: &Device, pipelines: &Pipelines) -> Self {
+    pub(crate) fn new(device: &Device, queue: &Queue, pipelines: &Pipelines) -> Self {
         let capture_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.temporal.capture.layout"),
-            entries: &[uniform(0), texture(1), texture(2), depth(3), texture(4)],
+            entries: &[
+                uniform(0),
+                texture(1),
+                texture(2),
+                depth(3),
+                texture(4),
+                texture(5),
+            ],
         });
         let seed_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.temporal.seed.layout"),
@@ -184,6 +194,7 @@ impl TemporalPass {
                 texture(3),
                 depth(4),
                 texture(5),
+                texture(6),
             ],
         });
         let capture_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -230,6 +241,7 @@ impl TemporalPass {
             seed_layout,
             capture_uniforms,
             seed_uniforms,
+            dummy_float: dummy(device, queue, "grana.temporal.dummy", ACCUMULATION_FORMAT),
         }
     }
 
@@ -287,6 +299,12 @@ impl TemporalPass {
                     BindGroupEntry {
                         binding: 4,
                         resource: BindingResource::TextureView(inputs.volume),
+                    },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: BindingResource::TextureView(
+                            inputs.normal.unwrap_or(&self.dummy_float),
+                        ),
                     },
                 ],
             });
@@ -370,6 +388,12 @@ impl TemporalPass {
                 BindGroupEntry {
                     binding: 5,
                     resource: BindingResource::TextureView(inputs.volume),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(
+                        inputs.normal.unwrap_or(&self.dummy_float),
+                    ),
                 },
             ],
         });
@@ -506,6 +530,49 @@ fn attachment(
         usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
+}
+
+fn dummy(
+    device: &Device,
+    queue: &Queue,
+    label: &'static str,
+    format: wgpu::TextureFormat,
+) -> TextureView {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some(label),
+        size: Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let data: &[u8] = &[0u8; 8];
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(data.len() as u32),
+            rows_per_image: Some(1),
+        },
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&TextureViewDescriptor::default())
 }
 
 fn pipeline_layout(

@@ -1,6 +1,7 @@
 use wgpu::{
-    Device, Extent3d, Texture, TextureDescriptor, TextureDimension, TextureUsages, TextureView,
-    TextureViewDescriptor,
+    CommandEncoderDescriptor, Device, Extent3d, LoadOp, Operations, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, StoreOp, Texture, TextureDescriptor,
+    TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
 use crate::target::NORMAL_FORMAT;
@@ -11,7 +12,7 @@ pub(crate) struct Guide {
 }
 
 impl Guide {
-    pub(crate) fn new(device: &Device, size: [u32; 2]) -> Self {
+    pub(crate) fn new(device: &Device, queue: &Queue, size: [u32; 2]) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0,
             "a guide target covers a positive surface"
@@ -34,6 +35,11 @@ impl Guide {
             label: Some("grana.guide.view"),
             ..Default::default()
         });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("grana.guide"),
+        });
+        clear(&mut encoder, &view);
+        queue.submit([encoder.finish()]);
         Self {
             view,
             _texture: texture,
@@ -43,4 +49,30 @@ impl Guide {
     pub(crate) fn view(&self) -> &TextureView {
         &self.view
     }
+
+    pub(crate) fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
+        clear(encoder, &self.view);
+    }
+}
+
+fn clear(encoder: &mut wgpu::CommandEncoder, view: &TextureView) {
+    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("grana.guide.clear.pass"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Clear(wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                }),
+                store: StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        ..Default::default()
+    });
 }

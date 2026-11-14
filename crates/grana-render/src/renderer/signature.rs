@@ -145,6 +145,61 @@ pub(super) fn digest(words: &[u64]) -> u64 {
     hasher.finish()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ShadowKeys {
+    volume: u64,
+    objects: u64,
+}
+
+impl ShadowKeys {
+    pub(super) fn of(
+        objects: u64,
+        generation: u64,
+        time: u32,
+        style: u64,
+        ladder: Ladder,
+        space: &ShadowSpace,
+    ) -> Self {
+        let space = space.digest();
+        Self {
+            volume: digest(&[
+                style,
+                ladder.base as u64,
+                ladder.count as u64,
+                u64::from(time),
+                generation,
+                space,
+            ]),
+            objects: digest(&[objects, space]),
+        }
+    }
+
+    pub(super) fn volume(self) -> u64 {
+        self.volume
+    }
+
+    pub(super) fn objects(self) -> u64 {
+        self.objects
+    }
+}
+
+pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {
+    let mut low = -0.5 * world;
+    let mut high = 0.5 * world;
+    for layer in scene.layers {
+        for (object, group) in layer.mesh.groups().iter().enumerate() {
+            if !scene.styles[layer.style_start + object].visible() {
+                continue;
+            }
+            let object_low = Vec3::from(group.min());
+            let object_high = object_low + UNIT * Vec3::from(group.scale());
+            low = low.min(object_low);
+            high = high.max(object_high);
+        }
+    }
+    (low, high)
+}
+
 pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {
     let mut key = channels.len() as u64;
     for channel in channels {

@@ -324,6 +324,7 @@ impl Scene {
         for value in [
             self.shading.ambient,
             self.shading.diffuse,
+            self.shading.shadows,
             self.shading.azimuth,
             self.shading.elevation,
         ] {

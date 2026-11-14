@@ -411,6 +411,7 @@ impl Encode for Shading {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.ambient);
         writer.f32(self.diffuse);
+        writer.f32(self.shadows);
         writer.f32(self.azimuth);
         writer.f32(self.elevation);
     }

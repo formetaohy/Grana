@@ -27,6 +27,8 @@ const OPAQUE_NARROW: u32 = 0u;
 const OPAQUE_WIDE: u32 = 1u;
 const LAYER_NARROW: u32 = 2u;
 const LAYER_WIDE: u32 = 3u;
+const SHADOW_NARROW: u32 = 4u;
+const SHADOW_WIDE: u32 = 5u;
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<StyleData>;
@@ -83,4 +85,22 @@ fn mesh_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     commands[index + count * OPAQUE_WIDE] = opaque_wide;
     commands[index + count * LAYER_NARROW] = layer_narrow;
     commands[index + count * LAYER_WIDE] = layer_wide;
+}
+
+@compute @workgroup_size(64)
+fn mesh_cull_shadow(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if (index >= arrayLength(&objects)) {
+        return;
+    }
+    let count = arrayLength(&objects);
+    let object = objects[index];
+    var narrow = empty();
+    var wide = empty();
+    if (styles[index].flags.x >= 0.5) {
+        narrow = command(object.narrow_first, object.narrow_count, object.vertex_base);
+        wide = command(object.wide_first, object.wide_count, object.vertex_base);
+    }
+    commands[index + count * SHADOW_NARROW] = narrow;
+    commands[index + count * SHADOW_WIDE] = wide;
 }

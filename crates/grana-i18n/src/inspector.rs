@@ -63,6 +63,7 @@ labels! {
     offset => "Offset" / "偏移";
     flip_plane => "Flip Plane" / "翻转平面";
     exposure => "Exposure" / "曝光";
+    shadows => "Shadows" / "阴影";
     ambient => "Ambient" / "环境光";
     diffuse => "Diffuse" / "漫反射";
     reset_rendering => "Reset Rendering" / "重置渲染";
