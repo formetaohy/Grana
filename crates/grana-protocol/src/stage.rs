@@ -992,6 +992,7 @@ fn object_coloring(
         }
     } else {
         match (&spec.key, &spec.target) {
+            (Some(key), _) if key == crate::spec::IDENTITY_KEY => ObjectColor::Identity,
             (Some(key), _) if key == grana_measure::SCORE_KEY => {
                 let set = scene.objects.get(id).expect("the staged object set exists");
                 if set.classifier().is_none() {

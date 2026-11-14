@@ -12,6 +12,7 @@ use crate::error::Error;
 use crate::weights::{self, BlockNames, Checkpoint, NeckNames};
 
 const NORMALIZATION_EPSILON: f64 = 1.0e-6;
+const FLOW_CHANNELS: usize = 3;
 const ROW_EQUATION: &str = "bghwc,hkc->bghwk";
 const COLUMN_EQUATION: &str = "bghwc,wkc->bghwk";
 
@@ -472,6 +473,7 @@ impl Model {
             )));
         }
         let mut flows = Vec::with_capacity(tiles.len());
+        let last = self.outputs;
         for index in 0..tiles.len() {
             let base = index * area * self.outputs;
             let region = &values[base..base + area * self.outputs];
@@ -480,9 +482,9 @@ impl Model {
                     "the model produced non-finite flow values",
                 ));
             }
-            let cellprob = region[2 * area..3 * area].to_vec();
-            let dx = region[area..2 * area].to_vec();
-            let dy = region[..area].to_vec();
+            let cellprob = region[(last - 1) * area..last * area].to_vec();
+            let dx = region[(last - 2) * area..(last - 1) * area].to_vec();
+            let dy = region[(last - 3) * area..(last - 2) * area].to_vec();
             flows.push(Flow::from_parts(side, side, dy, dx, cellprob));
         }
         Ok(flows)
@@ -599,6 +601,11 @@ impl Layout {
             )));
         }
         let outputs = upsample[1];
+        if outputs < FLOW_CHANNELS {
+            return Err(Error::model(format!(
+                "the readout must predict a y flow, an x flow and a cell probability, found {outputs} channels"
+            )));
+        }
         expect(
             checkpoint,
             weights::OUT_WEIGHT,

@@ -2996,6 +2996,93 @@ fn projects_localizations_over_their_frame_range() {
 }
 
 #[test]
+fn colors_imported_objects_by_their_label() {
+    let volume = support::spheres(
+        Extent::new(16, 16, 8),
+        Spacing::new(1.0, 1.0, 1.0),
+        &[([8.0, 8.0, 4.0], 3.0)],
+        HIGH,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("labels", volume.pyramid()));
+    let set = scene.objects.import("cells", 0, &scene.dataset);
+    scene.install(set, 0, ObjectFrame::Surfaces(two_surface()));
+    let mut cache = grana_engine::SplatCache::new();
+    let targets = grana_engine::plan(&scene, None);
+    let rendered =
+        grana_engine::frame(&scene, &targets, &mut cache).expect("the labelled objects render");
+    assert_eq!(
+        rendered.styles.len(),
+        2,
+        "each object carries its own style"
+    );
+    assert_eq!(rendered.style_ids.len(), 2);
+    assert_eq!(
+        rendered.styles[0].color(),
+        grana_display::categorical(0),
+        "the first object takes the first label colour"
+    );
+    assert_eq!(
+        rendered.styles[1].color(),
+        grana_display::categorical(1),
+        "the second object takes the second label colour"
+    );
+}
+
+fn two_surface() -> SurfaceSet {
+    const CORNERS: [[f32; 3]; 8] = [
+        [-0.5, -0.5, -0.5],
+        [0.5, -0.5, -0.5],
+        [0.5, 0.5, -0.5],
+        [-0.5, 0.5, -0.5],
+        [-0.5, -0.5, 0.5],
+        [0.5, -0.5, 0.5],
+        [0.5, 0.5, 0.5],
+        [-0.5, 0.5, 0.5],
+    ];
+    const INDICES: [u32; 36] = [
+        0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6,
+        3, 0, 4, 3, 4, 7,
+    ];
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for object in 0..2u32 {
+        let centre = [4.0 * object as f32 - 2.0, 0.0, 0.0];
+        let base = vertices.len() as u32;
+        for corner in CORNERS {
+            vertices.push(grana_geometry::MeshVertex::new(
+                [
+                    centre[0] + corner[0],
+                    centre[1] + corner[1],
+                    centre[2] + corner[2],
+                ],
+                [0.0, 0.0, 1.0],
+                object,
+            ));
+        }
+        indices.extend(INDICES.iter().map(|index| index + base));
+    }
+    let statistics = (0..2u32)
+        .map(|object| {
+            let centre = 4.0 * object as f32 - 2.0;
+            grana_object::SurfaceStatistics::new(
+                8,
+                1.0,
+                6.0,
+                [centre, 0.0, 0.0],
+                grana_geometry::Bounds::new([centre - 0.5, -0.5, -0.5], [centre + 0.5, 0.5, 0.5]),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    SurfaceSet::new(
+        0,
+        grana_geometry::Mesh::new(vertices, indices),
+        statistics,
+        IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0); 2]),
+    )
+}
+
+#[test]
 fn exports_tiles_that_match_the_preview() {
     let mut noise = support::Noise::new(0x2545_f491);
     let precision = 0.012f32;

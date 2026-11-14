@@ -365,6 +365,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
 
 fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> String {
     match metric {
+        ObjectColor::Identity => "Object".to_string(),
         ObjectColor::Measurement(measurement) => measurement.label(channels),
         ObjectColor::Relation {
             target,

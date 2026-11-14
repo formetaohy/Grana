@@ -579,6 +579,13 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn color_by_label(&mut self) {
+        let mut coloring = self.object_coloring.clone();
+        if coloring.set_metric(Some(ObjectColor::Identity)) {
+            self.set_object_coloring(coloring);
+        }
+    }
+
     pub fn track_coloring(&self) -> &Coloring<TrackColor> {
         &self.track_coloring
     }

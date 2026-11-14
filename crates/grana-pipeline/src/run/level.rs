@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use grana_object::Mask;
-use grana_volume::{Intensity, Pyramid, Region, VoxelData};
+use grana_volume::{Intensity, VoxelData};
 use grana_warp::Warp;
 
 use crate::channels::Channels;
@@ -9,7 +9,6 @@ use crate::channels::Channels;
 const SAMPLE_PLANES: u32 = 8;
 const SAMPLE_VOXELS: usize = 1 << 18;
 const PERCENTILE: usize = 100;
-const COARSE_SIDE: u32 = 96;
 
 pub(super) struct Leveling {
     intensity: Intensity,
@@ -28,22 +27,6 @@ impl Leveling {
         warp: &Warp,
     ) -> Result<Self, String> {
         Self::collect(reader, time, channel, level, ranges, mask, warp)
-    }
-
-    pub(super) fn sampled(
-        reader: &Channels,
-        time: u32,
-        channel: usize,
-        region: Region,
-    ) -> Result<Self, String> {
-        let pyramid = reader.pyramid();
-        let level = coarse_level(pyramid);
-        let info = pyramid.level(level);
-        let ranges = region.voxel_range(info).unwrap_or_else(|| {
-            let extent = info.extent();
-            [0..extent.x(), 0..extent.y(), 0..extent.z()]
-        });
-        Self::collect(reader, time, channel, level, &ranges, None, &Warp::IDENTITY)
     }
 
     fn collect(
@@ -117,14 +100,4 @@ impl Leveling {
         }
         plane
     }
-}
-
-fn coarse_level(pyramid: &Pyramid) -> usize {
-    let mut level = 0;
-    for index in 0..pyramid.level_count() {
-        if pyramid.level(index).extent().max_dimension() >= COARSE_SIDE {
-            level = index;
-        }
-    }
-    level
 }

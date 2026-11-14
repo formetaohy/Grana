@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Coloring, Extent, Material, Shading, TransferFunction, VolumeMode};
+use grana_display::{
+    Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
+};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
@@ -1016,6 +1018,10 @@ impl Scene {
 
     pub fn object_colors(&self, set: &ObjectSet) -> Option<Vec<[f32; 3]>> {
         let metric = set.object_coloring().metric()?;
+        if metric == ObjectColor::Identity {
+            let frame = set.frame_shared(self.time)?;
+            return Some((0..frame.object_count()).map(categorical).collect());
+        }
         let extent = self.objects.object_extent(set.id())?;
         let values = self.objects.metric_values(set.id(), metric, self.time)?;
         let coloring = set.object_coloring();

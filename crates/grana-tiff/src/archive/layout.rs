@@ -252,9 +252,26 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
         ));
     }
     let mut ifd = 0usize;
+    let columns = [basis.column(0), basis.column(1), basis.column(2)];
+    let corner = level.origin();
+    let middle = [0.5 * extent.x() as f32, 0.5 * extent.y() as f32];
     for frame in 0..spec.frames {
         for channel in 0..spec.channels.len() {
             for z in 0..extent.z() {
+                let local = [middle[0], middle[1], z as f32 + 0.5];
+                let centre = [0, 1, 2].map(|axis| {
+                    corner[axis]
+                        + columns[0][axis] * local[0]
+                        + columns[1][axis] * local[1]
+                        + columns[2][axis] * local[2]
+                        + spec.placement[axis]
+                });
+                xml.push_str(&format!(
+                    "   <Plane TheT=\"{frame}\" TheC=\"{channel}\" TheZ=\"{z}\" PositionX=\"{}\" PositionXUnit=\"µm\" PositionY=\"{}\" PositionYUnit=\"µm\" PositionZ=\"{}\" PositionZUnit=\"µm\"/>\n",
+                    located(centre[0]),
+                    located(centre[1]),
+                    located(centre[2])
+                ));
                 xml.push_str(&format!(
                     "   <TiffData IFD=\"{ifd}\" PlaneCount=\"1\" FirstT=\"{frame}\" FirstC=\"{channel}\" FirstZ=\"{z}\"/>\n"
                 ));
@@ -273,6 +290,10 @@ fn color(tint: [f32; 3]) -> i32 {
 
 fn number(value: f32) -> String {
     value.to_string()
+}
+
+fn located(value: f32) -> String {
+    format!("{value:.6}")
 }
 
 fn escape(text: &str) -> String {

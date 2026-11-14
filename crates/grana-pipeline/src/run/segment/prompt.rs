@@ -12,7 +12,6 @@ use crate::run::domain::Domain;
 
 use super::SegmentRequest;
 use super::segmenter;
-use crate::run::level::Leveling;
 
 const WINDOW_LIMIT: u32 = 1024;
 const WINDOW_GROWTH: u32 = 3;
@@ -45,11 +44,9 @@ pub(super) fn segment(
                 break;
             }
             let mask = domain.mask(request.roi.as_ref(), time)?;
-            let leveling = Leveling::sampled(reader, time, request.channel, request.region)?;
             let grower = Grow {
                 reader,
                 segmenter: &segmenter,
-                leveling: &leveling,
                 info,
                 channel: request.channel,
                 roi: mask.as_ref(),
@@ -148,7 +145,6 @@ fn order(span: Span) -> Vec<u32> {
 struct Grow<'a> {
     reader: &'a Channels,
     segmenter: &'a Segmenter,
-    leveling: &'a Leveling,
     info: Level,
     channel: usize,
     roi: Option<&'a Mask>,
@@ -236,9 +232,9 @@ impl Grow<'_> {
                 .reader
                 .read_region(self.time, 0, self.channel, &ranges, self.warp)
                 .map_err(|error| error.to_string())?;
-            let mut plane = self.leveling.apply(&data);
-            self.erase(&mut plane, &window, z);
-            if plane.iter().all(|value| *value == 0.0) {
+            let mut plane = vec![0.0f32; data.voxel_count()];
+            data.write_values(&mut plane);
+            if !self.covers(&window, z) {
                 return Ok(None);
             }
             let seed = [
@@ -249,10 +245,16 @@ impl Grow<'_> {
                 .segmenter
                 .seeded(&plane, window.width, window.height, &[seed])
                 .map_err(|error| format!("the segmentation model failed: {error}"))?;
-            let mask = Mask2d {
-                window,
-                bits: labels.into_iter().map(|label| label > 0).collect(),
-            };
+            let bits = labels
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    let x = window.x + (index as u32 % window.width);
+                    let y = window.y + (index as u32 / window.width);
+                    label > 0 && self.kept(x, y, z)
+                })
+                .collect();
+            let mask = Mask2d { window, bits };
             if mask.count() == 0 {
                 return Ok(None);
             }
@@ -269,17 +271,16 @@ impl Grow<'_> {
         }
     }
 
-    fn erase(&self, plane: &mut [f32], window: &Window, z: u32) {
+    fn covers(&self, window: &Window, z: u32) -> bool {
         let Some(roi) = self.roi else {
-            return;
+            return true;
         };
-        for y in 0..window.height {
-            for x in 0..window.width {
-                if !roi.contains_cell([window.x + x, window.y + y, z]) {
-                    plane[(y * window.width + x) as usize] = 0.0;
-                }
-            }
-        }
+        (0..window.height)
+            .any(|y| (0..window.width).any(|x| roi.contains_cell([window.x + x, window.y + y, z])))
+    }
+
+    fn kept(&self, x: u32, y: u32, z: u32) -> bool {
+        self.roi.is_none_or(|roi| roi.contains_cell([x, y, z]))
     }
 }
 

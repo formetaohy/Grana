@@ -122,6 +122,8 @@ pub struct PairSpec {
     pub b: String,
 }
 
+pub const IDENTITY_KEY: &str = "identity";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorSpec {
@@ -2131,7 +2133,7 @@ impl ClassifierSpec {
 impl MetricSpec {
     pub fn of(metric: ObjectColor, scene: &Scene, keys: &[String]) -> Option<Self> {
         Some(match metric {
-            ObjectColor::Coloc { .. } => return None,
+            ObjectColor::Identity | ObjectColor::Coloc { .. } => return None,
             ObjectColor::Score => Self {
                 key: Some(grana_measure::SCORE_KEY.to_string()),
                 target: None,
@@ -2232,6 +2234,7 @@ impl MetricSpec {
                 }
                 Ok(ObjectColor::Score)
             }
+            (Some(key), None) if key == IDENTITY_KEY => Ok(ObjectColor::Identity),
             (Some(key), None) => {
                 let measurement = set
                     .colorable_measurements()

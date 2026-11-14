@@ -59,6 +59,7 @@ labels! {
     hide_selected => "Hide Selected" / "隐藏选中";
     target => "Target" / "目标";
     classifier_score => "Classifier score" / "分类器分数";
+    label_color => "Object label" / "对象标签";
     coloring => "Coloring" / "着色";
     classifier => "Classifier" / "分类器";
     classifier_intro => "Trains on the objects kept by the statistics gate and scores every object of the set." / "以统计筛选保留的对象进行训练，并为该对象集的每个对象打分。";

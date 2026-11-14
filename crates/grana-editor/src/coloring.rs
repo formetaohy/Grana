@@ -50,6 +50,9 @@ pub fn edit<'a>(
     let Some(metric) = current else {
         return children;
     };
+    if matches!(metric, ObjectColor::Identity) {
+        return children;
+    }
     let palettes = Palette::ALL
         .iter()
         .map(|palette| (*palette, palette.name().to_string()))

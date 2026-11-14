@@ -14,6 +14,7 @@ pub(crate) struct Ome {
     pub interval: Option<f32>,
     pub channels: Vec<Channel>,
     pub tiff_data: Vec<TiffData>,
+    pub planes: Vec<Plane>,
 }
 
 pub(crate) struct Channel {
@@ -29,6 +30,14 @@ pub(crate) struct TiffData {
     pub t: u32,
     pub planes: u32,
     pub file: Option<String>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct Plane {
+    pub z: u32,
+    pub c: u32,
+    pub t: u32,
+    pub position: [Option<f32>; 3],
 }
 
 pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
@@ -94,6 +103,7 @@ fn element(
     match start.name().local_name().as_ref() {
         b"Pixels" => pixels(start, ome),
         b"Channel" => channel(start, ome),
+        b"Plane" => plane(start, ome),
         b"TiffData" => {
             *pending = Some(TiffData {
                 ifd: integer_attribute(start, b"IFD")?.unwrap_or(0),
@@ -153,6 +163,27 @@ fn channel(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
     Ok(())
 }
 
+fn plane(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
+    let mut position = [None; 3];
+    for (axis, (name, unit)) in [
+        (b"PositionX", b"PositionXUnit"),
+        (b"PositionY", b"PositionYUnit"),
+        (b"PositionZ", b"PositionZUnit"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        position[axis] = point_attribute(start, name, unit)?;
+    }
+    ome.planes.push(Plane {
+        z: integer_attribute(start, b"TheZ")?.unwrap_or(0),
+        c: integer_attribute(start, b"TheC")?.unwrap_or(0),
+        t: integer_attribute(start, b"TheT")?.unwrap_or(0),
+        position,
+    });
+    Ok(())
+}
+
 fn attribute(start: &BytesStart, name: &[u8]) -> Result<Option<String>, String> {
     for attribute in start.attributes() {
         let attribute = attribute.map_err(|error| error.to_string())?;
@@ -187,6 +218,17 @@ fn length_attribute(start: &BytesStart, name: &[u8], unit: &[u8]) -> Result<Opti
     space(value, unit.as_deref()).map(Some)
 }
 
+fn point_attribute(start: &BytesStart, name: &[u8], unit: &[u8]) -> Result<Option<f32>, String> {
+    let Some(text) = attribute(start, name)? else {
+        return Ok(None);
+    };
+    let value = text
+        .parse::<f32>()
+        .map_err(|error| format!("the OME attribute `{}` is invalid: {error}", label(name)))?;
+    let unit = attribute(start, unit)?;
+    point(value, unit.as_deref()).map(Some)
+}
+
 fn time_attribute(start: &BytesStart) -> Result<Option<f32>, String> {
     let Some(text) = attribute(start, b"TimeIncrement")? else {
         return Ok(None);
@@ -199,7 +241,20 @@ fn time_attribute(start: &BytesStart) -> Result<Option<f32>, String> {
 }
 
 fn space(value: f32, unit: Option<&str>) -> Result<f32, String> {
-    let factor = match unit.unwrap_or("µm") {
+    positive(value * length_unit(unit)?, "physical size")
+}
+
+fn point(value: f32, unit: Option<&str>) -> Result<f32, String> {
+    let scaled = value * length_unit(unit)?;
+    if scaled.is_finite() {
+        Ok(scaled)
+    } else {
+        Err("the OME plane position is not a finite number".to_string())
+    }
+}
+
+fn length_unit(unit: Option<&str>) -> Result<f32, String> {
+    Ok(match unit.unwrap_or("µm") {
         "µm" | "μm" | "um" => 1.0,
         "nm" => 1e-3,
         "pm" => 1e-6,
@@ -209,8 +264,7 @@ fn space(value: f32, unit: Option<&str>) -> Result<f32, String> {
         "Å" | "angstrom" => 1e-4,
         "in" | "inch" => 25_400.0,
         other => return Err(format!("the physical unit `{other}` is not supported")),
-    };
-    positive(value * factor, "physical size")
+    })
 }
 
 fn duration(value: f32, unit: Option<&str>) -> Result<f32, String> {

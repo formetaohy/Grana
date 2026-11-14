@@ -738,6 +738,10 @@ fn object_color(
         pair: None,
     };
     Some(match metric {
+        ObjectColor::Identity => ColorSpec {
+            key: Some(crate::spec::IDENTITY_KEY.to_string()),
+            ..color
+        },
         ObjectColor::Score => ColorSpec {
             key: Some(grana_measure::SCORE_KEY.to_string()),
             ..color

@@ -245,11 +245,19 @@ impl Image {
             .and_then(|ome| ome.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
+        let placement = placement(ome.as_ref(), pyramid_levels[0], sizes[2], path)?;
         let stored = pyramid_levels.len();
         Ok(Self {
             path: path.to_path_buf(),
             name,
-            pyramid: Pyramid::new(pyramid_levels, stored, channels, sizes[0], interval),
+            pyramid: Pyramid::placed(
+                pyramid_levels,
+                stored,
+                channels,
+                sizes[0],
+                interval,
+                placement,
+            ),
             levels,
             files,
             cache,
@@ -490,6 +498,48 @@ fn spacing(ome: &Option<Ome>, volume: &File, path: &Path) -> Result<Spacing, Err
     };
     let z = physical[2].unwrap_or(x);
     Ok(Spacing::new(x, y, z))
+}
+
+fn placement(
+    ome: Option<&Ome>,
+    level: grana_volume::Level,
+    depth: u32,
+    path: &Path,
+) -> Result<[f32; 3], Error> {
+    let Some(ome) = ome else {
+        return Ok([0.0; 3]);
+    };
+    let plane = ome
+        .planes
+        .iter()
+        .filter(|plane| plane.position.iter().any(Option::is_some))
+        .min_by_key(|plane| (plane.t, plane.c, plane.z));
+    let Some(plane) = plane else {
+        return Ok([0.0; 3]);
+    };
+    if plane.z >= depth {
+        return Err(Error::metadata(
+            path,
+            "the OME plane position lies outside the declared depth",
+        ));
+    }
+    let step = level.basis().column(2)[2];
+    let reach = 0.5 * (f64::from(depth) - 1.0 - f64::from(plane.z)) * f64::from(step);
+    let mut placed = [0.0f32; 3];
+    for (axis, (slot, position)) in placed.iter_mut().zip(plane.position).enumerate() {
+        let Some(position) = position else {
+            continue;
+        };
+        let value = f64::from(position) + if axis == 2 { reach } else { 0.0 };
+        if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+            return Err(Error::metadata(
+                path,
+                "the OME plane position is outside the supported range",
+            ));
+        }
+        *slot = value as f32;
+    }
+    Ok(placed)
 }
 
 fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {

@@ -962,6 +962,7 @@ impl Encode for ObjectColor {
                 pair.encode(writer);
                 writer.u8(metric.index());
             }
+            Self::Identity => writer.u8(5),
         }
     }
 }

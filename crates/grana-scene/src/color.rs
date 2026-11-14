@@ -10,6 +10,7 @@ use crate::track_color::relation_value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectColor {
+    Identity,
     Measurement(Measurement),
     Relation {
         target: ObjectSetId,
@@ -30,6 +31,7 @@ pub enum ObjectColor {
 impl ObjectColor {
     pub fn unit(self) -> Unit {
         match self {
+            Self::Identity => Unit::Count,
             Self::Measurement(measurement) => measurement.unit(),
             Self::Relation { field, .. } => field.unit(),
             Self::Child { field, .. } => field.unit(),
@@ -39,6 +41,7 @@ impl ObjectColor {
 
     pub fn decimals(self) -> u8 {
         match self {
+            Self::Identity => 0,
             Self::Measurement(measurement) => measurement.decimals(),
             Self::Relation { field, .. } => field.decimals(),
             Self::Child { field, .. } => field.decimals(),
@@ -49,7 +52,11 @@ impl ObjectColor {
 
     pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
-            Self::Measurement(_) | Self::Child { .. } | Self::Coloc { .. } | Self::Score => None,
+            Self::Identity
+            | Self::Measurement(_)
+            | Self::Child { .. }
+            | Self::Coloc { .. }
+            | Self::Score => None,
             Self::Relation { target, shift, .. } => Some((target, shift)),
         }
     }
@@ -65,6 +72,7 @@ impl ObjectColor {
         object: usize,
     ) -> f32 {
         match self {
+            Self::Identity => object as f32,
             Self::Measurement(measurement) => measurement.value(objects, object),
             Self::Relation { field, .. } => relation_value(field, relation, object),
             Self::Child { .. } => {

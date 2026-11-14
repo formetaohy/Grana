@@ -148,16 +148,16 @@ pub(super) fn appearance<'a>(
         .iter()
         .map(|channel| channel.name().to_string())
         .collect::<Vec<_>>();
-    let mut metrics = set
-        .colorable_measurements()
-        .into_iter()
-        .map(|measurement| {
-            (
-                ObjectColor::Measurement(measurement),
-                crate::text::column(language, &measurement.label(&names)),
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut metrics = vec![(
+        ObjectColor::Identity,
+        grana_i18n::object::label_color(language).to_string(),
+    )];
+    metrics.extend(set.colorable_measurements().into_iter().map(|measurement| {
+        (
+            ObjectColor::Measurement(measurement),
+            crate::text::column(language, &measurement.label(&names)),
+        )
+    }));
     for relation in set.relations() {
         let target = state.scene.objects.get(relation.target()).map_or_else(
             || grana_i18n::object::target(language).to_string(),

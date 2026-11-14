@@ -62,6 +62,29 @@ fn assembles_slices_by_overlap() {
 }
 
 #[test]
+fn normalizes_a_plane_to_its_one_and_ninety_ninth_percentiles() {
+    let mut values = (0..1000).map(|index| index as f32).collect::<Vec<_>>();
+    values[0] = -5.0;
+    let normalized = grana_segment::normalize(&values);
+    let expected = (-5.0 - 9.99) / (989.01 - 9.99);
+    assert!(
+        (normalized[0] - expected).abs() <= 1.0e-5,
+        "the plane keeps its values below the first percentile: {} against {expected}",
+        normalized[0]
+    );
+    assert!(
+        normalized[999] > 1.0,
+        "the plane keeps its values above the ninety ninth percentile: {}",
+        normalized[999]
+    );
+    let flat = grana_segment::normalize(&[3.0; 16]);
+    assert!(
+        flat.iter().all(|value| *value == 0.0),
+        "a plane without contrast normalizes to zeros"
+    );
+}
+
+#[test]
 fn assigns_flow_basins_to_their_seeds() {
     let flow = basin_flow();
     let labels = flow.seeded(Prompt::new(&CENTERS, 0.0, 6.0));

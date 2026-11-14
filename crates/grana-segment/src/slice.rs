@@ -7,10 +7,10 @@ use crate::cache;
 use crate::dynamics::{self, Flow, Prompt};
 use crate::error::Error;
 use crate::model::Model;
+use crate::normalize;
 use crate::tile;
 
 const TILE_BATCH: usize = 4;
-const FLAT_EPSILON: f32 = 1.0e-6;
 const SEED_REACH: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,25 +77,8 @@ impl Segmenter {
     }
 
     pub fn segment(&self, plane: &[f32], width: u32, height: u32) -> Result<Vec<u32>> {
-        let length = image_length(width, height)?;
-        if plane.len() != length {
-            return Err(Error::input(format!(
-                "the plane must contain {length} values, found {}",
-                plane.len()
-            )));
-        }
-        if plane
-            .iter()
-            .any(|&value| !value.is_finite() || value < 0.0 || value > 1.0)
-        {
-            return Err(Error::input(
-                "the plane must contain finite values in the range 0..=1",
-            ));
-        }
+        check_plane(plane, width, height)?;
         let settings = self.settings;
-        if plane.iter().all(|&value| value == plane[0]) {
-            return Ok(vec![0; length]);
-        }
         let flow = self.flow(plane, width, height)?;
         let mut labels = flow.masks(settings.cellprob_threshold());
         self.finish(&flow, &mut labels, width, height);
@@ -109,24 +92,7 @@ impl Segmenter {
         height: u32,
         seeds: &[[f32; 2]],
     ) -> Result<Vec<u32>> {
-        let length = image_length(width, height)?;
-        if plane.len() != length {
-            return Err(Error::input(format!(
-                "the plane must contain {length} values, found {}",
-                plane.len()
-            )));
-        }
-        if plane
-            .iter()
-            .any(|&value| !value.is_finite() || value < 0.0 || value > 1.0)
-        {
-            return Err(Error::input(
-                "the plane must contain finite values in the range 0..=1",
-            ));
-        }
-        if plane.iter().all(|&value| value == plane[0]) {
-            return Ok(vec![0; length]);
-        }
+        check_plane(plane, width, height)?;
         let flow = self.flow(plane, width, height)?;
         let settings = self.settings;
         let mut labels = flow.seeded(Prompt::new(
@@ -151,6 +117,7 @@ impl Segmenter {
     }
 
     fn flow(&self, plane: &[f32], width: u32, height: u32) -> Result<Flow> {
+        let values = normalize::plane(plane);
         let length = image_length(width, height)?;
         let side = self.model.info().side();
         let settings = self.settings;
@@ -173,7 +140,7 @@ impl Segmenter {
             let source = row * width_length;
             let target = (row + lead_y as usize) * padded_width as usize + lead_x as usize;
             padded[target..target + width_length]
-                .copy_from_slice(&plane[source..source + width_length]);
+                .copy_from_slice(&values[source..source + width_length]);
         }
 
         let starts_x = tile::starts(padded_width, side, settings.tile_overlap());
@@ -195,24 +162,15 @@ impl Segmenter {
         let mut origins: Vec<(u32, u32)> = Vec::with_capacity(TILE_BATCH);
         for &start_y in &starts_y {
             for &start_x in &starts_x {
-                let mut values = vec![0f32; tile_area];
-                let mut low = f32::INFINITY;
-                let mut high = f32::NEG_INFINITY;
+                let mut tile_values = vec![0f32; tile_area];
                 for row in 0..side_length {
                     let source =
                         (start_y as usize + row) * padded_width as usize + start_x as usize;
                     let target = row * side_length;
-                    for column in 0..side_length {
-                        let value = padded[source + column];
-                        low = low.min(value);
-                        high = high.max(value);
-                        values[target + column] = value;
-                    }
+                    tile_values[target..target + side_length]
+                        .copy_from_slice(&padded[source..source + side_length]);
                 }
-                if high - low <= FLAT_EPSILON {
-                    continue;
-                }
-                batch.push(values);
+                batch.push(tile_values);
                 origins.push((start_x, start_y));
                 if batch.len() == TILE_BATCH {
                     accumulator.infer(&self.model, &batch, &origins)?;
@@ -234,13 +192,13 @@ impl Segmenter {
             for column in 0..width_length {
                 let index = source + column;
                 let weight = accumulator.weight[index];
-                if weight > 0.0 {
-                    dy[target + column] = accumulator.dy[index] / weight;
-                    dx[target + column] = accumulator.dx[index] / weight;
-                    cellprob[target + column] = accumulator.cellprob[index] / weight;
-                } else {
-                    cellprob[target + column] = f32::NEG_INFINITY;
-                }
+                assert!(
+                    weight > 0.0,
+                    "every plane pixel lies under a tile that ran the model"
+                );
+                dy[target + column] = accumulator.dy[index] / weight;
+                dx[target + column] = accumulator.dx[index] / weight;
+                cellprob[target + column] = accumulator.cellprob[index] / weight;
             }
         }
 
@@ -445,6 +403,20 @@ fn validate_settings(settings: Settings, side: u32) -> Result<()> {
         return Err(Error::input(
             "the slice overlap must be a finite value in the range 0..=1",
         ));
+    }
+    Ok(())
+}
+
+fn check_plane(plane: &[f32], width: u32, height: u32) -> Result<()> {
+    let length = image_length(width, height)?;
+    if plane.len() != length {
+        return Err(Error::input(format!(
+            "the plane must contain {length} values, found {}",
+            plane.len()
+        )));
+    }
+    if plane.iter().any(|value| !value.is_finite()) {
+        return Err(Error::input("the plane must contain finite values"));
     }
     Ok(())
 }

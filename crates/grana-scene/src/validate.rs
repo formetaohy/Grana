@@ -572,6 +572,7 @@ fn provenance_acyclic(sets: &[SetState]) -> bool {
 
 fn color_applies(sets: &[SetState], set: &SetState, channels: usize, metric: ObjectColor) -> bool {
     match metric {
+        ObjectColor::Identity => true,
         ObjectColor::Measurement(measurement) => {
             measurement.colorable() && set.kind.measurements(channels).contains(&measurement)
         }

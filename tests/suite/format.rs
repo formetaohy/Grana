@@ -63,7 +63,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             name: "pyramid",
             channels: &channels,
             levels: &levels,
-            placement: [0.0; 3],
+            placement: [1.5, -2.0, 3.0],
             frames: 2,
             interval: 0.5,
             fill: &mut fill,
@@ -81,6 +81,17 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     );
     let image = grana_tiff::Image::open(&path).expect("the archive opens");
     assert_eq!(image.pyramid().level_count(), 3);
+    for (axis, value) in image.pyramid().placement().into_iter().enumerate() {
+        let expected = [1.5, -2.0, 3.0][axis];
+        assert!(
+            (value - expected).abs() <= 1.0e-5,
+            "the archive keeps its world placement on axis {axis}: {value} against {expected}"
+        );
+        assert!(
+            image.pyramid().level(0).center()[axis].abs() <= 1.0e-5,
+            "the archive centres its levels and records the placement once"
+        );
+    }
     for (index, level) in levels.iter().enumerate() {
         assert_eq!(
             image.pyramid().level(index).extent(),
@@ -156,6 +167,57 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         values.iter().all(|value| *value == 7.0),
         "the exported channel keeps its voxels"
     );
+
+    let source = image.pyramid().level(0);
+    let cropped = cropped_levels(
+        Region::axis_aligned(
+            Vec3::from(source.corner([4.0, 2.0, 1.0])),
+            Vec3::from(source.corner([12.0, 10.0, 5.0])),
+        ),
+        image.pyramid().levels(),
+    )
+    .expect("the region crops the levels");
+    let mut progress = |_, _| {};
+    let summary = grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: temp.path().join("crop.ome.tif"),
+            name: "crop".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                range: Intensity::new(0.0, 255.0),
+            }],
+            levels: cropped.levels,
+            origins: cropped.origins,
+            placement: image.pyramid().placement(),
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: Vec::new(),
+        },
+        &Channels::stored(Arc::clone(&image)),
+        &AtomicBool::new(false),
+        &mut progress,
+    )
+    .expect("the region exports as an archive");
+    let reopened = grana_tiff::Image::open(summary.path()).expect("the cropped archive opens");
+    let expected = [0, 1, 2].map(|axis| {
+        0.5 * (source.corner([4.0, 2.0, 1.0])[axis] + source.corner([12.0, 10.0, 5.0])[axis])
+    });
+    for (axis, value) in reopened.pyramid().placement().into_iter().enumerate() {
+        assert!(
+            (value - expected[axis]).abs() <= 1.0e-3,
+            "the cropped archive keeps the world centre of its box on axis {axis}: {value} against {}",
+            expected[axis]
+        );
+    }
+    for (axis, value) in reopened.pyramid().level(0).center().into_iter().enumerate() {
+        assert!(
+            value.abs() <= 1.0e-3,
+            "the cropped archive places its centre at the world origin on axis {axis}: {value}"
+        );
+    }
 }
 
 #[test]

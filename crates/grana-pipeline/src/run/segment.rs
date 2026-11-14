@@ -10,7 +10,6 @@ use crate::channels::Channels;
 use crate::event::Event;
 use crate::run::domain::Domain;
 use crate::run::labelled;
-use crate::run::level::Leveling;
 
 mod prompt;
 
@@ -120,15 +119,6 @@ pub fn segment(
         };
         let width = ranges[0].end - ranges[0].start;
         let height = ranges[1].end - ranges[1].start;
-        let leveling = Leveling::at(
-            reader,
-            time,
-            request.channel,
-            0,
-            &ranges,
-            mask.as_ref(),
-            warp,
-        )?;
         let mut slices = Vec::with_capacity(depth as usize);
         for (offset, z) in ranges[2].clone().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -138,9 +128,10 @@ pub fn segment(
             let values = reader
                 .read_region(time, 0, request.channel, &slice, warp)
                 .map_err(|error| error.to_string())?;
-            let mut plane = leveling.apply(&values);
+            let mut plane = vec![0.0f32; values.voxel_count()];
+            values.write_values(&mut plane);
             let kept = match mask.as_ref() {
-                Some(mask) => keep_plane(&mut plane, mask, &ranges, z),
+                Some(mask) => covers(mask, &ranges, z),
                 None => true,
             };
             let mut labels = if kept {
@@ -196,21 +187,17 @@ fn clip(region: &[Range<u32>; 3], mask: Option<&Mask>, level: Level) -> Option<[
         .then_some(ranges)
 }
 
-fn keep_plane(plane: &mut [f32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32) -> bool {
+fn covers(mask: &Mask, ranges: &[Range<u32>; 3], z: u32) -> bool {
     let width = (ranges[0].end - ranges[0].start) as usize;
     let height = (ranges[1].end - ranges[1].start) as usize;
-    let mut any = false;
     for y in 0..height {
-        let row = y * width;
         for x in 0..width {
             if mask.contains_cell([ranges[0].start + x as u32, ranges[1].start + y as u32, z]) {
-                any = true;
-            } else {
-                plane[row + x] = 0.0;
+                return true;
             }
         }
     }
-    any
+    false
 }
 
 fn keep_labels(labels: &mut [u32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32) {

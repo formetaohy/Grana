@@ -1440,6 +1440,7 @@ impl Decode for ObjectColor {
                 let metric = ColocMetric::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
                 Ok(Self::Coloc { pair, metric })
             }
+            5 => Ok(Self::Identity),
             _ => Err(FAULT_SHAPE),
         }
     }

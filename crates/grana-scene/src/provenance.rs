@@ -427,6 +427,13 @@ impl Provenance {
         }
     }
 
+    pub fn labelled(&self) -> bool {
+        matches!(
+            self,
+            Self::Segmented { .. } | Self::Imported { .. } | Self::Masked { .. }
+        )
+    }
+
     pub fn source(&self) -> Option<ObjectSetId> {
         match self {
             Self::Filtered { source, .. }

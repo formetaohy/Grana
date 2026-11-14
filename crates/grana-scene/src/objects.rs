@@ -102,6 +102,7 @@ impl Objects {
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let mut set = ObjectSet::new(id, key, ObjectKind::Surfaces, name, channel, color, dataset);
         set.set_provenance(Provenance::imported(label));
+        set.color_by_label();
         self.sets.push(set);
         id
     }
@@ -128,6 +129,7 @@ impl Objects {
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let mut set = ObjectSet::new(id, key, ObjectKind::Surfaces, name, channel, color, dataset);
         set.set_provenance(Provenance::segmented(params));
+        set.color_by_label();
         self.sets.push(set);
         id
     }
@@ -461,10 +463,14 @@ impl Objects {
         if strokes.is_empty() {
             return None;
         }
-        self.derive(id, suffix, || Provenance::Masked {
+        let masked = self.derive(id, suffix, || Provenance::Masked {
             source: id,
             strokes,
-        })
+        })?;
+        if let Some(set) = self.get_mut(masked) {
+            set.color_by_label();
+        }
+        Some(masked)
     }
 
     pub fn replan_masked(&mut self, id: ObjectSetId, strokes: Vec<MaskEdit>) -> bool {
@@ -1106,6 +1112,11 @@ impl Objects {
         let set = self.get(id)?;
         let frame = set.frame_shared(time)?;
         match metric {
+            ObjectColor::Identity => Some(
+                (0..frame.object_count())
+                    .map(|object| object as f32)
+                    .collect(),
+            ),
             ObjectColor::Measurement(measurement) => Some(
                 (0..frame.object_count())
                     .map(|object| measurement.value(frame.objects(), object))
@@ -1195,6 +1206,7 @@ impl Objects {
         };
         match metric {
             None => {}
+            Some(ObjectColor::Identity) => {}
             Some(ObjectColor::Measurement(measurement)) => assert!(
                 set.colorable_measurements().contains(&measurement),
                 "the measurement colors the objects of its set"
