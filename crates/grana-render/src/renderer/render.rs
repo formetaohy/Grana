@@ -577,6 +577,7 @@ impl Renderer {
                     let object = shadow_keys.objects();
                     if *object_key != Some(object) {
                         *object_key = Some(object);
+                        shadow.clear_objects(&mut encoder);
                         if let Some(mesh_passes) = meshes.as_ref() {
                             mesh_passes.draw_shadow(&mut encoder, shadow.objects());
                         }

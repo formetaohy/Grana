@@ -562,7 +562,7 @@ impl MeshPasses {
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                 view: target,
                 depth_ops: Some(Operations {
-                    load: LoadOp::Clear(1.0),
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 }),
                 stencil_ops: None,

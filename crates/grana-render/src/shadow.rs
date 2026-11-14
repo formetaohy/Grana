@@ -215,6 +215,22 @@ impl Shadow {
         &self.objects
     }
 
+    pub fn clear_objects(&self, encoder: &mut CommandEncoder) {
+        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("grana.shadow.objects.clear"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.objects,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+    }
+
     pub fn encode_tau(&mut self, encoder: &mut CommandEncoder, groups: ShadowGroups<'_>, key: u64) {
         if self.tau_key == Some(key) {
             return;
