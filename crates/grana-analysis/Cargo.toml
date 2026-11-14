@@ -12,6 +12,7 @@ bytemuck = { workspace = true }
 fs4 = { workspace = true }
 glam = { workspace = true }
 grana-geometry = { workspace = true }
+grana-store = { workspace = true }
 grana-display = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }

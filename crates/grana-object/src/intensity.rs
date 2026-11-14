@@ -207,6 +207,10 @@ impl IntensityTable {
         self.values.len() / self.channels
     }
 
+    pub fn values(&self) -> &[SampleStatistics] {
+        &self.values
+    }
+
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }

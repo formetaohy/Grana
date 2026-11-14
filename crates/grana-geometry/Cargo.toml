@@ -9,8 +9,8 @@ repository.workspace = true
 [dependencies]
 bytemuck = { workspace = true }
 grana-codec = { workspace = true }
+grana-store = { workspace = true }
 glam = { workspace = true }
-thiserror = { workspace = true }
 
 [lints]
 workspace = true

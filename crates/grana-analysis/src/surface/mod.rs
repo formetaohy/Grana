@@ -17,8 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use grana_geometry::{Geometry, GeometryStore};
+use grana_geometry::Geometry;
 use grana_object::SurfaceSet;
+use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::morphology::Element;
@@ -72,15 +73,11 @@ pub(crate) type Measure<'a> =
 pub struct Sources<'a> {
     read: &'a Read<'a>,
     measure: &'a Measure<'a>,
-    store: &'a Arc<GeometryStore>,
+    store: &'a Arc<SpillStore>,
 }
 
 impl<'a> Sources<'a> {
-    pub fn new(
-        read: &'a Read<'a>,
-        measure: &'a Measure<'a>,
-        store: &'a Arc<GeometryStore>,
-    ) -> Self {
+    pub fn new(read: &'a Read<'a>, measure: &'a Measure<'a>, store: &'a Arc<SpillStore>) -> Self {
         Self {
             read,
             measure,
@@ -515,7 +512,7 @@ pub fn recut(
     set: &SurfaceSet,
     spec: SurfaceCut,
     workers: usize,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<Option<SurfaceSet>, String> {
     let Some(topology) = set.topology() else {
         return Ok(None);

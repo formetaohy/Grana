@@ -358,13 +358,17 @@ impl ObjectParams {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectFrame {
-    Spots(SpotSet),
+    Spots(Arc<SpotSet>),
     Surfaces(SurfaceSet),
     Filaments(FilamentSet),
     Cells(CellSet),
 }
 
 impl ObjectFrame {
+    pub fn from_spots(set: SpotSet) -> Self {
+        Self::Spots(Arc::new(set))
+    }
+
     pub fn anchors(&self) -> Vec<ObjectAnchor> {
         match self {
             Self::Spots(set) => set
@@ -551,7 +555,7 @@ impl ObjectFrame {
             return Ok(None);
         }
         Ok(match self {
-            Self::Spots(set) => set.without(object).map(Self::Spots),
+            Self::Spots(set) => set.without(object).map(|set| Self::Spots(Arc::new(set))),
             Self::Surfaces(set) => set.without(object)?.map(Self::Surfaces),
             Self::Filaments(set) => set.without(object)?.map(Self::Filaments),
             Self::Cells(set) => set.without(object)?.map(Self::Cells),
@@ -572,7 +576,7 @@ impl ObjectFrame {
             return Ok(Some(self.clone()));
         }
         Ok(Some(match self {
-            Self::Spots(set) => Self::Spots(set.retain(keep)),
+            Self::Spots(set) => Self::Spots(Arc::new(set.retain(keep))),
             Self::Surfaces(set) => Self::Surfaces(set.retain(keep)?),
             Self::Filaments(set) => Self::Filaments(set.retain(keep)?),
             Self::Cells(set) => Self::Cells(set.retain(keep)?),
@@ -581,7 +585,9 @@ impl ObjectFrame {
 
     pub fn merge(&self, other: &Self) -> Result<Self, String> {
         Ok(match (self, other) {
-            (Self::Spots(carried), Self::Spots(absorbed)) => Self::Spots(carried.merge(absorbed)),
+            (Self::Spots(carried), Self::Spots(absorbed)) => {
+                Self::Spots(Arc::new(carried.merge(absorbed)))
+            }
             (Self::Surfaces(carried), Self::Surfaces(absorbed)) => {
                 Self::Surfaces(carried.merge(absorbed).map_err(|error| error.to_string())?)
             }

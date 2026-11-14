@@ -1044,21 +1044,24 @@ impl Objects {
             .collect()
     }
 
-    pub fn child(&self, parent: ObjectSetId, child: ObjectSetId, time: u32) -> Option<Child<'_>> {
+    pub fn child<'a>(
+        &'a self,
+        parent: ObjectSetId,
+        child: ObjectSetId,
+        time: u32,
+        frame: &'a ObjectFrame,
+    ) -> Option<Child<'a>> {
         let set = self.get(child)?;
         let relation = set.relation(parent, 0)?;
-        let frame = set.frame(time);
-        let members = frame.and_then(|frame| {
-            relation
-                .frame(time)
-                .filter(|relation| relation.objects() == frame.object_count())
-                .map(members_of)
-        });
+        let members = relation
+            .frame(time)
+            .filter(|relation| relation.objects() == frame.object_count())
+            .map(members_of);
         Some(Child::new(
             set.key().as_str(),
             set.name(),
             set.child_fields(),
-            frame.map(ObjectFrame::objects),
+            Some(frame.objects()),
             members,
         ))
     }
@@ -1101,7 +1104,7 @@ impl Objects {
 
     fn compute_values(&self, id: ObjectSetId, metric: ObjectColor, time: u32) -> Option<Vec<f32>> {
         let set = self.get(id)?;
-        let frame = set.frame(time)?;
+        let frame = set.frame_shared(time)?;
         match metric {
             ObjectColor::Measurement(measurement) => Some(
                 (0..frame.object_count())
@@ -1123,7 +1126,8 @@ impl Objects {
                 )
             }
             ObjectColor::Child { target, field } => {
-                let child = self.child(id, target, time)?;
+                let child_frame = self.get(target)?.frame_shared(time)?;
+                let child = self.child(id, target, time, &child_frame)?;
                 Some(child.values(frame.object_count(), field))
             }
             ObjectColor::Coloc { pair, metric } => {
@@ -1320,20 +1324,23 @@ impl Objects {
         let set = self.get(id)?;
         match metric {
             ObjectColor::Child { target, field } => {
-                let parents = set.frame(time)?.object_count();
-                let values = self.child(id, target, time)?.values(parents, field);
+                let parents = set.frame_shared(time)?.object_count();
+                let child_frame = self.get(target)?.frame_shared(time)?;
+                let values = self
+                    .child(id, target, time, &child_frame)?
+                    .values(parents, field);
                 extent_of(&values)
             }
             ObjectColor::Coloc { .. } | ObjectColor::Score => {
                 extent_of(self.metric_values(id, metric, time)?.as_slice())
             }
             _ => {
-                let frame = set.frame(time)?;
+                let frame = set.frame_shared(time)?;
                 let relation = metric
                     .relation()
                     .and_then(|(target, shift)| set.relation(target, shift))
                     .and_then(|relation| relation.frame(time));
-                metric.extent(frame, relation)
+                metric.extent(&frame, relation)
             }
         }
     }

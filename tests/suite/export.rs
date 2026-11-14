@@ -196,7 +196,7 @@ fn exports_a_track_lineage_as_a_vector_page() {
         scene.install(
             set,
             time,
-            ObjectFrame::Spots(SpotSet::new(0, vec![spot], intensities)),
+            ObjectFrame::from_spots(SpotSet::new(0, vec![spot], intensities)),
         );
     }
     let mother = Track::new(vec![

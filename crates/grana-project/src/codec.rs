@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use grana_codec::{Decoder, Encoder, Fault};
-use grana_geometry::GeometryStore;
+use grana_store::SpillStore;
 
 pub(crate) trait Encode {
     fn encode(&self, writer: &mut Encoder<'_>);
@@ -16,14 +16,14 @@ pub(crate) trait Decode: Sized {
 
 pub(crate) struct Reader<'a> {
     decoder: Decoder<'a>,
-    store: Arc<GeometryStore>,
+    store: Arc<SpillStore>,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(
         source: &'a mut dyn Read,
         length: usize,
-        store: Arc<GeometryStore>,
+        store: Arc<SpillStore>,
         cancel: &'a AtomicBool,
         report: &'a mut dyn FnMut(usize),
     ) -> Self {
@@ -33,7 +33,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    pub fn store(&self) -> &Arc<GeometryStore> {
+    pub fn store(&self) -> &Arc<SpillStore> {
         &self.store
     }
 }

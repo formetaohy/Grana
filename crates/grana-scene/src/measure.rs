@@ -8,7 +8,6 @@ use grana_measure::{
 use glam::Vec3;
 use grana_volume::Region;
 
-use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
@@ -604,9 +603,7 @@ impl Measure {
         Some(match self.group {
             Group::Object => {
                 let mut frames = (0..object.frame_count())
-                    .map(|time| {
-                        vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)]
-                    })
+                    .map(|time| vec![false; object.object_count(time)])
                     .collect::<Vec<_>>();
                 for row in mask.iter() {
                     let observation = table.observation(row);
@@ -637,9 +634,7 @@ impl Measure {
                     .filter_map(|row| table.observation(row).molecule())
                     .collect::<BTreeSet<_>>();
                 let mut frames = (0..object.frame_count())
-                    .map(|time| {
-                        vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)]
-                    })
+                    .map(|time| vec![false; object.object_count(time)])
                     .collect::<Vec<_>>();
                 for (time, frame) in object.frames() {
                     let Some(spots) = frame.spots() else {

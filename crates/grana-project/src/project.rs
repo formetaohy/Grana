@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use grana_animation::Timeline;
 use grana_display::CameraState;
-use grana_geometry::GeometryStore;
 use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneShape, SceneState};
+use grana_store::SpillStore;
 use grana_volume::Fingerprint;
 
 use grana_codec::Encoder;
@@ -227,7 +227,7 @@ impl Project {
 
     pub fn read(
         path: &Path,
-        store: Arc<GeometryStore>,
+        store: Arc<SpillStore>,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Self, Error> {
@@ -290,7 +290,7 @@ impl Project {
             .sets
             .iter()
             .flat_map(|set| set.frames.iter().flatten())
-            .map(|frame| match &**frame {
+            .map(|frame| match frame.shared().as_ref() {
                 ObjectFrame::Spots(_) => 1,
                 ObjectFrame::Surfaces(set) => 2 + usize::from(set.topology().is_some()),
                 ObjectFrame::Filaments(_) => 2,

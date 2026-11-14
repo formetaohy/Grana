@@ -107,7 +107,7 @@ fn renders_a_track_lineage_without_a_window() {
     scene.install(
         set,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             vec![Spot::new([16.0, 16.0, 1.0], 3.0, 1.0)],
             intensities,

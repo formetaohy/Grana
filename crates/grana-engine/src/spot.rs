@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
 use grana_display::srgb_to_linear;
@@ -18,14 +20,14 @@ pub(crate) const STANDALONE: u32 = u32::MAX;
 
 pub(crate) const LEVEL_COUNT: u8 = LADDER + 1;
 
-#[derive(Clone, Copy)]
-pub(crate) struct Frame<'a> {
+#[derive(Clone)]
+pub(crate) struct Frame {
     pub(crate) time: u32,
-    pub(crate) spots: &'a SpotSet,
+    pub(crate) spots: Arc<SpotSet>,
 }
 
-impl<'a> Frame<'a> {
-    pub(crate) fn new(time: u32, spots: &'a SpotSet) -> Self {
+impl Frame {
+    pub(crate) fn new(time: u32, spots: Arc<SpotSet>) -> Self {
         Self { time, spots }
     }
 }
@@ -85,7 +87,7 @@ pub(crate) struct Ladder {
 }
 
 impl Ladder {
-    pub(crate) fn over(frames: &[Frame<'_>]) -> Option<Self> {
+    pub(crate) fn over(frames: &[Frame]) -> Option<Self> {
         let total = frames.iter().map(|frame| frame.spots.len()).sum::<usize>();
         if total == 0 {
             return None;
@@ -126,11 +128,11 @@ impl Ladder {
     }
 }
 
-pub(crate) fn aggregated(frames: &[Frame<'_>]) -> bool {
+pub(crate) fn aggregated(frames: &[Frame]) -> bool {
     frames.iter().map(|frame| frame.spots.len()).sum::<usize>() >= AGGREGATE_FLOOR
 }
 
-pub(crate) fn choose(frames: &[Frame<'_>], world_per_pixel: f32) -> Choice {
+pub(crate) fn choose(frames: &[Frame], world_per_pixel: f32) -> Choice {
     let projected = frames.len() > 1;
     let usable = world_per_pixel.is_finite() && world_per_pixel > 0.0;
     if !projected && (!aggregated(frames) || !usable) {
@@ -162,19 +164,14 @@ pub(crate) fn choose(frames: &[Frame<'_>], world_per_pixel: f32) -> Choice {
     Choice::Level(LADDER)
 }
 
-pub(crate) fn detections<F>(
-    frames: &[Frame<'_>],
-    choice: Choice,
-    opacity: f32,
-    style: F,
-) -> Detections
+pub(crate) fn detections<F>(frames: &[Frame], choice: Choice, opacity: f32, style: F) -> Detections
 where
     F: Fn(u32, usize, &Spot) -> Appearance,
 {
     if frames.len() == 1 {
-        let frame = frames[0];
+        let frame = &frames[0];
         return match choice {
-            Choice::Full => raw(frame.spots, opacity, &|index: usize, spot| {
+            Choice::Full => raw(&frame.spots, opacity, &|index: usize, spot| {
                 style(frame.time, index, spot)
             }),
             Choice::Level(level) => binned(frames, level, opacity, &style, true),
@@ -244,7 +241,7 @@ where
     detections
 }
 
-fn binned<F>(frames: &[Frame<'_>], level: u8, opacity: f32, style: &F, pickable: bool) -> Detections
+fn binned<F>(frames: &[Frame], level: u8, opacity: f32, style: &F, pickable: bool) -> Detections
 where
     F: Fn(u32, usize, &Spot) -> Appearance,
 {

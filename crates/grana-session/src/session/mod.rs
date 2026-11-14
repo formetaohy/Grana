@@ -30,7 +30,6 @@ use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
-use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
 use grana_image::Plate;
 use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
@@ -42,6 +41,8 @@ use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
     ObjectSetId, Origin, Progress, Revision, Revisions, Scene,
 };
+use grana_store::DEFAULT_BUDGET;
+use grana_store::SpillStore;
 use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 
 use crate::access::Access;
@@ -103,7 +104,7 @@ pub struct Session {
     access: Access,
     read_only: bool,
     scene: Option<Scene>,
-    store: Arc<GeometryStore>,
+    store: Arc<SpillStore>,
     measure: Measure,
     tasks: Tasks,
     timeline: Timeline,
@@ -190,7 +191,7 @@ impl Session {
             access,
             read_only: false,
             scene: None,
-            store: GeometryStore::temporary(DEFAULT_BUDGET)
+            store: SpillStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
             tasks: Tasks::default(),

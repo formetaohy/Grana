@@ -665,7 +665,10 @@ impl Decode for SetState {
         let label_export = Option::<LabelExport>::decode(reader)?;
         let localization = Option::<LocalizationSource>::decode(reader)?;
         let seeds = decode_seeds(reader)?;
-        let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
+        let frames = Vec::<Option<ObjectFrame>>::decode(reader)?
+            .into_iter()
+            .map(|frame| frame.map(|frame| grana_scene::Frame::resident(Arc::new(frame))))
+            .collect::<Vec<_>>();
         let state = Self {
             id,
             key,
@@ -1564,7 +1567,7 @@ impl Decode for ObjectFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         reader.step();
         match reader.u8()? {
-            TAG_SPOTS => Ok(Self::Spots(SpotSet::decode(reader)?)),
+            TAG_SPOTS => Ok(Self::Spots(Arc::new(SpotSet::decode(reader)?))),
             TAG_SURFACES => Ok(Self::Surfaces(SurfaceSet::decode(reader)?)),
             TAG_FILAMENTS => Ok(Self::Filaments(FilamentSet::decode(reader)?)),
             TAG_CELLS => Ok(Self::Cells(CellSet::decode(reader)?)),

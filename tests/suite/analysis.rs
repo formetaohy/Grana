@@ -8,7 +8,6 @@ use grana_analysis::{
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
     local::{BlockField, BlockLevels},
 };
-use grana_geometry::GeometryStore;
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
@@ -21,6 +20,7 @@ use grana_scene::{
     Dataset, Drift, LocalizationAlignment, LocalizationSource, ObjectFrame, ObjectKind,
     ObjectParams, Registration, Scene,
 };
+use grana_store::SpillStore;
 use grana_volume::{
     Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
     VolumeSeries, VoxelData, VoxelFormat,
@@ -349,7 +349,7 @@ fn extract_surfaces_at(
                         core[2].clone(),
                     ))
                 },
-                &GeometryStore::memory(),
+                &SpillStore::memory(),
             ),
         )
         .expect("a surface frame is detected")
@@ -562,7 +562,7 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         intensity,
     );
     let set = scan
-        .frame(&data, None, &GeometryStore::memory(), |_| Ok(data.clone()))
+        .frame(&data, None, &SpillStore::memory(), |_| Ok(data.clone()))
         .expect("the filament scan traces the frame");
     assert_eq!(set.object_count(), 1, "the dim filament survives");
     let length = set.object(0).expect("the filament exists").length();
@@ -589,6 +589,68 @@ fn recovers_a_translation_and_reports_a_still_volume() {
     }
     let still = vec![4.0f32; dims.iter().product()];
     assert_eq!(drift_shift(&still, &still, dims), [0.0; 3]);
+}
+
+#[test]
+fn pages_localization_frames_beyond_the_resident_budget() {
+    const FRAMES: u32 = 1200;
+    const PER_FRAME: usize = 1000;
+    let level = Level::new(Extent::new(32, 32, 2), Spacing::new(0.1, 0.1, 0.1));
+    let pyramid = Pyramid::new(
+        vec![level],
+        1,
+        vec![ChannelInfo::new(
+            "GFP",
+            [0.0, 1.0, 0.0],
+            Intensity::new(0.0, 255.0),
+            Intensity::new(0.0, 255.0),
+            VoxelFormat::U16,
+        )],
+        FRAMES,
+        1.0,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("paged", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = SampleStatistics::new(500.0, 400.0, 600.0, 20.0, 500.0);
+    let center =
+        |time: u32, index: usize| [0.01 * index as f32, 0.02 * time as f32, 0.5 * index as f32];
+    for time in 0..FRAMES {
+        let spots = (0..PER_FRAME)
+            .map(|index| Spot::new(center(time, index), 0.05, 1.0))
+            .collect::<Vec<_>>();
+        let intensities = IntensityTable::new(1, vec![statistics; PER_FRAME]);
+        scene.install(
+            set,
+            time,
+            ObjectFrame::from_spots(grana_object::SpotSet::new(0, spots, intensities)),
+        );
+    }
+    let object = scene.objects.get(set).expect("the spots stay");
+    assert!(
+        object.paged(),
+        "a {FRAMES} frame localization set pages its frames"
+    );
+    assert!(
+        object.paged_bytes() <= 64 << 20,
+        "the resident localization pages stay inside the budget"
+    );
+    assert_eq!(object.object_count(0), PER_FRAME);
+    for time in [0, 1, 599, FRAMES - 2, FRAMES - 1] {
+        let frame = object.frame_shared(time).expect("the paged frame reloads");
+        let spots = frame.spots().expect("the paged frame holds spots");
+        assert_eq!(
+            spots.len(),
+            PER_FRAME,
+            "the paged frame keeps its localizations"
+        );
+        let index = time as usize % PER_FRAME;
+        assert_eq!(spots.spots()[index].center(), center(time, index));
+    }
+    let total = object
+        .frames()
+        .map(|(_, frame)| frame.object_count())
+        .sum::<usize>();
+    assert_eq!(total, FRAMES as usize * PER_FRAME);
 }
 
 #[test]
@@ -619,9 +681,10 @@ fn estimates_localization_drift_from_density() {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let offsets = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
+    let found = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
         .expect("the drift estimates")
         .expect("the drift finishes");
+    let offsets = found.offsets();
     assert_eq!(offsets.len(), frames);
     for (time, offset) in offsets.iter().enumerate() {
         let expected = rate * (time as f32 - reference as f32);
@@ -678,9 +741,10 @@ fn aligns_a_sparse_reference_against_the_resampled_localizations() {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let offsets = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
+    let found = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
         .expect("the sparse reference aligns")
         .expect("the alignment finishes");
+    let offsets = found.offsets();
     for time in (25..frames).step_by(25) {
         let expected = rate * time as f32;
         assert!(
@@ -689,6 +753,51 @@ fn aligns_a_sparse_reference_against_the_resampled_localizations() {
             offsets[time]
         );
     }
+}
+
+#[test]
+fn tolerates_drift_segments_that_hold_no_solution() {
+    let frames = 400usize;
+    let reference = 0u32;
+    let mut seed = support::Noise::new(7);
+    let mut series = Vec::with_capacity(frames);
+    for time in 0..frames {
+        let jump = if time >= 360 { 0.9 } else { 0.0 };
+        let points = if !(40..360).contains(&time) {
+            (0..20)
+                .map(|_| {
+                    grana_analysis::LocalizationPoint::new(
+                        [
+                            0.4 + 0.4 * seed.value() + jump,
+                            0.4 + 0.4 * seed.value(),
+                            0.0,
+                        ],
+                        [0.012; 3],
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        series.push(points);
+    }
+    let found = grana_analysis::localization_drift(&series, reference, &mut |_, _| true)
+        .expect("the drift tolerates an unsolved segment")
+        .expect("the drift finishes");
+    assert_eq!(found.offsets().len(), frames);
+    assert!(found.segments() > 1, "the series splits into segments");
+    assert!(
+        found.fallback() <= found.segments(),
+        "the fallback counts its segments"
+    );
+    assert!(
+        found
+            .offsets()
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite()),
+        "every offset stays finite"
+    );
 }
 
 #[test]
@@ -711,7 +820,7 @@ fn realigns_localizations_when_drift_changes() {
         scene.install(
             set,
             time,
-            ObjectFrame::Spots(grana_object::SpotSet::new(
+            ObjectFrame::from_spots(grana_object::SpotSet::new(
                 0,
                 spots.clone(),
                 IntensityTable::new(1, vec![statistics; 1]),
@@ -753,7 +862,7 @@ fn realigns_localizations_when_drift_changes() {
         .objects
         .get(set)
         .expect("the spot set stays")
-        .frame(1)
+        .frame_shared(1)
         .expect("the frame stays")
         .spots()
         .expect("the frame carries spots")
@@ -775,7 +884,7 @@ fn realigns_localizations_when_drift_changes() {
         .objects
         .get(set)
         .expect("the spot set stays")
-        .frame(1)
+        .frame_shared(1)
         .expect("the frame stays")
         .spots()
         .expect("the frame carries spots")
@@ -808,7 +917,7 @@ fn aligns_each_channel_with_its_own_drift() {
             scene.install(
                 set,
                 time,
-                ObjectFrame::Spots(grana_object::SpotSet::new(
+                ObjectFrame::from_spots(grana_object::SpotSet::new(
                     0,
                     vec![Spot::grouped(center, [0.02; 3], 1.0, None)],
                     IntensityTable::new(2, vec![statistics; 2]),
@@ -843,7 +952,7 @@ fn aligns_each_channel_with_its_own_drift() {
             .objects
             .get(set)
             .expect("the spot set stays")
-            .frame(1)
+            .frame_shared(1)
             .expect("the frame stays")
             .spots()
             .expect("the frame carries spots")
@@ -925,7 +1034,7 @@ fn aligns_localizations_with_channel_registration() {
         scene.install(
             set,
             time,
-            ObjectFrame::Spots(grana_object::SpotSet::new(
+            ObjectFrame::from_spots(grana_object::SpotSet::new(
                 0,
                 vec![Spot::grouped(center, [0.02; 3], 1.0, None)],
                 IntensityTable::new(2, vec![statistics; 2]),
@@ -956,7 +1065,7 @@ fn aligns_localizations_with_channel_registration() {
         .objects
         .get(set)
         .expect("the spot set stays")
-        .frame(0)
+        .frame_shared(0)
         .expect("the frame stays")
         .spots()
         .expect("the frame carries spots")
@@ -971,7 +1080,7 @@ fn aligns_localizations_with_channel_registration() {
         .objects
         .get(set)
         .expect("the spot set stays")
-        .frame(0)
+        .frame_shared(0)
         .expect("the frame stays")
         .spots()
         .expect("the frame carries spots")
@@ -1527,7 +1636,7 @@ fn spots_of(channels: &Channels) -> Vec<Spot> {
         None,
         grana_scene::Drifts::new(),
         1,
-        GeometryStore::temporary(256 << 20).expect("the geometry store opens"),
+        SpillStore::temporary(256 << 20).expect("the geometry store opens"),
     );
     let mut spots = Vec::new();
     let mut sink = |event: grana_pipeline::Event| {
@@ -1777,7 +1886,7 @@ fn registers_channels_onto_a_reference_channel() {
     scene.install(
         spots,
         0,
-        ObjectFrame::Spots(grana_object::SpotSet::new(
+        ObjectFrame::from_spots(grana_object::SpotSet::new(
             0,
             vec![Spot::new([6.0, 6.0, 3.0], 1.0, 0.5)],
             grana_object::IntensityTable::new(
@@ -2767,7 +2876,7 @@ fn projects_localizations_over_their_frame_range() {
         scene.install(
             set,
             time,
-            ObjectFrame::Spots(grana_object::SpotSet::new(
+            ObjectFrame::from_spots(grana_object::SpotSet::new(
                 0,
                 spots.clone(),
                 IntensityTable::new(1, vec![statistics; spots.len()]),

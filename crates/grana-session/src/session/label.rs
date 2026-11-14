@@ -181,11 +181,11 @@ impl super::Session {
             return Err("the dataset has no OME-Zarr folder to label".to_string());
         };
         let frames = (0..scene.frame_count())
-            .filter(|time| object.frame(*time).is_some())
+            .filter(|time| object.frame_stamp(*time).is_some())
             .collect::<Vec<_>>();
         let labels = frames
             .iter()
-            .filter_map(|time| object.frame(*time).map(ObjectFrame::object_count))
+            .map(|time| object.object_count(*time))
             .max()
             .unwrap_or(0);
         if labels == 0 {
@@ -201,11 +201,9 @@ impl super::Session {
             .collect::<Vec<_>>();
         let visible = (0..scene.frame_count())
             .map(|time| {
-                object.frame(time).map_or_else(Vec::new, |frame| {
-                    (0..frame.object_count())
-                        .map(|index| object.visible_object(time, index))
-                        .collect()
-                })
+                (0..object.object_count(time))
+                    .map(|index| object.visible_object(time, index))
+                    .collect::<Vec<bool>>()
             })
             .collect::<Vec<_>>();
         if visible.iter().flatten().all(|shown| !shown) {

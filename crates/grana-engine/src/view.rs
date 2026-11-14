@@ -137,14 +137,17 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
         if !scene.shown(set) {
             continue;
         }
-        let frame = set.frame(scene.time());
+        let frame = set.frame_shared(scene.time());
         detail.push(match (frame, lens) {
-            (Some(ObjectFrame::Surfaces(surfaces)), Some(lens)) => {
-                surfaces.select_detail(triangle_target(surfaces, lens))
-            }
-            (Some(ObjectFrame::Cells(cells)), Some(lens)) => {
-                cells.select_detail(triangle_target(cells.bodies(), lens))
-            }
+            (Some(frame), Some(lens)) => match frame.as_ref() {
+                ObjectFrame::Surfaces(surfaces) => {
+                    surfaces.select_detail(triangle_target(surfaces, lens))
+                }
+                ObjectFrame::Cells(cells) => {
+                    cells.select_detail(triangle_target(cells.bodies(), lens))
+                }
+                ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => 0,
+            },
             _ => 0,
         });
         splats.push(match lens {
@@ -217,7 +220,7 @@ pub fn frame(
             splats.push(SplatChunk::single(key, stamp, seeded));
             members.push(SplatMembers::standalone(key, set.id(), count));
         }
-        let Some(frame) = set.frame(time) else {
+        let Some(frame) = set.frame_shared(time) else {
             continue;
         };
         let colors = scene.object_colors(set);
@@ -274,7 +277,7 @@ pub fn frame(
                 members.push(SplatMembers::new(key, set.id(), highlight.members));
             }
         }
-        let (geometry, level) = match frame {
+        let (geometry, level) = match frame.as_ref() {
             ObjectFrame::Surfaces(surfaces) => {
                 let (mesh, available) =
                     surfaces.detail(detail).map_err(|error| error.to_string())?;
@@ -284,7 +287,9 @@ pub fn frame(
                 let (mesh, available) = cells.detail(detail).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
-            _ => (frame.geometry().map_err(|error| error.to_string())?, 0),
+            ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => {
+                (frame.geometry().map_err(|error| error.to_string())?, 0)
+            }
         };
         if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(time))
             && !mesh.is_empty()

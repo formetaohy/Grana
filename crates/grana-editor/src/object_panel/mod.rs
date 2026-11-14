@@ -361,12 +361,9 @@ fn object<'a>(
     let time = state.scene.time();
     let detected = set.detected();
     let current = set
-        .frame(time)
+        .frame_shared(time)
         .map(|frame| (frame.object_count(), frame.level()));
-    let mean = set
-        .frame(time)
-        .and_then(ObjectFrame::spots)
-        .and_then(|spots| spots.mean_quality());
+    let mean = set.spot_frame(time).and_then(|spots| spots.mean_quality());
     let expanded = state.workspace.expanded(id);
     let mut children = Vec::new();
     children.push(header_row(ctx, state, id, position, sets));

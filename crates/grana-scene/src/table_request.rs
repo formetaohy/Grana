@@ -87,6 +87,9 @@ impl TableRequest {
         if group == Group::Molecule && !crate::measure::molecule_grouping(scene, id) {
             return None;
         }
+        if group == Group::Track && set.tracks().is_none() {
+            return None;
+        }
         let children = match group {
             Group::Object => scene.objects.child_sets(id),
             Group::Track | Group::Timepoint | Group::Molecule => Vec::new(),

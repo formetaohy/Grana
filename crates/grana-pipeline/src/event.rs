@@ -46,6 +46,10 @@ pub enum Event {
         coloc: Box<ObjectColoc>,
     },
     Drift(Drift),
+    DriftSummary {
+        segments: usize,
+        fallback: usize,
+    },
     Registration(Registration),
     Fiducial {
         channels: usize,

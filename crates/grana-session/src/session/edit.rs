@@ -131,7 +131,7 @@ impl Session {
             .get(set)
             .ok_or("the object set is missing from the scene")?;
         let mut keep = (0..scene.frame_count())
-            .map(|time| vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)])
+            .map(|time| vec![false; object.object_count(time)])
             .collect::<Vec<_>>();
         let rows = if scope {
             self.measure.rows().to_vec()
@@ -876,7 +876,7 @@ fn surface_plan(
     if kind == SurfaceEditKind::Merge && unique.len() < 2 {
         return Err("merging needs two distinct surfaces".to_string());
     }
-    let Some(frame) = object.frame(time) else {
+    let Some(frame) = object.frame_shared(time) else {
         return Err("the object set holds no surface here".to_string());
     };
     if frame.kind() != ObjectKind::Surfaces {
@@ -927,7 +927,7 @@ fn counterparts(
     recorded_time: u32,
     objects: &[usize],
 ) -> Option<Vec<ObjectAnchor>> {
-    let frame = object.frame(current)?;
+    let frame = object.frame_shared(current)?;
     if frame.kind() != ObjectKind::Surfaces {
         return None;
     }

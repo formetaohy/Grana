@@ -82,6 +82,10 @@ impl Session {
                 clusters: Box<grana_analysis::localization::Clusters>,
             },
             Drift(grana_scene::Drift),
+            DriftSummary {
+                segments: usize,
+                fallback: usize,
+            },
             Registration(grana_scene::Registration),
             Fiducial {
                 channels: usize,
@@ -174,6 +178,9 @@ impl Session {
                     }
                     Poll::Event(Event::Drift(drift)) => {
                         updates.push((index, job, Update::Drift(drift)));
+                    }
+                    Poll::Event(Event::DriftSummary { segments, fallback }) => {
+                        updates.push((index, job, Update::DriftSummary { segments, fallback }));
                     }
                     Poll::Event(Event::Registration(registration)) => {
                         updates.push((index, job, Update::Registration(registration)));
@@ -346,6 +353,11 @@ impl Session {
                         scene.set_drift(drift);
                     }
                     self.realign();
+                }
+                Update::DriftSummary { segments, fallback } => {
+                    self.message = Some(Message::info(format!(
+                        "the drift correction aligned {segments} segments and filled {fallback} of them from the resampled reference"
+                    )));
                 }
                 Update::Registration(registration) => {
                     if let (Job::Register, Some(scene)) = (job, self.scene.as_mut()) {
@@ -1130,10 +1142,12 @@ impl Session {
         };
         object.detected() > 0
             && (0..scene.frame_count()).all(|time| {
-                object.frame(time).is_none_or(|frame| match frame {
-                    ObjectFrame::Surfaces(surface) => surface.cuttable(),
-                    _ => false,
-                })
+                object
+                    .frame_shared(time)
+                    .is_none_or(|frame| match frame.as_ref() {
+                        ObjectFrame::Surfaces(surface) => surface.cuttable(),
+                        _ => false,
+                    })
             })
     }
 
@@ -1156,7 +1170,7 @@ impl Session {
             .push(crate::recut(Job::Recut(set), frames, cut, 0, self.store()));
     }
 
-    pub(super) fn store(&self) -> Arc<GeometryStore> {
+    pub(super) fn store(&self) -> Arc<SpillStore> {
         Arc::clone(&self.store)
     }
 
@@ -1410,7 +1424,7 @@ impl Session {
         let mut frames = Vec::with_capacity(scene.frame_count() as usize);
         for time in 0..scene.frame_count() {
             let mut points = Vec::new();
-            if let Some(frame) = object.frame(time) {
+            if let Some(frame) = object.frame_shared(time) {
                 for (index, spot) in frame.spots_of().iter().enumerate() {
                     if object.visible_object(time, index) {
                         points.push(grana_analysis::LocalizationPoint::new(
@@ -1685,7 +1699,7 @@ fn fiducial_points(scene: &Scene, set: ObjectSetId) -> Vec<[f32; 3]> {
     if !grouped {
         let mut points = Vec::new();
         for time in 0..object.frame_count() {
-            let Some(frame) = object.frame(time) else {
+            let Some(frame) = object.frame_shared(time) else {
                 continue;
             };
             for (index, spot) in frame.spots_of().iter().enumerate() {
@@ -1698,7 +1712,7 @@ fn fiducial_points(scene: &Scene, set: ObjectSetId) -> Vec<[f32; 3]> {
     }
     let mut groups = std::collections::BTreeMap::<u32, (u32, [f64; 3])>::new();
     for time in 0..object.frame_count() {
-        let Some(frame) = object.frame(time) else {
+        let Some(frame) = object.frame_shared(time) else {
             continue;
         };
         for (index, spot) in frame.spots_of().iter().enumerate() {

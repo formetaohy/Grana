@@ -48,11 +48,31 @@ impl LocalizationPoint {
     }
 }
 
+pub struct LocalizationDrift {
+    offsets: Vec<[f32; 3]>,
+    segments: usize,
+    fallback: usize,
+}
+
+impl LocalizationDrift {
+    pub fn offsets(&self) -> &[[f32; 3]] {
+        &self.offsets
+    }
+
+    pub fn segments(&self) -> usize {
+        self.segments
+    }
+
+    pub fn fallback(&self) -> usize {
+        self.fallback
+    }
+}
+
 pub fn localization_drift(
     frames: &[Vec<LocalizationPoint>],
     reference: u32,
     report: &mut dyn FnMut(usize, usize) -> bool,
-) -> Result<Option<Vec<[f32; 3]>>, String> {
+) -> Result<Option<LocalizationDrift>, String> {
     if frames.len() < 2 {
         return Err("the object set holds one frame to align".to_string());
     }
@@ -72,36 +92,31 @@ pub fn localization_drift(
     };
     let cloud = Cloud::new(&reference_cloud, reach);
     let segments = segmentation.len();
-    let total_steps = 2 * segments + 1;
+    let total_steps = 2 * segments + 2;
     let mut drift = vec![None; segments];
     drift[segmentation.reference] = Some([0.0; 3]);
     let mut done = 0usize;
     for distance in 1..segments {
         for segment in segmentation.ring(distance) {
             let Some(points) = segmentation.centers(frames, segment) else {
+                done += 1;
                 continue;
             };
             if points.len() < MINIMUM_PAIRS {
+                done += 1;
                 continue;
             }
             let start = extrapolate(&drift, &segmentation, segment);
-            let Some(shift) = cloud.estimate(&points, reach, start, None) else {
-                return Err(format!(
-                    "the frames {} to {} pair too few localizations to measure drift",
-                    segmentation.bounds(segment)[0],
-                    segmentation.bounds(segment)[1] - 1
-                ));
-            };
-            drift[segment] = Some(shift);
+            if let Some(shift) = cloud.estimate(&points, reach, start, None) {
+                drift[segment] = Some(shift);
+            }
+            done += 1;
         }
-        done += 1;
         if !report(done, total_steps) {
             return Ok(None);
         }
     }
-    let Some(first) = interpolate(&drift, &segmentation, frames.len()) else {
-        return Err("the localizations fill fewer than two segments to align".to_string());
-    };
+    let first = offsets(&drift, &segmentation, frames.len());
     let Some((resampled, sampled)) = segmentation.resampled(frames, &first) else {
         return Err("the drift correction resamples no localization".to_string());
     };
@@ -110,11 +125,14 @@ pub fn localization_drift(
     if !report(done, total_steps) {
         return Ok(None);
     }
+    let mut fallback = 0usize;
     for segment in 0..segments {
         let Some(points) = segmentation.centers(frames, segment) else {
+            done += 1;
             continue;
         };
         if points.len() < MINIMUM_PAIRS {
+            done += 1;
             continue;
         }
         let start = first[segmentation.center_frame(segment)];
@@ -125,6 +143,9 @@ pub fn localization_drift(
         if let Some(shift) = cloud.estimate(&points, reach, start, Some(excluded))
             && (0..3).all(|axis| (shift[axis] - start[axis]).abs() <= reach.spacing()[axis])
         {
+            if drift[segment].is_none() {
+                fallback += 1;
+            }
             drift[segment] = Some(shift);
         }
         done += 1;
@@ -132,9 +153,7 @@ pub fn localization_drift(
             return Ok(None);
         }
     }
-    let Some(offsets) = interpolate(&drift, &segmentation, frames.len()) else {
-        return Err("the localizations fill fewer than two segments to align".to_string());
-    };
+    let offsets = offsets(&drift, &segmentation, frames.len());
     if !report(total_steps, total_steps) {
         return Ok(None);
     }
@@ -142,8 +161,8 @@ pub fn localization_drift(
     if !anchor.iter().all(|value| value.is_finite()) {
         return Err("the drift estimate carries a non-finite offset".to_string());
     }
-    Ok(Some(
-        offsets
+    Ok(Some(LocalizationDrift {
+        offsets: offsets
             .into_iter()
             .map(|offset| {
                 [0, 1, 2].map(|axis| {
@@ -155,7 +174,24 @@ pub fn localization_drift(
                 })
             })
             .collect(),
-    ))
+        segments,
+        fallback,
+    }))
+}
+
+fn offsets(
+    drift: &[Option<[f32; 3]>],
+    segmentation: &Segmentation,
+    frames: usize,
+) -> Vec<[f32; 3]> {
+    let solved = drift.iter().flatten().count();
+    if solved >= 2
+        && let Some(offsets) = interpolate(drift, segmentation, frames)
+    {
+        return offsets;
+    }
+    let anchor = drift[segmentation.reference].unwrap_or([0.0; 3]);
+    vec![anchor; frames]
 }
 
 #[derive(Clone, Copy)]

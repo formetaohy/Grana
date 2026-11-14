@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::IntensityTable;
-use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh};
+use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh};
+use grana_store::SpillStore;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FilamentTopology {
@@ -160,7 +161,7 @@ impl FilamentSet {
 
     pub fn paged(
         level: usize,
-        store: &Arc<GeometryStore>,
+        store: &Arc<SpillStore>,
         mesh: Mesh,
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,

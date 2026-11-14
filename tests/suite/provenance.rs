@@ -18,7 +18,7 @@ fn scene() -> Scene {
     scene.install(
         set,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             vec![Spot::new([8.0, 8.0, 2.0], 1.0, 0.5)],
             IntensityTable::new(

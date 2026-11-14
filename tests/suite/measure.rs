@@ -11,6 +11,31 @@ fn window() -> Window {
 }
 
 #[test]
+fn lists_no_track_rows_without_a_track_set() {
+    let first = spots();
+    let frames = [Frame::new(0, Objects::Spots(&first), &[], &[])];
+    let channels = [CHANNEL.to_string()];
+    let table = Table::build(
+        &frames,
+        None,
+        &channels,
+        2.0,
+        Group::Track,
+        Aggregate::MEAN,
+        None,
+    );
+    assert_eq!(
+        table.rows(),
+        0,
+        "a track table without tracks holds no rows"
+    );
+    assert!(
+        !table.columns().is_empty(),
+        "the track table keeps its columns"
+    );
+}
+
+#[test]
 fn summarises_spots_and_exports_a_csv() {
     let first = spots();
     let second = spots();

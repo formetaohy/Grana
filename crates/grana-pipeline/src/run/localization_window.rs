@@ -35,11 +35,11 @@ impl LocalizationWindow {
                 if !masked {
                     return None;
                 }
-                set.frame(time).map(|frame| {
-                    (0..frame.object_count())
+                Some(
+                    (0..set.object_count(time))
                         .map(|index| set.visible_object(time, index))
-                        .collect::<Vec<_>>()
-                })
+                        .collect::<Vec<_>>(),
+                )
             })
             .collect::<Vec<_>>();
         Self::new(held, visible)

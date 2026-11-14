@@ -4,7 +4,7 @@ use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_object::{RelationFrame, RelationPair};
-use grana_scene::{Item, Job, ObjectFrame, ObjectSet, ObjectSetId, Scene, Selection};
+use grana_scene::{Item, Job, ObjectSet, ObjectSetId, Scene, Selection};
 use grana_session::Command;
 use grana_ui::{
     Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle,
@@ -248,9 +248,9 @@ fn body(
                 .scene
                 .objects
                 .get(choice.target)
-                .and_then(|set| set.frame(shifted))
+                .and_then(|set| set.frame_shared(shifted))
         })
-        .map_or(0, ObjectFrame::object_count);
+        .map_or(0, |frame| frame.object_count());
     Body::Ready(Box::new(matrix(ctx, state, frame, choice, target_objects)))
 }
 

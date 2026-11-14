@@ -24,7 +24,7 @@ pub fn write(
         .ok_or_else(|| "the mesh export names no object set".to_string())?;
     let name = object.name().to_string();
     let frame = object
-        .frame(time)
+        .frame_shared(time)
         .ok_or_else(|| format!("{name} holds no frame {time}"))?;
     let geometry = match frame.geometry().map_err(|error| error.to_string())? {
         Some(geometry) if geometry.object_count() > 0 => geometry,

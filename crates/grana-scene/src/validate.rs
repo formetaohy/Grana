@@ -5,7 +5,7 @@ use grana_volume::CHANNEL_LIMIT;
 
 use crate::object_set::ObjectSetId;
 use crate::state::{ItemState, SceneState, SetState};
-use crate::{ObjectColor, ObjectFrame, ObjectKind, Seeds, TrackColor};
+use crate::{ObjectColor, ObjectKind, Seeds, TrackColor};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SceneShape {
@@ -317,7 +317,7 @@ impl SceneState {
                 .zip(&set.frames)
                 .any(|(frame, objects)| {
                     frame
-                        .as_deref()
+                        .as_ref()
                         .is_some_and(|frame| frame.objects() != object_count(objects))
                 })
             {
@@ -512,11 +512,10 @@ impl SceneState {
                 ));
             };
             let valid = match selection.item {
-                ItemState::Object(index) => set.frames.iter().any(|frame| {
-                    frame
-                        .as_deref()
-                        .is_some_and(|frame| index < frame.object_count())
-                }),
+                ItemState::Object(index) => set
+                    .frames
+                    .iter()
+                    .any(|frame| frame.as_ref().is_some_and(|frame| index < frame.objects())),
                 ItemState::Track(index) => set
                     .tracks
                     .as_ref()
@@ -532,8 +531,8 @@ impl SceneState {
     }
 }
 
-fn object_count(frame: &Option<std::sync::Arc<ObjectFrame>>) -> usize {
-    frame.as_deref().map_or(0, ObjectFrame::object_count)
+fn object_count(frame: &Option<crate::frame::Frame>) -> usize {
+    frame.as_ref().map_or(0, crate::frame::Frame::objects)
 }
 
 fn provenance_acyclic(sets: &[SetState]) -> bool {

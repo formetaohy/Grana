@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
-use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex, SurfaceShape};
+use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{
     Basin, IntensityTable, SampleAccumulator, SampleStatistics, SurfaceSet, SurfaceStatistics,
     SurfaceTopology,
 };
+use grana_store::SpillStore;
 
 use super::cap;
 use crate::hash::Map;
@@ -26,7 +27,7 @@ pub(super) fn cut(
     spec: SurfaceCut,
     removed: &[u32],
     workers: usize,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Option<SurfaceSet>, String> {
     let info = topology.info();
@@ -509,7 +510,7 @@ pub(super) fn assemble(
     pieces: Vec<Chunk>,
     leaves: Vec<Vec<u32>>,
     removed: &[u32],
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<SurfaceSet, String> {
     assert_eq!(
         leaves.len(),

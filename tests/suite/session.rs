@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::CameraState;
-use grana_geometry::GeometryStore;
 use grana_measure::MeasureView;
 use grana_object::{
     CellParams, IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
@@ -14,6 +13,7 @@ use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
 use grana_scene::{Dataset, Drift, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
+use grana_store::SpillStore;
 use grana_volume::{
     BrickCoord, BrickRequest, Channel, Extent, Fingerprint, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
@@ -134,7 +134,7 @@ fn round_trips_a_bleach_channel_through_protocol_and_project() {
         .expect("the bleach project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -268,7 +268,7 @@ fn derives_operator_channels_through_a_project() {
         .expect("the operator project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -332,7 +332,7 @@ fn samples_an_intensity_profile_through_project_and_protocol() {
             .expect("the profile project writes");
         let loaded = Project::read(
             &path,
-            GeometryStore::memory(),
+            SpillStore::memory(),
             &AtomicBool::new(false),
             &mut |_, _| {},
         )
@@ -381,8 +381,8 @@ fn objects(session: &Session, set: grana_scene::ObjectSetId) -> usize {
         .expect("the series opens")
         .objects
         .get(set)
-        .and_then(|set| set.frame(0))
-        .map_or(0, ObjectFrame::object_count)
+        .and_then(|set| set.frame_shared(0))
+        .map_or(0, |frame| frame.object_count())
 }
 
 fn settle(session: &mut Session) {
@@ -456,13 +456,15 @@ fn round_trips_detected_surfaces_through_geff() {
         .find(|object| object.kind() == ObjectKind::Surfaces && object.id() != set)
         .expect("the imported surface set lands");
     assert_eq!(
-        imported.frame(0).map_or(0, ObjectFrame::object_count),
+        imported
+            .frame_shared(0)
+            .map_or(0, |frame| frame.object_count()),
         2,
         "the imported graph restores both surfaces"
     );
     assert!(
         imported
-            .frame(0)
+            .frame_shared(0)
             .is_some_and(|frame| frame.geometry().is_ok()),
         "the restored surfaces carry their meshes"
     );
@@ -522,7 +524,10 @@ fn imports_picasso_group_trajectories_as_tracks() {
     for track in tracks.tracks() {
         assert_eq!(track.nodes().len(), 2, "a group spans both frames");
     }
-    let spot = object.frame(0).expect("the first frame lands").spots_of()[0];
+    let spot = object
+        .frame_shared(0)
+        .expect("the first frame lands")
+        .spots_of()[0];
     assert_eq!(spot.quality(), 2000.0);
     assert_eq!(spot.group(), Some(7), "the spot keeps its group");
     assert!(
@@ -564,7 +569,7 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
         .expect("the localization set lands")
         .id();
     let object = scene.objects.get(set).expect("the localization set stays");
-    let frame = object.frame(0).expect("the first frame lands");
+    let frame = object.frame_shared(0).expect("the first frame lands");
     let spots = frame.spots().expect("the frame carries spots");
     assert_eq!(spots.len(), 2, "the first frame carries its two spots");
     assert_eq!(
@@ -634,7 +639,7 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
         .expect("the project writes");
     let loaded = Project::read(
         &document,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -659,8 +664,10 @@ fn imports_imaris_filaments() {
     assert_eq!(sets.len(), 1);
     let set = sets[0];
     assert_eq!(set.kind(), grana_scene::ObjectKind::Filaments);
-    let frame = set.frame(0).expect("the filament holds its first frame");
-    let grana_scene::ObjectFrame::Filaments(filaments) = frame else {
+    let frame = set
+        .frame_shared(0)
+        .expect("the filament holds its first frame");
+    let grana_scene::ObjectFrame::Filaments(filaments) = frame.as_ref() else {
         panic!("the frame holds filaments");
     };
     assert_eq!(filaments.object_count(), 1);
@@ -719,7 +726,9 @@ fn measures_imported_objects_without_statistics() {
     let sets = scene.objects.iter().collect::<Vec<_>>();
     assert_eq!(sets.len(), 2, "both Imaris objects are attached");
     for set in &sets {
-        let frame = set.frame(0).expect("the object holds its first frame");
+        let frame = set
+            .frame_shared(0)
+            .expect("the object holds its first frame");
         let intensities = frame.intensities();
         assert_eq!(intensities.objects(), 1);
         assert_eq!(intensities.channels(), 1);
@@ -751,7 +760,7 @@ fn measures_imported_objects_without_statistics() {
         .expect("the imported objects write a project");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -818,7 +827,7 @@ fn round_trips_a_slice_camera_through_project_and_protocol() {
         .expect("the slice project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -959,7 +968,7 @@ fn undoes_derived_channels_and_keeps_every_selection() {
         .expect("the derived project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1032,7 +1041,7 @@ fn keeps_an_oriented_region_across_a_project() {
         .expect("the project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1065,7 +1074,7 @@ fn round_trips_a_project() {
     scene.install(
         spots,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
             IntensityTable::new(
@@ -1099,7 +1108,7 @@ fn round_trips_a_project() {
     assert!(steps > 0, "the save reports its steps");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1139,7 +1148,7 @@ fn round_trips_a_deformation_through_protocol_and_project() {
     scene.install(
         spots,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
             IntensityTable::new(
@@ -1183,7 +1192,7 @@ fn round_trips_a_deformation_through_protocol_and_project() {
         .expect("the project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1551,7 +1560,7 @@ fn paints_erases_and_undoes_a_voxel_mask() {
         .expect("the mask project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1581,9 +1590,9 @@ fn surfaces_of(session: &Session, set: grana_scene::ObjectSetId) -> grana_object
     let frame = scene
         .objects
         .get(set)
-        .and_then(|object| object.frame(0))
+        .and_then(|object| object.frame_shared(0))
         .expect("the object set holds a frame");
-    match frame {
+    match frame.as_ref() {
         ObjectFrame::Surfaces(surfaces) => surfaces.clone(),
         _ => panic!("the object set holds surfaces"),
     }
@@ -1686,7 +1695,7 @@ fn round_trips_a_surface_project() {
         .expect("the surface project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -1826,7 +1835,7 @@ fn colocalizes_every_object_and_carries_it_through_project_and_protocol() {
         .expect("the colocalization project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -2216,7 +2225,7 @@ fn refuses_a_project_written_by_another_schema() {
     std::fs::write(&path, &bytes).expect("the header is patched");
     let error = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -2265,8 +2274,10 @@ fn grows_cells_around_nuclei_through_a_project_and_protocol() {
     let scene = session.scene().expect("the series stays open");
     let set = scene.objects.get(cells).expect("the cells stay staged");
     assert_eq!(set.kind(), ObjectKind::Cells);
-    let frame = set.frame(0).expect("the cells grow on the first frame");
-    let ObjectFrame::Cells(frame) = frame else {
+    let frame = set
+        .frame_shared(0)
+        .expect("the cells grow on the first frame");
+    let ObjectFrame::Cells(frame) = frame.as_ref() else {
         panic!("the growth installs a cell frame");
     };
     assert_eq!(frame.object_count(), 2, "each nucleus grows one cell");
@@ -2305,8 +2316,8 @@ fn grows_cells_around_nuclei_through_a_project_and_protocol() {
         .objects
         .iter()
         .find(|set| set.kind() == ObjectKind::Cells)
-        .and_then(|set| set.frame(0))
-        .map(ObjectFrame::object_count);
+        .and_then(|set| set.frame_shared(0))
+        .map(|frame| frame.object_count());
     assert_eq!(
         rebuilt,
         Some(2),
@@ -2331,7 +2342,7 @@ fn grows_cells_around_nuclei_through_a_project_and_protocol() {
         .expect("the cell project writes");
     let loaded = Project::read(
         &path,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -2995,7 +3006,7 @@ fn clusters_imported_localizations_into_molecules() {
         .expect("the clustered project writes");
     let loaded = Project::read(
         &document,
-        GeometryStore::memory(),
+        SpillStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -3050,7 +3061,7 @@ fn clusters_imported_localizations_into_molecules() {
     let object = scene.objects.get(set).expect("the localization set stays");
     let visible = (0..scene.frame_count())
         .map(|time| {
-            let Some(frame) = object.frame(time) else {
+            let Some(frame) = object.frame_shared(time) else {
                 return 0;
             };
             (0..frame.object_count())

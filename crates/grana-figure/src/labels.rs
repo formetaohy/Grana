@@ -65,7 +65,7 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
         if !scene.shown(set) || !set.labels() {
             continue;
         }
-        let Some(frame) = set.frame(time) else {
+        let Some(frame) = set.frame_shared(time) else {
             continue;
         };
         let metric = set.label_metric();

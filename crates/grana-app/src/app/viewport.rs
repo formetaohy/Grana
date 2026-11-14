@@ -274,7 +274,8 @@ impl App {
             .and_then(|object| object.provenance().source())
             .unwrap_or(set);
         let object = scene.objects.get(source)?;
-        let ObjectFrame::Surfaces(surfaces) = object.frame(scene.time())? else {
+        let frame = object.frame_shared(scene.time())?;
+        let ObjectFrame::Surfaces(surfaces) = frame.as_ref() else {
             return None;
         };
         let anchors = surfaces

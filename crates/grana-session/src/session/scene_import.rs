@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex, ends, push_graph};
+use grana_geometry::{Bounds, Mesh, MeshVertex, ends, push_graph};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
     SpotSet, SurfaceSet, SurfaceStatistics,
@@ -9,6 +9,7 @@ use grana_readout::{
     ImportedSpot, ImportedSurface,
 };
 use grana_scene::{IntensitySource, ObjectKind};
+use grana_store::SpillStore;
 
 use super::intensity::Sampler;
 use super::*;
@@ -213,7 +214,7 @@ fn surfaces(
     channels: usize,
     voxel: f32,
     frames: u32,
-    store: &Arc<GeometryStore>,
+    store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
     sampled: &mut usize,
 ) -> Result<Loaded, String> {
@@ -309,7 +310,10 @@ fn spots(
             continue;
         }
         let table = IntensityTable::new(channels, intensities);
-        loaded.push((*time, ObjectFrame::Spots(SpotSet::new(0, held, table))));
+        loaded.push((
+            *time,
+            ObjectFrame::Spots(Arc::new(SpotSet::new(0, held, table))),
+        ));
     }
     Ok(loaded)
 }
@@ -318,7 +322,7 @@ fn filaments(
     object: &ImportedObject,
     channels: usize,
     frames: u32,
-    store: &Arc<GeometryStore>,
+    store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
     sampled: &mut usize,
 ) -> Result<Loaded, String> {

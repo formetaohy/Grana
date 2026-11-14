@@ -6,8 +6,8 @@ use glam::Vec3;
 
 use grana_codec::{Decoder, Encoder, FAULT_TAG, FAULT_VALUE, Fault};
 
-use crate::store::{Decode, Payload};
 use crate::{Mesh, MeshVertex};
+use grana_store::{Decode, Payload};
 
 const UNIT: f32 = 65535.0;
 const NARROW_LIMIT: usize = u16::MAX as usize;

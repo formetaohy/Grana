@@ -13,6 +13,7 @@ mod params;
 mod relation;
 mod shape;
 mod spot;
+mod spot_page;
 mod surface;
 mod track;
 mod weight;
@@ -34,6 +35,7 @@ pub use params::{
 pub use relation::{RelationFrame, RelationPair};
 pub use shape::Shape;
 pub use spot::{RADIUS_PER_SIGMA, Spot, SpotSet};
+pub use spot_page::SpotPage;
 pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
     SurfaceTopology, TopologyInfo,
@@ -41,4 +43,4 @@ pub use surface::{
 pub use track::{
     Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics, grouped_tracks,
 };
-pub use weight::SpotWeight;
+pub use weight::{SpotWeight, SpotWeightSampler};

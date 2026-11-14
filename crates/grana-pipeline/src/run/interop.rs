@@ -3,13 +3,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex};
+use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_interop::{Kind, Objects, Shape};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
     SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_scene::{Drifts, ObjectFrame};
+use grana_store::SpillStore;
 use grana_volume::{Level, VoxelData};
 
 use crate::channels::Channels;
@@ -18,11 +19,11 @@ use crate::event::Event;
 pub struct InteropRequest {
     file: String,
     drifts: Drifts,
-    store: Arc<GeometryStore>,
+    store: Arc<SpillStore>,
 }
 
 impl InteropRequest {
-    pub fn new(file: &str, drifts: Drifts, store: Arc<GeometryStore>) -> Self {
+    pub fn new(file: &str, drifts: Drifts, store: Arc<SpillStore>) -> Self {
         assert!(!file.trim().is_empty(), "an import names a track file");
         Self {
             file: file.to_string(),
@@ -78,7 +79,7 @@ pub fn interop(
                 let table = intensities(
                     reader, &request, *time, slots, detections, &objects, &samples,
                 )?;
-                ObjectFrame::Spots(SpotSet::new(0, spots, table))
+                ObjectFrame::Spots(Arc::new(SpotSet::new(0, spots, table)))
             }
             Kind::Surfaces => {
                 let (mesh, statistics) = surfaces(slots, detections, &objects)?;

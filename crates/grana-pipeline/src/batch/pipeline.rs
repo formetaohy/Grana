@@ -4,7 +4,6 @@ use std::sync::atomic::Ordering;
 
 use grana_animation::Timeline;
 use grana_display::Camera;
-use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
 use grana_mesh::Format as MeshFormat;
@@ -13,6 +12,8 @@ use grana_project::{Export, NamedView, Project, Source as ProjectSource, ViewSta
 use grana_scene::{
     Dataset, MaskFilter, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug,
 };
+use grana_store::DEFAULT_BUDGET;
+use grana_store::SpillStore;
 use grana_volume::{Pyramid, Region};
 
 use crate::capture::{Capture, CaptureRequest, Kind as CaptureKind};
@@ -122,7 +123,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         None => Source::file_series(path.to_path_buf(), scene),
     };
     let reader = Arc::new(Image::open(&source)?);
-    let store = GeometryStore::temporary(DEFAULT_BUDGET)
+    let store = SpillStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
     let mut artifacts = artifacts(task.protocol, &name, task.project, task.channels);
@@ -525,7 +526,7 @@ struct Run<'a, 'b> {
     task: &'b Task<'a>,
     dataset: &'b DatasetEntry,
     channels: Channels,
-    store: &'b Arc<GeometryStore>,
+    store: &'b Arc<SpillStore>,
     folder: &'b Path,
     scene: Scene,
     sets: Vec<ObjectSetId>,
@@ -1211,11 +1212,11 @@ impl Run<'_, '_> {
             return Err("label images are written into local OME-Zarr datasets".to_string());
         }
         let frames = (0..self.scene.frame_count())
-            .filter(|time| object.frame(*time).is_some())
+            .filter(|time| object.frame_stamp(*time).is_some())
             .collect::<Vec<_>>();
         let labels = frames
             .iter()
-            .filter_map(|time| object.frame(*time).map(ObjectFrame::object_count))
+            .map(|time| object.object_count(*time))
             .max()
             .unwrap_or(0);
         if labels == 0 {
@@ -1232,11 +1233,11 @@ impl Run<'_, '_> {
             .collect::<Vec<_>>();
         let visible = (0..self.scene.frame_count())
             .map(|time| {
-                object.frame(time).map_or_else(Vec::new, |frame| {
-                    (0..frame.object_count())
+                {
+                    (0..object.object_count(time))
                         .map(|index| object.visible_object(time, index))
                         .collect()
-                })
+                }
             })
             .collect::<Vec<_>>();
         let levels =
@@ -1660,7 +1661,7 @@ fn detect(
     params: ObjectParams,
     seeds: Vec<Vec<[f32; 3]>>,
     policy: grana_analysis::SeedPolicy,
-    store: &Arc<GeometryStore>,
+    store: &Arc<SpillStore>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
     let frames = reading.reader.pyramid().frame_count() as usize;
@@ -1680,6 +1681,7 @@ fn detect(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::DriftSummary { .. }
         | RunEvent::Registration(_)
         | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }
@@ -1730,6 +1732,7 @@ fn grow_frames(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::DriftSummary { .. }
         | RunEvent::Registration(_)
         | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }
@@ -1778,6 +1781,7 @@ fn segment_frames(
         | RunEvent::Coloc { .. }
         | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::DriftSummary { .. }
         | RunEvent::Registration(_)
         | RunEvent::Fiducial { .. }
         | RunEvent::Calibration { .. }

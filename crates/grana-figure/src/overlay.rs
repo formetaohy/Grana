@@ -267,7 +267,7 @@ pub fn caption(scene: &Scene, time: u32) -> Caption {
         .iter()
         .filter(|set| scene.shown(set) && set.detected() > 0)
         .map(|set| {
-            let count = set.frame(time).map_or(0, |frame| frame.object_count());
+            let count = set.object_count(time);
             format!("{} · {count} {}", set.name(), set.kind().count_noun())
         })
         .collect();

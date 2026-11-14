@@ -58,11 +58,10 @@ pub(super) fn attached<'a>(
     let intensities = set.provenance().intensities()?;
     let language = ctx.language();
     let frames = (0..state.scene.frame_count())
-        .filter(|time| set.frame(*time).is_some())
+        .filter(|time| set.frame_stamp(*time).is_some())
         .count();
     let objects = (0..state.scene.frame_count())
-        .filter_map(|time| set.frame(time))
-        .map(ObjectFrame::object_count)
+        .map(|time| set.object_count(time))
         .sum::<usize>();
     let text = match intensities {
         IntensitySource::Statistics => {

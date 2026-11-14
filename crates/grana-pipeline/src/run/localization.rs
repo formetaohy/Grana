@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_object::{IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet};
@@ -77,7 +78,7 @@ pub fn localization(
         if let Some(set) = spots(reader, time, rows, &request.alignment.warp(time))? {
             sink(Event::Frame {
                 time,
-                frame: ObjectFrame::Spots(set),
+                frame: ObjectFrame::Spots(Arc::new(set)),
             });
         }
         sink(Event::Progress {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_object::{SpotSet, SpotWeight};
+use grana_object::{SpotWeight, SpotWeightSampler};
 use grana_render::{Digest, SplatChunk, SplatGeometry, SplatLevel, SplatStyle};
 use grana_scene::{Item, ObjectSet, ObjectSetId, Scene};
 
@@ -147,29 +147,28 @@ pub(crate) fn range(set: &ObjectSet, time: u32, frames: u32) -> [u32; 2] {
         .map_or([time, time], |source| source.projected_frames(time, frames))
 }
 
-pub(crate) fn frames<'a>(scene: &'a Scene, set: &'a ObjectSet) -> Vec<Frame<'a>> {
+pub(crate) fn frames(scene: &Scene, set: &ObjectSet) -> Vec<Frame> {
     let [start, end] = range(set, scene.time(), scene.frame_count());
     (start..=end)
-        .filter_map(|time| {
-            let spots = set.frame(time).and_then(|frame| frame.spots())?;
-            Some(Frame::new(time, spots))
-        })
+        .filter_map(|time| Some(Frame::new(time, set.spot_frame(time)?)))
         .collect()
 }
 
 fn measure_weight(set: &ObjectSet) -> Option<SpotWeight> {
     set.localization()?;
-    let total = set
-        .frames()
-        .map(|(_, frame)| frame.spots().map_or(0, SpotSet::len))
+    let total = (0..set.frame_count())
+        .map(|time| set.object_count(time))
         .sum::<usize>();
-    (total > 0).then(|| {
-        SpotWeight::measure(
-            total,
-            set.frames()
-                .flat_map(|(_, frame)| frame.spots().map_or(&[][..], SpotSet::spots)),
-        )
-    })
+    if total == 0 {
+        return None;
+    }
+    let mut sampler = SpotWeightSampler::new(total);
+    for (_, frame) in set.frames() {
+        if let Some(spots) = frame.spots() {
+            sampler.push(spots.spots());
+        }
+    }
+    Some(sampler.finish())
 }
 
 pub(crate) struct Prepared {
@@ -238,7 +237,7 @@ fn build(
     scene: &Scene,
     set: &ObjectSet,
     level: u8,
-    frames: &[Frame<'_>],
+    frames: &[Frame],
     range: [u32; 2],
     weight: Option<SpotWeight>,
 ) -> Level {

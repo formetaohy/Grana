@@ -11,6 +11,7 @@ grana-warp = { workspace = true }
 glam = { workspace = true }
 grana-display = { workspace = true }
 grana-geometry = { workspace = true }
+grana-store = { workspace = true }
 grana-measure = { workspace = true }
 grana-model = { workspace = true }
 grana-object = { workspace = true }

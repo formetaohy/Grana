@@ -666,8 +666,8 @@ impl Scene {
         let Some(count) = self
             .objects
             .get(id)
-            .and_then(|set| set.frame(time))
-            .map(ObjectFrame::object_count)
+            .and_then(|set| set.frame_shared(time))
+            .map(|frame| frame.object_count())
         else {
             return Ok(false);
         };
@@ -802,7 +802,7 @@ impl Scene {
             ));
         };
         let counts = (0..self.frame_count())
-            .map(|time| filtered.frame(time).map_or(0, ObjectFrame::object_count))
+            .map(|time| filtered.object_count(time))
             .collect::<Vec<_>>();
         let params = filtered.params();
         if counts.iter().all(|count| *count == 0) {
@@ -818,7 +818,7 @@ impl Scene {
         let groups = if criteria.group() == Group::Molecule {
             (0..self.frame_count())
                 .map(|time| {
-                    filtered.frame(time).map_or_else(Vec::new, |frame| {
+                    filtered.frame_shared(time).map_or_else(Vec::new, |frame| {
                         frame.spots_of().iter().map(|spot| spot.group()).collect()
                     })
                 })
@@ -1060,8 +1060,9 @@ impl Scene {
     }
 
     pub fn child_count(&self, parent: ObjectSetId, child: ObjectSetId) -> Option<usize> {
-        let query = self.objects.child(parent, child, self.time)?;
-        let parents = self.objects.get(parent)?.frame(self.time)?.object_count();
+        let frame = self.objects.get(child)?.frame_shared(self.time)?;
+        let parents = self.objects.get(parent)?.object_count(self.time);
+        let query = self.objects.child(parent, child, self.time, &frame)?;
         let values = query.values(parents, grana_measure::ChildField::Count);
         if values.iter().any(|value| !value.is_finite()) {
             return None;
@@ -1717,8 +1718,8 @@ impl Scene {
             Some(source) => self
                 .objects
                 .get(source)
-                .and_then(|set| set.frame(self.time))
-                .map_or(0, ObjectFrame::object_count),
+                .and_then(|set| set.frame_shared(self.time))
+                .map_or(0, |frame| frame.object_count()),
             None => self.seeds(id).len(),
         }
     }
@@ -1791,8 +1792,8 @@ impl Scene {
         (0..self.frame_count())
             .map(|time| {
                 source
-                    .frame(time)
-                    .map_or_else(Vec::new, ObjectFrame::centroids)
+                    .frame_shared(time)
+                    .map_or_else(Vec::new, |frame| frame.centroids())
             })
             .collect()
     }
@@ -1807,7 +1808,11 @@ impl Scene {
         origin: Vec3,
         direction: Vec3,
     ) -> Result<Option<Vec3>, String> {
-        let Some(frame) = self.objects.get(id).and_then(|set| set.frame(self.time)) else {
+        let Some(frame) = self
+            .objects
+            .get(id)
+            .and_then(|set| set.frame_shared(self.time))
+        else {
             return Ok(None);
         };
         let mesh = frame.geometry().map_err(|error| error.to_string())?;
@@ -1817,7 +1822,7 @@ impl Scene {
     pub fn surface_hit(&self, origin: Vec3, direction: Vec3) -> Result<Option<Vec3>, String> {
         let mut nearest: Option<Vec3> = None;
         for set in self.pickable() {
-            let Some(frame) = set.frame(self.time) else {
+            let Some(frame) = set.frame_shared(self.time) else {
                 continue;
             };
             let mesh = frame.geometry().map_err(|error| error.to_string())?;

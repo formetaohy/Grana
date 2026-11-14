@@ -1,6 +1,6 @@
 mod bounds;
 mod bvh;
-mod error;
+mod geometry;
 mod graph;
 mod hull;
 mod mesh;
@@ -10,12 +10,11 @@ mod relax;
 mod shape;
 mod simplify;
 mod slice;
-mod store;
 mod tube;
 
 pub use bounds::Bounds;
 pub use bvh::{Bvh, Primitive};
-pub use error::Error;
+pub use geometry::Geometry;
 pub use graph::{ends, push_graph};
 pub use hull::Hull;
 pub use mesh::{Mesh, MeshVertex};
@@ -25,5 +24,6 @@ pub use relax::relax;
 pub use shape::SurfaceShape;
 pub use simplify::simplify;
 pub use slice::{SECTION_QUADS, SectionCutter, SectionIndex, SectionPlane, is_closed};
-pub use store::{DEFAULT_BUDGET, Decode, Geometry, GeometryId, GeometryStore, Payload, StoreStats};
 pub use tube::{TUBE_SIDES, push_sphere, push_tube};
+
+pub use grana_store::{Decode, Error, Payload};

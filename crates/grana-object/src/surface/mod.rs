@@ -4,7 +4,8 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, MeshVertex, PackedMesh, SurfaceShape};
+use grana_geometry::{Bounds, Geometry, Mesh, MeshVertex, PackedMesh, SurfaceShape};
+use grana_store::SpillStore;
 
 use crate::IntensityTable;
 
@@ -129,7 +130,7 @@ impl SurfaceSet {
 
     pub fn paged(
         level: usize,
-        store: &Arc<GeometryStore>,
+        store: &Arc<SpillStore>,
         mesh: Mesh,
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,

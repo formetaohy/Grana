@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_geometry::GeometryStore;
 use grana_object::{SurfaceCut, TrackParams};
 use grana_pipeline::Channels;
 use grana_scene::{Job, ObjectFrame};
+use grana_store::SpillStore;
 
 use crate::task::{Poll, Task};
 use grana_pipeline::Event;
@@ -70,7 +70,7 @@ pub fn recut(
     frames: Vec<Option<Arc<ObjectFrame>>>,
     cut: SurfaceCut,
     workers: usize,
-    store: Arc<GeometryStore>,
+    store: Arc<SpillStore>,
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
         let total = frames.len();

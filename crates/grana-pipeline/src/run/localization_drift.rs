@@ -61,10 +61,11 @@ pub fn localization_drift(
         });
         !cancel.load(Ordering::Relaxed)
     };
-    let Some(offsets) = grana_analysis::localization_drift(&frames, reference, &mut report)? else {
+    let Some(found) = grana_analysis::localization_drift(&frames, reference, &mut report)? else {
         sink(Event::Done);
         return Ok(());
     };
+    let offsets = found.offsets();
     if cancel.load(Ordering::Relaxed) {
         sink(Event::Done);
         return Ok(());
@@ -74,6 +75,10 @@ pub fn localization_drift(
         let residual = Warp::shift(*offset);
         warps.push(base.warp(time as u32).added(&residual));
     }
+    sink(Event::DriftSummary {
+        segments: found.segments(),
+        fallback: found.fallback(),
+    });
     sink(Event::Drift(Drift::new(channel, reference, warps)));
     sink(Event::Done);
     Ok(())

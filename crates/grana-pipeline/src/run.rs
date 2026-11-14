@@ -8,10 +8,10 @@ use grana_analysis::{
     SpotScanner, SurfaceBuilder, coloc_sampling, filament_level, relate_frames, spot_level,
     surface_level,
 };
-use grana_geometry::GeometryStore;
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, Roi};
 use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams};
+use grana_store::SpillStore;
 use grana_volume::VoxelData;
 use grana_warp::Warp;
 
@@ -92,7 +92,7 @@ pub struct DetectRequest {
     seed_policy: SeedPolicy,
     drifts: Drifts,
     workers: usize,
-    store: Arc<GeometryStore>,
+    store: Arc<SpillStore>,
 }
 
 impl DetectRequest {
@@ -103,7 +103,7 @@ impl DetectRequest {
         roi: Option<Roi>,
         drifts: Drifts,
         workers: usize,
-        store: Arc<GeometryStore>,
+        store: Arc<SpillStore>,
     ) -> Self {
         Self {
             channel,
@@ -565,7 +565,7 @@ fn spots(
             let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
                 report(done, total)
             })?;
-            Ok(set.map(ObjectFrame::Spots))
+            Ok(set.map(|set| ObjectFrame::Spots(Arc::new(set))))
         },
         &mut install(sink),
     )?;

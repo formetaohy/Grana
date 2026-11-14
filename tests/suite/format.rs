@@ -369,7 +369,7 @@ fn exports_a_region_of_the_channels_and_labels() {
         color: [1.0, 0.0, 0.0],
         opacity: 1.0,
         properties: vec![(1, "spot 1".to_string())],
-        shapes: vec![Some(Arc::new(ObjectFrame::Spots(spots)))],
+        shapes: vec![Some(Arc::new(ObjectFrame::from_spots(spots)))],
         visible: vec![vec![true]],
     };
     let channels = Channels::stored(Arc::clone(&image));

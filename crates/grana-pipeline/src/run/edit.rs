@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use grana_geometry::GeometryStore;
 use grana_object::SurfaceEdit;
 use grana_scene::ObjectFrame;
+use grana_store::SpillStore;
 
 pub fn edit(
     frames: &[Option<Arc<ObjectFrame>>],
     edits: &[SurfaceEdit],
     voxel: f32,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<Vec<Option<Arc<ObjectFrame>>>, String> {
     let mut edited = frames.to_vec();
     for edit in edits {

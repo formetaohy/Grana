@@ -1239,11 +1239,12 @@ fn track_table(
         aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
     }));
     let Some(set) = tracks else {
+        let data = columns.iter().map(|_| Vec::new()).collect::<Vec<_>>();
         return Table::new(
             columns,
             TrackMeasurement::ALL.len(),
             Vec::new(),
-            Vec::new(),
+            data,
             Group::Track,
             aggregate,
         );

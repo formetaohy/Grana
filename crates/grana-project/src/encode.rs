@@ -1043,6 +1043,12 @@ impl Encode for TrackColor {
     }
 }
 
+impl Encode for grana_scene::Frame {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.shared().encode(writer);
+    }
+}
+
 impl Encode for ObjectFrame {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.step();

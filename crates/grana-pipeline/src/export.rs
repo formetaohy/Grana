@@ -64,10 +64,12 @@ pub struct LabelLayer {
 
 impl LabelLayer {
     pub fn of(set: &ObjectSet) -> Option<Self> {
-        let frames = set.frames().map(|(time, _)| time).collect::<Vec<_>>();
+        let frames = (0..set.frame_count())
+            .filter(|time| set.frame_stamp(*time).is_some())
+            .collect::<Vec<_>>();
         let labels = frames
             .iter()
-            .filter_map(|time| set.frame(*time).map(ObjectFrame::object_count))
+            .map(|time| set.object_count(*time))
             .max()
             .unwrap_or(0);
         if labels == 0 || labels > LABEL_LIMIT {
@@ -78,11 +80,11 @@ impl LabelLayer {
             .collect::<Vec<_>>();
         let visible = (0..set.frame_count())
             .map(|time| {
-                set.frame(time).map_or_else(Vec::new, |frame| {
-                    (0..frame.object_count())
+                {
+                    (0..set.object_count(time))
                         .map(|index| set.visible_object(time, index))
                         .collect()
-                })
+                }
             })
             .collect::<Vec<_>>();
         let title = set.name().to_string();

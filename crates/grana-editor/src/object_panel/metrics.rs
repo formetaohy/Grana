@@ -170,7 +170,7 @@ pub(super) fn measure<'a>(
         .scene
         .objects
         .get(id)
-        .and_then(|object| object.frame(time))
+        .and_then(|object| object.frame_shared(time))
     else {
         return Vec::new();
     };
@@ -186,7 +186,7 @@ pub(super) fn measure<'a>(
         view::divider(ctx),
         view::section_header(ctx, grana_i18n::object::selected_object(language), None),
     ];
-    let rows = match &frame {
+    let rows = match frame.as_ref() {
         ObjectFrame::Spots(spots) => {
             let Some(spot) = spots.spots().get(index).copied() else {
                 return children;

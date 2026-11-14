@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_exec::Role;
-use grana_geometry::GeometryStore;
 use grana_project::{Error, Project};
+use grana_store::SpillStore;
 
 use crate::task::{Poll, Progress};
 
@@ -42,7 +42,7 @@ impl Document {
         }
     }
 
-    pub fn open(path: PathBuf, store: Arc<GeometryStore>) -> Self {
+    pub fn open(path: PathBuf, store: Arc<SpillStore>) -> Self {
         let headline = label(Transfer::Open, &path);
         let target = path.clone();
         let task = Progress::spawn(Role::Read, move |cancel, progress| {

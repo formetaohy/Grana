@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use grana_geometry::GeometryStore;
 use grana_object::{
     Basin, ObjectAnchor, SampleAccumulator, SurfaceEdit, SurfaceEditKind, SurfaceSet,
     SurfaceTopology,
 };
+use grana_store::SpillStore;
 
 use super::cut::{self, Piece};
 
@@ -14,7 +14,7 @@ pub fn apply(
     set: &SurfaceSet,
     edit: &SurfaceEdit,
     voxel: f32,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<SurfaceSet, String> {
     let anchors = set
         .objects()
@@ -54,7 +54,7 @@ pub fn apply(
 pub fn merge(
     set: &SurfaceSet,
     objects: &[usize],
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<SurfaceSet, String> {
     let topology = loaded(set)?;
     let count = set.object_count();
@@ -92,7 +92,7 @@ pub fn merge(
 pub fn split(
     set: &SurfaceSet,
     object: usize,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<SurfaceSet, String> {
     let topology = loaded(set)?;
     let count = set.object_count();
@@ -227,7 +227,7 @@ fn rebuild(
     set: &SurfaceSet,
     targets: Vec<u32>,
     leaves: Vec<Vec<u32>>,
-    store: Option<&Arc<GeometryStore>>,
+    store: Option<&Arc<SpillStore>>,
 ) -> Result<SurfaceSet, String> {
     let objects = leaves.len();
     let channels = topology.info().channels();

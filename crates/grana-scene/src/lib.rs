@@ -8,6 +8,7 @@ mod dataset;
 mod derived;
 mod drift;
 mod drifts;
+mod frame;
 mod job;
 mod key;
 mod label_export;
@@ -46,6 +47,7 @@ pub use derived::{
 };
 pub use drift::Drift;
 pub use drifts::Drifts;
+pub use frame::Frame;
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use grana_measure::RelationField;
 pub use grana_object::{ObjectAnchor, SurfaceEdit, SurfaceEditKind};

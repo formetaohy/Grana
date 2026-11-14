@@ -33,7 +33,7 @@ pub(super) fn header_row<'a>(
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let current = set
-        .frame(time)
+        .frame_shared(time)
         .map(|frame| (frame.object_count(), frame.level()));
     let expanded = state.workspace.expanded(id);
     let width = width();
@@ -446,7 +446,10 @@ pub(super) fn object_edit_rows<'a>(
         return Vec::new();
     }
     let time = state.scene.time();
-    let Some(ObjectFrame::Surfaces(surfaces)) = set.frame(time) else {
+    let Some(frame) = set.frame_shared(time) else {
+        return Vec::new();
+    };
+    let ObjectFrame::Surfaces(surfaces) = frame.as_ref() else {
         return Vec::new();
     };
     if !surfaces.cuttable() {

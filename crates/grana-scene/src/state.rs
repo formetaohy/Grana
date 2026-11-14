@@ -11,11 +11,12 @@ use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::derived::{DerivedSpec, Operation};
 use crate::drifts::Drifts;
+use crate::frame::Frame;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::localization::LocalizationSource;
 use crate::mask::MaskFilter;
-use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
+use crate::object::{ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::ObjectSetId;
 use crate::provenance::Provenance;
 use crate::registration::Registration;
@@ -104,7 +105,7 @@ pub struct SetState {
     pub label_export: Option<LabelExport>,
     pub localization: Option<LocalizationSource>,
     pub seeds: Seeds,
-    pub frames: Vec<Option<Arc<ObjectFrame>>>,
+    pub frames: Vec<Option<Frame>>,
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
     pub version: u32,
@@ -395,7 +396,7 @@ impl Scene {
                 .get(selection.set)
                 .is_some_and(|set| match selection.item {
                     Item::Object(index) => set
-                        .frame(time)
+                        .frame_shared(time)
                         .is_some_and(|frame| index < frame.object_count()),
                     Item::Track(index) => {
                         set.tracks().is_some_and(|layer| index < layer.set().len())

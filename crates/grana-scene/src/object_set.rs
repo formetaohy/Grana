@@ -6,11 +6,13 @@ use grana_measure::{
 use grana_object::TrackParams;
 use grana_object::match_anchor;
 use grana_object::{RelationFrame, SpotSet, TrackSet};
+use grana_store::SpillStore;
 
 use crate::alignment::LocalizationAlignment;
 use crate::color::ObjectColor;
 use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
+use crate::frame::{Frame, SPOT_PAGE_THRESHOLD, open_store, place};
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::localization::LocalizationSource;
@@ -54,15 +56,27 @@ pub enum Visibility {
 
 struct FrameSlot {
     stamp: Revision,
-    data: Option<Arc<ObjectFrame>>,
+    frame: Option<Frame>,
 }
 
 impl FrameSlot {
     fn new() -> Self {
         Self {
             stamp: Revision::ZERO,
-            data: None,
+            frame: None,
         }
+    }
+
+    fn objects(&self) -> usize {
+        self.frame.as_ref().map_or(0, Frame::objects)
+    }
+
+    fn shared(&self) -> Option<Arc<ObjectFrame>> {
+        self.frame.as_ref().map(Frame::shared)
+    }
+
+    fn spot_frame(&self) -> Option<Arc<SpotSet>> {
+        self.frame.as_ref()?.spot_frame()
     }
 }
 
@@ -91,6 +105,8 @@ pub struct ObjectSet {
     params: ObjectParams,
     track_style: Option<TrackStyle>,
     frames: Vec<FrameSlot>,
+    store: Option<Arc<SpillStore>>,
+    installed_spots: usize,
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
@@ -143,6 +159,8 @@ impl ObjectSet {
             params,
             track_style,
             frames,
+            store: None,
+            installed_spots: 0,
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             classifier: None,
@@ -686,8 +704,8 @@ impl ObjectSet {
         let Some(count) = self
             .frames
             .get(time as usize)
-            .and_then(|slot| slot.data.as_deref())
-            .map(ObjectFrame::object_count)
+            .and_then(|slot| slot.frame.as_ref())
+            .map(Frame::objects)
         else {
             return false;
         };
@@ -698,7 +716,7 @@ impl ObjectSet {
             self.hidden = self
                 .frames
                 .iter()
-                .map(|slot| vec![false; slot.data.as_deref().map_or(0, ObjectFrame::object_count)])
+                .map(|slot| vec![false; slot.objects()])
                 .collect();
         }
         let mask = &mut self.hidden[time as usize];
@@ -730,7 +748,7 @@ impl ObjectSet {
         let counts = self
             .frames
             .iter()
-            .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
+            .map(|slot| slot.frame.as_ref().map(Frame::objects))
             .collect::<Vec<_>>();
         self.curation.seed(counts.len());
         self.curation.record_hidden(time, anchors);
@@ -759,7 +777,7 @@ impl ObjectSet {
         for (mask, slot) in hidden.iter().zip(&self.frames) {
             assert_eq!(
                 mask.len(),
-                slot.data.as_deref().map_or(0, ObjectFrame::object_count),
+                slot.objects(),
                 "the hidden objects cover every object of a frame"
             );
         }
@@ -803,29 +821,40 @@ impl ObjectSet {
         self.document = self.document.next();
     }
 
-    pub fn frame(&self, time: u32) -> Option<&ObjectFrame> {
-        self.frames
-            .get(time as usize)
-            .and_then(|slot| slot.data.as_deref())
+    pub fn paged(&self) -> bool {
+        self.store.is_some()
+    }
+
+    pub fn paged_bytes(&self) -> u64 {
+        self.store
+            .as_ref()
+            .map_or(0, |store| store.stats().resident())
+    }
+
+    pub fn object_count(&self, time: u32) -> usize {
+        self.frames.get(time as usize).map_or(0, FrameSlot::objects)
     }
 
     pub fn frame_shared(&self, time: u32) -> Option<Arc<ObjectFrame>> {
-        self.frames
-            .get(time as usize)
-            .and_then(|slot| slot.data.clone())
+        self.frames.get(time as usize)?.shared()
+    }
+
+    pub fn spot_frame(&self, time: u32) -> Option<Arc<SpotSet>> {
+        self.frames.get(time as usize)?.frame.as_ref()?.spot_frame()
     }
 
     pub fn frame_stamp(&self, time: u32) -> Option<Revision> {
         self.frames
             .get(time as usize)
-            .and_then(|slot| slot.data.as_ref().map(|_| slot.stamp))
+            .and_then(|slot| slot.frame.as_ref().map(|_| slot.stamp))
     }
 
-    pub fn frames(&self) -> impl Iterator<Item = (u32, &ObjectFrame)> + '_ {
-        self.frames
-            .iter()
-            .enumerate()
-            .filter_map(|(time, slot)| slot.data.as_deref().map(|data| (time as u32, data)))
+    pub fn frames(&self) -> impl Iterator<Item = (u32, Arc<ObjectFrame>)> + '_ {
+        self.frames.iter().enumerate().filter_map(|(time, slot)| {
+            slot.frame
+                .as_ref()
+                .map(|frame| (time as u32, frame.shared()))
+        })
     }
 
     pub fn relations(&self) -> &[Relation] {
@@ -1022,7 +1051,7 @@ impl ObjectSet {
     pub fn detected(&self) -> usize {
         self.frames
             .iter()
-            .filter(|slot| slot.data.is_some())
+            .filter(|slot| slot.frame.is_some())
             .count()
     }
 
@@ -1062,7 +1091,7 @@ impl ObjectSet {
             label_export: self.label_export.clone(),
             localization: self.localization.clone(),
             seeds: self.seeds.clone(),
-            frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
+            frames: self.frames.iter().map(|slot| slot.frame.clone()).collect(),
             relations: self
                 .relations
                 .iter()
@@ -1144,6 +1173,8 @@ impl ObjectSet {
             params,
             track_style,
             frames: (0..frame_count).map(|_| FrameSlot::new()).collect(),
+            store: None,
+            installed_spots: 0,
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             classifier: classifier
@@ -1202,9 +1233,10 @@ impl ObjectSet {
         );
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
-                set.install_shared(time as u32, frame, stamps.mint());
+                set.install_frame(time as u32, frame, stamps.mint());
             }
         }
+        set.settle_pages();
         for time in 0..set.frames.len() {
             let stamp = set.frames[time].stamp;
             set.curation.set_applied(time as u32, stamp);
@@ -1220,8 +1252,7 @@ impl ObjectSet {
                     .frames()
                     .iter()
                     .zip(&set.frames)
-                    .all(|(values, slot)| values.len()
-                        == slot.data.as_deref().map_or(0, ObjectFrame::object_count)),
+                    .all(|(values, slot)| values.len() == slot.objects()),
                 "an object colocalization state measures every object of its set"
             );
             set.object_coloc = Some(coloc);
@@ -1230,7 +1261,7 @@ impl ObjectSet {
         if let Some(channels) = set
             .frames
             .iter()
-            .find_map(|slot| slot.data.as_ref().map(|frame| frame.objects().channels()))
+            .find_map(|slot| slot.shared().map(|frame| frame.objects().channels()))
         {
             assert!(
                 channels <= dataset.channels().len(),
@@ -1319,7 +1350,7 @@ impl ObjectSet {
                 for (mask, slot) in frames.iter().zip(&self.frames) {
                     assert_eq!(
                         mask.len(),
-                        slot.data.as_deref().map_or(0, ObjectFrame::object_count),
+                        slot.objects(),
                         "the visibility covers every object"
                     );
                 }
@@ -1373,12 +1404,17 @@ impl ObjectSet {
         if !filter.active() {
             return true;
         }
-        self.frames
+        match self
+            .frames
             .get(time as usize)
-            .and_then(|slot| slot.data.as_deref())
-            .and_then(ObjectFrame::spots)
-            .and_then(|set| set.spots().get(object))
-            .is_none_or(|spot| filter.keeps(spot.quality(), spot.sigma()))
+            .and_then(|slot| slot.spot_frame())
+        {
+            Some(set) => set
+                .spots()
+                .get(object)
+                .is_none_or(|spot| filter.keeps(spot.quality(), spot.sigma())),
+            None => true,
+        }
     }
 
     pub fn visible_track(&self, track: usize) -> bool {
@@ -1490,7 +1526,7 @@ impl ObjectSet {
         let Some(frame) = self
             .frames
             .get(time as usize)
-            .and_then(|slot| slot.data.clone())
+            .and_then(|slot| slot.shared())
         else {
             return Ok(false);
         };
@@ -1539,10 +1575,7 @@ impl ObjectSet {
             if self.curation.applied(time as u32) == slot.stamp {
                 continue;
             }
-            let anchors = slot
-                .data
-                .as_deref()
-                .map_or_else(Vec::new, ObjectFrame::anchors);
+            let anchors = slot.shared().map_or_else(Vec::new, |frame| frame.anchors());
             if let Some(kept) = self.curation.keep(time as u32, &anchors, self.voxel) {
                 pending += kept.pending;
                 if kept.keep.iter().any(|kept| !kept) {
@@ -1552,7 +1585,7 @@ impl ObjectSet {
         }
         let mut applied = 0usize;
         for (time, keep) in keeps {
-            let Some(frame) = self.frames[time as usize].data.clone() else {
+            let Some(frame) = self.frames[time as usize].shared() else {
                 continue;
             };
             let removed = keep
@@ -1674,7 +1707,7 @@ impl ObjectSet {
 
     fn resolve_edit(&self, edit: TrackEdit) -> Option<TrackEdit> {
         let resolve = |node: TrackAnchor| -> Option<TrackAnchor> {
-            let frame = self.frames.get(node.time() as usize)?.data.as_deref()?;
+            let frame = self.frames.get(node.time() as usize)?.shared()?;
             let object = match_anchor(&frame.anchors(), node.position(), self.voxel)?;
             Some(TrackAnchor::new(node.time(), object, node.position()))
         };
@@ -1794,12 +1827,17 @@ impl ObjectSet {
             .tracks
             .as_ref()
             .map(|layer| layer.set().without_objects(time, objects));
+        let placed = if empty {
+            None
+        } else {
+            pruned.map(|frame| self.manage(Arc::new(frame)))
+        };
         let slot = self
             .frames
             .get_mut(time as usize)
             .expect("the pruned object lies inside the time series");
         slot.stamp = stamp;
-        slot.data = if empty { None } else { pruned.map(Arc::new) };
+        slot.frame = placed;
         if let Some(mask) = self.hidden.get_mut(time as usize) {
             *mask = retained(mask, objects);
         }
@@ -1870,9 +1908,11 @@ impl ObjectSet {
                 .iter()
                 .map(|slot| FrameSlot {
                     stamp: Revision::ZERO,
-                    data: slot.data.clone(),
+                    frame: slot.frame.clone(),
                 })
                 .collect(),
+            store: self.store.clone(),
+            installed_spots: self.installed_spots,
             object_coloring,
             track_coloring: self.track_coloring.clone(),
             classifier: self.classifier.clone(),
@@ -1916,26 +1956,28 @@ impl ObjectSet {
         }
         let mut frames = Vec::with_capacity(self.frames.len());
         for (left, right) in self.frames.iter().zip(&other.frames) {
-            let frame = match (left.data.as_deref(), right.data.as_deref()) {
+            let frame = match (left.frame.as_ref(), right.frame.as_ref()) {
                 (Some(carried), Some(absorbed)) => {
+                    let carried = carried.shared();
+                    let absorbed = absorbed.shared();
                     if carried.level() != absorbed.level() {
                         return Err(format!(
                             "the object set {} detects another resolution",
                             other.name
                         ));
                     }
-                    Some(Arc::new(carried.merge(absorbed)?))
+                    Some(Frame::resident(Arc::new(carried.merge(&absorbed)?)))
                 }
-                (Some(_), None) => left.data.clone(),
-                (None, Some(_)) => right.data.clone(),
+                (Some(_), None) => left.frame.clone(),
+                (None, Some(_)) => right.frame.clone(),
                 (None, None) => None,
             };
-            frames.push(FrameSlot { stamp, data: frame });
+            frames.push(FrameSlot { stamp, frame });
         }
         let offsets = self
             .frames
             .iter()
-            .map(|slot| slot.data.as_deref().map_or(0, ObjectFrame::object_count))
+            .map(|slot| slot.objects())
             .collect::<Vec<_>>();
         let tracks = match (&self.tracks, &other.tracks) {
             (None, None) => None,
@@ -2017,6 +2059,8 @@ impl ObjectSet {
             params: self.params,
             track_style: self.track_style.or(other.track_style),
             frames,
+            store: self.store.clone().or_else(|| other.store.clone()),
+            installed_spots: self.installed_spots + other.installed_spots,
             object_coloring,
             track_coloring,
             classifier: self.classifier.clone(),
@@ -2048,7 +2092,7 @@ impl ObjectSet {
         }
         let mut hidden = Vec::with_capacity(frames.len());
         for (time, slot) in frames.iter().enumerate() {
-            let mut mask = vec![false; slot.data.as_deref().map_or(0, ObjectFrame::object_count)];
+            let mut mask = vec![false; slot.objects()];
             if let Some(source) = self.hidden.get(time) {
                 for (index, flag) in source.iter().enumerate() {
                     if *flag && let Some(slot) = mask.get_mut(index) {
@@ -2117,13 +2161,11 @@ impl ObjectSet {
         if self.kind != ObjectKind::Spots || groups.len() != self.frames.len() {
             return false;
         }
+        let store = self.store.clone();
         let mut changed = false;
         for (time, slot) in self.frames.iter_mut().enumerate() {
-            let Some(frame) = slot.data.as_deref() else {
+            let Some(spots) = slot.spot_frame() else {
                 continue;
-            };
-            let ObjectFrame::Spots(spots) = frame else {
-                return false;
             };
             let Some(held) = groups.get(time) else {
                 continue;
@@ -2140,7 +2182,10 @@ impl ObjectSet {
                 continue;
             }
             let stamp = stamps.mint();
-            slot.data = Some(Arc::new(ObjectFrame::Spots(spots.regrouped(held))));
+            slot.frame = Some(place(
+                store.as_ref(),
+                Arc::new(ObjectFrame::Spots(Arc::new(spots.regrouped(held)))),
+            ));
             slot.stamp = stamp;
             self.revision = stamp;
             self.document = self.document.next();
@@ -2165,6 +2210,7 @@ impl ObjectSet {
         if self.kind != ObjectKind::Spots || &applied == next {
             return false;
         }
+        let store = self.store.clone();
         let mut changed = false;
         for (time, slot) in self.frames.iter_mut().enumerate() {
             let time = time as u32;
@@ -2173,11 +2219,8 @@ impl ObjectSet {
             if previous == next {
                 continue;
             }
-            let Some(frame) = slot.data.as_deref() else {
+            let Some(spots) = slot.spot_frame() else {
                 continue;
-            };
-            let ObjectFrame::Spots(spots) = frame else {
-                return false;
             };
             let aligned = spots
                 .spots()
@@ -2191,11 +2234,14 @@ impl ObjectSet {
                 })
                 .collect::<Vec<_>>();
             let stamp = stamps.mint();
-            slot.data = Some(Arc::new(ObjectFrame::Spots(SpotSet::new(
-                spots.level(),
-                aligned,
-                spots.intensities().clone(),
-            ))));
+            slot.frame = Some(place(
+                store.as_ref(),
+                Arc::new(ObjectFrame::Spots(Arc::new(SpotSet::new(
+                    spots.level(),
+                    aligned,
+                    spots.intensities().clone(),
+                )))),
+            ));
             slot.stamp = stamp;
             self.revision = stamp;
             self.document = self.document.next();
@@ -2220,10 +2266,12 @@ impl ObjectSet {
         };
         let frames = &self.frames;
         let remapped = layer.set().remapped(|time, object, centroid| {
-            frames
-                .get(time as usize)
-                .and_then(|slot| slot.data.as_deref())
-                .and_then(|frame| frame.spots_of().get(object))
+            let Some(spots) = frames.get(time as usize).and_then(|slot| slot.spot_frame()) else {
+                return centroid;
+            };
+            spots
+                .spots()
+                .get(object)
                 .map_or(centroid, |spot| spot.center())
         });
         let stamp = stamps.mint();
@@ -2240,6 +2288,7 @@ impl ObjectSet {
             self.kind,
             "an object frame matches its object set"
         );
+        let placed = self.manage(frame);
         self.discard_object_coloc();
         let slot = self
             .frames
@@ -2250,7 +2299,7 @@ impl ObjectSet {
         self.visibility = Visibility::All;
         self.hidden.clear();
         slot.stamp = stamp;
-        slot.data = Some(frame);
+        slot.frame = Some(placed);
     }
 
     pub(crate) fn install_optional(
@@ -2259,13 +2308,14 @@ impl ObjectSet {
         frame: Option<Arc<ObjectFrame>>,
         stamp: Revision,
     ) {
-        if let Some(frame) = &frame {
+        let placed = frame.map(|frame| {
             assert_eq!(
                 frame.kind(),
                 self.kind,
                 "an object frame matches its object set"
             );
-        }
+            self.manage(frame)
+        });
         self.discard_object_coloc();
         let slot = self
             .frames
@@ -2276,13 +2326,71 @@ impl ObjectSet {
         self.visibility = Visibility::All;
         self.hidden.clear();
         slot.stamp = stamp;
-        slot.data = frame;
+        slot.frame = placed;
+    }
+
+    fn manage(&mut self, frame: Arc<ObjectFrame>) -> Frame {
+        let spots = match frame.as_ref() {
+            ObjectFrame::Spots(spots) => spots.len(),
+            ObjectFrame::Surfaces(_) | ObjectFrame::Filaments(_) | ObjectFrame::Cells(_) => 0,
+        };
+        self.installed_spots += spots;
+        if self.store.is_none() && self.installed_spots <= SPOT_PAGE_THRESHOLD {
+            return Frame::resident(frame);
+        }
+        let store = match &self.store {
+            Some(store) => Arc::clone(store),
+            None => {
+                let store = open_store();
+                self.store = Some(Arc::clone(&store));
+                self.spill(&store);
+                store
+            }
+        };
+        place(Some(&store), frame)
+    }
+
+    fn settle_pages(&mut self) {
+        if self.kind != ObjectKind::Spots || self.store.is_some() {
+            return;
+        }
+        let total = self.frames.iter().map(FrameSlot::objects).sum::<usize>();
+        self.installed_spots = total;
+        if total <= SPOT_PAGE_THRESHOLD {
+            return;
+        }
+        let store = self
+            .frames
+            .iter()
+            .find_map(|slot| slot.frame.as_ref().and_then(Frame::store))
+            .unwrap_or_else(open_store);
+        self.store = Some(Arc::clone(&store));
+        self.spill(&store);
+    }
+
+    fn install_frame(&mut self, time: u32, frame: Frame, stamp: Revision) {
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the restored object frame lies inside the time series");
+        slot.stamp = stamp;
+        slot.frame = Some(frame);
+        self.revision = stamp;
+        self.document = self.document.next();
+    }
+
+    fn spill(&mut self, store: &Arc<SpillStore>) {
+        for slot in &mut self.frames {
+            if let Some(Frame::Resident(frame)) = &slot.frame {
+                slot.frame = Some(place(Some(store), Arc::clone(frame)));
+            }
+        }
     }
 
     pub(crate) fn clear(&mut self, stamp: Revision) {
         self.discard_object_coloc();
         for slot in &mut self.frames {
-            slot.data = None;
+            slot.frame = None;
         }
         self.hidden.clear();
         self.revision = stamp;
@@ -2475,7 +2583,7 @@ impl ObjectSet {
     }
 
     fn anchor_at(&self, time: u32, object: usize) -> Option<[f32; 3]> {
-        let frame = self.frames.get(time as usize)?.data.as_deref()?;
+        let frame = self.frames.get(time as usize)?.shared()?;
         let anchors = frame.anchors();
         Some(anchors.get(object)?.position())
     }

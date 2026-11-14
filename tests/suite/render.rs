@@ -1791,7 +1791,7 @@ fn keys_the_scene_by_its_render_versions() {
     scene.install(
         set,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             vec![Spot::new([32.0, 32.0, 16.0], 4.0, 1.0)],
             IntensityTable::new(2, vec![statistics; 2]),
@@ -2352,7 +2352,7 @@ fn spot_scene(pyramid: Pyramid, side: usize) -> Scene {
     scene.install(
         set,
         0,
-        ObjectFrame::Spots(SpotSet::new(
+        ObjectFrame::from_spots(SpotSet::new(
             0,
             spots,
             IntensityTable::new(1, vec![statistics; count]),
