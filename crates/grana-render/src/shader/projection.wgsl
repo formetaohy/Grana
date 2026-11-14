@@ -82,7 +82,7 @@ fn march_projected(
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);
                 let absorbed = transmittance * alpha;
-                radiance += absorbed * volume_lighting(albedo, texel, origin + direction * cursor);
+                radiance += absorbed * volume_lighting(albedo, texel);
                 moment += absorbed * cursor;
                 mass += absorbed;
                 transmittance *= 1.0 - alpha;

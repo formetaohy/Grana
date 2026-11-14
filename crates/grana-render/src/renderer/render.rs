@@ -1,4 +1,4 @@
-use super::signature::{ShadowKeys, channel_style, digest, hash_camera, shadow_bounds};
+use super::signature::{channel_style, digest, hash_camera};
 use super::*;
 
 impl Renderer {
@@ -78,13 +78,11 @@ impl Renderer {
             settled,
             planned,
             demand,
-            shadow,
             transparent,
             exporting,
             convergence,
             temporal: temporal_pass,
             fade,
-            object_key,
             info,
             dummy_oit,
             budget,
@@ -205,7 +203,7 @@ impl Renderer {
         let versions = scene.versions;
         let channel_key = channel_style(scene.channels);
         if *channels_key != Some(channel_key) {
-            scene_table.prepare(device, queue, pyramid, scene.channels);
+            scene_table.prepare(queue, pyramid, scene.channels);
             scene_table.write_channels(device, queue, pyramid, scene.channels);
             *channels_key = Some(channel_key);
         }
@@ -268,24 +266,6 @@ impl Renderer {
                 table.rebase(queue, time, atlas, arena);
             }
         }
-        let finest = pyramid.level(0);
-        let world = Vec3::from(finest.world_extent());
-        let spacing = finest.spacing();
-        let (shadow_low, shadow_high) = shadow_bounds(scene, world);
-        let space = ShadowSpace::new(
-            scene.shading.light(),
-            shadow_low,
-            shadow_high,
-            Vec3::new(spacing.x(), spacing.y(), spacing.z()),
-        );
-        let shadow_keys = ShadowKeys::of(
-            versions.objects(),
-            *generation,
-            time,
-            channel_key,
-            ladder,
-            &space,
-        );
         let tables = ladder
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
@@ -311,7 +291,6 @@ impl Renderer {
             &tables,
             scene.shading,
             ray,
-            space,
         );
         data.viewport = [
             viewport[0] as f32,
@@ -440,9 +419,6 @@ impl Renderer {
             }
             if !slice && let Some(mesh_passes) = meshes.as_mut() {
                 mesh_passes.cull_volume(&mut encoder, scene_table.group());
-                if scene.shading.shadows > 0.0 {
-                    mesh_passes.cull_shadow(&mut encoder, scene_table.group());
-                }
             }
         }
         let sample_index = if reset && !assured && temporal.is_some() {
@@ -501,29 +477,7 @@ impl Renderer {
                     && row.opacity > 0.0
                     && row.volume.mode() == grana_display::VolumeMode::Maximum
             });
-            scene_table.write_shadow_frame(queue, data);
-            if let Some(shadow) = shadow.as_mut() {
-                let groups = ShadowGroups {
-                    scene: scene_table.shadow_group(),
-                    level: level_group,
-                    atlas: atlas.group(),
-                };
-                if !slice && scene.shading.shadows > 0.0 {
-                    let object = shadow_keys.objects();
-                    if *object_key != Some(object) {
-                        *object_key = Some(object);
-                        if let Some(mesh_passes) = meshes.as_ref() {
-                            mesh_passes.draw_shadow(&mut encoder, shadow.objects());
-                        }
-                    }
-                    shadow.encode_tau(&mut encoder, groups, shadow_keys.volume());
-                }
-            }
             crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
-            let shadow_group = shadow
-                .as_ref()
-                .map(Shadow::group)
-                .expect("the shadow is ready");
             let group = scene_table.group();
             if let Some(mesh_passes) = meshes.as_mut() {
                 mesh_passes.write_uniforms(queue, &data, scene.shading);
@@ -547,7 +501,6 @@ impl Renderer {
                             depth_group: target.scene.depth_group(),
                             oit: oit_group,
                             occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
-                            shadow: shadow_group,
                         },
                         crate::volume::VolumePath::Composite,
                     );
@@ -597,9 +550,6 @@ impl Renderer {
                         depth: target.scene.depth(),
                     },
                     viewport,
-                    Lighting {
-                        shadow: shadow_group,
-                    },
                 );
             }
             if let Some(oit) = oit {
@@ -628,7 +578,7 @@ impl Renderer {
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     if let Some(mesh_passes) = meshes.as_ref() {
-                        mesh_passes.draw_oit(&mut pass, shadow_group, oit.write_group());
+                        mesh_passes.draw_oit(&mut pass, oit.write_group());
                     }
                     if let Some(splat_passes) = splats.as_ref() {
                         splat_passes.draw_oit(&mut pass, group, oit.write_group());
@@ -677,7 +627,7 @@ impl Renderer {
                     );
                     pass.set_scissor_rect(viewport[0], viewport[1], width, height);
                     if let Some(mesh_passes) = meshes.as_ref() {
-                        mesh_passes.draw_color(&mut pass, shadow_group, oit.write_group());
+                        mesh_passes.draw_color(&mut pass, oit.write_group());
                     }
                     if let Some(splat_passes) = splats.as_ref() {
                         splat_passes.draw_color(&mut pass, group, oit.write_group());
@@ -720,7 +670,6 @@ impl Renderer {
                     depth_group: target.scene.depth_group(),
                     oit: oit_group,
                     occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
-                    shadow: shadow_group,
                 };
                 let path = if projected {
                     crate::volume::VolumePath::Projection

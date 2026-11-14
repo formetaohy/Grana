@@ -49,9 +49,6 @@ const _: () = {
 pub(crate) struct SceneTable {
     frame: Buffer,
     channels: Table<ChannelData>,
-    shadow_frame: Buffer,
-    shadow_channels: Table<ChannelData>,
-    shadow_group: BindGroup,
     lut: Texture,
     extinction: Texture,
     transfers: Vec<Option<TransferFunction>>,
@@ -106,27 +103,9 @@ impl SceneTable {
             extinction: &extinction_view,
         };
         let group = scene_group(device, layouts, &binding);
-        let shadow_frame = uniform_buffer(
-            device,
-            "grana.shadow.frame.uniforms",
-            size_of::<FrameData>(),
-        );
-        let shadow_channels = Table::with_capacity(device, "grana.shadow.channels", CHANNEL_LIMIT);
-        let shadow_binding = SceneBinding {
-            frame: &shadow_frame,
-            neutral: &neutral,
-            channels: shadow_channels.buffer(),
-            lut: &lut_view,
-            sampler: &lut_sampler,
-            extinction: &extinction_view,
-        };
-        let shadow_group = scene_group(device, layouts, &shadow_binding);
         Self {
             frame,
             channels: table,
-            shadow_frame,
-            shadow_channels,
-            shadow_group,
             lut,
             extinction,
             transfers: vec![None; channels],
@@ -141,17 +120,7 @@ impl SceneTable {
         &self.group
     }
 
-    pub fn shadow_group(&self) -> &BindGroup {
-        &self.shadow_group
-    }
-
-    pub fn prepare(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        pyramid: &Pyramid,
-        rows: &[ChannelRow],
-    ) {
+    pub fn prepare(&mut self, queue: &Queue, pyramid: &Pyramid, rows: &[ChannelRow]) {
         assert_eq!(
             rows.len(),
             self.channels_count,
@@ -164,7 +133,6 @@ impl SceneTable {
             }
         }
         let data = channel_data(rows, &self.thresholds, pyramid);
-        let _ = self.shadow_channels.write(device, queue, &data.rows);
         self.floor = data.floor;
     }
 
@@ -187,10 +155,6 @@ impl SceneTable {
 
     pub fn threshold_floor(&self) -> f32 {
         self.floor
-    }
-
-    pub fn write_shadow_frame(&mut self, queue: &Queue, frame: FrameData) {
-        queue.write_buffer(&self.shadow_frame, 0, bytemuck::bytes_of(&frame));
     }
 
     pub fn write_frame(&self, queue: &Queue, frame: FrameData) {

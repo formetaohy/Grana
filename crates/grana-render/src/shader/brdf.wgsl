@@ -42,7 +42,6 @@ fn shade_surface(
     normal: vec3<f32>,
     view: vec3<f32>,
     light: vec3<f32>,
-    visibility: f32,
     ambient: f32,
     diffuse: f32,
 ) -> vec3<f32> {
@@ -58,7 +57,7 @@ fn shade_surface(
     let specular = brdf_ggx(n_dot_h, r) * brdf_smith(n_dot_v, n_dot_l, r) * fresnel
         / max(4.0 * n_dot_v * n_dot_l, 1.0e-4);
     let diffuse_weight = (vec3<f32>(1.0) - fresnel) * (1.0 - m);
-    let direct = (diffuse_weight * albedo + specular) * n_dot_l * diffuse * visibility;
+    let direct = (diffuse_weight * albedo + specular) * n_dot_l * diffuse;
     let mirror = reflect(-view, normal);
     let reflected = mix(scene_environment(normal), scene_environment(mirror), 1.0 - r);
     let environment = ambient

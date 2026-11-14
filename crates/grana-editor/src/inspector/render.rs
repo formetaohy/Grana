@@ -229,21 +229,6 @@ pub(super) fn rendering<'a>(
             &exposure,
             Command::SetExposure,
         ));
-        let shadows = format!("{:.2}", shading.shadows);
-        children.push(view::slider_readout(
-            ctx,
-            "shadows",
-            Some(grana_i18n::inspector::shadows(language)),
-            shading.shadows,
-            (0.0..=1.0, false),
-            &shadows,
-            move |value| {
-                Command::SetShading(grana_display::Shading {
-                    shadows: value,
-                    ..shading
-                })
-            },
-        ));
         let lighting = Key::new("rendering.lighting");
         let lighting_open = state.workspace.disclosures.is_open(lighting);
         let mut light = Vec::new();

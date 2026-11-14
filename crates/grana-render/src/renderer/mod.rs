@@ -13,7 +13,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::cast_slice;
-use glam::Vec3;
 use grana_display::Camera;
 use grana_gpu::Pipelines;
 use grana_gpu::Readback;
@@ -46,7 +45,6 @@ use crate::present::Present;
 use crate::sample;
 use crate::schema::{SceneFrame, Versions};
 use crate::section::Sections;
-use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
 use crate::target::{self, SceneTarget};
 use crate::temporal::{FrameView, Temporal, TemporalPass};
@@ -66,8 +64,6 @@ const PREFETCH_SHARE: usize = 4;
 const RECORD_SHARE: u64 = 8;
 
 const FADE_DRAWS: f32 = 10.0;
-
-const UNIT: f32 = 65535.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -106,11 +102,6 @@ pub struct Requests {
 pub(crate) struct VolumeTargets<'a> {
     pub(crate) color: &'a TextureView,
     pub(crate) depth: &'a TextureView,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Lighting<'a> {
-    pub(crate) shadow: &'a BindGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,7 +157,6 @@ pub struct Renderer {
     level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
-    shadow: Option<Shadow>,
     volume: VolumePass,
     oit_resolve: Option<OitResolve>,
     meshes: Option<MeshPasses>,
@@ -204,7 +194,6 @@ pub struct Renderer {
     convergence: Option<Convergence>,
     temporal: TemporalPass,
     fade: Option<Fade>,
-    object_key: Option<u64>,
     sections: Sections,
     sliced: bool,
     overlay: Overlays,
@@ -261,7 +250,6 @@ impl Renderer {
             level_group: None,
             bricks: Vec::new(),
             planner: None,
-            shadow: None,
             volume,
             oit_resolve: None,
             meshes: None,
@@ -300,7 +288,6 @@ impl Renderer {
             convergence: None,
             temporal,
             fade: None,
-            object_key: None,
             sections,
             sliced: false,
             overlay,
@@ -474,17 +461,6 @@ impl Renderer {
         let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
         planner.bind_arena(device, &self.layouts, &arena);
         self.planner = Some(planner);
-        let finest = pyramid.level(0);
-        let world = Vec3::from(finest.world_extent());
-        let spacing = finest.spacing();
-        let voxel = Vec3::new(spacing.x(), spacing.y(), spacing.z());
-        self.shadow = Some(Shadow::new(
-            device,
-            &self.layouts,
-            shadow::resolution(world, voxel),
-            &self.pipelines,
-        ));
-        self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,
