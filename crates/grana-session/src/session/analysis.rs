@@ -1357,16 +1357,14 @@ impl Session {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
-        let frames = (0..scene.frame_count())
-            .map(|time| object.frame_shared(time))
-            .collect::<Vec<_>>();
+        let source = object.source();
         let drifts = scene.drifts().clone();
         self.message = None;
         self.record_progress(Job::ObjectColoc(set), 0, 0, 0);
         self.analysis.push(crate::object_coloc(
             Job::ObjectColoc(set),
             channels,
-            grana_pipeline::run::ObjectColocRequest::new(pair, region, frames, drifts, 0),
+            grana_pipeline::run::ObjectColocRequest::new(pair, region, source, drifts, 0),
         ));
     }
 
@@ -1421,26 +1419,12 @@ impl Session {
         let channel = object.channel();
         let base = scene.drift(channel).cloned().unwrap_or_default();
         let reference = base.reference();
-        let mut frames = Vec::with_capacity(scene.frame_count() as usize);
-        for time in 0..scene.frame_count() {
-            let mut points = Vec::new();
-            if let Some(frame) = object.frame_shared(time) {
-                for (index, spot) in frame.spots_of().iter().enumerate() {
-                    if object.visible_object(time, index) {
-                        points.push(grana_analysis::LocalizationPoint::new(
-                            spot.center(),
-                            spot.sigma(),
-                        ));
-                    }
-                }
-            }
-            frames.push(points);
-        }
+        let source = object.source();
         self.message = None;
         self.record_progress(Job::Drift, 0, 0, 0);
         self.analysis.push(crate::localization_drift(
             Job::Drift,
-            grana_pipeline::run::LocalizationDriftRequest::new(frames, reference, channel, base),
+            grana_pipeline::run::LocalizationDriftRequest::new(source, reference, channel, base),
         ));
     }
 

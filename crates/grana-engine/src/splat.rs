@@ -9,6 +9,7 @@ use crate::spot::{self, Appearance, Choice, Frame, LEVEL_COUNT};
 const _: () = assert!(LEVEL_COUNT == grana_render::SPLAT_LEVELS);
 
 const SPLAT_LIMIT: usize = 1 << 21;
+const WEIGHT_FRAMES: usize = 48;
 
 pub struct SplatCache {
     sets: Vec<SetLevels>,
@@ -33,16 +34,36 @@ impl SplatCache {
         self.sets.retain(|entry| present.contains(&entry.set));
     }
 
-    pub(crate) fn prepare(
+    pub(crate) fn choose(
         &mut self,
         scene: &Scene,
         set: &ObjectSet,
-        key: u64,
-        choice: Choice,
-    ) -> Prepared {
-        let held = frames(scene, set);
+        world_per_pixel: f32,
+    ) -> Choice {
         let range = range(set, scene.time(), scene.frame_count());
-        let index = match self
+        let projected = range[0] != range[1];
+        let aggregated = set.object_count(scene.time()) >= spot::AGGREGATE_FLOOR;
+        let stamp = set.revision().raw();
+        let index = self.entry(set);
+        let entry = &mut self.sets[index];
+        if entry
+            .ladder
+            .as_ref()
+            .is_none_or(|held| held.stamp != stamp || held.range != range)
+        {
+            let ladder = spot::Ladder::over(&frames(scene, set));
+            entry.ladder = Some(LadderSample {
+                stamp,
+                range,
+                ladder,
+            });
+        }
+        let ladder = entry.ladder.as_ref().and_then(|held| held.ladder);
+        spot::choose(projected, aggregated, ladder, world_per_pixel)
+    }
+
+    fn entry(&mut self, set: &ObjectSet) -> usize {
+        match self
             .sets
             .iter()
             .position(|entry| entry.set == set.id().raw())
@@ -52,13 +73,27 @@ impl SplatCache {
                 self.sets.push(SetLevels {
                     set: set.id().raw(),
                     weight: None,
+                    ladder: None,
                     levels: std::array::from_fn(|_| None),
                 });
                 self.sets.len() - 1
             }
-        };
+        }
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        scene: &Scene,
+        set: &ObjectSet,
+        key: u64,
+        choice: Choice,
+    ) -> Prepared {
+        let range = range(set, scene.time(), scene.frame_count());
+        let projected = range[0] != range[1];
+        let present = (range[0]..=range[1]).any(|time| set.frame_stamp(time).is_some());
+        let index = self.entry(set);
         let entry = &mut self.sets[index];
-        if held.is_empty() {
+        if !present {
             entry.levels = std::array::from_fn(|_| None);
             return Prepared {
                 chunks: Vec::new(),
@@ -70,11 +105,17 @@ impl SplatCache {
             };
         }
         let stamp = set.revision().raw();
-        if entry.weight.as_ref().is_none_or(|(held, _)| *held != stamp) {
-            entry.weight = Some((stamp, measure_weight(set)));
+        if entry.weight.as_ref().is_none_or(|held| {
+            held.stamp != stamp || held.range != range || held.projected != projected
+        }) {
+            entry.weight = Some(MeasuredWeight {
+                stamp,
+                range,
+                projected,
+                weight: measure_weight(set, range, projected),
+            });
         }
-        let weight = entry.weight.as_ref().and_then(|(_, weight)| *weight);
-        let projected = held.len() > 1;
+        let weight = entry.weight.as_ref().and_then(|held| held.weight);
         let choice = if projected {
             Choice::Level(choice.level().max(1))
         } else {
@@ -82,7 +123,7 @@ impl SplatCache {
         };
         let wanted = if projected {
             vec![choice.level()]
-        } else if spot::aggregated(&held) {
+        } else if set.object_count(scene.time()) >= spot::AGGREGATE_FLOOR {
             (0..LEVEL_COUNT).collect()
         } else {
             vec![0]
@@ -99,10 +140,12 @@ impl SplatCache {
                 *level = None;
             }
         }
+        let mut held = None;
         for slot in wanted {
             let level = &mut entry.levels[slot as usize];
             if level.is_none() {
-                *level = Some(build(scene, set, slot, &held, range, weight));
+                let frames = held.get_or_insert_with(|| frames(scene, set));
+                *level = Some(build(scene, set, slot, frames, range, weight));
             }
         }
         let levels = &entry.levels;
@@ -154,21 +197,39 @@ pub(crate) fn frames(scene: &Scene, set: &ObjectSet) -> Vec<Frame> {
         .collect()
 }
 
-fn measure_weight(set: &ObjectSet) -> Option<SpotWeight> {
+fn measure_weight(set: &ObjectSet, range: [u32; 2], projected: bool) -> Option<SpotWeight> {
     set.localization()?;
-    let total = (0..set.frame_count())
-        .map(|time| set.object_count(time))
-        .sum::<usize>();
+    let sampled = if projected {
+        sample_frames(range[0], range[1])
+    } else {
+        sample_frames(0, set.frame_count().saturating_sub(1))
+    };
+    let mut picked = Vec::with_capacity(sampled.len());
+    for time in sampled {
+        if let Some(spots) = set.spot_frame(time) {
+            picked.push(spots);
+        }
+    }
+    let total = picked.iter().map(|spots| spots.len()).sum::<usize>();
     if total == 0 {
         return None;
     }
     let mut sampler = SpotWeightSampler::new(total);
-    for (_, frame) in set.frames() {
-        if let Some(spots) = frame.spots() {
-            sampler.push(spots.spots());
-        }
+    for spots in &picked {
+        sampler.push(spots.spots());
     }
     Some(sampler.finish())
+}
+
+fn sample_frames(start: u32, end: u32) -> Vec<u32> {
+    if end <= start {
+        return vec![start];
+    }
+    let span = u64::from(end - start);
+    let sampled = (span + 1).min(WEIGHT_FRAMES as u64);
+    (0..sampled)
+        .map(|index| start + (index * span / (sampled - 1)) as u32)
+        .collect()
 }
 
 pub(crate) struct Prepared {
@@ -215,8 +276,22 @@ impl SplatMembers {
 
 struct SetLevels {
     set: u64,
-    weight: Option<(u64, Option<SpotWeight>)>,
+    weight: Option<MeasuredWeight>,
+    ladder: Option<LadderSample>,
     levels: [Option<Level>; LEVEL_COUNT as usize],
+}
+
+struct MeasuredWeight {
+    stamp: u64,
+    range: [u32; 2],
+    projected: bool,
+    weight: Option<SpotWeight>,
+}
+
+struct LadderSample {
+    stamp: u64,
+    range: [u32; 2],
+    ladder: Option<spot::Ladder>,
 }
 
 struct Level {

@@ -21,6 +21,7 @@ use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
 use crate::revision::{Revision, Revisions};
 use crate::seed::Seeds;
+use crate::source::ObjectSource;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
 use crate::track_layer::TrackLayer;
@@ -845,6 +846,27 @@ impl ObjectSet {
 
     pub fn spot_frame(&self, time: u32) -> Option<Arc<SpotSet>> {
         self.frames.get(time as usize)?.frame.as_ref()?.spot_frame()
+    }
+
+    pub fn source(&self) -> ObjectSource {
+        ObjectSource::live(
+            self.frame_handles(),
+            self.visibility.clone(),
+            self.hidden.clone(),
+            self.localization_filter(),
+            self.tracks.as_ref().map(TrackLayer::shared_set),
+        )
+    }
+
+    pub(crate) fn plain_source(&self) -> ObjectSource {
+        ObjectSource::plain(self.frame_handles())
+    }
+
+    fn frame_handles(&self) -> Vec<Option<Frame>> {
+        self.frames
+            .iter()
+            .map(|slot| slot.frame.clone())
+            .collect::<Vec<_>>()
     }
 
     pub fn frame_stamp(&self, time: u32) -> Option<Revision> {

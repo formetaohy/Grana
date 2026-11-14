@@ -10,7 +10,7 @@ use grana_analysis::{
 };
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, Roi};
-use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams};
+use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams, ObjectSource};
 use grana_store::SpillStore;
 use grana_volume::VoxelData;
 use grana_warp::Warp;
@@ -366,7 +366,7 @@ pub fn coloc(
 pub struct ObjectColocRequest {
     pair: ColocPair,
     region: grana_volume::Region,
-    frames: Vec<Option<Arc<ObjectFrame>>>,
+    source: ObjectSource,
     drifts: Drifts,
     workers: usize,
 }
@@ -375,14 +375,14 @@ impl ObjectColocRequest {
     pub fn new(
         pair: ColocPair,
         region: grana_volume::Region,
-        frames: Vec<Option<Arc<ObjectFrame>>>,
+        source: ObjectSource,
         drifts: Drifts,
         workers: usize,
     ) -> Self {
         Self {
             pair,
             region,
-            frames,
+            source,
             drifts,
             workers,
         }
@@ -398,7 +398,7 @@ pub fn object_coloc(
     let ObjectColocRequest {
         pair,
         region,
-        frames,
+        source,
         drifts,
         workers,
     } = request;
@@ -419,16 +419,15 @@ pub fn object_coloc(
         return Err("the region does not overlap the dataset".to_string());
     }
     let totals = pyramid.frame_count();
-    if frames.len() != totals as usize {
+    if source.frames() != totals {
         return Err(format!(
             "the object masks cover {} frames and the dataset holds {totals}",
-            frames.len()
+            source.frames()
         ));
     }
     let level_index = grana_analysis::object_coloc_level(pyramid, totals, region, &|time| {
-        frames
-            .get(time as usize)
-            .and_then(Option::as_ref)
+        source
+            .frame(time)
             .map_or_else(Vec::new, |frame| frame.anchors())
     });
     let info = pyramid.level(level_index);
@@ -442,7 +441,7 @@ pub fn object_coloc(
         cancel,
         || (),
         |(), time, report| {
-            let Some(frame) = frames.get(time as usize).and_then(Option::as_ref) else {
+            let Some(frame) = source.frame(time) else {
                 return Ok(None);
             };
             let objects = frame.object_count();

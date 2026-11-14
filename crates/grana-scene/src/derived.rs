@@ -1,16 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use grana_object::{Mask, Roi};
+use grana_object::{Mask, rasterize};
 use grana_optics::Psf;
 use grana_volume::{ChannelInfo, Intensity, Level, VoxelFormat};
 
-use crate::object::ObjectFrame;
+use crate::mask::MaskGate;
 use crate::object_set::ObjectSetId;
 
 const CACHE_LIMIT: usize = 4;
 const INTENSITY_FLOOR: f32 = 0.0;
-
-pub type MaskFrames = Arc<Vec<Option<Arc<ObjectFrame>>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SmoothSpec {
@@ -378,12 +376,12 @@ impl Derived {
         }
     }
 
-    pub fn masked(spec: DerivedSpec, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
+    pub fn masked(spec: DerivedSpec, gate: Arc<MaskGate>, radius: f32, stamp: u64) -> Self {
         assert!(
             spec.mask().is_some(),
             "a bound mask channel masks an object set"
         );
-        let channel = Arc::new(MaskChannel::new(spec.source(), frames, radius, stamp));
+        let channel = Arc::new(MaskChannel::new(spec.source(), gate, radius, stamp));
         Self {
             spec: Arc::new(spec),
             mask: Some(channel),
@@ -400,10 +398,6 @@ impl Derived {
 
     pub fn mask(&self) -> Option<&Arc<MaskChannel>> {
         self.mask.as_ref()
-    }
-
-    pub fn frames(&self) -> Option<MaskFrames> {
-        self.mask.as_ref().map(|channel| channel.frames())
     }
 }
 
@@ -461,24 +455,24 @@ struct CacheEntry {
     mask: Arc<Mask>,
 }
 
-struct Gate {
-    frames: MaskFrames,
+struct Bound {
+    gate: Arc<MaskGate>,
     radius: f32,
     stamp: u64,
 }
 
 pub struct MaskChannel {
     source: usize,
-    gate: Mutex<Gate>,
+    bound: Mutex<Bound>,
     cache: Mutex<Vec<CacheEntry>>,
 }
 
 impl MaskChannel {
-    pub fn new(source: usize, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
+    pub fn new(source: usize, gate: Arc<MaskGate>, radius: f32, stamp: u64) -> Self {
         Self {
             source,
-            gate: Mutex::new(Gate {
-                frames,
+            bound: Mutex::new(Bound {
+                gate,
                 radius,
                 stamp,
             }),
@@ -490,33 +484,33 @@ impl MaskChannel {
         self.source
     }
 
-    pub fn frames(&self) -> MaskFrames {
-        let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        Arc::clone(&gate.frames)
+    pub fn gate(&self) -> Arc<MaskGate> {
+        let bound = self.bound.lock().unwrap_or_else(|error| error.into_inner());
+        Arc::clone(&bound.gate)
     }
 
     pub fn stamp(&self) -> u64 {
-        self.gate
+        self.bound
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .stamp
     }
 
-    pub fn refresh(&self, frames: MaskFrames, radius: f32, stamp: u64) -> bool {
-        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        if gate.stamp == stamp {
+    pub fn refresh(&self, gate: Arc<MaskGate>, radius: f32, stamp: u64) -> bool {
+        let mut held = self.bound.lock().unwrap_or_else(|error| error.into_inner());
+        if held.stamp == stamp {
             return false;
         }
-        gate.frames = frames;
-        gate.radius = radius;
-        gate.stamp = stamp;
+        held.gate = gate;
+        held.radius = radius;
+        held.stamp = stamp;
         true
     }
 
     pub fn mask(&self, time: u32, level: Level) -> Result<Arc<Mask>, String> {
-        let (frames, radius, stamp) = {
-            let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-            (Arc::clone(&gate.frames), gate.radius, gate.stamp)
+        let (gate, radius, stamp) = {
+            let held = self.bound.lock().unwrap_or_else(|error| error.into_inner());
+            (Arc::clone(&held.gate), held.radius, held.stamp)
         };
         {
             let cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
@@ -527,14 +521,10 @@ impl MaskChannel {
                 return Ok(Arc::clone(&entry.mask));
             }
         }
-        let roi = Roi::paged(frames.len(), move |time| {
-            let Some(frame) = frames.get(time as usize).and_then(Option::as_ref) else {
-                return Ok(None);
-            };
-            frame.shape().map(Some).map_err(|error| error.to_string())
-        })
-        .with_radius(radius);
-        let mask = Arc::new(roi.mask(level, time)?);
+        let Some(shape) = gate.shape(time)? else {
+            return Ok(Arc::new(Mask::empty(level)));
+        };
+        let mask = Arc::new(rasterize(&shape, level, radius)?);
         let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
         cache.retain(|entry| entry.stamp == stamp && entry.time != time);
         cache.push(CacheEntry {

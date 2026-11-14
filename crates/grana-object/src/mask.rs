@@ -407,46 +407,54 @@ impl Roi {
         let Some(frame) = (self.shape)(time)? else {
             return Ok(Mask::empty(level));
         };
-        let Some((low, high)) = frame.bounds() else {
-            return Ok(Mask::empty(level));
-        };
-        let spacing = level.spacing();
-        let spacing = [spacing.x(), spacing.y(), spacing.z()];
-        let extent = level.extent();
-        let extent = [extent.x(), extent.y(), extent.z()];
-        let continuous = |point: [f32; 3], axis: usize| level.voxel_of(point)[axis];
-        let mut origin = [0i64; 3];
-        let mut limit = [0i64; 3];
-        let margin = [0, 1, 2].map(|axis| {
-            if self.radius > 0.0 {
-                (self.radius / spacing[axis]).ceil() as i64 + 1
-            } else {
-                0
-            }
-        });
-        for (axis, slot) in extent.iter().enumerate() {
-            origin[axis] = (continuous(low, axis).floor() as i64 - 1 - margin[axis]).max(0);
-            limit[axis] =
-                (continuous(high, axis).ceil() as i64 + 1 + margin[axis]).min(i64::from(*slot));
-        }
-        if (0..3).any(|axis| limit[axis] <= origin[axis]) {
-            return Ok(Mask::empty(level));
-        }
-        let mut area = Area::new(origin, limit, level);
-        match frame {
-            Shape::Spots(spots) => {
-                for spot in spots.iter() {
-                    area.sphere(spot.center(), spot.radius());
-                }
-            }
-            Shape::Mesh(mesh) => rasterize(&mesh, &mut area),
-        }
-        let mask = area.finish();
-        if self.radius > 0.0 {
-            mask.dilated(self.radius)
+        rasterize(&frame, level, self.radius)
+    }
+}
+
+pub fn rasterize(frame: &Shape, level: Level, radius: f32) -> Result<Mask, String> {
+    assert!(
+        radius.is_finite() && radius >= 0.0,
+        "an analysis mask grows by a finite radius"
+    );
+    let Some((low, high)) = frame.bounds() else {
+        return Ok(Mask::empty(level));
+    };
+    let spacing = level.spacing();
+    let spacing = [spacing.x(), spacing.y(), spacing.z()];
+    let extent = level.extent();
+    let extent = [extent.x(), extent.y(), extent.z()];
+    let continuous = |point: [f32; 3], axis: usize| level.voxel_of(point)[axis];
+    let mut origin = [0i64; 3];
+    let mut limit = [0i64; 3];
+    let margin = [0, 1, 2].map(|axis| {
+        if radius > 0.0 {
+            (radius / spacing[axis]).ceil() as i64 + 1
         } else {
-            Ok(mask)
+            0
         }
+    });
+    for (axis, slot) in extent.iter().enumerate() {
+        origin[axis] = (continuous(low, axis).floor() as i64 - 1 - margin[axis]).max(0);
+        limit[axis] =
+            (continuous(high, axis).ceil() as i64 + 1 + margin[axis]).min(i64::from(*slot));
+    }
+    if (0..3).any(|axis| limit[axis] <= origin[axis]) {
+        return Ok(Mask::empty(level));
+    }
+    let mut area = Area::new(origin, limit, level);
+    match frame {
+        Shape::Spots(spots) => {
+            for spot in spots.iter() {
+                area.sphere(spot.center(), spot.radius());
+            }
+        }
+        Shape::Mesh(mesh) => cut_mesh(mesh, &mut area),
+    }
+    let mask = area.finish();
+    if radius > 0.0 {
+        mask.dilated(radius)
+    } else {
+        Ok(mask)
     }
 }
 
@@ -595,7 +603,7 @@ impl Area {
     }
 }
 
-fn rasterize(mesh: &PackedMesh, area: &mut Area) {
+fn cut_mesh(mesh: &PackedMesh, area: &mut Area) {
     if mesh.is_empty() {
         return;
     }

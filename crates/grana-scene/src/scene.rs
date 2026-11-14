@@ -4,8 +4,7 @@ use glam::Vec3;
 use grana_display::{Coloring, Extent, Material, Shading, TransferFunction, VolumeMode};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
-use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
-use grana_object::{Shape, TrackParams};
+use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
 use grana_optics::Psf;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
 
@@ -16,14 +15,12 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
-use crate::derived::{
-    Derived, DerivedSpec, MaskFrames, Operation, RestoreSpec, mask_info, mask_intensity,
-};
+use crate::derived::{Derived, DerivedSpec, Operation, RestoreSpec, mask_info, mask_intensity};
 use crate::drift::Drift;
 use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
-use crate::mask::MaskFilter;
+use crate::mask::{MaskFilter, MaskGate, RelationGate};
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
@@ -32,13 +29,6 @@ use crate::registration::Registration;
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, mix};
 use crate::table_request::TableRequest;
-
-fn shape_at(frames: &[Option<Arc<ObjectFrame>>], time: u32) -> Result<Option<Shape>, String> {
-    let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
-        return Ok(None);
-    };
-    frame.shape().map(Some).map_err(|error| error.to_string())
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -234,11 +224,11 @@ impl Scene {
                             spec.name()
                         ));
                     };
-                    let (frames, stamp) = match self.masked_frames(object) {
-                        Ok(frames) => (frames, self.gate_stamp(object)),
-                        Err(_) => (plain_frames(object), 0),
+                    let (gate, stamp) = match self.mask_gate(object) {
+                        Ok(gate) => (gate, self.gate_stamp(object)),
+                        Err(_) => (MaskGate::new(object.plain_source(), None, None), 0),
                     };
-                    Derived::masked(spec, frames, self.mask_radius, stamp)
+                    Derived::masked(spec, gate, self.mask_radius, stamp)
                 }
                 None => Derived::plain(spec),
             });
@@ -269,14 +259,14 @@ impl Scene {
             ));
         }
         let color = object.color();
-        let frames = self.masked_frames(object)?;
+        let gate = self.mask_gate(object)?;
         let stamp = self.gate_stamp(object);
         let source = self.dataset.channels()[channel].clone();
         let name = self.mask_name(&source, object);
         let intensity = mask_intensity(&source);
         let spec = DerivedSpec::masked(set, channel, name, color, intensity);
         let info = mask_info(spec.name(), color, &source);
-        self.push_derived(Derived::masked(spec, frames, self.mask_radius, stamp), info)
+        self.push_derived(Derived::masked(spec, gate, self.mask_radius, stamp), info)
     }
 
     pub fn add_derived(&mut self, spec: DerivedSpec) -> Result<usize, String> {
@@ -460,8 +450,8 @@ impl Scene {
             if channel.stamp() == stamp {
                 continue;
             }
-            if let Ok(frames) = self.masked_frames(object) {
-                channel.refresh(frames, self.mask_radius, stamp);
+            if let Ok(gate) = self.mask_gate(object) {
+                channel.refresh(gate, self.mask_radius, stamp);
             }
         }
     }
@@ -1251,71 +1241,35 @@ impl Scene {
         let Some(set) = self.mask.and_then(|mask| self.objects.get(mask)) else {
             return Ok(None);
         };
-        let frames = self.masked_frames(set)?;
-        Ok(Some(
-            grana_object::Roi::paged(frames.len(), move |time| shape_at(&frames, time))
-                .with_radius(self.mask_radius),
-        ))
+        let gate = self.mask_gate(set)?;
+        Ok(Some(gate.roi().with_radius(self.mask_radius)))
     }
 
-    fn masked_frames(&self, set: &ObjectSet) -> Result<MaskFrames, String> {
-        let filtered = set.filtered();
+    fn mask_gate(&self, set: &ObjectSet) -> Result<Arc<MaskGate>, String> {
         let filter = self.mask_filter;
-        if let Some(filter) = filter
-            && set.relation(filter.target(), filter.shift()).is_none()
-        {
-            return Err(format!(
-                "the analysis mask relates {} to an object set that left the scene",
-                set.name()
-            ));
-        }
-        let mut frames = Vec::with_capacity(self.frame_count() as usize);
-        for time in 0..self.frame_count() {
-            let Some(frame) = set.frame_shared(time) else {
-                frames.push(None);
-                continue;
-            };
-            let mut keep = (0..frame.object_count())
-                .map(|object| !filtered || set.filtered_object(time, object))
-                .collect::<Vec<_>>();
-            if let Some(filter) = filter
-                && keep.iter().any(|kept| *kept)
-            {
+        let relation = match filter {
+            None => None,
+            Some(filter) => {
                 let relation = set
                     .relation(filter.target(), filter.shift())
-                    .expect("the checked relation is present");
+                    .ok_or_else(|| {
+                        format!(
+                            "the analysis mask relates {} to an object set that left the scene",
+                            set.name()
+                        )
+                    })?;
                 let target = self
                     .objects
                     .get(filter.target())
                     .map_or("the related set", ObjectSet::name);
-                let measured = relation.frame(time).ok_or_else(|| {
-                    format!(
-                        "the analysis mask needs the relation of {} to {target} at frame {time}",
-                        set.name()
-                    )
-                })?;
-                if measured.objects() != frame.object_count() {
-                    return Err(format!(
-                        "the relation of {} to {target} measures {} objects at frame {time} and the frame holds {}",
-                        set.name(),
-                        measured.objects(),
-                        frame.object_count()
-                    ));
-                }
-                for (object, kept) in keep.iter_mut().enumerate() {
-                    *kept &= filter.holds(measured, object);
-                }
+                Some(RelationGate::new(
+                    relation.shared_frames().to_vec(),
+                    set.name().to_string(),
+                    target.to_string(),
+                ))
             }
-            frames.push(if keep.iter().all(|kept| *kept) {
-                Some(frame)
-            } else {
-                frame
-                    .retain(&keep)
-                    .map_err(|error| error.to_string())?
-                    .map(Arc::new)
-            });
-        }
-        Ok(Arc::new(frames))
+        };
+        Ok(MaskGate::new(set.source(), filter, relation))
     }
 
     fn gate_stamp(&self, set: &ObjectSet) -> u64 {
@@ -1955,14 +1909,6 @@ impl Scene {
             self.objects.set_object_coloc(id, None);
         }
     }
-}
-
-fn plain_frames(set: &ObjectSet) -> MaskFrames {
-    Arc::new(
-        (0..set.frame_count())
-            .map(|time| set.frame_shared(time))
-            .collect(),
-    )
 }
 
 fn filter_stamp(filter: Option<MaskFilter>) -> u64 {

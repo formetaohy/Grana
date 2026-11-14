@@ -674,6 +674,37 @@ fn pages_localization_frames_beyond_the_resident_budget() {
             .is_some_and(|image| image.pixels().iter().any(|sample| *sample > 0)),
         "the paged window paints its localizations"
     );
+    let before = scene
+        .objects
+        .get(set)
+        .expect("the spots stay")
+        .paged_bytes();
+    scene.set_mask(Some(set));
+    let roi = scene
+        .mask_frames()
+        .expect("the analysis mask binds its object set")
+        .expect("the analysis mask names its object set");
+    assert_eq!(
+        roi.frames(),
+        FRAMES as usize,
+        "the analysis mask spans every frame of its object set"
+    );
+    assert_eq!(
+        scene
+            .objects
+            .get(set)
+            .expect("the spots stay")
+            .paged_bytes(),
+        before,
+        "binding the analysis mask leaves the resident pages untouched"
+    );
+    let mask = roi
+        .mask(scene.dataset.pyramid().level(0), 7)
+        .expect("the analysis mask rasterizes one frame");
+    assert!(
+        !mask.is_empty(),
+        "the analysis mask covers the localizations it keeps"
+    );
 }
 
 #[test]

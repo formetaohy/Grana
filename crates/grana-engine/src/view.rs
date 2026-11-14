@@ -131,8 +131,12 @@ pub fn key(scene: &Scene) -> u64 {
 }
 
 pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
+    plan_with(scene, lens, &mut SplatCache::new())
+}
+
+pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, splats: &mut SplatCache) -> Targets {
     let mut detail = Vec::new();
-    let mut splats = Vec::new();
+    let mut choices = Vec::new();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
@@ -150,22 +154,20 @@ pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
             },
             _ => 0,
         });
-        splats.push(match lens {
+        choices.push(match lens {
             Some(lens) => {
-                let held = crate::splat::frames(scene, set);
-                if held.is_empty() {
-                    Choice::Full
-                } else {
-                    let pixels = lens
-                        .camera
-                        .world_per_point(lens.height as f32, lens.camera.distance());
-                    spot::choose(&held, pixels)
-                }
+                let pixels = lens
+                    .camera
+                    .world_per_point(lens.height as f32, lens.camera.distance());
+                splats.choose(scene, set, pixels)
             }
             None => Choice::Full,
         });
     }
-    Targets { detail, splats }
+    Targets {
+        detail,
+        splats: choices,
+    }
 }
 
 pub fn frame(

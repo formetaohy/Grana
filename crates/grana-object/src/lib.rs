@@ -26,7 +26,7 @@ pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;
 pub use localization::{ClusterSpec, LocalizationFilter, LocalizationSpec};
-pub use mask::{Mask, Roi};
+pub use mask::{Mask, Roi, rasterize};
 pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
     CellParams, FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackEvents,

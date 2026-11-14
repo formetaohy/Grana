@@ -1,27 +1,55 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_analysis::LocalizationPoint;
-use grana_scene::Drift;
+use grana_analysis::{LocalizationFrames, LocalizationPoint};
+use grana_scene::{Drift, ObjectSource};
 use grana_warp::Warp;
 
 use crate::event::Event;
 
 pub struct LocalizationDriftRequest {
-    frames: Vec<Vec<LocalizationPoint>>,
+    source: LocalizationCloud,
     reference: u32,
     channel: usize,
     base: Drift,
 }
 
+struct LocalizationCloud(ObjectSource);
+
+impl LocalizationFrames for LocalizationCloud {
+    fn frames(&self) -> usize {
+        self.0.frames() as usize
+    }
+
+    fn total(&self) -> usize {
+        if self.0.filtered() {
+            (0..self.0.frames())
+                .map(|time| self.points(time).len())
+                .sum()
+        } else {
+            (0..self.0.frames())
+                .map(|time| self.0.object_count(time))
+                .sum()
+        }
+    }
+
+    fn points(&self, time: u32) -> Vec<LocalizationPoint> {
+        let Some(spots) = self.0.spot_frame(time) else {
+            return Vec::new();
+        };
+        spots
+            .spots()
+            .iter()
+            .enumerate()
+            .filter(|(index, spot)| self.0.visible_spot(time, *index, spot))
+            .map(|(_, spot)| LocalizationPoint::new(spot.center(), spot.sigma()))
+            .collect()
+    }
+}
+
 impl LocalizationDriftRequest {
-    pub fn new(
-        frames: Vec<Vec<LocalizationPoint>>,
-        reference: u32,
-        channel: usize,
-        base: Drift,
-    ) -> Self {
+    pub fn new(source: ObjectSource, reference: u32, channel: usize, base: Drift) -> Self {
         assert!(
-            !frames.is_empty(),
+            source.frames() > 0,
             "a localization drift names the frames of its object set"
         );
         assert!(
@@ -29,7 +57,7 @@ impl LocalizationDriftRequest {
             "a localization drift composes with a drift of its own reference"
         );
         Self {
-            frames,
+            source: LocalizationCloud(source),
             reference,
             channel,
             base,
@@ -43,11 +71,12 @@ pub fn localization_drift(
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let LocalizationDriftRequest {
-        frames,
+        source,
         reference,
         channel,
         base,
     } = request;
+    let frames = source.frames();
     sink(Event::Progress {
         time: 0,
         done: 0,
@@ -61,7 +90,7 @@ pub fn localization_drift(
         });
         !cancel.load(Ordering::Relaxed)
     };
-    let Some(found) = grana_analysis::localization_drift(&frames, reference, &mut report)? else {
+    let Some(found) = grana_analysis::localization_drift(&source, reference, &mut report)? else {
         sink(Event::Done);
         return Ok(());
     };
@@ -70,7 +99,7 @@ pub fn localization_drift(
         sink(Event::Done);
         return Ok(());
     }
-    let mut warps = Vec::with_capacity(frames.len());
+    let mut warps = Vec::with_capacity(frames);
     for (time, offset) in offsets.iter().enumerate() {
         let residual = Warp::shift(*offset);
         warps.push(base.warp(time as u32).added(&residual));

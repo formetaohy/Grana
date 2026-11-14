@@ -1378,7 +1378,12 @@ impl Run<'_, '_> {
         {
             return Err(format!("{name} detected no objects to colocalize"));
         }
-        let frames = frames_of(&self.scene, set);
+        let source = self
+            .scene
+            .objects
+            .get(set)
+            .expect("the staged object set exists")
+            .source();
         let region = self.scene.region;
         if region.enabled()
             && region
@@ -1411,7 +1416,7 @@ impl Run<'_, '_> {
             crate::run::ObjectColocRequest::new(
                 pair,
                 region,
-                frames,
+                source,
                 self.scene.drifts().clone(),
                 task.workers,
             ),

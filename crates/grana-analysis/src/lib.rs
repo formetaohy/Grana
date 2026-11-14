@@ -28,7 +28,9 @@ pub use drift::{
 pub use fiducial::{Fiducial, fiducial_registration};
 pub use filament::{FilamentScan, filament_level};
 pub use label::{LabelBuilder, LabelSlab};
-pub use localization_drift::{LocalizationPoint, localization_drift};
+pub use localization_drift::{
+    LocalizationDrift, LocalizationFrames, LocalizationPoint, localization_drift,
+};
 pub use object_coloc::{LabelRead, ObjectColocScan, object_coloc_level};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};

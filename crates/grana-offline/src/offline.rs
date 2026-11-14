@@ -132,7 +132,7 @@ impl Offline {
             }
             let pose = export.pose();
             scene.set_time(pose.time);
-            let targets = grana_engine::plan(&scene, export.lens());
+            let targets = grana_engine::plan_with(&scene, export.lens(), &mut splats);
             let stale = prepared
                 .as_ref()
                 .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);

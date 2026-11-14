@@ -48,6 +48,28 @@ impl LocalizationPoint {
     }
 }
 
+pub trait LocalizationFrames: Send + Sync {
+    fn frames(&self) -> usize;
+
+    fn total(&self) -> usize;
+
+    fn points(&self, time: u32) -> Vec<LocalizationPoint>;
+}
+
+impl LocalizationFrames for Vec<Vec<LocalizationPoint>> {
+    fn frames(&self) -> usize {
+        self.len()
+    }
+
+    fn total(&self) -> usize {
+        self.iter().map(Vec::len).sum()
+    }
+
+    fn points(&self, time: u32) -> Vec<LocalizationPoint> {
+        self.get(time as usize).cloned().unwrap_or_default()
+    }
+}
+
 pub struct LocalizationDrift {
     offsets: Vec<[f32; 3]>,
     segments: usize,
@@ -69,24 +91,25 @@ impl LocalizationDrift {
 }
 
 pub fn localization_drift(
-    frames: &[Vec<LocalizationPoint>],
+    frames: &dyn LocalizationFrames,
     reference: u32,
     report: &mut dyn FnMut(usize, usize) -> bool,
 ) -> Result<Option<LocalizationDrift>, String> {
-    if frames.len() < 2 {
+    let count = frames.frames();
+    if count < 2 {
         return Err("the object set holds one frame to align".to_string());
     }
-    if reference as usize >= frames.len() {
+    if reference as usize >= count {
         return Err("the drift reference lies outside the time series".to_string());
     }
-    let total = frames.iter().map(Vec::len).sum::<usize>();
+    let total = frames.total();
     if total < MINIMUM_POINTS {
         return Err(format!(
             "the object set holds {total} localizations, too few to align"
         ));
     }
-    let reach = Reach::measure(frames);
-    let segmentation = Segmentation::new(frames.len(), reference);
+    let reach = Reach::measure(frames, total);
+    let segmentation = Segmentation::new(count, reference);
     let Some(reference_cloud) = segmentation.centers(frames, segmentation.reference) else {
         return Err("the reference frames hold no localization to pair".to_string());
     };
@@ -116,8 +139,8 @@ pub fn localization_drift(
             return Ok(None);
         }
     }
-    let first = offsets(&drift, &segmentation, frames.len());
-    let Some((resampled, sampled)) = segmentation.resampled(frames, &first) else {
+    let first = offsets(&drift, &segmentation, count);
+    let Some((resampled, sampled)) = segmentation.resampled(frames, &first, total) else {
         return Err("the drift correction resamples no localization".to_string());
     };
     let cloud = Cloud::resampled(&resampled, sampled, reach);
@@ -153,7 +176,7 @@ pub fn localization_drift(
             return Ok(None);
         }
     }
-    let offsets = offsets(&drift, &segmentation, frames.len());
+    let offsets = offsets(&drift, &segmentation, count);
     if !report(total_steps, total_steps) {
         return Ok(None);
     }
@@ -202,16 +225,16 @@ struct Reach {
 }
 
 impl Reach {
-    fn measure(frames: &[Vec<LocalizationPoint>]) -> Self {
-        let total = frames.iter().map(Vec::len).sum::<usize>();
+    fn measure(frames: &dyn LocalizationFrames, total: usize) -> Self {
         let stride = (total / SAMPLE).max(1);
         let mut lateral = Vec::with_capacity(total.div_ceil(stride).min(SAMPLE) + 1);
         let mut axial = Vec::with_capacity(total.div_ceil(stride).min(SAMPLE) + 1);
         let mut low = f32::INFINITY;
         let mut high = f32::NEG_INFINITY;
         let mut seen = 0usize;
-        for frame in frames {
-            for point in frame {
+        for time in 0..frames.frames() {
+            let points = frames.points(time as u32);
+            for point in &points {
                 if seen.is_multiple_of(stride) {
                     let precision = point.precision();
                     lateral.push(0.5 * (precision[0] + precision[1]));
@@ -295,28 +318,33 @@ impl Segmentation {
         below.into_iter().chain(above)
     }
 
-    fn centers(&self, frames: &[Vec<LocalizationPoint>], segment: usize) -> Option<Vec<[f32; 3]>> {
+    fn centers(&self, frames: &dyn LocalizationFrames, segment: usize) -> Option<Vec<[f32; 3]>> {
         let [start, end] = self.bounds(segment);
         let mut points = Vec::new();
-        for frame in &frames[start..end] {
-            points.extend(frame.iter().map(LocalizationPoint::center));
+        for time in start..end {
+            points.extend(
+                frames
+                    .points(time as u32)
+                    .iter()
+                    .map(LocalizationPoint::center),
+            );
         }
         (!points.is_empty()).then_some(points)
     }
 
     fn resampled(
         &self,
-        frames: &[Vec<LocalizationPoint>],
+        frames: &dyn LocalizationFrames,
         offsets: &[[f32; 3]],
+        total: usize,
     ) -> Option<(Vec<[f32; 3]>, Vec<u32>)> {
-        let total = frames.iter().map(Vec::len).sum::<usize>();
         let stride = total.div_ceil(RESAMPLE).max(1);
         let mut points = Vec::with_capacity(total.div_ceil(stride).min(RESAMPLE) + 1);
         let mut sampled = Vec::with_capacity(total.div_ceil(stride).min(RESAMPLE) + 1);
         let mut seen = 0usize;
-        for (time, frame) in frames.iter().enumerate() {
-            let offset = offsets[time];
-            for point in frame {
+        for (time, offset) in offsets.iter().enumerate() {
+            let frame = frames.points(time as u32);
+            for point in &frame {
                 if seen.is_multiple_of(stride) {
                     let center = point.center();
                     points.push([0, 1, 2].map(|axis| center[axis] - offset[axis]));

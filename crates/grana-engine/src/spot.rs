@@ -9,7 +9,7 @@ use grana_render::{SplatGeometry, SplatStyle};
 const RAW_PIXELS: f32 = 3.0;
 const CELL_PIXELS: f32 = 4.0;
 const SAMPLE_LIMIT: usize = 1024;
-const AGGREGATE_FLOOR: usize = 512;
+pub(crate) const AGGREGATE_FLOOR: usize = 512;
 const LADDER: u8 = 4;
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
@@ -81,6 +81,7 @@ impl Detections {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Ladder {
     diameter: f32,
     cells: [f32; LADDER as usize],
@@ -128,17 +129,17 @@ impl Ladder {
     }
 }
 
-pub(crate) fn aggregated(frames: &[Frame]) -> bool {
-    frames.iter().map(|frame| frame.spots.len()).sum::<usize>() >= AGGREGATE_FLOOR
-}
-
-pub(crate) fn choose(frames: &[Frame], world_per_pixel: f32) -> Choice {
-    let projected = frames.len() > 1;
+pub(crate) fn choose(
+    projected: bool,
+    aggregated: bool,
+    ladder: Option<Ladder>,
+    world_per_pixel: f32,
+) -> Choice {
     let usable = world_per_pixel.is_finite() && world_per_pixel > 0.0;
-    if !projected && (!aggregated(frames) || !usable) {
+    if !projected && (!aggregated || !usable) {
         return Choice::Full;
     }
-    let Some(ladder) = Ladder::over(frames) else {
+    let Some(ladder) = ladder else {
         return if projected {
             Choice::Level(1)
         } else {

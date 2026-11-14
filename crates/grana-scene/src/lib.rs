@@ -27,6 +27,7 @@ mod seed;
 mod segment;
 mod slug;
 mod snapshot;
+mod source;
 mod state;
 mod table_request;
 mod trace;
@@ -42,8 +43,8 @@ pub use color::ObjectColor;
 pub use curation::{Curation, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use derived::{
-    BackgroundSpec, Derived, DerivedSpec, MaskChannel, MaskFrames, Operation, RatioSpec,
-    RestoreSpec, SmoothSpec, derived_infos, mask_info, mask_intensity,
+    BackgroundSpec, Derived, DerivedSpec, MaskChannel, Operation, RatioSpec, RestoreSpec,
+    SmoothSpec, derived_infos, mask_info, mask_intensity,
 };
 pub use drift::Drift;
 pub use drifts::Drifts;
@@ -55,7 +56,7 @@ pub use job::{Job, Progress};
 pub use key::ObjectSetKey;
 pub use label_export::LabelExport;
 pub use localization::LocalizationSource;
-pub use mask::MaskFilter;
+pub use mask::{MaskFilter, MaskGate};
 pub use measure::{Measure, MeasureState, PlotKey, PlotRequest};
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
@@ -69,6 +70,7 @@ pub use seed::Seeds;
 pub use segment::{License, SEGMENT_FIELDS, SegmentModel, SegmentParams};
 pub use slug::slug;
 pub use snapshot::Snapshot;
+pub use source::ObjectSource;
 pub use state::{ChannelState, ItemState, RelationState, SceneState, SelectionState, SetState};
 pub use table_request::{MeasureKey, TableRequest};
 pub use trace::Trace;

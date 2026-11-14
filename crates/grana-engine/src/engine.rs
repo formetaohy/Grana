@@ -183,12 +183,13 @@ impl Engine {
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
-        let detail = view::plan(
+        let detail = view::plan_with(
             view.scene,
             Some(view::Lens {
                 camera: view.camera,
                 height: view.size[1],
             }),
+            &mut self.splats,
         );
         if self
             .prepared
