@@ -370,7 +370,7 @@ impl Session {
                 }
             }
             if let Some(timeline) = view.timeline() {
-                self.timeline = timeline;
+                self.restore_timeline(timeline);
             }
             if let Some(export) = view.export() {
                 self.export = export;

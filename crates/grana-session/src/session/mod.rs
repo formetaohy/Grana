@@ -450,7 +450,8 @@ impl Session {
         }
     }
     pub fn restore_timeline(&mut self, timeline: Timeline) {
-        self.timeline = timeline;
+        let frames = self.scene.as_ref().map_or(1, |scene| scene.frame_count());
+        self.timeline = timeline.clamped(frames);
     }
     pub fn take_view(&mut self) -> Option<ViewState> {
         self.view.take()
@@ -491,7 +492,7 @@ impl Session {
         let Some(named) = self.views.get(index).map(|named| named.view.clone()) else {
             return false;
         };
-        self.timeline = named.timeline.clone();
+        self.restore_timeline(named.timeline.clone());
         self.export = named.export;
         self.view = Some(named);
         self.touch();

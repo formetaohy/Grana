@@ -143,6 +143,7 @@ pub struct ObjectSet {
     localization: Option<LocalizationSource>,
     track_bounds: Mutex<Option<TrackBounds>>,
     revision: Revision,
+    shape: Revision,
     document: Revision,
     visibility: Visibility,
     seeds: Seeds,
@@ -197,6 +198,7 @@ impl ObjectSet {
             localization: None,
             track_bounds: Mutex::new(None),
             revision: Revision::FIRST,
+            shape: Revision::FIRST,
             document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: Seeds::points(dataset.frame_count() as usize),
@@ -377,7 +379,7 @@ impl ObjectSet {
         self.localization.as_ref()
     }
 
-    pub(crate) fn set_localization(&mut self, source: LocalizationSource) -> bool {
+    pub(crate) fn set_localization(&mut self, source: LocalizationSource, stamp: Revision) -> bool {
         if self.kind != ObjectKind::Spots {
             return false;
         }
@@ -390,11 +392,16 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(source);
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
 
-    pub(crate) fn set_localization_spec(&mut self, spec: grana_object::LocalizationSpec) -> bool {
+    pub(crate) fn set_localization_spec(
+        &mut self,
+        spec: grana_object::LocalizationSpec,
+        stamp: Revision,
+    ) -> bool {
         let Some(source) = self.localization.as_ref() else {
             return false;
         };
@@ -403,6 +410,7 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(next);
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -433,7 +441,7 @@ impl ObjectSet {
         true
     }
 
-    pub(crate) fn set_localization_clustered(&mut self, clustered: bool) -> bool {
+    pub(crate) fn set_localization_clustered(&mut self, clustered: bool, stamp: Revision) -> bool {
         let Some(source) = self.localization.as_ref() else {
             return false;
         };
@@ -442,6 +450,7 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(next);
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -449,6 +458,7 @@ impl ObjectSet {
     pub(crate) fn set_localization_clusters(
         &mut self,
         clusters: grana_object::ClusterSpec,
+        stamp: Revision,
     ) -> bool {
         let Some(source) = self.localization.as_ref() else {
             return false;
@@ -458,6 +468,7 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(next);
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -727,15 +738,21 @@ impl ObjectSet {
             .sum()
     }
 
-    pub(crate) fn set_hidden(&mut self, time: u32, objects: &[usize], hidden: bool) -> bool {
-        let changed = self.hide(time, objects, hidden);
+    pub(crate) fn set_hidden(
+        &mut self,
+        time: u32,
+        objects: &[usize],
+        hidden: bool,
+        stamp: Revision,
+    ) -> bool {
+        let changed = self.hide(time, objects, hidden, stamp);
         if changed {
             self.record_hidden(time);
         }
         changed
     }
 
-    fn hide(&mut self, time: u32, objects: &[usize], hidden: bool) -> bool {
+    fn hide(&mut self, time: u32, objects: &[usize], hidden: bool, stamp: Revision) -> bool {
         let Some(count) = self
             .frames
             .get(time as usize)
@@ -764,6 +781,7 @@ impl ObjectSet {
             changed = true;
         }
         if changed {
+            self.shape = stamp;
             self.document = self.document.next();
         }
         changed
@@ -789,12 +807,13 @@ impl ObjectSet {
         self.curation.record_hidden(time, anchors);
     }
 
-    pub(crate) fn clear_hidden(&mut self) -> bool {
+    pub(crate) fn clear_hidden(&mut self, stamp: Revision) -> bool {
         if self.hidden.is_empty() {
             return false;
         }
         self.hidden.clear();
         self.curation.clear_hidden();
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -955,6 +974,7 @@ impl ObjectSet {
             vec![None; self.frame_count() as usize],
         ));
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -1009,6 +1029,7 @@ impl ObjectSet {
             }));
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -1039,6 +1060,7 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -1057,6 +1079,7 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -1080,6 +1103,7 @@ impl ObjectSet {
             return;
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
     }
 
@@ -1105,6 +1129,7 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
     }
 
@@ -1121,6 +1146,14 @@ impl ObjectSet {
 
     pub fn revision(&self) -> Revision {
         self.revision
+    }
+
+    pub fn shape(&self) -> Revision {
+        self.shape
+    }
+
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 
     pub fn document(&self) -> Revision {
@@ -1246,6 +1279,7 @@ impl ObjectSet {
             localization,
             track_bounds: Mutex::new(None),
             revision: stamps.mint(),
+            shape: stamps.mint(),
             document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: Seeds::points(frame_count),
@@ -1395,7 +1429,7 @@ impl ObjectSet {
         self.track_coloring = track;
     }
 
-    pub fn set_visibility(&mut self, visibility: Visibility) {
+    pub fn set_visibility(&mut self, visibility: Visibility, stamp: Revision) {
         if self.visibility == visibility {
             return;
         }
@@ -1426,6 +1460,7 @@ impl ObjectSet {
             }
         }
         self.visibility = visibility;
+        self.shape = stamp;
         self.document = self.document.next();
     }
 
@@ -1677,12 +1712,12 @@ impl ObjectSet {
             let stamp = self.frames[time].stamp;
             self.curation.set_applied(time as u32, stamp);
         }
-        self.reapply_hidden();
+        self.reapply_hidden(stamp);
         self.curation.set_pending(pending);
         applied
     }
 
-    pub(crate) fn reapply_hidden(&mut self) -> usize {
+    pub(crate) fn reapply_hidden(&mut self, stamp: Revision) -> usize {
         let mut hidden = 0;
         for time in 0..self.frames.len() {
             let Some(frame) = self.frame_shared(time as u32) else {
@@ -1695,7 +1730,7 @@ impl ObjectSet {
                 continue;
             }
             hidden += targets.len();
-            self.hide(time as u32, &targets, true);
+            self.hide(time as u32, &targets, true, stamp);
         }
         hidden
     }
@@ -1773,6 +1808,7 @@ impl ObjectSet {
             self.curation.remove_edit(index);
         }
         if applied > 0 || self.curation.dropped() > 0 {
+            self.shape = stamp;
             self.document = self.document.next();
         }
         applied
@@ -1871,6 +1907,7 @@ impl ObjectSet {
         self.curation.seed(self.frames.len());
         self.curation.record_edit(edit);
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         true
@@ -1918,6 +1955,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = visibility;
     }
@@ -1984,6 +2022,7 @@ impl ObjectSet {
             localization: self.localization.clone(),
             track_bounds: Mutex::new(None),
             revision: Revision::FIRST,
+            shape: Revision::FIRST,
             document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: self.seeds.clone(),
@@ -2132,6 +2171,7 @@ impl ObjectSet {
             localization: None,
             track_bounds: Mutex::new(None),
             revision: stamp,
+            shape: stamp,
             document: self.document.next(),
             visibility: Visibility::All,
             seeds,
@@ -2197,6 +2237,7 @@ impl ObjectSet {
             return false;
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -2216,6 +2257,7 @@ impl ObjectSet {
             return false;
         }
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         true
     }
@@ -2251,6 +2293,7 @@ impl ObjectSet {
             ));
             slot.stamp = stamp;
             self.revision = stamp;
+            self.shape = stamp;
             self.document = self.document.next();
             changed = true;
         }
@@ -2307,6 +2350,7 @@ impl ObjectSet {
             ));
             slot.stamp = stamp;
             self.revision = stamp;
+            self.shape = stamp;
             self.document = self.document.next();
             changed = true;
         }
@@ -2340,6 +2384,7 @@ impl ObjectSet {
         let stamp = stamps.mint();
         self.tracks = Some(TrackLayer::new(remapped, thickness, stamp));
         self.revision = stamp;
+        self.shape = stamp;
     }
 
     pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: Revision) {
@@ -2358,6 +2403,7 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         self.hidden.clear();
@@ -2385,6 +2431,7 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         self.hidden.clear();
@@ -2439,6 +2486,7 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.frame = Some(frame);
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
     }
 
@@ -2457,6 +2505,7 @@ impl ObjectSet {
         }
         self.hidden.clear();
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         self.tracks = None;
@@ -2521,6 +2570,7 @@ impl ObjectSet {
             .expect("only trackable objects install tracks");
         self.tracks = Some(TrackLayer::new(set, thickness, stamp));
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         self.apply_edits(stamp);
@@ -2528,6 +2578,7 @@ impl ObjectSet {
 
     pub(crate) fn clear_tracks(&mut self, stamp: Revision) {
         self.revision = stamp;
+        self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
         self.tracks = None;

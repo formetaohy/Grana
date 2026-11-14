@@ -399,6 +399,15 @@ impl Derived {
     pub fn mask(&self) -> Option<&Arc<MaskChannel>> {
         self.mask.as_ref()
     }
+
+    pub(crate) fn rebase(&mut self, source: usize, denominator: Option<usize>) {
+        let spec = self.spec.rebased(source, denominator);
+        if let Some(mask) = self.mask.as_ref() {
+            let channel = MaskChannel::new(spec.source(), mask.gate(), mask.radius(), mask.stamp());
+            self.mask = Some(Arc::new(channel));
+        }
+        self.spec = Arc::new(spec);
+    }
 }
 
 pub fn derived_infos(
@@ -487,6 +496,13 @@ impl MaskChannel {
     pub fn gate(&self) -> Arc<MaskGate> {
         let bound = self.bound.lock().unwrap_or_else(|error| error.into_inner());
         Arc::clone(&bound.gate)
+    }
+
+    pub fn radius(&self) -> f32 {
+        self.bound
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .radius
     }
 
     pub fn stamp(&self) -> u64 {

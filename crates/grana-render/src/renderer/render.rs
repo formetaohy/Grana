@@ -1,6 +1,4 @@
-use super::signature::{
-    ShadowKeys, channel_style, digest, hash_camera, shadow_bounds, shadow_visibility,
-};
+use super::signature::{SceneSummary, ShadowKeys, channel_style, digest, hash_camera};
 use super::*;
 
 const AMBIENT_REACH: f32 = 40.0;
@@ -73,6 +71,7 @@ impl Renderer {
             volume_measure,
             volume_rejection,
             fit_cache,
+            summary,
             level_cap,
             feedback,
             frames,
@@ -279,7 +278,15 @@ impl Renderer {
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
         let spacing = finest.spacing();
-        let (shadow_low, shadow_high) = shadow_bounds(scene, world);
+        let scene_summary = match *summary {
+            Some(held) if held.holds(versions) => held,
+            _ => {
+                let held = SceneSummary::of(scene, world);
+                *summary = Some(held);
+                held
+            }
+        };
+        let (shadow_low, shadow_high) = scene_summary.bounds();
         let space = ShadowSpace::new(
             scene.shading.light(),
             shadow_low,
@@ -288,7 +295,7 @@ impl Renderer {
         );
         let shadow_keys = ShadowKeys::of(
             versions.objects(),
-            shadow_visibility(scene.layers, scene.styles),
+            scene_summary.visibility(),
             *generation,
             time,
             channel_key,

@@ -2,7 +2,7 @@ use grana_display::CameraState;
 use grana_gpu::Pipelines;
 use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
-use grana_volume::{BrickData, BrickRequest, Pyramid};
+use grana_volume::{BrickData, BrickRequest, Clip, Pyramid, Region};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::display::{Display, View};
@@ -19,6 +19,9 @@ struct Request {
     scene: u64,
     overlays: u64,
     camera: CameraState,
+    region: Region,
+    clip: Clip,
+    exposure: u32,
     size: [u32; 2],
     level_cap: usize,
     generation: u64,
@@ -44,10 +47,18 @@ struct Prepared {
     scene: RenderedScene,
 }
 
+struct Plan {
+    scene: u64,
+    camera: CameraState,
+    height: u32,
+    targets: view::Targets,
+}
+
 pub struct Engine {
     renderer: Renderer,
     pending_pick: Option<Identities>,
     prepared: Option<Prepared>,
+    plan: Option<Plan>,
     splats: SplatCache,
     image: Option<ViewportImage>,
     request: Option<Request>,
@@ -67,6 +78,7 @@ impl Engine {
             renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET, pipelines),
             pending_pick: None,
             prepared: None,
+            plan: None,
             splats: SplatCache::new(),
             image: None,
             request: None,
@@ -81,6 +93,7 @@ impl Engine {
         self.renderer.set_dataset(device, pyramid);
         self.pending_pick = None;
         self.prepared = None;
+        self.plan = None;
         self.splats.clear();
         self.request = None;
         self.info = FrameInfo::default();
@@ -114,6 +127,9 @@ impl Engine {
             scene: scene_key,
             overlays: overlay_key(view.overlays),
             camera: view.camera.state(),
+            region: view.scene.region,
+            clip: view.scene.clip,
+            exposure: view.scene.exposure.to_bits(),
             size: view.size,
             level_cap: view.level_cap,
             generation: self.generation,
@@ -126,14 +142,32 @@ impl Engine {
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
-        let detail = view::plan_with(
-            view.scene,
-            Some(view::Lens {
-                camera: view.camera,
-                height: size[1],
-            }),
-            &mut self.splats,
-        );
+        let detail = match &self.plan {
+            Some(plan)
+                if plan.scene == scene_key
+                    && plan.camera == request.camera
+                    && plan.height == size[1] =>
+            {
+                plan.targets.clone()
+            }
+            _ => {
+                let targets = view::plan_with(
+                    view.scene,
+                    Some(view::Lens {
+                        camera: view.camera,
+                        height: size[1],
+                    }),
+                    &mut self.splats,
+                );
+                self.plan = Some(Plan {
+                    scene: scene_key,
+                    camera: request.camera,
+                    height: size[1],
+                    targets: targets.clone(),
+                });
+                targets
+            }
+        };
         if self
             .prepared
             .as_ref()

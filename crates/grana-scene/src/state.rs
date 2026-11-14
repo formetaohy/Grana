@@ -222,7 +222,7 @@ impl Scene {
         let mask = self.mask.and_then(|set| self.objects.get(set)).map(|set| {
             MaskKey::new(
                 set.id(),
-                set.document().raw(),
+                set.shape().raw(),
                 state.mask_radius,
                 self.mask_filter,
             )

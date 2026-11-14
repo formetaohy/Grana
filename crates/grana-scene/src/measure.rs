@@ -631,9 +631,7 @@ impl Measure {
         let Some(visibility) = self.restriction(scene, id) else {
             return;
         };
-        if let Some(object) = scene.objects.get_mut(id) {
-            object.set_visibility(visibility);
-        }
+        scene.objects.set_visibility(id, visibility);
     }
 
     fn restriction(&self, scene: &Scene, id: ObjectSetId) -> Option<Visibility> {

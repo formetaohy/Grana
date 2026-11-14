@@ -340,6 +340,7 @@ impl Scene {
         }
         self.derived.remove(index);
         self.channels.remove(channel);
+        self.rebase_derived(channel);
         let infos = self
             .dataset
             .channels()
@@ -355,6 +356,19 @@ impl Scene {
             self.selected = self.selected.saturating_sub(1);
         }
         Ok(())
+    }
+
+    fn rebase_derived(&mut self, removed: usize) {
+        for entry in &mut self.derived {
+            let source = entry.spec().source();
+            let denominator = entry.spec().ratio_denominator();
+            let next_source = if source > removed { source - 1 } else { source };
+            let next_denominator =
+                denominator.map(|value| if value > removed { value - 1 } else { value });
+            if next_source != source || next_denominator != denominator {
+                entry.rebase(next_source, next_denominator);
+            }
+        }
     }
 
     pub fn set_restore(
@@ -975,15 +989,11 @@ impl Scene {
         objects: &[usize],
         hidden: bool,
     ) -> bool {
-        self.objects
-            .get_mut(id)
-            .is_some_and(|set| set.set_hidden(time, objects, hidden))
+        self.objects.set_hidden(id, time, objects, hidden)
     }
 
     pub fn clear_hidden(&mut self, id: ObjectSetId) -> bool {
-        self.objects
-            .get_mut(id)
-            .is_some_and(ObjectSet::clear_hidden)
+        self.objects.clear_hidden(id)
     }
 
     pub fn hidden_count(&self, id: ObjectSetId) -> usize {
@@ -1280,7 +1290,7 @@ impl Scene {
     }
 
     fn gate_stamp(&self, set: &ObjectSet) -> u64 {
-        let mut stamp = mix(HASH_OFFSET, set.document().raw());
+        let mut stamp = mix(HASH_OFFSET, set.shape().raw());
         stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
         stamp = mix(stamp, filter_stamp(self.mask_filter));
         stamp
@@ -1894,7 +1904,7 @@ impl Scene {
         let set = self.objects.get(self.mask?)?;
         Some(MaskKey::new(
             set.id(),
-            set.document().raw(),
+            set.shape().raw(),
             self.mask_radius,
             self.mask_filter,
         ))

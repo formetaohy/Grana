@@ -901,6 +901,48 @@ fn undoes_and_replays_object_edits() {
 }
 
 #[test]
+fn removing_a_derived_channel_rebases_the_channels_after_it() {
+    let mut session = Session::new();
+    session.open_series("derived removal", series());
+    session.execute(Command::AddSmoothChannel {
+        source: 0,
+        sigma: 0.2,
+    });
+    session.execute(Command::AddSmoothChannel {
+        source: 0,
+        sigma: 0.3,
+    });
+    session.execute(Command::AddSmoothChannel {
+        source: 2,
+        sigma: 0.4,
+    });
+    session.execute(Command::RemoveDerivedChannel { channel: 1 });
+    {
+        let scene = session.scene().expect("the series stays open");
+        assert_eq!(scene.dataset.channels().len(), 3);
+        let chained = scene
+            .derived()
+            .last()
+            .expect("two derived channels survive the removal");
+        assert_eq!(
+            chained.spec().source(),
+            1,
+            "the chained channel follows the channel it reads"
+        );
+    }
+    session.execute(Command::Undo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the series stays open")
+            .derived()
+            .len(),
+        3,
+        "the removal undoes"
+    );
+}
+
+#[test]
 fn undoes_derived_channels_and_keeps_every_selection() {
     let mut session = Session::new();
     session.open_series("derived undo", series());
@@ -3328,4 +3370,72 @@ fn replays_a_localization_protocol() {
         grouped, 6,
         "the replayed molecules group their localizations"
     );
+}
+
+#[test]
+fn restyling_a_masked_set_keeps_the_streamed_volume() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::AddMaskChannel { set });
+    session.poll();
+    let content = session.content();
+    session.execute(Command::SetObjectColor {
+        set,
+        color: [0.2, 0.4, 0.8],
+    });
+    session.poll();
+    assert_eq!(
+        session.content(),
+        content,
+        "restyling a masked set must not reload the streamed volume"
+    );
+    session.execute(Command::SetObjectHidden {
+        set,
+        time: 0,
+        objects: vec![0],
+        hidden: true,
+    });
+    session.poll();
+    assert_ne!(
+        session.content(),
+        content,
+        "hiding an object of a masked set must rebuild the mask"
+    );
+}
+
+#[test]
+fn clamps_a_timeline_recorded_on_a_longer_series() {
+    let mut session = Session::new();
+    session.open_series("timeline", series());
+    let key = grana_animation::Keyframe {
+        at: 0.0,
+        time: 30,
+        camera: view_state().camera,
+    };
+    let timeline = Timeline::from_parts(24, 2.0, vec![key]).expect("the timeline parses");
+    session.restore_timeline(timeline);
+    let sample = session
+        .timeline()
+        .sample(0.0)
+        .expect("the timeline samples its keyframe");
+    assert_eq!(
+        sample.time, 0,
+        "a keyframe time clamps to the frames of the series"
+    );
+    session.set_time(sample.time);
 }

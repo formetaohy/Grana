@@ -142,6 +142,20 @@ impl Timeline {
         (index < self.keys.len()).then(|| self.keys.remove(index))
     }
 
+    pub fn clamped(self, frames: u32) -> Self {
+        assert!(frames > 0, "a timeline spans at least one frame");
+        let last = frames - 1;
+        let keys = self
+            .keys
+            .into_iter()
+            .map(|key| Keyframe {
+                time: key.time.min(last),
+                ..key
+            })
+            .collect();
+        Self { keys, ..self }
+    }
+
     pub fn clear(&mut self) {
         self.keys.clear();
     }

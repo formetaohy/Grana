@@ -44,7 +44,7 @@ use crate::planner::{
 };
 use crate::present::Present;
 use crate::sample;
-use crate::schema::{SceneFrame, Versions};
+use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
@@ -184,6 +184,7 @@ pub struct Renderer {
     volume_measure: Vec<Option<usize>>,
     volume_rejection: Option<(u64, usize)>,
     fit_cache: Option<(u64, VolumeFit)>,
+    summary: Option<signature::SceneSummary>,
     motion: Option<u64>,
     level_cap: Option<usize>,
     budget: u64,
@@ -283,6 +284,7 @@ impl Renderer {
             volume_measure: Vec::new(),
             volume_rejection: None,
             fit_cache: None,
+            summary: None,
             motion: None,
             level_cap: None,
             budget,
@@ -511,6 +513,7 @@ impl Renderer {
         self.volume_measure = vec![None; pyramid.level_count()];
         self.volume_rejection = None;
         self.fit_cache = None;
+        self.summary = None;
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.clear();
         }

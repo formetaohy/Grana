@@ -13,7 +13,7 @@ use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind};
-use crate::object_set::{ObjectSet, ObjectSetId};
+use crate::object_set::{ObjectSet, ObjectSetId, Visibility};
 use crate::provenance::{Criteria, Provenance};
 use crate::registration::Registration;
 use crate::revision::Revisions;
@@ -748,8 +748,9 @@ impl Objects {
     }
 
     pub fn set_localization(&mut self, id: ObjectSetId, source: LocalizationSource) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_localization(source))
+            .is_some_and(|set| set.set_localization(source, stamp))
     }
 
     pub fn set_localization_spec(
@@ -757,8 +758,9 @@ impl Objects {
         id: ObjectSetId,
         spec: grana_object::LocalizationSpec,
     ) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_localization_spec(spec))
+            .is_some_and(|set| set.set_localization_spec(spec, stamp))
     }
 
     pub fn set_localization_group_colored(&mut self, id: ObjectSetId, group_colored: bool) -> bool {
@@ -772,8 +774,9 @@ impl Objects {
     }
 
     pub fn set_localization_clustered(&mut self, id: ObjectSetId, clustered: bool) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_localization_clustered(clustered))
+            .is_some_and(|set| set.set_localization_clustered(clustered, stamp))
     }
 
     pub fn set_localization_clusters(
@@ -781,8 +784,40 @@ impl Objects {
         id: ObjectSetId,
         clusters: grana_object::ClusterSpec,
     ) -> bool {
+        let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_localization_clusters(clusters))
+            .is_some_and(|set| set.set_localization_clusters(clusters, stamp))
+    }
+
+    pub fn set_hidden(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        objects: &[usize],
+        hidden: bool,
+    ) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id)
+            .is_some_and(|set| set.set_hidden(time, objects, hidden, stamp))
+    }
+
+    pub fn clear_hidden(&mut self, id: ObjectSetId) -> bool {
+        let stamp = self.revisions.mint();
+        self.get_mut(id).is_some_and(|set| set.clear_hidden(stamp))
+    }
+
+    pub fn set_visibility(&mut self, id: ObjectSetId, visibility: Visibility) -> bool {
+        if self
+            .get(id)
+            .is_none_or(|set| set.visibility() == &visibility)
+        {
+            return false;
+        }
+        let stamp = self.revisions.mint();
+        self.get_mut(id).is_some_and(|set| {
+            set.set_visibility(visibility, stamp);
+            true
+        })
     }
 
     pub fn regroup(&mut self, id: ObjectSetId, groups: &[Vec<Option<u32>>]) -> bool {
@@ -848,7 +883,8 @@ impl Objects {
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
-        self.get_mut(id).map_or(0, ObjectSet::reapply_hidden)
+        let stamp = self.revisions.mint();
+        self.get_mut(id).map_or(0, |set| set.reapply_hidden(stamp))
     }
 
     pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {

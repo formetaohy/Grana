@@ -1,5 +1,5 @@
 use super::*;
-use crate::schema::{Digest, Layer, Style};
+use crate::schema::{Digest, Layer, Style, Versions};
 use grana_display::CameraState;
 
 #[derive(Clone, Copy)]
@@ -193,6 +193,37 @@ pub(super) fn shadow_visibility(layers: &[Layer], styles: &[Style]) -> u64 {
         }
     }
     digest.finish()
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SceneSummary {
+    objects: u64,
+    style: u64,
+    bounds: (Vec3, Vec3),
+    visibility: u64,
+}
+
+impl SceneSummary {
+    pub(super) fn of(scene: &SceneFrame<'_>, world: Vec3) -> Self {
+        Self {
+            objects: scene.versions.objects(),
+            style: scene.versions.style(),
+            bounds: shadow_bounds(scene, world),
+            visibility: shadow_visibility(scene.layers, scene.styles),
+        }
+    }
+
+    pub(super) fn holds(self, versions: Versions) -> bool {
+        self.objects == versions.objects() && self.style == versions.style()
+    }
+
+    pub(super) fn bounds(self) -> (Vec3, Vec3) {
+        self.bounds
+    }
+
+    pub(super) fn visibility(self) -> u64 {
+        self.visibility
+    }
 }
 
 pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {

@@ -174,6 +174,13 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
         revision,
         "an unchanged interactive request renders nothing"
     );
+    session.execute(grana_session::Command::SetExposure(2.0));
+    draw(&mut engine, &mut session, Display::Interactive);
+    assert_ne!(
+        engine.image_revision(),
+        revision,
+        "an interactive exposure change renders the new exposure"
+    );
     assert!(
         engine.request_pick(gpu.device(), gpu.queue(), [size[0] - 20, size[1] - 20]),
         "an interactive frame covers the whole viewport"

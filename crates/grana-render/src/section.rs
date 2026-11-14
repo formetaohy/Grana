@@ -447,14 +447,21 @@ fn geometry_stamp(scene: &SceneFrame<'_>, plane: Option<PlaneKey>) -> u64 {
             for value in key.normal.into_iter().chain(key.right).chain([key.offset]) {
                 digest.mix(u64::from(value));
             }
+            for layer in scene.layers {
+                digest.mix(layer.key.digest());
+                digest.mix(layer.style_start as u64);
+                for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count]
+                {
+                    digest.flag(style.visible());
+                }
+            }
         }
-        None => digest.mix(u64::MAX),
-    }
-    for layer in scene.layers {
-        digest.mix(layer.key.digest());
-        digest.mix(layer.style_start as u64);
-        for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
-            digest.flag(style.visible());
+        None => {
+            digest.mix(u64::MAX);
+            for layer in scene.layers {
+                digest.mix(layer.key.digest());
+                digest.mix(layer.style_start as u64);
+            }
         }
     }
     digest.finish()
