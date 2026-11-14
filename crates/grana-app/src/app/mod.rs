@@ -105,7 +105,6 @@ pub struct App {
     closing: bool,
     window_fit: WindowFit,
     window_fitted: bool,
-    reveal: bool,
 }
 
 impl App {
@@ -162,7 +161,6 @@ impl App {
             closing: false,
             window_fit: WindowFit::Startup,
             window_fitted: false,
-            reveal: false,
         }
     }
 
@@ -346,13 +344,8 @@ impl App {
                 let current = window.inner_size().to_logical::<f64>(window.scale_factor());
                 let settled = (current.width - size.width).abs() < 1.0
                     && (current.height - size.height).abs() < 1.0;
-                if settled {
-                    if self.capture.is_none() {
-                        window.set_visible(true);
-                    }
-                } else {
+                if !settled {
                     let _ = window.request_inner_size(size);
-                    self.reveal = self.capture.is_none();
                 }
             }
             WindowFit::Editor => {
@@ -367,7 +360,7 @@ impl App {
                 }
             }
         }
-        if self.capture.is_none() && self.window_fit == WindowFit::Editor {
+        if self.capture.is_none() {
             window.set_visible(true);
         }
         self.window_fitted = true;
@@ -406,8 +399,8 @@ impl ApplicationHandler for App {
         if self.surface.is_none() {
             self.resume(event_loop);
         }
-        if let Some(surface) = &self.surface {
-            surface.window.request_redraw();
+        if self.surface.is_some() {
+            self.redraw();
         }
     }
 
@@ -428,12 +421,6 @@ impl ApplicationHandler for App {
                     surface.gpu.resize([size.width, size.height]);
                     self.chrome.refresh(&surface.window);
                     surface.window.request_redraw();
-                }
-                if self.reveal {
-                    self.reveal = false;
-                    if let Some(surface) = self.surface.as_ref() {
-                        surface.window.set_visible(true);
-                    }
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
