@@ -18,13 +18,11 @@ const STAGING: &str = "staging";
 const BUDGET: u64 = 4 << 30;
 const RETAIN: u64 = 3 << 30;
 const MEMORY_BUDGET: u64 = 256 << 20;
-const SHARDS: u64 = 16;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const CRC_SEED: u32 = 0xffff_ffff;
 const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
-const NONE: u32 = u32::MAX;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -49,176 +47,10 @@ pub(crate) struct Shape {
     pub(crate) format: VoxelFormat,
 }
 
-struct Node {
-    key: Key,
-    data: Arc<VoxelData>,
-    bytes: u64,
-    newer: u32,
-    older: u32,
-}
+pub(crate) type Cache = grana_store::LruCache<Key, VoxelData>;
 
-struct Shard {
-    slots: HashMap<Key, u32>,
-    nodes: Vec<Node>,
-    free: Vec<u32>,
-    newest: u32,
-    oldest: u32,
-    bytes: u64,
-    budget: u64,
-}
-
-impl Shard {
-    fn new(budget: u64) -> Self {
-        Self {
-            slots: HashMap::new(),
-            nodes: Vec::new(),
-            free: Vec::new(),
-            newest: NONE,
-            oldest: NONE,
-            bytes: 0,
-            budget,
-        }
-    }
-
-    fn fetch(&mut self, key: Key) -> Option<Arc<VoxelData>> {
-        let slot = *self.slots.get(&key)?;
-        self.promote(slot);
-        Some(Arc::clone(&self.nodes[slot as usize].data))
-    }
-
-    fn insert(&mut self, key: Key, data: Arc<VoxelData>) {
-        let bytes = size(&data);
-        if let Some(slot) = self.slots.get(&key).copied() {
-            let node = &mut self.nodes[slot as usize];
-            self.bytes = self.bytes - node.bytes + bytes;
-            node.data = data;
-            node.bytes = bytes;
-            self.promote(slot);
-            self.evict();
-            return;
-        }
-        let slot = match self.free.pop() {
-            Some(slot) => {
-                self.nodes[slot as usize] = Node {
-                    key,
-                    data,
-                    bytes,
-                    newer: NONE,
-                    older: self.newest,
-                };
-                slot
-            }
-            None => {
-                let slot =
-                    u32::try_from(self.nodes.len()).expect("a shard holds fewer than 4G bricks");
-                self.nodes.push(Node {
-                    key,
-                    data,
-                    bytes,
-                    newer: NONE,
-                    older: self.newest,
-                });
-                slot
-            }
-        };
-        if self.newest == NONE {
-            self.oldest = slot;
-        } else {
-            self.nodes[self.newest as usize].newer = slot;
-        }
-        self.newest = slot;
-        self.slots.insert(key, slot);
-        self.bytes += bytes;
-        self.evict();
-    }
-
-    fn promote(&mut self, slot: u32) {
-        if slot == self.newest {
-            return;
-        }
-        let node = &self.nodes[slot as usize];
-        let (newer, older) = (node.newer, node.older);
-        if older != NONE {
-            self.nodes[older as usize].newer = newer;
-        } else {
-            self.oldest = newer;
-        }
-        if newer != NONE {
-            self.nodes[newer as usize].older = older;
-        }
-        let previous = self.newest;
-        self.nodes[slot as usize].newer = NONE;
-        self.nodes[slot as usize].older = previous;
-        if previous != NONE {
-            self.nodes[previous as usize].newer = slot;
-        }
-        self.newest = slot;
-    }
-
-    fn evict(&mut self) {
-        while self.bytes > self.budget && self.slots.len() > 1 {
-            let slot = self.oldest;
-            if slot == NONE {
-                return;
-            }
-            let node = &self.nodes[slot as usize];
-            let key = node.key;
-            let bytes = node.bytes;
-            self.oldest = node.newer;
-            if self.oldest == NONE {
-                self.newest = NONE;
-            } else {
-                self.nodes[self.oldest as usize].older = NONE;
-            }
-            self.slots.remove(&key);
-            self.nodes[slot as usize].older = NONE;
-            self.nodes[slot as usize].newer = NONE;
-            self.free.push(slot);
-            self.bytes = self.bytes.saturating_sub(bytes);
-        }
-    }
-}
-
-pub(crate) struct Cache {
-    shards: Box<[Mutex<Shard>]>,
-}
-
-impl Cache {
-    pub(crate) fn new() -> Self {
-        let budget = (MEMORY_BUDGET / SHARDS).max(1);
-        let shards = (0..SHARDS)
-            .map(|_| Mutex::new(Shard::new(budget)))
-            .collect::<Vec<_>>();
-        Self {
-            shards: shards.into_boxed_slice(),
-        }
-    }
-
-    pub(crate) fn fetch(&self, key: Key) -> Option<Arc<VoxelData>> {
-        self.shard(key)
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .fetch(key)
-    }
-
-    pub(crate) fn insert(&self, key: Key, data: Arc<VoxelData>) {
-        self.shard(key)
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(key, data);
-    }
-
-    fn shard(&self, key: Key) -> &Mutex<Shard> {
-        let mut hash = mix(FNV_BASE, &key.identity.to_le_bytes());
-        hash = mix(hash, &key.level.to_le_bytes());
-        hash = mix(hash, &key.time.to_le_bytes());
-        hash = mix(hash, &key.channel.to_le_bytes());
-        for value in key.coord {
-            hash = mix(hash, &value.to_le_bytes());
-        }
-        let index = hash % self.shards.len() as u64;
-        &self.shards[index as usize]
-    }
+pub(crate) fn bricks() -> Cache {
+    Cache::new(MEMORY_BUDGET, size)
 }
 
 pub(crate) struct Store {

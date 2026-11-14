@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use grana_animation::Timeline;
 use grana_display::CameraState;
-use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneShape, SceneState};
+use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneShape, SceneState};
 use grana_store::SpillStore;
 use grana_volume::Fingerprint;
 
@@ -290,12 +290,7 @@ impl Project {
             .sets
             .iter()
             .flat_map(|set| set.frames.iter().flatten())
-            .map(|frame| match frame.shared().as_ref() {
-                ObjectFrame::Spots(_) => 1,
-                ObjectFrame::Surfaces(set) => 2 + usize::from(set.topology().is_some()),
-                ObjectFrame::Filaments(_) => 2,
-                ObjectFrame::Cells(set) => 2 + usize::from(set.bodies().topology().is_some()),
-            })
+            .map(grana_scene::Frame::write_steps)
             .sum()
     }
 
@@ -337,6 +332,11 @@ impl Project {
             if let Some(error) = writer.fault() {
                 return Err(write(error.to_string()));
             }
+            debug_assert_eq!(
+                writer.steps(),
+                total,
+                "a project announces its written steps"
+            );
             writer.len()
         };
         let mut file = encoder.finish().map_err(|error| write(error.to_string()))?;

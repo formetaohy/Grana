@@ -54,7 +54,7 @@ impl Session {
             }
         };
         self.message = None;
-        self.after_mask_layout();
+        self.relayout_channels();
         self.message = Some(Message::info(format!(
             "masked channel {name} counts the signal inside the objects"
         )));
@@ -136,7 +136,7 @@ impl Session {
             Ok(channel) => {
                 let name = scene.dataset.channels()[channel].name().to_string();
                 self.message = None;
-                self.after_mask_layout();
+                self.relayout_channels();
                 self.message = Some(Message::info(format!(
                     "smoothed channel {name} smooths {source_name}"
                 )));
@@ -173,7 +173,7 @@ impl Session {
             Ok(channel) => {
                 let name = scene.dataset.channels()[channel].name().to_string();
                 self.message = None;
-                self.after_mask_layout();
+                self.relayout_channels();
                 self.message = Some(Message::info(format!(
                     "background channel {name} removes the background of {source_name}"
                 )));
@@ -296,7 +296,7 @@ impl Session {
             None => return,
         };
         match outcome {
-            Ok(true) => self.refresh_derived_layout(),
+            Ok(true) => self.relayout_channels(),
             Ok(false) => {}
             Err(detail) => self.message = Some(Message::error(detail)),
         }
@@ -314,7 +314,7 @@ impl Session {
             None => return,
         };
         match outcome {
-            Ok(true) => self.refresh_derived_layout(),
+            Ok(true) => self.relayout_channels(),
             Ok(false) => {}
             Err(detail) => self.message = Some(Message::error(detail)),
         }
@@ -368,19 +368,16 @@ impl Session {
             None => return,
         };
         match outcome {
-            Ok(true) => self.refresh_derived_layout(),
+            Ok(true) => self.relayout_channels(),
             Ok(false) => {}
             Err(detail) => self.message = Some(Message::error(detail)),
         }
     }
 
-    pub(super) fn refresh_derived_layout(&mut self) {
-        self.in_flight.clear();
-        self.failed.clear();
-        self.bricks.clear();
+    pub(super) fn relayout_channels(&mut self) {
         self.mask_stamp = None;
         self.install_channels();
-        self.reloaded();
+        self.reload_streamed();
     }
 
     pub(super) fn remove_derived_channel(&mut self, channel: usize) {
@@ -404,17 +401,8 @@ impl Session {
         };
         if removed {
             self.message = None;
-            self.after_mask_layout();
+            self.relayout_channels();
         }
-    }
-
-    pub(super) fn after_mask_layout(&mut self) {
-        self.in_flight.clear();
-        self.failed.clear();
-        self.bricks.clear();
-        self.mask_stamp = None;
-        self.install_channels();
-        self.reloaded();
     }
 
     pub(super) fn refresh_masks(&mut self) -> bool {
@@ -430,9 +418,7 @@ impl Session {
             .is_some_and(|(held, value)| held == time && value != stamp);
         self.mask_stamp = Some((time, stamp));
         if changed {
-            self.in_flight.clear();
-            self.bricks.clear();
-            self.reloaded();
+            self.reload_streamed();
         }
         changed
     }
@@ -485,7 +471,7 @@ impl Session {
                 )) {
                     Ok(_) => {
                         self.message = None;
-                        self.after_mask_layout();
+                        self.relayout_channels();
                         self.message = Some(Message::info(format!(
                             "restored channel {name} deconvolves {fundus}"
                         )));
@@ -530,7 +516,7 @@ impl Session {
                 )) {
                     Ok(_) => {
                         self.message = None;
-                        self.after_mask_layout();
+                        self.relayout_channels();
                         self.message = Some(Message::info(format!(
                             "ratio channel {name} divides {up} by {down}"
                         )));
@@ -559,7 +545,7 @@ impl Session {
                 )) {
                     Ok(_) => {
                         self.message = None;
-                        self.after_mask_layout();
+                        self.relayout_channels();
                         self.message = Some(Message::info(format!(
                             "bleach channel {name} normalizes {fundus}"
                         )));
@@ -592,7 +578,7 @@ impl Session {
                     .as_mut()
                     .map(|scene| scene.set_ratio(channel, denominator, intensity));
                 match outcome {
-                    Some(Ok(true)) => self.refresh_derived_layout(),
+                    Some(Ok(true)) => self.relayout_channels(),
                     Some(Ok(false)) => {}
                     Some(Err(detail)) => self.message = Some(Message::error(detail)),
                     None => {}

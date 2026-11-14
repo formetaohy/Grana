@@ -12,8 +12,8 @@ impl Pearson {
     pub fn from_sums(count: u64, sums: [f64; 5]) -> Self {
         let [sum_a, sum_b, sum_aa, sum_bb, sum_ab] = sums;
         assert!(
-            sums.iter().all(|value| value.is_finite() && *value >= 0.0),
-            "a pair of channels accumulates finite non-negative sums"
+            sums.iter().all(|value| value.is_finite()),
+            "a pair of channels accumulates finite sums"
         );
         Self {
             count,

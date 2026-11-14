@@ -897,10 +897,6 @@ fn table<'a>(
     let font = theme.font(Level::Monospace);
     let on_selected = palette.on_secondary_container;
     let on_row = palette.on_surface;
-    let document = state.measure.document_hash();
-    let digest = widths.iter().fold(0u64, |hash, width| {
-        hash.rotate_left(7) ^ u64::from(width.to_bits())
-    });
     let rows_key = Key::new("measure.rows");
     elements.push(
         ctx.scroll(
@@ -920,28 +916,32 @@ fn table<'a>(
                     let cells = columns
                         .iter()
                         .zip(widths.iter())
-                        .map(|((column_index, column), width)| {
-                            let text = match state.measure.value(index as usize, *column_index) {
+                        .map(|((column_index, column), width)| Cell {
+                            width: width.to_bits(),
+                            text: match state.measure.value(index as usize, *column_index) {
                                 Some(value) => column.format(value),
                                 None => String::from("…"),
-                            };
-                            (text, *width)
+                            },
                         })
                         .collect::<Vec<_>>();
                     children.push(
                         grana_ui::canvas(Length::Fill, ROW_HEIGHT)
                             .view(
-                                (document, row, selected, digest, cells.len()),
-                                move |_, painter, info| {
+                                Row {
+                                    index: row,
+                                    selected,
+                                    cells,
+                                },
+                                move |row, painter, info| {
                                     let rect = info.rect;
                                     let body = rect.shrink2(Vec2::new(4.0, 1.0));
-                                    if selected {
+                                    if row.selected {
                                         painter.rect(
                                             body,
                                             Corners::all(8.0),
                                             palette.secondary_container,
                                         );
-                                    } else if row % 2 == 1 {
+                                    } else if row.index % 2 == 1 {
                                         painter.rect(
                                             body,
                                             Corners::all(4.0),
@@ -956,22 +956,23 @@ fn table<'a>(
                                         );
                                     }
                                     let mut left = rect.min.x;
-                                    for (text, width) in cells.iter() {
-                                        let cell = Rect::from_min_size(
+                                    for cell in &row.cells {
+                                        let width = f32::from_bits(cell.width);
+                                        let area = Rect::from_min_size(
                                             Vec2::new(left, rect.min.y),
-                                            Vec2::new(*width, ROW_HEIGHT),
+                                            Vec2::new(width, ROW_HEIGHT),
                                         );
                                         painter.text_in(
-                                            cell.shrink2(Vec2::new(8.0, 0.0)),
-                                            text,
+                                            area.shrink2(Vec2::new(8.0, 0.0)),
+                                            &cell.text,
                                             TextStyle::new(
                                                 font,
-                                                if selected { on_selected } else { on_row },
+                                                if row.selected { on_selected } else { on_row },
                                             )
                                             .aligned(Align::End),
                                             Align::Center,
                                         );
-                                        left += *width;
+                                        left += width;
                                     }
                                 },
                             )
@@ -989,6 +990,19 @@ fn table<'a>(
         .at(body),
     );
     elements
+}
+
+#[derive(Hash)]
+struct Cell {
+    width: u32,
+    text: String,
+}
+
+#[derive(Hash)]
+struct Row {
+    index: usize,
+    selected: bool,
+    cells: Vec<Cell>,
 }
 
 fn state_index(rows: &[u32], row: usize) -> Option<u32> {

@@ -48,6 +48,10 @@ impl<'a> Encoder<'a> {
         self.written
     }
 
+    pub fn steps(&self) -> usize {
+        self.steps
+    }
+
     pub fn is_empty(&self) -> bool {
         self.written == 0
     }

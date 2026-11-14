@@ -93,7 +93,7 @@ impl Image {
             series,
             selected: source.series(),
             identity,
-            bricks: Cache::new(),
+            bricks: cache::bricks(),
             store,
         })
     }

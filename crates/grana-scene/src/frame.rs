@@ -44,6 +44,18 @@ impl Frame {
         }
     }
 
+    pub fn write_steps(&self) -> usize {
+        match self {
+            Self::Paged { .. } => 1,
+            Self::Resident(frame) => match frame.as_ref() {
+                ObjectFrame::Spots(_) => 1,
+                ObjectFrame::Surfaces(set) => 2 + usize::from(set.topology().is_some()),
+                ObjectFrame::Filaments(_) => 2,
+                ObjectFrame::Cells(set) => 2 + usize::from(set.bodies().topology().is_some()),
+            },
+        }
+    }
+
     pub fn store(&self) -> Option<Arc<SpillStore>> {
         match self {
             Self::Resident(_) => None,

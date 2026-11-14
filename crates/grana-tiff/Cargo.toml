@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 grana-archive = { workspace = true }
 grana-file = { workspace = true }
+grana-store = { workspace = true }
 flate2 = { workspace = true }
 grana-volume = { workspace = true }
 quick-xml = { workspace = true }

@@ -12,6 +12,7 @@ glam = { workspace = true }
 grana-czi = { workspace = true }
 grana-dir = { workspace = true }
 grana-readout = { workspace = true }
+grana-store = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }

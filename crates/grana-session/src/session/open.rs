@@ -23,8 +23,7 @@ impl Session {
         self.recipe = None;
         self.resume.clear();
         self.recut = None;
-        self.in_flight.clear();
-        self.bricks.clear();
+        self.discard_streamed();
         self.measure.reset();
         self.label_images.clear();
         self.mask_stamp = None;
@@ -404,9 +403,7 @@ impl Session {
         self.deferred = false;
         self.recut = None;
         self.message = None;
-        self.in_flight.clear();
-        self.failed.clear();
-        self.bricks.clear();
+        self.discard_streamed();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
         self.views.clear();
@@ -426,9 +423,7 @@ impl Session {
         self.analysis.clear();
         self.progress.clear();
         self.measure.reset();
-        self.in_flight.clear();
-        self.failed.clear();
-        self.bricks.clear();
+        self.discard_streamed();
         self.timeline = Timeline::new(30, frame_duration(&scene));
         self.history.clear();
         if let Some(pending) = self.pending.take() {

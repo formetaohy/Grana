@@ -48,7 +48,7 @@ use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 use crate::access::Access;
 use crate::command::{Edit, Export};
 use crate::document::{self, Document};
-use crate::history::{History, Snapshot};
+use crate::history::{History, Snapshot, Undo};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
@@ -267,7 +267,10 @@ impl Session {
         };
         let index = self.timeline.insert(key);
         if let Some(snapshot) = snapshot {
-            self.history.record(Edit::new(Action::Keyframe), snapshot);
+            self.history.record(
+                Edit::new(Action::Keyframe),
+                Undo::Snapshot(Box::new(snapshot)),
+            );
         }
         self.touch();
         index
@@ -343,6 +346,17 @@ impl Session {
 
     pub(crate) fn reloaded(&mut self) {
         self.content = self.touch();
+    }
+
+    pub(crate) fn discard_streamed(&mut self) {
+        self.in_flight.clear();
+        self.failed.clear();
+        self.bricks.clear();
+    }
+
+    pub(crate) fn reload_streamed(&mut self) {
+        self.discard_streamed();
+        self.reloaded();
     }
 
     pub fn pending(&self) -> usize {

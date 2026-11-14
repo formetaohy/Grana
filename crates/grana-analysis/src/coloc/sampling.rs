@@ -46,8 +46,10 @@ impl ColocSampling {
     }
 
     pub fn blocks(&self) -> u64 {
-        let blocks = [0, 1, 2].map(|axis| u64::from(self.dims[axis].div_ceil(self.block[axis])));
-        blocks.iter().product::<u64>() * u64::from(self.frames)
+        [0, 1, 2]
+            .map(|axis| u64::from(self.dims[axis].div_ceil(self.block[axis])))
+            .into_iter()
+            .product()
     }
 }
 

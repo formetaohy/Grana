@@ -1654,9 +1654,7 @@ impl Session {
         if let Some(source) = self.source.as_ref() {
             source.set_drifts(drifts);
         }
-        self.in_flight.clear();
-        self.bricks.clear();
-        self.reloaded();
+        self.reload_streamed();
     }
 }
 

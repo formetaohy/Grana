@@ -20,10 +20,7 @@ impl SampleStatistics {
             "intensity statistics are ordered"
         );
         assert!(deviation >= 0.0, "an intensity deviation is non negative");
-        assert!(
-            sum.is_finite() && sum >= 0.0,
-            "an intensity sum is a non negative total"
-        );
+        assert!(sum.is_finite(), "an intensity sum is finite");
         Self {
             mean,
             minimum,
@@ -145,7 +142,6 @@ impl SampleAccumulator {
             && parts.squared.is_finite()
             && parts.squared >= 0.0
             && parts.sum.is_finite()
-            && parts.sum >= 0.0
             && parts.minimum.is_finite()
             && parts.maximum.is_finite();
         ordered.then_some(Self {

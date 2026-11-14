@@ -48,6 +48,11 @@ struct Entry {
     snapshot: Snapshot,
 }
 
+pub(crate) enum Undo {
+    Coalesced,
+    Snapshot(Box<Snapshot>),
+}
+
 #[derive(Default)]
 pub(crate) struct History {
     undo: Vec<Entry>,
@@ -56,20 +61,25 @@ pub(crate) struct History {
 }
 
 impl History {
-    pub(crate) fn record(&mut self, edit: Edit, snapshot: Snapshot) {
-        let now = Instant::now();
-        let merged = self.last.is_some_and(|(last, at)| {
+    pub(crate) fn coalesces(&self, edit: &Edit) -> bool {
+        self.last.is_some_and(|(last, at)| {
             last.action() == edit.action()
                 && last.target() == edit.target()
                 && edit.continuous()
-                && now.duration_since(at) <= COALESCE
-        });
+                && Instant::now().duration_since(at) <= COALESCE
+        })
+    }
+
+    pub(crate) fn record(&mut self, edit: Edit, undo: Undo) {
         self.redo.clear();
-        self.last = Some((edit, now));
-        if merged {
+        self.last = Some((edit, Instant::now()));
+        let Undo::Snapshot(snapshot) = undo else {
             return;
-        }
-        self.undo.push(Entry { edit, snapshot });
+        };
+        self.undo.push(Entry {
+            edit,
+            snapshot: *snapshot,
+        });
         if self.undo.len() > MAX_ENTRIES {
             self.undo.remove(0);
         }

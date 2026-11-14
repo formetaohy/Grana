@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use grana_volume::VoxelFormat;
 
-use crate::cache::Cache;
+use crate::Cache;
 use crate::codec;
 use crate::error::Error;
 use crate::store::Store;
@@ -283,7 +283,7 @@ impl Page {
     ) -> Result<Arc<Vec<u8>>, Error> {
         let path = source.path;
         let key = (source.file, level, page_index, block.index);
-        if let Some(data) = source.cache.lookup(key) {
+        if let Some(data) = source.cache.fetch(key) {
             return Ok(data);
         }
         let expected = block.width as usize

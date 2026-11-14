@@ -6,7 +6,7 @@ use super::edit::{MaskPaint, SurfaceEditRequest};
 
 pub(super) struct Recording {
     edit: Edit,
-    snapshot: Snapshot,
+    undo: Undo,
     hash: u64,
     analyses: usize,
 }
@@ -834,10 +834,14 @@ impl Session {
             return None;
         }
         let edit = command.edit()?;
-        let snapshot = self.snapshot()?;
+        let undo = if self.history.coalesces(&edit) {
+            Undo::Coalesced
+        } else {
+            Undo::Snapshot(Box::new(self.snapshot()?))
+        };
         Some(Recording {
             edit,
-            snapshot,
+            undo,
             hash: self.document_hash()?,
             analyses: self.analysis.len(),
         })
@@ -846,7 +850,7 @@ impl Session {
     pub(super) fn commit_edit(&mut self, recording: Recording) {
         let Recording {
             edit,
-            snapshot,
+            undo,
             hash,
             analyses,
         } = recording;
@@ -854,7 +858,7 @@ impl Session {
         let started = self.analysis.len() > analyses;
         if changed || (edit.asynchronous() && started) {
             self.deferred = false;
-            self.history.record(edit, snapshot);
+            self.history.record(edit, undo);
         }
     }
 
@@ -950,7 +954,7 @@ impl Session {
         self.realign();
         self.message = None;
         if derived {
-            self.refresh_derived_layout();
+            self.relayout_channels();
         }
     }
 

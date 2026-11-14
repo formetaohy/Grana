@@ -834,7 +834,7 @@ impl Session {
             scene.remove_object(set);
         }
         if masked {
-            self.after_mask_layout();
+            self.relayout_channels();
         }
     }
 }

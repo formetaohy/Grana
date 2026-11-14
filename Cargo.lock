@@ -3520,6 +3520,7 @@ version = "0.1.1"
 name = "grana-czi"
 version = "0.1.1"
 dependencies = [
+ "grana-store",
  "grana-volume",
  "openreadout-jpegxr",
  "quick-xml",
@@ -3629,6 +3630,7 @@ dependencies = [
  "grana-czi",
  "grana-dir",
  "grana-readout",
+ "grana-store",
  "grana-tiff",
  "grana-volume",
  "grana-warp",
@@ -4025,6 +4027,7 @@ dependencies = [
  "flate2",
  "grana-archive",
  "grana-file",
+ "grana-store",
  "grana-volume",
  "quick-xml",
  "thiserror 2.0.21",

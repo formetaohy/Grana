@@ -528,7 +528,10 @@ impl Renderer {
                     );
                 }
             }
-            if surfaces || volume_visible {
+            if reset && (surfaces || volume_visible) {
+                target.guide.clear(&mut encoder);
+            }
+            if surfaces && !slice {
                 if target
                     .ao
                     .as_ref()
@@ -546,29 +549,24 @@ impl Renderer {
                     .ao
                     .as_ref()
                     .expect("the ambient occlusion target is ready");
-                if reset {
-                    target.guide.clear(&mut encoder);
-                }
                 ao.clear(&mut encoder);
-                if !slice {
-                    if let Some(mesh_passes) = meshes.as_ref() {
-                        mesh_passes.draw_gbuffer(
-                            &mut encoder,
-                            ao.normal(),
-                            ao.depth(),
-                            viewport,
-                            scene_table.group(),
-                        );
-                    }
-                    ao.evaluate(
-                        queue,
+                if let Some(mesh_passes) = meshes.as_ref() {
+                    mesh_passes.draw_gbuffer(
                         &mut encoder,
-                        &data,
-                        AMBIENT_REACH,
-                        AMBIENT_STRENGTH,
-                        sample_index,
+                        ao.normal(),
+                        ao.depth(),
+                        viewport,
+                        scene_table.group(),
                     );
                 }
+                ao.evaluate(
+                    queue,
+                    &mut encoder,
+                    &data,
+                    AMBIENT_REACH,
+                    AMBIENT_STRENGTH,
+                    sample_index,
+                );
             }
             scene_table.write_shadow_frame(queue, data);
             if let Some(shadow) = shadow.as_mut() {

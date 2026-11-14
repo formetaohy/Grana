@@ -311,7 +311,10 @@ pub fn frame(
                 appearance.real(opacity);
                 appearance.real(material.roughness());
                 appearance.real(material.metallic());
-                styles.push(Style::new([red, green, blue], visible, selected, opacity));
+                styles.push(
+                    Style::new([red, green, blue], visible, selected, opacity)
+                        .with_material(material),
+                );
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Object(index),
@@ -344,12 +347,15 @@ pub fn frame(
                 appearance.real(opacity);
                 appearance.real(material.roughness());
                 appearance.real(material.metallic());
-                styles.push(Style::new(
-                    [red, green, blue],
-                    visible && set.visible_track(index),
-                    selected,
-                    opacity,
-                ));
+                styles.push(
+                    Style::new(
+                        [red, green, blue],
+                        visible && set.visible_track(index),
+                        selected,
+                        opacity,
+                    )
+                    .with_material(material),
+                );
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Track(index),

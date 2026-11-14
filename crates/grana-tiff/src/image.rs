@@ -8,7 +8,7 @@ use grana_volume::{
     VoxelData, VoxelFormat, pad_brick,
 };
 
-use crate::cache::Cache;
+use crate::Cache;
 use crate::error::Error;
 use crate::ome::{self, Ome, TiffData};
 use crate::page::{Page, Region, Source as PageSource};
@@ -55,6 +55,7 @@ struct LevelPages {
     extent: Extent,
     planes: Planes,
     slots: Vec<Slot>,
+    pages: Vec<Arc<Page>>,
 }
 
 #[derive(Clone, Copy)]
@@ -212,7 +213,7 @@ impl Image {
                 )
             })
             .collect::<Vec<_>>();
-        let cache = Cache::new(CACHE_BYTES);
+        let cache = crate::cache(CACHE_BYTES);
         let mut channels = Vec::with_capacity(sizes[1] as usize);
         for index in 0..sizes[1] {
             let info = ome
@@ -434,6 +435,7 @@ fn gather(
     let mut ordered = placed.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|(index, _)| **index);
     let mut slots = Vec::with_capacity(ordered.len());
+    let mut pages = Vec::with_capacity(ordered.len());
     let mut extent: Option<Extent> = None;
     for (_, slot) in ordered {
         let page = files[slot.file].sub(slot.page, level)?;
@@ -452,6 +454,7 @@ fn gather(
             ),
         });
         slots.push(*slot);
+        pages.push(Arc::new(page));
     }
     let Some(extent) = extent else {
         return Err(Error::metadata(path, "the OME-TIFF series holds no planes"));
@@ -460,6 +463,7 @@ fn gather(
         extent,
         planes: planes.clone(),
         slots,
+        pages,
     })
 }
 
@@ -644,12 +648,7 @@ fn region(
             path: PathBuf::new(),
             detail: "the plane holds more voxels than this platform addresses".to_string(),
         })?;
-    let mut data = match levels[request.level]
-        .slots
-        .first()
-        .and_then(|slot| files[slot.file].sub(slot.page, request.level).ok())
-        .map(|page| page.format)
-    {
+    let mut data = match level.pages.first().map(|page| page.format) {
         Some(VoxelFormat::U8) => VoxelData::U8(vec![0; count]),
         Some(VoxelFormat::U16) => VoxelData::U16(vec![0; count]),
         Some(VoxelFormat::F32) => VoxelData::F32(vec![0.0; count]),
@@ -671,7 +670,10 @@ fn region(
             detail: "the series holds no such plane".to_string(),
         })?;
         let volume = &files[slot.file];
-        let page = volume.sub(slot.page, request.level)?;
+        let page = level.pages.get(raster).ok_or_else(|| Error::Region {
+            path: PathBuf::new(),
+            detail: "the series holds no such plane".to_string(),
+        })?;
         let sample = if page.planar {
             0
         } else {

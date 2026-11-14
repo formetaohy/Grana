@@ -8,9 +8,9 @@ use grana_volume::{
     VoxelFormat, pad_brick,
 };
 
+use crate::Cache;
 use crate::Error;
 use crate::binary::u32_at;
-use crate::cache::Cache;
 use crate::directory;
 use crate::header::{self, Header};
 use crate::layout::{Layout, LevelLayout, Plan, PlaneKey, SceneLayout};
@@ -141,7 +141,7 @@ impl Image {
                 ),
             )
         })?;
-        let cache = Cache::new(CACHE_BYTES);
+        let cache = crate::cache(CACHE_BYTES);
         let base = &selected.levels[0];
         let metadata = &document.metadata;
         let mut channels = Vec::with_capacity(selected.pixels.len());
@@ -385,13 +385,13 @@ fn blit(
             continue;
         }
         let held = (depth - tile.plane) as usize;
-        let origin = held * row * tile.height as usize;
+        let tile_row = tile.width as usize * sample;
+        let origin = held * tile_row * tile.height as usize;
         let samples = samples(store, path, cache, tile)?;
         let columns = (right - left) as usize * sample;
         for line in top..bottom {
-            let source = origin
-                + (((line - tile.y) as usize) * tile.width as usize + (left - tile.x) as usize)
-                    * sample;
+            let source =
+                origin + ((line - tile.y) as usize * tile_row + (left - tile.x) as usize * sample);
             let target = ((line - request.y.start) as usize) * row
                 + (left - request.x.start) as usize * sample;
             out[target..target + columns].copy_from_slice(&samples[source..source + columns]);
@@ -406,7 +406,7 @@ fn samples(
     cache: &Cache,
     tile: &plane::Tile,
 ) -> Result<Arc<Vec<u8>>, Error> {
-    if let Some(samples) = cache.lookup(tile.position) {
+    if let Some(samples) = cache.fetch(tile.position) {
         return Ok(samples);
     }
     let samples = Arc::new(plane::samples(store, path, tile)?);
