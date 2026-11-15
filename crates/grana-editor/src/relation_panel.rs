@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_object::{RelationFrame, RelationPair};
-use grana_scene::{Item, Job, ObjectSet, ObjectSetId, Scene, Selection};
+use grana_scene::{Item, Job, ObjectSetId, Scene, Selection};
 use grana_session::Command;
 use grana_ui::{
     Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle,
@@ -62,6 +64,7 @@ struct Matrix {
     rows: Vec<usize>,
     columns: Vec<usize>,
     cells: HashMap<(usize, usize), f32>,
+    digest: u64,
     minimum: f32,
     maximum: f32,
     source: ObjectSetId,
@@ -70,9 +73,72 @@ struct Matrix {
     filtered: bool,
 }
 
-enum Body {
-    Pending,
-    Ready(Box<Matrix>),
+#[derive(Default)]
+pub(crate) struct Body {
+    stamp: Option<u64>,
+    matrix: Option<Box<Matrix>>,
+}
+
+impl Body {
+    fn matrix(
+        &self,
+        scene: &Scene,
+        choice: Choice,
+        metric: RelationMetric,
+        filter: f32,
+        width: f32,
+    ) -> Option<&Matrix> {
+        let stamp = stamp(scene, choice, metric, filter, width);
+        (self.stamp == Some(stamp))
+            .then_some(self.matrix.as_deref())
+            .flatten()
+    }
+}
+
+pub(crate) fn prepare(
+    scene: &Scene,
+    body: &mut Body,
+    selected: Option<(ObjectSetId, ObjectSetId, i32)>,
+    metric: RelationMetric,
+    filter: f32,
+    width: f32,
+) {
+    let choices = choices(scene);
+    if choices.is_empty() {
+        *body = Body::default();
+        return;
+    }
+    let choice = choices
+        .iter()
+        .position(|choice| Some(choice.key()) == selected)
+        .map_or(choices[0], |selected| choices[selected]);
+    let stamp = stamp(scene, choice, metric, filter, width);
+    if body.stamp == Some(stamp) {
+        return;
+    }
+    body.stamp = Some(stamp);
+    body.matrix = matrix(scene, choice, metric, filter, width).map(Box::new);
+}
+
+fn stamp(scene: &Scene, choice: Choice, metric: RelationMetric, filter: f32, width: f32) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    scene.time().hash(&mut hasher);
+    choice.source.raw().hash(&mut hasher);
+    choice.target.raw().hash(&mut hasher);
+    choice.shift.hash(&mut hasher);
+    for id in [choice.source, choice.target] {
+        match scene.objects.get(id) {
+            Some(set) => {
+                set.revision().raw().hash(&mut hasher);
+                set.document().raw().hash(&mut hasher);
+            }
+            None => u64::MAX.hash(&mut hasher),
+        }
+    }
+    metric.index().hash(&mut hasher);
+    filter.to_bits().hash(&mut hasher);
+    width.to_bits().hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -92,17 +158,20 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         .and_then(|key| choices.iter().position(|choice| choice.key() == key))
         .unwrap_or(0);
     let choice = choices[selected];
-    let body = match state.scene.objects.get(choice.source) {
-        Some(source) => body(ctx, state, source, choice),
-        None => Body::Pending,
-    };
     let mut children = vec![header(ctx, state, &choices, selected)];
-    match body {
-        Body::Pending => children.push(pending(ctx, state, choice)),
-        Body::Ready(matrix) => {
-            children.push(matrix_card(ctx, state, &matrix));
-            children.push(pairs_card(ctx, state, &matrix));
+    let matrix = state.workspace.relation_body.matrix(
+        state.scene,
+        choice,
+        state.workspace.relation_metric,
+        state.workspace.relation_filter,
+        ctx.size().x,
+    );
+    match matrix {
+        Some(matrix) => {
+            children.push(matrix_card(ctx, state, matrix));
+            children.push(pairs_card(ctx, state, matrix));
         }
+        None => children.push(pending(ctx, state, choice)),
     }
     grana_ui::column()
         .gap(12.0)
@@ -229,29 +298,26 @@ fn export_hint(choice: Choice, language: Language) -> &'static str {
     }
 }
 
-fn body(
-    ctx: &mut BuildContext<'_, Message>,
-    state: &View<'_>,
-    source: &ObjectSet,
+fn matrix(
+    scene: &Scene,
     choice: Choice,
-) -> Body {
-    let Some(relation) = source.relation(choice.target, choice.shift) else {
-        return Body::Pending;
-    };
-    let time = state.scene.time();
-    let Some(frame) = relation.frame(time) else {
-        return Body::Pending;
-    };
+    metric: RelationMetric,
+    filter: f32,
+    width: f32,
+) -> Option<Matrix> {
+    let source = scene.objects.get(choice.source)?;
+    let relation = source.relation(choice.target, choice.shift)?;
+    let time = scene.time();
+    let frame = relation.frame(time)?;
     let target_objects = target_time(time, choice.shift)
         .and_then(|shifted| {
-            state
-                .scene
+            scene
                 .objects
                 .get(choice.target)
                 .and_then(|set| set.frame_shared(shifted))
         })
         .map_or(0, |frame| frame.object_count());
-    Body::Ready(Box::new(matrix(ctx, state, frame, choice, target_objects)))
+    Some(layout(frame, choice, metric, filter, width, target_objects))
 }
 
 fn target_time(time: u32, shift: i32) -> Option<u32> {
@@ -261,14 +327,14 @@ fn target_time(time: u32, shift: i32) -> Option<u32> {
         .then_some(shifted as u32)
 }
 
-fn matrix(
-    ctx: &BuildContext<'_, Message>,
-    state: &View<'_>,
+fn layout(
     frame: &RelationFrame,
     choice: Choice,
+    metric: RelationMetric,
+    filter: f32,
+    width: f32,
     target_objects: usize,
 ) -> Matrix {
-    let metric = state.workspace.relation_metric;
     let objects = frame.objects();
     let mut values = frame
         .pairs()
@@ -281,7 +347,6 @@ fn matrix(
     let (minimum, maximum) = bounds(&values);
     let near = metric.near();
     let strength = |value: f32| position(value, minimum, maximum, near);
-    let filter = state.workspace.relation_filter;
     let filtered = filter > 0.0;
     values.retain(|(_, value)| strength(*value) + 1.0e-6 >= filter);
     let mut pairs = values
@@ -300,20 +365,26 @@ fn matrix(
             .then(left.value.total_cmp(&right.value))
             .then((left.source, left.target).cmp(&(right.source, right.target)))
     });
-    let usable = (ctx.size().x - 96.0 - GUTTER).max(MINIMUM_CELL * 4.0);
+    let usable = (width - 96.0 - GUTTER).max(MINIMUM_CELL * 4.0);
     let fit = ((usable / MINIMUM_CELL).floor() as usize).clamp(1, COLUMN_LIMIT);
     let mut rows = ranked(&pairs, |pair| pair.source);
     let mut columns = ranked(&pairs, |pair| pair.target);
     rows.truncate(ROW_LIMIT);
     columns.truncate(fit);
+    let row_slot = slot_map(&rows);
+    let column_slot = slot_map(&columns);
     let mut cells = HashMap::with_capacity(pairs.len());
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
     for pair in &pairs {
-        if let (Some(row), Some(column)) = (
-            rows.iter().position(|index| *index == pair.source),
-            columns.iter().position(|index| *index == pair.target),
-        ) {
-            cells.insert((row, column), pair.strength);
-        }
+        let (Some(row), Some(column)) = (row_slot.get(&pair.source), column_slot.get(&pair.target))
+        else {
+            continue;
+        };
+        cells.insert((*row, *column), pair.strength);
+        digest = digest.rotate_left(7)
+            ^ ((*row as u64) << 32)
+            ^ (*column as u64)
+            ^ u64::from(pair.strength.to_bits());
     }
     let cell = (usable / columns.len().max(1) as f32).clamp(MINIMUM_CELL, CELL);
     Matrix {
@@ -321,6 +392,7 @@ fn matrix(
         rows,
         columns,
         cells,
+        digest,
         minimum,
         maximum,
         source: choice.source,
@@ -328,6 +400,14 @@ fn matrix(
         cell,
         filtered,
     }
+}
+
+fn slot_map(indices: &[usize]) -> HashMap<usize, usize> {
+    indices
+        .iter()
+        .enumerate()
+        .map(|(slot, index)| (*index, slot))
+        .collect()
 }
 
 fn bounds(values: &[(RelationPair, f32)]) -> (f32, f32) {
@@ -404,7 +484,7 @@ fn pending<'a>(
 fn matrix_card<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &View<'a>,
-    matrix: &Matrix,
+    matrix: &'a Matrix,
 ) -> Element<'a, Message> {
     let language = ctx.language();
     let detail =
@@ -441,18 +521,18 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
     let step = ((24.0 / cell).ceil() as usize).max(1);
     let mut labels = Vec::with_capacity(matrix.columns.len());
     for (index, column) in matrix.columns.iter().copied().enumerate() {
-        let text = if index % step == 0 {
-            (column + 1).to_string()
-        } else {
-            String::new()
-        };
+        let shown = index % step == 0;
         let selection = Selection {
             set: matrix.target,
             item: Item::Object(column),
         };
         labels.push(
             grana_ui::canvas(Length::Fixed(cell), HEADER)
-                .view(text.clone(), move |_, painter, info| {
+                .view((column, shown), move |(column, shown), painter, info| {
+                    if !*shown {
+                        return;
+                    }
+                    let text = (column + 1).to_string();
                     painter.text_in(info.rect, &text, style, Align::Center);
                 })
                 .key(Key::index("relation.column", index))
@@ -472,7 +552,7 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
     grana_ui::row().height(Length::Fixed(HEADER)).children(row)
 }
 
-fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element<'a, Message> {
+fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &'a Matrix) -> Element<'a, Message> {
     let cell = matrix.cell;
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -480,14 +560,14 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
         TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).aligned(Align::End);
     let mut gutter = Vec::with_capacity(matrix.rows.len());
     for (index, row) in matrix.rows.iter().copied().enumerate() {
-        let text = (row + 1).to_string();
         let selection = Selection {
             set: matrix.source,
             item: Item::Object(row),
         };
         gutter.push(
             grana_ui::canvas(Length::Fixed(GUTTER), cell)
-                .view(text.clone(), move |_, painter, info| {
+                .view(row, move |row, painter, info| {
+                    let text = (row + 1).to_string();
                     painter.text_in(
                         info.rect.shrink2(Vec2::new(6.0, 0.0)),
                         &text,
@@ -501,17 +581,10 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
     }
     let columns = matrix.columns.len();
     let rows = matrix.rows.len();
-    let cells = matrix.cells.clone();
     let width = (columns as f32 * cell).max(1.0);
     let height = (rows as f32 * cell).max(1.0);
     let grid = palette.surface_container_highest;
-    let digest = cells.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, cell| {
-        let ((source, target), strength) = cell;
-        hash.rotate_left(7)
-            ^ ((*source as u64) << 32)
-            ^ (*target as u64)
-            ^ u64::from(strength.to_bits())
-    });
+    let digest = matrix.digest;
     let canvas = grana_ui::canvas(Length::Fixed(width), height).view(
         (digest, rows, columns),
         move |_, painter, info| {
@@ -525,7 +598,7 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Element
                         Vec2::splat(cell),
                     )
                     .shrink(0.5);
-                    let color = match cells.get(&(row, column)) {
+                    let color = match matrix.cells.get(&(row, column)) {
                         Some(strength) => heat(*strength),
                         None => grid,
                     };
@@ -620,8 +693,9 @@ fn pairs_card<'a>(
     children.push(view::caption(ctx, &format!("{source} → {target}")));
     let mut rows = Vec::with_capacity(shown);
     for (index, pair) in matrix.pairs.iter().take(shown).enumerate() {
-        let text = format!("#{} → #{}", pair.source + 1, pair.target + 1);
-        let value = metric.format(pair.value);
+        let source = pair.source;
+        let target = pair.target;
+        let value = pair.value;
         let strength = pair.strength;
         let body = TextStyle::new(theme.font(Level::Label), palette.on_surface_variant);
         let number =
@@ -634,8 +708,8 @@ fn pairs_card<'a>(
         rows.push(
             grana_ui::canvas(Length::Fill, ROW_HEIGHT)
                 .view(
-                    (text.clone(), value.clone(), strength.to_bits()),
-                    move |_, painter, info| {
+                    (source, target, value.to_bits(), strength.to_bits(), metric),
+                    move |(source, target, value, strength, metric), painter, info| {
                         if info.hover > 0.01 {
                             painter.rect(
                                 info.rect,
@@ -647,7 +721,8 @@ fn pairs_card<'a>(
                             Vec2::new(info.rect.min.x + 4.0, info.rect.center().y - 4.5),
                             Vec2::splat(9.0),
                         );
-                        painter.rect(swatch, Corners::capsule(), heat(strength));
+                        painter.rect(swatch, Corners::capsule(), heat(f32::from_bits(*strength)));
+                        let text = format!("#{} → #{}", source + 1, target + 1);
                         painter.text_in(
                             Rect::from_min_size(
                                 Vec2::new(info.rect.min.x + 20.0, info.rect.min.y),
@@ -662,7 +737,7 @@ fn pairs_card<'a>(
                                 Vec2::new(info.rect.min.x + 186.0, info.rect.min.y),
                                 Vec2::new(120.0, info.rect.height()),
                             ),
-                            &value,
+                            &metric.format(f32::from_bits(*value)),
                             number,
                             Align::Center,
                         );

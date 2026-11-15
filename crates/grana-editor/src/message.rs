@@ -90,10 +90,7 @@ pub enum Message {
     SetComparisonAxis(usize),
     SetComparisonGroup(Option<String>),
     SetComparisonKey(Option<String>),
-    ToggleComparisonDetail {
-        group: String,
-        key: String,
-    },
+    ToggleComparisonDetail(usize),
     SelectPair {
         source: ObjectSetId,
         target: ObjectSetId,

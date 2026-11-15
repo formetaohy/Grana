@@ -234,9 +234,9 @@ fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message
     }
     let sliced = state.camera.slice().is_some();
     let labels = if sliced {
-        Vec::new()
+        &[][..]
     } else {
-        overlay::labels(state.scene, state.scene.time())
+        state.workspace.overlay.labels()
     };
     let annotations = if sliced {
         Vec::new()
@@ -246,7 +246,7 @@ fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message
     let layout = *layout;
     grana_ui::canvas(Length::Fill, layout.viewport.height())
         .view_live(move |painter, _info| {
-            let viewport = viewport(state, &layout, &legends, &labels, &annotations);
+            let viewport = viewport(state, &layout, &legends, labels, &annotations);
             overlay::paint(painter, &viewport);
         })
         .named("stage.overlay")

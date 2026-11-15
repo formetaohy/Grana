@@ -132,6 +132,7 @@ pub fn build(
     {
         frame.commands.push(Command::SetMeasureSet(Some(set.id())));
     }
+    workspace.prepare(view, ui.size());
     let palette = crate::palette::resolve(ui, view, workspace);
     let state = View {
         access: view.access,
@@ -703,13 +704,14 @@ pub fn apply(
                 workspace.comparison_key = None;
             }
             Message::SetComparisonKey(key) => workspace.comparison_key = key,
-            Message::ToggleComparisonDetail { group, key } => {
-                let selected = (group, key);
-                workspace.comparison_open = if workspace.comparison_open.as_ref() == Some(&selected)
-                {
-                    None
-                } else {
-                    Some(selected)
+            Message::ToggleComparisonDetail(index) => {
+                if let Some(slot) = workspace.batch_chart.slots.get(index).cloned() {
+                    workspace.comparison_open = if workspace.comparison_open.as_ref() == Some(&slot)
+                    {
+                        None
+                    } else {
+                        Some(slot)
+                    };
                 }
             }
             Message::SelectPair {

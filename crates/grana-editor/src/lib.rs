@@ -11,6 +11,7 @@ mod inspector;
 mod measure_panel;
 mod message;
 mod object_panel;
+mod overlay;
 mod palette;
 mod panel;
 mod plate_panel;

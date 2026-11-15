@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_chart::{Decor, Style};
+use grana_chart::{Decor, Page, Style};
 use grana_session::Command;
 use grana_ui::{
     Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Length, Level,
@@ -8,8 +8,100 @@ use grana_ui::{
 
 use crate::chart::{ComparisonRequest, comparison_chart, group_names, set_names};
 use crate::message::Message;
-use crate::state::View;
+use crate::state::{ComparisonAxis, DistributionStyle, View};
 use crate::view;
+
+#[derive(Default)]
+pub(crate) struct Chart {
+    stamp: Option<u64>,
+    page: Option<Page>,
+    pub(crate) slots: Vec<(String, String)>,
+}
+
+impl Chart {
+    pub(crate) fn page(&self) -> Option<&Page> {
+        self.page.as_ref()
+    }
+
+    pub(crate) fn stamp(&self) -> u64 {
+        self.stamp.unwrap_or_default()
+    }
+}
+
+pub(crate) struct Filter<'a> {
+    pub metric: Option<&'a str>,
+    pub axis: ComparisonAxis,
+    pub group: Option<&'a str>,
+    pub key: Option<&'a str>,
+    pub style: DistributionStyle,
+    pub language: grana_i18n::Language,
+}
+
+pub(crate) fn prepare(
+    chart: &mut Chart,
+    view: &grana_session::SessionView<'_>,
+    filter: Filter<'_>,
+) {
+    let Some(batch) = view.batch.as_ref() else {
+        *chart = Chart::default();
+        return;
+    };
+    let selected = filter
+        .metric
+        .and_then(|key| batch.metrics.iter().position(|metric| metric.key() == key))
+        .unwrap_or(0);
+    let Some(metric) = batch.metrics.get(selected) else {
+        *chart = Chart::default();
+        return;
+    };
+    let stamp = stamp(batch, metric, selected, &filter);
+    if chart.stamp == Some(stamp) {
+        return;
+    }
+    chart.stamp = Some(stamp);
+    match comparison_chart(ComparisonRequest {
+        rows: batch.comparison,
+        tests: batch.significance,
+        interactions: batch.interactions,
+        metric,
+        index: selected,
+        axis: filter.axis,
+        group: filter.group,
+        key: filter.key,
+        style: filter.style,
+        language: filter.language,
+    }) {
+        Some(built) => {
+            chart.page = Some(built.page);
+            chart.slots = built.slots;
+        }
+        None => {
+            chart.page = None;
+            chart.slots.clear();
+        }
+    }
+}
+
+fn stamp(
+    batch: &grana_session::BatchView<'_>,
+    metric: &grana_session::BatchMetric,
+    selected: usize,
+    filter: &Filter<'_>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    batch.comparison.hash(&mut hasher);
+    batch.significance.hash(&mut hasher);
+    batch.interactions.hash(&mut hasher);
+    metric.hash(&mut hasher);
+    selected.hash(&mut hasher);
+    filter.axis.index().hash(&mut hasher);
+    filter.group.hash(&mut hasher);
+    filter.key.hash(&mut hasher);
+    filter.style.index().hash(&mut hasher);
+    filter.language.label().hash(&mut hasher);
+    hasher.finish()
+}
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let col_a = grana_ui::column()
@@ -586,44 +678,14 @@ fn comparison<'a>(
         children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     }
-    let Some(built) = comparison_chart(ComparisonRequest {
-        rows,
-        tests: state.batch_significance(),
-        interactions: state.batch_interactions(),
-        metric,
-        index: selected,
-        axis,
-        group: group.as_deref(),
-        key: key.as_deref(),
-        style: state.workspace.distribution_style,
-        language: ctx.language(),
-    }) else {
+    let Some(page) = state.workspace.batch_chart.page() else {
         children.push(view::weak(ctx, grana_i18n::batch::filter_empty(language)));
         return view::card(ctx, 6.0, children);
     };
-    let slots = built.slots;
-    let page = built.page;
     let style = Style::card(ctx.theme(), page.distribution()).with_language(ctx.language());
     let pointer = ctx.pointer();
-    let count = slots.len();
-    let digest = {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        visible.hash(&mut hasher);
-        state.batch_significance().len().hash(&mut hasher);
-        for test in state.batch_significance() {
-            test.adjusted.to_bits().hash(&mut hasher);
-            test.rank_adjusted.to_bits().hash(&mut hasher);
-        }
-        state.batch_interactions().len().hash(&mut hasher);
-        metric.key().hash(&mut hasher);
-        selected.hash(&mut hasher);
-        axis.index().hash(&mut hasher);
-        group.hash(&mut hasher);
-        key.hash(&mut hasher);
-        state.workspace.distribution_style.index().hash(&mut hasher);
-        hasher.finish()
-    };
+    let count = state.workspace.batch_chart.slots.len();
+    let digest = state.workspace.batch_chart.stamp();
     let canvas = grana_ui::canvas(Length::Fill, CHART_HEIGHT)
         .view(digest, move |_, painter, info| {
             let decor = Decor {
@@ -641,8 +703,7 @@ fn comparison<'a>(
             }
             let frame = style.metrics.frame(pointer.rect);
             let index = grana_chart::group_at(frame, count, pointer.position)?;
-            let (group, key) = slots.get(index)?.clone();
-            Some(Message::ToggleComparisonDetail { group, key })
+            Some(Message::ToggleComparisonDetail(index))
         });
     children.push(canvas);
     let open = state

@@ -4,6 +4,24 @@ use crate::comparison::{Comparison, ComparisonSample, pairs};
 use crate::format::{formatted, scientific};
 use crate::quality::Metric;
 
+impl std::hash::Hash for Interaction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.name.hash(state);
+        self.kind.hash(state);
+        self.metric.hash(state);
+        self.group_a.hash(state);
+        self.group_b.hash(state);
+        self.adjusted.to_bits().hash(state);
+        self.rank_adjusted.to_bits().hash(state);
+        self.effect.map(f64::to_bits).hash(state);
+        self.test.p().to_bits().hash(state);
+        self.test.mean_a().to_bits().hash(state);
+        self.test.mean_b().to_bits().hash(state);
+        self.rank.p().to_bits().hash(state);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Interaction {
     pub key: String,

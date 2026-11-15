@@ -9,7 +9,9 @@ use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesVie
 use grana_ui::Key;
 
 use crate::message::Message;
+use crate::overlay::Overlay;
 use crate::panel::Panel;
+use crate::relation_panel::Body as RelationBody;
 use crate::stage::Stage;
 
 #[derive(Clone, Copy, Debug)]
@@ -137,7 +139,7 @@ pub struct MaskBrush {
 
 pub use grana_chart::DistributionStyle;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationMetric {
     Contact,
     Distance,
@@ -240,15 +242,18 @@ pub struct Workspace {
     pub relation: Option<(ObjectSetId, ObjectSetId, i32)>,
     pub relation_metric: RelationMetric,
     pub relation_filter: f32,
+    pub(crate) relation_body: RelationBody,
     pub distribution_style: DistributionStyle,
     pub comparison_metric: Option<String>,
     pub comparison_axis: ComparisonAxis,
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
+    pub(crate) batch_chart: crate::batch_panel::Chart,
     pub palette: Option<Palette>,
     pub language: grana_i18n::Language,
     pub chrome: crate::chrome::ChromeView,
+    pub(crate) overlay: Overlay,
     pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
@@ -285,15 +290,18 @@ impl Default for Workspace {
             relation: None,
             relation_metric: RelationMetric::Contact,
             relation_filter: 0.0,
+            relation_body: RelationBody::default(),
             distribution_style: DistributionStyle::Box,
             comparison_metric: None,
             comparison_axis: ComparisonAxis::default(),
             comparison_group: None,
             comparison_key: None,
             comparison_open: None,
+            batch_chart: crate::batch_panel::Chart::default(),
             palette: None,
             language: grana_i18n::Language::English,
             chrome: crate::chrome::ChromeView::default(),
+            overlay: Overlay::default(),
             palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }
@@ -301,6 +309,39 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    pub(crate) fn prepare(&mut self, view: &grana_session::SessionView<'_>, size: Vec2) {
+        if let Some(scene) = view.scene {
+            self.overlay.refresh(scene);
+        }
+        match self.panel.unwrap_or(self.last_panel) {
+            Panel::Relations => {
+                if let Some(scene) = view.scene {
+                    crate::relation_panel::prepare(
+                        scene,
+                        &mut self.relation_body,
+                        self.relation,
+                        self.relation_metric,
+                        self.relation_filter,
+                        size.x,
+                    );
+                }
+            }
+            Panel::Batch => crate::batch_panel::prepare(
+                &mut self.batch_chart,
+                view,
+                crate::batch_panel::Filter {
+                    metric: self.comparison_metric.as_deref(),
+                    axis: self.comparison_axis,
+                    group: self.comparison_group.as_deref(),
+                    key: self.comparison_key.as_deref(),
+                    style: self.distribution_style,
+                    language: self.language,
+                },
+            ),
+            _ => {}
+        }
+    }
+
     pub fn default_height() -> f32 {
         340.0
     }

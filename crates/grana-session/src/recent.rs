@@ -41,7 +41,7 @@ impl Entry {
     }
 
     pub fn image(path: &Path, name: &str, series: usize) -> Self {
-        Self::new(Kind::Image, name, &path.to_string_lossy(), series)
+        Self::new(Kind::Image, name, &path.to_string_lossy(), series).located()
     }
 
     pub fn project(path: &Path) -> Self {
@@ -49,11 +49,21 @@ impl Entry {
             || path.to_string_lossy().into_owned(),
             |stem| stem.to_string_lossy().into_owned(),
         );
-        Self::new(Kind::Project, &name, &path.to_string_lossy(), 0)
+        Self::new(Kind::Project, &name, &path.to_string_lossy(), 0).located()
     }
 
     pub fn remote(url: &str, name: &str, series: usize) -> Self {
         Self::new(Kind::Remote, name, url, series)
+    }
+
+    fn located(mut self) -> Self {
+        if self.kind == Kind::Remote {
+            return self;
+        }
+        let absolute = std::path::absolute(Path::new(&self.target))
+            .unwrap_or_else(|_| PathBuf::from(&self.target));
+        self.target = absolute.to_string_lossy().into_owned();
+        self
     }
 
     pub fn kind(&self) -> Kind {
@@ -108,6 +118,7 @@ impl Recent {
             .unwrap_or_default()
             .entry
             .into_iter()
+            .map(Entry::located)
             .filter(Entry::present)
             .take(LIMIT)
             .collect();

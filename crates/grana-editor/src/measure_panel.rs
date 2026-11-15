@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use glam::Vec2;
 use grana_i18n::Language;
 use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis, Scope};
@@ -918,10 +920,11 @@ fn table<'a>(
                         .zip(widths.iter())
                         .map(|((column_index, column), width)| Cell {
                             width: width.to_bits(),
-                            text: match state.measure.value(index as usize, *column_index) {
-                                Some(value) => column.format(value),
-                                None => String::from("…"),
-                            },
+                            decimals: column.decimals(),
+                            value: state
+                                .measure
+                                .value(index as usize, *column_index)
+                                .map(f32::to_bits),
                         })
                         .collect::<Vec<_>>();
                     children.push(
@@ -955,6 +958,7 @@ fn table<'a>(
                                             palette.on_surface.with_alpha(0.07 * info.hover),
                                         );
                                     }
+                                    let mut text = String::new();
                                     let mut left = rect.min.x;
                                     for cell in &row.cells {
                                         let width = f32::from_bits(cell.width);
@@ -962,9 +966,21 @@ fn table<'a>(
                                             Vec2::new(left, rect.min.y),
                                             Vec2::new(width, ROW_HEIGHT),
                                         );
+                                        text.clear();
+                                        match cell.value {
+                                            Some(bits) => {
+                                                let _ = write!(
+                                                    text,
+                                                    "{:.*}",
+                                                    cell.decimals as usize,
+                                                    f32::from_bits(bits)
+                                                );
+                                            }
+                                            None => text.push('\u{2026}'),
+                                        }
                                         painter.text_in(
                                             area.shrink2(Vec2::new(8.0, 0.0)),
-                                            &cell.text,
+                                            &text,
                                             TextStyle::new(
                                                 font,
                                                 if row.selected { on_selected } else { on_row },
@@ -995,7 +1011,8 @@ fn table<'a>(
 #[derive(Hash)]
 struct Cell {
     width: u32,
-    text: String,
+    decimals: u8,
+    value: Option<u32>,
 }
 
 #[derive(Hash)]
