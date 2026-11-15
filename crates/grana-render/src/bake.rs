@@ -150,6 +150,7 @@ impl BakeQueue {
         atlas: &Atlas,
         levels: &[usize],
         time: u32,
+        content: u32,
         capacity: usize,
     ) -> &[BakeEntry] {
         assert!(capacity > 0, "a bake pass stages at least one slot");
@@ -159,7 +160,7 @@ impl BakeQueue {
                 let Some(slot) = resident.slot else {
                     continue;
                 };
-                let key = stamp(time, *level as u32, resident.index as u32);
+                let key = stamp(time, content, *level as u32, resident.index as u32);
                 if self.staged.get(&slot) == Some(&key) {
                     continue;
                 }
@@ -179,9 +180,10 @@ impl BakeQueue {
     }
 }
 
-fn stamp(time: u32, level: u32, brick: u32) -> u64 {
+fn stamp(time: u32, content: u32, level: u32, brick: u32) -> u64 {
     let mut hash = u64::from(time) ^ u64::from(level).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     hash ^= u64::from(brick).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+    hash ^= u64::from(content).wrapping_mul(0x1656_67b1_9e37_79f9);
     hash ^= hash >> 33;
     hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
     hash ^ (hash >> 33)

@@ -10,7 +10,6 @@ pub(super) struct Levels {
 pub(super) struct Residency {
     pub(super) epoch: u64,
     pub(super) data: u64,
-    pub(super) channels: u64,
     pub(super) prefetch: bool,
     pub(super) assured: bool,
     pub(super) time: u32,
@@ -42,14 +41,7 @@ pub(super) struct ViewState<'a> {
 }
 
 impl Residency {
-    pub(super) fn of(
-        epoch: u64,
-        data: u64,
-        channels: u64,
-        mode: Mode,
-        time: u32,
-        view: ViewState<'_>,
-    ) -> Self {
+    pub(super) fn of(epoch: u64, data: u64, mode: Mode, time: u32, view: ViewState<'_>) -> Self {
         let ViewState {
             camera,
             size,
@@ -59,7 +51,6 @@ impl Residency {
         Self {
             epoch,
             data,
-            channels,
             prefetch: mode.prefetch,
             assured: mode.assured,
             time,

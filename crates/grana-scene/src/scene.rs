@@ -474,12 +474,16 @@ impl Scene {
 
     pub fn mask_stamp(&self, time: u32) -> u64 {
         let mut stamp = HASH_OFFSET;
-        stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
-        stamp = mix(stamp, filter_stamp(self.mask_filter));
+        let mut bound = false;
         for entry in &self.derived {
             let (Some(set), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
                 continue;
             };
+            if !bound {
+                bound = true;
+                stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
+                stamp = mix(stamp, filter_stamp(self.mask_filter));
+            }
             stamp = mix(stamp, set.raw());
             stamp = mix(stamp, entry.spec().source() as u64);
             stamp = mix(stamp, channel.stamp());

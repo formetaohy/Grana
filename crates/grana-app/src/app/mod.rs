@@ -233,6 +233,7 @@ impl App {
             }
         };
         self.engine = Some(engine);
+        self.sync_dataset(false);
     }
 
     pub(super) fn redraw(&mut self) {

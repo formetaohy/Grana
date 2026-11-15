@@ -36,6 +36,7 @@ impl Renderer {
             pyramid,
             channels,
             time: now,
+            content,
             generation,
             pin,
             prefetched,
@@ -88,7 +89,7 @@ impl Renderer {
             if units.len() < voxels * total {
                 units.resize(voxels * total, 0);
             }
-            let mut maxima = [[0.0f32; 4]; CHANNEL_LIMIT / 4];
+            let mut maximum = 0.0f32;
             let mut base = 0;
             for pack in 0..packs {
                 let components = pack_components(*channels, pack);
@@ -100,17 +101,16 @@ impl Renderer {
                     let intensity = pyramid.channels()[channel].intensity();
                     let summary_cells =
                         &mut cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
-                    maxima[channel / 4][channel % 4] = data.channels()[channel].pack_units(
+                    maximum = maximum.max(data.channels()[channel].pack_units(
                         intensity,
                         &mut packed[..],
                         texels,
                         component,
                         summary_cells,
-                    );
+                    ));
                 }
                 base += span;
             }
-            let maximum = maxima.iter().flatten().copied().fold(0.0f32, f32::max);
             let current = time == *now;
             let publish = current
                 && tables[level]
@@ -119,7 +119,7 @@ impl Renderer {
             if maximum <= 0.0 {
                 atlas.assign_hollow(time, level, index);
                 if publish && let Some(table) = tables[level].as_mut() {
-                    table.set_record(queue, arena, index, BrickRecord::hollow(time));
+                    table.set_record(queue, arena, index, BrickRecord::hollow(time, *content));
                 }
                 if current {
                     *generation += 1;
@@ -148,17 +148,7 @@ impl Renderer {
                 atlas.write(queue, pack, slot, &units[base..base + span]);
                 base += span;
             }
-            atlas.assign(
-                slot,
-                ResidentBrick {
-                    time,
-                    level,
-                    index,
-                    maxima,
-                },
-                *pin,
-                demand,
-            );
+            atlas.assign(slot, ResidentBrick { time, level, index }, *pin, demand);
             if let Some(occupancy) = occupancy.as_mut() {
                 words[0] = maximum.to_bits();
                 for (word, cell) in words[1..].iter_mut().zip(summary.iter()) {
@@ -171,7 +161,7 @@ impl Renderer {
                     queue,
                     arena,
                     index,
-                    BrickRecord::new(slot + 1, time, maxima),
+                    BrickRecord::new(slot + 1, time, *content),
                 );
             }
             if current {

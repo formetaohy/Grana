@@ -10,6 +10,7 @@ pub(super) struct Signature<'a> {
     pub(super) levels: Levels,
     pub(super) versions: Versions,
     pub(super) channels: u64,
+    pub(super) content: u32,
     pub(super) generation: u64,
     pub(super) time: u32,
     pub(super) exposure: f32,
@@ -27,6 +28,7 @@ impl Signature<'_> {
             levels,
             versions,
             channels,
+            content,
             generation,
             time,
             exposure,
@@ -52,6 +54,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
+        content.hash(&mut hasher);
         generation.hash(&mut hasher);
         overlay.hash(&mut hasher);
         hasher.finish()
@@ -63,6 +66,7 @@ impl Signature<'_> {
             region,
             versions,
             channels,
+            content,
             exposure,
             epoch,
             size,
@@ -85,6 +89,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
+        content.hash(&mut hasher);
         overlay.hash(&mut hasher);
         hasher.finish()
     }
@@ -96,6 +101,7 @@ impl Signature<'_> {
             region,
             versions,
             channels,
+            content,
             time,
             exposure,
             epoch,
@@ -125,6 +131,7 @@ impl Signature<'_> {
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
         channels.hash(&mut hasher);
+        content.hash(&mut hasher);
         overlay.hash(&mut hasher);
         hasher.finish()
     }

@@ -200,6 +200,7 @@ pub struct Renderer {
     epoch: u64,
     resident: Option<Resident>,
     channels_key: Option<u64>,
+    content: u32,
     generation: u64,
     pin: u64,
     prefetch: bool,
@@ -300,6 +301,7 @@ impl Renderer {
             epoch: 0,
             resident: None,
             channels_key: None,
+            content: 0,
             generation: 0,
             pin: 0,
             prefetch: false,
@@ -384,6 +386,38 @@ impl Renderer {
 
     pub fn set_transparent(&mut self, transparent: bool) {
         self.transparent = transparent;
+    }
+
+    pub fn holds(&self, pyramid: &Pyramid) -> bool {
+        self.pyramid.as_ref().is_some_and(|held| {
+            held.levels() == pyramid.levels()
+                && held.frame_count() == pyramid.frame_count()
+                && held.channel_count() == pyramid.channel_count()
+                && held.brick_bytes() == pyramid.brick_bytes()
+        })
+    }
+
+    pub fn invalidate(&mut self, pyramid: &Pyramid) {
+        assert!(
+            self.holds(pyramid),
+            "an invalidated dataset keeps the resident layout"
+        );
+        self.pyramid = Some(pyramid.clone());
+        self.content = self.content.wrapping_add(1);
+        if let Some(atlas) = self.atlas.as_mut() {
+            atlas.reset();
+        }
+        self.baked.forget();
+        self.channels_key = None;
+        self.frames.fill(None);
+        self.settled = None;
+        self.planned = None;
+        self.demand = None;
+        self.prefetched.clear();
+        self.prefetch_key = None;
+        self.prefetch_issued.clear();
+        self.generation = self.generation.wrapping_add(1);
+        self.info = FrameInfo::default();
     }
 
     pub fn begin_export(&mut self) {
@@ -533,6 +567,7 @@ impl Renderer {
         self.epoch += 1;
         self.resident = None;
         self.channels_key = None;
+        self.content = 0;
         self.pin = 0;
         self.prefetched.clear();
         self.prefetch_key = None;

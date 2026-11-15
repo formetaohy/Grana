@@ -79,6 +79,7 @@ impl Renderer {
             epoch,
             resident,
             channels_key,
+            content,
             generation,
             settled,
             planned,
@@ -216,7 +217,7 @@ impl Renderer {
             scene_table.write_channels(device, queue, pyramid, scene.channels);
             *channels_key = Some(channel_key);
         }
-        let stamp = digest(&[versions.data(), *generation]);
+        let stamp = digest(&[versions.data(), *generation, u64::from(*content)]);
         let next = Resident {
             objects: versions.objects(),
             style: versions.style(),
@@ -225,7 +226,6 @@ impl Renderer {
         let residency = Residency::of(
             *epoch,
             stamp,
-            channel_key,
             Mode {
                 prefetch: display.prefetches(),
                 assured,
@@ -272,7 +272,7 @@ impl Renderer {
             ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
             let table = bricks[level].as_mut().expect("the brick table exists");
             if table.time() != Some(time) {
-                table.rebase(queue, time, atlas, arena);
+                table.rebase(queue, time, *content, atlas, arena);
             }
         }
         let finest = pyramid.level(0);
@@ -337,6 +337,7 @@ impl Renderer {
         ];
         data.oit = [u32::from(translucent), 0, 0, 0];
         data.tag[1] = u32::from(!awaits);
+        data.tag[3] = *content;
         data.occupancy[0] = scene_table.threshold_floor();
         let pixels = u64::from(width) * u64::from(height);
         if translucent
@@ -363,6 +364,7 @@ impl Renderer {
             levels,
             versions,
             channels: channel_key,
+            content: *content,
             generation: *generation,
             time,
             exposure,
@@ -525,7 +527,7 @@ impl Renderer {
                 && let Some(bake) = bake.as_ref()
             {
                 let levels = ladder.levels().collect::<Vec<usize>>();
-                let entries = baked.collect(atlas, &levels, time, bake.capacity());
+                let entries = baked.collect(atlas, &levels, time, *content, bake.capacity());
                 if !entries.is_empty() {
                     bake.stage(queue, entries);
                     bake.encode(

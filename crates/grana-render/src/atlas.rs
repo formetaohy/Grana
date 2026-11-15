@@ -55,13 +55,11 @@ pub(crate) struct ResidentBrick {
     pub time: u32,
     pub level: usize,
     pub index: usize,
-    pub maxima: [[f32; 4]; CHANNEL_LIMIT / 4],
 }
 
 pub(crate) struct Resident {
     pub index: usize,
     pub slot: Option<u32>,
-    pub maxima: [[f32; 4]; CHANNEL_LIMIT / 4],
 }
 
 #[derive(Clone, Copy)]
@@ -277,6 +275,15 @@ impl Atlas {
         self.pruned = Some(frames);
     }
 
+    pub fn reset(&mut self) {
+        let capacity = self.slots.len() as u32;
+        self.free = (0..capacity).rev().collect();
+        self.slots.fill(Slot::EMPTY);
+        self.identity.clear();
+        self.hollow.clear();
+        self.pruned = None;
+    }
+
     pub fn residents(&self, time: u32, level: usize) -> Vec<Resident> {
         let mut residents = self
             .slots
@@ -287,7 +294,6 @@ impl Atlas {
                 (brick.time == time && brick.level == level).then_some(Resident {
                     index: brick.index,
                     slot: Some(slot as u32),
-                    maxima: brick.maxima,
                 })
             })
             .collect::<Vec<_>>();
@@ -300,7 +306,6 @@ impl Atlas {
                 .map(|(_, _, index)| Resident {
                     index: *index,
                     slot: None,
-                    maxima: [[0.0; 4]; CHANNEL_LIMIT / 4],
                 }),
         );
         residents

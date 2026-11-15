@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use grana_animation::Timeline;
-use grana_display::CameraState;
+use grana_display::{Camera, CameraState};
+use grana_engine::{Display, Engine, SAMPLE_LIMIT};
 use grana_measure::MeasureView;
 use grana_object::{
     CellParams, IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
@@ -3415,6 +3416,167 @@ fn restyling_a_masked_set_keeps_the_streamed_volume() {
         session.content(),
         content,
         "hiding an object of a masked set must rebuild the mask"
+    );
+}
+
+#[test]
+fn a_mask_radius_keeps_the_dataset_and_reloads_the_content() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::AddMaskChannel { set });
+    session.poll();
+    let dataset = session
+        .scene()
+        .expect("the series stays open")
+        .dataset
+        .pyramid()
+        .clone();
+    let replaced = session.replaced();
+    let content = session.content();
+    session.execute(Command::SetMaskRadius(0.4));
+    session.poll();
+    assert_eq!(
+        session
+            .scene()
+            .expect("the series stays open")
+            .dataset
+            .pyramid(),
+        &dataset,
+        "a mask radius rebuilt the streamed dataset"
+    );
+    assert_eq!(
+        session.replaced(),
+        replaced,
+        "a mask radius replaced the dataset"
+    );
+    assert_ne!(
+        session.content(),
+        content,
+        "a mask radius kept the streamed content"
+    );
+}
+
+#[test]
+fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
+    let Some(gpu) = support::gpu() else {
+        return;
+    };
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::AddMaskChannel { set });
+    session.poll();
+    let mut engine = Engine::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
+    engine.set_dataset(
+        gpu.device(),
+        session.scene().expect("the series opens").dataset.pyramid(),
+    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(
+        session
+            .scene()
+            .expect("the series opens")
+            .dataset
+            .world_size(),
+        1.0,
+    );
+    let size = [160, 160];
+    let mut streamed = 0usize;
+    let settle_engine = |engine: &mut Engine, session: &mut Session, streamed: &mut usize| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while engine.info().samples < SAMPLE_LIMIT {
+            assert!(
+                Instant::now() < deadline,
+                "the engine never resolved the mask"
+            );
+            session.poll();
+            let time = session.scene().expect("the series opens").time();
+            if let Some(requests) = engine.poll_requests(gpu.device(), time) {
+                *streamed += requests.volume.len();
+                let mut bricks = requests.volume.clone();
+                bricks.extend_from_slice(&requests.prefetch);
+                session.request(requests.time, &bricks);
+            }
+            let bricks = session.take_bricks();
+            if !bricks.is_empty() {
+                engine.upload(gpu.queue(), &bricks);
+            }
+            engine
+                .draw(
+                    gpu.device(),
+                    gpu.queue(),
+                    grana_engine::View {
+                        scene: session.scene().expect("the series opens"),
+                        camera: &camera,
+                        size,
+                        display: Display::Still,
+                        level_cap: 99,
+                        overlays: &[],
+                    },
+                )
+                .expect("the viewport draws");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    settle_engine(&mut engine, &mut session, &mut streamed);
+    let pyramid = session
+        .scene()
+        .expect("the series opens")
+        .dataset
+        .pyramid()
+        .clone();
+    let content = session.content();
+    session.execute(Command::SetMaskRadius(0.4));
+    session.poll();
+    assert_ne!(
+        session.content(),
+        content,
+        "a mask radius kept the streamed content"
+    );
+    assert!(
+        engine.holds(&pyramid),
+        "a mask radius rebuilt the engine dataset"
+    );
+    streamed = 0;
+    engine.invalidate(&pyramid);
+    settle_engine(&mut engine, &mut session, &mut streamed);
+    assert!(
+        streamed > 0,
+        "the invalidated mask channel was never restreamed"
     );
 }
 

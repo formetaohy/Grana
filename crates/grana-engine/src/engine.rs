@@ -42,13 +42,14 @@ struct Identities {
 }
 
 struct Prepared {
-    scene_key: u64,
+    structure: u64,
+    display: u64,
     targets: view::Targets,
-    scene: RenderedScene,
+    rendered: RenderedScene,
 }
 
 struct Plan {
-    scene: u64,
+    structure: u64,
     camera: CameraState,
     height: u32,
     targets: view::Targets,
@@ -99,6 +100,18 @@ impl Engine {
         self.info = FrameInfo::default();
     }
 
+    pub fn holds(&self, pyramid: &Pyramid) -> bool {
+        self.renderer.holds(pyramid)
+    }
+
+    pub fn invalidate(&mut self, pyramid: &Pyramid) {
+        self.renderer.invalidate(pyramid);
+        self.generation = self.renderer.generation();
+        self.pending_pick = None;
+        self.request = None;
+        self.info = FrameInfo::default();
+    }
+
     pub fn requests_pending(&self) -> bool {
         self.renderer.requests_pending()
     }
@@ -122,9 +135,9 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        let scene_key = view::key(view.scene);
+        let keys = view::key(view.scene);
         let request = Request {
-            scene: scene_key,
+            scene: keys.digest(),
             overlays: overlay_key(view.overlays),
             camera: view.camera.state(),
             region: view.scene.region,
@@ -144,7 +157,7 @@ impl Engine {
         }
         let detail = match &self.plan {
             Some(plan)
-                if plan.scene == scene_key
+                if plan.structure == keys.structure()
                     && plan.camera == request.camera
                     && plan.height == size[1] =>
             {
@@ -160,7 +173,7 @@ impl Engine {
                     &mut self.splats,
                 );
                 self.plan = Some(Plan {
-                    scene: scene_key,
+                    structure: keys.structure(),
                     camera: request.camera,
                     height: size[1],
                     targets: targets.clone(),
@@ -168,17 +181,21 @@ impl Engine {
                 targets
             }
         };
-        if self
-            .prepared
-            .as_ref()
-            .is_none_or(|prepared| prepared.scene_key != scene_key || prepared.targets != detail)
-        {
-            let scene = view::frame(view.scene, &detail, &mut self.splats)?;
+        if self.prepared.as_ref().is_none_or(|prepared| {
+            prepared.structure != keys.structure() || prepared.targets != detail
+        }) {
+            let rendered = view::frame(view.scene, &detail, &mut self.splats)?;
             self.prepared = Some(Prepared {
-                scene_key,
-                scene,
+                structure: keys.structure(),
+                display: keys.display(),
                 targets: detail,
+                rendered,
             });
+        } else if let Some(prepared) = self.prepared.as_mut()
+            && prepared.display != keys.display()
+        {
+            prepared.display = keys.display();
+            view::restyle(&mut prepared.rendered, view.scene);
         }
         let info = {
             let Self {
@@ -204,7 +221,7 @@ impl Engine {
                     level_cap: view.level_cap,
                     overlays: view.overlays,
                 },
-                &prepared.scene,
+                &prepared.rendered,
             )?
         };
         self.info = info;
@@ -261,8 +278,8 @@ impl Engine {
             return false;
         }
         *pending_pick = Some(Identities {
-            styles: prepared.scene.style_ids.clone(),
-            members: prepared.scene.members.clone(),
+            styles: prepared.rendered.style_ids.clone(),
+            members: prepared.rendered.members.clone(),
         });
         true
     }

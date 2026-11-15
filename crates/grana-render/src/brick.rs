@@ -4,9 +4,6 @@ use grana_volume::{BrickGrid, Level, Pyramid};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 use crate::atlas::Atlas;
-use grana_volume::CHANNEL_LIMIT;
-
-const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
 
 pub(crate) const HOLLOW_FLAG: u32 = 2;
 
@@ -18,13 +15,11 @@ pub(crate) struct BrickRecord {
     pub slot: u32,
     pub flags: u32,
     pub time: u32,
-    pub reserved: u32,
-    pub maxima: [[f32; 4]; MAXIMA_PLANE],
+    pub content: u32,
 }
 
 const _: () = {
-    assert!(size_of::<BrickRecord>() == 80);
-    assert!(std::mem::offset_of!(BrickRecord, maxima) == 16);
+    assert!(size_of::<BrickRecord>() == 16);
 };
 
 impl BrickRecord {
@@ -32,27 +27,24 @@ impl BrickRecord {
         slot: 0,
         flags: 0,
         time: u32::MAX,
-        reserved: 0,
-        maxima: [[0.0; 4]; MAXIMA_PLANE],
+        content: 0,
     };
 
-    pub const fn hollow(time: u32) -> Self {
+    pub const fn hollow(time: u32, content: u32) -> Self {
         Self {
             slot: 0,
             flags: HOLLOW_FLAG,
             time,
-            reserved: 0,
-            maxima: [[0.0; 4]; MAXIMA_PLANE],
+            content,
         }
     }
 
-    pub fn new(slot: u32, time: u32, maxima: [[f32; 4]; MAXIMA_PLANE]) -> Self {
+    pub const fn new(slot: u32, time: u32, content: u32) -> Self {
         Self {
             slot,
             flags: 0,
             time,
-            reserved: 0,
-            maxima,
+            content,
         }
     }
 
@@ -179,11 +171,18 @@ impl BrickTable {
         self.base
     }
 
-    pub fn rebase(&mut self, queue: &Queue, time: u32, atlas: &Atlas, arena: &BrickArena) {
+    pub fn rebase(
+        &mut self,
+        queue: &Queue,
+        time: u32,
+        content: u32,
+        atlas: &Atlas,
+        arena: &BrickArena,
+    ) {
         for resident in atlas.residents(time, self.level) {
             let record = match resident.slot {
-                Some(slot) => BrickRecord::new(slot + 1, time, resident.maxima),
-                None => BrickRecord::hollow(time),
+                Some(slot) => BrickRecord::new(slot + 1, time, content),
+                None => BrickRecord::hollow(time, content),
             };
             if self.records[resident.index] != record {
                 self.set_record(queue, arena, resident.index, record);

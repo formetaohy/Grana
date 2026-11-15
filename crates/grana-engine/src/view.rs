@@ -73,44 +73,46 @@ impl RenderedScene {
     }
 }
 
-pub fn key(scene: &Scene) -> u64 {
-    let mut key = Digest::new();
-    key.mix(u64::from(scene.time()));
-    key.mix(scene.channels.len() as u64);
-    key.mix(scene.derived().len() as u64);
-    for channel in &scene.channels {
-        key.flag(channel.enabled);
-        key.real(channel.opacity);
-        key.real(channel.window.min());
-        key.real(channel.window.max());
-        key.mix(channel.volume().mode().index() as u64);
-        key.real(channel.volume().isovalue());
-        for stop in channel.transfer().stops() {
-            key.real(stop.position());
-            key.real(stop.opacity());
-            for component in stop.color() {
-                key.real(component);
-            }
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Key {
+    structure: u64,
+    display: u64,
+}
+
+impl Key {
+    pub fn structure(self) -> u64 {
+        self.structure
     }
-    key.real(scene.shading.ambient);
-    key.real(scene.shading.diffuse);
-    key.real(scene.shading.shadows);
-    key.real(scene.shading.azimuth);
-    key.real(scene.shading.elevation);
-    key.real(scene.step_scale);
+
+    pub fn display(self) -> u64 {
+        self.display
+    }
+
+    pub fn digest(self) -> u64 {
+        let mut digest = Digest::new();
+        digest.mix(self.structure);
+        digest.mix(self.display);
+        digest.finish()
+    }
+}
+
+pub fn key(scene: &Scene) -> Key {
+    let mut structure = Digest::new();
+    structure.mix(u64::from(scene.time()));
+    structure.mix(scene.channels.len() as u64);
+    structure.mix(scene.derived().len() as u64);
     for selection in scene.selections() {
-        key.mix(selection.set.raw());
-        key.mix(match selection.item {
+        structure.mix(selection.set.raw());
+        structure.mix(match selection.item {
             Item::Object(index) => (index as u64) * 2,
             Item::Track(index) => (index as u64) * 2 + 1,
         });
     }
     for set in scene.objects.iter() {
-        key.mix(set.id().raw());
-        key.mix(set.revision().raw());
-        key.mix(set.document().raw());
-        key.mix(
+        structure.mix(set.id().raw());
+        structure.mix(set.revision().raw());
+        structure.mix(set.document().raw());
+        structure.mix(
             set.frame_stamp(scene.time())
                 .map_or(u64::MAX, |stamp| stamp.raw()),
         );
@@ -118,16 +120,41 @@ pub fn key(scene: &Scene) -> u64 {
             && source.projected()
         {
             for time in source.projected_frames(scene.time(), scene.frame_count()) {
-                key.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
+                structure.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
             }
         }
-        key.mix(
+        structure.mix(
             set.tracks()
                 .map_or(u64::MAX, |tracks| tracks.revision().raw()),
         );
-        key.flag(scene.shown(set));
+        structure.flag(scene.shown(set));
     }
-    key.finish()
+    let mut display = Digest::new();
+    for channel in &scene.channels {
+        display.flag(channel.enabled);
+        display.real(channel.opacity);
+        display.real(channel.window.min());
+        display.real(channel.window.max());
+        display.mix(channel.volume().mode().index() as u64);
+        display.real(channel.volume().isovalue());
+        for stop in channel.transfer().stops() {
+            display.real(stop.position());
+            display.real(stop.opacity());
+            for component in stop.color() {
+                display.real(component);
+            }
+        }
+    }
+    display.real(scene.shading.ambient);
+    display.real(scene.shading.diffuse);
+    display.real(scene.shading.shadows);
+    display.real(scene.shading.azimuth);
+    display.real(scene.shading.elevation);
+    display.real(scene.step_scale);
+    Key {
+        structure: structure.finish(),
+        display: display.finish(),
+    }
 }
 
 pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
@@ -381,17 +408,7 @@ pub fn frame(
         appearance.mix(selection.set.raw());
         appearance.mix(item);
     }
-    let channels = scene
-        .channels
-        .iter()
-        .map(|channel| ChannelRow {
-            visible: channel.enabled,
-            opacity: channel.opacity,
-            window: channel.window,
-            transfer: channel.transfer().clone(),
-            volume: channel.volume(),
-        })
-        .collect();
+    let channels = channel_rows(scene);
     assert_eq!(
         ordinal,
         targets.detail.len(),
@@ -414,6 +431,26 @@ pub fn frame(
         shading: scene.shading,
         step_scale: scene.step_scale,
     })
+}
+
+pub fn restyle(rendered: &mut RenderedScene, scene: &Scene) {
+    rendered.channels = channel_rows(scene);
+    rendered.shading = scene.shading;
+    rendered.step_scale = scene.step_scale;
+}
+
+fn channel_rows(scene: &Scene) -> Vec<ChannelRow> {
+    scene
+        .channels
+        .iter()
+        .map(|channel| ChannelRow {
+            visible: channel.enabled,
+            opacity: channel.opacity,
+            window: channel.window,
+            transfer: channel.transfer().clone(),
+            volume: channel.volume(),
+        })
+        .collect()
 }
 
 fn seed_stamp(scene: &Scene, set: &ObjectSet) -> u64 {

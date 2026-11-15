@@ -7,6 +7,20 @@ use super::App;
 use crate::stream::View as StreamView;
 impl App {
     pub(super) fn exchange_bricks(&mut self) {
+        let replaced = self.session.replaced() != self.replaced;
+        let reloaded = self.session.content() != self.content;
+        if replaced || reloaded {
+            self.replaced = self.session.replaced();
+            self.content = self.session.content();
+            self.sync_dataset(replaced);
+            if replaced {
+                self.needs_fit = true;
+                self.workspace.playback.playing = false;
+                self.workspace.playback.previewing = false;
+                self.last_advance = None;
+                self.last_animation = None;
+            }
+        }
         let App {
             surface,
             engine,
@@ -33,25 +47,30 @@ impl App {
         if !bricks.is_empty() {
             engine.upload(&surface.gpu.queue, &bricks);
         }
-        let replaced = session.replaced() != self.replaced;
-        let reloaded = session.content() != self.content;
-        if replaced || reloaded {
-            self.replaced = session.replaced();
-            self.content = session.content();
-            if let Some(scene) = session.scene() {
-                engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
-            }
-        }
-        if replaced {
-            self.needs_fit = true;
-            self.workspace.playback.playing = false;
-            self.workspace.playback.previewing = false;
-            self.last_advance = None;
-            self.last_animation = None;
-        }
         let view = session.take_view();
         if let Some(view) = view {
             self.apply_view(&view);
+        }
+    }
+
+    pub(super) fn sync_dataset(&mut self, replaced: bool) {
+        let App {
+            surface,
+            engine,
+            session,
+            ..
+        } = self;
+        let (Some(surface), Some(engine)) = (surface.as_ref(), engine.as_mut()) else {
+            return;
+        };
+        let pyramid = session.scene().map(|scene| scene.dataset.pyramid().clone());
+        let Some(pyramid) = pyramid else {
+            return;
+        };
+        if replaced || !engine.holds(&pyramid) {
+            engine.set_dataset(&surface.gpu.device, &pyramid);
+        } else {
+            engine.invalidate(&pyramid);
         }
     }
 

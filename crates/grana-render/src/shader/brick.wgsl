@@ -6,12 +6,11 @@ struct BrickRecord {
     slot: u32,
     flags: u32,
     time: u32,
-    reserved: u32,
-    maxima: array<vec4<f32>, 4>,
+    content: u32,
 }
 
 fn brick_holds(record: BrickRecord) -> bool {
-    return record.time == frame.tag.x;
+    return record.time == frame.tag.x && record.content == frame.tag.w;
 }
 
 fn brick_hollow(record: BrickRecord) -> bool {
@@ -23,7 +22,7 @@ fn brick_slot(record: BrickRecord) -> u32 {
 }
 
 fn brick_display_slot(record: BrickRecord) -> u32 {
-    if (frame.tag.y != 0u) {
+    if (frame.tag.y != 0u && record.content == frame.tag.w) {
         return record.slot;
     }
     return brick_slot(record);

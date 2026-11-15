@@ -1812,6 +1812,123 @@ fn bare_scene<'a>(versions: Versions, channels: &'a [grana_render::ChannelRow]) 
     }
 }
 
+fn volume_view<'a>(
+    target: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    scene: &'a SceneFrame<'a>,
+) -> View<'a> {
+    View {
+        target,
+        camera,
+        region: Region::none(),
+        scene,
+        viewport: WHOLE,
+        display: grana_render::Display::Still,
+    }
+}
+
+#[test]
+fn restyles_a_channel_without_replanning_the_residency() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let cool = channels(&pyramid, &[TransferFunction::tinted([0.4, 0.8, 1.0])]);
+    let warm = channels(&pyramid, &[TransferFunction::tinted([1.0, 0.4, 0.2])]);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let target = texture(&gpu, SIDE);
+    let surface = target.create_view(&Default::default());
+    let painted = versions();
+    let base = bare_scene(painted, &cool);
+    let restyled = bare_scene(painted, &warm);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let settled = settle(
+        &gpu,
+        &mut renderer,
+        &volume_view(&surface, &camera, &base),
+        &volume,
+    );
+    assert_eq!(
+        settled.view.resident, settled.view.demand,
+        "the stream never completed"
+    );
+    let info = renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            frame(&volume_view(&surface, &camera, &restyled)),
+        )
+        .expect("the restyled frame draws");
+    assert!(
+        !renderer.requests_pending(),
+        "a channel style replanned the streamed residency"
+    );
+    assert_eq!(
+        info.samples, 1,
+        "a channel style kept the accumulated samples"
+    );
+    assert!(!info.rebuilt, "a channel style rebuilt the object buffers");
+}
+
+#[test]
+fn invalidates_the_streamed_content_and_restreams_it() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let rows = channels(&pyramid, &[TransferFunction::tinted([0.4, 0.8, 1.0])]);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let target = texture(&gpu, SIDE);
+    let surface = target.create_view(&Default::default());
+    let scene = bare_scene(versions(), &rows);
+    let view = volume_view(&surface, &camera, &scene);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    settle(&gpu, &mut renderer, &view, &volume);
+    let before = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let slots = renderer.slots();
+    let finest = renderer.first_level();
+    renderer.invalidate(&pyramid);
+    assert_eq!(
+        renderer.slots(),
+        slots,
+        "the invalidation resized the atlas"
+    );
+    assert_eq!(
+        renderer.first_level(),
+        finest,
+        "the invalidation moved the level floor"
+    );
+    renderer
+        .draw(gpu.device(), gpu.queue(), frame(&view))
+        .expect("the invalidated frame draws");
+    let requests = next_demand(&gpu, &mut renderer).expect("the invalidated frame plans again");
+    assert!(
+        !requests.volume.is_empty(),
+        "the invalidated content stayed resident"
+    );
+    assert_eq!(
+        requests.view.resident, 0,
+        "the invalidated content still counts as resident"
+    );
+    let grid = BrickGrid::new(volume.extent());
+    let bricks = requests
+        .volume
+        .iter()
+        .map(|request| (*request, volume.brick(&grid, request.coord)))
+        .collect::<Vec<_>>();
+    renderer.upload(gpu.queue(), &bricks);
+    settle(&gpu, &mut renderer, &view, &volume);
+    let after = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    assert!(
+        difference(&before, &after) < 1.0,
+        "the restreamed content differs from the settled image"
+    );
+}
+
 #[test]
 fn keys_the_scene_by_its_render_versions() {
     let volume = two_channel_volume();
@@ -1850,10 +1967,12 @@ fn keys_the_scene_by_its_render_versions() {
     let selected = grana_engine::key(&scene);
     assert_ne!(selected, styled, "a selection kept the render state");
     scene.channels[1].opacity = 0.3;
-    assert_ne!(
-        grana_engine::key(&scene),
-        selected,
-        "a channel style kept the render state"
+    let restyled = grana_engine::key(&scene);
+    assert_ne!(restyled, selected, "a channel style kept the render state");
+    assert_eq!(
+        restyled.structure(),
+        selected.structure(),
+        "a channel style rebuilt the rendered scene"
     );
 }
 
