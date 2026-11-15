@@ -3147,3 +3147,37 @@ fn exports_tiles_that_match_the_preview() {
         "the tiles seam nothing against the single grid"
     );
 }
+
+#[test]
+fn keeps_dense_moving_tracks_whole() {
+    let frames = (0..24u32)
+        .map(|time| {
+            let offset = [0.7 * time as f32, 0.2 * time as f32];
+            let centroids = (0..240)
+                .map(|index| {
+                    [
+                        2.0 * (index % 16) as f32 + offset[0],
+                        2.0 * (index / 16) as f32 + offset[1],
+                        0.0,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            (centroids, 0.6)
+        })
+        .collect::<Vec<_>>();
+    let set = tracked(
+        &frames
+            .iter()
+            .map(|(centroids, radius)| (centroids.as_slice(), *radius))
+            .collect::<Vec<_>>(),
+        TrackParams::new(1.2, 1, events(false, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(set.len(), 240, "a gap never replaces a continuous step");
+    assert!(
+        (0..240).all(|track| set
+            .track(track)
+            .is_some_and(|track| track.nodes().len() == 24)),
+        "every dense track follows its object through the movie"
+    );
+}

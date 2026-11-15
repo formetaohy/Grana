@@ -51,10 +51,6 @@ impl Detections {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.detections.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.detections.is_empty()
     }

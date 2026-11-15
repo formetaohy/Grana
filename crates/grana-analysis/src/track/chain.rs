@@ -1,8 +1,5 @@
 use grana_object::Link;
 
-use super::detection::Detections;
-use super::link::Matching;
-
 pub(super) struct Chain {
     points: Vec<usize>,
     start: u32,
@@ -41,51 +38,42 @@ pub(super) struct Chains {
 }
 
 impl Chains {
-    pub fn build(detections: &Detections, matching: &Matching) -> Self {
-        let mut chains: Vec<Chain> = Vec::new();
-        let mut links = Vec::new();
-        for first in 0..detections.len() {
-            if matching.predecessor(first).is_some() {
-                continue;
-            }
-            let mut points = Vec::new();
-            let mut at = first;
-            let mut incoming = 0u8;
-            loop {
-                points.push(at);
-                match matching.successor(at) {
-                    Some(next) if detections.frame(next) == detections.frame(at) + 1 => {
-                        at = next;
-                    }
-                    next => {
-                        let outgoing = u8::from(next.is_some());
-                        let start = detections.frame(points[0]);
-                        let end = detections.frame(at);
-                        chains.push(Chain {
-                            points: std::mem::take(&mut points),
-                            start,
-                            end,
-                            incoming,
-                            outgoing,
-                        });
-                        if incoming == 1 {
-                            links.push((chains.len() - 2, chains.len() - 1, Link::Gap));
-                        }
-                        let Some(next) = next else {
-                            break;
-                        };
-                        at = next;
-                        incoming = 1;
-                    }
-                }
-            }
-        }
+    pub fn new() -> Self {
         Self {
-            stamps: vec![1; chains.len()],
-            chains,
-            links,
-            epoch: 1,
+            chains: Vec::new(),
+            links: Vec::new(),
+            stamps: Vec::new(),
+            epoch: 0,
         }
+    }
+
+    pub fn push(&mut self, point: usize, frame: u32) -> usize {
+        self.chains.push(Chain {
+            points: vec![point],
+            start: frame,
+            end: frame,
+            incoming: 0,
+            outgoing: 0,
+        });
+        self.epoch += 1;
+        self.stamps.push(self.epoch);
+        self.chains.len() - 1
+    }
+
+    pub fn extend(&mut self, index: usize, point: usize, frame: u32) {
+        let chain = &mut self.chains[index];
+        assert_eq!(
+            frame,
+            chain.end + 1,
+            "a contiguous extension advances one frame"
+        );
+        assert_eq!(
+            chain.outgoing, 0,
+            "a chain with a gap successor never extends"
+        );
+        chain.points.push(point);
+        chain.end = frame;
+        self.touch(index);
     }
 
     pub fn len(&self) -> usize {
@@ -145,6 +133,10 @@ impl Chains {
     }
 
     pub fn attach(&mut self, parent: usize, child: usize, kind: Link) {
+        assert!(
+            self.chains[child].start > self.chains[parent].end,
+            "a link leaves a parent before its child starts"
+        );
         self.chains[parent].outgoing += 1;
         self.chains[child].incoming += 1;
         self.links.push((parent, child, kind));

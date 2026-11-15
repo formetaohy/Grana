@@ -32,8 +32,7 @@ impl TrackLinker {
                     .expect("an empty track set is valid"),
             );
         }
-        let matching = link::link(&detections, self.params, cancel, progress)?;
-        let mut chains = chain::Chains::build(&detections, &matching);
+        let mut chains = link::link(&detections, self.params, cancel, progress)?;
         junction::attach(&mut chains, &detections, self.params, cancel, progress)?;
         Some(set::build(&chains, &detections, frame_interval))
     }
