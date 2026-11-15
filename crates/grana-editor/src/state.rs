@@ -313,8 +313,8 @@ impl Workspace {
         if let Some(scene) = view.scene {
             self.overlay.refresh(scene);
         }
-        match self.panel.unwrap_or(self.last_panel) {
-            Panel::Relations => {
+        match self.panel {
+            Some(Panel::Relations) => {
                 if let Some(scene) = view.scene {
                     crate::relation_panel::prepare(
                         scene,
@@ -326,7 +326,7 @@ impl Workspace {
                     );
                 }
             }
-            Panel::Batch => crate::batch_panel::prepare(
+            Some(Panel::Batch) => crate::batch_panel::prepare(
                 &mut self.batch_chart,
                 view,
                 crate::batch_panel::Filter {

@@ -88,7 +88,7 @@ pub struct IoView<'a> {
     pub loading: Option<&'a str>,
     pub document: Option<(&'a str, usize, usize)>,
     pub message: Option<&'a Message>,
-    pub project: Option<String>,
+    pub name: Option<String>,
     pub dirty: bool,
     pub pending: usize,
     pub frames: u32,

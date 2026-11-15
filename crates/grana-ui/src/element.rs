@@ -96,7 +96,6 @@ impl Size {
 pub enum Flow {
     Row,
     Column,
-    Stack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,13 +135,6 @@ impl Layout {
             flow: Flow::Row,
             size: Size::AUTO,
             ..Self::column()
-        }
-    }
-
-    pub fn stack() -> Self {
-        Self {
-            flow: Flow::Stack,
-            ..Self::row()
         }
     }
 }
@@ -673,6 +665,9 @@ impl<'a, A> Element<'a, A> {
         }
         if interaction.is_focusable() != node.interaction.is_focusable() {
             dirty = dirty.union(Dirty::FOCUS);
+        }
+        if interaction.is_interactive() != node.interaction.is_interactive() {
+            dirty.hits = true;
         }
         node.interaction = interaction;
         if node.background != background {

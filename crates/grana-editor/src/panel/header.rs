@@ -110,7 +110,7 @@ fn project_split<'a>(
     let project_font = theme.font(Level::Label);
     let project = state
         .io
-        .project
+        .name
         .as_deref()
         .unwrap_or(grana_i18n::common::untitled(ctx.language()))
         .to_string();

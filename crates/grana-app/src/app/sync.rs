@@ -93,7 +93,7 @@ impl App {
     pub(super) fn sync_title(&mut self) {
         let name = self
             .session
-            .project_name()
+            .document_name()
             .unwrap_or_else(|| grana_i18n::common::untitled(self.workspace.language).to_string());
         let title = if self.session.access().viewer() {
             format!(

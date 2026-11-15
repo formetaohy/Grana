@@ -781,6 +781,21 @@ impl Measure {
                 hash = mix(hash, u64::from(point[1].to_bits()));
             }
         }
+        if let Some(roi) = self.roi {
+            for value in roi
+                .center()
+                .to_array()
+                .into_iter()
+                .chain(roi.half().to_array())
+            {
+                hash = mix(hash, u64::from(value.to_bits()));
+            }
+            for axis in 0..3 {
+                for value in roi.axis(axis).to_array() {
+                    hash = mix(hash, u64::from(value.to_bits()));
+                }
+            }
+        }
         if let Some((column, descending)) = self.sort {
             hash = mix(hash, column as u64);
             hash = mix(hash, u64::from(u8::from(descending)));

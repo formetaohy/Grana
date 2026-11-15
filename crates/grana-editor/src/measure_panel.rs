@@ -636,11 +636,10 @@ fn filters<'a>(
             .key(Key::index("measure.filter.minimum", index))
             .on_drag_value(speed, move |value| {
                 let low = value.min(maximum);
-                let high = value.max(maximum);
-                if (low - minimum).abs() > f32::EPSILON || (high - maximum).abs() > f32::EPSILON {
+                if (low - minimum).abs() > f32::EPSILON {
                     Message::Command(Command::SetFilter {
                         index,
-                        filter: Filter::new(column_index, low, high),
+                        filter: Filter::new(column_index, low, maximum),
                     })
                 } else {
                     Message::Noop
@@ -649,12 +648,11 @@ fn filters<'a>(
         let maximum_value = grana_ui::widget::drag_value(&theme, maximum, 4)
             .key(Key::index("measure.filter.maximum", index))
             .on_drag_value(speed, move |value| {
-                let low = minimum.min(value);
-                let high = minimum.max(value);
-                if (low - minimum).abs() > f32::EPSILON || (high - maximum).abs() > f32::EPSILON {
+                let high = value.max(minimum);
+                if (high - maximum).abs() > f32::EPSILON {
                     Message::Command(Command::SetFilter {
                         index,
-                        filter: Filter::new(column_index, low, high),
+                        filter: Filter::new(column_index, minimum, high),
                     })
                 } else {
                     Message::Noop

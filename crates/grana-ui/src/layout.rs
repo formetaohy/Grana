@@ -20,11 +20,6 @@ impl Loose {
     pub const LOOSE: Self = Self { x: true, y: true };
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct Outcome {
-    pub geometry: bool,
-}
-
 pub struct LayoutEngine<'a> {
     pub text: &'a mut Text,
     pub theme: &'a crate::theme::Theme,
@@ -32,7 +27,7 @@ pub struct LayoutEngine<'a> {
 }
 
 impl LayoutEngine<'_> {
-    pub fn run<A>(&mut self, tree: &mut Tree<A>) -> Outcome {
+    pub fn run<A>(&mut self, tree: &mut Tree<A>) {
         let root = tree.root;
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
         {
@@ -51,16 +46,14 @@ impl LayoutEngine<'_> {
             self.measure(tree, child, self.screen, Loose::TIGHT);
         }
         let clip = Clip::new(screen, Corners::ZERO);
-        let mut outcome = Outcome::default();
         for index in 0..tree.nodes[root].children.len() {
             let child = tree.nodes[root].children[index];
             let size = tree.nodes[child].measured;
             let rect = tree.nodes[child]
                 .position
                 .unwrap_or_else(|| Rect::from_min_size(Vec2::ZERO, size));
-            outcome.geometry |= self.arrange(tree, child, rect, clip);
+            self.arrange(tree, child, rect, clip);
         }
-        outcome
     }
 
     fn measure<A>(&mut self, tree: &mut Tree<A>, id: NodeId, available: Vec2, loose: Loose) {
@@ -268,9 +261,7 @@ impl LayoutEngine<'_> {
                 continue;
             }
             let remaining = match layout.flow {
-                Flow::Column | Flow::Stack => {
-                    Vec2::new(inner.width(), (inner.max.y - cursor.y).max(0.0))
-                }
+                Flow::Column => Vec2::new(inner.width(), (inner.max.y - cursor.y).max(0.0)),
                 Flow::Row if layout.wrap => Vec2::new(inner.width(), inner.height()),
                 Flow::Row => Vec2::new((inner.max.x - cursor.x).max(0.0), inner.height()),
             };
@@ -287,7 +278,7 @@ impl LayoutEngine<'_> {
                 size = measure_and_layout(self, tree, child, remaining, child_loose);
             }
             match layout.flow {
-                Flow::Column | Flow::Stack => {
+                Flow::Column => {
                     fixed_main += size.y;
                     cursor.y += size.y + layout.gap;
                     cross = cross.max(size.x);
@@ -334,14 +325,14 @@ impl LayoutEngine<'_> {
                 };
                 self.measure(tree, child, target, tight);
                 match layout.flow {
-                    Flow::Column | Flow::Stack => cross = cross.max(tree.nodes[child].measured.x),
+                    Flow::Column => cross = cross.max(tree.nodes[child].measured.x),
                     Flow::Row => cross = cross.max(tree.nodes[child].measured.y),
                 }
             }
             main = fixed_main + free;
         }
         let content = match layout.flow {
-            Flow::Column | Flow::Stack => Vec2::new(cross, main),
+            Flow::Column => Vec2::new(cross, main),
             Flow::Row => Vec2::new(main, cross),
         };
         let measured = content + layout.padding.size();
@@ -383,7 +374,7 @@ impl LayoutEngine<'_> {
                         layout.size.height == Length::Auto
                             || (loose.y && layout.size.height == Length::Fill)
                     }
-                    Flow::Column | Flow::Stack => {
+                    Flow::Column => {
                         layout.size.width == Length::Auto
                             || (loose.x && layout.size.width == Length::Fill)
                     }
@@ -393,7 +384,7 @@ impl LayoutEngine<'_> {
                         layout.size.width == Length::Auto
                             || (loose.x && layout.size.width == Length::Fill)
                     }
-                    Flow::Column | Flow::Stack => {
+                    Flow::Column => {
                         layout.size.height == Length::Auto
                             || (loose.y && layout.size.height == Length::Fill)
                     }
@@ -410,15 +401,10 @@ impl LayoutEngine<'_> {
         node.auto_main = auto_main;
     }
 
-    fn arrange<A>(
-        &mut self,
-        tree: &mut Tree<A>,
-        id: NodeId,
-        rect: Rect,
-        parent_clip: Clip,
-    ) -> bool {
+    fn arrange<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, parent_clip: Clip) {
         if tree.nodes[id].popup_spec.is_some() {
-            return self.arrange_popup(tree, id);
+            self.arrange_popup(tree, id);
+            return;
         }
         let (layout, scroll_spec, background) = {
             let node = &tree.nodes[id];
@@ -432,7 +418,7 @@ impl LayoutEngine<'_> {
                 && node.rect == rect
                 && node.arranged_clip == parent_clip
             {
-                return false;
+                return;
             }
         }
         let corners = if layout.clip {
@@ -445,7 +431,6 @@ impl LayoutEngine<'_> {
         } else {
             parent_clip
         };
-        let mut geometry = false;
         let mut hit_change = false;
         let restored = !tree.nodes[id].visible;
         let moved = tree.nodes[id].rect != rect;
@@ -457,7 +442,6 @@ impl LayoutEngine<'_> {
                 || node.clip_corners != clip.corners
             {
                 node.paint_dirty = true;
-                geometry = true;
                 hit_change = true;
             }
             node.rect = rect;
@@ -479,16 +463,15 @@ impl LayoutEngine<'_> {
             tree.wake(id);
         }
         if scroll_spec.is_some() {
-            geometry |= self.arrange_scroll(tree, id, rect, clip);
-            return geometry;
+            self.arrange_scroll(tree, id, rect, clip);
+            return;
         }
         if matches!(tree.nodes[id].content, Content::Empty) {
-            geometry |= self.arrange_group(tree, id, rect, clip);
+            self.arrange_group(tree, id, rect, clip);
         }
-        geometry
     }
 
-    fn arrange_group<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) -> bool {
+    fn arrange_group<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
         let (layout, inner_provisional, content_main, content_cross, auto_cross, auto_main) = {
             let node = &tree.nodes[id];
             (
@@ -506,12 +489,12 @@ impl LayoutEngine<'_> {
         } else {
             match layout.flow {
                 Flow::Row => inner_provisional.y,
-                Flow::Column | Flow::Stack => inner_provisional.x,
+                Flow::Column => inner_provisional.x,
             }
         };
         let inner_main = match layout.flow {
             Flow::Row => inner_provisional.x,
-            Flow::Column | Flow::Stack => inner_provisional.y,
+            Flow::Column => inner_provisional.y,
         };
         let main_space = if auto_main || layout.wrap {
             0.0
@@ -532,20 +515,19 @@ impl LayoutEngine<'_> {
         let mut cursor = Vec2::ZERO;
         let mut line = 0.0f32;
         let mut line_height = 0.0f32;
-        let mut geometry = false;
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             if tree.nodes[child].popup_spec.is_some() {
-                geometry |= self.arrange_popup(tree, child);
+                self.arrange_popup(tree, child);
                 continue;
             }
             if let Some(position) = tree.nodes[child].position {
-                geometry |= self.arrange(tree, child, position, clip);
+                self.arrange(tree, child, position, clip);
                 continue;
             }
             let size = tree.nodes[child].measured;
             match layout.flow {
-                Flow::Column | Flow::Stack => {
+                Flow::Column => {
                     let x = inner_min.x + (cross_base - size.x) * align;
                     let y = inner_min.y + cursor.y + main_space * justify;
                     self.place(
@@ -586,7 +568,6 @@ impl LayoutEngine<'_> {
                 }
             }
         }
-        geometry
     }
 
     fn place<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
@@ -597,13 +578,7 @@ impl LayoutEngine<'_> {
         }
     }
 
-    fn arrange_scroll<A>(
-        &mut self,
-        tree: &mut Tree<A>,
-        id: NodeId,
-        rect: Rect,
-        clip: Clip,
-    ) -> bool {
+    fn arrange_scroll<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
         let spec = tree.nodes[id].scroll_spec.expect("the scroll is present");
         let offset = tree.nodes[id].scroll.map_or(0.0, |scroll| scroll.offset);
         let shift = match spec.axis {
@@ -616,7 +591,6 @@ impl LayoutEngine<'_> {
         };
         let window = rect.expand(CULL_MARGIN);
         let mut cursor = origin;
-        let mut geometry = false;
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
@@ -625,9 +599,9 @@ impl LayoutEngine<'_> {
                 |position| position.translate(shift),
             );
             if tree.nodes[child].popup_spec.is_some() {
-                geometry |= self.arrange_popup(tree, child);
+                self.arrange_popup(tree, child);
             } else if tree.nodes[child].position.is_some() || window.intersects(child_rect) {
-                geometry |= self.arrange(tree, child, child_rect, clip);
+                self.arrange(tree, child, child_rect, clip);
             } else {
                 hide(tree, child);
             }
@@ -636,21 +610,21 @@ impl LayoutEngine<'_> {
                 Axis::Row => cursor.x += size.x,
             }
         }
-        geometry
     }
 
-    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId) -> bool {
+    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId) {
         let spec = tree.nodes[id].popup_spec.expect("the popup is present");
         let open = tree.nodes[id].runtime.open;
         if !open {
-            let visible = tree.nodes[id].visible;
             hide(tree, id);
-            return visible;
+            return;
         }
-        let Some(anchor) = tree.node_at(spec.anchor) else {
-            let visible = tree.nodes[id].visible;
+        let Some(anchor) = tree
+            .node_at(spec.anchor)
+            .filter(|id| tree.nodes[*id].visible)
+        else {
             hide(tree, id);
-            return visible;
+            return;
         };
         let anchor_rect = tree.nodes[anchor].rect;
         let padding = tree.nodes[id].layout.padding;
@@ -677,7 +651,7 @@ impl LayoutEngine<'_> {
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
         let corners = Corners::all(self.theme.metrics.corner_lg);
         let clip = Clip::new(screen, Corners::ZERO).intersect(rect, corners);
-        let mut geometry = false;
+        let mut changed = false;
         let restored = !tree.nodes[id].visible;
         {
             let node = &mut tree.nodes[id];
@@ -687,7 +661,7 @@ impl LayoutEngine<'_> {
                 || node.clip_corners != clip.corners
             {
                 node.paint_dirty = true;
-                geometry = true;
+                changed = true;
             }
             node.rect = rect;
             node.clip = clip.rect;
@@ -698,7 +672,7 @@ impl LayoutEngine<'_> {
         if restored {
             tree.focus = true;
         }
-        if geometry {
+        if changed {
             tree.hits = true;
         }
         let mut cursor = rect.min + Vec2::new(padding.left, padding.top);
@@ -708,10 +682,9 @@ impl LayoutEngine<'_> {
             let rect = tree.nodes[child]
                 .position
                 .unwrap_or_else(|| Rect::from_min_size(cursor, size));
-            geometry |= self.arrange(tree, child, rect, clip);
+            self.arrange(tree, child, rect, clip);
             cursor.y += size.y + gap;
         }
-        geometry
     }
 }
 

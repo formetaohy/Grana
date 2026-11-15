@@ -362,6 +362,10 @@ impl<A: Clone> Ui<A> {
             self.run_layout();
             self.tree.layout = false;
         }
+        if self.tree.hits {
+            self.rebuild_hits();
+            self.tree.hits = false;
+        }
         self.update_tooltip();
         self.paint_overlays();
         self.paint_layers(&canvases);
@@ -373,12 +377,8 @@ impl<A: Clone> Ui<A> {
             theme: &self.theme,
             screen: self.size,
         };
-        let outcome = engine.run(&mut self.tree);
+        engine.run(&mut self.tree);
         self.update_scroll_metrics();
-        if outcome.geometry || self.tree.hits {
-            self.rebuild_hits();
-            self.tree.hits = false;
-        }
     }
 
     pub fn finish(&mut self) -> Option<Duration> {

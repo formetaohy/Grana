@@ -140,59 +140,59 @@ pub(super) fn appearance<'a>(
     let Some(set) = state.scene.objects.get(id) else {
         return Vec::new();
     };
-    let language = ctx.language();
-    let names = state
-        .scene
-        .dataset
-        .channels()
-        .iter()
-        .map(|channel| channel.name().to_string())
-        .collect::<Vec<_>>();
-    let mut metrics = vec![(
-        ObjectColor::Identity,
-        grana_i18n::object::label_color(language).to_string(),
-    )];
-    metrics.extend(set.colorable_measurements().into_iter().map(|measurement| {
-        (
-            ObjectColor::Measurement(measurement),
-            crate::text::column(language, &measurement.label(&names)),
-        )
-    }));
-    for relation in set.relations() {
-        let target = state.scene.objects.get(relation.target()).map_or_else(
-            || grana_i18n::object::target(language).to_string(),
-            |target| target.name().to_string(),
-        );
-        let shift = match relation.shift() {
-            0 => String::new(),
-            shift => format!(" · t{shift:+}"),
-        };
-        for field in RelationField::CONTINUOUS {
-            let metric = ObjectColor::Relation {
-                target: relation.target(),
-                field,
-                shift: relation.shift(),
-            };
-            let field_label = grana_i18n::measure::term(language, field.label())
-                .unwrap_or_else(|| field.label().to_string());
-            metrics.push((metric, format!("{target} · {field_label}{shift}")));
-        }
-    }
-    metrics.extend(child_metrics(language, state.scene, set, &names));
-    metrics.extend(coloc_metrics(language, set, &names));
-    if set.classifier().is_some() {
-        metrics.push((
-            ObjectColor::Score,
-            grana_i18n::object::classifier_score(language).to_string(),
-        ));
-    }
-    let extent = state.scene.object_extent(set);
-    let coloring = set.object_coloring().clone();
     let salt = format!("object.{}.coloring", id.raw());
     let key = Key::new(&salt);
     let open = state.workspace.disclosures.is_open(key);
     let mut children = Vec::new();
     if open {
+        let language = ctx.language();
+        let names = state
+            .scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.name().to_string())
+            .collect::<Vec<_>>();
+        let mut metrics = vec![(
+            ObjectColor::Identity,
+            grana_i18n::object::label_color(language).to_string(),
+        )];
+        metrics.extend(set.colorable_measurements().into_iter().map(|measurement| {
+            (
+                ObjectColor::Measurement(measurement),
+                crate::text::column(language, &measurement.label(&names)),
+            )
+        }));
+        for relation in set.relations() {
+            let target = state.scene.objects.get(relation.target()).map_or_else(
+                || grana_i18n::object::target(language).to_string(),
+                |target| target.name().to_string(),
+            );
+            let shift = match relation.shift() {
+                0 => String::new(),
+                shift => format!(" · t{shift:+}"),
+            };
+            for field in RelationField::CONTINUOUS {
+                let metric = ObjectColor::Relation {
+                    target: relation.target(),
+                    field,
+                    shift: relation.shift(),
+                };
+                let field_label = grana_i18n::measure::term(language, field.label())
+                    .unwrap_or_else(|| field.label().to_string());
+                metrics.push((metric, format!("{target} · {field_label}{shift}")));
+            }
+        }
+        metrics.extend(child_metrics(language, state.scene, set, &names));
+        metrics.extend(coloc_metrics(language, set, &names));
+        if set.classifier().is_some() {
+            metrics.push((
+                ObjectColor::Score,
+                grana_i18n::object::classifier_score(language).to_string(),
+            ));
+        }
+        let extent = state.scene.object_extent(set);
+        let coloring = set.object_coloring().clone();
         children.extend(crate::coloring::edit(
             ctx, &salt, id, &coloring, &metrics, extent, width,
         ));
@@ -200,7 +200,7 @@ pub(super) fn appearance<'a>(
     vec![crate::inspector::disclosure(
         ctx,
         &salt,
-        grana_i18n::object::coloring(language),
+        grana_i18n::object::coloring(ctx.language()),
         open,
         children,
     )]

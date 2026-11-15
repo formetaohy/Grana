@@ -73,10 +73,6 @@ impl Border {
         color: Color::TRANSPARENT,
     };
 
-    pub fn hairline(color: Color) -> Self {
-        Self { width: 1.0, color }
-    }
-
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
             width: self.width + (other.width - self.width) * t,

@@ -375,8 +375,15 @@ impl Session {
     pub fn message(&self) -> Option<&Message> {
         self.message.as_ref()
     }
-    pub fn project_name(&self) -> Option<String> {
-        self.project.as_ref().map(|path| file_name(path))
+    pub fn document_name(&self) -> Option<String> {
+        self.project
+            .as_ref()
+            .map(|path| file_name(path))
+            .or_else(|| {
+                self.scene
+                    .as_ref()
+                    .map(|scene| scene.dataset.name().to_string())
+            })
     }
     pub fn dirty(&self) -> bool {
         self.scene.is_some() && self.document_hash() != self.baseline
@@ -442,7 +449,7 @@ impl Session {
             loading: self.loading.as_deref(),
             document,
             message: self.message.as_ref(),
-            project: self.project_name(),
+            name: self.document_name(),
             dirty: self.dirty(),
             pending: self.in_flight.len(),
             frames,

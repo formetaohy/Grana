@@ -43,6 +43,10 @@ impl<A: Clone> Ui<A> {
             if self.tree.nodes[id].painted {
                 self.tree.nodes[id].painted = false;
                 self.layers[layer].rebuild = true;
+                let rect = self.tree.nodes[id].rect;
+                let erased = crate::paint::extent(&self.tree.nodes[id].paint.material)
+                    .map_or(rect, |held| held.union(rect));
+                self.damage.add(erased);
             }
             return;
         }

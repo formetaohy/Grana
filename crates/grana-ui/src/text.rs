@@ -90,6 +90,7 @@ struct Spec {
     weight: u32,
     stretch: u16,
     grade: i16,
+    tracking: i16,
     leading: u32,
     width: u32,
     pixels_per_point: u32,
@@ -176,6 +177,7 @@ impl Text {
             weight: (style.weight * 4.0).round() as u32,
             stretch: (style.width * 4.0).round() as u16,
             grade: (style.grade * 4.0).round() as i16,
+            tracking: (style.tracking * 64.0).round() as i16,
             leading: (style.leading * 4.0).round() as u32,
             width: (max_width.max(0.0) * 4.0).round() as u32,
             pixels_per_point: (self.pixels_per_point * 100.0).round() as u32,
@@ -251,7 +253,7 @@ impl Text {
                 let mut width = 0.0f32;
                 for run in runs {
                     let glyphs = self.fonts.shape(run.face, run.text, glyph_style, 1.0);
-                    width += glyphs.width;
+                    width += glyphs.width + style.tracking * glyphs.glyphs.len() as f32;
                     shaped.push((run.face as u16, glyphs));
                 }
                 if wrap && bounded && !whitespace && pen > 0.0 && pen + width > max_width + 0.01 {
@@ -280,15 +282,15 @@ impl Text {
                     break 'paragraphs;
                 }
                 for (face, run) in &shaped {
-                    for glyph in &run.glyphs {
+                    for (index, glyph) in run.glyphs.iter().enumerate() {
                         glyphs.push(PlacedGlyph {
                             face: *face,
                             id: glyph.id,
-                            x: pen + glyph.x,
+                            x: pen + glyph.x + style.tracking * index as f32,
                             baseline: 0.0,
                         });
                     }
-                    pen += run.width;
+                    pen += run.width + style.tracking * run.glyphs.len() as f32;
                 }
             }
             if !glyphs.is_empty() {
@@ -301,11 +303,7 @@ impl Text {
             lines.push((Vec::new(), 0.0));
         }
 
-        let mut widest = 0.0f32;
-        for (line, width) in &lines {
-            widest = widest.max(*width);
-            let _ = line;
-        }
+        let widest = lines.iter().map(|(_, width)| *width).fold(0.0f32, f32::max);
         let reference = if bounded { max_width } else { widest };
         let mut placed = Vec::new();
         for (index, (line, width)) in lines.iter().enumerate() {

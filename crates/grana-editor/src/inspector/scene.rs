@@ -22,7 +22,6 @@ pub(super) fn region<'a>(
         let world = state.scene.dataset.world_size();
         let half = 0.5 * world;
         let minimum = (0.001 * world.min_element()).max(1.0e-4);
-        let reach = world.length().max(minimum);
         children.push(
             grana_ui::widget::toggle_row(
                 &theme,
@@ -69,12 +68,13 @@ pub(super) fn region<'a>(
             let value = size[axis_idx];
             let readout = format!("{value:.2} µm");
             let label = grana_i18n::inspector::size(language, axis);
+            let bound = world.abs().dot(current.axis(axis_idx).abs()).max(minimum);
             children.push(
                 grana_ui::widget::slider_readout(
                     &theme,
                     Some(&label),
                     value,
-                    minimum..=2.0 * reach,
+                    minimum..=bound,
                     false,
                     &readout,
                 )
@@ -82,7 +82,7 @@ pub(super) fn region<'a>(
                 .on_slide(move |value| {
                     let mut region = current;
                     let mut extents = current.half();
-                    extents[axis_idx] = 0.5 * value.clamp(minimum, 2.0 * reach);
+                    extents[axis_idx] = 0.5 * value.clamp(minimum, bound);
                     region.set_half(extents);
                     Message::Command(Command::SetRegion(region))
                 }),
@@ -229,7 +229,8 @@ pub(super) fn drift<'a>(
                                 .named("drift.reference")
                                 .on_drag_value(0.2, move |value| {
                                     Message::Command(Command::SetDriftReference(
-                                        value.round().clamp(0.0, (frames - 1) as f32) as u32,
+                                        value.round().clamp(0.0, frames.saturating_sub(1) as f32)
+                                            as u32,
                                     ))
                                 });
                         let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
@@ -540,7 +541,7 @@ pub(super) fn mask<'a>(
         let readout = format!("{radius:.2} µm");
         children.push(view::slider_readout(
             ctx,
-            "mask.radius",
+            "mask.grow",
             Some(grana_i18n::inspector::grow_by(language)),
             radius,
             (0.0..=limit, false),

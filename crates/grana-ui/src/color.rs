@@ -107,16 +107,6 @@ impl Color {
         0.2126 * self.red + 0.7152 * self.green + 0.0722 * self.blue
     }
 
-    pub fn saturate(self, amount: f32) -> Self {
-        let luminance = self.luminance();
-        Self {
-            red: luminance + (self.red - luminance) * amount,
-            green: luminance + (self.green - luminance) * amount,
-            blue: luminance + (self.blue - luminance) * amount,
-            alpha: self.alpha,
-        }
-    }
-
     pub fn to_array(self) -> [f32; 4] {
         [self.red, self.green, self.blue, self.alpha]
     }

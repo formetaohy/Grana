@@ -300,7 +300,6 @@ impl<A> Tree<A> {
             current = self.nodes[node].parent;
         }
         self.layout = true;
-        self.hits = true;
     }
 
     pub fn invalidate_layout(&mut self, id: NodeId) {
@@ -317,7 +316,6 @@ impl<A> Tree<A> {
             current = self.nodes[node].parent;
         }
         self.layout = true;
-        self.hits = true;
     }
 
     pub fn node_at(&self, key: Key) -> Option<NodeId> {

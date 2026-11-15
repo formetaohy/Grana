@@ -30,13 +30,6 @@ impl Rect {
         }
     }
 
-    pub fn from_bounds(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self {
-            min: Vec2::new(left, top),
-            max: Vec2::new(right, bottom),
-        }
-    }
-
     pub fn width(self) -> f32 {
         self.max.x - self.min.x
     }
@@ -128,29 +121,6 @@ impl Rect {
 
     pub fn expand(self, amount: f32) -> Self {
         self.shrink(-amount)
-    }
-
-    pub fn with_height(self, height: f32) -> Self {
-        Self {
-            min: self.min,
-            max: Vec2::new(self.max.x, self.min.y + height),
-        }
-    }
-
-    pub fn with_width(self, width: f32) -> Self {
-        Self {
-            min: self.min,
-            max: Vec2::new(self.min.x + width, self.max.y),
-        }
-    }
-
-    pub fn clamp_to(self, bounds: Self) -> Self {
-        let size = self.size().min(bounds.size());
-        let min = self.min.max(bounds.min).min(bounds.max - size);
-        Self {
-            min,
-            max: min + size,
-        }
     }
 }
 

@@ -32,6 +32,7 @@ pub(super) fn transport<'a>(
     let frames = state.scene.frame_count();
     let playing = state.workspace.playback.playing;
     let language = ctx.language();
+    let previous = frame.checked_sub(1).unwrap_or(frames.saturating_sub(1));
     let back_element = crate::view::icon_button(
         ctx,
         "timeline.back",
@@ -39,7 +40,7 @@ pub(super) fn transport<'a>(
         30.0,
         Role::SurfaceHigh,
         grana_i18n::timeline::previous_frame(language),
-        Message::Command(Command::SetTime(frame.saturating_sub(1))),
+        Message::Command(Command::SetTime(previous)),
     )
     .shaped(Corners::split_leading(inner))
     .at(back);
