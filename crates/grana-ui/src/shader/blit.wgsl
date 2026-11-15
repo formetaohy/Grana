@@ -28,6 +28,11 @@ fn linear_to_srgb(channel: f32) -> f32 {
 }
 
 @fragment
+fn fs_clear(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0);
+}
+
+@fragment
 fn fs_present_encoded(in: VertexOut) -> @location(0) vec4<f32> {
     let color = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb;
     return vec4<f32>(

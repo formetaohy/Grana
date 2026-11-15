@@ -174,7 +174,8 @@ impl ScrollState {
     }
 
     pub fn settled(&self) -> bool {
-        !self.moving && self.bar < 0.01
+        let goal = if self.moving || self.hover { 1.0 } else { 0.0 };
+        !self.moving && (self.bar - goal).abs() < 0.01
     }
 }
 

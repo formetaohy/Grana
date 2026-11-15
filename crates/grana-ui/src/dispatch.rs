@@ -218,6 +218,9 @@ impl<A: Clone> Ui<A> {
     fn drag_scrollbar(&mut self) -> bool {
         let pointer = self.pointer;
         let primary = self.input.button(Button::Primary);
+        if primary.pressed {
+            self.scrollbar = None;
+        }
         if primary.pressed
             && let Some((node, bar, scroll)) = self.bar_at(pointer)
         {
@@ -237,7 +240,9 @@ impl<A: Clone> Ui<A> {
                 };
                 position.clamp(0.0, 1.0) * scroll.limit()
             };
-            self.scrollbar = Some((node, pointer, offset));
+            if primary.down {
+                self.scrollbar = Some((node, pointer, offset));
+            }
             self.press = None;
             self.drag = None;
             self.scroll_to(node, offset);
@@ -246,9 +251,11 @@ impl<A: Clone> Ui<A> {
         let Some((node, from, offset)) = self.scrollbar else {
             return false;
         };
-        if primary.down
-            && let Some(scroll) = self.tree.nodes[node].scroll
-        {
+        if !primary.down {
+            self.scrollbar = None;
+            return primary.released;
+        }
+        if let Some(scroll) = self.tree.nodes[node].scroll {
             let axis = self.tree.nodes[node].scroll_axis();
             let bar = crate::scroll::bar(self.tree.nodes[node].rect, axis, scroll);
             let delta = match axis {
@@ -263,10 +270,7 @@ impl<A: Clone> Ui<A> {
             };
             self.scroll_to(node, offset + delta * scale);
         }
-        if primary.released {
-            self.scrollbar = None;
-        }
-        self.scrollbar.is_some()
+        true
     }
 
     fn scroll_to(&mut self, node: NodeId, offset: f32) {
@@ -707,6 +711,18 @@ impl<A: Clone> Ui<A> {
             };
             if let Some(action) = action {
                 self.actions.push(action);
+            }
+            if commit
+                && self
+                    .input
+                    .keys()
+                    .iter()
+                    .any(|event| event.pressed && !event.repeat && event.key == Some(InputKey::Tab))
+            {
+                let forward = !self.input.modifiers().shift;
+                if self.advance_focus(forward) {
+                    self.focus_visible = true;
+                }
             }
         }
     }

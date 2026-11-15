@@ -141,11 +141,19 @@ pub(crate) struct Atlases<'a> {
     pub images: &'a ImageAtlas,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Damage {
+    None,
+    Rect([u32; 4]),
+    Full,
+}
+
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
     pub scene: Option<&'a TextureView>,
     pub scene_changed: bool,
     pub reset: bool,
+    pub damage: Damage,
     pub atlases: Atlases<'a>,
     pub content: &'a LayerBuffer,
     pub chrome: &'a LayerBuffer,
@@ -238,6 +246,7 @@ pub struct Renderer {
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
     downsample: RenderPipeline,
+    erase: RenderPipeline,
     ui: RenderPipeline,
     figure: RenderPipeline,
     ui_layout: BindGroupLayout,
@@ -346,6 +355,20 @@ impl Renderer {
             linear,
             pipelines,
         );
+        let erase_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.ui.erase.pipeline_layout"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let erase = fullscreen_pipeline(
+            device,
+            "grana.ui.erase",
+            &erase_layout,
+            &blit_shader,
+            "fs_clear",
+            linear,
+            pipelines,
+        );
         let ui = instance_pipeline(
             device,
             "grana.ui.instances",
@@ -392,6 +415,7 @@ impl Renderer {
             present_encoded,
             present_linear,
             downsample,
+            erase,
             ui,
             figure,
             ui_layout,
@@ -516,6 +540,7 @@ impl Renderer {
             scene,
             scene_changed,
             reset,
+            damage,
             atlases,
             content,
             chrome,
@@ -543,6 +568,16 @@ impl Renderer {
             || changed[Layer::Chrome.index()]
             || changed[Layer::Popup.index()]
             || changed[Layer::Hud.index()];
+        let damage = if reset || (scene_changed || reupload) && matches!(damage, Damage::None) {
+            Damage::Full
+        } else {
+            damage
+        };
+        let scissor = match damage {
+            Damage::None => None,
+            Damage::Full => Some(self.region()),
+            Damage::Rect(rect) => Some(self.clip(rect)),
+        };
         if reupload {
             for index in 0..SLOTS {
                 if !changed[index] {
@@ -557,8 +592,11 @@ impl Renderer {
                 self.revisions[index] = layers[index].revision;
             }
         }
-        if reupload || reset || scene_changed {
-            clear(encoder, &canvas_linear);
+        if let Some(scissor) = scissor {
+            match damage {
+                Damage::Full => clear(encoder, &canvas_linear),
+                _ => self.erase(encoder, &canvas_linear, scissor),
+            }
             self.paint_material(
                 encoder,
                 atlases,
@@ -570,6 +608,7 @@ impl Renderer {
                 },
                 &self.buffers.buffers[Layer::Content.index()].buffer,
                 content.material.len(),
+                Some(scissor),
             );
             if has_backdrop(&chrome.material) {
                 if content_refresh || !self.content_blur {
@@ -590,6 +629,7 @@ impl Renderer {
                 },
                 &self.buffers.buffers[Layer::Chrome.index()].buffer,
                 chrome.material.len(),
+                Some(scissor),
             );
             if has_backdrop(&popup.material) || has_backdrop(&hud.material) {
                 if interface_refresh || !self.interface_blur {
@@ -610,6 +650,7 @@ impl Renderer {
                 },
                 &self.buffers.buffers[Layer::Popup.index()].buffer,
                 popup.material.len(),
+                Some(scissor),
             );
             self.paint_material(
                 encoder,
@@ -622,6 +663,7 @@ impl Renderer {
                 },
                 &self.buffers.buffers[Layer::Hud.index()].buffer,
                 hud.material.len(),
+                Some(scissor),
             );
             self.paint_material(
                 encoder,
@@ -634,6 +676,7 @@ impl Renderer {
                 },
                 &self.buffers.buffers[OVERLAY_SLOT].buffer,
                 overlay.material.len(),
+                Some(scissor),
             );
         }
 
@@ -664,6 +707,37 @@ impl Renderer {
         );
     }
 
+    fn erase(&self, encoder: &mut CommandEncoder, target: &TextureView, scissor: [u32; 4]) {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.ui.erase.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: PassOperations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.erase);
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
+        pass.draw(0..3, 0..1);
+    }
+
+    fn region(&self) -> [u32; 4] {
+        [0, 0, self.size[0], self.size[1]]
+    }
+
+    fn clip(&self, rect: [u32; 4]) -> [u32; 4] {
+        let x = rect[0].min(self.size[0]);
+        let y = rect[1].min(self.size[1]);
+        let width = rect[2].min(self.size[0] - x);
+        let height = rect[3].min(self.size[1] - y);
+        [x, y, width, height]
+    }
+
     fn update_backdrop(&self, encoder: &mut CommandEncoder, source: &TextureView) {
         let Some(backdrop) = self.backdrop.as_ref() else {
             return;
@@ -692,6 +766,7 @@ impl Renderer {
         target: &PaintTarget<'_>,
         buffer: &Buffer,
         count: usize,
+        scissor: Option<[u32; 4]>,
     ) {
         if count == 0 {
             return;
@@ -718,6 +793,9 @@ impl Renderer {
         });
         pass.set_pipeline(&self.ui);
         pass.set_bind_group(0, &group, &[]);
+        if let Some(scissor) = scissor {
+            pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
+        }
         pass.draw(0..6, 0..count as u32);
     }
 

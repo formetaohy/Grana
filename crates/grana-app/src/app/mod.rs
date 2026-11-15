@@ -7,7 +7,7 @@ use glam::Vec2;
 
 use grana_display::Camera;
 use grana_editor::{Frame, Stage, Workspace};
-use grana_engine::{Engine, SAMPLE_LIMIT};
+use grana_engine::{Display, Engine, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_i18n::Language;
 use grana_scene::Revision;
@@ -41,6 +41,7 @@ const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+const INTERACTION_HOLD: Duration = Duration::from_millis(220);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
@@ -104,6 +105,7 @@ pub struct App {
     revision: Revision,
     language: Language,
     interacting: bool,
+    activity: Option<Instant>,
     animating: bool,
     chrome: window::Chrome,
     closing: bool,
@@ -164,6 +166,7 @@ impl App {
             revision: Revision::ZERO,
             language,
             interacting: false,
+            activity: None,
             animating: false,
             chrome: window::Chrome::new(),
             closing: false,
@@ -288,12 +291,19 @@ impl App {
         let mut delay = self.render(display).unwrap_or(Duration::MAX);
         if let Some(wait) = wait {
             delay = delay.min(wait);
-        } else if self.workspace.playback.playing {
+        }
+        if self.workspace.playback.playing {
             delay = delay.min(self.playback_delay());
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.session.scene().is_some() && self.converging() {
+        } else if display != Display::Interactive
+            && self.session.scene().is_some()
+            && self.converging()
+        {
             delay = Duration::ZERO;
+        }
+        if let Some(active) = self.activity_wait() {
+            delay = delay.min(active);
         }
         if !self.workspace.playback.playing && self.streaming() {
             delay = delay.min(STREAM_POLL);
@@ -341,6 +351,11 @@ impl App {
     pub(super) fn arm_pump(&mut self) {
         self.pump_at = (self.workspace.playback.playing && self.streaming())
             .then(|| Instant::now() + STREAM_POLL);
+    }
+
+    fn activity_wait(&self) -> Option<Duration> {
+        self.activity
+            .and_then(|at| INTERACTION_HOLD.checked_sub(at.elapsed()))
     }
 
     fn idle_delay(&self) -> Option<Duration> {

@@ -28,6 +28,10 @@ impl Key {
         Self(mix(self.0, hash(name.as_bytes())))
     }
 
+    pub fn with(self, value: u64) -> Self {
+        Self(mix(self.0, value))
+    }
+
     pub fn structural(index: usize) -> Self {
         Self(mix(0x9e37_79b9_7f4a_7c15, index as u64))
     }
@@ -662,8 +666,8 @@ impl<'a, A> Element<'a, A> {
             node.popup_spec = popup;
             dirty = dirty.union(Dirty::GEOMETRY);
         }
-        dirty = dirty.union(content.dirty_since(&node.content));
-        if !node.content.same(&content) {
+        if let Some(changed) = content.dirty_since(&node.content) {
+            dirty = dirty.union(changed);
             node.kind = content.kind();
             node.content = content;
         }

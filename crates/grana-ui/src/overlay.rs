@@ -136,6 +136,15 @@ impl<A: Clone> Ui<A> {
             }
         }
         if self.overlay.material != instances.material {
+            let held = crate::paint::extent(&self.overlay.material);
+            let fresh = crate::paint::extent(&instances.material);
+            let extent = match (held, fresh) {
+                (Some(held), Some(fresh)) => Some(held.union(fresh)),
+                (held, fresh) => held.or(fresh),
+            };
+            if let Some(extent) = extent {
+                self.damage.add(extent);
+            }
             self.overlay.assign(&instances.material);
         }
         self.scratch = instances;

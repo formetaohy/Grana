@@ -62,6 +62,7 @@ pub enum Event {
     Moved(Vec2),
     Down(Button),
     Up(Button),
+    Cancel,
     Leave,
     Wheel(Vec2),
     Modifiers(Modifiers),
@@ -165,6 +166,14 @@ impl Input {
                     let state = &mut self.buttons[button.index()];
                     state.down = false;
                     state.released = true;
+                }
+                Event::Cancel => {
+                    for state in &mut self.buttons {
+                        if state.down {
+                            state.down = false;
+                            state.released = true;
+                        }
+                    }
                 }
                 Event::Leave => self.inside = false,
                 Event::Wheel(delta) => self.wheel += delta,

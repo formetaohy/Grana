@@ -161,9 +161,13 @@ impl App {
             WindowEvent::Ime(Ime::Commit(text)) => {
                 input.push(UiEvent::Text(text.clone()));
             }
+            WindowEvent::Focused(false) => {
+                input.push(UiEvent::Cancel);
+            }
             _ => return,
         }
         self.interacting = true;
+        self.activity = Some(std::time::Instant::now());
         self.request_redraw();
     }
 }

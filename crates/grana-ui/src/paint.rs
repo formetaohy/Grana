@@ -79,43 +79,7 @@ impl Instance {
     }
 
     fn touches(&self, clip: crate::geometry::Rect) -> bool {
-        let (min, max) = match self.meta[0] {
-            KIND_SEGMENT => {
-                let width = 0.5 * self.extra[0].max(0.0);
-                let from = Vec2::new(self.rect[0], self.rect[1]);
-                let to = Vec2::new(self.rect[2], self.rect[3]);
-                (
-                    from.min(to) - Vec2::splat(width),
-                    from.max(to) + Vec2::splat(width),
-                )
-            }
-            KIND_RING => {
-                let center = Vec2::new(self.rect[0], self.rect[1]);
-                let radius = self.rect[2].max(0.0) + self.rect[3].max(0.0);
-                (center - Vec2::splat(radius), center + Vec2::splat(radius))
-            }
-            KIND_TRIANGLE => {
-                let a = Vec2::new(self.uv[0], self.uv[1]);
-                let b = Vec2::new(self.uv[2], self.uv[3]);
-                let c = Vec2::new(self.extra[0], self.extra[1]);
-                (a.min(b).min(c), a.max(b).max(c))
-            }
-            _ => {
-                let border = if (self.meta[1] & FLAG_BORDER) != 0 {
-                    self.extra[0].max(0.0)
-                } else {
-                    0.0
-                };
-                (
-                    Vec2::new(self.rect[0] - border, self.rect[1] - border),
-                    Vec2::new(
-                        self.rect[0] + self.rect[2] + border,
-                        self.rect[1] + self.rect[3] + border,
-                    ),
-                )
-            }
-        };
-        let bounds = crate::geometry::Rect::from_min_max(min, max);
+        let bounds = bounds(self);
         !bounds.is_empty() && bounds.intersects(clip)
     }
 }
@@ -689,6 +653,78 @@ pub fn corners_array(corners: Corners) -> [f32; 4] {
         corners.bottom_right,
         corners.bottom_left,
     ]
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Damage {
+    #[default]
+    None,
+    Rect(Rect),
+    Full,
+}
+
+impl Damage {
+    pub fn add(&mut self, rect: Rect) {
+        if rect.is_empty() {
+            return;
+        }
+        *self = match *self {
+            Self::None => Self::Rect(rect),
+            Self::Rect(held) => Self::Rect(held.union(rect)),
+            Self::Full => Self::Full,
+        };
+    }
+
+    pub fn full(&mut self) {
+        *self = Self::Full;
+    }
+}
+
+pub(crate) fn extent(instances: &[Instance]) -> Option<Rect> {
+    instances
+        .iter()
+        .map(bounds)
+        .reduce(|held, rect| held.union(rect))
+        .map(|rect| rect.expand(1.0))
+}
+
+fn bounds(instance: &Instance) -> Rect {
+    match instance.meta[0] {
+        KIND_SEGMENT => {
+            let width = 0.5 * instance.extra[0].max(0.0);
+            Rect::from_min_max(
+                Vec2::new(instance.rect[0], instance.rect[1])
+                    .min(Vec2::new(instance.rect[2], instance.rect[3]))
+                    - Vec2::splat(width),
+                Vec2::new(instance.rect[0], instance.rect[1])
+                    .max(Vec2::new(instance.rect[2], instance.rect[3]))
+                    + Vec2::splat(width),
+            )
+        }
+        KIND_RING => {
+            let center = Vec2::new(instance.rect[0], instance.rect[1]);
+            let radius = instance.rect[2].max(0.0) + instance.rect[3].max(0.0);
+            Rect::from_min_max(center - Vec2::splat(radius), center + Vec2::splat(radius))
+        }
+        KIND_TRIANGLE => {
+            let a = Vec2::new(instance.uv[0], instance.uv[1]);
+            let b = Vec2::new(instance.uv[2], instance.uv[3]);
+            let c = Vec2::new(instance.extra[0], instance.extra[1]);
+            Rect::from_min_max(a.min(b).min(c), a.max(b).max(c))
+        }
+        _ => {
+            let border = if (instance.meta[1] & FLAG_BORDER) != 0 {
+                instance.extra[0].max(0.0)
+            } else {
+                0.0
+            };
+            Rect::from_min_size(
+                Vec2::new(instance.rect[0], instance.rect[1]),
+                Vec2::new(instance.rect[2], instance.rect[3]),
+            )
+            .expand(border)
+        }
+    }
 }
 
 fn clipped(mut instance: Instance, clip: Clip) -> Instance {

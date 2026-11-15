@@ -116,18 +116,18 @@ impl Content {
         }
     }
 
-    pub(crate) fn dirty_since(&self, previous: &Self) -> crate::element::Dirty {
+    pub(crate) fn dirty_since(&self, previous: &Self) -> Option<crate::element::Dirty> {
         if self.same(previous) {
-            return crate::element::Dirty::NONE;
+            return None;
         }
-        crate::element::Dirty {
+        Some(crate::element::Dirty {
             geometry: true,
             paint: true,
             animate: true,
             hits: crate::widget::hit_changed(previous, self),
             fields: matches!(self, Self::Field(_)),
             ..crate::element::Dirty::NONE
-        }
+        })
     }
 }
 

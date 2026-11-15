@@ -40,6 +40,8 @@ pub struct Ui<A = ()> {
     pub(crate) layers: [LayerBuffer; Layer::ALL.len()],
     pub(crate) scratch: Instances,
     pub(crate) overlay: LayerBuffer,
+    pub(crate) damage: crate::paint::Damage,
+    pub(crate) scene_bounds: Rect,
     pub(crate) change: Change,
     pub(crate) scale: f32,
     pub(crate) size: Vec2,
@@ -93,6 +95,8 @@ impl<A: Clone> Ui<A> {
             layers: std::array::from_fn(|_| LayerBuffer::default()),
             scratch: Instances::default(),
             overlay: LayerBuffer::default(),
+            damage: crate::paint::Damage::None,
+            scene_bounds: Rect::ZERO,
             change: Change::default(),
             scale: 1.0,
             size: Vec2::ZERO,
@@ -398,6 +402,14 @@ impl<A: Clone> Ui<A> {
         target: &wgpu::TextureView,
         scene: Option<&wgpu::TextureView>,
     ) {
+        let mut damage = self.damage;
+        if self.change.scene {
+            damage.add(self.scene_bounds);
+        }
+        if self.change.reset {
+            damage.full();
+        }
+        let damage = paint_damage(damage, self.scale, self.size);
         {
             let Self {
                 renderer,
@@ -415,6 +427,7 @@ impl<A: Clone> Ui<A> {
                     scene,
                     scene_changed: change.scene,
                     reset: change.reset,
+                    damage,
                     atlases: crate::render::Atlases {
                         glyphs: text.atlas(),
                         images,
@@ -432,6 +445,7 @@ impl<A: Clone> Ui<A> {
         }
         self.change.scene = false;
         self.change.reset = false;
+        self.damage = crate::paint::Damage::None;
     }
 
     pub fn figure_instances(
@@ -488,6 +502,7 @@ impl<A: Clone> Ui<A> {
             theme: &self.theme,
             language: self.language,
             tree: &self.tree,
+            popups: &self.popup_anchors,
             animations: &mut self.animations,
             animating: &mut self.animating,
             size: self.size,
@@ -515,11 +530,32 @@ impl<A: Clone> Ui<A> {
     }
 }
 
+fn paint_damage(damage: crate::paint::Damage, scale: f32, size: Vec2) -> crate::render::Damage {
+    match damage {
+        crate::paint::Damage::None => crate::render::Damage::None,
+        crate::paint::Damage::Full => crate::render::Damage::Full,
+        crate::paint::Damage::Rect(rect) => {
+            let min = (rect.min * scale).floor().max(Vec2::ZERO);
+            let max = (rect.max * scale).ceil().min(size * scale);
+            if max.x - min.x < 1.0 || max.y - min.y < 1.0 {
+                return crate::render::Damage::None;
+            }
+            crate::render::Damage::Rect([
+                min.x as u32,
+                min.y as u32,
+                (max.x - min.x) as u32,
+                (max.y - min.y) as u32,
+            ])
+        }
+    }
+}
+
 pub struct BuildContext<'a, A> {
     text: &'a mut Text,
     theme: &'a Theme,
     language: Language,
     tree: &'a Tree<A>,
+    popups: &'a HashMap<Key, NodeId>,
     animations: &'a mut HashMap<u64, Animated>,
     animating: &'a mut bool,
     size: Vec2,
@@ -651,14 +687,9 @@ impl<A> BuildContext<'_, A> {
     }
 
     pub fn popup_open(&self, key: Key) -> bool {
-        self.popup_anchors_open(key)
-    }
-
-    fn popup_anchors_open(&self, key: Key) -> bool {
-        self.tree
-            .nodes
-            .values()
-            .any(|node| node.popup_spec.is_some_and(|spec| spec.anchor == key) && node.runtime.open)
+        self.popups
+            .get(&key)
+            .is_some_and(|id| self.tree.nodes[*id].runtime.open)
     }
 
     pub fn is_editing(&self, key: Key) -> bool {

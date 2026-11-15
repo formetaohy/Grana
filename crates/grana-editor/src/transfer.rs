@@ -4,6 +4,8 @@ use grana_ui::{Align, BuildContext, Color, Element, Icon, Length, Level, Role, T
 
 use crate::message::Message;
 
+const STOP_GAP: f32 = 0.002;
+
 pub fn edit<'a>(
     ctx: &mut BuildContext<'_, Message>,
     salt: &str,
@@ -43,11 +45,22 @@ pub fn edit<'a>(
         let text = format!("{:>6.0}", window.value(stop.position()));
         let caption = ctx.measure(&text, caption_style).x.ceil() + 2.0;
         let position_width = (width - caption - 116.0).max(40.0);
+        let low = if index == 0 {
+            0.0
+        } else {
+            stops[index - 1].position() + STOP_GAP
+        };
+        let high = if index + 1 == stops.len() {
+            1.0
+        } else {
+            stops[index + 1].position() - STOP_GAP
+        };
+        let (low, high) = (low.min(stop.position()), high.max(stop.position()));
         let moved = {
             let base = stops.clone();
             move |value: f32| {
                 let mut next = base.clone();
-                next[index].set_position(value);
+                next[index].set_position(value.clamp(low, high));
                 set(next)
             }
         };
@@ -95,7 +108,7 @@ pub fn edit<'a>(
                     &theme,
                     None,
                     stop.position(),
-                    0.0..=1.0,
+                    low..=high,
                     false,
                     Length::Fixed(position_width),
                 )

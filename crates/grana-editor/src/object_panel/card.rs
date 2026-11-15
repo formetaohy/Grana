@@ -38,10 +38,11 @@ pub(super) fn header_row<'a>(
     let expanded = state.workspace.expanded(id);
     let width = width();
     let language = ctx.language();
-    let name_key = Key::new(format!("object.{raw}.name"));
+    let base = Key::new("object").with(raw);
+    let name_key = base.then("name");
     let editing = ctx.is_editing(name_key) || state.workspace.renaming == Some(id);
     let arrow = ctx.animate(
-        Key::new(format!("object.{raw}.arrow")).id(),
+        base.then("arrow").id(),
         if expanded { 1.0 } else { 0.0 },
         Motion::spatial_fast(),
     );
@@ -83,7 +84,7 @@ pub(super) fn header_row<'a>(
             painter.rect(tile, Corners::all(10.0), tint.with_alpha(0.20));
             icon::paint(kind_icon(kind), painter, tile.center(), 15.0, tint, 1.6);
         })
-        .key(Key::new(format!("object.{raw}.header.icon")))
+        .key(base.then("header.icon"))
         .press(toggle());
     let text_width = width - 122.0;
     let text = if editing {
@@ -127,7 +128,7 @@ pub(super) fn header_row<'a>(
                     );
                 },
             )
-            .key(Key::new(format!("object.{raw}.header.text")))
+            .key(base.then("header.text"))
             .press(toggle())
     };
     let eye = view::icon_button(
@@ -146,9 +147,11 @@ pub(super) fn header_row<'a>(
             visible: !visible,
         }),
     );
+    let menu_name = format!("object.{raw}.menu");
+    let menu_key = Key::new(&menu_name);
     let menu_button = view::icon_button(
         ctx,
-        &format!("object.{raw}.menu"),
+        &menu_name,
         Icon::Ellipsis,
         26.0,
         Role::Standard,
@@ -179,12 +182,16 @@ pub(super) fn header_row<'a>(
                 1.6,
             );
         })
-        .key(Key::new(format!("object.{raw}.arrow.anchor")))
+        .key(base.then("arrow.anchor"))
         .press(toggle())
         .focus_ring(Corners::capsule())
         .cursor(grana_ui::Cursor::Pointing);
-    let rows = object_menu(ctx, state, id, position, sets);
-    let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 192.0, rows);
+    let rows = if ctx.popup_open(menu_key) {
+        object_menu(ctx, state, id, position, sets)
+    } else {
+        Vec::new()
+    };
+    let menu = view::menu(ctx, menu_key, 192.0, rows);
     let gap = grana_ui::canvas(Length::Fixed(4.0), 0.0).view_static(|_painter, _info| {});
     let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0).view_static(|_painter, _info| {});
     let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0).view_static(|_painter, _info| {});

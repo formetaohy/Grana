@@ -417,14 +417,12 @@ impl LayoutEngine<'_> {
         rect: Rect,
         parent_clip: Clip,
     ) -> bool {
-        let (layout, scroll_spec, popup_spec, background) = {
+        if tree.nodes[id].popup_spec.is_some() {
+            return self.arrange_popup(tree, id);
+        }
+        let (layout, scroll_spec, background) = {
             let node = &tree.nodes[id];
-            (
-                node.layout,
-                node.scroll_spec,
-                node.popup_spec,
-                node.background,
-            )
+            (node.layout, node.scroll_spec, node.background)
         };
         {
             let node = &tree.nodes[id];
@@ -480,21 +478,17 @@ impl LayoutEngine<'_> {
             tree.nodes[id].runtime.resnap = true;
             tree.wake(id);
         }
-        if popup_spec.is_some() {
-            self.arrange_popup(tree, id);
-            return geometry;
-        }
         if scroll_spec.is_some() {
-            self.arrange_scroll(tree, id, rect, clip);
+            geometry |= self.arrange_scroll(tree, id, rect, clip);
             return geometry;
         }
         if matches!(tree.nodes[id].content, Content::Empty) {
-            self.arrange_group(tree, id, rect, clip);
+            geometry |= self.arrange_group(tree, id, rect, clip);
         }
         geometry
     }
 
-    fn arrange_group<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
+    fn arrange_group<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) -> bool {
         let (layout, inner_provisional, content_main, content_cross, auto_cross, auto_main) = {
             let node = &tree.nodes[id];
             (
@@ -538,14 +532,15 @@ impl LayoutEngine<'_> {
         let mut cursor = Vec2::ZERO;
         let mut line = 0.0f32;
         let mut line_height = 0.0f32;
+        let mut geometry = false;
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
-            if tree.nodes[child].position.is_some() || tree.nodes[child].popup_spec.is_some() {
-                let size = tree.nodes[child].measured;
-                let overlay = tree.nodes[child]
-                    .position
-                    .unwrap_or_else(|| Rect::from_min_size(Vec2::ZERO, size));
-                self.arrange(tree, child, overlay, clip);
+            if tree.nodes[child].popup_spec.is_some() {
+                geometry |= self.arrange_popup(tree, child);
+                continue;
+            }
+            if let Some(position) = tree.nodes[child].position {
+                geometry |= self.arrange(tree, child, position, clip);
                 continue;
             }
             let size = tree.nodes[child].measured;
@@ -591,6 +586,7 @@ impl LayoutEngine<'_> {
                 }
             }
         }
+        geometry
     }
 
     fn place<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
@@ -601,7 +597,13 @@ impl LayoutEngine<'_> {
         }
     }
 
-    fn arrange_scroll<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
+    fn arrange_scroll<A>(
+        &mut self,
+        tree: &mut Tree<A>,
+        id: NodeId,
+        rect: Rect,
+        clip: Clip,
+    ) -> bool {
         let spec = tree.nodes[id].scroll_spec.expect("the scroll is present");
         let offset = tree.nodes[id].scroll.map_or(0.0, |scroll| scroll.offset);
         let shift = match spec.axis {
@@ -614,6 +616,7 @@ impl LayoutEngine<'_> {
         };
         let window = rect.expand(CULL_MARGIN);
         let mut cursor = origin;
+        let mut geometry = false;
         for index in 0..tree.nodes[id].children.len() {
             let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
@@ -621,8 +624,10 @@ impl LayoutEngine<'_> {
                 || Rect::from_min_size(cursor, size),
                 |position| position.translate(shift),
             );
-            if tree.nodes[child].position.is_some() || window.intersects(child_rect) {
-                self.arrange(tree, child, child_rect, clip);
+            if tree.nodes[child].popup_spec.is_some() {
+                geometry |= self.arrange_popup(tree, child);
+            } else if tree.nodes[child].position.is_some() || window.intersects(child_rect) {
+                geometry |= self.arrange(tree, child, child_rect, clip);
             } else {
                 hide(tree, child);
             }
@@ -631,18 +636,21 @@ impl LayoutEngine<'_> {
                 Axis::Row => cursor.x += size.x,
             }
         }
+        geometry
     }
 
-    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId) {
+    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId) -> bool {
         let spec = tree.nodes[id].popup_spec.expect("the popup is present");
         let open = tree.nodes[id].runtime.open;
         if !open {
+            let visible = tree.nodes[id].visible;
             hide(tree, id);
-            return;
+            return visible;
         }
         let Some(anchor) = tree.node_at(spec.anchor) else {
+            let visible = tree.nodes[id].visible;
             hide(tree, id);
-            return;
+            return visible;
         };
         let anchor_rect = tree.nodes[anchor].rect;
         let padding = tree.nodes[id].layout.padding;
@@ -669,16 +677,29 @@ impl LayoutEngine<'_> {
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
         let corners = Corners::all(self.theme.metrics.corner_lg);
         let clip = Clip::new(screen, Corners::ZERO).intersect(rect, corners);
+        let mut geometry = false;
+        let restored = !tree.nodes[id].visible;
         {
             let node = &mut tree.nodes[id];
-            if node.rect != rect || node.clip != clip.rect || node.clip_corners != clip.corners {
+            if restored
+                || node.rect != rect
+                || node.clip != clip.rect
+                || node.clip_corners != clip.corners
+            {
                 node.paint_dirty = true;
+                geometry = true;
             }
             node.rect = rect;
             node.clip = clip.rect;
             node.clip_corners = clip.corners;
             node.visible = true;
             node.measured = rect.size();
+        }
+        if restored {
+            tree.focus = true;
+        }
+        if geometry {
+            tree.hits = true;
         }
         let mut cursor = rect.min + Vec2::new(padding.left, padding.top);
         for index in 0..tree.nodes[id].children.len() {
@@ -687,9 +708,10 @@ impl LayoutEngine<'_> {
             let rect = tree.nodes[child]
                 .position
                 .unwrap_or_else(|| Rect::from_min_size(cursor, size));
-            self.arrange(tree, child, rect, clip);
+            geometry |= self.arrange(tree, child, rect, clip);
             cursor.y += size.y + gap;
         }
+        geometry
     }
 }
 

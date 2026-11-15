@@ -83,6 +83,9 @@ impl<A: Clone> Ui<A> {
             if !node.visible || node.rect.is_empty() || node.layer == Layer::Content {
                 continue;
             }
+            if node.layer == Layer::Hud && !node.blocks_pointer {
+                continue;
+            }
             let surface_visible = node
                 .background
                 .is_some_and(|surface| surface.fill.is_visible() || surface.backdrop > 0.0);

@@ -18,6 +18,7 @@ impl<A: Clone> Ui<A> {
             for layer in &mut self.layers {
                 layer.rebuild = true;
             }
+            self.damage.full();
         }
         let root = self.tree.root;
         self.paint_node(root, canvases);
@@ -55,7 +56,9 @@ impl<A: Clone> Ui<A> {
         let live = self.tree.nodes[id].canvas == CanvasKind::Live;
         let repaint = !culled && (self.tree.nodes[id].paint_dirty || moved || live);
         if repaint {
-            self.repaint(id, canvases);
+            if let Some(extent) = self.repaint(id, canvases) {
+                self.damage.add(extent);
+            }
             self.tree.nodes[id].pointer_seen = self.pointer;
         }
         #[cfg(debug_assertions)]
@@ -75,6 +78,11 @@ impl<A: Clone> Ui<A> {
         if included != self.tree.nodes[id].painted {
             self.tree.nodes[id].painted = included;
             self.layers[layer].rebuild = true;
+            let painted = crate::paint::extent(&self.tree.nodes[id].paint.material)
+                .map_or(self.tree.nodes[id].rect, |held| {
+                    held.union(self.tree.nodes[id].rect)
+                });
+            self.damage.add(painted);
         }
         if included
             && !self.layers[layer].rebuild
@@ -96,10 +104,23 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    fn repaint<'a>(&mut self, id: NodeId, canvases: &SecondaryMap<NodeId, CanvasPaint<'a>>) {
+    fn repaint<'a>(
+        &mut self,
+        id: NodeId,
+        canvases: &SecondaryMap<NodeId, CanvasPaint<'a>>,
+    ) -> Option<Rect> {
         let previous = std::mem::take(&mut self.tree.nodes[id].paint);
         let mut fresh = std::mem::take(&mut self.scratch);
         self.paint_into(id, canvases, &mut fresh);
+        let extent = match (
+            crate::paint::extent(&previous.material),
+            crate::paint::extent(&fresh.material),
+        ) {
+            (Some(held), Some(fresh)) => Some(held.union(fresh)),
+            (Some(held), None) => Some(held),
+            (None, Some(fresh)) => Some(fresh),
+            (None, None) => None,
+        };
         if previous.material == fresh.material {
             self.tree.nodes[id].paint = previous;
             self.scratch = fresh;
@@ -109,6 +130,7 @@ impl<A: Clone> Ui<A> {
             self.scratch = previous;
         }
         self.tree.nodes[id].paint_dirty = false;
+        extent
     }
 
     #[cfg(debug_assertions)]
@@ -206,6 +228,19 @@ impl<A: Clone> Ui<A> {
                     inside: rect.contains(self.pointer),
                 };
                 paint(&mut painter, info);
+            }
+        }
+        for instance in &instances.material {
+            if instance.meta[0] == crate::paint::KIND_SCENE {
+                let rect = Rect::from_min_size(
+                    Vec2::new(instance.rect[0], instance.rect[1]),
+                    Vec2::new(instance.rect[2], instance.rect[3]),
+                );
+                self.scene_bounds = if self.scene_bounds.is_empty() {
+                    rect
+                } else {
+                    self.scene_bounds.union(rect)
+                };
             }
         }
     }
