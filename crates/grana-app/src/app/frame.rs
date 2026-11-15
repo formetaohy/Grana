@@ -4,7 +4,7 @@ use grana_engine::{Display, SAMPLE_LIMIT, Viewport};
 use grana_render::FrameInfo;
 
 use super::App;
-use crate::stream::View as StreamView;
+use crate::stream::{Stream, View as StreamView};
 impl App {
     pub(super) fn exchange_bricks(&mut self) {
         let replaced = self.session.replaced() != self.replaced;
@@ -15,14 +15,16 @@ impl App {
             self.sync_dataset(replaced);
             if replaced {
                 self.needs_fit = true;
+                self.camera_touched = false;
                 self.workspace.reset_document();
                 self.mask_path.clear();
-                self.pick_toggle = false;
+                self.pick_toggle = None;
                 self.plate = None;
                 self.autosave_at = None;
                 self.changed_at = None;
                 self.last_advance = None;
                 self.last_animation = None;
+                self.stream = Stream::new();
             }
         }
         let App {

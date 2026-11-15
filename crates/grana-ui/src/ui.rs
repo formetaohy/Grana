@@ -73,7 +73,6 @@ pub struct Ui<A = ()> {
     pub(crate) preedit: Option<String>,
     pub(crate) animation: Vec<NodeId>,
     pub(crate) scrolling: Vec<NodeId>,
-    pub(crate) scrollers: Vec<NodeId>,
     pub(crate) scrollbar: Option<(NodeId, Vec2, f32)>,
 }
 
@@ -129,7 +128,6 @@ impl<A: Clone> Ui<A> {
             preedit: None,
             animation: Vec::new(),
             scrolling: Vec::new(),
-            scrollers: Vec::new(),
             scrollbar: None,
         }
     }

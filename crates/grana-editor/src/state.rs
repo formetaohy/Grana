@@ -366,8 +366,10 @@ impl Workspace {
         self.track_set = None;
         self.seed = None;
         self.mask = None;
+        self.annotation_tool = None;
         self.annotation_pending = None;
         self.annotation_drag = None;
+        self.remote_open = false;
         self.renaming = None;
         self.expanded.clear();
         self.classifier.clear();

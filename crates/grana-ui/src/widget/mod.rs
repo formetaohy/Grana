@@ -246,7 +246,7 @@ pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut 
             animating = true;
         }
     }
-    if matches!(node.content, Content::Spinner(_) | Content::Progress(_)) {
+    if matches!(node.content, Content::Spinner(_)) {
         node.paint_dirty = true;
         animating = true;
     }
@@ -322,19 +322,4 @@ pub(crate) fn cursor(content: &Content) -> Option<Cursor> {
 
 pub(crate) fn padding(theme: &Theme) -> f32 {
     (theme.metrics.control_height * 0.44).round()
-}
-
-pub(crate) fn hit_changed(before: &Content, after: &Content) -> bool {
-    hit_geometry(before) != hit_geometry(after)
-}
-
-fn hit_geometry(content: &Content) -> Option<(Option<&str>, bool, crate::element::Length)> {
-    match content {
-        Content::Slider(slider) => Some((
-            slider.label.as_deref(),
-            slider.readout.is_some(),
-            slider.width,
-        )),
-        _ => None,
-    }
 }

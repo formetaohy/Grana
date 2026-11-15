@@ -24,6 +24,7 @@ mod scene_import;
 mod seed;
 mod stitch;
 mod tasks;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -120,6 +121,7 @@ pub struct Session {
     message: Option<Message>,
     project: Option<PathBuf>,
     baseline: Option<u64>,
+    hash: Cell<Option<(Revision, u64)>>,
     deferred: bool,
     recovery: Recovery,
     restore: Option<Restore>,
@@ -210,6 +212,7 @@ impl Session {
             message: None,
             project: None,
             baseline: None,
+            hash: Cell::new(None),
             deferred: false,
             recovery: Recovery::default(),
             restore: None,
@@ -386,7 +389,20 @@ impl Session {
             })
     }
     pub fn dirty(&self) -> bool {
-        self.scene.is_some() && self.document_hash() != self.baseline
+        if self.scene.is_none() {
+            return false;
+        }
+        let hash = match self.hash.get() {
+            Some((revision, hash)) if revision == self.revision => hash,
+            _ => {
+                let hash = self
+                    .document_hash()
+                    .expect("a loaded document hashes its content");
+                self.hash.set(Some((self.revision, hash)));
+                hash
+            }
+        };
+        self.baseline != Some(hash)
     }
     pub fn history(&self) -> HistoryView {
         HistoryView {

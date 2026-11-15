@@ -130,5 +130,7 @@ impl<A: Clone> Ui<A> {
             self.hovered_since = None;
             self.tooltip = None;
         }
+        self.tree.scrolls.retain(|id| !gone.contains(id));
+        self.scrolling.retain(|id| !gone.contains(id));
     }
 }

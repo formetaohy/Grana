@@ -96,6 +96,7 @@ pub struct Input {
     wheel: Vec2,
     buttons: [ButtonState; 3],
     modifiers: Modifiers,
+    cancelled: bool,
     events: Vec<Event>,
     keys: Vec<KeyEvent>,
     texts: Vec<String>,
@@ -115,6 +116,7 @@ impl Input {
             wheel: Vec2::ZERO,
             buttons: [ButtonState::default(); 3],
             modifiers: Modifiers::default(),
+            cancelled: false,
             events: Vec::new(),
             keys: Vec::new(),
             texts: Vec::new(),
@@ -142,6 +144,7 @@ impl Input {
         self.elapsed = elapsed;
         self.delta = Vec2::ZERO;
         self.wheel = Vec2::ZERO;
+        self.cancelled = false;
         self.keys.clear();
         self.texts.clear();
         for button in self.buttons.iter_mut() {
@@ -168,11 +171,9 @@ impl Input {
                     state.released = true;
                 }
                 Event::Cancel => {
+                    self.cancelled = true;
                     for state in &mut self.buttons {
-                        if state.down {
-                            state.down = false;
-                            state.released = true;
-                        }
+                        state.down = false;
                     }
                 }
                 Event::Leave => self.inside = false,
@@ -208,6 +209,10 @@ impl Input {
 
     pub fn wheel(&self) -> Vec2 {
         self.wheel
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancelled
     }
 
     pub fn button(&self, button: Button) -> ButtonState {

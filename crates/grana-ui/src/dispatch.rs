@@ -9,6 +9,12 @@ use crate::ui::Ui;
 
 impl<A: Clone> Ui<A> {
     pub(crate) fn dispatch(&mut self) {
+        if self.input.cancelled() {
+            self.press = None;
+            self.drag = None;
+            self.edit_drag = false;
+            self.scrollbar = None;
+        }
         self.hover_scrollbars();
         if self.drag_scrollbar() {
             self.wheel();
@@ -70,7 +76,7 @@ impl<A: Clone> Ui<A> {
             self.drag = None;
             self.focus_visible = false;
             self.dismiss_popups();
-        } else if primary.down && self.edit_drag {
+        } else if primary.down && self.edit_drag && self.input.delta() != Vec2::ZERO {
             self.edit_drag_to(pointer);
         }
         if primary.down
@@ -84,6 +90,7 @@ impl<A: Clone> Ui<A> {
         self.drag_values();
         self.drag_gesture();
         if primary.down
+            && (primary.pressed || self.input.delta() != Vec2::ZERO)
             && let Some(press) = self.press
         {
             self.pointer_events(
@@ -175,7 +182,8 @@ impl<A: Clone> Ui<A> {
         &self,
         pointer: Vec2,
     ) -> Option<(NodeId, crate::scroll::Bar, crate::scroll::ScrollState)> {
-        self.scrollers
+        self.tree
+            .scrolls
             .iter()
             .filter_map(|id| {
                 let node = self.tree.nodes.get(*id)?;
@@ -202,7 +210,7 @@ impl<A: Clone> Ui<A> {
         let pointer = self.pointer;
         let hovered = self.bar_at(pointer).map(|(id, _, _)| id);
         let mut wake = Vec::new();
-        for id in &self.scrollers {
+        for id in &self.tree.scrolls {
             let Some(node) = self.tree.nodes.get_mut(*id) else {
                 continue;
             };

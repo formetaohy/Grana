@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use slotmap::SlotMap;
 
-use crate::element::{CanvasKind, CanvasPaint, ContentKind, Dirty, Element, Key, Layer};
+use crate::element::{CanvasKind, CanvasPaint, Content, ContentKind, Dirty, Element, Key, Layer};
 use crate::node::{Node, NodeId};
 
 pub struct Tree<A> {
@@ -16,6 +16,8 @@ pub struct Tree<A> {
     pub popups: bool,
     pub hits: bool,
     pub activated: Vec<NodeId>,
+    pub removed_damage: Option<crate::geometry::Rect>,
+    pub scrolls: Vec<NodeId>,
     created: Vec<(Key, NodeId)>,
     #[cfg(debug_assertions)]
     seen: HashSet<Key>,
@@ -42,6 +44,8 @@ impl<A> Tree<A> {
             popups: false,
             hits: false,
             activated: Vec::new(),
+            removed_damage: None,
+            scrolls: Vec::new(),
             created: Vec::new(),
             #[cfg(debug_assertions)]
             seen: HashSet::new(),
@@ -140,16 +144,26 @@ impl<A> Tree<A> {
                     None => {
                         self.structure = true;
                         self.focus = true;
-                        self.fields = true;
-                        self.popups = true;
                         self.hits = true;
                         let mut element = element;
+                        let fields = matches!(element.content, Content::Field(_));
+                        let popups = element.popup.is_some();
+                        let scroll = element.scroll.is_some();
                         let children = std::mem::take(&mut element.children);
                         let canvas = element.canvas.take();
                         let parent_layer = self.nodes[parent].layer;
                         let mut node = element.into_node(key, parent_layer);
                         node.parent = Some(parent);
                         let id = self.nodes.insert(node);
+                        if fields {
+                            self.fields = true;
+                        }
+                        if popups {
+                            self.popups = true;
+                        }
+                        if scroll {
+                            self.scrolls.push(id);
+                        }
                         if let Some(canvas) = canvas {
                             canvases.insert(id, canvas.paint);
                         }
@@ -201,6 +215,9 @@ impl<A> Tree<A> {
         }
         if patch.geometry {
             self.dirty_layout(id);
+            if self.nodes[id].scroll_spec.is_some() && !self.scrolls.contains(&id) {
+                self.scrolls.push(id);
+            }
         }
         if patch.paint {
             self.nodes[id].paint_dirty = true;
@@ -274,6 +291,15 @@ impl<A> Tree<A> {
         let children = std::mem::take(&mut self.nodes[id].children);
         for child in children {
             self.remove(child, removed);
+        }
+        let node = &self.nodes[id];
+        if node.painted {
+            let erased = crate::paint::extent(&node.paint.material)
+                .map_or(node.rect, |held| held.union(node.rect));
+            self.removed_damage = Some(
+                self.removed_damage
+                    .map_or(erased, |held| held.union(erased)),
+            );
         }
         let key = self.nodes[id].key;
         if self.anchors.get(&key) == Some(&id) {

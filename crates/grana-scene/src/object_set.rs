@@ -127,6 +127,7 @@ pub struct ObjectSet {
     labels: bool,
     label: Option<ObjectColor>,
     hidden: Vec<Vec<bool>>,
+    hidden_total: usize,
     opacity: f32,
     material: Material,
     voxel: f32,
@@ -182,6 +183,7 @@ impl ObjectSet {
             labels: false,
             label: None,
             hidden: Vec::new(),
+            hidden_total: 0,
             opacity: 1.0,
             material: Material::DEFAULT,
             voxel,
@@ -732,10 +734,7 @@ impl ObjectSet {
     }
 
     pub fn hidden_count(&self) -> usize {
-        self.hidden
-            .iter()
-            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
-            .sum()
+        self.hidden_total
     }
 
     pub(crate) fn set_hidden(
@@ -773,13 +772,16 @@ impl ObjectSet {
         }
         let mask = &mut self.hidden[time as usize];
         let mut changed = false;
+        let mut delta = 0isize;
         for object in objects {
             if *object >= count || mask[*object] == hidden {
                 continue;
             }
             mask[*object] = hidden;
+            delta += if hidden { 1 } else { -1 };
             changed = true;
         }
+        self.hidden_total = self.hidden_total.saturating_add_signed(delta);
         if changed {
             self.shape = stamp;
             self.document = self.document.next();
@@ -812,6 +814,7 @@ impl ObjectSet {
             return false;
         }
         self.hidden.clear();
+        self.hidden_total = 0;
         self.curation.clear_hidden();
         self.shape = stamp;
         self.document = self.document.next();
@@ -821,6 +824,7 @@ impl ObjectSet {
     pub(crate) fn restore_hidden(&mut self, hidden: Vec<Vec<bool>>) {
         if hidden.is_empty() {
             self.hidden = hidden;
+            self.hidden_total = 0;
             return;
         }
         assert_eq!(
@@ -835,6 +839,10 @@ impl ObjectSet {
                 "the hidden objects cover every object of a frame"
             );
         }
+        self.hidden_total = hidden
+            .iter()
+            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
+            .sum();
         self.hidden = hidden;
     }
 
@@ -1260,6 +1268,7 @@ impl ObjectSet {
             labels,
             label,
             hidden: Vec::new(),
+            hidden_total: 0,
             opacity,
             material,
             voxel: dataset.voxel_size().min_element(),
@@ -1999,6 +2008,7 @@ impl ObjectSet {
             labels: self.labels,
             label,
             hidden: self.hidden.clone(),
+            hidden_total: self.hidden_total,
             opacity: self.opacity,
             material: self.material,
             voxel: self.voxel,
@@ -2140,6 +2150,10 @@ impl ObjectSet {
         }
         let seeds = self.seeds.clone();
         let hidden = self.combined_hidden(other, &offsets, &frames);
+        let hidden_total = hidden
+            .iter()
+            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
+            .sum();
         let label = self
             .label
             .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
@@ -2155,6 +2169,7 @@ impl ObjectSet {
             labels: self.labels,
             label,
             hidden,
+            hidden_total,
             opacity: self.opacity,
             material: self.material,
             voxel: self.voxel,

@@ -519,7 +519,19 @@ fn lineage<'a>(
     let revision = object.revision().raw();
     let background = grana_ui::canvas(Length::Fill, rect.height())
         .view(
-            (time, hovered, lane_count, frames, offset.to_bits()),
+            (
+                time,
+                hovered,
+                hovered_index,
+                lane_count,
+                frames,
+                offset.to_bits(),
+                pointer.x.to_bits(),
+                source,
+                divide,
+                merge,
+                reparent,
+            ),
             move |_, painter, info| {
                 let rect = info.rect;
                 painter.rect(

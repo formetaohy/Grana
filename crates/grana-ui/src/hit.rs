@@ -23,27 +23,11 @@ pub(crate) fn collect<A>(
     text: &mut Text,
     theme: &Theme,
 ) {
-    collect_with_window(tree, id, hits, text, theme, None);
-}
-
-fn collect_with_window<A>(
-    tree: &Tree<A>,
-    id: NodeId,
-    hits: &mut Vec<Hit>,
-    text: &mut Text,
-    theme: &Theme,
-    window: Option<Rect>,
-) {
     let node = &tree.nodes[id];
     if !node.visible {
         return;
     }
-    let window = if node.popup_spec.is_some() && node.runtime.open {
-        Some(node.rect)
-    } else {
-        window
-    };
-    let clip = window.unwrap_or(node.clip);
+    let clip = node.clip;
     let visible = clip.width() > 0.0 && clip.height() > 0.0;
     let interactive = node.interactive();
     let scroll = node.scroll_spec.is_some();
@@ -65,7 +49,7 @@ fn collect_with_window<A>(
         });
     }
     for child in &node.children {
-        collect_with_window(tree, *child, hits, text, theme, window);
+        collect(tree, *child, hits, text, theme);
     }
 }
 

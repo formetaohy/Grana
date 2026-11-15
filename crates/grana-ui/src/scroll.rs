@@ -220,12 +220,11 @@ impl<A: Clone> Ui<A> {
 
     pub(crate) fn update_scroll_metrics(&mut self) {
         let mut wake = Vec::new();
-        let mut scrollers = std::mem::take(&mut self.scrollers);
-        for (id, node) in self.tree.nodes.iter_mut() {
+        for id in self.tree.scrolls.clone() {
+            let node = &mut self.tree.nodes[id];
             let Some(spec) = node.scroll_spec else {
                 continue;
             };
-            scrollers.push(id);
             let viewport = match spec.axis {
                 Axis::Column => node.rect.height(),
                 Axis::Row => node.rect.width(),
@@ -242,7 +241,6 @@ impl<A: Clone> Ui<A> {
                 wake.push(id);
             }
         }
-        self.scrollers = scrollers;
         for id in wake {
             self.wake_scroll(id);
         }

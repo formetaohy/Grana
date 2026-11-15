@@ -7,6 +7,7 @@ use crate::node::NodeId;
 use crate::paint::{Clip, Instance, Instances, Painter};
 use crate::style::State;
 use crate::theme::Role;
+use crate::tree::Tree;
 use crate::ui::Ui;
 use crate::widget::PaintInfo;
 
@@ -18,7 +19,9 @@ impl<A: Clone> Ui<A> {
             for layer in &mut self.layers {
                 layer.rebuild = true;
             }
-            self.damage.full();
+        }
+        if let Some(erased) = self.tree.removed_damage.take() {
+            self.damage.add(erased);
         }
         let root = self.tree.root;
         self.paint_node(root, canvases);
@@ -30,7 +33,14 @@ impl<A: Clone> Ui<A> {
                 }
                 material
             });
-            self.collect_layers(root, &mut materials);
+            let mut erased = None;
+            Self::collect_layers(
+                &mut self.tree,
+                &mut self.layers,
+                root,
+                &mut materials,
+                &mut erased,
+            );
             for (index, material) in materials.into_iter().enumerate() {
                 let layer = &mut self.layers[index];
                 layer.material = material;
@@ -42,13 +52,16 @@ impl<A: Clone> Ui<A> {
                 layer.dirty = Some((0, layer.material.len()));
                 layer.touch();
             }
+            if let Some(erased) = erased {
+                self.damage.add(erased);
+            }
         }
     }
 
     fn paint_node<'a>(&mut self, id: NodeId, canvases: &SecondaryMap<NodeId, CanvasPaint<'a>>) {
         if !self.tree.nodes[id].visible {
-            let layer = self.tree.nodes[id].layer.index();
             if self.tree.nodes[id].painted {
+                let layer = self.tree.nodes[id].layer.index();
                 self.tree.nodes[id].painted = false;
                 self.layers[layer].rebuild = true;
                 let rect = self.tree.nodes[id].rect;
@@ -102,6 +115,7 @@ impl<A: Clone> Ui<A> {
         {
             let (start, end) = self.tree.nodes[id].layer_range;
             if (end - start) as usize == count {
+                debug_assert!(self.tree.nodes[id].painted, "a patch reads a resident node");
                 let material = std::mem::take(&mut self.tree.nodes[id].paint.material);
                 self.layers[layer].patch(start as usize, &material);
                 self.tree.nodes[id].paint.material = material;
@@ -257,26 +271,34 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    fn collect_layers(&mut self, id: NodeId, materials: &mut [Vec<Instance>; Layer::ALL.len()]) {
-        if !self.tree.nodes[id].visible {
-            return;
-        }
-        let index = self.tree.nodes[id].layer.index();
-        if self.layers[index].rebuild {
-            let painted = self.tree.nodes[id].painted && !self.tree.nodes[id].paint.is_empty();
-            if painted {
+    fn collect_layers(
+        tree: &mut Tree<A>,
+        layers: &mut [crate::paint::LayerBuffer; Layer::ALL.len()],
+        id: NodeId,
+        materials: &mut [Vec<Instance>; Layer::ALL.len()],
+        erased: &mut Option<Rect>,
+    ) {
+        let node = &mut tree.nodes[id];
+        let index = node.layer.index();
+        if layers[index].rebuild {
+            if node.visible && node.painted && !node.paint.is_empty() {
                 let start = materials[index].len() as u32;
-                materials[index].extend_from_slice(&self.tree.nodes[id].paint.material);
-                let end = materials[index].len() as u32;
-                self.tree.nodes[id].layer_range = (start, end);
-                self.tree.nodes[id].layer_version = self.tree.nodes[id].paint_version;
+                materials[index].extend_from_slice(&node.paint.material);
+                node.layer_range = (start, materials[index].len() as u32);
+                node.layer_version = node.paint_version;
             } else {
-                self.tree.nodes[id].layer_range = (0, 0);
+                if node.painted {
+                    let painted = crate::paint::extent(&node.paint.material)
+                        .map_or(node.rect, |held| held.union(node.rect));
+                    *erased = Some(erased.map_or(painted, |held| held.union(painted)));
+                }
+                node.painted = false;
+                node.layer_range = (0, 0);
             }
         }
-        for index in 0..self.tree.nodes[id].children.len() {
-            let child = self.tree.nodes[id].children[index];
-            self.collect_layers(child, materials);
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
+            Self::collect_layers(tree, layers, child, materials, erased);
         }
     }
 }

@@ -95,7 +95,7 @@ pub struct App {
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
     stream: Stream,
-    pick_toggle: bool,
+    pick_toggle: Option<bool>,
     mask_path: Vec<[f32; 3]>,
     plate: Option<(String, usize)>,
     export: Export,
@@ -105,6 +105,7 @@ pub struct App {
     revision: Revision,
     language: Language,
     interacting: bool,
+    camera_touched: bool,
     activity: Option<Instant>,
     animating: bool,
     chrome: window::Chrome,
@@ -157,7 +158,7 @@ impl App {
             ime: false,
             ime_area: None,
             stream: Stream::new(),
-            pick_toggle: false,
+            pick_toggle: None,
             mask_path: Vec::new(),
             plate: None,
             export: Export::new(),
@@ -167,6 +168,7 @@ impl App {
             revision: Revision::ZERO,
             language,
             interacting: false,
+            camera_touched: false,
             activity: None,
             animating: false,
             chrome: window::Chrome::new(),
@@ -505,6 +507,9 @@ impl ApplicationHandler for App {
                 if let Some(surface) = self.surface.as_mut() {
                     surface.gpu.resize([size.width, size.height]);
                     self.chrome.refresh(&surface.window);
+                    if !self.camera_touched {
+                        self.needs_fit = true;
+                    }
                     surface.window.request_redraw();
                 }
             }

@@ -132,6 +132,13 @@ impl Stage {
         self.modifiers = input.modifiers();
         interaction.modifiers = self.modifiers;
         let pointer = input.position();
+        if input.cancelled() {
+            self.drag = None;
+            self.drag_button = None;
+            self.press = None;
+            self.hovered = self.contains(pointer);
+            return interaction;
+        }
 
         self.hovered = self.contains(pointer);
         let delta = input.delta();

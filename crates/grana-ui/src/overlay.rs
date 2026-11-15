@@ -88,7 +88,8 @@ impl<A: Clone> Ui<A> {
                 painter.pop_clip(previous);
             }
             let bars = self
-                .scrollers
+                .tree
+                .scrolls
                 .iter()
                 .filter_map(|id| {
                     let node = self.tree.nodes.get(*id)?;

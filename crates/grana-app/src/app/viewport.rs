@@ -79,6 +79,9 @@ impl App {
             };
             (interaction, hovered, cursor)
         };
+        if interaction.camera || interaction.slice.is_some() {
+            self.camera_touched = true;
+        }
         self.push_cursor(cursor);
         if let Some((index, part)) = hovered
             && interaction.grab.is_some()
@@ -105,8 +108,8 @@ impl App {
                 (Some(set), false) => self.place_seed(set, point, interaction.modifiers.alt),
                 (Some(_), true) => {}
                 (None, _) => {
-                    self.pick_toggle = interaction.modifiers.shift || interaction.modifiers.control;
-                    self.pick(point);
+                    let toggle = interaction.modifiers.shift || interaction.modifiers.control;
+                    self.pick(point, toggle);
                 }
             }
             self.request_redraw();
@@ -427,7 +430,7 @@ impl App {
         }
     }
 
-    pub(super) fn pick(&mut self, point: Vec2) {
+    pub(super) fn pick(&mut self, point: Vec2, toggle: bool) {
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
@@ -439,7 +442,9 @@ impl App {
             (point.x * scale).max(0.0).round() as u32,
             (point.y * scale).max(0.0).round() as u32,
         ];
-        engine.request_pick(&surface.gpu.device, &surface.gpu.queue, point);
+        if engine.request_pick(&surface.gpu.device, &surface.gpu.queue, point) {
+            self.pick_toggle = Some(toggle);
+        }
     }
 
     pub(super) fn poll_pick(&mut self) {
@@ -455,12 +460,13 @@ impl App {
         let Some(picked) = engine.poll_pick(&surface.gpu.device) else {
             return;
         };
+        let toggle = self.pick_toggle.take().unwrap_or(false);
         let selection = match picked {
             Picked::Hit(selection) => Some(selection),
             Picked::Seed => return,
             Picked::Miss => None,
         };
-        match (selection, std::mem::take(&mut self.pick_toggle)) {
+        match (selection, toggle) {
             (Some(selection), true) => {
                 self.apply(vec![Command::ToggleSelect(selection)]);
             }

@@ -120,15 +120,63 @@ impl Content {
         if self.same(previous) {
             return None;
         }
+        let geometry = self.geometry() != previous.geometry();
         Some(crate::element::Dirty {
-            geometry: true,
+            geometry,
             paint: true,
             animate: true,
-            hits: crate::widget::hit_changed(previous, self),
+            hits: geometry,
             fields: matches!(self, Self::Field(_)),
             ..crate::element::Dirty::NONE
         })
     }
+
+    pub(crate) fn geometry(&self) -> Geometry<'_> {
+        match self {
+            Self::Empty => Geometry::Fixed,
+            Self::Canvas => Geometry::Fixed,
+            Self::Text(text) => Geometry::Text(text),
+            Self::Icon(icon) => Geometry::Size(icon.size),
+            Self::Button(button) => Geometry::Button(button),
+            Self::IconButton(icon) => Geometry::Size(icon.size),
+            Self::Toggle(toggle) => Geometry::Row(toggle.row),
+            Self::Checkbox(checkbox) => Geometry::Label(&checkbox.label, checkbox.font),
+            Self::Slider(slider) => Geometry::Slider(
+                slider.label.as_deref(),
+                slider.readout.is_some(),
+                slider.width,
+            ),
+            Self::RangeSlider(range) => Geometry::Slider(None, false, range.width),
+            Self::Segment(segment) => {
+                Geometry::Segment(&segment.options, segment.font, segment.width, segment.fill)
+            }
+            Self::Tabs(_) => Geometry::Fixed,
+            Self::DragValue(drag) => Geometry::Width(drag.width),
+            Self::Field(_) => Geometry::Fixed,
+            Self::MenuRow(_) => Geometry::Fixed,
+            Self::ActionRow(_) => Geometry::Fixed,
+            Self::Badge(badge) => Geometry::Label(&badge.label, badge.font),
+            Self::Spinner(spinner) => Geometry::Size(spinner.size),
+            Self::Progress(progress) => Geometry::Width(progress.width),
+            Self::GradientBar(bar) => Geometry::Size(bar.height),
+            Self::Labelled(_) => Geometry::Fixed,
+            Self::ColorSwatch(swatch) => Geometry::Size(swatch.size),
+            Self::ColorPicker(_) => Geometry::Fixed,
+        }
+    }
+}
+
+#[derive(PartialEq)]
+pub(crate) enum Geometry<'a> {
+    Fixed,
+    Text(&'a TextContent),
+    Size(f32),
+    Button(&'a ButtonContent),
+    Row(bool),
+    Label(&'a str, TypeStyle),
+    Slider(Option<&'a str>, bool, crate::element::Length),
+    Segment(&'a [String], TypeStyle, crate::element::Length, bool),
+    Width(f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
