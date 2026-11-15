@@ -5,6 +5,10 @@ use grana_session::{Command, Effects};
 use super::{App, Resume};
 impl App {
     pub(super) fn apply(&mut self, commands: Vec<Command>) -> bool {
+        if commands.is_empty() {
+            self.validate_mask();
+            return false;
+        }
         let view = self.view_state();
         self.session.observe_view(view);
         for command in commands {

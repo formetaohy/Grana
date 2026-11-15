@@ -1,5 +1,7 @@
 use super::*;
 
+const FRAME_ROW: f32 = 22.0;
+
 pub(super) fn region<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
@@ -434,30 +436,35 @@ pub(super) fn frame_table<'a>(
     let theme = *ctx.theme();
     let language = ctx.language();
     let reference = drift.reference();
-    let mut rows = Vec::new();
-    for frame in 0..drift.frames() {
-        let offset = drift.translation(frame);
-        let mut label = grana_i18n::inspector::frame_number(language, frame + 1);
-        if frame == time {
-            label.push_str(" •");
-        }
-        if frame == reference {
-            label.push_str(grana_i18n::inspector::reference_suffix(language));
-        }
-        rows.push(view::labelled(
-            ctx,
-            &label,
-            &format!("{:+0.2} {:+0.2} {:+0.2}", offset[0], offset[1], offset[2]),
-        ));
-    }
-    let list = grana_ui::column().gap(0.0).children(rows);
-    let mut children = vec![
-        Element::new(grana_ui::Layout::column())
-            .named("drift.frames")
-            .scroll(grana_ui::Axis::Column, Length::Fixed(116.0), None)
-            .clipped()
-            .children([list]),
-    ];
+    let frames = drift.frames();
+    let list = ctx.scroll(
+        Key::new("drift.frames"),
+        grana_ui::Axis::Column,
+        Length::Fixed(116.0),
+        FRAME_ROW,
+        frames as usize,
+        move |window| {
+            let mut rows = Vec::with_capacity(window.span().len());
+            for frame in window.span() {
+                let frame = frame as u32;
+                let offset = drift.translation(frame);
+                let mut label = grana_i18n::inspector::frame_number(language, frame + 1);
+                if frame == time {
+                    label.push_str(" •");
+                }
+                if frame == reference {
+                    label.push_str(grana_i18n::inspector::reference_suffix(language));
+                }
+                rows.push(grana_ui::widget::labelled(
+                    &theme,
+                    &label,
+                    &format!("{:+0.2} {:+0.2} {:+0.2}", offset[0], offset[1], offset[2]),
+                ));
+            }
+            rows
+        },
+    );
+    let mut children = vec![list];
     if time == reference {
         children.push(view::weak(
             ctx,

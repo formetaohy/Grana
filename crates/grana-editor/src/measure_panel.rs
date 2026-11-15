@@ -868,7 +868,7 @@ fn table<'a>(
             Vec2::new(cell.max.x + 1.0, cell.max.y),
         );
         let grip_key = Key::index("measure.width", *index);
-        let column = *index;
+        let column = Key::new(column.key());
         let spare = (available - 1.0 - total).max(0.0);
         let ceiling = (width + spare).max(MIN_COLUMN_WIDTH);
         elements.push(
@@ -879,7 +879,7 @@ fn table<'a>(
                 .cursor(Cursor::ResizeHorizontal)
                 .on_drag(Axis::Row, move |delta| {
                     Some(Message::SetColumnWidth {
-                        index: column,
+                        column,
                         width: (width + delta).clamp(MIN_COLUMN_WIDTH, ceiling),
                     })
                 }),
@@ -1134,8 +1134,8 @@ fn column_widths(state: &View<'_>, columns: &[(usize, Column)], available: f32) 
         let scale = available / total;
         initial.iter().map(|width| width * scale).collect()
     };
-    for (slot, (index, _)) in columns.iter().enumerate() {
-        if let Some(width) = state.workspace.column_widths.get(index) {
+    for (slot, (_, column)) in columns.iter().enumerate() {
+        if let Some(width) = state.workspace.column_widths.get(&Key::new(column.key())) {
             widths[slot] = width.max(MIN_COLUMN_WIDTH);
         }
     }

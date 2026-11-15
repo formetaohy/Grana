@@ -32,6 +32,7 @@ pub struct ImageAtlas {
     shelves: Vec<Shelf>,
     slots: HashMap<u64, [f32; 4]>,
     uploads: Vec<Upload>,
+    generation: u64,
 }
 
 impl ImageAtlas {
@@ -67,6 +68,7 @@ impl ImageAtlas {
             shelves: Vec::new(),
             slots: HashMap::new(),
             uploads: Vec::new(),
+            generation: 0,
         }
     }
 
@@ -79,6 +81,7 @@ impl ImageAtlas {
             shelves: Vec::new(),
             slots: HashMap::new(),
             uploads: Vec::new(),
+            generation: 0,
         }
     }
 
@@ -92,6 +95,10 @@ impl ImageAtlas {
         self.sampler
             .as_ref()
             .expect("an image atlas is bound to a device")
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn slot(&mut self, bitmap: &Bitmap) -> Option<[f32; 4]> {
@@ -182,6 +189,7 @@ impl ImageAtlas {
         });
         self.view = Some(texture.create_view(&TextureViewDescriptor::default()));
         self.texture = Some(texture);
+        self.generation = self.generation.wrapping_add(1);
         Some(())
     }
 

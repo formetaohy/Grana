@@ -219,7 +219,7 @@ pub struct Workspace {
     pub sidebar_tab: usize,
     pub dock_height: f32,
     pub playback: Playback,
-    pub column_widths: HashMap<usize, f32>,
+    pub column_widths: HashMap<Key, f32>,
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
     pub divide: Option<(u32, usize)>,
@@ -249,6 +249,7 @@ pub struct Workspace {
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
+    pub(crate) measure_request: Option<ObjectSetId>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub palette: Option<Palette>,
     pub language: grana_i18n::Language,
@@ -297,6 +298,7 @@ impl Default for Workspace {
             comparison_group: None,
             comparison_key: None,
             comparison_open: None,
+            measure_request: None,
             batch_chart: crate::batch_panel::Chart::default(),
             palette: None,
             language: grana_i18n::Language::English,
@@ -357,6 +359,27 @@ impl Workspace {
         self.merge = None;
         self.merge_parents.clear();
         self.reparent = None;
+    }
+
+    pub fn reset_document(&mut self) {
+        self.cancel_lineage();
+        self.track_set = None;
+        self.seed = None;
+        self.mask = None;
+        self.annotation_pending = None;
+        self.annotation_drag = None;
+        self.renaming = None;
+        self.expanded.clear();
+        self.classifier.clear();
+        self.relation = None;
+        self.relation_body = RelationBody::default();
+        self.measure_request = None;
+        self.palette = None;
+        self.palette_actions.clear();
+        self.drag = PlotDrag::default();
+        self.playback = Playback::default();
+        self.column_widths.clear();
+        self.overlay = Overlay::default();
     }
 
     pub fn classifier_features(&self, set: &ObjectSet) -> Vec<Measurement> {

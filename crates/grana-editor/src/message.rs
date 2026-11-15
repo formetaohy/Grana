@@ -28,7 +28,7 @@ pub enum Message {
     ToggleSidebar,
     SetDockHeight(f32),
     SetColumnWidth {
-        index: usize,
+        column: Key,
         width: f32,
     },
     ToggleOpen(Key),

@@ -92,10 +92,12 @@ pub fn apply(
                 } else {
                     DOCK_DEFAULT
                 };
-                workspace.dock_height = (height + value).max(DOCK_MINIMUM);
+                let transport = view.scene.is_some_and(|scene| scene.frame_count() > 1);
+                let limit = super::dock_available(ui.size(), transport);
+                workspace.dock_height = (height + value).clamp(DOCK_MINIMUM, limit);
             }
-            Message::SetColumnWidth { index, width } => {
-                workspace.column_widths.insert(index, width);
+            Message::SetColumnWidth { column, width } => {
+                workspace.column_widths.insert(column, width);
             }
             Message::ToggleOpen(key) => workspace.disclosures.toggle(key),
             Message::ExpandObject { set, open } => {

@@ -23,6 +23,7 @@ const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
 const MINIMUM_INSTANCES: usize = 512;
 const MAX_BLUR_MIPS: u32 = 5;
+const BLUR_REACH: u32 = 64;
 const OVERLAY_SLOT: usize = Layer::ALL.len();
 const SLOTS: usize = Layer::ALL.len() + 1;
 
@@ -144,8 +145,40 @@ pub(crate) struct Atlases<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Damage {
     None,
-    Rect([u32; 4]),
+    Regions {
+        rects: [[u32; 4]; crate::paint::DAMAGE_REGIONS],
+        len: u8,
+    },
     Full,
+}
+
+impl Damage {
+    fn scissors(
+        self,
+        clip: impl Fn([u32; 4]) -> [u32; 4],
+        full: [u32; 4],
+    ) -> ([[u32; 4]; crate::paint::DAMAGE_REGIONS], usize) {
+        let mut scissors = [[0u32; 4]; crate::paint::DAMAGE_REGIONS];
+        match self {
+            Self::None => (scissors, 0),
+            Self::Full => {
+                scissors[0] = full;
+                (scissors, 1)
+            }
+            Self::Regions { rects, len } => {
+                let mut count = 0;
+                for rect in &rects[..usize::from(len)] {
+                    let rect = clip(*rect);
+                    if rect[2] == 0 || rect[3] == 0 {
+                        continue;
+                    }
+                    scissors[count] = rect;
+                    count += 1;
+                }
+                (scissors, count)
+            }
+        }
+    }
 }
 
 pub(crate) struct PaintFrame<'a> {
@@ -170,6 +203,7 @@ struct PaintTarget<'a> {
 struct InstanceBuffer {
     buffer: Buffer,
     capacity: usize,
+    generation: u64,
 }
 
 impl InstanceBuffer {
@@ -177,6 +211,7 @@ impl InstanceBuffer {
         Self {
             buffer: instance_buffer(device, label, MINIMUM_INSTANCES),
             capacity: MINIMUM_INSTANCES,
+            generation: 0,
         }
     }
 
@@ -192,6 +227,7 @@ impl InstanceBuffer {
                 .next_power_of_two()
                 .max(MINIMUM_INSTANCES);
             self.buffer = instance_buffer(device, label, self.capacity);
+            self.generation = self.generation.wrapping_add(1);
             grown = true;
         }
         let total = layer.material.len();
@@ -576,11 +612,7 @@ impl Renderer {
         } else {
             damage
         };
-        let scissor = match damage {
-            Damage::None => None,
-            Damage::Full => Some(self.region()),
-            Damage::Rect(rect) => Some(self.clip(rect)),
-        };
+        let (scissors, count) = damage.scissors(|rect| self.clip(rect), self.region());
         if reupload {
             for index in 0..SLOTS {
                 if !changed[index] {
@@ -596,92 +628,97 @@ impl Renderer {
             }
         }
         self.prepare_groups(atlases, scene, &backdrop_sampled);
-        if let Some(scissor) = scissor {
-            match damage {
-                Damage::Full => clear(encoder, &canvas_linear),
-                _ => self.erase(encoder, &canvas_linear, scissor),
+        if count > 0 {
+            if matches!(damage, Damage::Full) {
+                clear(encoder, &canvas_linear);
+            } else {
+                for scissor in &scissors[..count] {
+                    self.erase(encoder, &canvas_linear, *scissor);
+                }
             }
-            self.paint_material(
-                encoder,
-                &PaintTarget {
-                    target: &canvas_linear,
-                    load: LoadOp::Load,
-                },
-                &self.ui_groups[Layer::Content.index()]
-                    .as_ref()
-                    .expect("the content group is cached")
-                    .1,
-                content.material.len(),
-                Some(scissor),
-            );
+            let content_group = &self.ui_groups[Layer::Content.index()]
+                .as_ref()
+                .expect("the content group is cached")
+                .1;
+            for scissor in &scissors[..count] {
+                self.paint_material(
+                    encoder,
+                    &PaintTarget {
+                        target: &canvas_linear,
+                        load: LoadOp::Load,
+                    },
+                    content_group,
+                    content.material.len(),
+                    Some(*scissor),
+                );
+            }
+            let region = if matches!(damage, Damage::Full) {
+                None
+            } else {
+                Some(self.reach(&scissors[..count]))
+            };
             if chrome.backdrop {
                 if content_refresh || !self.content_blur {
-                    self.update_backdrop(encoder, &canvas_linear);
+                    self.update_backdrop(encoder, &canvas_linear, region);
                     self.content_blur = true;
                 }
             } else {
                 self.content_blur = false;
             }
-            self.paint_material(
-                encoder,
-                &PaintTarget {
-                    target: &canvas_linear,
-                    load: LoadOp::Load,
-                },
-                &self.ui_groups[Layer::Chrome.index()]
-                    .as_ref()
-                    .expect("the chrome group is cached")
-                    .1,
-                chrome.material.len(),
-                Some(scissor),
-            );
+            let chrome_group = &self.ui_groups[Layer::Chrome.index()]
+                .as_ref()
+                .expect("the chrome group is cached")
+                .1;
+            for scissor in &scissors[..count] {
+                self.paint_material(
+                    encoder,
+                    &PaintTarget {
+                        target: &canvas_linear,
+                        load: LoadOp::Load,
+                    },
+                    chrome_group,
+                    chrome.material.len(),
+                    Some(*scissor),
+                );
+            }
             if popup.backdrop || hud.backdrop {
                 if interface_refresh || !self.interface_blur {
-                    self.update_backdrop(encoder, &canvas_linear);
+                    self.update_backdrop(encoder, &canvas_linear, region);
                     self.interface_blur = true;
                 }
             } else {
                 self.interface_blur = false;
             }
-            self.paint_material(
-                encoder,
-                &PaintTarget {
-                    target: &canvas_linear,
-                    load: LoadOp::Load,
-                },
-                &self.ui_groups[Layer::Popup.index()]
-                    .as_ref()
-                    .expect("the popup group is cached")
-                    .1,
-                popup.material.len(),
-                Some(scissor),
-            );
-            self.paint_material(
-                encoder,
-                &PaintTarget {
-                    target: &canvas_linear,
-                    load: LoadOp::Load,
-                },
-                &self.ui_groups[Layer::Hud.index()]
-                    .as_ref()
-                    .expect("the hud group is cached")
-                    .1,
-                hud.material.len(),
-                Some(scissor),
-            );
-            self.paint_material(
-                encoder,
-                &PaintTarget {
-                    target: &canvas_linear,
-                    load: LoadOp::Load,
-                },
-                &self.ui_groups[OVERLAY_SLOT]
-                    .as_ref()
-                    .expect("the overlay group is cached")
-                    .1,
-                overlay.material.len(),
-                Some(scissor),
-            );
+            let popup_group = &self.ui_groups[Layer::Popup.index()]
+                .as_ref()
+                .expect("the popup group is cached")
+                .1;
+            let hud_group = &self.ui_groups[Layer::Hud.index()]
+                .as_ref()
+                .expect("the hud group is cached")
+                .1;
+            let overlay_group = &self.ui_groups[OVERLAY_SLOT]
+                .as_ref()
+                .expect("the overlay group is cached")
+                .1;
+            for scissor in &scissors[..count] {
+                for (group, material) in [
+                    (popup_group, popup.material.len()),
+                    (hud_group, hud.material.len()),
+                    (overlay_group, overlay.material.len()),
+                ] {
+                    self.paint_material(
+                        encoder,
+                        &PaintTarget {
+                            target: &canvas_linear,
+                            load: LoadOp::Load,
+                        },
+                        group,
+                        material,
+                        Some(*scissor),
+                    );
+                }
+            }
         }
 
         if self
@@ -708,6 +745,7 @@ impl Renderer {
             group,
             target_view,
             LoadOp::Clear(wgpu::Color::BLACK),
+            None,
         );
     }
 
@@ -726,7 +764,7 @@ impl Renderer {
             let key = group_key(
                 scene_id,
                 backdrop_id,
-                &self.buffers.buffers[slot].buffer,
+                self.buffers.buffers[slot].generation,
                 atlases,
             );
             if self.ui_groups[slot]
@@ -777,7 +815,12 @@ impl Renderer {
         [x, y, width, height]
     }
 
-    fn update_backdrop(&mut self, encoder: &mut CommandEncoder, source: &TextureView) {
+    fn update_backdrop(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        source: &TextureView,
+        region: Option<[u32; 4]>,
+    ) {
         let Some(backdrop) = self.backdrop.as_ref() else {
             return;
         };
@@ -794,14 +837,51 @@ impl Renderer {
             let group = self.backdrop_blits[index]
                 .as_ref()
                 .expect("the backdrop blit group is cached");
+            let scissor = region.map(|rect| self.backdrop_scissor(rect, index as u32));
+            if scissor.is_some_and(|scissor| scissor[2] == 0 || scissor[3] == 0) {
+                continue;
+            }
             fullscreen(
                 encoder,
                 &self.downsample,
                 group,
                 target,
                 LoadOp::Clear(wgpu::Color::BLACK),
+                scissor,
             );
         }
+    }
+
+    fn reach(&self, scissors: &[[u32; 4]]) -> [u32; 4] {
+        let mut min = [u32::MAX; 2];
+        let mut max = [0u32; 2];
+        for rect in scissors {
+            min[0] = min[0].min(rect[0]);
+            min[1] = min[1].min(rect[1]);
+            max[0] = max[0].max(rect[0] + rect[2]);
+            max[1] = max[1].max(rect[1] + rect[3]);
+        }
+        let left = min[0].saturating_sub(BLUR_REACH).min(self.size[0]);
+        let top = min[1].saturating_sub(BLUR_REACH).min(self.size[1]);
+        let right = max[0].saturating_add(BLUR_REACH).min(self.size[0]);
+        let bottom = max[1].saturating_add(BLUR_REACH).min(self.size[1]);
+        [left, top, right - left, bottom - top]
+    }
+
+    fn backdrop_scissor(&self, rect: [u32; 4], level: u32) -> [u32; 4] {
+        let divisor = 1u32 << (level + 1);
+        let width = ((self.size[0] / 2).max(1) >> level).max(1);
+        let height = ((self.size[1] / 2).max(1) >> level).max(1);
+        let left = (rect[0] / divisor).min(width);
+        let top = (rect[1] / divisor).min(height);
+        let right = (rect[0] + rect[2]).div_ceil(divisor).min(width);
+        let bottom = (rect[1] + rect[3]).div_ceil(divisor).min(height);
+        [
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
+        ]
     }
 
     fn paint_material(
@@ -968,14 +1048,14 @@ impl Renderer {
     }
 }
 
-fn group_key(scene: usize, backdrop: u64, instances: &Buffer, atlases: Atlases<'_>) -> u64 {
+fn group_key(scene: usize, backdrop: u64, instances: u64, atlases: Atlases<'_>) -> u64 {
     let mut key = 0xcbf2_9ce4_8422_2325u64;
     for value in [
         scene as u64,
         backdrop,
-        instances as *const Buffer as usize as u64,
+        instances,
         atlases.glyphs.view() as *const TextureView as usize as u64,
-        atlases.images.view() as *const TextureView as usize as u64,
+        atlases.images.generation(),
     ] {
         key = (key ^ value).wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -1055,6 +1135,7 @@ fn fullscreen(
     group: &BindGroup,
     target: &TextureView,
     load: LoadOp<wgpu::Color>,
+    scissor: Option<[u32; 4]>,
 ) {
     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("grana.ui.fullscreen.pass"),
@@ -1071,6 +1152,9 @@ fn fullscreen(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[]);
+    if let Some(scissor) = scissor {
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
+    }
     pass.draw(0..3, 0..1);
 }
 

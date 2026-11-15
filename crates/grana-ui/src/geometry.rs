@@ -80,6 +80,13 @@ impl Rect {
             && other.min.y < self.max.y
     }
 
+    pub fn contains_rect(self, other: Self) -> bool {
+        other.min.x >= self.min.x
+            && other.min.y >= self.min.y
+            && other.max.x <= self.max.x
+            && other.max.y <= self.max.y
+    }
+
     pub fn intersect(self, other: Self) -> Self {
         Self {
             min: self.min.max(other.min),

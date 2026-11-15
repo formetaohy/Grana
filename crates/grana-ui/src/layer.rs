@@ -22,19 +22,26 @@ impl<A: Clone> Ui<A> {
         }
         let root = self.tree.root;
         self.paint_node(root, canvases);
-        for index in 0..Layer::ALL.len() {
-            if !self.layers[index].rebuild {
-                continue;
+        if self.layers.iter().any(|layer| layer.rebuild) {
+            let mut materials: [Vec<Instance>; Layer::ALL.len()] = std::array::from_fn(|index| {
+                let mut material = std::mem::take(&mut self.layers[index].material);
+                if self.layers[index].rebuild {
+                    material.clear();
+                }
+                material
+            });
+            self.collect_layers(root, &mut materials);
+            for (index, material) in materials.into_iter().enumerate() {
+                let layer = &mut self.layers[index];
+                layer.material = material;
+                if !layer.rebuild {
+                    continue;
+                }
+                layer.rebuild = false;
+                layer.reset_backdrop();
+                layer.dirty = Some((0, layer.material.len()));
+                layer.touch();
             }
-            let mut material = std::mem::take(&mut self.layers[index].material);
-            material.clear();
-            self.collect_layer(root, index, &mut material);
-            let layer = &mut self.layers[index];
-            layer.material = material;
-            layer.rebuild = false;
-            layer.reset_backdrop();
-            layer.dirty = Some((0, layer.material.len()));
-            layer.touch();
         }
     }
 
@@ -250,16 +257,17 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    fn collect_layer(&mut self, id: NodeId, layer: usize, material: &mut Vec<Instance>) {
+    fn collect_layers(&mut self, id: NodeId, materials: &mut [Vec<Instance>; Layer::ALL.len()]) {
         if !self.tree.nodes[id].visible {
             return;
         }
-        if self.tree.nodes[id].layer.index() == layer {
+        let index = self.tree.nodes[id].layer.index();
+        if self.layers[index].rebuild {
             let painted = self.tree.nodes[id].painted && !self.tree.nodes[id].paint.is_empty();
             if painted {
-                let start = material.len() as u32;
-                material.extend_from_slice(&self.tree.nodes[id].paint.material);
-                let end = material.len() as u32;
+                let start = materials[index].len() as u32;
+                materials[index].extend_from_slice(&self.tree.nodes[id].paint.material);
+                let end = materials[index].len() as u32;
                 self.tree.nodes[id].layer_range = (start, end);
                 self.tree.nodes[id].layer_version = self.tree.nodes[id].paint_version;
             } else {
@@ -268,7 +276,7 @@ impl<A: Clone> Ui<A> {
         }
         for index in 0..self.tree.nodes[id].children.len() {
             let child = self.tree.nodes[id].children[index];
-            self.collect_layer(child, layer, material);
+            self.collect_layers(child, materials);
         }
     }
 }

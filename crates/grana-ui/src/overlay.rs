@@ -88,10 +88,10 @@ impl<A: Clone> Ui<A> {
                 painter.pop_clip(previous);
             }
             let bars = self
-                .tree
-                .nodes
-                .values()
-                .filter_map(|node| {
+                .scrollers
+                .iter()
+                .filter_map(|id| {
+                    let node = self.tree.nodes.get(*id)?;
                     let scroll = node.scroll?;
                     let spec = node.scroll_spec?;
                     if scroll.bar <= 0.01 || scroll.limit() <= 0.0 {

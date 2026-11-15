@@ -672,11 +672,62 @@ pub fn corners_array(corners: Corners) -> [f32; 4] {
     ]
 }
 
+pub(crate) const DAMAGE_REGIONS: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Regions {
+    rects: [Rect; DAMAGE_REGIONS],
+    len: usize,
+}
+
+impl Regions {
+    const EMPTY: Self = Self {
+        rects: [Rect::ZERO; DAMAGE_REGIONS],
+        len: 0,
+    };
+
+    pub fn iter(&self) -> impl Iterator<Item = Rect> + '_ {
+        self.rects[..self.len].iter().copied()
+    }
+
+    fn insert(&mut self, rect: Rect) {
+        let mut pending = rect;
+        let mut index = 0;
+        while index < self.len {
+            let held = self.rects[index];
+            if held.contains_rect(pending) {
+                return;
+            }
+            if pending.contains_rect(held) || held.intersects(pending) {
+                pending = pending.union(held);
+                self.len -= 1;
+                self.rects[index] = self.rects[self.len];
+                index = 0;
+                continue;
+            }
+            index += 1;
+        }
+        if self.len == DAMAGE_REGIONS {
+            let bounds = self
+                .rects
+                .iter()
+                .copied()
+                .reduce(Rect::union)
+                .expect("a filled damage region holds a rectangle");
+            self.len = 1;
+            self.rects[0] = bounds.union(pending);
+        } else {
+            self.rects[self.len] = pending;
+            self.len += 1;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum Damage {
     #[default]
     None,
-    Rect(Rect),
+    Regions(Regions),
     Full,
 }
 
@@ -685,11 +736,15 @@ impl Damage {
         if rect.is_empty() {
             return;
         }
-        *self = match *self {
-            Self::None => Self::Rect(rect),
-            Self::Rect(held) => Self::Rect(held.union(rect)),
-            Self::Full => Self::Full,
-        };
+        match self {
+            Self::Full => {}
+            Self::None => {
+                let mut regions = Regions::EMPTY;
+                regions.insert(rect);
+                *self = Self::Regions(regions);
+            }
+            Self::Regions(regions) => regions.insert(rect),
+        }
     }
 
     pub fn full(&mut self) {

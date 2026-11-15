@@ -73,6 +73,7 @@ pub struct Ui<A = ()> {
     pub(crate) preedit: Option<String>,
     pub(crate) animation: Vec<NodeId>,
     pub(crate) scrolling: Vec<NodeId>,
+    pub(crate) scrollers: Vec<NodeId>,
     pub(crate) scrollbar: Option<(NodeId, Vec2, f32)>,
 }
 
@@ -128,6 +129,7 @@ impl<A: Clone> Ui<A> {
             preedit: None,
             animation: Vec::new(),
             scrolling: Vec::new(),
+            scrollers: Vec::new(),
             scrollbar: None,
         }
     }
@@ -531,21 +533,40 @@ impl<A: Clone> Ui<A> {
 }
 
 fn paint_damage(damage: crate::paint::Damage, scale: f32, size: Vec2) -> crate::render::Damage {
+    let region = |rect: crate::geometry::Rect| {
+        let min = (rect.min * scale).floor().max(Vec2::ZERO);
+        let max = (rect.max * scale).ceil().min(size * scale);
+        if max.x - min.x < 1.0 || max.y - min.y < 1.0 {
+            return None;
+        }
+        Some([
+            min.x as u32,
+            min.y as u32,
+            (max.x - min.x) as u32,
+            (max.y - min.y) as u32,
+        ])
+    };
     match damage {
         crate::paint::Damage::None => crate::render::Damage::None,
         crate::paint::Damage::Full => crate::render::Damage::Full,
-        crate::paint::Damage::Rect(rect) => {
-            let min = (rect.min * scale).floor().max(Vec2::ZERO);
-            let max = (rect.max * scale).ceil().min(size * scale);
-            if max.x - min.x < 1.0 || max.y - min.y < 1.0 {
-                return crate::render::Damage::None;
+        crate::paint::Damage::Regions(regions) => {
+            let mut rects = [[0u32; 4]; crate::paint::DAMAGE_REGIONS];
+            let mut len = 0usize;
+            for rect in regions.iter() {
+                let Some(rect) = region(rect) else {
+                    continue;
+                };
+                rects[len] = rect;
+                len += 1;
             }
-            crate::render::Damage::Rect([
-                min.x as u32,
-                min.y as u32,
-                (max.x - min.x) as u32,
-                (max.y - min.y) as u32,
-            ])
+            if len == 0 {
+                crate::render::Damage::None
+            } else {
+                crate::render::Damage::Regions {
+                    rects,
+                    len: len as u8,
+                }
+            }
         }
     }
 }

@@ -1,8 +1,10 @@
+use std::hash::{Hash, Hasher};
+
 use glam::Vec2;
 use grana_session::{Command, PlateView, Well};
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Element, Fill, Icon, Length, Level, Rect, Role, Shadow,
-    TextStyle,
+    Align, Bitmap, BuildContext, Color, Corners, Element, Fill, Icon, Key, Length, Level, Rect,
+    Role, Shadow, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -78,17 +80,17 @@ fn grid<'a>(
     let plate = view.plate;
     let selected = view.selected_well();
     let side = cell_side(plate.columns(), width);
+    let columns = plate.columns();
     let mut rows = Vec::with_capacity(plate.rows());
     for row in 0..plate.rows() {
-        let mut cells = Vec::with_capacity(plate.columns());
-        for column in 0..plate.columns() {
+        let mut cells = Vec::with_capacity(columns);
+        for column in 0..columns {
             cells.push(cell(
                 ctx,
                 view,
                 plate.well(row, column),
                 selected,
-                row,
-                column,
+                row * columns + column,
                 side,
             ));
         }
@@ -102,13 +104,32 @@ fn grid<'a>(
     view::card(ctx, 8.0, vec![grana_ui::column().gap(GAP).children(rows)])
 }
 
+struct Cell {
+    present: bool,
+    active: bool,
+    lit: bool,
+    label: String,
+    thumbnail: Option<Bitmap>,
+    font: TypeStyle,
+}
+
+impl Hash for Cell {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.present.hash(state);
+        self.active.hash(state);
+        self.lit.hash(state);
+        self.label.hash(state);
+        self.thumbnail.as_ref().map(Bitmap::identity).hash(state);
+        self.font.hash(state);
+    }
+}
+
 fn cell<'a>(
     ctx: &mut BuildContext<'_, Message>,
     view: &PlateView<'_>,
     well: Option<&Well>,
     selected: Option<&Well>,
-    row: usize,
-    column: usize,
+    slot: usize,
     side: f32,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
@@ -116,25 +137,32 @@ fn cell<'a>(
     let active = well.is_some_and(|well| selected.is_some_and(|held| std::ptr::eq(held, well)));
     let present = well.is_some();
     let label = well.map_or_else(String::new, |well| well.label().to_string());
-    let drawn = label.clone();
     let font = theme.font(Level::Caption);
     let thumbnail = well
         .and_then(|well| well.fields().first())
         .and_then(|field| view.thumbnail(field.series()))
         .cloned();
     let lit = thumbnail.is_some();
+    let props = Cell {
+        present,
+        active,
+        lit,
+        label: label.clone(),
+        thumbnail,
+        font,
+    };
     let element = grana_ui::canvas(Length::Fixed(side), side)
-        .view_live(move |painter, info| {
+        .view(props, move |cell, painter, info| {
             let rect = info.rect;
             let engaged = info.hover.max(info.press);
-            let corners = Corners::all(if active { 12.0 } else { 8.0 });
-            let border = if active {
+            let corners = Corners::all(if cell.active { 12.0 } else { 8.0 });
+            let border = if cell.active {
                 palette.primary
             } else {
                 palette.outline_variant.amplify(0.4 + 0.6 * engaged)
             };
-            if present {
-                let fill = if active {
+            if cell.present {
+                let fill = if cell.active {
                     palette.secondary_container
                 } else {
                     palette
@@ -145,10 +173,10 @@ fn cell<'a>(
             } else {
                 painter.rect(rect, corners, palette.surface_container_lowest);
             }
-            if let Some(bitmap) = &thumbnail {
+            if let Some(bitmap) = &cell.thumbnail {
                 painter.bitmap(rect, corners, bitmap);
             }
-            if present && active {
+            if cell.present && cell.active {
                 painter.outlined(
                     rect,
                     corners,
@@ -160,17 +188,17 @@ fn cell<'a>(
                     Shadow::NONE,
                 );
             }
-            if present {
-                let tint = if lit {
+            if cell.present {
+                let tint = if cell.lit {
                     Color::white_alpha(0.95)
-                } else if active {
+                } else if cell.active {
                     palette.on_secondary_container
                 } else {
                     palette.on_surface_variant.lerp(palette.on_surface, engaged)
                 };
-                let style = TextStyle::new(font, tint).aligned(Align::Center);
-                let ink = painter.measure(&drawn, style);
-                let pill = if lit {
+                let style = TextStyle::new(cell.font, tint).aligned(Align::Center);
+                let ink = painter.measure(&cell.label, style);
+                let pill = if cell.lit {
                     Rect::from_min_size(
                         Vec2::new(rect.min.x + 5.0, rect.max.y - 20.0),
                         Vec2::new(ink.x + 12.0, 15.0),
@@ -178,13 +206,13 @@ fn cell<'a>(
                 } else {
                     Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
                 };
-                if lit {
+                if cell.lit {
                     painter.rect(pill, Corners::capsule(), Color::black_alpha(0.68));
                 }
-                painter.text_in(pill, &drawn, style, Align::Center);
+                painter.text_in(pill, &cell.label, style, Align::Center);
             }
         })
-        .named(&format!("plate.{row}.{column}"));
+        .key(Key::index("plate.cell", slot));
     match well.and_then(|well| well.fields().first()) {
         Some(field) => {
             let detail = grana_i18n::plate::well_fields(

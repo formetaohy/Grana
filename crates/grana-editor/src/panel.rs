@@ -32,6 +32,18 @@ pub const TOOLBAR_LEFT: f32 = 336.0;
 pub const TOOLBAR_RIGHT: f32 = 336.0;
 pub const STAGE_INSET: f32 = 12.0;
 
+pub(crate) fn dock_available(size: Vec2, transport: bool) -> f32 {
+    let bottom = size.y
+        - MARGIN
+        - if transport {
+            TRANSPORT_HEIGHT + GAP
+        } else {
+            0.0
+        };
+    let top = MARGIN + TOOLBAR_HEIGHT + GAP + 100.0;
+    (bottom - top).max(DOCK_MINIMUM)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
     Statistics,
@@ -128,11 +140,15 @@ pub fn build(
             .map(|panel| crate::shell::window_size(panel.size()));
         return frame;
     };
-    if workspace.panel == Some(Panel::Statistics)
-        && view.measure.set().is_none()
-        && let Some(set) = scene.objects.iter().find(|set| set.detected() > 0)
-    {
-        frame.commands.push(Command::SetMeasureSet(Some(set.id())));
+    if workspace.panel == Some(Panel::Statistics) && view.measure.set().is_none() {
+        if let Some(set) = scene.objects.iter().find(|set| set.detected() > 0)
+            && workspace.measure_request != Some(set.id())
+        {
+            workspace.measure_request = Some(set.id());
+            frame.commands.push(Command::SetMeasureSet(Some(set.id())));
+        }
+    } else if view.measure.set().is_some() {
+        workspace.measure_request = None;
     }
     workspace.prepare(view, ui.size());
     let palette = crate::palette::resolve(ui, view, workspace);
@@ -276,8 +292,7 @@ impl Layout {
             if dock_open { 1.0 } else { 0.0 },
             Motion::spatial_default(),
         );
-        let dock_top = toolbar_left.max.y + GAP + 100.0;
-        let dock_available = (dock_bottom - dock_top).max(DOCK_MINIMUM);
+        let dock_available = dock_available(full.size(), transport_height > 0.0);
         let dock_stored = if state.workspace.dock_height > 0.0 {
             state.workspace.dock_height
         } else {

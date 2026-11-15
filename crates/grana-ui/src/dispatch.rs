@@ -175,18 +175,20 @@ impl<A: Clone> Ui<A> {
         &self,
         pointer: Vec2,
     ) -> Option<(NodeId, crate::scroll::Bar, crate::scroll::ScrollState)> {
-        self.tree
-            .nodes
+        self.scrollers
             .iter()
-            .filter(|(_, node)| node.visible && !node.rect.is_empty())
-            .filter_map(|(id, node)| {
+            .filter_map(|id| {
+                let node = self.tree.nodes.get(*id)?;
+                if !node.visible || node.rect.is_empty() {
+                    return None;
+                }
                 let scroll = node.scroll?;
                 node.scroll_spec?;
                 if scroll.limit() <= 0.0 || !node.clip.contains(pointer) {
                     return None;
                 }
                 let bar = crate::scroll::bar(node.rect, node.scroll_axis(), scroll);
-                bar.hit.contains(pointer).then_some((id, bar, scroll))
+                bar.hit.contains(pointer).then_some((*id, bar, scroll))
             })
             .max_by(|left, right| {
                 left.1
@@ -200,14 +202,17 @@ impl<A: Clone> Ui<A> {
         let pointer = self.pointer;
         let hovered = self.bar_at(pointer).map(|(id, _, _)| id);
         let mut wake = Vec::new();
-        for (id, node) in self.tree.nodes.iter_mut() {
+        for id in &self.scrollers {
+            let Some(node) = self.tree.nodes.get_mut(*id) else {
+                continue;
+            };
             let Some(scroll) = node.scroll.as_mut() else {
                 continue;
             };
-            let hover = hovered == Some(id);
+            let hover = hovered == Some(*id);
             if scroll.hover != hover {
                 scroll.hover = hover;
-                wake.push(id);
+                wake.push(*id);
             }
         }
         for id in wake {

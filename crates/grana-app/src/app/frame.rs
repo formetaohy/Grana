@@ -15,8 +15,12 @@ impl App {
             self.sync_dataset(replaced);
             if replaced {
                 self.needs_fit = true;
-                self.workspace.playback.playing = false;
-                self.workspace.playback.previewing = false;
+                self.workspace.reset_document();
+                self.mask_path.clear();
+                self.pick_toggle = false;
+                self.plate = None;
+                self.autosave_at = None;
+                self.changed_at = None;
                 self.last_advance = None;
                 self.last_animation = None;
             }
