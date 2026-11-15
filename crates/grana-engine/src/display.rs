@@ -13,6 +13,10 @@ impl Display {
         self == Self::Playback
     }
 
+    pub fn resolution(self, size: [u32; 2]) -> [u32; 2] {
+        self.render().resolution(size)
+    }
+
     pub(crate) fn render(self) -> grana_render::Display {
         match self {
             Self::Interactive => grana_render::Display::Interactive,

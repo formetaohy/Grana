@@ -13,9 +13,11 @@ struct Accumulated {
 @group(0) @binding(2) var previous: texture_2d<f32>;
 @group(0) @binding(3) var samples: texture_2d<f32>;
 @group(0) @binding(4) var earlier_samples: texture_2d<f32>;
+@group(0) @binding(5) var screen_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
 }
 
 @vertex
@@ -27,16 +29,18 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     );
     var output: VertexOutput;
     output.clip_position = vec4<f32>(corners[index], 0.0, 1.0);
+    output.uv = vec2<f32>(corners[index].x * 0.5 + 0.5, 0.5 - corners[index].y * 0.5);
     return output;
 }
 
-fn resolve(pixel: vec2<f32>) -> vec4<f32> {
-    return textureLoad(source, vec2<i32>(pixel), 0) / max(textureLoad(samples, vec2<i32>(pixel), 0).x, 1.0);
+fn resolve(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(source, screen_sampler, uv, 0.0)
+        / max(textureSampleLevel(samples, screen_sampler, uv, 0.0).x, 1.0);
 }
 
-fn earlier(pixel: vec2<f32>) -> vec4<f32> {
-    return textureLoad(previous, vec2<i32>(pixel), 0)
-        / max(textureLoad(earlier_samples, vec2<i32>(pixel), 0).x, 1.0);
+fn earlier(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(previous, screen_sampler, uv, 0.0)
+        / max(textureSampleLevel(earlier_samples, screen_sampler, uv, 0.0).x, 1.0);
 }
 
 @fragment
@@ -48,8 +52,8 @@ fn fs_accumulate(input: VertexOutput) -> Accumulated {
 fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = input.clip_position.xy;
     let weight = screen.fade.x;
-    let fresh = resolve(pixel);
-    let stale = earlier(pixel);
+    let fresh = resolve(input.uv);
+    let stale = earlier(input.uv);
     let accumulated = mix(stale, fresh, weight);
     let coverage = clamp(accumulated.a, 0.0, 1.0);
     let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);

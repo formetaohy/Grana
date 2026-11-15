@@ -84,6 +84,89 @@ pub(super) struct ResidencyDemand {
     pub(super) bands: Vec<Demand>,
 }
 
+pub(super) struct TargetCache {
+    slots: [Option<FrameTarget>; 2],
+    current: usize,
+}
+
+impl TargetCache {
+    pub(super) fn new() -> Self {
+        Self {
+            slots: [None, None],
+            current: 0,
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.slots = [None, None];
+        self.current = 0;
+    }
+
+    pub(super) fn current(&self) -> Option<&FrameTarget> {
+        self.slots[self.current].as_ref()
+    }
+
+    pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = &mut FrameTarget> {
+        self.slots.iter_mut().flatten()
+    }
+
+    pub(super) fn take(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        present: &Present,
+        size: [u32; 2],
+    ) -> (FrameTarget, bool) {
+        let held = (0..self.slots.len()).find(|index| {
+            self.slots[*index]
+                .as_ref()
+                .is_some_and(|target| target.size == size)
+        });
+        let (slot, created) = match held {
+            Some(index) => (index, false),
+            None => {
+                let index = (0..self.slots.len())
+                    .find(|index| *index != self.current)
+                    .unwrap_or(0);
+                self.slots[index] = Some(FrameTarget::new(device, queue, layouts, present, size));
+                (index, true)
+            }
+        };
+        self.current = slot;
+        (
+            self.slots[slot].take().expect("the frame target is ready"),
+            created,
+        )
+    }
+
+    pub(super) fn put(&mut self, target: FrameTarget) {
+        self.slots[self.current] = Some(target);
+    }
+
+    pub(super) fn reserve(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        present: &Present,
+        size: [u32; 2],
+    ) {
+        if self
+            .slots
+            .iter()
+            .flatten()
+            .any(|target| target.size == size)
+        {
+            return;
+        }
+        let slot = (0..self.slots.len())
+            .find(|index| *index != self.current)
+            .unwrap_or(0);
+        self.slots[slot] = Some(FrameTarget::new(device, queue, layouts, present, size));
+    }
+}
+
 pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
     pub(super) accumulation: Texture,

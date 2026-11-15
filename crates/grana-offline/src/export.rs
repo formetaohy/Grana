@@ -216,6 +216,7 @@ impl Export {
             grana_render::Frame {
                 target: &self.draw.1,
                 size: self.viewport.size,
+                resolution: self.viewport.size,
                 camera: &camera,
                 viewport: self.viewport.region,
                 time: scene.time(),

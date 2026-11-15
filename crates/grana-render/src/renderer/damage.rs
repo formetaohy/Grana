@@ -19,7 +19,7 @@ impl Renderer {
         if scopes.is_empty() {
             return;
         }
-        if let Some(target) = self.target.as_mut() {
+        for target in self.targets.iter_mut() {
             target.shot = None;
             target.holds = false;
         }

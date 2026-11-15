@@ -1,13 +1,14 @@
 use bytemuck::{Pod, Zeroable};
 use grana_gpu::Pipelines;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
-    BlendOperation, BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites,
-    CommandEncoder, Device, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor,
-    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
-    TextureFormat, TextureSampleType, TextureView, TextureViewDimension, VertexState,
+    AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent,
+    BlendFactor, BlendOperation, BlendState, Buffer, BufferUsages, Color, ColorTargetState,
+    ColorWrites, CommandEncoder, Device, FilterMode, FragmentState, LoadOp, Operations,
+    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerDescriptor,
+    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureFormat, TextureSampleType,
+    TextureView, TextureViewDimension, VertexState,
 };
 
 const SHADER: &str = concat!(
@@ -42,6 +43,7 @@ pub(crate) struct Present {
     quantize: RenderPipeline,
     layout: BindGroupLayout,
     uniforms: Buffer,
+    sampler: Sampler,
     encode: bool,
     format: TextureFormat,
 }
@@ -65,6 +67,12 @@ impl Present {
                 texture(2),
                 texture(3),
                 texture(4),
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let sourced_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -101,12 +109,21 @@ impl Present {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("grana.present.sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
         Self {
             accumulate,
             present,
             quantize,
             layout,
             uniforms,
+            sampler,
             encode: !format.is_srgb(),
             format,
         }
@@ -147,6 +164,10 @@ impl Present {
                 BindGroupEntry {
                     binding: 4,
                     resource: BindingResource::TextureView(fade_count),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Sampler(&self.sampler),
                 },
             ],
         })

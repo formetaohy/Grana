@@ -6,7 +6,8 @@ mod signature;
 mod upload;
 
 use residency::{
-    FrameTarget, LevelKey, Levels, Mode, Residency, ResidencyDemand, Resident, ViewState,
+    FrameTarget, LevelKey, Levels, Mode, Residency, ResidencyDemand, Resident, TargetCache,
+    ViewState,
 };
 use signature::Signature;
 use std::collections::HashSet;
@@ -139,11 +140,24 @@ impl Display {
     pub fn prefetches(self) -> bool {
         self == Self::Playback
     }
+
+    pub fn resolution(self, size: [u32; 2]) -> [u32; 2] {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a display covers a positive surface"
+        );
+        if self == Self::Interactive {
+            [(size[0].div_ceil(2)).max(1), (size[1].div_ceil(2)).max(1)]
+        } else {
+            size
+        }
+    }
 }
 
 pub struct Frame<'a, 'b> {
     pub target: &'a TextureView,
     pub size: [u32; 2],
+    pub resolution: [u32; 2],
     pub camera: &'a Camera,
     pub viewport: [u32; 4],
     pub time: u32,
@@ -160,7 +174,7 @@ pub struct Frame<'a, 'b> {
 pub struct Renderer {
     layouts: Layouts,
     present: Present,
-    target: Option<FrameTarget>,
+    targets: TargetCache,
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     occupancy: Option<Occupancy>,
@@ -261,7 +275,7 @@ impl Renderer {
         let overlay = Overlays::new(device, pipelines);
         Self {
             present,
-            target: None,
+            targets: TargetCache::new(),
             scene: None,
             atlas: None,
             occupancy: None,
@@ -425,7 +439,7 @@ impl Renderer {
     }
 
     pub fn begin_export(&mut self) {
-        self.target = None;
+        self.targets.clear();
         self.resident = None;
         if let Some(convergence) = self.convergence.as_mut() {
             convergence.forget();
@@ -562,7 +576,7 @@ impl Renderer {
         }
         self.sections.clear();
         self.sliced = false;
-        self.target = None;
+        self.targets.clear();
         self.viewport = None;
         if let Some(convergence) = self.convergence.as_mut() {
             convergence.forget();
@@ -600,33 +614,41 @@ impl Renderer {
             "the surface is not empty"
         );
         assert!(
+            frame.resolution[0] > 0 && frame.resolution[1] > 0,
+            "the render surface is not empty"
+        );
+        assert!(
+            frame.resolution[0] <= frame.size[0] && frame.resolution[1] <= frame.size[1],
+            "the render surface lies inside the frame surface"
+        );
+        assert!(
             frame.exposure.is_finite() && frame.exposure > 0.0,
             "an exposure scales radiance by a positive factor"
         );
         assert!(frame.samples > 0, "a target resolves at least one sample");
-        let size = frame.size;
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|target| target.size != size)
-        {
-            self.target = Some(FrameTarget::new(
-                device,
-                queue,
-                &self.layouts,
-                &self.present,
-                size,
-            ));
+        let size = frame.resolution;
+        let (mut target, created) =
+            self.targets
+                .take(device, queue, &self.layouts, &self.present, size);
+        if created {
             if let Some(convergence) = self.convergence.as_mut() {
                 convergence.forget();
             }
             self.settled = None;
         }
-        let mut target = self.target.take().expect("the frame target is ready");
         self.level_cap = Some(frame.level_cap);
         let info = self.render(device, queue, &mut target, frame);
-        self.target = Some(target);
+        self.targets.put(target);
         info
+    }
+
+    pub fn reserve_target(&mut self, device: &Device, queue: &Queue, size: [u32; 2]) {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a reserved target covers a positive surface"
+        );
+        self.targets
+            .reserve(device, queue, &self.layouts, &self.present, size);
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {
@@ -813,7 +835,10 @@ impl Renderer {
         exposure: f32,
         transparent: bool,
     ) -> (Texture, [u32; 2]) {
-        let target = self.target.as_ref().expect("a drawn frame holds a target");
+        let target = self
+            .targets
+            .current()
+            .expect("a drawn frame holds a target");
         let size = target.size;
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("grana.picture"),

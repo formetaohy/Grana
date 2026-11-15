@@ -104,6 +104,30 @@ impl Edit {
         (time - self.active_at).rem_euclid(BLINK_PERIOD) < BLINK_DUTY
     }
 
+    pub fn composed(&self, preedit: &str) -> String {
+        if preedit.is_empty() {
+            return self.text.clone();
+        }
+        let length = self.length();
+        let (start, end) = self
+            .selection()
+            .unwrap_or((self.caret.min(length), self.caret.min(length)));
+        let mut composed = String::with_capacity(self.text.len() + preedit.len());
+        for (index, character) in self.text.chars().enumerate() {
+            if index == start {
+                composed.push_str(preedit);
+            }
+            if index >= start && index < end {
+                continue;
+            }
+            composed.push(character);
+        }
+        if start >= length {
+            composed.push_str(preedit);
+        }
+        composed
+    }
+
     fn offset(&self, index: usize) -> usize {
         let index = index.min(self.length());
         let mut offset = self.text.len();

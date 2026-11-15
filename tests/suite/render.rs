@@ -34,6 +34,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
     Frame {
         target: view.target,
         size: [SIDE, SIDE],
+        resolution: [SIDE, SIDE],
         camera: view.camera,
         viewport: view.viewport,
         time: 0,
@@ -1370,6 +1371,7 @@ fn take(
     let build = || Frame {
         target: &target,
         size: [SIDE, SIDE],
+        resolution: [SIDE, SIDE],
         camera: view.camera,
         viewport: WHOLE,
         time: view.time,
@@ -1700,6 +1702,7 @@ fn drawn<'a, 'b>(
     Frame {
         target,
         size: [SIDE, SIDE],
+        resolution: [SIDE, SIDE],
         camera,
         viewport: WHOLE,
         time: 0,

@@ -15,7 +15,7 @@ const TEXTURE_BUDGET: u64 = 512 << 20;
 pub const SAMPLE_LIMIT: u32 = 32;
 
 #[derive(Clone, Copy, PartialEq)]
-struct Request {
+struct Content {
     scene: u64,
     overlays: u64,
     camera: CameraState,
@@ -25,7 +25,6 @@ struct Request {
     size: [u32; 2],
     level_cap: usize,
     generation: u64,
-    display: Display,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +61,8 @@ pub struct Engine {
     plan: Option<Plan>,
     splats: SplatCache,
     image: Option<ViewportImage>,
-    request: Option<Request>,
+    content: Option<Content>,
+    resolution: [u32; 2],
     generation: u64,
     image_revision: u64,
     info: FrameInfo,
@@ -82,7 +82,8 @@ impl Engine {
             plan: None,
             splats: SplatCache::new(),
             image: None,
-            request: None,
+            content: None,
+            resolution: [0, 0],
             generation: 0,
             image_revision: 0,
             info: FrameInfo::default(),
@@ -96,7 +97,7 @@ impl Engine {
         self.prepared = None;
         self.plan = None;
         self.splats.clear();
-        self.request = None;
+        self.content = None;
         self.info = FrameInfo::default();
     }
 
@@ -108,7 +109,7 @@ impl Engine {
         self.renderer.invalidate(pyramid);
         self.generation = self.renderer.generation();
         self.pending_pick = None;
-        self.request = None;
+        self.content = None;
         self.info = FrameInfo::default();
     }
 
@@ -140,7 +141,7 @@ impl Engine {
         );
         self.renderer.set_exporting(false);
         let keys = view::key(view.scene);
-        let request = Request {
+        let content = Content {
             scene: keys.digest(),
             overlays: overlay_key(view.overlays),
             camera: view.camera.state(),
@@ -150,11 +151,24 @@ impl Engine {
             size: view.size,
             level_cap: view.level_cap,
             generation: self.generation,
-            display: view.display,
         };
-        if self.request == Some(request) && self.resolved(view.display) {
+        if self.content == Some(content) && self.resolved(view.display) {
             return Ok(());
         }
+        let moving = self.content.is_some_and(|previous| {
+            previous.camera != content.camera
+                || previous.size != content.size
+                || previous.region != content.region
+                || previous.clip != content.clip
+                || previous.exposure != content.exposure
+                || previous.scene != content.scene
+                || previous.overlays != content.overlays
+        });
+        let resolution = if view.display == Display::Interactive && moving {
+            view.display.resolution(view.size)
+        } else {
+            view.size
+        };
         let size = view.size;
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
@@ -162,7 +176,7 @@ impl Engine {
         let detail = match &self.plan {
             Some(plan)
                 if plan.structure == keys.structure()
-                    && plan.camera == request.camera
+                    && plan.camera == content.camera
                     && plan.height == size[1] =>
             {
                 plan.targets.clone()
@@ -178,7 +192,7 @@ impl Engine {
                 );
                 self.plan = Some(Plan {
                     structure: keys.structure(),
-                    camera: request.camera,
+                    camera: content.camera,
                     height: size[1],
                     targets: targets.clone(),
                 });
@@ -220,6 +234,7 @@ impl Engine {
                     camera: view.camera,
                     viewport: [0, 0, size[0], size[1]],
                     size,
+                    resolution,
                     samples: SAMPLE_LIMIT,
                     display: view.display.render(),
                     level_cap: view.level_cap,
@@ -229,9 +244,16 @@ impl Engine {
             )?
         };
         self.info = info;
-        self.request = Some(request);
+        self.content = Some(content);
+        self.resolution = resolution;
         if info.samples != 0 {
             self.image_revision = self.image_revision.wrapping_add(1);
+        }
+        if view.display == Display::Still && self.resolved(view.display) {
+            let interactive = Display::Interactive.resolution(size);
+            if interactive != size {
+                self.renderer.reserve_target(device, queue, interactive);
+            }
         }
         Ok(())
     }
@@ -256,7 +278,14 @@ impl Engine {
         if display.awaits() {
             return info.samples != 0 && !info.fading;
         }
-        info.samples >= SAMPLE_LIMIT && !info.fading && info.view.resident >= info.view.demand
+        let detailed = self
+            .image
+            .as_ref()
+            .is_some_and(|image| image.size == self.resolution);
+        detailed
+            && info.samples >= SAMPLE_LIMIT
+            && !info.fading
+            && info.view.resident >= info.view.demand
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {

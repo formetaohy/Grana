@@ -14,9 +14,10 @@ impl Renderer {
     ) -> Result<FrameInfo, String> {
         let Frame {
             target: surface,
-            size,
+            size: surface_size,
+            resolution,
             camera,
-            viewport,
+            viewport: pick,
             time,
             region: bounds,
             clip,
@@ -27,12 +28,19 @@ impl Renderer {
             level_cap: _,
             temporal,
         } = frame;
-        assert!(inside(viewport, size), "the view lies on the surface");
+        assert!(inside(pick, surface_size), "the view lies on the surface");
+        let viewport = scaled(pick, surface_size, resolution);
+        let size = resolution;
+        let display_height = pick[3].max(1);
+        assert!(
+            inside(viewport, size),
+            "the view lies on the render surface"
+        );
         let awaits = display.awaits();
         let assured = display.assures();
         self.time = time;
         self.prefetch = display.prefetches();
-        self.viewport = Some(viewport);
+        self.viewport = Some(pick);
         let slice = camera.slice().is_some();
         let slice_objects = slice && (!scene.layers.is_empty() || !scene.splats.is_empty());
         let temporal = temporal.filter(|_| !slice_objects);
@@ -170,7 +178,7 @@ impl Renderer {
             camera,
             region: bounds,
             aspect,
-            height,
+            height: display_height,
             limits,
             capacity: share,
             current,
@@ -178,7 +186,7 @@ impl Renderer {
         let fit_key = digest(&[
             motion,
             share as u64,
-            u64::from(height),
+            u64::from(display_height),
             ceiling as u64,
             first as u64,
             u64::from(u32::from(measured)),
@@ -233,7 +241,7 @@ impl Renderer {
             time,
             ViewState {
                 camera,
-                size: [viewport[2], viewport[3]],
+                size: surface_size,
                 region: bounds,
                 levels,
             },
@@ -964,4 +972,22 @@ pub(super) fn inside(region: [u32; 4], size: [u32; 2]) -> bool {
         && region[3] > 0
         && region[0] + region[2] <= size[0]
         && region[1] + region[3] <= size[1]
+}
+
+pub(super) fn scaled(region: [u32; 4], surface: [u32; 2], resolution: [u32; 2]) -> [u32; 4] {
+    if surface == resolution {
+        return region;
+    }
+    let scale = |value: u32, source: u32, target: u32| -> u32 {
+        (u64::from(value) * u64::from(target) / u64::from(source)) as u32
+    };
+    let x = scale(region[0], surface[0], resolution[0]);
+    let y = scale(region[1], surface[1], resolution[1]);
+    let width = scale(region[2], surface[0], resolution[0])
+        .max(1)
+        .min(resolution[0].saturating_sub(x));
+    let height = scale(region[3], surface[1], resolution[1])
+        .max(1)
+        .min(resolution[1].saturating_sub(y));
+    [x, y, width, height]
 }

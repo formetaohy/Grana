@@ -40,7 +40,7 @@ pub(crate) fn resolve(
 ) -> Option<PaletteView> {
     let state = workspace.palette.as_ref()?;
     let mut selected = state.selected;
-    let query = ui.editing_text().unwrap_or_default().to_string();
+    let query = ui.editing_text().unwrap_or_default();
     let entries = catalog(view, workspace, &query);
     if entries.is_empty() {
         selected = 0;
