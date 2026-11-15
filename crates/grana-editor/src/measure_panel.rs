@@ -78,8 +78,8 @@ fn toolbar<'a>(
         .collect::<Vec<_>>();
     let current = state.measure.set();
     let chosen = current
-        .or_else(|| sets.first().map(|(id, _)| *id))
-        .unwrap_or_else(|| sets[0].0);
+        .filter(|id| sets.iter().any(|(candidate, _)| candidate == id))
+        .unwrap_or(sets[0].0);
     let selected = sets.iter().position(|(id, _)| *id == chosen).unwrap_or(0);
     let trackable = state
         .scene

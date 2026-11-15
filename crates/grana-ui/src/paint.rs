@@ -135,6 +135,7 @@ pub(crate) struct LayerBuffer {
     pub dirty: Option<(usize, usize)>,
     pub revision: u64,
     pub backdrop: bool,
+    backdrops: usize,
 }
 
 impl LayerBuffer {
@@ -146,13 +147,13 @@ impl LayerBuffer {
     }
 
     pub(crate) fn patch(&mut self, start: usize, instances: &[Instance]) {
-        self.replace(start, instances);
-        if instances
-            .iter()
-            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0)
-        {
-            self.backdrop = true;
+        if instances.is_empty() {
+            return;
         }
+        let held = backdrops(&self.material[start..start + instances.len()]);
+        self.replace(start, instances);
+        self.backdrops = self.backdrops + backdrops(instances) - held;
+        self.backdrop = self.backdrops > 0;
         self.mark(start, instances.len());
         self.touch();
     }
@@ -175,19 +176,22 @@ impl LayerBuffer {
     pub(crate) fn assign(&mut self, instances: &[Instance]) {
         self.material.clear();
         self.material.extend_from_slice(instances);
-        self.backdrop = instances
-            .iter()
-            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0);
+        self.reset_backdrop();
         self.dirty = Some((0, self.material.len()));
         self.touch();
     }
 
     pub(crate) fn reset_backdrop(&mut self) {
-        self.backdrop = self
-            .material
-            .iter()
-            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0);
+        self.backdrops = backdrops(&self.material);
+        self.backdrop = self.backdrops > 0;
     }
+}
+
+fn backdrops(instances: &[Instance]) -> usize {
+    instances
+        .iter()
+        .filter(|instance| instance.meta[1] & FLAG_BACKDROP != 0)
+        .count()
 }
 
 pub struct Painter<'a> {

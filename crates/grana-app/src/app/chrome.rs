@@ -15,8 +15,9 @@ impl App {
         let Some(surface) = surface.as_ref() else {
             return;
         };
-        if let Some(cursor) = chrome.track(&surface.window, event) {
-            surface.window.set_cursor(cursor);
+        let cursor = chrome.track(&surface.window, event);
+        if let Some(cursor) = cursor {
+            self.push_cursor(cursor);
         }
     }
 
@@ -85,12 +86,9 @@ impl App {
         self.request_redraw();
     }
 
-    pub(super) fn sync_window_cursor(&self) {
-        let Some(edge) = self.chrome.edge() else {
-            return;
-        };
-        if let Some(surface) = self.surface.as_ref() {
-            surface.window.set_cursor(CursorIcon::from(edge));
+    pub(super) fn sync_window_cursor(&mut self) {
+        if let Some(edge) = self.chrome.edge() {
+            self.push_cursor(CursorIcon::from(edge));
         }
     }
 

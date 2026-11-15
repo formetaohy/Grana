@@ -13,14 +13,16 @@ use super::{App, Surface, TOOL_CLICK_SLOP};
 impl App {
     pub(super) fn interact_viewport(&mut self) {
         if self.session.scene().is_none() {
-            if let Some(surface) = self.surface.as_mut() {
-                surface
-                    .window
-                    .set_cursor(interface_cursor(surface.ui.cursor()));
+            let cursor = self
+                .surface
+                .as_ref()
+                .map(|surface| interface_cursor(surface.ui.cursor()));
+            if let Some(cursor) = cursor {
+                self.push_cursor(cursor);
             }
             return;
         }
-        let (interaction, hovered) = {
+        let (interaction, hovered, cursor) = {
             let App {
                 surface,
                 session,
@@ -75,9 +77,9 @@ impl App {
             } else {
                 interface_cursor(surface.ui.cursor())
             };
-            surface.window.set_cursor(cursor);
-            (interaction, hovered)
+            (interaction, hovered, cursor)
         };
+        self.push_cursor(cursor);
         if let Some((index, part)) = hovered
             && interaction.grab.is_some()
             && self.workspace.annotation_drag.is_none()

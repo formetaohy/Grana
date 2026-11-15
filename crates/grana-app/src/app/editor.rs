@@ -1,10 +1,39 @@
 use std::time::Duration;
 
 use grana_editor::Frame;
-use grana_session::SessionView;
+use grana_session::{Session, SessionView};
 use grana_ui::Vec2 as UiVec2;
 
 use super::App;
+
+fn session_view<'a>(
+    session: &'a Session,
+    export: Option<(u32, u32)>,
+    message: Option<&str>,
+) -> SessionView<'a> {
+    SessionView {
+        access: session.access(),
+        scene: session.scene(),
+        measure: session.measure(),
+        measuring: session.measuring(),
+        timeline: session.timeline(),
+        jobs: session.progress(),
+        localizations: session.localizations(),
+        io: session.io(export, message.map(str::to_owned)),
+        batch: session.batch(),
+        stitch: session.stitch().map(|stitch| stitch.view()),
+        history: session.history(),
+        series: session.series(),
+        plate: session.plate(),
+        labels: session.label_images(),
+        views: session.views(),
+        recent: session.recent(),
+        import: session.import(),
+        recovery: session.recovery(),
+        export: session.export(),
+    }
+}
+
 impl App {
     pub(super) fn run_ui(&mut self) -> (Frame, Option<Duration>) {
         let App {
@@ -31,29 +60,7 @@ impl App {
         let actions = surface
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());
-        let exporting = export.progress();
-        let export_message = output.clone();
-        let view = SessionView {
-            access: session.access(),
-            scene: session.scene(),
-            measure: session.measure(),
-            measuring: session.measuring(),
-            timeline: session.timeline(),
-            jobs: session.progress(),
-            localizations: session.localizations(),
-            io: session.io(exporting, export_message),
-            batch: session.batch(),
-            stitch: session.stitch().map(|stitch| stitch.view()),
-            history: session.history(),
-            series: session.series(),
-            plate: session.plate(),
-            labels: session.label_images(),
-            views: session.views(),
-            recent: session.recent(),
-            import: session.import(),
-            recovery: session.recovery(),
-            export: session.export(),
-        };
+        let view = session_view(session, export.progress(), output.as_deref());
         let frame = grana_editor::build(&mut surface.ui, actions, &view, camera, stage, workspace);
         let wait = surface.ui.finish();
         (frame, wait)
@@ -74,27 +81,7 @@ impl App {
             let Some(surface) = surface.as_mut() else {
                 return false;
             };
-            let view = SessionView {
-                access: session.access(),
-                scene: session.scene(),
-                measure: session.measure(),
-                measuring: session.measuring(),
-                timeline: session.timeline(),
-                jobs: session.progress(),
-                localizations: session.localizations(),
-                io: session.io(export.progress(), output.clone()),
-                batch: session.batch(),
-                stitch: session.stitch().map(|stitch| stitch.view()),
-                history: session.history(),
-                series: session.series(),
-                plate: session.plate(),
-                labels: session.label_images(),
-                views: session.views(),
-                recent: session.recent(),
-                import: session.import(),
-                recovery: session.recovery(),
-                export: session.export(),
-            };
+            let view = session_view(session, export.progress(), output.as_deref());
             let mut frame = Frame::default();
             grana_editor::apply(
                 &mut surface.ui,

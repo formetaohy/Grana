@@ -108,6 +108,7 @@ pub struct App {
     activity: Option<Instant>,
     animating: bool,
     chrome: window::Chrome,
+    cursor: Option<winit::window::CursorIcon>,
     closing: bool,
     window_fit: WindowFit,
     window_fitted: bool,
@@ -169,6 +170,7 @@ impl App {
             activity: None,
             animating: false,
             chrome: window::Chrome::new(),
+            cursor: None,
             closing: false,
             window_fit: WindowFit::Startup,
             window_fitted: false,
@@ -213,6 +215,7 @@ impl App {
         self.replaced = self.session.replaced();
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
+        self.cursor = None;
     }
 
     fn sync_engine(&mut self) {
@@ -222,19 +225,13 @@ impl App {
         let Some(pending) = self.pending_engine.take() else {
             return;
         };
-        let engine = if self.session.scene().is_some() {
-            pending
-                .recv()
-                .unwrap_or_else(|_| panic!("the renderer failed to initialize"))
-        } else {
-            match pending.try_recv() {
-                Ok(engine) => engine,
-                Err(TryRecvError::Empty) => {
-                    self.pending_engine = Some(pending);
-                    return;
-                }
-                Err(TryRecvError::Disconnected) => panic!("the renderer failed to initialize"),
+        let engine = match pending.try_recv() {
+            Ok(engine) => engine,
+            Err(TryRecvError::Empty) => {
+                self.pending_engine = Some(pending);
+                return;
             }
+            Err(TryRecvError::Disconnected) => panic!("the renderer failed to initialize"),
         };
         self.engine = Some(engine);
         self.sync_dataset(false);
@@ -447,6 +444,16 @@ impl App {
     pub(super) fn request_redraw(&self) {
         if let Some(surface) = &self.surface {
             surface.window.request_redraw();
+        }
+    }
+
+    pub(super) fn push_cursor(&mut self, cursor: winit::window::CursorIcon) {
+        if self.cursor == Some(cursor) {
+            return;
+        }
+        self.cursor = Some(cursor);
+        if let Some(surface) = &self.surface {
+            surface.window.set_cursor(cursor);
         }
     }
 

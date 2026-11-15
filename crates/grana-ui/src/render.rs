@@ -195,11 +195,6 @@ pub(crate) struct PaintFrame<'a> {
     pub overlay: &'a LayerBuffer,
 }
 
-struct PaintTarget<'a> {
-    target: &'a TextureView,
-    load: LoadOp<wgpu::Color>,
-}
-
 struct InstanceBuffer {
     buffer: Buffer,
     capacity: usize,
@@ -629,30 +624,24 @@ impl Renderer {
         }
         self.prepare_groups(atlases, scene, &backdrop_sampled);
         if count > 0 {
-            if matches!(damage, Damage::Full) {
+            let full = matches!(damage, Damage::Full);
+            if full {
                 clear(encoder, &canvas_linear);
-            } else {
-                for scissor in &scissors[..count] {
-                    self.erase(encoder, &canvas_linear, *scissor);
-                }
             }
             let content_group = &self.ui_groups[Layer::Content.index()]
                 .as_ref()
                 .expect("the content group is cached")
                 .1;
             for scissor in &scissors[..count] {
-                self.paint_material(
+                self.paint_layers(
                     encoder,
-                    &PaintTarget {
-                        target: &canvas_linear,
-                        load: LoadOp::Load,
-                    },
-                    content_group,
-                    content.material.len(),
+                    &canvas_linear,
+                    &[(content_group, content.material.len())],
                     Some(*scissor),
+                    (!full).then_some(*scissor),
                 );
             }
-            let region = if matches!(damage, Damage::Full) {
+            let region = if full {
                 None
             } else {
                 Some(self.reach(&scissors[..count]))
@@ -670,15 +659,12 @@ impl Renderer {
                 .expect("the chrome group is cached")
                 .1;
             for scissor in &scissors[..count] {
-                self.paint_material(
+                self.paint_layers(
                     encoder,
-                    &PaintTarget {
-                        target: &canvas_linear,
-                        load: LoadOp::Load,
-                    },
-                    chrome_group,
-                    chrome.material.len(),
+                    &canvas_linear,
+                    &[(chrome_group, chrome.material.len())],
                     Some(*scissor),
+                    None,
                 );
             }
             if popup.backdrop || hud.backdrop {
@@ -701,23 +687,13 @@ impl Renderer {
                 .as_ref()
                 .expect("the overlay group is cached")
                 .1;
+            let interface = [
+                (popup_group, popup.material.len()),
+                (hud_group, hud.material.len()),
+                (overlay_group, overlay.material.len()),
+            ];
             for scissor in &scissors[..count] {
-                for (group, material) in [
-                    (popup_group, popup.material.len()),
-                    (hud_group, hud.material.len()),
-                    (overlay_group, overlay.material.len()),
-                ] {
-                    self.paint_material(
-                        encoder,
-                        &PaintTarget {
-                            target: &canvas_linear,
-                            load: LoadOp::Load,
-                        },
-                        group,
-                        material,
-                        Some(*scissor),
-                    );
-                }
+                self.paint_layers(encoder, &canvas_linear, &interface, Some(*scissor), None);
             }
         }
 
@@ -782,25 +758,6 @@ impl Renderer {
             );
             self.ui_groups[slot] = Some((key, group));
         }
-    }
-
-    fn erase(&self, encoder: &mut CommandEncoder, target: &TextureView, scissor: [u32; 4]) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.ui.erase.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: PassOperations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.erase);
-        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-        pass.draw(0..3, 0..1);
     }
 
     fn region(&self) -> [u32; 4] {
@@ -884,36 +841,46 @@ impl Renderer {
         ]
     }
 
-    fn paint_material(
+    fn paint_layers(
         &self,
         encoder: &mut CommandEncoder,
-        target: &PaintTarget<'_>,
-        group: &BindGroup,
-        count: usize,
+        target: &TextureView,
+        layers: &[(&BindGroup, usize)],
         scissor: Option<[u32; 4]>,
+        erase: Option<[u32; 4]>,
     ) {
-        if count == 0 {
+        if erase.is_none() && layers.iter().all(|(_, count)| *count == 0) {
             return;
         }
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ui.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target.target,
+                view: target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: PassOperations {
-                    load: target.load,
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 },
             })],
             ..Default::default()
         });
+        if let Some(erase) = erase {
+            pass.set_pipeline(&self.erase);
+            pass.set_scissor_rect(erase[0], erase[1], erase[2], erase[3]);
+            pass.draw(0..3, 0..1);
+        }
         pass.set_pipeline(&self.ui);
-        pass.set_bind_group(0, group, &[]);
         if let Some(scissor) = scissor {
             pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         }
-        pass.draw(0..6, 0..count as u32);
+        for (group, count) in layers {
+            if *count == 0 {
+                continue;
+            }
+            pass.set_bind_group(0, *group, &[]);
+            pass.draw(0..6, 0..*count as u32);
+        }
     }
 
     pub fn paint_figure(

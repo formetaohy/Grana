@@ -218,7 +218,8 @@ impl App {
     pub(super) fn streaming(&self) -> bool {
         let engine = self.engine.as_ref();
         let info = self.frame_info();
-        self.session.batch().is_some_and(|batch| batch.running)
+        self.pending_engine.is_some()
+            || self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
             || self.session.loading().is_some()
             || self.session.previewing()
