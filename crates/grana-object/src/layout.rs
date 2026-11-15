@@ -1,6 +1,6 @@
 use crate::TrackSet;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackLayout {
     order: Vec<usize>,
     lanes: Vec<usize>,

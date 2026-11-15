@@ -14,27 +14,41 @@ impl<A: Clone> Ui<A> {
             self.tooltip = None;
             return;
         };
+        if self.tree.nodes[node].tooltip.is_none() {
+            self.hovered_since = Some((node, self.time));
+            self.tooltip = None;
+            return;
+        }
         let since = match self.hovered_since {
             Some((id, since)) if id == node => since,
             _ => {
                 self.hovered_since = Some((node, self.time));
                 self.tooltip = None;
+                self.wake(TOOLTIP_DELAY);
                 return;
             }
         };
-        if self.time - since > TOOLTIP_DELAY
-            && let Some(text) = self.tree.nodes[node].tooltip.clone()
+        let remaining = TOOLTIP_DELAY - (self.time - since);
+        if remaining > 0.0 {
+            self.wake(remaining);
+            return;
+        }
+        let text = self.tree.nodes[node]
+            .tooltip
+            .as_deref()
+            .expect("the hovered node carries a tooltip");
+        if self
+            .tooltip
+            .as_ref()
+            .is_some_and(|(held, shown)| *held == node && shown == text)
         {
-            self.tooltip = Some((node, text));
-            self.animating = true;
+            return;
         }
-        if self.time - since <= TOOLTIP_DELAY {
-            self.animating = true;
-        }
+        self.tooltip = Some((node, text.to_string()));
     }
 
     pub(crate) fn paint_overlays(&mut self) {
-        let tooltip = self.tooltip.clone();
+        let tooltip = self.tooltip.take();
         let focus = self.focus;
         let focus_visible = self.focus_visible;
         let pointer = self.pointer;
@@ -125,5 +139,6 @@ impl<A: Clone> Ui<A> {
             self.overlay.assign(&instances.material);
         }
         self.scratch = instances;
+        self.tooltip = tooltip;
     }
 }

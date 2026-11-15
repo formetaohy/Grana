@@ -13,7 +13,7 @@ use wgpu::{
     RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
     ShaderStages, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
-    VertexBufferLayout, VertexState, VertexStepMode, util::DeviceExt,
+    VertexBufferLayout, VertexState, VertexStepMode,
 };
 
 use crate::schema::{Digest, Overlay};
@@ -70,6 +70,7 @@ pub(crate) struct Overlays {
     draws: Vec<Draw>,
     vertices: Vec<Vertex>,
     buffer: Option<Buffer>,
+    capacity: usize,
     stamp: u64,
 }
 
@@ -137,6 +138,7 @@ impl Overlays {
             draws: Vec::new(),
             vertices: Vec::new(),
             buffer: None,
+            capacity: 0,
             stamp: 0,
         }
     }
@@ -155,7 +157,6 @@ impl Overlays {
         self.stamp = stamp;
         self.vertices.clear();
         self.draws.clear();
-        self.buffer = None;
         if overlays.is_empty() {
             self.sheets.clear();
             return;
@@ -188,13 +189,18 @@ impl Overlays {
             self.draws.push(Draw { sheet: key, first });
         }
         self.sheets.retain(|key, _| kept.contains(key));
-        self.buffer = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let bytes = bytemuck::cast_slice(&self.vertices);
+        if self.capacity < bytes.len() {
+            self.capacity = bytes.len().next_power_of_two();
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("grana.overlay.vertices"),
-                contents: bytemuck::cast_slice(&self.vertices),
-                usage: BufferUsages::VERTEX,
-            }),
-        );
+                size: self.capacity as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let buffer = self.buffer.as_ref().expect("the overlay buffer is sized");
+        queue.write_buffer(buffer, 0, bytes);
     }
 
     pub fn draw(&self, encoder: &mut CommandEncoder, target: &TextureView, viewport: [u32; 4]) {

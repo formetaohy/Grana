@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use grana_editor::Frame;
 use grana_session::SessionView;
 use grana_ui::Vec2 as UiVec2;
 
 use super::App;
 impl App {
-    pub(super) fn run_ui(&mut self) -> (Frame, bool) {
+    pub(super) fn run_ui(&mut self) -> (Frame, Option<Duration>) {
         let App {
             surface,
             session,
@@ -17,7 +19,7 @@ impl App {
             ..
         } = self;
         let Some(surface) = surface.as_mut() else {
-            return (Frame::default(), false);
+            return (Frame::default(), None);
         };
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
@@ -53,8 +55,8 @@ impl App {
             export: session.export(),
         };
         let frame = grana_editor::build(&mut surface.ui, actions, &view, camera, stage, workspace);
-        let animating = surface.ui.finish();
-        (frame, animating)
+        let wait = surface.ui.finish();
+        (frame, wait)
     }
 
     pub(super) fn dispatch(&mut self, message: grana_editor::Message) -> bool {

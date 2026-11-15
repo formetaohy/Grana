@@ -476,7 +476,7 @@ fn lineage<'a>(
         rect.min + Vec2::new(SIDE, AXIS + 4.0),
         rect.max - Vec2::new(SIDE + 6.0, 6.0),
     );
-    let layout = grana_object::TrackLayout::of(set);
+    let layout = set.layout();
     let lane_count = layout.len();
     let content = lane_count as f32 * ROW;
     let key = Key::new("tracks.tree");

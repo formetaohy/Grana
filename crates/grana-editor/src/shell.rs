@@ -646,7 +646,7 @@ fn recent_row<'a>(
     let detail_style = TextStyle::new(theme.font(Level::Monospace), palette.outline).truncating();
     grana_ui::canvas(Length::Fill, RECENT_ROW)
         .view(
-            (title.clone(), detail.clone(), symbol),
+            (title.clone(), detail.clone(), symbol, index, count),
             move |_, painter, info| {
                 let rect = info.rect;
                 let fill = palette

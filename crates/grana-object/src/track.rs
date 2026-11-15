@@ -1,3 +1,4 @@
+use crate::TrackLayout;
 use crate::lineage::Lineage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,6 +213,7 @@ pub struct TrackSet {
     detections: Vec<(u32, usize, u32)>,
     divisions: usize,
     merges: usize,
+    layout: TrackLayout,
 }
 
 impl TrackSet {
@@ -309,7 +311,7 @@ impl TrackSet {
         let merges = incoming.iter().filter(|count| **count == 2).count();
         let mut by_child = (0..links.len() as u32).collect::<Vec<_>>();
         by_child.sort_unstable_by_key(|index| (links[*index as usize].child, *index));
-        Ok(Self {
+        let mut set = Self {
             frame_interval,
             tracks,
             links,
@@ -317,7 +319,10 @@ impl TrackSet {
             detections,
             divisions,
             merges,
-        })
+            layout: TrackLayout::default(),
+        };
+        set.layout = TrackLayout::of(&set);
+        Ok(set)
     }
 
     pub fn linked(
@@ -335,6 +340,10 @@ impl TrackSet {
 
     pub fn frame_interval(&self) -> f32 {
         self.frame_interval
+    }
+
+    pub fn layout(&self) -> &TrackLayout {
+        &self.layout
     }
 
     pub fn tracks(&self) -> &[Track] {

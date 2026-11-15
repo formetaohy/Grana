@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use glam::Vec2;
 use grana_i18n::Language;
@@ -59,6 +60,7 @@ pub struct Ui<A = ()> {
     pub(crate) popup_anchors: HashMap<Key, NodeId>,
     pub(crate) cursor: Cursor,
     pub(crate) animating: bool,
+    pub(crate) wake_in: Option<f32>,
     pub(crate) inside: bool,
     pub(crate) pointer: Vec2,
     pub(crate) occluders: Vec<Rect>,
@@ -111,6 +113,7 @@ impl<A: Clone> Ui<A> {
             popup_anchors: HashMap::new(),
             cursor: Cursor::Arrow,
             animating: false,
+            wake_in: None,
             inside: false,
             pointer: Vec2::ZERO,
             occluders: Vec::new(),
@@ -321,6 +324,7 @@ impl<A: Clone> Ui<A> {
         self.actions.clear();
         self.cursor = Cursor::Arrow;
         self.animating = false;
+        self.wake_in = None;
         self.edit_caret = None;
         self.inside = self.input.inside();
         self.pointer = self.input.position();
@@ -376,11 +380,19 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    pub fn finish(&mut self) -> bool {
+    pub fn finish(&mut self) -> Option<Duration> {
         self.text.flush(self.renderer.queue());
         self.images.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
-        self.animating
+        if self.animating {
+            return Some(Duration::ZERO);
+        }
+        self.wake_in
+            .map(|seconds| Duration::from_secs_f32(seconds.max(0.0)))
+    }
+
+    pub(crate) fn wake(&mut self, seconds: f32) {
+        self.wake_in = Some(self.wake_in.map_or(seconds, |held| held.min(seconds)));
     }
 
     pub fn render(

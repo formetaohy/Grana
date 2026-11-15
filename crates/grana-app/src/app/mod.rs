@@ -256,7 +256,8 @@ impl App {
         self.exchange_bricks();
         self.poll_pick();
         self.session.sync_measure();
-        let (frame, animating) = self.run_ui();
+        let (frame, wait) = self.run_ui();
+        let animating = wait.is_some_and(|wait| wait.is_zero());
         self.fit_window(&frame);
         self.animating = animating;
         self.sync_preference();
@@ -276,8 +277,8 @@ impl App {
         self.interacting = false;
         self.fit_view();
         let mut delay = self.render(display).unwrap_or(Duration::MAX);
-        if animating {
-            delay = Duration::ZERO;
+        if let Some(wait) = wait {
+            delay = delay.min(wait);
         } else if self.workspace.playback.playing {
             delay = delay.min(PLAYBACK_POLL);
         } else if self.workspace.playback.previewing {

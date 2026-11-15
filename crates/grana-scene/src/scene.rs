@@ -487,8 +487,8 @@ impl Scene {
                 stamp,
                 self.objects
                     .get(set)
-                    .and_then(|object| object.frame_shared(time))
-                    .map_or(0, |frame| Arc::as_ptr(&frame) as u64),
+                    .and_then(|object| object.frame_stamp(time))
+                    .map_or(u64::MAX, |frame| frame.raw()),
             );
         }
         stamp
