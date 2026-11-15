@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
 
 use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
@@ -31,10 +31,12 @@ pub struct Opened {
 pub enum Event {
     Opened(Box<Opened>),
     Brick {
+        generation: u64,
         request: BrickRequest,
         data: BrickData,
     },
     ReadFailed {
+        generation: u64,
         request: BrickRequest,
         detail: String,
     },
@@ -45,11 +47,16 @@ pub struct Loader {
     events: Pipe<Event>,
     sender: Sender<Event>,
     reader: &'static Executor,
-    time: Arc<AtomicU32>,
-    drifts: Arc<RwLock<Drifts>>,
-    channels: Arc<RwLock<Option<Arc<Channels>>>>,
-    closed: Arc<AtomicBool>,
+    shared: Arc<Shared>,
     source: Source,
+}
+
+struct Shared {
+    time: AtomicU32,
+    drifts: RwLock<Drifts>,
+    channels: RwLock<Option<Arc<Channels>>>,
+    generation: AtomicU64,
+    closed: AtomicBool,
 }
 
 impl Loader {
@@ -79,10 +86,13 @@ impl Loader {
                 events,
                 sender,
                 reader: Executor::lane(Role::Read),
-                time: Arc::new(AtomicU32::new(0)),
-                drifts: Arc::new(RwLock::new(Drifts::new())),
-                channels: Arc::new(RwLock::new(Some(channels))),
-                closed: Arc::new(AtomicBool::new(false)),
+                shared: Arc::new(Shared {
+                    time: AtomicU32::new(0),
+                    drifts: RwLock::new(Drifts::new()),
+                    channels: RwLock::new(Some(channels)),
+                    generation: AtomicU64::new(0),
+                    closed: AtomicBool::new(false),
+                }),
                 source,
             },
             opened,
@@ -108,33 +118,25 @@ impl Loader {
     fn open(source: Source) -> Self {
         let remote = source.is_remote();
         let (sender, events) = Pipe::new(CAPACITY);
-        let time = Arc::new(AtomicU32::new(0));
-        let drifts = Arc::new(RwLock::new(Drifts::new()));
-        let channels = Arc::new(RwLock::new(None));
-        let closed = Arc::new(AtomicBool::new(false));
+        let shared = Arc::new(Shared {
+            time: AtomicU32::new(0),
+            drifts: RwLock::new(Drifts::new()),
+            channels: RwLock::new(None),
+            generation: AtomicU64::new(0),
+            closed: AtomicBool::new(false),
+        });
         let reader = Executor::lane(Role::Read);
         let opening = source.clone();
         let opening_sender = sender.clone();
-        let opening_channels = Arc::clone(&channels);
-        let opening_closed = Arc::clone(&closed);
+        let opening_shared = Arc::clone(&shared);
         reader.submit_ordered(OPENING, move |cancel| {
-            open(
-                opening,
-                remote,
-                &opening_channels,
-                &opening_closed,
-                cancel,
-                &opening_sender,
-            );
+            open(opening, remote, &opening_shared, cancel, &opening_sender);
         });
         Self {
             events,
             sender,
             reader,
-            time,
-            drifts,
-            channels,
-            closed,
+            shared,
             source,
         }
     }
@@ -146,38 +148,46 @@ impl Loader {
         }
     }
 
+    pub fn generation(&self) -> u64 {
+        self.shared.generation.load(AtomicOrdering::Relaxed)
+    }
+
+    pub fn invalidate(&self) {
+        self.shared.generation.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
     pub fn request(&self, requests: &[BrickRequest]) -> bool {
-        if self.closed.load(AtomicOrdering::Relaxed) {
+        if self.shared.closed.load(AtomicOrdering::Relaxed) {
             return false;
         }
+        let generation = self.generation();
         for request in requests.iter().rev() {
             let request = *request;
             let priority = self.reader.stamp();
-            let channels = Arc::clone(&self.channels);
-            let time = Arc::clone(&self.time);
-            let drifts = Arc::clone(&self.drifts);
-            let closed = Arc::clone(&self.closed);
+            let shared = Arc::clone(&self.shared);
             let events = self.sender.clone();
             self.reader.submit_ordered(priority, move |cancel| {
-                read(request, &channels, &time, &drifts, &closed, cancel, &events);
+                read(request, generation, &shared, cancel, &events);
             });
         }
         true
     }
 
     pub fn set_time(&self, time: u32) {
-        self.time.store(time, AtomicOrdering::Relaxed);
+        self.shared.time.store(time, AtomicOrdering::Relaxed);
     }
 
     pub fn set_drifts(&self, drifts: Drifts) {
         *self
+            .shared
             .drifts
             .write()
             .unwrap_or_else(|error| error.into_inner()) = drifts;
     }
 
     pub fn drifts(&self) -> Drifts {
-        self.drifts
+        self.shared
+            .drifts
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -189,13 +199,15 @@ impl Loader {
 
     pub fn set_channels(&self, channels: Channels) {
         *self
+            .shared
             .channels
             .write()
             .unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(channels));
     }
 
     pub fn channels(&self) -> Option<Arc<Channels>> {
-        self.channels
+        self.shared
+            .channels
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -204,19 +216,12 @@ impl Loader {
 
 impl Drop for Loader {
     fn drop(&mut self) {
-        self.closed.store(true, AtomicOrdering::Relaxed);
+        self.shared.closed.store(true, AtomicOrdering::Relaxed);
     }
 }
 
-fn open(
-    source: Source,
-    remote: bool,
-    channels: &RwLock<Option<Arc<Channels>>>,
-    closed: &AtomicBool,
-    cancel: &Cancel,
-    sender: &Sender<Event>,
-) {
-    let stopped = || closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
+fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: &Sender<Event>) {
+    let stopped = || shared.closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
     let fail = |detail: String| {
         sender.send_until(Event::Failed(detail), stopped);
     };
@@ -273,31 +278,35 @@ fn open(
         field,
         imports,
     }));
-    if cancel.cancelled() || closed.load(AtomicOrdering::Relaxed) {
+    if cancel.cancelled() || shared.closed.load(AtomicOrdering::Relaxed) {
         return;
     }
     let reader = Arc::new(Channels::stored(Arc::new(reader)));
-    *channels.write().unwrap_or_else(|error| error.into_inner()) = Some(reader);
+    *shared
+        .channels
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = Some(reader);
     sender.send_until(opened, stopped);
 }
 
 fn read(
     request: BrickRequest,
-    channels: &RwLock<Option<Arc<Channels>>>,
-    time: &AtomicU32,
-    drifts: &RwLock<Drifts>,
-    closed: &AtomicBool,
+    generation: u64,
+    shared: &Shared,
     cancel: &Cancel,
     events: &Sender<Event>,
 ) {
-    let stopped = || closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
+    let current = || shared.generation.load(AtomicOrdering::Relaxed) == generation;
+    let stopped =
+        || shared.closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() || !current();
     if stopped() {
         return;
     }
-    if request.time < time.load(AtomicOrdering::Relaxed) {
+    if request.time < shared.time.load(AtomicOrdering::Relaxed) {
         return;
     }
-    let Some(channels) = channels
+    let Some(channels) = shared
+        .channels
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
@@ -305,7 +314,8 @@ fn read(
         return;
     };
     let base = channels.pyramid().channel_count();
-    let warps = drifts
+    let warps = shared
+        .drifts
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .warps(request.time, base);
@@ -315,12 +325,20 @@ fn read(
         }
         match channels.read_brick(request.time, request.level, request.coord, &warps) {
             Ok(data) => {
-                events.send_until(Event::Brick { request, data }, stopped);
+                events.send_until(
+                    Event::Brick {
+                        generation,
+                        request,
+                        data,
+                    },
+                    stopped,
+                );
                 return;
             }
             Err(detail) if attempt == ATTEMPTS => {
                 events.send_until(
                     Event::ReadFailed {
+                        generation,
                         request,
                         detail: detail.to_string(),
                     },

@@ -349,6 +349,9 @@ impl Session {
     }
 
     pub(crate) fn discard_streamed(&mut self) {
+        if let Some(source) = self.source.as_ref() {
+            source.invalidate();
+        }
         self.in_flight.clear();
         self.failed.clear();
         self.bricks.clear();

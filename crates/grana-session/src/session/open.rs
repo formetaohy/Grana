@@ -554,17 +554,29 @@ impl Session {
                         self.deferred = true;
                     }
                 }
-                LoaderEvent::Brick { request, data } => {
-                    self.in_flight.remove(&request);
-                    self.transfer.record(data.bytes(), Instant::now());
-                    self.bricks.push((request, data));
+                LoaderEvent::Brick {
+                    generation,
+                    request,
+                    data,
+                } => {
+                    if !self.stale(generation) {
+                        self.in_flight.remove(&request);
+                        self.transfer.record(data.bytes(), Instant::now());
+                        self.bricks.push((request, data));
+                    }
                 }
-                LoaderEvent::ReadFailed { request, detail } => {
-                    self.in_flight.remove(&request);
-                    self.failed.insert(request);
-                    self.message = Some(Message::error(format!(
-                        "a volume region could not be read: {detail}"
-                    )));
+                LoaderEvent::ReadFailed {
+                    generation,
+                    request,
+                    detail,
+                } => {
+                    if !self.stale(generation) {
+                        self.in_flight.remove(&request);
+                        self.failed.insert(request);
+                        self.message = Some(Message::error(format!(
+                            "a volume region could not be read: {detail}"
+                        )));
+                    }
                 }
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;
@@ -583,6 +595,12 @@ impl Session {
             }
         }
         repaint
+    }
+
+    fn stale(&self, generation: u64) -> bool {
+        self.source
+            .as_ref()
+            .is_none_or(|source| source.generation() != generation)
     }
 
     fn remember_open(&mut self, source: Option<&Source>, name: &str, series: usize) {

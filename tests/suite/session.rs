@@ -3439,3 +3439,43 @@ fn clamps_a_timeline_recorded_on_a_longer_series() {
     );
     session.set_time(sample.time);
 }
+
+#[test]
+fn drops_volume_reads_that_predate_a_content_change() {
+    let mut session = Session::new();
+    session.open_series("stale bricks", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let bricks = (0..64)
+        .map(|_| BrickRequest {
+            time: 0,
+            level: 0,
+            coord: BrickCoord::new(0, 0, 0),
+        })
+        .collect::<Vec<_>>();
+    session.request(0, &bricks);
+    assert!(session.pending() > 0, "the brick reads are in flight");
+    session.execute(Command::Undo);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        session.poll();
+        assert!(
+            session.take_bricks().is_empty(),
+            "a volume read from before the content change never lands"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    session.request(0, &bricks[..1]);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        session.poll();
+        if !session.take_bricks().is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the volume read after the content change never completes"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}

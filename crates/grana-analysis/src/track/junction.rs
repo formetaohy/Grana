@@ -62,28 +62,32 @@ impl Event {
         [Some(first), Some(second), third].into_iter().flatten()
     }
 
-    fn apply(&self, chains: &mut Chains) {
+    fn apply(&self, chains: &mut Chains) -> Option<usize> {
         match self {
             Self::Fork(fork) => match fork.child {
                 Some(child) => {
                     chains.attach(fork.parent, child, Link::Division);
                     chains.attach(fork.parent, fork.other, Link::Division);
+                    None
                 }
                 None => {
                     let tail = chains.cut(fork.parent, fork.frame);
                     chains.attach(fork.parent, tail, Link::Division);
                     chains.attach(fork.parent, fork.other, Link::Division);
+                    Some(tail)
                 }
             },
             Self::Join(join) => match join.child {
                 Some(child) => {
                     chains.attach(join.head, child, Link::Merge);
                     chains.attach(join.other, child, Link::Merge);
+                    None
                 }
                 None => {
                     let tail = chains.cut(join.head, join.frame);
                     chains.attach(join.head, tail, Link::Merge);
                     chains.attach(join.other, tail, Link::Merge);
+                    Some(tail)
                 }
             },
         }
@@ -101,28 +105,44 @@ pub(super) fn attach(
     let total = 2 * frames;
     let events = params.events();
     let mut support = Support::default();
-    for frame in 1..frames {
+    let mut starts = vec![Vec::new(); frames];
+    for index in 0..chains.len() {
+        starts[chains.chain(index).start() as usize].push(index);
+    }
+    let mut previous = starts[0].clone();
+    for (frame, opening) in starts.iter().enumerate().skip(1) {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
         progress(frames + frame, total);
+        let mut active = previous.clone();
+        active.retain(|&index| chains.chain(index).end() as usize >= frame);
+        active.extend(opening.iter().copied());
+        let ending = previous
+            .iter()
+            .copied()
+            .filter(|&index| chains.chain(index).end() as usize == frame - 1)
+            .collect::<Vec<_>>();
+        let step = Step {
+            chains,
+            detections,
+            frame,
+            active: &active,
+            ending: &ending,
+        };
         let mut candidates = Vec::new();
         if events.division() {
             forks(
-                chains,
-                detections,
+                &step,
                 &mut support,
-                frame,
                 events.division_range(),
                 &mut candidates,
             );
         }
         if events.merge() {
             joins(
-                chains,
-                detections,
+                &step,
                 &mut support,
-                frame,
                 events.merge_range(),
                 events.merge_overlap(),
                 &mut candidates,
@@ -130,10 +150,27 @@ pub(super) fn attach(
         }
         candidates.sort_unstable_by_key(|event| event.rank());
         for index in select(&candidates) {
-            candidates[index].apply(chains);
+            if let Some(tail) = candidates[index].apply(chains) {
+                active.push(tail);
+            }
         }
+        previous = active;
     }
     Some(())
+}
+
+struct Step<'a> {
+    chains: &'a Chains,
+    detections: &'a Detections,
+    frame: usize,
+    active: &'a [usize],
+    ending: &'a [usize],
+}
+
+impl Step<'_> {
+    fn time(&self) -> u32 {
+        self.frame as u32
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -256,20 +293,17 @@ fn continue_score(detections: &Detections, chains: &Chains, chain: usize) -> f64
     (1.0 / (1.0 + jerk / speed)).clamp(0.0, 1.0)
 }
 
-fn forks(
-    chains: &Chains,
-    detections: &Detections,
-    support: &mut Support,
-    frame: usize,
-    range: f32,
-    events: &mut Vec<Event>,
-) {
-    let time = frame as u32;
-    let (starts, _) = start_chains(chains, frame);
-    let grid = detections.grid(frame, range);
-    for parent in 0..chains.len() {
+fn forks(step: &Step<'_>, support: &mut Support, range: f32, events: &mut Vec<Event>) {
+    let chains = step.chains;
+    let detections = step.detections;
+    let active = step.active;
+    let ending = step.ending;
+    let time = step.time();
+    let (starts, _) = starts_at(chains, active, step.frame);
+    let grid = detections.grid(step.frame, range);
+    for &parent in active {
         let chain = chains.chain(parent);
-        if chain.start() >= time || chain.end() < time || chain.incoming() > 1 {
+        if chain.start() >= time || chain.incoming() > 1 {
             continue;
         }
         let position = (time - chain.start()) as usize;
@@ -323,9 +357,9 @@ fn forks(
             }));
         });
     }
-    for parent in 0..chains.len() {
+    for &parent in ending {
         let chain = chains.chain(parent);
-        if chain.end() + 1 != time || chain.outgoing() > 0 || chain.incoming() > 1 {
+        if chain.outgoing() > 0 || chain.incoming() > 1 {
             continue;
         }
         let points = chains.points(parent);
@@ -387,20 +421,22 @@ fn forks(
 }
 
 fn joins(
-    chains: &Chains,
-    detections: &Detections,
+    step: &Step<'_>,
     support: &mut Support,
-    frame: usize,
     range: f32,
     overlap: f32,
     events: &mut Vec<Event>,
 ) {
-    let time = frame as u32;
-    let ends = end_chains(chains, frame);
-    let grid = detections.grid(frame - 1, range);
-    for head in 0..chains.len() {
+    let chains = step.chains;
+    let detections = step.detections;
+    let active = step.active;
+    let ending = step.ending;
+    let time = step.time();
+    let ends = ends_at(chains, ending);
+    let grid = detections.grid(step.frame - 1, range);
+    for &head in active {
         let chain = chains.chain(head);
-        if chain.start() >= time || chain.end() < time || chain.outgoing() > 0 {
+        if chain.start() >= time || chain.outgoing() > 0 {
             continue;
         }
         let position = (time - chain.start()) as usize;
@@ -454,7 +490,7 @@ fn joins(
             }));
         });
     }
-    let (_, order) = start_chains(chains, frame);
+    let (_, order) = starts_at(chains, active, step.frame);
     for child in order {
         let points = chains.points(child);
         let merged = points[0];
@@ -517,11 +553,15 @@ fn joins(
     }
 }
 
-fn start_chains(chains: &Chains, frame: usize) -> (HashMap<usize, usize>, Vec<usize>) {
+fn starts_at(
+    chains: &Chains,
+    active: &[usize],
+    frame: usize,
+) -> (HashMap<usize, usize>, Vec<usize>) {
     let time = frame as u32;
     let mut starts = HashMap::new();
     let mut order = Vec::new();
-    for index in 0..chains.len() {
+    for &index in active {
         let chain = chains.chain(index);
         if chain.start() == time && chain.incoming() == 0 {
             starts.insert(chain.points()[0], index);
@@ -531,12 +571,11 @@ fn start_chains(chains: &Chains, frame: usize) -> (HashMap<usize, usize>, Vec<us
     (starts, order)
 }
 
-fn end_chains(chains: &Chains, frame: usize) -> HashMap<usize, usize> {
-    let time = (frame - 1) as u32;
+fn ends_at(chains: &Chains, ending: &[usize]) -> HashMap<usize, usize> {
     let mut ends = HashMap::new();
-    for index in 0..chains.len() {
+    for &index in ending {
         let chain = chains.chain(index);
-        if chain.end() == time && chain.outgoing() == 0 {
+        if chain.outgoing() == 0 {
             ends.insert(*chain.points().last().expect("a chain holds points"), index);
         }
     }
