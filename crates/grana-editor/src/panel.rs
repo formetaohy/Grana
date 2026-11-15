@@ -154,6 +154,7 @@ pub fn build(
     let palette = crate::palette::resolve(ui, view, workspace);
     let state = View {
         access: view.access,
+        revision: view.revision,
         scene,
         measure: view.measure,
         measuring: view.measuring,

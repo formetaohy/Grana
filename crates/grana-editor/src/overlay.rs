@@ -23,6 +23,10 @@ impl Overlay {
     pub fn labels(&self) -> &[Label] {
         &self.labels
     }
+
+    pub fn stamp(&self) -> u64 {
+        self.stamp.unwrap_or(u64::MAX)
+    }
 }
 
 fn stamp(scene: &Scene) -> u64 {

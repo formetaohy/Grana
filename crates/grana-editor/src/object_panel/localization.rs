@@ -20,6 +20,12 @@ const CHART_HEIGHT: f32 = 148.0;
 
 const GROUP_ROWS: usize = 4;
 
+#[derive(Clone, Copy, Hash)]
+struct ImageKey {
+    identity: u64,
+    height: u32,
+}
+
 pub(super) fn card<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
@@ -54,16 +60,26 @@ pub(super) fn card<'a>(
         Some(&detail),
     )];
     if let (Some(bitmap), Some(report)) = (bitmap, report) {
-        let bitmap = bitmap.clone();
         let size = bitmap.size();
         let height = (super::width() * size[1] as f32 / size[0].max(1) as f32)
             .clamp(IMAGE_MINIMUM, IMAGE_MAXIMUM);
         children.push(
-            grana_ui::canvas(Length::Fill, height).view_live(move |painter, info| {
-                let target = fit(info.rect, size);
-                painter.rect(info.rect, Corners::all(6.0), Color::BLACK);
-                painter.bitmap(target, Corners::all(4.0), &bitmap);
-            }),
+            grana_ui::canvas(Length::Fill, height)
+                .view(
+                    ImageKey {
+                        identity: bitmap.identity(),
+                        height: height.to_bits(),
+                    },
+                    move |_, painter, info| {
+                        let target = fit(info.rect, size);
+                        painter.rect(info.rect, Corners::all(6.0), Color::BLACK);
+                        painter.bitmap(target, Corners::all(4.0), bitmap);
+                    },
+                )
+                .key(grana_ui::Key::index(
+                    "localization.image",
+                    id.raw() as usize,
+                )),
         );
         let depth = report.depth();
         if depth.layers() > 1 {
@@ -227,14 +243,19 @@ pub(super) fn card<'a>(
                 grana_i18n::localization::neighbours(language),
                 Some(&pairs),
             ));
-            children.push(neighbours_chart(ctx, language, nena));
+            children.push(neighbours_chart(ctx, state.revision.raw(), language, nena));
         }
         children.push(view::section_header(
             ctx,
             grana_i18n::localization::correlation(language),
             None,
         ));
-        children.push(correlation_chart(ctx, language, report));
+        children.push(correlation_chart(
+            ctx,
+            state.revision.raw(),
+            language,
+            report,
+        ));
         if report.frc().scoped() {
             children.push(view::caption(
                 ctx,
@@ -527,6 +548,7 @@ fn fields<'a>(
 
 fn neighbours_chart<'a>(
     ctx: &mut BuildContext<'_, Message>,
+    revision: u64,
     language: Language,
     nena: &'a NeNa,
 ) -> Element<'a, Message> {
@@ -555,11 +577,12 @@ fn neighbours_chart<'a>(
         notes: Vec::new(),
         outside: Vec::new(),
     };
-    chart_canvas(ctx, language, chart)
+    chart_canvas(ctx, language, revision, chart)
 }
 
 fn correlation_chart<'a>(
     ctx: &mut BuildContext<'_, Message>,
+    revision: u64,
     language: Language,
     report: &'a LocalizationReport,
 ) -> Element<'a, Message> {
@@ -608,7 +631,7 @@ fn correlation_chart<'a>(
         notes: Vec::new(),
         outside,
     };
-    chart_canvas(ctx, language, chart)
+    chart_canvas(ctx, language, revision, chart)
 }
 
 fn points(values: &[f32], held: &[f32]) -> Vec<CurvePoint> {
@@ -627,12 +650,13 @@ fn points(values: &[f32], held: &[f32]) -> Vec<CurvePoint> {
 fn chart_canvas<'a>(
     ctx: &mut BuildContext<'_, Message>,
     language: Language,
+    revision: u64,
     chart: SeriesChart,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let style = grana_chart::Style::card(&theme, grana_chart::DistributionStyle::Box)
         .with_language(language);
-    grana_ui::canvas(Length::Fill, CHART_HEIGHT).view_live(move |painter, info| {
+    grana_ui::canvas(Length::Fill, CHART_HEIGHT).view(revision, move |_, painter, info| {
         grana_chart::series(
             painter,
             info.rect,

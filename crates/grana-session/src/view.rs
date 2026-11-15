@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use grana_animation::Timeline;
 use grana_image::{Plate, Series, Well};
 use grana_project::{Export, NamedView};
-use grana_scene::{Measure, Progress, Scene};
+use grana_scene::{Measure, Progress, Revision, Scene};
 
 use crate::access::Access;
 use crate::command::Action;
@@ -148,6 +148,7 @@ pub struct StitchView {
 
 pub struct SessionView<'a> {
     pub access: Access,
+    pub revision: Revision,
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
     pub measuring: bool,

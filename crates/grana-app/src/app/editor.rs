@@ -13,6 +13,7 @@ fn session_view<'a>(
 ) -> SessionView<'a> {
     SessionView {
         access: session.access(),
+        revision: session.revision(),
         scene: session.scene(),
         measure: session.measure(),
         measuring: session.measuring(),

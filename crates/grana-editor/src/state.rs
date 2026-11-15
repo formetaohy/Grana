@@ -394,6 +394,7 @@ impl Workspace {
 
 pub struct View<'a> {
     pub access: grana_session::Access,
+    pub revision: grana_scene::Revision,
     pub scene: &'a Scene,
     pub measure: &'a Measure,
     pub measuring: bool,

@@ -1,7 +1,7 @@
 use glam::Vec2;
 use slotmap::SecondaryMap;
 
-use crate::element::{CanvasKind, CanvasPaint, Layer};
+use crate::element::{CanvasPaint, Layer};
 use crate::geometry::{Corners, Rect};
 use crate::node::NodeId;
 use crate::paint::{Clip, Instance, Instances, Painter};
@@ -78,8 +78,7 @@ impl<A: Clone> Ui<A> {
                 .intersects(self.tree.nodes[id].clip);
         let tracked = self.hover == Some(id) || self.press == Some(id) || self.drag == Some(id);
         let moved = tracked && self.pointer != self.tree.nodes[id].pointer_seen;
-        let live = self.tree.nodes[id].canvas == CanvasKind::Live;
-        let repaint = !culled && (self.tree.nodes[id].paint_dirty || moved || live);
+        let repaint = !culled && (self.tree.nodes[id].paint_dirty || moved);
         if repaint {
             if let Some(extent) = self.repaint(id, canvases) {
                 self.damage.add(extent);
@@ -92,7 +91,7 @@ impl<A: Clone> Ui<A> {
             && !self.tree.nodes[id].paint_dirty
             && matches!(
                 self.tree.nodes[id].canvas,
-                CanvasKind::Static | CanvasKind::Props(_)
+                crate::element::CanvasKind::Static | crate::element::CanvasKind::Props(_)
             )
         {
             self.verify_canvas(id, canvases);
@@ -170,7 +169,7 @@ impl<A: Clone> Ui<A> {
             instances.material == self.tree.nodes[id].paint.material,
             "the cached canvas {:#x} of node {:#x} changed without new props",
             match self.tree.nodes[id].canvas {
-                CanvasKind::Props(hash) => hash,
+                crate::element::CanvasKind::Props(hash) => hash,
                 _ => 0,
             },
             self.tree.nodes[id].key.id()

@@ -296,6 +296,7 @@ impl App {
             let session = &self.session;
             let view = SessionView {
                 access: session.access(),
+                revision: session.revision(),
                 scene: session.scene(),
                 measure: session.measure(),
                 measuring: session.measuring(),

@@ -226,31 +226,95 @@ fn viewport<'a>(
     }
 }
 
-fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message> {
-    let mut legends = overlay::legends(state.scene);
-    let language = state.workspace.language;
-    for legend in &mut legends {
-        legend.title = crate::text::legend(language, &legend.title);
+#[derive(Clone, Copy, Hash)]
+struct OverlayKey {
+    revision: grana_scene::Revision,
+    labels: u64,
+    camera: u64,
+    viewport: [u32; 4],
+    safe: [u32; 4],
+    world: [u32; 3],
+    pending: [u32; 4],
+    language: grana_i18n::Language,
+}
+
+impl OverlayKey {
+    fn new(state: &View<'_>, layout: &Layout) -> Self {
+        Self {
+            revision: state.revision,
+            labels: state.workspace.overlay.stamp(),
+            camera: camera_digest(state.camera),
+            viewport: edges(layout.viewport),
+            safe: edges(layout.content().shrink(STAGE_INSET)),
+            world: state
+                .scene
+                .dataset
+                .world_size()
+                .to_array()
+                .map(f32::to_bits),
+            pending: state.workspace.annotation_pending.map_or([0; 4], |at| {
+                [at[0].to_bits(), at[1].to_bits(), at[2].to_bits(), 1]
+            }),
+            language: state.workspace.language,
+        }
     }
-    let sliced = state.camera.slice().is_some();
-    let labels = if sliced {
-        &[][..]
-    } else {
-        state.workspace.overlay.labels()
-    };
-    let annotations = if sliced {
-        Vec::new()
-    } else {
-        overlay::annotations(state.scene, state.scene.time())
-    };
-    let layout = *layout;
-    grana_ui::canvas(Length::Fill, layout.viewport.height())
-        .view_live(move |painter, _info| {
-            let viewport = viewport(state, &layout, &legends, labels, &annotations);
+}
+
+fn camera_digest(camera: &grana_display::Camera) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let state = camera.state();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    state.pivot.map(f32::to_bits).hash(&mut hasher);
+    state.yaw.to_bits().hash(&mut hasher);
+    state.pitch.to_bits().hash(&mut hasher);
+    state.distance.to_bits().hash(&mut hasher);
+    state.fov_y.to_bits().hash(&mut hasher);
+    state.projection.index().hash(&mut hasher);
+    state.aperture.to_bits().hash(&mut hasher);
+    state.focus.to_bits().hash(&mut hasher);
+    if let Some(slice) = state.slice {
+        slice.axis().hash(&mut hasher);
+        slice.right().to_array().map(f32::to_bits).hash(&mut hasher);
+        slice.up().to_array().map(f32::to_bits).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn edges(rect: Rect) -> [u32; 4] {
+    [
+        rect.min.x.to_bits(),
+        rect.min.y.to_bits(),
+        rect.max.x.to_bits(),
+        rect.max.y.to_bits(),
+    ]
+}
+
+fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout) -> Element<'a, Message> {
+    let key = OverlayKey::new(state, layout);
+    let slot = *layout;
+    grana_ui::canvas(Length::Fill, slot.viewport.height())
+        .view(key, move |_, painter, _info| {
+            let mut legends = overlay::legends(state.scene);
+            let language = state.workspace.language;
+            for legend in &mut legends {
+                legend.title = crate::text::legend(language, &legend.title);
+            }
+            let sliced = state.camera.slice().is_some();
+            let labels = if sliced {
+                &[][..]
+            } else {
+                state.workspace.overlay.labels()
+            };
+            let annotations = if sliced {
+                Vec::new()
+            } else {
+                overlay::annotations(state.scene, state.scene.time())
+            };
+            let viewport = viewport(state, &slot, &legends, labels, &annotations);
             overlay::paint(painter, &viewport);
         })
         .named("stage.overlay")
-        .at(layout.viewport)
+        .at(slot.viewport)
         .layer(Layer::Content)
 }
 

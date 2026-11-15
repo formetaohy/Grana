@@ -187,7 +187,6 @@ pub type CanvasPaint<'a> = Box<dyn Fn(&mut Painter, CanvasInfo<'_>) + 'a>;
 pub enum CanvasKind {
     #[default]
     None,
-    Live,
     Static,
     Props(u64),
 }
@@ -457,15 +456,6 @@ impl<'a, A> Element<'a, A> {
 
     pub fn children(mut self, children: impl IntoIterator<Item = Element<'a, A>>) -> Self {
         self.children = children.into_iter().collect();
-        self
-    }
-
-    pub fn view_live(mut self, paint: impl Fn(&mut Painter, CanvasInfo<'_>) + 'a) -> Self {
-        self.canvas = Some(Canvas {
-            kind: CanvasKind::Live,
-            paint: Box::new(paint),
-        });
-        self.content = Content::Canvas;
         self
     }
 

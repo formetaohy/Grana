@@ -5,6 +5,7 @@ use grana_render::FrameInfo;
 
 use super::App;
 use crate::stream::{Stream, View as StreamView};
+
 impl App {
     pub(super) fn exchange_bricks(&mut self) {
         let replaced = self.session.replaced() != self.replaced;
