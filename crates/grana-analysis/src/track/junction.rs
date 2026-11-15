@@ -5,7 +5,7 @@ use glam::Vec3;
 use grana_object::{Link, TrackParams};
 
 use super::chain::Chains;
-use super::detection::Detections;
+use super::detection::{Detections, Grid};
 
 const HORIZON: f64 = 4.0;
 const SUPPORT_FLOOR: f64 = 0.25;
@@ -104,11 +104,17 @@ pub(super) fn attach(
     let frames = detections.frame_count();
     let total = 2 * frames;
     let events = params.events();
+    if frames < 2 || !(events.division() || events.merge()) {
+        progress(total, total);
+        return Some(());
+    }
+    let cell = events.division_range().max(events.merge_range()) * detections.widest();
     let mut support = Support::default();
     let mut starts = vec![Vec::new(); frames];
     for index in 0..chains.len() {
         starts[chains.chain(index).start() as usize].push(index);
     }
+    let mut previous_index = detections.grid(0, cell);
     let mut previous = starts[0].clone();
     for (frame, opening) in starts.iter().enumerate().skip(1) {
         if cancel.load(Ordering::Relaxed) {
@@ -123,12 +129,15 @@ pub(super) fn attach(
             .copied()
             .filter(|&index| chains.chain(index).end() as usize == frame - 1)
             .collect::<Vec<_>>();
+        let current = detections.grid(frame, cell);
         let step = Step {
             chains,
             detections,
             frame,
             active: &active,
             ending: &ending,
+            current: &current,
+            previous: &previous_index,
         };
         let mut candidates = Vec::new();
         if events.division() {
@@ -155,6 +164,7 @@ pub(super) fn attach(
             }
         }
         previous = active;
+        previous_index = current;
     }
     Some(())
 }
@@ -165,6 +175,8 @@ struct Step<'a> {
     frame: usize,
     active: &'a [usize],
     ending: &'a [usize],
+    current: &'a Grid<'a>,
+    previous: &'a Grid<'a>,
 }
 
 impl Step<'_> {
@@ -300,7 +312,7 @@ fn forks(step: &Step<'_>, support: &mut Support, range: f32, events: &mut Vec<Ev
     let ending = step.ending;
     let time = step.time();
     let (starts, _) = starts_at(chains, active, step.frame);
-    let grid = detections.grid(step.frame, range);
+    let grid = step.current;
     for &parent in active {
         let chain = chains.chain(parent);
         if chain.start() >= time || chain.incoming() > 1 {
@@ -433,7 +445,7 @@ fn joins(
     let ending = step.ending;
     let time = step.time();
     let ends = ends_at(chains, ending);
-    let grid = detections.grid(step.frame - 1, range);
+    let grid = step.previous;
     for &head in active {
         let chain = chains.chain(head);
         if chain.start() >= time || chain.outgoing() > 0 {

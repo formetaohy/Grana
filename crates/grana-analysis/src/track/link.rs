@@ -71,7 +71,7 @@ impl Linker {
         detections: &Detections,
         frame: usize,
         step: f32,
-        grids: &[Grid<'_>],
+        grid: &Grid<'_>,
     ) -> Vec<Vec<Edge>> {
         let targets = detections.span(frame);
         let count = targets.len();
@@ -81,7 +81,6 @@ impl Linker {
             let last = *chain.points().last().expect("a chain holds points");
             let reach = frame as u32 - chain.end();
             let predicted = detections.centroid(last) + self.velocity[index] * reach as f32;
-            let grid = &grids[reach as usize - 1];
             let gate = detections.gate(last, reach as f32 * step);
             let mut edges = Vec::new();
             grid.near(predicted, gate, |target, distance| {
@@ -114,6 +113,7 @@ pub(super) fn link(
     let total = 2 * frames;
     let span = params.max_gap() as usize + 1;
     let step = params.max_step();
+    let cell = step * detections.widest();
     let mut linker = Linker::new();
     for frame in 0..frames {
         progress(frame, total);
@@ -129,12 +129,7 @@ pub(super) fn link(
             }
             continue;
         }
-        let rows = {
-            let grids = (1..=span)
-                .map(|reach| detections.grid(frame, step * reach as f32))
-                .collect::<Vec<_>>();
-            linker.rows(detections, frame, step, &grids)
-        };
+        let rows = linker.rows(detections, frame, step, &detections.grid(frame, cell));
         let sources = linker.open.clone();
         let assignment = assign::solve(&rows, count + sources.len(), cancel)?;
         let mut claimed = vec![false; count];

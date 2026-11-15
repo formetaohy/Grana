@@ -1,18 +1,18 @@
 use grana_volume::{
-    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, CELL_COUNT, CHANNEL_LIMIT, PADDED_SIDE,
+    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, CELL_COUNT, CHANNEL_LIMIT, PADDED_SIDE, Pyramid,
 };
 use wgpu::Queue;
 
-use crate::atlas::{PACK, ResidentBrick, pack_components, pack_texels};
+use crate::atlas::{PACK, PACK_LIMIT, ResidentBrick, pack_components, pack_texels};
 use crate::brick::BrickRecord;
-use crate::occupancy::OCCUPANCY_WORDS;
+use crate::occupancy::{OCCUPANCY_WORDS, Occupancy};
 
 use super::Renderer;
 
 pub(super) struct UploadScratch {
     units: Vec<u16>,
     cells: Vec<f32>,
-    summary: Vec<f32>,
+    summaries: Vec<f32>,
     words: Vec<u32>,
 }
 
@@ -21,7 +21,7 @@ impl UploadScratch {
         Self {
             units: Vec::new(),
             cells: vec![0.0; CHANNEL_LIMIT * CELL_COUNT],
-            summary: vec![0.0; CELL_COUNT],
+            summaries: vec![0.0; PACK_LIMIT * CELL_COUNT],
             words: vec![0; OCCUPANCY_WORDS],
         }
     }
@@ -42,6 +42,7 @@ impl Renderer {
             prefetched,
             staging,
             occupancy,
+            refreshes,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(arena)) =
@@ -49,22 +50,28 @@ impl Renderer {
         else {
             return;
         };
+        let total = *channels;
+        let pack_count = total.div_ceil(PACK);
+        let texels = (0..pack_count)
+            .map(|pack| pack_texels(pack_components(total, pack)))
+            .sum::<usize>();
         let UploadScratch {
             units,
             cells,
-            summary,
+            summaries,
             words,
         } = staging;
-        let packs = (*channels).div_ceil(PACK);
-        let total = (0..packs)
-            .map(|pack| pack_texels(pack_components(*channels, pack)))
-            .sum::<usize>();
         for (request, data) in bricks {
-            let BrickRequest { time, level, coord } = *request;
+            let BrickRequest {
+                time,
+                level,
+                coord,
+                channels: scope,
+            } = *request;
             if level >= pyramid.level_count()
                 || level < arena.first()
                 || time >= pyramid.frame_count()
-                || data.channels().len() != *channels
+                || data.channels().len() != total
             {
                 continue;
             }
@@ -77,40 +84,72 @@ impl Renderer {
             }
             let grid = BrickGrid::new(extent);
             let index = grid.index(coord);
-            if atlas.slot(time, level, index).is_some() || atlas.is_hollow(time, level, index) {
-                continue;
-            }
             let voxels = data.channels()[0].voxel_count();
             assert_eq!(
                 voxels,
                 (PADDED_SIDE as usize).pow(3),
                 "an uploaded brick holds a padded cube"
             );
-            if units.len() < voxels * total {
-                units.resize(voxels * total, 0);
-            }
-            let mut maximum = 0.0f32;
-            let mut base = 0;
-            for pack in 0..packs {
-                let components = pack_components(*channels, pack);
-                let texels = pack_texels(components);
-                let span = voxels * texels;
-                let packed = &mut units[base..base + span];
-                for component in 0..components {
-                    let channel = pack * PACK + component;
-                    let intensity = pyramid.channels()[channel].intensity();
-                    let summary_cells =
-                        &mut cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
-                    maximum = maximum.max(data.channels()[channel].pack_units(
-                        intensity,
-                        &mut packed[..],
-                        texels,
-                        component,
-                        summary_cells,
-                    ));
+            let packs = pack_mask(scope, total);
+            if let Some(slot) = atlas.slot(time, level, index) {
+                let refresh = refreshes.remove(request);
+                if refresh || !scope.covers(total) {
+                    for pack in pack_range(pack_count, packs) {
+                        let span = pack_texels(pack_components(total, pack)) * voxels;
+                        if units.len() < span {
+                            units.resize(span, 0);
+                        }
+                        let (maximum, summary) = stage(
+                            &mut units[..span],
+                            cells,
+                            &mut summaries[..CELL_COUNT],
+                            pyramid,
+                            total,
+                            data,
+                            pack,
+                        );
+                        atlas.write(queue, pack, slot, &units[..span]);
+                        occupy(
+                            words,
+                            occupancy.as_ref(),
+                            queue,
+                            slot,
+                            pack,
+                            maximum,
+                            summary,
+                        );
+                    }
+                    atlas.written(slot);
+                    if time == *now {
+                        *generation += 1;
+                    }
                 }
-                base += span;
+                continue;
             }
+            if !scope.covers(total) || atlas.is_hollow(time, level, index) {
+                continue;
+            }
+            let span = voxels * texels;
+            if units.len() < span {
+                units.resize(span, 0);
+            }
+            let mut maxima = [0.0f32; PACK_LIMIT];
+            let mut base = 0;
+            for pack in 0..pack_count {
+                let step = voxels * pack_texels(pack_components(total, pack));
+                let (maximum, _) = stage(
+                    &mut units[base..base + step],
+                    cells,
+                    &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
+                    pyramid,
+                    total,
+                    data,
+                    pack,
+                );
+                maxima[pack] = maximum;
+                base += step;
+            }
+            let maximum = maxima[..pack_count].iter().copied().fold(0.0, f32::max);
             let current = time == *now;
             let publish = current
                 && tables[level]
@@ -126,13 +165,6 @@ impl Renderer {
                 }
                 continue;
             }
-            summary.fill(0.0);
-            for channel in 0..*channels {
-                let cells = &cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
-                for (cell, value) in summary.iter_mut().zip(cells) {
-                    *cell = cell.max(*value);
-                }
-            }
             let demand = !prefetched.contains(request);
             let Some((slot, evicted)) = atlas.allocate(*pin, *now, time, demand) else {
                 continue;
@@ -143,19 +175,21 @@ impl Renderer {
                 other.drop_record(queue, arena, brick.index, brick.time);
             }
             let mut base = 0;
-            for pack in 0..packs {
-                let span = voxels * pack_texels(pack_components(*channels, pack));
-                atlas.write(queue, pack, slot, &units[base..base + span]);
-                base += span;
+            for pack in 0..pack_count {
+                let step = voxels * pack_texels(pack_components(total, pack));
+                atlas.write(queue, pack, slot, &units[base..base + step]);
+                occupy(
+                    words,
+                    occupancy.as_ref(),
+                    queue,
+                    slot,
+                    pack,
+                    maxima[pack],
+                    &summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
+                );
+                base += step;
             }
             atlas.assign(slot, ResidentBrick { time, level, index }, *pin, demand);
-            if let Some(occupancy) = occupancy.as_mut() {
-                words[0] = maximum.to_bits();
-                for (word, cell) in words[1..].iter_mut().zip(summary.iter()) {
-                    *word = cell.to_bits();
-                }
-                occupancy.write(queue, slot, words);
-            }
             if publish && let Some(table) = tables[level].as_mut() {
                 table.set_record(
                     queue,
@@ -167,6 +201,69 @@ impl Renderer {
             if current {
                 *generation += 1;
             }
+            refreshes.remove(request);
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stage<'a>(
+    units: &mut [u16],
+    cells: &mut [f32],
+    summary: &'a mut [f32],
+    pyramid: &Pyramid,
+    channels: usize,
+    data: &BrickData,
+    pack: usize,
+) -> (f32, &'a [f32]) {
+    summary.fill(0.0);
+    let texels = pack_texels(pack_components(channels, pack));
+    let mut maximum = 0.0f32;
+    for component in 0..pack_components(channels, pack) {
+        let channel = pack * PACK + component;
+        let intensity = pyramid.channels()[channel].intensity();
+        let channel_cells = &mut cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
+        let value =
+            data.channels()[channel].pack_units(intensity, units, texels, component, channel_cells);
+        maximum = maximum.max(value);
+        for (cell, value) in summary.iter_mut().zip(channel_cells.iter()) {
+            *cell = cell.max(*value);
+        }
+    }
+    (maximum, summary)
+}
+
+fn occupy(
+    words: &mut [u32],
+    occupancy: Option<&Occupancy>,
+    queue: &Queue,
+    slot: u32,
+    pack: usize,
+    maximum: f32,
+    summary: &[f32],
+) {
+    let Some(occupancy) = occupancy else {
+        return;
+    };
+    words[0] = maximum.to_bits();
+    for (word, cell) in words[1..].iter_mut().zip(summary) {
+        *word = cell.to_bits();
+    }
+    occupancy.write(queue, slot, pack, words);
+}
+
+fn pack_mask(channels: grana_volume::ChannelSet, count: usize) -> u64 {
+    let mut packs = 0u64;
+    for pack in 0..count.div_ceil(PACK) {
+        let covered = (pack * PACK..(pack + 1) * PACK)
+            .all(|channel| channel >= count || channels.contains(channel));
+        if covered {
+            packs |= 1 << pack;
+        }
+    }
+    packs
+}
+
+fn pack_range(pack_count: usize, packs: u64) -> impl Iterator<Item = usize> {
+    (0..pack_count).filter(move |pack| packs & (1 << pack) != 0)
 }

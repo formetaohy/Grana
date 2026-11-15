@@ -1,11 +1,25 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use grana_animation::Keyframe;
 use grana_engine::Display;
 
-use super::{App, PLAYBACK_INTERVAL};
+use super::{App, PLAYBACK_INTERVAL, STREAM_POLL};
 
 impl App {
+    pub(super) fn playback_wait(&self) -> Duration {
+        self.last_advance.map_or(Duration::ZERO, |last| {
+            PLAYBACK_INTERVAL.saturating_sub(last.elapsed())
+        })
+    }
+
+    pub(super) fn playback_delay(&self) -> Duration {
+        if self.frame_info().samples == 0 {
+            STREAM_POLL
+        } else {
+            self.playback_wait()
+        }
+    }
+
     pub(super) fn display_mode(&self, animating: bool) -> Display {
         if animating || self.interacting || self.workspace.playback.previewing {
             Display::Interactive

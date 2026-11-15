@@ -44,8 +44,8 @@ pub use color::ObjectColor;
 pub use curation::{Curation, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use derived::{
-    BackgroundSpec, Derived, DerivedSpec, MaskChannel, Operation, RatioSpec, RestoreSpec,
-    SmoothSpec, derived_infos, mask_info, mask_intensity,
+    BackgroundSpec, Derived, DerivedSpec, GAUSSIAN_REACH, MaskChannel, Operation, RatioSpec,
+    RestoreSpec, SmoothSpec, derived_infos, mask_info, mask_intensity,
 };
 pub use drift::Drift;
 pub use drifts::Drifts;
@@ -67,7 +67,7 @@ pub use registration::Registration;
 pub use relation::Relation;
 pub use revision::{Revision, Revisions};
 pub use row::{RowSpec, Rows, RowsRequest};
-pub use scene::{Item, Scene, Selection};
+pub use scene::{Item, MaskExtent, Scene, Selection};
 pub use seed::Seeds;
 pub use segment::{License, SEGMENT_FIELDS, SegmentModel, SegmentParams};
 pub use slug::slug;

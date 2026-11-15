@@ -30,6 +30,10 @@ impl App {
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
             return;
         };
+        let damages = session.take_damage();
+        if !damages.is_empty() {
+            engine.damage(&surface.gpu.queue, &damages);
+        }
         let time = session.scene().map_or(0, |scene| scene.time());
         if let Some(requests) = engine.poll_requests(&surface.gpu.device, time) {
             let current = session

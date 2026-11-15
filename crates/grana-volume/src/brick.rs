@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{Extent, VoxelData};
+use crate::{ChannelSet, Extent, VoxelData};
 
 pub const CHANNEL_LIMIT: usize = 16;
 
@@ -9,6 +9,22 @@ pub struct BrickRequest {
     pub time: u32,
     pub level: usize,
     pub coord: BrickCoord,
+    pub channels: ChannelSet,
+}
+
+impl BrickRequest {
+    pub fn new(time: u32, level: usize, coord: BrickCoord) -> Self {
+        Self::of(time, level, coord, ChannelSet::ALL)
+    }
+
+    pub fn of(time: u32, level: usize, coord: BrickCoord, channels: ChannelSet) -> Self {
+        Self {
+            time,
+            level,
+            coord,
+            channels,
+        }
+    }
 }
 
 pub const BRICK_SIDE: u32 = 32;
@@ -176,6 +192,15 @@ impl BrickData {
                 VoxelData::F32(data) => 4 * data.len() as u64,
             })
             .sum()
+    }
+}
+
+pub fn blank_brick(format: crate::VoxelFormat) -> VoxelData {
+    let voxels = (PADDED_SIDE as usize).pow(3);
+    match format {
+        crate::VoxelFormat::U8 => VoxelData::U8(vec![0; voxels]),
+        crate::VoxelFormat::U16 => VoxelData::U16(vec![0; voxels]),
+        crate::VoxelFormat::F32 => VoxelData::F32(vec![0.0; voxels]),
     }
 }
 

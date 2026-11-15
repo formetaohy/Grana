@@ -38,12 +38,12 @@ use grana_object::TrackSet;
 use grana_optics::Psf;
 use grana_project::{Mismatch, NamedView, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
-    Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, Revision, Revisions, Scene,
+    Criteria, Dataset, FilterRange, Item, Job, LassoPath, MaskExtent, Measure, ObjectFrame,
+    ObjectParams, ObjectSetId, Origin, Progress, Revision, Revisions, Scene,
 };
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
+use grana_volume::{BrickData, BrickRequest, Damage, Fingerprint, Region};
 
 use crate::access::Access;
 use crate::command::{Edit, Export};
@@ -163,7 +163,9 @@ pub struct Session {
     field: usize,
     fields: Fields,
     fingerprint: Option<Fingerprint>,
-    mask_stamp: Option<(u32, u64)>,
+    mask_stamps: Vec<u64>,
+    mask_extents: Vec<Option<MaskExtent>>,
+    damages: Vec<Damage>,
     transfer: Transfer,
     recent: Recent,
     import: Vec<ImportNote>,
@@ -251,7 +253,9 @@ impl Session {
             field: 0,
             fields: Fields::default(),
             fingerprint: None,
-            mask_stamp: None,
+            mask_stamps: Vec::new(),
+            mask_extents: Vec::new(),
+            damages: Vec::new(),
             transfer: Transfer::default(),
             recent: Recent::default(),
             import: Vec::new(),
@@ -522,6 +526,9 @@ impl Session {
     pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
         std::mem::take(&mut self.bricks)
     }
+    pub fn take_damage(&mut self) -> Vec<Damage> {
+        std::mem::take(&mut self.damages)
+    }
     fn prune_localizations(&mut self) -> bool {
         match self.scene.as_ref() {
             Some(scene) => self.localization.retain(scene),
@@ -679,6 +686,7 @@ impl Session {
             return;
         }
         scene.set_time(time);
+        self.mask_extents = scene.mask_extents(time);
         self.in_flight.retain(|request| request.time >= time);
         if let Some(source) = &self.source {
             source.set_time(time);

@@ -54,14 +54,7 @@ fn detects_surfaces_masks_a_channel_and_captures() {
         assert_eq!(scene.derived()[0].spec().source(), 0);
     }
 
-    session.request(
-        0,
-        &[BrickRequest {
-            time: 0,
-            level: 0,
-            coord: BrickCoord::new(1, 0, 0),
-        }],
-    );
+    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))]);
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
         session.poll();
@@ -188,14 +181,7 @@ fn derives_operator_channels_through_a_project() {
             grana_scene::Operation::Ratio(_)
         ));
     }
-    session.request(
-        0,
-        &[BrickRequest {
-            time: 0,
-            level: 0,
-            coord: BrickCoord::new(1, 0, 0),
-        }],
-    );
+    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))]);
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
         session.poll();
@@ -3412,15 +3398,19 @@ fn restyling_a_masked_set_keeps_the_streamed_volume() {
         hidden: true,
     });
     session.poll();
-    assert_ne!(
+    assert!(
+        !session.take_damage().is_empty(),
+        "hiding an object of a masked set must damage the mask"
+    );
+    assert_eq!(
         session.content(),
         content,
-        "hiding an object of a masked set must rebuild the mask"
+        "hiding an object of a masked set kept the streamed volume"
     );
 }
 
 #[test]
-fn a_mask_radius_keeps_the_dataset_and_reloads_the_content() {
+fn a_mask_radius_keeps_the_dataset_and_damages_the_mask() {
     let mut session = Session::new();
     session.open_series("nuclei", series());
     session.execute(Command::SelectChannel(0));
@@ -3464,10 +3454,26 @@ fn a_mask_radius_keeps_the_dataset_and_reloads_the_content() {
         replaced,
         "a mask radius replaced the dataset"
     );
-    assert_ne!(
+    let damages = session.take_damage();
+    assert_eq!(damages.len(), 1, "a mask radius damages one region");
+    assert!(
+        damages[0]
+            .region()
+            .contains(glam::Vec3::from(frame_anchors(&session, set)[0].position())),
+        "the damaged region covers the masked surfaces"
+    );
+    assert!(
+        damages[0].channels().iter().all(|channel| channel
+            >= session
+                .scene()
+                .expect("the series stays open")
+                .base_channels()),
+        "the damaged channels name the derived mask channel"
+    );
+    assert_eq!(
         session.content(),
         content,
-        "a mask radius kept the streamed content"
+        "a mask radius reloaded the streamed content"
     );
 }
 
@@ -3516,43 +3522,51 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
     );
     let size = [160, 160];
     let mut streamed = 0usize;
-    let settle_engine = |engine: &mut Engine, session: &mut Session, streamed: &mut usize| {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while engine.info().samples < SAMPLE_LIMIT {
-            assert!(
-                Instant::now() < deadline,
-                "the engine never resolved the mask"
-            );
-            session.poll();
-            let time = session.scene().expect("the series opens").time();
-            if let Some(requests) = engine.poll_requests(gpu.device(), time) {
-                *streamed += requests.volume.len();
-                let mut bricks = requests.volume.clone();
-                bricks.extend_from_slice(&requests.prefetch);
-                session.request(requests.time, &bricks);
+    let settle_engine =
+        |engine: &mut Engine, session: &mut Session, streamed: &mut usize, until: Option<u64>| {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                assert!(
+                    Instant::now() < deadline,
+                    "the engine never resolved the mask"
+                );
+                session.poll();
+                let time = session.scene().expect("the series opens").time();
+                if let Some(requests) = engine.poll_requests(gpu.device(), time) {
+                    *streamed += requests.volume.len();
+                    let mut bricks = requests.volume.clone();
+                    bricks.extend_from_slice(&requests.prefetch);
+                    session.request(requests.time, &bricks);
+                }
+                let bricks = session.take_bricks();
+                if !bricks.is_empty() {
+                    engine.upload(gpu.queue(), &bricks);
+                }
+                engine
+                    .draw(
+                        gpu.device(),
+                        gpu.queue(),
+                        grana_engine::View {
+                            scene: session.scene().expect("the series opens"),
+                            camera: &camera,
+                            size,
+                            display: Display::Still,
+                            level_cap: 99,
+                            overlays: &[],
+                        },
+                    )
+                    .expect("the viewport draws");
+                let waiting = match until {
+                    Some(revision) => engine.image_revision() <= revision,
+                    None => engine.info().samples < SAMPLE_LIMIT,
+                };
+                if !waiting {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
             }
-            let bricks = session.take_bricks();
-            if !bricks.is_empty() {
-                engine.upload(gpu.queue(), &bricks);
-            }
-            engine
-                .draw(
-                    gpu.device(),
-                    gpu.queue(),
-                    grana_engine::View {
-                        scene: session.scene().expect("the series opens"),
-                        camera: &camera,
-                        size,
-                        display: Display::Still,
-                        level_cap: 99,
-                        overlays: &[],
-                    },
-                )
-                .expect("the viewport draws");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    };
-    settle_engine(&mut engine, &mut session, &mut streamed);
+        };
+    settle_engine(&mut engine, &mut session, &mut streamed, None);
     let pyramid = session
         .scene()
         .expect("the series opens")
@@ -3562,21 +3576,28 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
     let content = session.content();
     session.execute(Command::SetMaskRadius(0.4));
     session.poll();
-    assert_ne!(
+    let damages = session.take_damage();
+    assert!(!damages.is_empty(), "a mask radius damaged no mask");
+    assert_eq!(
         session.content(),
         content,
-        "a mask radius kept the streamed content"
+        "a mask radius reloaded the streamed content"
     );
     assert!(
         engine.holds(&pyramid),
         "a mask radius rebuilt the engine dataset"
     );
+    let revision = engine.image_revision();
+    engine.damage(gpu.queue(), &damages);
     streamed = 0;
-    engine.invalidate(&pyramid);
-    settle_engine(&mut engine, &mut session, &mut streamed);
+    settle_engine(&mut engine, &mut session, &mut streamed, Some(revision));
+    assert!(
+        engine.image_revision() > revision,
+        "the damaged bricks were never redrawn"
+    );
     assert!(
         streamed > 0,
-        "the invalidated mask channel was never restreamed"
+        "the damaged mask channel was never restreamed"
     );
 }
 
@@ -3609,11 +3630,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let bricks = (0..64)
-        .map(|_| BrickRequest {
-            time: 0,
-            level: 0,
-            coord: BrickCoord::new(0, 0, 0),
-        })
+        .map(|_| BrickRequest::new(0, 0, BrickCoord::new(0, 0, 0)))
         .collect::<Vec<_>>();
     session.request(0, &bricks);
     assert!(session.pending() > 0, "the brick reads are in flight");

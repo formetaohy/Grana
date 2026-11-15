@@ -10,6 +10,8 @@ use crate::object_set::ObjectSetId;
 const CACHE_LIMIT: usize = 4;
 const INTENSITY_FLOOR: f32 = 0.0;
 
+pub const GAUSSIAN_REACH: f32 = 3.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SmoothSpec {
     sigma: f32,
@@ -143,6 +145,15 @@ impl Operation {
 
     pub fn bleach(&self) -> bool {
         matches!(self, Self::Bleach)
+    }
+
+    pub fn spread(&self) -> Option<f32> {
+        match self {
+            Self::Smooth(smooth) => Some(GAUSSIAN_REACH * smooth.sigma()),
+            Self::Background(background) => Some(background.radius()),
+            Self::Mask { .. } | Self::Ratio(_) | Self::Bleach => Some(0.0),
+            Self::Restore(_) => None,
+        }
     }
 }
 

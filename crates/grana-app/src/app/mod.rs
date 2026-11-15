@@ -40,7 +40,6 @@ use crate::window;
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
-const PLAYBACK_POLL: Duration = Duration::from_millis(4);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
@@ -88,6 +87,7 @@ pub struct App {
     last_advance: Option<Instant>,
     last_animation: Option<Instant>,
     repaint_at: Option<Instant>,
+    pump_at: Option<Instant>,
     title: Option<String>,
     modifiers: ModifiersState,
     output: Option<String>,
@@ -147,6 +147,7 @@ impl App {
             last_advance: None,
             last_animation: None,
             repaint_at: None,
+            pump_at: None,
             title: None,
             modifiers: ModifiersState::default(),
             output: None,
@@ -236,10 +237,20 @@ impl App {
         self.sync_dataset(false);
     }
 
-    pub(super) fn redraw(&mut self) {
+    pub(super) fn pump(&mut self) -> bool {
         self.session.poll();
         self.sync_engine();
         if self.follow_resume() {
+            return false;
+        }
+        self.exchange_bricks();
+        self.poll_pick();
+        self.session.sync_measure();
+        true
+    }
+
+    pub(super) fn redraw(&mut self) {
+        if !self.pump() {
             return;
         }
         self.sync_window_fit();
@@ -254,9 +265,6 @@ impl App {
         {
             self.workspace.seed = None;
         }
-        self.exchange_bricks();
-        self.poll_pick();
-        self.session.sync_measure();
         let (frame, wait) = self.run_ui();
         let animating = wait.is_some_and(|wait| wait.is_zero());
         self.fit_window(&frame);
@@ -281,7 +289,7 @@ impl App {
         if let Some(wait) = wait {
             delay = delay.min(wait);
         } else if self.workspace.playback.playing {
-            delay = delay.min(PLAYBACK_POLL);
+            delay = delay.min(self.playback_delay());
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
         } else if self.session.scene().is_some() && self.converging() {
@@ -326,6 +334,26 @@ impl App {
             self.repaint_at = Some(Instant::now() + delay);
         } else {
             self.repaint_at = None;
+        }
+        self.arm_pump();
+    }
+
+    pub(super) fn arm_pump(&mut self) {
+        self.pump_at = (self.workspace.playback.playing && self.streaming())
+            .then(|| Instant::now() + STREAM_POLL);
+    }
+
+    fn idle_delay(&self) -> Option<Duration> {
+        if self.workspace.playback.playing {
+            Some(self.playback_delay())
+        } else if self.streaming() {
+            Some(STREAM_POLL)
+        } else if self.export.running() {
+            Some(EXPORT_POLL)
+        } else if self.capture.is_none() && self.session.access().author() && self.session.dirty() {
+            Some(self.autosave_wait())
+        } else {
+            None
         }
     }
     pub(super) fn write_capture(&mut self, path: &Path) {
@@ -497,32 +525,33 @@ impl ApplicationHandler for App {
             self.pump_capture(event_loop);
             return;
         }
-        if self.repaint_at.is_none() {
-            if self.workspace.playback.playing {
-                self.repaint_at = Some(Instant::now() + PLAYBACK_POLL);
-            } else if self.streaming() {
-                self.repaint_at = Some(Instant::now() + STREAM_POLL);
-            } else if self.export.running() {
-                self.repaint_at = Some(Instant::now() + EXPORT_POLL);
-            } else if self.capture.is_none()
-                && self.session.access().author()
-                && self.session.dirty()
-            {
-                self.repaint_at = Some(Instant::now() + self.autosave_wait());
+        let now = Instant::now();
+        if self.pump_at.is_some_and(|at| now >= at) {
+            self.pump_at = None;
+            self.pump();
+            if self.exiting {
+                event_loop.exit();
+                return;
             }
+            self.arm_pump();
         }
-        let Some(deadline) = self.repaint_at else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
-        };
-        if Instant::now() >= deadline {
+        let paint = self.repaint_at.is_some_and(|at| now >= at);
+        if paint {
             self.repaint_at = None;
-            if let Some(surface) = &self.surface {
-                surface.window.request_redraw();
-            }
-            event_loop.set_control_flow(ControlFlow::Wait);
-        } else {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        }
+        if self.repaint_at.is_none() {
+            self.repaint_at = self.idle_delay().map(|delay| now + delay);
+        }
+        if paint && let Some(surface) = &self.surface {
+            surface.window.request_redraw();
+        }
+        let deadline = match (self.repaint_at, self.pump_at) {
+            (Some(repaint), Some(pump)) => Some(repaint.min(pump)),
+            (repaint, pump) => repaint.or(pump),
+        };
+        match deadline {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 }

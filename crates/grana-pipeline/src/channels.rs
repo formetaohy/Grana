@@ -10,7 +10,8 @@ use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
 use grana_scene::{DerivedSpec, MaskChannel, Operation, Registration, Scene};
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, Pyramid, VoxelData, pad_brick,
+    BrickCoord, BrickData, BrickGrid, ChannelSet, Extent, Intensity, Level, Pyramid, VoxelData,
+    blank_brick, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 
@@ -354,6 +355,7 @@ impl Channels {
         level: usize,
         coord: BrickCoord,
         warps: &Warps,
+        channels: ChannelSet,
     ) -> Result<BrickData, ChannelsError> {
         assert!(
             self.metric.is_none(),
@@ -365,6 +367,9 @@ impl Channels {
                 .map(|channel| self.aligned(channel, warps))
                 .collect(),
         );
+        if !channels.covers(self.channels()) {
+            return self.read_brick_scope(time, level, coord, warps, channels);
+        }
         let data = self
             .reader
             .read_brick(time, level, coord, &placed)
@@ -393,6 +398,45 @@ impl Channels {
             ));
         }
         Ok(BrickData::new(channels))
+    }
+
+    fn read_brick_scope(
+        &self,
+        time: u32,
+        level: usize,
+        coord: BrickCoord,
+        warps: &Warps,
+        channels: ChannelSet,
+    ) -> Result<BrickData, ChannelsError> {
+        let info = self.level(level)?;
+        let grid = BrickGrid::new(info.extent());
+        let ranges = grid.padded_range(coord);
+        let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
+        let covered = Extent::new(
+            ranges[0].end - ranges[0].start,
+            ranges[1].end - ranges[1].start,
+            ranges[2].end - ranges[2].start,
+        );
+        let formats = &self.reader.pyramid().channels();
+        let mut bricks = Vec::with_capacity(self.channels());
+        for channel in 0..self.channels() {
+            if !channels.contains(channel) {
+                let format = formats
+                    .get(channel)
+                    .map_or(grana_volume::VoxelFormat::F32, |info| info.format());
+                bricks.push(blank_brick(format));
+                continue;
+            }
+            let region = self.read_aligned(time, level, channel, &ranges, warps)?;
+            bricks.push(pad_brick(
+                &region,
+                origin,
+                covered,
+                grid.origin(coord),
+                info.extent(),
+            ));
+        }
+        Ok(BrickData::new(bricks))
     }
 
     pub fn stored_region(

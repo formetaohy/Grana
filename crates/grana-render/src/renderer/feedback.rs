@@ -151,7 +151,15 @@ impl Renderer {
             missing.extend(absent);
         }
         missing.sort_by_key(|(bucket, _)| *bucket);
-        requests.volume = missing.into_iter().map(|(_, request)| request).collect();
+        for (_, request) in missing {
+            requests.volume.push(request);
+        }
+        self.refreshes.retain(|request| {
+            let grid = BrickGrid::new(pyramid.level(request.level).extent());
+            let index = grid.index(request.coord);
+            atlas.slot(request.time, request.level, index).is_some()
+        });
+        requests.volume.splice(0..0, self.refreshes.iter().copied());
         if requests.volume.is_empty() && self.prefetch {
             let issued = prefetch_requests(
                 &Prefetch {
@@ -273,11 +281,7 @@ fn carry(
         {
             continue;
         }
-        let request = BrickRequest {
-            time,
-            level,
-            coord: grid.coord(*index as usize),
-        };
+        let request = BrickRequest::new(time, level, grid.coord(*index as usize));
         if !issued.insert(request) {
             continue;
         }

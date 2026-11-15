@@ -1,12 +1,11 @@
 use std::ops::Range;
 
-use grana_scene::{DerivedSpec, Operation};
+use grana_scene::{DerivedSpec, GAUSSIAN_REACH, Operation};
 use grana_volume::{Level, Spacing, VoxelData};
 
 use super::ChannelsError;
 
 const HALO_LIMIT: u32 = 256;
-const GAUSSIAN_REACH: f32 = 3.0;
 
 pub(super) trait RegionSource {
     fn read(&self, channel: usize, ranges: &[Range<u32>; 3]) -> Result<VoxelData, ChannelsError>;

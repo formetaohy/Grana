@@ -2,7 +2,7 @@ use grana_display::CameraState;
 use grana_gpu::Pipelines;
 use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
-use grana_volume::{BrickData, BrickRequest, Clip, Pyramid, Region};
+use grana_volume::{BrickData, BrickRequest, Clip, Damage, Pyramid, Region};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::display::{Display, View};
@@ -110,6 +110,10 @@ impl Engine {
         self.pending_pick = None;
         self.request = None;
         self.info = FrameInfo::default();
+    }
+
+    pub fn damage(&mut self, queue: &Queue, damages: &[Damage]) {
+        self.renderer.damage(queue, damages);
     }
 
     pub fn requests_pending(&self) -> bool {

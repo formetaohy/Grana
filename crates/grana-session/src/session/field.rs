@@ -13,7 +13,7 @@ pub(super) struct Field {
     pub(super) timeline: Timeline,
     pub(super) export: Export,
     pub(super) coloc_thresholds: Option<(ColocPair, ColocThresholds)>,
-    pub(super) mask_stamp: Option<(u32, u64)>,
+    pub(super) mask_stamps: Vec<u64>,
     pub(super) project: Option<PathBuf>,
     pub(super) baseline: Option<u64>,
 }
@@ -82,7 +82,7 @@ impl Session {
             timeline: self.timeline.clone(),
             export: self.export,
             coloc_thresholds: self.coloc_thresholds.take(),
-            mask_stamp: self.mask_stamp.take(),
+            mask_stamps: std::mem::take(&mut self.mask_stamps),
             project: self.project.take(),
             baseline: self.baseline.take(),
         };
@@ -99,7 +99,7 @@ impl Session {
             timeline,
             export,
             coloc_thresholds,
-            mask_stamp,
+            mask_stamps,
             project,
             baseline,
             ..
@@ -116,7 +116,7 @@ impl Session {
         self.timeline = timeline;
         self.export = export;
         self.coloc_thresholds = coloc_thresholds;
-        self.mask_stamp = mask_stamp;
+        self.mask_stamps = mask_stamps;
         self.project = project;
         self.baseline = baseline;
     }

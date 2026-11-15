@@ -84,8 +84,12 @@ impl Detections {
         Vec3::from(self.detection(index).stretch) * reach
     }
 
-    pub fn grid(&self, frame: usize, reach: f32) -> Grid<'_> {
-        Grid::new(self, frame, reach * self.stretch)
+    pub fn grid(&self, frame: usize, cell: f32) -> Grid<'_> {
+        Grid::new(self, frame, cell)
+    }
+
+    pub fn widest(&self) -> f32 {
+        self.stretch
     }
 
     fn detection(&self, index: usize) -> &Detection {
@@ -109,8 +113,13 @@ pub(super) struct Grid<'a> {
 
 impl<'a> Grid<'a> {
     fn new(detections: &'a Detections, frame: usize, cell: f32) -> Self {
-        let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
-        for index in detections.span(frame) {
+        assert!(
+            cell.is_finite() && cell > 0.0,
+            "a detection index holds a positive cell"
+        );
+        let span = detections.span(frame);
+        let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::with_capacity(span.len());
+        for index in span {
             cells
                 .entry(key(detections.centroid(index), cell))
                 .or_default()
@@ -125,10 +134,11 @@ impl<'a> Grid<'a> {
 
     pub fn near(&self, at: Vec3, gate: Vec3, mut visit: impl FnMut(usize, f32)) {
         let gate = gate.to_array();
+        let reach = [0, 1, 2].map(|axis| (gate[axis] / self.cell).ceil().max(0.0) as i64);
         let base = key(at, self.cell);
-        for z in -1..=1 {
-            for y in -1..=1 {
-                for x in -1..=1 {
+        for z in -reach[2]..=reach[2] {
+            for y in -reach[1]..=reach[1] {
+                for x in -reach[0]..=reach[0] {
                     let Some(indices) = self.cells.get(&[base[0] + x, base[1] + y, base[2] + z])
                     else {
                         continue;

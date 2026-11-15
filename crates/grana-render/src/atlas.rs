@@ -93,6 +93,7 @@ pub(crate) struct Atlas {
     slot_grid: [u32; 3],
     free: Vec<u32>,
     slots: Vec<Slot>,
+    versions: Vec<u32>,
     identity: HashMap<(u32, usize, usize), u32>,
     hollow: HashSet<(u32, usize, usize)>,
     pruned: Option<[u32; 2]>,
@@ -228,6 +229,7 @@ impl Atlas {
             slot_grid,
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
+            versions: vec![0; capacity],
             identity: HashMap::new(),
             hollow: HashSet::new(),
             pruned: None,
@@ -256,6 +258,57 @@ impl Atlas {
 
     pub fn slot(&self, time: u32, level: usize, index: usize) -> Option<u32> {
         self.identity.get(&(time, level, index)).copied()
+    }
+
+    pub fn version(&self, slot: u32) -> u32 {
+        self.versions[slot as usize]
+    }
+
+    pub fn written(&mut self, slot: u32) {
+        self.versions[slot as usize] = self.versions[slot as usize].wrapping_add(1);
+    }
+
+    pub fn held(&self, level: usize, index: usize) -> Vec<ResidentBrick> {
+        self.slots
+            .iter()
+            .filter_map(|entry| {
+                let brick = entry.brick?;
+                (brick.level == level && brick.index == index).then_some(brick)
+            })
+            .collect()
+    }
+
+    pub fn release_hollow(&mut self, level: usize, index: usize) -> Vec<u32> {
+        let released = self
+            .hollow
+            .iter()
+            .filter(|(_, hollow_level, hollow_index)| {
+                *hollow_level == level && *hollow_index == index
+            })
+            .map(|(time, _, _)| *time)
+            .collect::<Vec<_>>();
+        for time in &released {
+            self.hollow.remove(&(*time, level, index));
+        }
+        released
+    }
+
+    pub fn evict_other_frames(&mut self, time: u32) -> Vec<ResidentBrick> {
+        let mut evicted = Vec::new();
+        for slot in 0..self.slots.len() {
+            let Some(brick) = self.slots[slot].brick else {
+                continue;
+            };
+            if brick.time == time {
+                continue;
+            }
+            self.identity
+                .remove(&(brick.time, brick.level, brick.index));
+            self.slots[slot] = Slot::EMPTY;
+            self.free.push(slot as u32);
+            evicted.push(brick);
+        }
+        evicted
     }
 
     pub fn is_hollow(&self, time: u32, level: usize, index: usize) -> bool {
@@ -393,6 +446,7 @@ impl Atlas {
             used: pin,
             held: hold,
         };
+        self.written(slot);
     }
 
     pub fn write(&self, queue: &Queue, pack: usize, slot: u32, units: &[u16]) {

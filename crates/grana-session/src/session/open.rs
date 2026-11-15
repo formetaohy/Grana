@@ -26,7 +26,8 @@ impl Session {
         self.discard_streamed();
         self.measure.reset();
         self.label_images.clear();
-        self.mask_stamp = None;
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
         self.plate = None;
         self.field = 0;
         self.fields.clear();
@@ -34,7 +35,8 @@ impl Session {
         self.set_time(0);
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
-            self.mask_stamp = Some((0, scene.mask_stamp(0)));
+            self.mask_stamps = scene.mask_stamps();
+            self.mask_extents = scene.mask_extents(scene.time());
         }
         self.baseline = self.document_hash();
     }
@@ -410,7 +412,8 @@ impl Session {
         self.history.clear();
         self.label_images.clear();
         self.fingerprint = None;
-        self.mask_stamp = None;
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
         self.channels = None;
         self.transfer.reset();
     }
@@ -460,7 +463,8 @@ impl Session {
         }
         self.fingerprint = Some(fingerprint);
         self.replace();
-        self.mask_stamp = None;
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
         self.transfer.reset();
         if let Some(source) = &self.source {
             if let Some(scene) = self.scene.as_ref() {
@@ -472,7 +476,8 @@ impl Session {
         }
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
-            self.mask_stamp = Some((scene.time(), scene.mask_stamp(scene.time())));
+            self.mask_stamps = scene.mask_stamps();
+            self.mask_extents = scene.mask_extents(scene.time());
         }
         self.accept_open();
     }

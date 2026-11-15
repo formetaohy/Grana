@@ -323,7 +323,13 @@ fn read(
         if stopped() {
             return;
         }
-        match channels.read_brick(request.time, request.level, request.coord, &warps) {
+        match channels.read_brick(
+            request.time,
+            request.level,
+            request.coord,
+            &warps,
+            request.channels,
+        ) {
             Ok(data) => {
                 events.send_until(
                     Event::Brick {

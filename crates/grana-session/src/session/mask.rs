@@ -1,6 +1,6 @@
 use grana_pipeline::Channels;
 use grana_scene::{DerivedSpec, ObjectSetId};
-use grana_volume::Intensity;
+use grana_volume::{ChannelSet, Damage, Intensity};
 
 use super::derived::{PendingChannel, calibrate};
 
@@ -375,7 +375,8 @@ impl Session {
     }
 
     pub(super) fn relayout_channels(&mut self) {
-        self.mask_stamp = None;
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
         self.install_channels();
         self.reload_streamed();
     }
@@ -407,20 +408,42 @@ impl Session {
 
     pub(super) fn refresh_masks(&mut self) -> bool {
         let Some(scene) = self.scene.as_mut() else {
-            self.mask_stamp = None;
+            self.mask_stamps.clear();
+            self.mask_extents.clear();
             return false;
         };
         scene.sync_masks();
-        let time = scene.time();
-        let stamp = scene.mask_stamp(time);
-        let changed = self
-            .mask_stamp
-            .is_some_and(|(held, value)| held == time && value != stamp);
-        self.mask_stamp = Some((time, stamp));
-        if changed {
-            self.reload_streamed();
+        let stamps = scene.mask_stamps();
+        if stamps.len() != self.mask_stamps.len() {
+            self.mask_stamps = stamps;
+            self.mask_extents = scene.mask_extents(scene.time());
+            return false;
         }
-        changed
+        let mut changed = ChannelSet::NONE;
+        for (index, (held, stamp)) in self.mask_stamps.iter().zip(&stamps).enumerate() {
+            if held != stamp {
+                changed = changed.with(scene.base_channels() + index);
+            }
+        }
+        if changed.is_empty() {
+            return false;
+        }
+        self.mask_stamps = stamps;
+        let time = scene.time();
+        let extents = scene.mask_extents(time);
+        let channels = scene.damaged_channels(changed);
+        let damage = scene
+            .mask_damage(channels, &extents, &self.mask_extents)
+            .and_then(|region| Damage::new(region, channels));
+        self.mask_extents = extents;
+        match damage {
+            Some(damage) => {
+                self.damages.push(damage);
+                self.discard_streamed();
+            }
+            None => self.reload_streamed(),
+        }
+        true
     }
 
     pub(super) fn finish_channel(

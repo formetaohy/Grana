@@ -105,7 +105,8 @@ impl Session {
         };
         self.history.clear();
         self.install_channels();
-        self.mask_stamp = None;
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
         let sets = staged.sets().to_vec();
         let steps = staged.steps().to_vec();
         self.realign();

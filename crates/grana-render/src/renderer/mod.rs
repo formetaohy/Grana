@@ -1,3 +1,4 @@
+mod damage;
 mod feedback;
 mod render;
 mod residency;
@@ -207,6 +208,7 @@ pub struct Renderer {
     prefetched: HashSet<BrickRequest>,
     prefetch_key: Option<u64>,
     prefetch_issued: Vec<BrickRequest>,
+    refreshes: HashSet<BrickRequest>,
     prefetch_rate: f32,
     transparent: bool,
     exporting: bool,
@@ -308,6 +310,7 @@ impl Renderer {
             prefetched: HashSet::new(),
             prefetch_key: None,
             prefetch_issued: Vec::new(),
+            refreshes: HashSet::new(),
             prefetch_rate: 1.0,
             transparent: false,
             exporting: false,
@@ -416,6 +419,7 @@ impl Renderer {
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
+        self.refreshes.clear();
         self.generation = self.generation.wrapping_add(1);
         self.info = FrameInfo::default();
     }
@@ -437,6 +441,7 @@ impl Renderer {
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
+        self.refreshes.clear();
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
         self.motion = None;
@@ -572,6 +577,7 @@ impl Renderer {
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
+        self.refreshes.clear();
         self.prefetch_rate = 1.0;
         self.generation = 0;
         self.settled = None;

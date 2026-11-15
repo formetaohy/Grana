@@ -8,7 +8,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
 use grana_optics::Psf;
-use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
+use grana_volume::{CHANNEL_LIMIT, ChannelInfo, ChannelSet, Clip, Intensity, Region};
 
 use crate::alignment::LocalizationAlignment;
 use crate::annotation::Annotations;
@@ -31,6 +31,8 @@ use crate::registration::Registration;
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, mix};
 use crate::table_request::TableRequest;
+
+pub type MaskExtent = ([f32; 3], [f32; 3]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -472,30 +474,75 @@ impl Scene {
         }
     }
 
-    pub fn mask_stamp(&self, time: u32) -> u64 {
-        let mut stamp = HASH_OFFSET;
-        let mut bound = false;
-        for entry in &self.derived {
-            let (Some(set), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
+    pub fn mask_stamps(&self) -> Vec<u64> {
+        self.derived
+            .iter()
+            .map(|entry| entry.mask().map_or(0, |mask| mask.stamp()))
+            .collect()
+    }
+
+    pub fn damaged_channels(&self, roots: ChannelSet) -> ChannelSet {
+        let mut channels = roots;
+        for (index, entry) in self.derived.iter().enumerate() {
+            let spec = entry.spec();
+            let reads = channels.contains(spec.source())
+                || spec
+                    .ratio_denominator()
+                    .is_some_and(|denominator| channels.contains(denominator));
+            if reads {
+                channels = channels.with(self.base_channels + index);
+            }
+        }
+        channels
+    }
+
+    pub fn mask_extents(&self, time: u32) -> Vec<Option<MaskExtent>> {
+        self.derived
+            .iter()
+            .map(|entry| {
+                let set = entry.spec().mask()?;
+                let frame = self.objects.get(set)?.frame_shared(time)?;
+                frame.shape().ok()?.bounds()
+            })
+            .collect()
+    }
+
+    pub fn mask_damage(
+        &self,
+        channels: ChannelSet,
+        extents: &[Option<MaskExtent>],
+        previous: &[Option<MaskExtent>],
+    ) -> Option<Region> {
+        let voxel = self.dataset.voxel_size().max_element();
+        let mut margin = self.mask_radius + voxel;
+        let mut low = Vec3::splat(f32::INFINITY);
+        let mut high = Vec3::splat(f32::NEG_INFINITY);
+        let mut bounded = false;
+        for channel in channels.iter() {
+            let Some(index) = channel.checked_sub(self.base_channels) else {
                 continue;
             };
-            if !bound {
-                bound = true;
-                stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
-                stamp = mix(stamp, filter_stamp(self.mask_filter));
+            let Some(entry) = self.derived.get(index) else {
+                continue;
+            };
+            margin += entry.spec().operation().spread()?;
+            let held = extents
+                .get(index)
+                .copied()
+                .flatten()
+                .into_iter()
+                .chain(previous.get(index).copied().flatten());
+            for (near, far) in held {
+                low = low.min(Vec3::from(near));
+                high = high.max(Vec3::from(far));
+                bounded = true;
             }
-            stamp = mix(stamp, set.raw());
-            stamp = mix(stamp, entry.spec().source() as u64);
-            stamp = mix(stamp, channel.stamp());
-            stamp = mix(
-                stamp,
-                self.objects
-                    .get(set)
-                    .and_then(|object| object.frame_stamp(time))
-                    .map_or(u64::MAX, |frame| frame.raw()),
-            );
         }
-        stamp
+        if !bounded {
+            return None;
+        }
+        let margin = Vec3::splat(margin);
+        Some(Region::axis_aligned(low - margin, high + margin))
     }
 
     fn mask_name(&self, source: &ChannelInfo, object: &ObjectSet) -> String {

@@ -350,11 +350,7 @@ pub(crate) fn decode_plan(
         indices.push(index);
         if entry & MISSING != 0 {
             buckets.push(bucket_of[position]);
-            requests.push(BrickRequest {
-                time,
-                level,
-                coord: grid.coord(index as usize),
-            });
+            requests.push(BrickRequest::new(time, level, grid.coord(index as usize)));
         }
     }
     Some(Demand {

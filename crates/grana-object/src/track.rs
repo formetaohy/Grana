@@ -453,22 +453,44 @@ impl TrackSet {
     }
 
     pub fn can_join(&self, source: (u32, usize), target: (u32, usize)) -> bool {
-        self.joinable(source, &[Some(target)])[0]
+        target.0 > source.0 && self.ends_lineage(source) && self.begins_lineage(target)
     }
 
     pub fn joinable(&self, source: (u32, usize), targets: &[Option<(u32, usize)>]) -> Vec<bool> {
-        let lineage = Lineage::of(self);
-        let Some(source) = lineage.node_at(source.0, source.1) else {
-            return vec![false; targets.len()];
-        };
+        let open = self.ends_lineage(source);
         targets
             .iter()
             .map(|target| {
-                target
-                    .and_then(|(time, object)| lineage.node_at(time, object))
-                    .is_some_and(|target| lineage.can_join(source, target))
+                open && target
+                    .is_some_and(|target| target.0 > source.0 && self.begins_lineage(target))
             })
             .collect()
+    }
+
+    fn ends_lineage(&self, node: (u32, usize)) -> bool {
+        self.track_at(node.0, node.1).is_some_and(|index| {
+            self.finishes_track(index, node) && self.child_links(index).next().is_none()
+        })
+    }
+
+    fn begins_lineage(&self, node: (u32, usize)) -> bool {
+        self.track_at(node.0, node.1).is_some_and(|index| {
+            self.begins_track(index, node) && self.parents(index).next().is_none()
+        })
+    }
+
+    fn begins_track(&self, track: usize, node: (u32, usize)) -> bool {
+        self.tracks[track]
+            .nodes()
+            .first()
+            .is_some_and(|first| (first.time(), first.object()) == node)
+    }
+
+    fn finishes_track(&self, track: usize, node: (u32, usize)) -> bool {
+        self.tracks[track]
+            .nodes()
+            .last()
+            .is_some_and(|last| (last.time(), last.object()) == node)
     }
 
     pub fn join(&self, source: (u32, usize), target: (u32, usize)) -> Option<Self> {
@@ -487,15 +509,12 @@ impl TrackSet {
         first: (u32, usize),
         second: (u32, usize),
     ) -> bool {
-        let lineage = Lineage::of(self);
-        let (Some(parent), Some(first), Some(second)) = (
-            lineage.node_at(parent.0, parent.1),
-            lineage.node_at(first.0, first.1),
-            lineage.node_at(second.0, second.1),
-        ) else {
-            return false;
-        };
-        lineage.can_divide(parent, first, second)
+        first != second
+            && first.0 > parent.0
+            && second.0 > parent.0
+            && self.ends_lineage(parent)
+            && self.begins_lineage(first)
+            && self.begins_lineage(second)
     }
 
     pub fn divide(
@@ -548,14 +567,19 @@ impl TrackSet {
     }
 
     pub fn can_reparent(&self, child: (u32, usize), parent: (u32, usize)) -> bool {
-        let lineage = Lineage::of(self);
-        let (Some(child), Some(parent)) = (
-            lineage.node_at(child.0, child.1),
-            lineage.node_at(parent.0, parent.1),
-        ) else {
+        let Some(parent_track) = self.track_at(parent.0, parent.1) else {
             return false;
         };
-        lineage.can_reparent(child, parent)
+        let Some(child_track) = self.track_at(child.0, child.1) else {
+            return false;
+        };
+        child.0 > parent.0
+            && self.finishes_track(parent_track, parent)
+            && self.begins_track(child_track, child)
+            && self.child_links(parent_track).count() < 2
+            && self
+                .child_links(parent_track)
+                .all(|link| link.child as usize != child_track)
     }
 
     pub fn reparent(&self, child: (u32, usize), parent: (u32, usize)) -> Option<Self> {
@@ -569,11 +593,9 @@ impl TrackSet {
     }
 
     pub fn can_detach(&self, child: (u32, usize)) -> bool {
-        let lineage = Lineage::of(self);
-        let Some(child) = lineage.node_at(child.0, child.1) else {
-            return false;
-        };
-        lineage.can_detach(child)
+        self.track_at(child.0, child.1).is_some_and(|index| {
+            self.begins_track(index, child) && self.parents(index).next().is_some()
+        })
     }
 
     pub fn detach(&self, child: (u32, usize)) -> Option<Self> {

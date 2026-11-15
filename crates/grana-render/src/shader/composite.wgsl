@@ -1,6 +1,7 @@
 @group(5) @binding(0) var<storage, read> occupied: array<u32>;
 
 const OCCUPANCY_WORDS: u32 = 65u;
+const OCCUPANCY_PACKS: u32 = 4u;
 const SEGMENT_ERROR: f32 = 0.02;
 const SEGMENT_STRIDE: f32 = 8.0;
 
@@ -22,11 +23,23 @@ struct Sight {
 }
 
 fn occupied_brick(slot: u32) -> bool {
-    return occupancy_reaches(occupied[slot * OCCUPANCY_WORDS]);
+    for (var pack = 0u; pack < OCCUPANCY_PACKS; pack += 1u) {
+        let word = (slot * OCCUPANCY_PACKS + pack) * OCCUPANCY_WORDS;
+        if (occupancy_reaches(occupied[word])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn occupied_cell(slot: u32, cell: u32) -> bool {
-    return occupancy_reaches(occupied[slot * OCCUPANCY_WORDS + 1u + cell]);
+    for (var pack = 0u; pack < OCCUPANCY_PACKS; pack += 1u) {
+        let word = (slot * OCCUPANCY_PACKS + pack) * OCCUPANCY_WORDS + 1u + cell;
+        if (occupancy_reaches(occupied[word])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn volume_sight(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> Sight {
