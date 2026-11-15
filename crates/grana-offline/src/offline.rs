@@ -96,7 +96,6 @@ impl Offline {
                     Err(detail) => Outcome::Failed { detail },
                 };
             if matches!(outcome, Outcome::Complete { .. }) {
-                self.pipelines.save();
                 progress(1, 1);
             }
             return outcome;
@@ -171,14 +170,12 @@ impl Offline {
             ) {
                 Step::Running => {}
                 Step::Complete(path) => {
-                    self.pipelines.save();
                     let (frame, total) = export.progress();
                     progress(frame, total);
                     return Outcome::Complete { path };
                 }
                 Step::Failed(detail) => return Outcome::Failed { detail },
             }
-            self.pipelines.save();
             let (frame, total) = export.progress();
             progress(frame, total);
         }

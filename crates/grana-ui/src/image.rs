@@ -99,12 +99,12 @@ impl ImageAtlas {
         if let Some(slot) = self.slots.get(&bitmap.identity()) {
             return Some(*slot);
         }
-        self.reserve()?;
         let [width, height] = bitmap.size();
         let tile = (width + PADDING * 2, height + PADDING * 2);
         if tile.0 > SIZE || tile.1 > SIZE {
             return None;
         }
+        self.reserve()?;
         let (x, y) = self.allocate(tile.0, tile.1)?;
         let mut data = vec![0u8; (tile.0 * tile.1) as usize * 4];
         for row in 0..height {

@@ -102,7 +102,7 @@ impl Renderer {
                         let (maximum, summary) = stage(
                             &mut units[..span],
                             cells,
-                            &mut summaries[..CELL_COUNT],
+                            &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
                             pyramid,
                             total,
                             data,

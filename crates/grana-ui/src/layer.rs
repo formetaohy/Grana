@@ -32,6 +32,7 @@ impl<A: Clone> Ui<A> {
             let layer = &mut self.layers[index];
             layer.material = material;
             layer.rebuild = false;
+            layer.reset_backdrop();
             layer.dirty = Some((0, layer.material.len()));
             layer.touch();
         }

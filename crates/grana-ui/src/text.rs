@@ -266,6 +266,30 @@ impl Text {
                         self.fonts.face_for('\u{2026}')
                     };
                     let ellipsis = self.fonts.shape(face, "\u{2026}", glyph_style, 1.0);
+                    let room = (max_width - pen - ellipsis.width).max(0.0);
+                    let mut base = 0.0f32;
+                    let mut used = 0.0f32;
+                    'prefix: for (face, run) in &shaped {
+                        for (index, glyph) in run.glyphs.iter().enumerate() {
+                            let advance = run
+                                .glyphs
+                                .get(index + 1)
+                                .map_or(run.width - glyph.x, |next| next.x - glyph.x);
+                            let x = base + glyph.x + style.tracking * index as f32;
+                            if x + advance > room {
+                                break 'prefix;
+                            }
+                            glyphs.push(PlacedGlyph {
+                                face: *face,
+                                id: glyph.id,
+                                x: pen + x,
+                                baseline: 0.0,
+                            });
+                            used = x + advance;
+                        }
+                        base += run.width + style.tracking * run.glyphs.len() as f32;
+                    }
+                    pen += used;
                     if pen + ellipsis.width <= max_width {
                         for glyph in &ellipsis.glyphs {
                             glyphs.push(PlacedGlyph {

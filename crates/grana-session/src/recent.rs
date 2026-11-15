@@ -112,16 +112,26 @@ impl Recent {
         let Some(root) = storage() else {
             return Self::default();
         };
-        let entries = std::fs::read_to_string(&root)
+        let mut entries = Vec::new();
+        let stored = std::fs::read_to_string(&root)
             .ok()
             .and_then(|text| toml::from_str::<Stored>(&text).ok())
-            .unwrap_or_default()
-            .entry
-            .into_iter()
-            .map(Entry::located)
-            .filter(Entry::present)
-            .take(LIMIT)
-            .collect();
+            .unwrap_or_default();
+        for entry in stored.entry.into_iter().map(Entry::located) {
+            if !entry.present()
+                || entries.iter().any(|held: &Entry| {
+                    held.kind == entry.kind
+                        && held.target == entry.target
+                        && held.series == entry.series
+                })
+            {
+                continue;
+            }
+            entries.push(entry);
+            if entries.len() == LIMIT {
+                break;
+            }
+        }
         Self {
             entries,
             root: Some(root),
@@ -143,7 +153,7 @@ impl Recent {
         if let Some(index) = duplicate {
             let held = self.entries.remove(index);
             self.entries.insert(0, held);
-            return Ok(());
+            return self.store();
         }
         self.entries.insert(0, entry);
         self.entries.truncate(LIMIT);

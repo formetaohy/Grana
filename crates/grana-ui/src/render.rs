@@ -15,7 +15,7 @@ use wgpu::{
 use crate::atlas::Atlas;
 use crate::element::Layer;
 use crate::image::ImageAtlas;
-use crate::paint::{FLAG_BACKDROP, Instance, LayerBuffer};
+use crate::paint::{Instance, LayerBuffer};
 use grana_gpu::Pipelines;
 use grana_gpu::layout;
 
@@ -164,8 +164,6 @@ pub(crate) struct PaintFrame<'a> {
 
 struct PaintTarget<'a> {
     target: &'a TextureView,
-    scene: &'a TextureView,
-    backdrop: &'a TextureView,
     load: LoadOp<wgpu::Color>,
 }
 
@@ -261,6 +259,8 @@ pub struct Renderer {
     uniform_state: Option<(f32, [u32; 2])>,
     canvas_generation: u64,
     blit_cache: Option<(u64, BindGroup)>,
+    backdrop_blits: [Option<BindGroup>; MAX_BLUR_MIPS as usize + 1],
+    ui_groups: [Option<(u64, BindGroup)>; SLOTS],
     content_blur: bool,
     interface_blur: bool,
 }
@@ -439,6 +439,8 @@ impl Renderer {
             uniform_state: None,
             canvas_generation: 0,
             blit_cache: None,
+            backdrop_blits: std::array::from_fn(|_| None),
+            ui_groups: std::array::from_fn(|_| None),
             content_blur: false,
             interface_blur: false,
         }
@@ -455,6 +457,8 @@ impl Renderer {
         self.backdrop = Some(BlurPyramid::new(&device, size, raw(self.encoded)));
         self.canvas_generation = self.canvas_generation.wrapping_add(1);
         self.blit_cache = None;
+        self.backdrop_blits = std::array::from_fn(|_| None);
+        self.ui_groups = std::array::from_fn(|_| None);
         self.content_blur = false;
         self.interface_blur = false;
         true
@@ -552,7 +556,6 @@ impl Renderer {
             self.size[0] > 0 && self.size[1] > 0,
             "the UI renderer needs a sized target"
         );
-        let scene = scene.unwrap_or(&self.dummy);
         let canvas = self.canvas.as_ref().expect("the renderer is sized");
         let canvas_linear = canvas.linear.clone();
         let canvas_encoded = canvas.encoded.clone();
@@ -592,6 +595,7 @@ impl Renderer {
                 self.revisions[index] = layers[index].revision;
             }
         }
+        self.prepare_groups(atlases, scene, &backdrop_sampled);
         if let Some(scissor) = scissor {
             match damage {
                 Damage::Full => clear(encoder, &canvas_linear),
@@ -599,18 +603,18 @@ impl Renderer {
             }
             self.paint_material(
                 encoder,
-                atlases,
                 &PaintTarget {
                     target: &canvas_linear,
-                    scene,
-                    backdrop: &self.dummy,
                     load: LoadOp::Load,
                 },
-                &self.buffers.buffers[Layer::Content.index()].buffer,
+                &self.ui_groups[Layer::Content.index()]
+                    .as_ref()
+                    .expect("the content group is cached")
+                    .1,
                 content.material.len(),
                 Some(scissor),
             );
-            if has_backdrop(&chrome.material) {
+            if chrome.backdrop {
                 if content_refresh || !self.content_blur {
                     self.update_backdrop(encoder, &canvas_linear);
                     self.content_blur = true;
@@ -620,18 +624,18 @@ impl Renderer {
             }
             self.paint_material(
                 encoder,
-                atlases,
                 &PaintTarget {
                     target: &canvas_linear,
-                    scene,
-                    backdrop: &backdrop_sampled,
                     load: LoadOp::Load,
                 },
-                &self.buffers.buffers[Layer::Chrome.index()].buffer,
+                &self.ui_groups[Layer::Chrome.index()]
+                    .as_ref()
+                    .expect("the chrome group is cached")
+                    .1,
                 chrome.material.len(),
                 Some(scissor),
             );
-            if has_backdrop(&popup.material) || has_backdrop(&hud.material) {
+            if popup.backdrop || hud.backdrop {
                 if interface_refresh || !self.interface_blur {
                     self.update_backdrop(encoder, &canvas_linear);
                     self.interface_blur = true;
@@ -641,40 +645,40 @@ impl Renderer {
             }
             self.paint_material(
                 encoder,
-                atlases,
                 &PaintTarget {
                     target: &canvas_linear,
-                    scene,
-                    backdrop: &backdrop_sampled,
                     load: LoadOp::Load,
                 },
-                &self.buffers.buffers[Layer::Popup.index()].buffer,
+                &self.ui_groups[Layer::Popup.index()]
+                    .as_ref()
+                    .expect("the popup group is cached")
+                    .1,
                 popup.material.len(),
                 Some(scissor),
             );
             self.paint_material(
                 encoder,
-                atlases,
                 &PaintTarget {
                     target: &canvas_linear,
-                    scene,
-                    backdrop: &backdrop_sampled,
                     load: LoadOp::Load,
                 },
-                &self.buffers.buffers[Layer::Hud.index()].buffer,
+                &self.ui_groups[Layer::Hud.index()]
+                    .as_ref()
+                    .expect("the hud group is cached")
+                    .1,
                 hud.material.len(),
                 Some(scissor),
             );
             self.paint_material(
                 encoder,
-                atlases,
                 &PaintTarget {
                     target: &canvas_linear,
-                    scene,
-                    backdrop: &backdrop_sampled,
                     load: LoadOp::Load,
                 },
-                &self.buffers.buffers[OVERLAY_SLOT].buffer,
+                &self.ui_groups[OVERLAY_SLOT]
+                    .as_ref()
+                    .expect("the overlay group is cached")
+                    .1,
                 overlay.material.len(),
                 Some(scissor),
             );
@@ -705,6 +709,41 @@ impl Renderer {
             target_view,
             LoadOp::Clear(wgpu::Color::BLACK),
         );
+    }
+
+    fn prepare_groups(
+        &mut self,
+        atlases: Atlases<'_>,
+        scene: Option<&TextureView>,
+        backdrop: &TextureView,
+    ) {
+        let scene_id = scene.map_or(0, |view| view as *const TextureView as usize);
+        let scene = scene.unwrap_or(&self.dummy);
+        for slot in 0..SLOTS {
+            let content = slot == Layer::Content.index();
+            let target = if content { &self.dummy } else { backdrop };
+            let backdrop_id = if content { 0 } else { self.canvas_generation };
+            let key = group_key(
+                scene_id,
+                backdrop_id,
+                &self.buffers.buffers[slot].buffer,
+                atlases,
+            );
+            if self.ui_groups[slot]
+                .as_ref()
+                .is_some_and(|(held, _)| *held == key)
+            {
+                continue;
+            }
+            let group = self.ui_group(
+                atlases,
+                scene,
+                target,
+                &self.buffers.buffers[slot].buffer,
+                &self.uniforms,
+            );
+            self.ui_groups[slot] = Some((key, group));
+        }
     }
 
     fn erase(&self, encoder: &mut CommandEncoder, target: &TextureView, scissor: [u32; 4]) {
@@ -738,7 +777,7 @@ impl Renderer {
         [x, y, width, height]
     }
 
-    fn update_backdrop(&self, encoder: &mut CommandEncoder, source: &TextureView) {
+    fn update_backdrop(&mut self, encoder: &mut CommandEncoder, source: &TextureView) {
         let Some(backdrop) = self.backdrop.as_ref() else {
             return;
         };
@@ -748,11 +787,17 @@ impl Renderer {
             } else {
                 &backdrop.mips[index - 1]
             };
-            let group = self.blit_group(input);
+            if self.backdrop_blits[index].is_none() {
+                let group = self.blit_group(input);
+                self.backdrop_blits[index] = Some(group);
+            }
+            let group = self.backdrop_blits[index]
+                .as_ref()
+                .expect("the backdrop blit group is cached");
             fullscreen(
                 encoder,
                 &self.downsample,
-                &group,
+                group,
                 target,
                 LoadOp::Clear(wgpu::Color::BLACK),
             );
@@ -762,22 +807,14 @@ impl Renderer {
     fn paint_material(
         &self,
         encoder: &mut CommandEncoder,
-        atlases: Atlases<'_>,
         target: &PaintTarget<'_>,
-        buffer: &Buffer,
+        group: &BindGroup,
         count: usize,
         scissor: Option<[u32; 4]>,
     ) {
         if count == 0 {
             return;
         }
-        let group = self.ui_group(
-            atlases,
-            target.scene,
-            target.backdrop,
-            buffer,
-            &self.uniforms,
-        );
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ui.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -792,7 +829,7 @@ impl Renderer {
             ..Default::default()
         });
         pass.set_pipeline(&self.ui);
-        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(0, group, &[]);
         if let Some(scissor) = scissor {
             pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         }
@@ -931,10 +968,18 @@ impl Renderer {
     }
 }
 
-fn has_backdrop(instances: &[Instance]) -> bool {
-    instances
-        .iter()
-        .any(|instance| (instance.meta[1] & FLAG_BACKDROP) != 0)
+fn group_key(scene: usize, backdrop: u64, instances: &Buffer, atlases: Atlases<'_>) -> u64 {
+    let mut key = 0xcbf2_9ce4_8422_2325u64;
+    for value in [
+        scene as u64,
+        backdrop,
+        instances as *const Buffer as usize as u64,
+        atlases.glyphs.view() as *const TextureView as usize as u64,
+        atlases.images.view() as *const TextureView as usize as u64,
+    ] {
+        key = (key ^ value).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    key
 }
 
 fn raw(format: TextureFormat) -> TextureFormat {

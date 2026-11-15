@@ -198,7 +198,6 @@ impl App {
         );
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
-        surface.gpu.pipelines().save();
     }
 
     pub(super) fn frame_info(&self) -> FrameInfo {

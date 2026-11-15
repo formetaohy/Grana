@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use wgpu::{Device, PipelineCache, PipelineCacheDescriptor};
 
@@ -13,9 +12,9 @@ pub struct Pipelines {
 }
 
 struct Inner {
+    device: Device,
     cache: Option<PipelineCache>,
     path: Option<PathBuf>,
-    saved: AtomicBool,
 }
 
 impl Pipelines {
@@ -36,9 +35,9 @@ impl Pipelines {
             });
         Self {
             inner: Arc::new(Inner {
+                device: device.clone(),
                 cache,
                 path,
-                saved: AtomicBool::new(false),
             }),
         }
     }
@@ -46,17 +45,23 @@ impl Pipelines {
     pub fn cache(&self) -> Option<&PipelineCache> {
         self.inner.cache.as_ref()
     }
+}
 
-    pub fn save(&self) {
-        let Some(cache) = self.inner.cache.as_ref() else {
-            return;
-        };
-        let Some(path) = self.inner.path.as_ref() else {
-            return;
-        };
-        if self.inner.saved.swap(true, Ordering::Relaxed) {
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if !self
+            .device
+            .features()
+            .contains(wgpu::Features::PIPELINE_CACHE)
+        {
             return;
         }
+        let Some(cache) = self.cache.as_ref() else {
+            return;
+        };
+        let Some(path) = self.path.as_ref() else {
+            return;
+        };
         let Some(data) = cache.get_data() else {
             return;
         };

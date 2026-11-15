@@ -134,6 +134,7 @@ pub(crate) struct LayerBuffer {
     pub rebuild: bool,
     pub dirty: Option<(usize, usize)>,
     pub revision: u64,
+    pub backdrop: bool,
 }
 
 impl LayerBuffer {
@@ -146,6 +147,12 @@ impl LayerBuffer {
 
     pub(crate) fn patch(&mut self, start: usize, instances: &[Instance]) {
         self.replace(start, instances);
+        if instances
+            .iter()
+            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0)
+        {
+            self.backdrop = true;
+        }
         self.mark(start, instances.len());
         self.touch();
     }
@@ -168,8 +175,18 @@ impl LayerBuffer {
     pub(crate) fn assign(&mut self, instances: &[Instance]) {
         self.material.clear();
         self.material.extend_from_slice(instances);
+        self.backdrop = instances
+            .iter()
+            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0);
         self.dirty = Some((0, self.material.len()));
         self.touch();
+    }
+
+    pub(crate) fn reset_backdrop(&mut self) {
+        self.backdrop = self
+            .material
+            .iter()
+            .any(|instance| instance.meta[1] & FLAG_BACKDROP != 0);
     }
 }
 
