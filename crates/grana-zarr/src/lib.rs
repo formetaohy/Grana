@@ -1,4 +1,5 @@
 mod axes;
+mod chunk;
 mod error;
 mod frame;
 mod hcs;

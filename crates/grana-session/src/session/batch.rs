@@ -152,12 +152,12 @@ impl Session {
             self.batch_message = Some("choose the batch output folder first".to_string());
             return;
         };
-        self.capture_protocol();
-        if self.batch_message.is_some() {
-            return;
-        }
-        let Some(protocol) = self.protocol.clone() else {
-            return;
+        let protocol = match self.protocol_of() {
+            Ok(protocol) => protocol,
+            Err(detail) => {
+                self.batch_message = Some(detail);
+                return;
+            }
         };
         match grana_pipeline::record_correction(&output, &path, scene, &protocol) {
             Ok(()) => {

@@ -128,6 +128,16 @@ impl Measure {
         self.invalidate();
     }
 
+    pub fn clear(&mut self) {
+        if self.set.take().is_none() {
+            return;
+        }
+        self.basis = None;
+        self.filters.clear();
+        self.sort = None;
+        self.invalidate();
+    }
+
     pub fn group(&self) -> Group {
         self.group
     }

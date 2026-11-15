@@ -619,11 +619,11 @@ impl Session {
                     scene.step_scale = 1.0;
                 }
             }
-            Command::SetMeasureSet(set) => {
-                if let (Some(set), Some(scene)) = (set, self.scene.as_mut()) {
-                    self.measure.select(set, scene);
-                }
-            }
+            Command::SetMeasureSet(set) => match (set, self.scene.as_mut()) {
+                (Some(set), Some(scene)) => self.measure.select(set, scene),
+                (Some(_), None) => {}
+                (None, _) => self.measure.clear(),
+            },
             Command::TrainClassifier { set, features } => self.train_classifier(set, features),
             Command::ClearClassifier(set) => {
                 if let Some(scene) = self.scene.as_mut() {

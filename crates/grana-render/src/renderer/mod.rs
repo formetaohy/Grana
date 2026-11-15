@@ -102,6 +102,10 @@ pub struct Requests {
     pub view: ViewInfo,
 }
 
+pub(super) fn carried_frame(time: u32, frames: u32) -> u32 {
+    (time + 1) % frames
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct VolumeTargets<'a> {
     pub(crate) color: &'a TextureView,

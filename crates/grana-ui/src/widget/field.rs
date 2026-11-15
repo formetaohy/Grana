@@ -51,27 +51,28 @@ pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec
 }
 
 pub(crate) fn caret_at(
-    field: &FieldContent,
+    text: &str,
+    style: TextStyle,
+    multiline: bool,
     rect: Rect,
     pointer: Vec2,
-    text: &mut crate::text::Text,
+    layout: &mut crate::text::Text,
 ) -> usize {
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 4.0));
-    let style = field.style;
     let x = pointer.x - inner.min.x;
-    if !field.multiline {
-        return column(field.value.as_str(), x, style, text);
+    if !multiline {
+        return column(text, x, style, layout);
     }
     let line_height = style.font.leading.max(style.font.size * 1.28);
     let row = ((pointer.y - inner.min.y) / line_height).floor().max(0.0) as usize;
     let mut offset = 0usize;
-    for (index, line) in field.value.split('\n').enumerate() {
+    for (index, line) in text.split('\n').enumerate() {
         if index == row {
-            return offset + column(line, x, style, text);
+            return offset + column(line, x, style, layout);
         }
         offset += line.chars().count() + 1;
     }
-    field.value.chars().count()
+    text.chars().count()
 }
 
 fn column(line: &str, x: f32, style: TextStyle, text: &mut crate::text::Text) -> usize {

@@ -97,7 +97,7 @@ pub(crate) struct Atlas {
     slots: Vec<Slot>,
     identity: HashMap<(u32, usize, usize), u32>,
     hollow: HashSet<(u32, usize, usize)>,
-    pruned: Option<u32>,
+    pruned: Option<[u32; 2]>,
 }
 
 impl Atlas {
@@ -268,12 +268,13 @@ impl Atlas {
         self.hollow.insert((time, level, index));
     }
 
-    pub fn prune(&mut self, now: u32) {
-        if self.pruned == Some(now) {
+    pub fn prune(&mut self, frames: [u32; 2]) {
+        if self.pruned == Some(frames) {
             return;
         }
-        self.hollow.retain(|(time, _, _)| *time >= now);
-        self.pruned = Some(now);
+        self.hollow
+            .retain(|(time, _, _)| *time == frames[0] || *time == frames[1]);
+        self.pruned = Some(frames);
     }
 
     pub fn residents(&self, time: u32, level: usize) -> Vec<Resident> {

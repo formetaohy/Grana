@@ -267,7 +267,10 @@ impl MaskWorker {
                 };
                 let base = detection.offset(core[0].start as i64);
                 let row = rows * (y + core_dims[1] * z);
-                let mut field_row = field.row(voxel_y, voxel_z);
+                let mut field_row = field.row(crate::local::RowKey {
+                    y: voxel_y,
+                    z: voxel_z,
+                });
                 for x in 0..core_dims[0] {
                     let voxel_x = core[0].start as i64 + x as i64;
                     if let Some(admitted) = admitted.as_mut() {

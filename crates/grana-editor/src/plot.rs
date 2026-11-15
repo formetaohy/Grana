@@ -1036,7 +1036,9 @@ fn nearest_trend_row(
         if table.observation(*row as usize).time() != Some(time) {
             continue;
         }
-        let current = table.cached_value(*row as usize, column)?;
+        let Some(current) = table.cached_value(*row as usize, column) else {
+            continue;
+        };
         if !current.is_finite() {
             continue;
         }
@@ -1078,7 +1080,9 @@ fn nearest_group_row(
         if split && table.observation(*row as usize).time() != target {
             continue;
         }
-        let current = table.cached_value(*row as usize, column)?;
+        let Some(current) = table.cached_value(*row as usize, column) else {
+            continue;
+        };
         if !current.is_finite() {
             continue;
         }

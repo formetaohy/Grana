@@ -548,7 +548,7 @@ impl<'a> Painter<'a> {
         });
     }
 
-    pub fn glyphs(&mut self, layout: &TextLayout, origin: Vec2, color: Color) {
+    pub fn glyphs(&mut self, layout: &TextLayout, origin: Vec2, color: Color) -> Option<Rect> {
         let Self {
             instances,
             text,
@@ -558,7 +558,13 @@ impl<'a> Painter<'a> {
         } = self;
         let clip = *clip;
         let gamma = *gamma;
+        let mut ink: Option<Rect> = None;
         text.emit(layout, origin, color, |plot| {
+            let rect = Rect::from_min_size(
+                Vec2::new(plot.left, plot.top),
+                Vec2::new(plot.width, plot.height),
+            );
+            ink = Some(ink.map_or(rect, |held| held.union(rect)));
             let mut instance = Instance::blank(KIND_GLYPH);
             instance.rect = [plot.left, plot.top, plot.width, plot.height];
             instance.color = plot.color.to_array();
@@ -568,6 +574,7 @@ impl<'a> Painter<'a> {
                 instances.material.push(clipped(instance, clip));
             }
         });
+        ink
     }
 
     pub fn text(&mut self, layout: &TextLayout, position: Vec2, color: Color) {
@@ -623,22 +630,11 @@ impl<'a> Painter<'a> {
             rect.min.x,
             rect.min.y + (rect.height() - layout.size.y) * factor,
         );
-        let material_start = self.instances.material.len();
-        self.glyphs(&layout, origin, style.color);
-        let instances = &mut self.instances.material;
-        let start = material_start;
-        if start >= instances.len() {
+        let start = self.instances.material.len();
+        let Some(ink) = self.glyphs(&layout, origin, style.color) else {
             self.record_text(&layout, origin, style.color);
             return;
-        }
-        let mut min = Vec2::splat(f32::INFINITY);
-        let mut max = Vec2::splat(f32::NEG_INFINITY);
-        for instance in &instances[start..] {
-            let corner = Vec2::new(instance.rect[0], instance.rect[1]);
-            let size = Vec2::new(instance.rect[2], instance.rect[3]);
-            min = min.min(corner);
-            max = max.max(corner + size);
-        }
+        };
         let mut delta = Vec2::ZERO;
         if matches!(style.align, Align::Center | Align::End) {
             let target = if style.align == Align::Center {
@@ -647,22 +643,24 @@ impl<'a> Painter<'a> {
                 rect.max.x
             };
             let current = if style.align == Align::Center {
-                (min.x + max.x) * 0.5
+                ink.center().x
             } else {
-                max.x
+                ink.max.x
             };
             delta.x = target - current;
         }
         if factor > 0.0 {
             let target = rect.min.y + rect.height() * factor;
-            let current = min.y + (max.y - min.y) * factor;
+            let current = ink.min.y + ink.height() * factor;
             delta.y = target - current;
         }
         let pixels_per_point = self.text.pixels_per_point();
         delta = (delta * pixels_per_point).round() / pixels_per_point;
-        for instance in &mut instances[start..] {
-            instance.rect[0] += delta.x;
-            instance.rect[1] += delta.y;
+        if delta != Vec2::ZERO {
+            for instance in &mut self.instances.material[start..] {
+                instance.rect[0] += delta.x;
+                instance.rect[1] += delta.y;
+            }
         }
         self.record_text(&layout, origin + delta, style.color);
     }

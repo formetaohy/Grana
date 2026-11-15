@@ -13,8 +13,15 @@ impl Session {
     }
 
     pub(super) fn capture_protocol(&mut self) {
+        match self.protocol_of() {
+            Ok(protocol) => self.set_protocol(protocol),
+            Err(detail) => self.batch_message = Some(detail),
+        }
+    }
+
+    pub(super) fn protocol_of(&self) -> Result<Protocol, String> {
         let Some(scene) = self.scene.as_ref() else {
-            return;
+            return Err("open a dataset before capturing its protocol".to_string());
         };
         let time = scene.time();
         let view = self
@@ -26,10 +33,8 @@ impl Session {
             .iter()
             .map(|named| NamedViewSpec::of(named.name.clone(), ViewSpec::of(&named.view, time)))
             .collect();
-        match Protocol::capture(scene, &self.measure, view, views, self.fingerprint) {
-            Ok(protocol) => self.set_protocol(protocol),
-            Err(error) => self.batch_message = Some(error.to_string()),
-        }
+        Protocol::capture(scene, &self.measure, view, views, self.fingerprint)
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn apply_protocol(&mut self) {
@@ -53,14 +58,23 @@ impl Session {
             let Some(scene) = self.scene.as_mut() else {
                 return;
             };
-            scene.clear_objects();
-            let infos = match protocol.derived_infos(scene.dataset.channels()) {
+            let base = scene.base_channels();
+            let infos = match protocol.derived_infos(&scene.dataset.channels()[..base]) {
                 Ok(infos) => infos,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
             };
+            if base + infos.len() > grana_volume::CHANNEL_LIMIT {
+                self.message = Some(Message::error(format!(
+                    "the protocol derives {} channels over the {base} stored channels of a dataset that displays at most {}",
+                    infos.len(),
+                    grana_volume::CHANNEL_LIMIT
+                )));
+                return;
+            }
+            scene.clear_objects();
             if let Err(detail) = scene.set_derived_layout(infos) {
                 self.message = Some(Message::error(detail));
                 return;

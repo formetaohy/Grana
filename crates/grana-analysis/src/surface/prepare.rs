@@ -134,7 +134,10 @@ impl Tile<'_> {
                 let bitset_y = origin[1] + y + SHIFT;
                 let voxel_y = field_start[1] + y as i64;
                 let base = field_dims[0] * (y + field_dims[1] * z);
-                let mut field_row = grid.row(voxel_y, voxel_z);
+                let mut field_row = grid.row(crate::local::RowKey {
+                    y: voxel_y,
+                    z: voxel_z,
+                });
                 for word in head..=tail {
                     let mut pending = band.needed_word(bitset_y, bitset_z, word);
                     if word == head {

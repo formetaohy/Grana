@@ -493,7 +493,10 @@ impl SpotScan {
         let mut spots = Vec::new();
         for z in core[2].clone() {
             for y in core[1].clone() {
-                let mut field_row = field.row(i64::from(y), i64::from(z));
+                let mut field_row = field.row(crate::local::RowKey {
+                    y: i64::from(y),
+                    z: i64::from(z),
+                });
                 for x in core[0].clone() {
                     let base = x as usize - core[0].start as usize
                         + self.halo[0] as usize

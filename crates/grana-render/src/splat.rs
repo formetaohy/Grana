@@ -578,6 +578,15 @@ impl SplatPasses {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.active.clear();
+        self.pickable.clear();
+        self.ranges.clear();
+        self.seen.clear();
+        self.count = 0;
+    }
+
     pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, splats: Splats<'_>) {
         self.seen.clear();
         self.active.clear();

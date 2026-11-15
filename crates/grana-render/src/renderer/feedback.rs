@@ -229,7 +229,7 @@ pub(super) fn prefetch_requests(
     } = *prefetch;
     let total = ((atlas.slots() as f32 / PREFETCH_SHARE as f32) * rate.clamp(0.25, 1.0))
         .min(PREFETCH_LIMIT as f32) as usize;
-    let next = (time + 1) % pyramid.frame_count();
+    let next = carried_frame(time, pyramid.frame_count());
     let mut budget = total;
     let mut requests = Vec::new();
     for (band, demand) in demands.iter().enumerate() {

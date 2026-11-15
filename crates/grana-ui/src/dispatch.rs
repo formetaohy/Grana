@@ -590,7 +590,14 @@ impl<A: Clone> Ui<A> {
                 return;
             };
             let rect = self.tree.nodes[node].rect;
-            let caret = crate::widget::field::caret_at(field, rect, self.pointer, &mut self.text);
+            let caret = crate::widget::field::caret_at(
+                edit.text(),
+                field.style,
+                field.multiline,
+                rect,
+                self.pointer,
+                &mut self.text,
+            );
             edit.place(caret, false, self.time);
             edit.click(self.pointer, self.time);
         }
@@ -606,14 +613,22 @@ impl<A: Clone> Ui<A> {
         let Content::Field(field) = &self.tree.nodes[node].content else {
             return;
         };
+        let (style, multiline) = (field.style, field.multiline);
         let rect = self.tree.nodes[node].rect;
-        let caret = crate::widget::field::caret_at(field, rect, self.pointer, &mut self.text);
         let extend = self.input.modifiers().shift;
         let time = self.time;
         let pointer = self.pointer;
         let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
             return;
         };
+        let caret = crate::widget::field::caret_at(
+            edit.text(),
+            style,
+            multiline,
+            rect,
+            pointer,
+            &mut self.text,
+        );
         edit.place(caret, extend, time);
         let clicks = edit.click(pointer, time);
         match clicks {
@@ -636,12 +651,21 @@ impl<A: Clone> Ui<A> {
         let Content::Field(field) = &self.tree.nodes[node].content else {
             return;
         };
+        let (style, multiline) = (field.style, field.multiline);
         let rect = self.tree.nodes[node].rect;
-        let caret = crate::widget::field::caret_at(field, rect, pointer, &mut self.text);
         let time = self.time;
-        if let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() {
-            edit.place(caret, true, time);
-        }
+        let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
+            return;
+        };
+        let caret = crate::widget::field::caret_at(
+            edit.text(),
+            style,
+            multiline,
+            rect,
+            pointer,
+            &mut self.text,
+        );
+        edit.place(caret, true, time);
     }
 
     fn field_keys(&mut self) {

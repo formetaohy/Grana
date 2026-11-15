@@ -264,18 +264,6 @@ impl DetectionStore {
         Ok(())
     }
 
-    pub(super) fn whole(&self) -> Option<Detection<'_>> {
-        let Storage::Memory(values) = &self.storage else {
-            return None;
-        };
-        Some(Detection {
-            values: Cow::Borrowed(&values[..]),
-            start: self.start,
-            dims: self.dims,
-            strides: super::strides_of(self.dims),
-        })
-    }
-
     pub(super) fn slab(&self, z: Range<u32>) -> Result<Option<Detection<'_>>, String> {
         let low = self.start[2] as u32;
         let high = low + self.dims[2] as u32;
@@ -333,10 +321,6 @@ impl<'a> DetectionSource<'a> {
 
     pub(super) fn cover(&self) -> &'a [Range<u32>; 3] {
         self.cover
-    }
-
-    pub(super) fn whole(&self) -> Option<Detection<'a>> {
-        self.store.whole()
     }
 
     pub(super) fn workers(&self) -> usize {

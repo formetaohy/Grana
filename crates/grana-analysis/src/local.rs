@@ -15,6 +15,21 @@ pub(crate) fn floor(intensity: Intensity) -> f32 {
     intensity.span() * MINIMUM_RANGE
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowKey {
+    pub y: i64,
+    pub z: i64,
+}
+
+impl RowKey {
+    pub fn of(voxel: [i64; 3]) -> Self {
+        Self {
+            y: voxel[1],
+            z: voxel[2],
+        }
+    }
+}
+
 pub(crate) struct Grid {
     anchor: [i64; 3],
     origin: [i64; 3],
@@ -39,9 +54,9 @@ impl Grid {
         })
     }
 
-    pub(crate) fn row(&self, y: i64, z: i64) -> Row<'_> {
-        let (first_y, weight_y) = self.axis(y, 1);
-        let (first_z, weight_z) = self.axis(z, 2);
+    pub(crate) fn row(&self, key: RowKey) -> Row<'_> {
+        let (first_y, weight_y) = self.axis(key.y, 1);
+        let (first_z, weight_z) = self.axis(key.z, 2);
         Row {
             grid: self,
             y: self.local(first_y, 1),
@@ -411,8 +426,8 @@ impl LocalField {
         ))
     }
 
-    pub fn row(&self, y: i64, z: i64) -> Row<'_> {
-        self.0.row(y, z)
+    pub fn row(&self, key: RowKey) -> Row<'_> {
+        self.0.row(key)
     }
 }
 
@@ -481,8 +496,8 @@ impl BlockField {
         local[0] + self.0.blocks[0] * (local[1] + self.0.blocks[1] * local[2])
     }
 
-    pub fn row(&self, y: i64, z: i64) -> Row<'_> {
-        self.0.row(y, z)
+    pub fn row(&self, key: RowKey) -> Row<'_> {
+        self.0.row(key)
     }
 
     pub fn at(&self, block: [i64; 3]) -> (f32, f32) {

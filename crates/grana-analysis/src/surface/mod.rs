@@ -28,7 +28,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
-use detection::{Detection, DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
+use detection::{DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
 use distance::Distance;
 pub use edit::{apply, merge, split};
 use mask::SolidMask;
@@ -626,9 +626,6 @@ fn run_pass(
     budget: &Budget,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
-    if let Some(detection) = inputs.source.whole() {
-        return run_whole(pass, workers, budget, &detection, inputs);
-    }
     let total = pass.total();
     let per_row = pass.plan.tiles[0] as usize * pass.plan.tiles[1] as usize;
     let stop = AtomicBool::new(false);
@@ -740,103 +737,6 @@ fn run_pass(
         }
     }
     Ok(PassOutcome::Done(Box::new(assembler.topology())))
-}
-
-fn run_whole(
-    pass: &Pass<'_>,
-    workers: usize,
-    budget: &Budget,
-    detection: &Detection,
-    inputs: &mut Inputs<'_>,
-) -> Result<PassOutcome, String> {
-    let total = pass.total();
-    let workers = workers.min(total.max(1));
-    let next = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let cancel = inputs.cancel;
-    let measure = inputs.measure;
-    let solid = inputs.solid;
-    let field = inputs.field;
-    let gate = pass.plan.gate(inputs.roi);
-    let (sender, receiver) = mpsc::channel::<(usize, TileResult)>();
-    let outcome = crate::schedule::parallel(|scope| {
-        let next = &next;
-        let stop = &stop;
-        let gate = &gate;
-        for _ in 0..workers {
-            let sender = sender.clone();
-            scope.spawn(move |_| {
-                let mut tile = Tile::new(pass, solid, field, detection, gate);
-                loop {
-                    if halted(cancel, stop) {
-                        break;
-                    }
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-                    let bytes = pass.array_bytes(index);
-                    if !budget.acquire(bytes, || halted(cancel, stop)) {
-                        break;
-                    }
-                    let result = tile.run(index, cancel, stop, measure);
-                    budget.release(bytes);
-                    if sender.send((index, result)).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-        let mut assembler = Assembler::new(pass);
-        let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
-        let mut assembled = 0usize;
-        while assembled < total {
-            if cancel.load(Ordering::Relaxed) {
-                stop.store(true, Ordering::Relaxed);
-                return Ok(None);
-            }
-            let (index, result) = match crate::schedule::receive(&receiver) {
-                Some(value) => value,
-                None => {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Ok(None);
-                    }
-                    return Err(
-                        "the surface workers stopped before every tile was assembled".to_string(),
-                    );
-                }
-            };
-            pending[index] = Some(result);
-            while assembled < total {
-                let Some(result) = pending[assembled].take() else {
-                    break;
-                };
-                match result {
-                    TileResult::Cancelled => {
-                        stop.store(true, Ordering::Relaxed);
-                        return Ok(None);
-                    }
-                    TileResult::Failed(detail) => {
-                        stop.store(true, Ordering::Relaxed);
-                        return Err(detail);
-                    }
-                    TileResult::Finished(output) => {
-                        assembler.push(assembled, *output)?;
-                        assembled += 1;
-                        if (assembled - 1).is_multiple_of(4) || assembled == total {
-                            (inputs.progress)(total + assembled, total * 2 + 1);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(Some(Box::new(assembler.topology())))
-    })?;
-    Ok(match outcome {
-        Some(topology) => PassOutcome::Done(topology),
-        None => PassOutcome::Cancelled,
-    })
 }
 
 fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {

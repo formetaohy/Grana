@@ -439,9 +439,9 @@ impl Block {
                 let x = mask.window.x - low[0] + (index % mask.window.width as usize) as u32;
                 let y = mask.window.y - low[1] + (index / mask.window.width as usize) as u32;
                 labels[x as usize + width * (y as usize + height * depth)] = 1;
-                sum[0] += f64::from(x);
-                sum[1] += f64::from(y);
-                sum[2] += depth as f64;
+                sum[0] += f64::from(low[0] + x);
+                sum[1] += f64::from(low[1] + y);
+                sum[2] += f64::from(low[2]) + depth as f64;
                 count += 1;
             }
         }

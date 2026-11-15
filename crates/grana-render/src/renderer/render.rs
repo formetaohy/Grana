@@ -140,7 +140,7 @@ impl Renderer {
             scene,
             camera.slice().map(|frame| frame.plane(camera.pivot())),
         );
-        atlas.prune(time);
+        atlas.prune([time, carried_frame(time, pyramid.frame_count())]);
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
         let first = arena.first();
@@ -448,6 +448,8 @@ impl Renderer {
                     splats
                         .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))
                         .set(device, queue, layouts, scene.splats);
+                } else if let Some(passes) = splats.as_mut() {
+                    passes.clear();
                 }
                 *resident = Some(next);
             }

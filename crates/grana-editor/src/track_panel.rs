@@ -499,6 +499,19 @@ fn lineage<'a>(
     let x = move |time: u32| inner.min.x + (time as f32 / span as f32) * inner.width();
     let lane_y = move |lane: usize| inner.min.y + lane as f32 * ROW + ROW * 0.5 - offset;
     let source = state.workspace.join;
+    let joinable = source.map_or_else(Vec::new, |source| {
+        let heads = (window.first..window.last)
+            .map(|lane| {
+                layout
+                    .order()
+                    .get(lane)
+                    .and_then(|index| set.track(*index))
+                    .and_then(|track| track.nodes().first())
+                    .map(|head| (head.time(), head.object()))
+            })
+            .collect::<Vec<_>>();
+        set.joinable(source, &heads)
+    });
     let divide = state.workspace.divide;
     let merge = state.workspace.merge;
     let merge_parents = state.workspace.merge_parents.clone();
@@ -791,28 +804,29 @@ fn lineage<'a>(
                     );
                     for (position, index) in order[first..last].iter().copied().enumerate() {
                         let lane = first + position;
+                        if !joinable.get(position).copied().unwrap_or(false) {
+                            continue;
+                        }
                         let Some(track) = set.track(index) else {
                             continue;
                         };
                         let Some(head) = track.nodes().first() else {
                             continue;
                         };
-                        if set.can_join(source, (head.time(), head.object())) {
-                            painter.rect(
-                                Rect::from_center_size(
-                                    Vec2::new(
-                                        info.rect.min.x
-                                            + (head.time() as f32
-                                                / frames.max(2).saturating_sub(1) as f32)
-                                                * info.rect.width(),
-                                        info.rect.min.y + lane as f32 * ROW + ROW * 0.5,
-                                    ),
-                                    Vec2::splat(4.0),
+                        painter.rect(
+                            Rect::from_center_size(
+                                Vec2::new(
+                                    info.rect.min.x
+                                        + (head.time() as f32
+                                            / frames.max(2).saturating_sub(1) as f32)
+                                            * info.rect.width(),
+                                    info.rect.min.y + lane as f32 * ROW + ROW * 0.5,
                                 ),
-                                Corners::capsule(),
-                                accent,
-                            );
-                        }
+                                Vec2::splat(4.0),
+                            ),
+                            Corners::capsule(),
+                            accent,
+                        );
                     }
                 }
             },

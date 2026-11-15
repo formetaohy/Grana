@@ -79,6 +79,7 @@ impl Session {
             }
         };
         let mut removed = 0usize;
+        let mut failure = None;
         for (time, objects) in deletions {
             let Some(scene) = self.scene.as_mut() else {
                 break;
@@ -87,10 +88,19 @@ impl Session {
                 Ok(true) => removed += objects.len(),
                 Ok(false) => {}
                 Err(detail) => {
-                    self.message = Some(Message::error(detail));
-                    return removed > 0;
+                    failure = Some(detail);
+                    break;
                 }
             }
+        }
+        if removed > 0 {
+            self.defer_relations(set);
+            self.refresh_dependents(set);
+            self.resume_relations(set);
+        }
+        if let Some(detail) = failure {
+            self.message = Some(Message::error(detail));
+            return removed > 0;
         }
         if removed == 0 {
             self.message = Some(Message::error(
@@ -98,9 +108,6 @@ impl Session {
             ));
             return false;
         }
-        self.defer_relations(set);
-        self.refresh_dependents(set);
-        self.resume_relations(set);
         true
     }
 

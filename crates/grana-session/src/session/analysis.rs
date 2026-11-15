@@ -5,6 +5,36 @@ use grana_pipeline::run::{GrowRequest, SegmentRequest};
 
 const CALIBRATION_ITERATIONS: u32 = 10;
 
+enum DetectPlan {
+    Grow {
+        channels: Arc<grana_pipeline::Channels>,
+        request: GrowRequest,
+    },
+    Segment {
+        channels: Arc<grana_pipeline::Channels>,
+        request: SegmentRequest,
+    },
+    Detect {
+        channels: Arc<grana_pipeline::Channels>,
+        request: DetectRequest,
+    },
+}
+
+impl DetectPlan {
+    fn clears_objects(&self) -> bool {
+        matches!(self, Self::Grow { .. })
+    }
+
+    fn into_analysis(self, set: ObjectSetId) -> Analysis {
+        let job = Job::Detect(set);
+        match self {
+            Self::Grow { channels, request } => crate::grow(job, channels, request),
+            Self::Segment { channels, request } => crate::segment(job, channels, request),
+            Self::Detect { channels, request } => crate::detect(job, channels, request),
+        }
+    }
+}
+
 impl Session {
     pub(super) fn sample_profile(&mut self, index: usize) {
         let prepared = self.scene.as_ref().and_then(|scene| {
@@ -881,16 +911,19 @@ impl Session {
             ));
             return;
         }
-        self.cancel(Job::Recut(set));
-        if self.recut.is_some_and(|(pending, _)| pending == set) {
-            self.recut = None;
-        }
         if self
             .analysis
             .iter()
             .any(|analysis| analysis.job() == Job::Detect(set))
         {
             return;
+        }
+        let Some(plan) = self.detect_plan(set) else {
+            return;
+        };
+        self.cancel(Job::Recut(set));
+        if self.recut.is_some_and(|(pending, _)| pending == set) {
+            self.recut = None;
         }
         self.cancel(Job::Track(set));
         if self.recipe.is_none() {
@@ -900,16 +933,23 @@ impl Session {
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
+        self.message = None;
+        self.record_progress(Job::Detect(set), 0, 0, 0);
+        if plan.clears_objects()
+            && let Some(scene) = self.scene.as_mut()
+        {
+            scene.clear_object(set);
+        }
+        self.analysis.push(plan.into_analysis(set));
+    }
+
+    fn detect_plan(&mut self, set: ObjectSetId) -> Option<DetectPlan> {
         let Some(channels) = self.analysis_channels() else {
             self.message = Some(Message::error("the dataset is still opening"));
-            return;
+            return None;
         };
-        let Some(scene) = self.scene.as_ref() else {
-            return;
-        };
-        let Some(object) = scene.objects.get(set) else {
-            return;
-        };
+        let scene = self.scene.as_ref()?;
+        let object = scene.objects.get(set)?;
         let channel = object.channel();
         if channel >= scene.base_channels() {
             let spec = scene.derived()[channel - scene.base_channels()].spec();
@@ -919,7 +959,7 @@ impl Session {
                     self.message = Some(Message::error(
                         "the mask channel needs its object set detected",
                     ));
-                    return;
+                    return None;
                 }
             }
         }
@@ -940,7 +980,7 @@ impl Session {
             self.message = Some(Message::error(format!(
                 "the seed source {name} detected no objects"
             )));
-            return;
+            return None;
         }
         let filter_target = scene
             .mask_filter
@@ -955,7 +995,7 @@ impl Session {
                         self.message = Some(Message::error(
                             "an object set cannot be limited to its own objects",
                         ));
-                        return;
+                        return None;
                     }
                     let detected = scene
                         .objects
@@ -965,7 +1005,7 @@ impl Session {
                         self.message = Some(Message::error(
                             "the analysis mask holds no detected objects",
                         ));
-                        return;
+                        return None;
                     }
                     match scene.mask_frames() {
                         Ok(Some(frames)) => Some(frames),
@@ -973,11 +1013,11 @@ impl Session {
                             self.message = Some(Message::error(
                                 "the analysis mask holds no detected objects",
                             ));
-                            return;
+                            return None;
                         }
                         Err(detail) => {
                             self.message = Some(Message::error(detail));
-                            return;
+                            return None;
                         }
                     }
                 }
@@ -987,68 +1027,71 @@ impl Session {
             self.message = Some(Message::error(
                 "the selected channel has no intensity range to detect",
             ));
-            return;
+            return None;
         }
         if region.enabled() && region.voxel_range(channels.pyramid().level(0)).is_none() {
             self.message = Some(Message::error("the region does not overlap the dataset"));
-            return;
+            return None;
         }
-        if let ObjectParams::Cells(params) = params {
-            let Some(source) = seed_source else {
-                self.message = Some(Message::error("the cells grow from a nucleus object set"));
-                return;
-            };
-            let Some(nuclei) = scene.objects.get(source) else {
-                return;
-            };
-            if nuclei.detected() == 0 {
-                self.message = Some(Message::error(
-                    "the nucleus object set holds no detected objects",
-                ));
-                return;
+        Some(match (params, segment) {
+            (ObjectParams::Cells(params), _) => {
+                let Some(source) = seed_source else {
+                    self.message = Some(Message::error("the cells grow from a nucleus object set"));
+                    return None;
+                };
+                let nuclei = scene.objects.get(source)?;
+                if nuclei.detected() == 0 {
+                    self.message = Some(Message::error(
+                        "the nucleus object set holds no detected objects",
+                    ));
+                    return None;
+                }
+                DetectPlan::Grow {
+                    channels,
+                    request: GrowRequest::new(
+                        channel,
+                        params,
+                        region,
+                        drifts,
+                        roi,
+                        nuclei.source(),
+                    ),
+                }
             }
-            let sources = nuclei.source();
-            self.message = None;
-            self.record_progress(Job::Detect(set), 0, 0, 0);
-            if let Some(scene) = self.scene.as_mut() {
-                scene.clear_object(set);
+            (_, Some(segment)) => {
+                let request = SegmentRequest::new(channel, segment, region, drifts, roi);
+                DetectPlan::Segment {
+                    channels,
+                    request: if seeds.iter().any(|frame| !frame.is_empty()) {
+                        request.with_seeds(seeds)
+                    } else {
+                        request
+                    },
+                }
             }
-            self.analysis.push(crate::grow(
-                Job::Detect(set),
-                Arc::clone(&channels),
-                GrowRequest::new(channel, params, region, drifts, roi, sources),
-            ));
-            return;
-        }
-        self.message = None;
-        self.record_progress(Job::Detect(set), 0, 0, 0);
-        if let Some(params) = segment {
-            let request = SegmentRequest::new(channel, params, region, drifts, roi);
-            let request = if seeds.iter().any(|frame| !frame.is_empty()) {
-                request.with_seeds(seeds)
-            } else {
-                request
-            };
-            self.analysis.push(crate::segment(
-                Job::Detect(set),
-                Arc::clone(&channels),
-                request,
-            ));
-            return;
-        }
-        let policy = match seed_source {
-            Some(_) => grana_pipeline::SeedPolicy::Sourced,
-            None if seeds.iter().any(|frame| !frame.is_empty()) => {
-                grana_pipeline::SeedPolicy::Strict
+            (params, None) => {
+                let policy = match seed_source {
+                    Some(_) => grana_pipeline::SeedPolicy::Sourced,
+                    None if seeds.iter().any(|frame| !frame.is_empty()) => {
+                        grana_pipeline::SeedPolicy::Strict
+                    }
+                    None => grana_pipeline::SeedPolicy::Unseeded,
+                };
+                DetectPlan::Detect {
+                    channels,
+                    request: DetectRequest::new(
+                        channel,
+                        params,
+                        region,
+                        roi,
+                        drifts,
+                        0,
+                        self.store(),
+                    )
+                    .with_seeds(seeds, policy),
+                }
             }
-            None => grana_pipeline::SeedPolicy::Unseeded,
-        };
-        self.analysis.push(crate::detect(
-            Job::Detect(set),
-            channels,
-            DetectRequest::new(channel, params, region, roi, drifts, 0, self.store())
-                .with_seeds(seeds, policy),
-        ));
+        })
     }
 
     pub(super) fn recut(&mut self, set: ObjectSetId, previous: ObjectParams, params: ObjectParams) {

@@ -852,41 +852,90 @@ fn browses_an_ome_zarr_plate() {
 fn writes_and_reads_a_label_image() {
     let temp = Temp::new("suite-zarr-label-write");
     let path = temp.path().join("labelled.ome.zarr");
-    write_zarr(&path);
-    let mut fill = |_level: usize,
-                    _frame: u32,
-                    _origin: [u32; 3],
-                    _extent: [u32; 3],
-                    data: &mut [u16]|
+    let extent = Extent::new(300, 10, 6);
+    let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
+    let channels = [WriteChannel {
+        name: "DAPI",
+        tint: [0.0, 0.0, 1.0],
+        range: Intensity::new(0.0, 1.0),
+    }];
+    let mut image_fill =
+        |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
+            data.fill(0.0);
+            Ok(())
+        };
+    let mut progress = |_, _| {};
+    write_image(
+        &path,
+        &mut ImageSpec {
+            name: "wide",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 2,
+            interval: 1.0,
+            fill: &mut image_fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the wide image writes");
+    let label_of = |x: u32, y: u32, z: u32| 1 + (x + 3 * y + 5 * z) % 7;
+    let mut label_fill = |_: usize,
+                          _: u32,
+                          origin: [u32; 3],
+                          length: [u32; 3],
+                          data: &mut [u16]|
      -> Result<(), String> {
-        data.fill(3);
+        for z in 0..length[2] {
+            for y in 0..length[1] {
+                for x in 0..length[0] {
+                    let index = x as usize
+                        + length[0] as usize * (y as usize + length[1] as usize * z as usize);
+                    data[index] = label_of(origin[0] + x, origin[1] + y, origin[2] + z) as u16;
+                }
+            }
+        }
         Ok(())
     };
-    let mut progress = |_, _| {};
     grana_zarr::write_group_labels(
         &path,
         "/",
         grana_zarr::LabelSpec {
             name: "cells",
             frames: &[0, 1],
-            labels: 3,
+            labels: 7,
             color: [1.0, 0.0, 0.0],
             opacity: 1.0,
             properties: &[],
-            fill: &mut fill,
+            fill: &mut label_fill,
             progress: &mut progress,
         },
     )
-    .expect("the labels write");
+    .expect("the labels write over a chunk boundary");
     let image = grana_zarr::Image::open(&path).expect("the labelled image opens");
     let labels = image.labels().expect("the labels read");
     let label = labels.get("cells").expect("the written label exists");
     assert_eq!(label.frames(), 2);
     let data = label
-        .read(1, 0, &[0..2, 0..2, 0..1], [0, 0, 0])
+        .read(
+            1,
+            0,
+            &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+            [0, 0, 0],
+        )
         .expect("the written label region reads");
-    assert_eq!(data.len(), 4);
-    assert!(data.iter().all(|value| *value == 3), "the labels hold 3");
+    assert_eq!(data.len(), extent.voxel_count() as usize);
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                assert_eq!(
+                    data[extent.index(x, y, z) as usize],
+                    label_of(x, y, z),
+                    "the label at {x},{y},{z}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

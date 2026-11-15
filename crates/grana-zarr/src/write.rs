@@ -9,6 +9,7 @@ use zarrs::array::{Array, ArrayBuilder, data_type};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
+use crate::chunk::Chunk;
 use crate::error::Error;
 
 const CHUNK_X: u32 = 256;
@@ -111,7 +112,8 @@ where
         u64::from(spatial[2]).div_ceil(chunk[2]),
     ];
     let channels = spec.channels.len();
-    let chunk_voxels = (chunk[2] * chunk[3] * chunk[4]) as usize;
+    let block = Chunk::new([chunk[4] as u32, chunk[3] as u32, chunk[2] as u32]);
+    let chunk_voxels = block.voxels();
     let mut indices = vec![0u64; AXIS_NAMES.len()];
     for frame in 0..spec.frames {
         for cz in 0..counts[2] {
@@ -128,35 +130,21 @@ where
                         chunk[2].min(u64::from(spatial[2] - origin[2])) as u32,
                     ];
                     let mut data = vec![0.0f32; chunk_voxels * channels];
-                    let full = length[0] as usize == chunk[4] as usize
-                        && length[1] as usize == chunk[3] as usize
-                        && length[2] as usize == chunk[2] as usize;
+                    let full = length == block.shape();
+                    let mut region =
+                        vec![
+                            0.0f32;
+                            (length[0] as usize) * (length[1] as usize) * (length[2] as usize)
+                        ];
                     for channel in 0..channels {
                         let base = channel * chunk_voxels;
+                        let target = &mut data[base..base + chunk_voxels];
                         if full {
-                            (spec.fill)(
-                                level,
-                                frame,
-                                channel,
-                                origin,
-                                length,
-                                &mut data[base..base + chunk_voxels],
-                            )?;
+                            (spec.fill)(level, frame, channel, origin, length, target)?;
                             continue;
                         }
-                        let voxels = length[0] as usize * length[1] as usize * length[2] as usize;
-                        let mut region = vec![0.0f32; voxels];
                         (spec.fill)(level, frame, channel, origin, length, &mut region)?;
-                        let width = length[0] as usize;
-                        let row = chunk[4] as usize;
-                        let depth_stride = row * chunk[3] as usize;
-                        for z in 0..length[2] as usize {
-                            for y in 0..length[1] as usize {
-                                let from = width * (y + length[1] as usize * z);
-                                let to = base + row * y + depth_stride * z;
-                                data[to..to + width].copy_from_slice(&region[from..from + width]);
-                            }
-                        }
+                        block.stage(length, &region, target);
                     }
                     indices[0] = u64::from(frame);
                     indices[1] = 0;

@@ -2,7 +2,7 @@ use glam::Vec3;
 use grana_volume::{Region, VoxelData};
 
 use super::Grid;
-use crate::local::LocalField;
+use crate::local::{LocalField, RowKey};
 use grana_object::Mask;
 
 const AXIS: u16 = 16;
@@ -85,11 +85,12 @@ fn fill<T: Sample>(
                 let low_x = x * step[0] as usize;
                 let high_x = (low_x + step[0] as usize).min(width);
                 let mut best = f32::NEG_INFINITY;
-                for row in low_z..high_z {
-                    let base = width * (row * height);
-                    for column in low_y..high_y {
-                        let offset = base + width * column;
-                        let mut field_row = field.row(row as i64, column as i64);
+                for voxel_z in low_z..high_z {
+                    let base = width * (voxel_z * height);
+                    for voxel_y in low_y..high_y {
+                        let offset = base + width * voxel_y;
+                        let mut field_row =
+                            field.row(RowKey::of([low_x as i64, voxel_y as i64, voxel_z as i64]));
                         for (index, value) in
                             values[offset + low_x..offset + high_x].iter().enumerate()
                         {

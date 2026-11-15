@@ -208,6 +208,7 @@ pub struct TrackSet {
     frame_interval: f32,
     tracks: Vec<Track>,
     links: Vec<TrackLink>,
+    by_child: Vec<u32>,
     detections: Vec<(u32, usize, u32)>,
     divisions: usize,
     merges: usize,
@@ -306,10 +307,13 @@ impl TrackSet {
         }
         let divisions = outgoing.iter().filter(|count| **count == 2).count();
         let merges = incoming.iter().filter(|count| **count == 2).count();
+        let mut by_child = (0..links.len() as u32).collect::<Vec<_>>();
+        by_child.sort_unstable_by_key(|index| (links[*index as usize].child, *index));
         Ok(Self {
             frame_interval,
             tracks,
             links,
+            by_child,
             detections,
             divisions,
             merges,
@@ -402,10 +406,17 @@ impl TrackSet {
     }
 
     pub fn parents(&self, index: usize) -> impl Iterator<Item = TrackLink> + '_ {
-        self.links
+        let links = &self.links;
+        let child = index as u32;
+        let range = self
+            .by_child
+            .partition_point(move |at| links[*at as usize].child < child)
+            ..self
+                .by_child
+                .partition_point(move |at| links[*at as usize].child <= child);
+        self.by_child[range]
             .iter()
-            .copied()
-            .filter(move |link| link.child as usize == index)
+            .map(move |at| links[*at as usize])
     }
 
     pub fn parent(&self, index: usize) -> Option<usize> {
@@ -413,10 +424,12 @@ impl TrackSet {
     }
 
     pub fn child_links(&self, index: usize) -> impl Iterator<Item = TrackLink> + '_ {
-        self.links
-            .iter()
-            .copied()
-            .filter(move |link| link.parent as usize == index)
+        let parent = index as u32;
+        let range = self.links.partition_point(move |link| link.parent < parent)
+            ..self
+                .links
+                .partition_point(move |link| link.parent <= parent);
+        self.links[range].iter().copied()
     }
 
     pub fn children(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
@@ -431,14 +444,22 @@ impl TrackSet {
     }
 
     pub fn can_join(&self, source: (u32, usize), target: (u32, usize)) -> bool {
+        self.joinable(source, &[Some(target)])[0]
+    }
+
+    pub fn joinable(&self, source: (u32, usize), targets: &[Option<(u32, usize)>]) -> Vec<bool> {
         let lineage = Lineage::of(self);
-        let (Some(source), Some(target)) = (
-            lineage.node_at(source.0, source.1),
-            lineage.node_at(target.0, target.1),
-        ) else {
-            return false;
+        let Some(source) = lineage.node_at(source.0, source.1) else {
+            return vec![false; targets.len()];
         };
-        lineage.can_join(source, target)
+        targets
+            .iter()
+            .map(|target| {
+                target
+                    .and_then(|(time, object)| lineage.node_at(time, object))
+                    .is_some_and(|target| lineage.can_join(source, target))
+            })
+            .collect()
     }
 
     pub fn join(&self, source: (u32, usize), target: (u32, usize)) -> Option<Self> {

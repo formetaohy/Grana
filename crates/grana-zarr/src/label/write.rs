@@ -8,6 +8,7 @@ use zarrs::filesystem::FilesystemStore;
 use zarrs::group::{Group, GroupBuilder};
 
 use crate::Image;
+use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::metadata::{Axis, AxisKind};
 
@@ -399,6 +400,11 @@ where
     let spatial = [extent.x(), extent.y(), extent.z()];
     let depth = z.map_or(1, |z| chunk[z]);
     let depth_extent = if z.is_some() { spatial[2] } else { 1 };
+    let block = Chunk::new([
+        chunk[x] as u32,
+        chunk[y] as u32,
+        if z.is_some() { depth as u32 } else { 1 },
+    ]);
     let counts = [
         u64::from(spatial[0]).div_ceil(chunk[x]),
         u64::from(spatial[1]).div_ceil(chunk[y]),
@@ -420,8 +426,10 @@ where
                         depth.min(u64::from(depth_extent - origin[2])) as u32,
                     ];
                     let voxels = (length[0] as usize) * (length[1] as usize) * (length[2] as usize);
-                    let mut data = vec![0u16; voxels];
-                    fill(level, frame, origin, length, &mut data)?;
+                    let mut region = vec![0u16; voxels];
+                    fill(level, frame, origin, length, &mut region)?;
+                    let mut data = vec![0u16; block.voxels()];
+                    block.stage(length, &region, &mut data);
                     for (index, kind) in kinds.iter().enumerate() {
                         indices[index] = match kind {
                             Kind::Time => u64::from(frame),
@@ -434,7 +442,7 @@ where
                     array
                         .store_chunk(&indices, data)
                         .map_err(|error| error.to_string())?;
-                    stats.bytes += (voxels * 2) as u64;
+                    stats.bytes += (block.voxels() * 2) as u64;
                     stats.done += 1;
                     progress(stats.done, stats.total);
                 }
