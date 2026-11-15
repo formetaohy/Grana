@@ -133,15 +133,15 @@ impl<'a, A> BuildContext<'a, A> {
     }
 
     pub fn segmented<'e>(&self, options: &[&str], selected: usize) -> Element<'e, A> {
-        widget::segmented(&self.copy(), &labels(options), selected)
+        widget::segmented(&self.copy(), options, selected)
     }
 
     pub fn segmented_fill<'e>(&self, options: &[&str], selected: usize) -> Element<'e, A> {
-        widget::segmented_fill(&self.copy(), &labels(options), selected)
+        widget::segmented_fill(&self.copy(), options, selected)
     }
 
     pub fn tabs<'e>(&self, options: &[&str], selected: usize) -> Element<'e, A> {
-        widget::tabs(&self.copy(), &labels(options), selected)
+        widget::tabs(&self.copy(), options, selected)
     }
 
     pub fn caption<'e>(&self, text: &str) -> Element<'e, A> {
@@ -248,8 +248,4 @@ impl<'a, A> BuildContext<'a, A> {
     pub fn empty_state<'e>(&self, symbol: Icon, title: &str, detail: &str) -> Element<'e, A> {
         widget::empty_state(&self.copy(), symbol, title, detail)
     }
-}
-
-fn labels(options: &[&str]) -> Vec<String> {
-    options.iter().map(|option| (*option).to_string()).collect()
 }

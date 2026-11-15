@@ -304,7 +304,9 @@ impl<A: Clone> Ui<A> {
                     | InputKey::PageDown
             );
         }
-        false
+        self.focus
+            .and_then(|node| self.tree.nodes.get(node))
+            .is_some_and(|node| node.visible && crate::dispatch::accepts(&node.content, key))
     }
 
     pub fn update(&mut self, size: Vec2, scale: f32, time: f64) -> Vec<A> {
@@ -314,9 +316,8 @@ impl<A: Clone> Ui<A> {
         self.scale = scale;
         self.time = time as f32;
         self.elapsed = self.input.begin(size, scale, time);
-        let preedit = self.input.preedit().map(str::to_owned);
-        if preedit != self.preedit {
-            self.preedit = preedit;
+        if self.input.preedit() != self.preedit.as_deref() {
+            self.preedit = self.input.preedit().map(str::to_owned);
             if let Some(edit) = self.edit {
                 self.tree.nodes[edit].paint_dirty = true;
             }

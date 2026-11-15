@@ -16,17 +16,17 @@ const TABS_HEIGHT: f32 = 32.0;
 const CELL_PAD: f32 = 22.0;
 const GROUP_GAP: f32 = 2.0;
 
-pub fn segmented<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+pub fn segmented<'a, A>(theme: &Theme, options: &[&str], selected: usize) -> Element<'a, A> {
     segmented_core(theme, options, selected, false)
 }
 
-pub fn segmented_fill<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+pub fn segmented_fill<'a, A>(theme: &Theme, options: &[&str], selected: usize) -> Element<'a, A> {
     segmented_core(theme, options, selected, true)
 }
 
 fn segmented_core<'a, A>(
     theme: &Theme,
-    options: &[String],
+    options: &[&str],
     selected: usize,
     fill: bool,
 ) -> Element<'a, A> {
@@ -36,7 +36,7 @@ fn segmented_core<'a, A>(
         ..Layout::row()
     })
     .with_content(Content::Segment(SegmentContent {
-        options: options.to_vec(),
+        options: labels(options),
         selected,
         fill,
         font: theme.font(Level::Label),
@@ -44,16 +44,20 @@ fn segmented_core<'a, A>(
     }))
 }
 
-pub fn tabs<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+pub fn tabs<'a, A>(theme: &Theme, options: &[&str], selected: usize) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fill, Length::Fixed(TABS_HEIGHT)),
         ..Layout::row()
     })
     .with_content(Content::Tabs(TabsContent {
-        options: options.to_vec(),
+        options: labels(options),
         selected,
         font: theme.font(Level::Label),
     }))
+}
+
+fn labels(options: &[&str]) -> Vec<String> {
+    options.iter().map(|option| (*option).to_string()).collect()
 }
 
 pub(super) fn measure_segment(

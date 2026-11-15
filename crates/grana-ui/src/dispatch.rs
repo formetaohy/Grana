@@ -761,18 +761,26 @@ impl<A: Clone> Ui<A> {
             self.focus_visible = false;
             return;
         }
-        if !self.edit.is_some() {
-            for key in &keys {
-                if matches!(key, InputKey::PageUp | InputKey::PageDown) {
-                    self.scroll_keys(*key);
-                }
+        let focused = self
+            .focus
+            .filter(|node| self.tree.nodes.get(*node).is_some_and(|node| node.visible));
+        for key in &keys {
+            if !matches!(key, InputKey::PageUp | InputKey::PageDown) {
+                continue;
+            }
+            let held = focused.is_some_and(|node| accepts(&self.tree.nodes[node].content, *key));
+            if !held {
+                self.scroll_keys(focused, *key);
             }
         }
-        let Some(node) = self.focus else {
+        let Some(node) = focused else {
             return;
         };
         for key in keys {
-            if self.adjust(node, key) {
+            let Some(direction) = step(key) else {
+                continue;
+            };
+            if self.adjust(node, key, direction) {
                 self.focus_visible = true;
             }
         }
@@ -787,8 +795,8 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    fn scroll_keys(&mut self, key: InputKey) {
-        let Some(node) = self.focus.or(self.hover) else {
+    fn scroll_keys(&mut self, anchor: Option<NodeId>, key: InputKey) {
+        let Some(node) = anchor.or(self.hover) else {
             return;
         };
         let Some(scroller) = self.scroll_ancestor(node) else {
@@ -817,13 +825,7 @@ impl<A: Clone> Ui<A> {
         None
     }
 
-    fn adjust(&mut self, node: NodeId, key: InputKey) -> bool {
-        let direction = match key {
-            InputKey::Left | InputKey::Down => -1.0,
-            InputKey::Right | InputKey::Up => 1.0,
-            InputKey::Home | InputKey::End | InputKey::PageUp | InputKey::PageDown => 0.0,
-            _ => return false,
-        };
+    fn adjust(&mut self, node: NodeId, key: InputKey, direction: f32) -> bool {
         match &self.tree.nodes[node].content {
             Content::Slider(slider) => {
                 let value = match key {
@@ -891,6 +893,30 @@ impl<A: Clone> Ui<A> {
             _ => false,
         }
     }
+}
+
+fn traverses(content: &Content) -> bool {
+    matches!(
+        content,
+        Content::Slider(_)
+            | Content::RangeSlider(_)
+            | Content::Segment(_)
+            | Content::Tabs(_)
+            | Content::DragValue(_)
+    )
+}
+
+fn step(key: InputKey) -> Option<f32> {
+    match key {
+        InputKey::Left | InputKey::Down => Some(-1.0),
+        InputKey::Right | InputKey::Up => Some(1.0),
+        InputKey::Home | InputKey::End | InputKey::PageUp | InputKey::PageDown => Some(0.0),
+        _ => None,
+    }
+}
+
+pub(crate) fn accepts(content: &Content, key: InputKey) -> bool {
+    traverses(content) && step(key).is_some()
 }
 
 fn is_inside<A>(tree: &crate::tree::Tree<A>, root: NodeId, node: NodeId) -> bool {

@@ -220,8 +220,9 @@ impl<A: Clone> Ui<A> {
 
     pub(crate) fn update_scroll_metrics(&mut self) {
         let mut wake = Vec::new();
-        for id in self.tree.scrolls.clone() {
-            let node = &mut self.tree.nodes[id];
+        let scrolls = std::mem::take(&mut self.tree.scrolls);
+        for id in &scrolls {
+            let node = &mut self.tree.nodes[*id];
             let Some(spec) = node.scroll_spec else {
                 continue;
             };
@@ -238,9 +239,10 @@ impl<A: Clone> Ui<A> {
                 scroll.moving = true;
             }
             if scroll.moving {
-                wake.push(id);
+                wake.push(*id);
             }
         }
+        self.tree.scrolls = scrolls;
         for id in wake {
             self.wake_scroll(id);
         }

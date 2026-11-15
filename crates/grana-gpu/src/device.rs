@@ -10,8 +10,6 @@ use crate::REQUIRED_FEATURES;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
-const TIMING_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
-
 const BACKEND_ORDER: &[Backends] = backend_order();
 
 const fn backend_order() -> &'static [Backends] {
@@ -204,9 +202,6 @@ fn acquire(
         return Err("the graphics adapter cannot stream packed volume bricks".to_string());
     }
     let mut features = REQUIRED_FEATURES;
-    if adapter.features().contains(TIMING_FEATURES) {
-        features |= TIMING_FEATURES;
-    }
     if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
         features |= wgpu::Features::PIPELINE_CACHE;
     }
