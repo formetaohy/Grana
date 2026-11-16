@@ -12,7 +12,6 @@ fn march_projected(
         peak[channel] = -1.0;
     }
     let count = u32(frame.march.z);
-    let packs = (count + PACK - 1u) / PACK;
     if (finish <= begin) {
         return March(radiance, transmittance);
     }
@@ -63,17 +62,14 @@ fn march_projected(
             let texel = walk_texel(walk, voxel);
             var tau = 0.0;
             var emission = vec3<f32>(0.0);
-            for (var pack = 0u; pack < packs; pack += 1u) {
-                if (!pack_active(pack, count)) {
+            for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
+                if (!pack_active(pack)) {
                     continue;
                 }
                 let values = textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
                 for (var component = 0u; component < PACK; component += 1u) {
                     let channel = pack * PACK + component;
-                    if (channel >= count) {
-                        break;
-                    }
-                    if (channel_opacity(channel) <= 0.0) {
+                    if (!channel_active(channel)) {
                         continue;
                     }
                     if (channel_maximum(channel)) {
@@ -104,13 +100,10 @@ fn march_projected(
         t = walk.exit;
     }
     for (var channel = 0u; channel < count; channel += 1u) {
-        if (!channel_maximum(channel) || peak[channel] < 0.0) {
+        if (!channel_active(channel) || !channel_maximum(channel) || peak[channel] < 0.0) {
             continue;
         }
         let opacity = channel_opacity(channel);
-        if (opacity <= 0.0) {
-            continue;
-        }
         let color = channel_tau(channel, peak[channel]).rgb;
         radiance += transmittance * opacity * color;
         transmittance *= 1.0 - opacity;

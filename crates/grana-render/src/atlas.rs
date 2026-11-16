@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytemuck::cast_slice;
 use grana_volume::PADDED_SIDE;
@@ -67,6 +67,8 @@ struct Slot {
     brick: Option<ResidentBrick>,
     used: u64,
     held: bool,
+    order: u32,
+    future: bool,
 }
 
 impl Slot {
@@ -74,7 +76,15 @@ impl Slot {
         brick: None,
         used: 0,
         held: false,
+        order: 0,
+        future: false,
     };
+}
+
+#[derive(Default)]
+struct Bucket {
+    current: Vec<u32>,
+    future: Vec<u32>,
 }
 
 pub(crate) struct AtlasBinding<'a> {
@@ -93,8 +103,10 @@ pub(crate) struct Atlas {
     slot_grid: [u32; 3],
     free: Vec<u32>,
     slots: Vec<Slot>,
+    buckets: BTreeMap<u64, Bucket>,
     versions: Vec<u32>,
     writes: u64,
+    now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
     hollow: HashSet<(u32, usize, usize)>,
     pruned: Option<[u32; 2]>,
@@ -231,8 +243,10 @@ impl Atlas {
             slot_grid,
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
+            buckets: BTreeMap::new(),
             versions: vec![0; capacity],
             writes: 0,
+            now: 0,
             identity: HashMap::new(),
             hollow: HashSet::new(),
             pruned: None,
@@ -310,9 +324,10 @@ impl Atlas {
             if brick.time == time {
                 continue;
             }
+            self.unplace(slot as u32);
+            self.slots[slot].brick = None;
             self.identity
                 .remove(&(brick.time, brick.level, brick.index));
-            self.slots[slot] = Slot::EMPTY;
             self.free.push(slot as u32);
             evicted.push(brick);
         }
@@ -340,6 +355,7 @@ impl Atlas {
         let capacity = self.slots.len() as u32;
         self.free = (0..capacity).rev().collect();
         self.slots.fill(Slot::EMPTY);
+        self.buckets.clear();
         self.identity.clear();
         self.hollow.clear();
         self.pruned = None;
@@ -374,11 +390,15 @@ impl Atlas {
 
     pub fn touch(&mut self, time: u32, level: usize, indices: impl Iterator<Item = u32>, pin: u64) {
         for index in indices {
-            if let Some(slot) = self.identity.get(&(time, level, index as usize)) {
-                let slot = &mut self.slots[*slot as usize];
-                slot.used = pin;
-                slot.held = true;
-            }
+            let Some(slot) = self.identity.get(&(time, level, index as usize)).copied() else {
+                continue;
+            };
+            let brick = self.slots[slot as usize]
+                .brick
+                .expect("a named slot holds a brick");
+            self.unplace(slot);
+            self.slots[slot as usize].held = true;
+            self.place(slot, pin, brick.time > self.now);
         }
     }
 
@@ -395,65 +415,136 @@ impl Atlas {
         request: u32,
         demand: bool,
     ) -> Option<(u32, Option<ResidentBrick>)> {
+        self.retime(now);
         if let Some(slot) = self.free.pop() {
             return Some((slot, None));
         }
-        let victim = self.victim(pin, now, request <= now, demand)?;
-        let brick = self.slots[victim]
+        let victim = self.victim(pin, request <= now, demand)?;
+        let brick = self.slots[victim as usize]
             .brick
             .expect("the eviction candidate holds a brick");
-        self.slots[victim] = Slot::EMPTY;
+        self.unplace(victim);
+        self.slots[victim as usize].brick = None;
         self.identity
             .remove(&(brick.time, brick.level, brick.index));
-        Some((victim as u32, Some(brick)))
+        Some((victim, Some(brick)))
     }
 
-    fn victim(&self, pin: u64, now: u32, allow_future: bool, demand: bool) -> Option<usize> {
-        let pick = |stale: bool, unheld: bool, future: bool| {
-            self.slots
-                .iter()
-                .enumerate()
-                .filter(|(_, slot)| {
-                    let Some(brick) = slot.brick else {
-                        return false;
-                    };
-                    (future || brick.time <= now)
-                        && (!stale || slot.used < pin)
-                        && (!unheld || !slot.held)
-                })
-                .min_by_key(|(_, slot)| slot.used)
-                .map(|(index, _)| index)
-        };
-        if let Some(victim) = pick(true, false, false) {
-            return Some(victim);
-        }
-        if demand && let Some(victim) = pick(false, true, false) {
-            return Some(victim);
-        }
-        if allow_future {
-            if let Some(victim) = pick(true, false, true) {
-                return Some(victim);
+    fn victim(&self, pin: u64, allow_future: bool, demand: bool) -> Option<u32> {
+        self.oldest(pin, false)
+            .or_else(|| demand.then(|| self.newest(pin, false)).flatten())
+            .or_else(|| allow_future.then(|| self.oldest(pin, true)).flatten())
+            .or_else(|| {
+                (demand && allow_future)
+                    .then(|| self.newest(pin, true))
+                    .flatten()
+            })
+    }
+
+    fn oldest(&self, pin: u64, future: bool) -> Option<u32> {
+        for (used, bucket) in &self.buckets {
+            if *used >= pin {
+                break;
             }
-            if demand && let Some(victim) = pick(false, true, true) {
-                return Some(victim);
+            let held = if future {
+                &bucket.future
+            } else {
+                &bucket.current
+            };
+            if let Some(slot) = held.first() {
+                return Some(*slot);
             }
         }
         None
     }
 
+    fn newest(&self, pin: u64, future: bool) -> Option<u32> {
+        let bucket = self.buckets.get(&pin)?;
+        let held = if future {
+            &bucket.future
+        } else {
+            &bucket.current
+        };
+        held.iter()
+            .copied()
+            .find(|slot| !self.slots[*slot as usize].held)
+    }
+
+    fn place(&mut self, slot: u32, used: u64, future: bool) {
+        let bucket = self.buckets.entry(used).or_default();
+        let held = if future {
+            &mut bucket.future
+        } else {
+            &mut bucket.current
+        };
+        let order = held.len() as u32;
+        held.push(slot);
+        let placed = &mut self.slots[slot as usize];
+        placed.used = used;
+        placed.future = future;
+        placed.order = order;
+    }
+
+    fn unplace(&mut self, slot: u32) {
+        let place = self.slots[slot as usize];
+        let empty = {
+            let bucket = self
+                .buckets
+                .get_mut(&place.used)
+                .expect("a slot keeps its usage bucket");
+            let held = if place.future {
+                &mut bucket.future
+            } else {
+                &mut bucket.current
+            };
+            let last = held.pop().expect("a usage bucket holds its slots");
+            if last != slot {
+                held[place.order as usize] = last;
+                self.slots[last as usize].order = place.order;
+            }
+            bucket.current.is_empty() && bucket.future.is_empty()
+        };
+        if empty {
+            self.buckets.remove(&place.used);
+        }
+    }
+
+    fn retime(&mut self, now: u32) {
+        if self.now == now {
+            return;
+        }
+        self.now = now;
+        let moved = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, place)| {
+                let brick = place.brick?;
+                (place.future != (brick.time > now)).then_some(slot as u32)
+            })
+            .collect::<Vec<_>>();
+        for slot in moved {
+            let brick = self.slots[slot as usize]
+                .brick
+                .expect("a retimed slot holds a brick");
+            let used = self.slots[slot as usize].used;
+            self.unplace(slot);
+            self.place(slot, used, brick.time > now);
+        }
+    }
+
     pub fn assign(&mut self, slot: u32, brick: ResidentBrick, pin: u64, hold: bool) {
         if let Some(previous) = self.slots[slot as usize].brick {
+            self.unplace(slot);
             self.identity
                 .remove(&(previous.time, previous.level, previous.index));
         }
         self.hollow.remove(&(brick.time, brick.level, brick.index));
         self.identity
             .insert((brick.time, brick.level, brick.index), slot);
-        self.slots[slot as usize] = Slot {
-            brick: Some(brick),
-            used: pin,
-            held: hold,
-        };
+        self.slots[slot as usize].brick = Some(brick);
+        self.slots[slot as usize].held = hold;
+        self.place(slot, pin, brick.time > self.now);
         self.written(slot);
     }
 

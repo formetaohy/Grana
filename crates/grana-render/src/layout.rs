@@ -69,7 +69,6 @@ impl Layouts {
                     ShaderStages::VERTEX_FRAGMENT.union(ShaderStages::COMPUTE),
                 ),
                 storage(2, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
-                texture(3, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 sampler(4, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 texture(5, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
             ],
@@ -100,7 +99,11 @@ impl Layouts {
         });
         let occupancy = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.occupancy.layout"),
-            entries: &[storage(0, ShaderStages::FRAGMENT, true)],
+            entries: &[storage(
+                0,
+                ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
+                true,
+            )],
         });
         let level_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.level.write.layout"),
@@ -421,6 +424,8 @@ impl Layouts {
                 Some(&level),
                 Some(&atlas),
                 Some(&shadow_write),
+                None,
+                Some(&occupancy),
             ],
             immediate_size: 0,
         });

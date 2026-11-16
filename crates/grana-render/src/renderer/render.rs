@@ -223,8 +223,7 @@ impl Renderer {
         let versions = scene.versions;
         let channel_key = channel_style(scene.channels);
         if *channels_key != Some(channel_key) {
-            scene_table.prepare(device, queue, pyramid, scene.channels);
-            scene_table.write_channels(device, queue, pyramid, scene.channels);
+            scene_table.publish(device, queue, pyramid, scene.channels);
             *channels_key = Some(channel_key);
         }
         let stamp = digest(&[versions.data(), *generation, u64::from(*content)]);
@@ -359,6 +358,7 @@ impl Renderer {
         data.tag[1] = u32::from(!awaits);
         data.tag[3] = *content;
         data.occupancy[0] = scene_table.threshold_floor();
+        data.packs = scene_table.packs();
         let pixels = u64::from(width) * u64::from(height);
         if translucent
             && target
@@ -617,6 +617,7 @@ impl Renderer {
                     scene: scene_table.shadow_group(),
                     level: level_group,
                     atlas: atlas.group(),
+                    occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
                 };
                 if !slice && scene.shading.shadows > 0.0 && volume_visible {
                     let object = shadow_keys.objects();

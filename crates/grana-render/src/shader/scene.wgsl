@@ -35,6 +35,7 @@ struct FrameData {
     slice_view: vec4<f32>,
     occupancy: vec4<f32>,
     bounds: vec4<u32>,
+    packs: vec4<u32>,
 }
 
 struct ChannelData {
@@ -49,7 +50,6 @@ struct ChannelData {
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
 @group(0) @binding(2) var<storage, read> channels: array<ChannelData>;
-@group(0) @binding(3) var lut: texture_2d<f32>;
 @group(0) @binding(4) var lut_sampler: sampler;
 @group(0) @binding(5) var extinction_lut: texture_2d<f32>;
 
@@ -183,15 +183,6 @@ fn channel_position(index: u32, unit: f32) -> f32 {
     return clamp((unit - channel.start) * channel.inverse, 0.0, 1.0);
 }
 
-fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
-    return textureSampleLevel(
-        lut,
-        lut_sampler,
-        vec2<f32>(channel_position(index, unit), channels[index].lut_row),
-        0.0,
-    );
-}
-
 fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
     return textureSampleLevel(
         extinction_lut,
@@ -205,16 +196,14 @@ const PACK: u32 = 4u;
 
 const CHANNEL_LIMIT: u32 = 16u;
 
-fn pack_active(pack: u32, count: u32) -> bool {
-    var occupied = false;
-    for (var component = 0u; component < PACK; component += 1u) {
-        let channel = pack * PACK + component;
-        if (channel >= count) {
-            break;
-        }
-        occupied = occupied || channel_opacity(channel) > 0.0;
-    }
-    return occupied;
+const PACK_LIMIT: u32 = CHANNEL_LIMIT / PACK;
+
+fn channel_active(channel: u32) -> bool {
+    return (frame.packs.x & (1u << channel)) != 0u;
+}
+
+fn pack_active(pack: u32) -> bool {
+    return (frame.packs.y & (1u << pack)) != 0u;
 }
 
 fn region_active() -> bool {

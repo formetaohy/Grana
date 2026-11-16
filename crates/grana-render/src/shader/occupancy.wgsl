@@ -3,7 +3,13 @@
 const OCCUPANCY_WORDS: u32 = 1u + CELL_GRID * CELL_GRID * CELL_GRID;
 
 fn occupancy_reaches(word: vec4<f32>) -> bool {
-    return max(max(word.x, word.y), max(word.z, word.w)) >= frame.occupancy.x;
+    var reach = 0.0;
+    for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
+        if (pack_active(pack)) {
+            reach = max(reach, word[pack]);
+        }
+    }
+    return reach >= frame.occupancy.x;
 }
 
 fn occupied_brick(slot: u32) -> bool {

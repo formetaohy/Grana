@@ -1,7 +1,5 @@
 fn slice_color(point: vec3<f32>) -> vec4<f32> {
     let uvw = level_local(0u, point);
-    let count = u32(frame.march.z);
-    let packs = (count + PACK - 1u) / PACK;
     let bands = band_count();
     for (var band = 0u; band < bands; band += 1u) {
         let g = level_frame(band);
@@ -16,20 +14,20 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
         }
         var radiance = vec3<f32>(0.0);
         var transmittance = 1.0;
-        for (var pack = 0u; pack < packs; pack += 1u) {
-            if (!pack_active(pack, count)) {
+        for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
+            if (!pack_active(pack)) {
                 continue;
             }
             let values = sample_pack(band, pack, voxel);
             for (var component = 0u; component < PACK; component += 1u) {
                 let channel = pack * PACK + component;
-                if (channel >= count) {
-                    break;
-                }
-                let opacity = channel_opacity(channel);
-                if (opacity <= 0.0 || values[component] < channel_threshold(channel)) {
+                if (!channel_active(channel)) {
                     continue;
                 }
+                if (values[component] < channel_threshold(channel)) {
+                    continue;
+                }
+                let opacity = channel_opacity(channel);
                 let extinction = channel_tau(channel, values[component]);
                 var alpha = opacity;
                 if (!channel_isosurface(channel) && !channel_maximum(channel)) {

@@ -21,8 +21,6 @@ const SHADER: &str = concat!(
     "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
-    include_str!("shader/optical.wgsl"),
-    "\n",
     include_str!("shader/structure.wgsl")
 );
 

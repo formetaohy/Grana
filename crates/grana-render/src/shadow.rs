@@ -25,7 +25,13 @@ const TAU_SHADER: &str = concat!(
     "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
+    include_str!("shader/occupancy.wgsl"),
+    "\n",
     include_str!("shader/tau_codec.wgsl"),
+    "\n",
+    include_str!("shader/optical.wgsl"),
+    "\n",
+    include_str!("shader/extinction.wgsl"),
     "\n",
     include_str!("shader/tau.wgsl")
 );
@@ -141,6 +147,7 @@ pub(crate) struct ShadowGroups<'a> {
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
     pub atlas: &'a BindGroup,
+    pub occupancy: &'a BindGroup,
 }
 
 pub fn extent(space: &ShadowSpace, voxel: f32) -> [u32; 3] {
@@ -263,6 +270,7 @@ impl Shadow {
         pass.set_bind_group(1, groups.level, &[]);
         pass.set_bind_group(2, groups.atlas, &[]);
         pass.set_bind_group(3, &self.tau_write, &[]);
+        pass.set_bind_group(5, groups.occupancy, &[]);
         pass.dispatch_workgroups(
             self.dims[0].div_ceil(WORKGROUP),
             self.dims[1].div_ceil(WORKGROUP),

@@ -11,6 +11,23 @@ struct BakeEntry {
 const BAKE_TILE: u32 = 4u;
 const BAKE_TILES: u32 = 9u;
 
+fn structure_density(texel: vec3<i32>) -> f32 {
+    let count = u32(frame.march.z);
+    let packs = (count + PACK - 1u) / PACK;
+    var total = 0.0;
+    for (var pack = 0u; pack < packs; pack += 1u) {
+        let values = textureLoad(atlases[pack], texel, 0);
+        for (var component = 0u; component < PACK; component += 1u) {
+            let channel = pack * PACK + component;
+            if (channel >= count) {
+                break;
+            }
+            total += max(values[component], 0.0);
+        }
+    }
+    return total;
+}
+
 fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32> {
     let dx = structure_density(origin + inner + vec3<i32>(1, 0, 0))
         - structure_density(origin + inner - vec3<i32>(1, 0, 0));

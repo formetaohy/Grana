@@ -9,6 +9,7 @@ use wgpu::{
     TextureViewDescriptor, util::DeviceExt,
 };
 
+use crate::atlas::{PACK, PACK_LIMIT};
 use crate::frame::FrameData;
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
@@ -53,10 +54,10 @@ pub(crate) struct SceneTable {
     shadow_channels: Table<ChannelData>,
     shadow_group: BindGroup,
     lut: Texture,
-    extinction: Texture,
     transfers: Vec<Option<TransferFunction>>,
     thresholds: Vec<Option<f32>>,
     floor: f32,
+    packs: [u32; 4],
     group: BindGroup,
     channels_count: usize,
 }
@@ -79,13 +80,8 @@ impl SceneTable {
         });
         let table = Table::with_capacity(device, "grana.channels", CHANNEL_LIMIT);
         let lut = transfer_texture(device, "grana.transfer.lut", channels);
-        let extinction = transfer_texture(device, "grana.transfer.extinction", channels);
         let lut_view = lut.create_view(&TextureViewDescriptor {
             label: Some("grana.transfer.lut.view"),
-            ..Default::default()
-        });
-        let extinction_view = extinction.create_view(&TextureViewDescriptor {
-            label: Some("grana.transfer.extinction.view"),
             ..Default::default()
         });
         let lut_sampler = device.create_sampler(&SamplerDescriptor {
@@ -101,9 +97,8 @@ impl SceneTable {
             frame: &frame,
             neutral: &neutral,
             channels: table.buffer(),
-            lut: &lut_view,
             sampler: &lut_sampler,
-            extinction: &extinction_view,
+            extinction: &lut_view,
         };
         let group = scene_group(device, layouts, &binding);
         let shadow_frame = uniform_buffer(
@@ -116,9 +111,8 @@ impl SceneTable {
             frame: &shadow_frame,
             neutral: &neutral,
             channels: shadow_channels.buffer(),
-            lut: &lut_view,
             sampler: &lut_sampler,
-            extinction: &extinction_view,
+            extinction: &lut_view,
         };
         let shadow_group = scene_group(device, layouts, &shadow_binding);
         Self {
@@ -128,10 +122,10 @@ impl SceneTable {
             shadow_channels,
             shadow_group,
             lut,
-            extinction,
             transfers: vec![None; channels],
             thresholds: vec![None; channels],
             floor: 0.0,
+            packs: [0; 4],
             group,
             channels_count: channels,
         }
@@ -145,7 +139,7 @@ impl SceneTable {
         &self.shadow_group
     }
 
-    pub fn prepare(
+    pub fn publish(
         &mut self,
         device: &Device,
         queue: &Queue,
@@ -165,28 +159,17 @@ impl SceneTable {
         }
         let data = channel_data(rows, &self.thresholds, pyramid);
         let _ = self.shadow_channels.write(device, queue, &data.rows);
-        self.floor = data.floor;
-    }
-
-    pub fn write_channels(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        pyramid: &Pyramid,
-        rows: &[ChannelRow],
-    ) {
-        assert_eq!(
-            rows.len(),
-            self.channels_count,
-            "the scene carries one row per channel"
-        );
-        let data = channel_data(rows, &self.thresholds, pyramid);
         self.channels.write(device, queue, &data.rows);
         self.floor = data.floor;
+        self.packs = data.packs;
     }
 
     pub fn threshold_floor(&self) -> f32 {
         self.floor
+    }
+
+    pub fn packs(&self) -> [u32; 4] {
+        self.packs
     }
 
     pub fn write_shadow_frame(&self, queue: &Queue, frame: FrameData) {
@@ -199,19 +182,14 @@ impl SceneTable {
 
     fn write_transfer(&mut self, queue: &Queue, row: usize, transfer: &TransferFunction) {
         let lut = transfer.lut(LUT_SIZE);
-        let mut straight = Vec::with_capacity(lut.len() * 4);
         let mut extinction = Vec::with_capacity(lut.len() * 4);
         for [red, green, blue, alpha] in lut.iter() {
-            for channel in [*red, *green, *blue, *alpha] {
-                straight.push(f16::from_f32(channel).to_bits());
-            }
             let opacity = alpha.clamp(0.0, TRANSPARENT_ALPHA);
             for channel in [*red, *green, *blue, -(1.0 - opacity).ln()] {
                 extinction.push(f16::from_f32(channel).to_bits());
             }
         }
-        write_row(queue, &self.lut, row, &straight);
-        write_row(queue, &self.extinction, row, &extinction);
+        write_row(queue, &self.lut, row, &extinction);
         self.thresholds[row] = lut
             .iter()
             .position(|stop| stop[3] > MINIMUM_ALPHA)
@@ -223,7 +201,6 @@ struct SceneBinding<'a> {
     frame: &'a Buffer,
     neutral: &'a Buffer,
     channels: &'a Buffer,
-    lut: &'a TextureView,
     sampler: &'a Sampler,
     extinction: &'a TextureView,
 }
@@ -244,10 +221,6 @@ fn scene_group(device: &Device, layouts: &Layouts, binding: &SceneBinding<'_>) -
             BindGroupEntry {
                 binding: 2,
                 resource: binding.channels.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: BindingResource::TextureView(binding.lut),
             },
             BindGroupEntry {
                 binding: 4,
@@ -273,6 +246,7 @@ fn uniform_buffer(device: &Device, label: &'static str, size: usize) -> Buffer {
 struct ChannelTable {
     rows: Vec<ChannelData>,
     floor: f32,
+    packs: [u32; 4],
 }
 
 fn channel_data(
@@ -281,6 +255,7 @@ fn channel_data(
     pyramid: &Pyramid,
 ) -> ChannelTable {
     let mut floor = f32::INFINITY;
+    let mut channels = 0u32;
     let rows = rows
         .iter()
         .enumerate()
@@ -303,6 +278,7 @@ fn channel_data(
             };
             let opacity = if row.visible { row.opacity } else { 0.0 };
             if opacity > 0.0 {
+                channels |= 1 << index;
                 let reach = match mode {
                     VolumeMode::Maximum => start,
                     VolumeMode::Blend | VolumeMode::Isosurface => threshold,
@@ -320,7 +296,17 @@ fn channel_data(
             }
         })
         .collect();
-    ChannelTable { rows, floor }
+    let packs = (0..PACK_LIMIT).fold(0u32, |mask, pack| {
+        let members = (0..PACK).fold(0u32, |bits, component| {
+            bits | ((channels >> (pack * PACK + component)) & 1)
+        });
+        mask | (u32::from(members != 0) << pack)
+    });
+    ChannelTable {
+        rows,
+        floor,
+        packs: [channels, packs, 0, 0],
+    }
 }
 
 fn transfer_texture(device: &Device, label: &str, channels: usize) -> Texture {
