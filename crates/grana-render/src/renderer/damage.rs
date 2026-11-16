@@ -45,7 +45,7 @@ impl Renderer {
         let evicted = atlas.evict_other_frames(*time);
         for brick in evicted {
             if let Some(table) = bricks[brick.level].as_mut() {
-                table.drop_record(queue, arena, brick.index, brick.time);
+                table.drop_record(arena, brick.index, brick.time);
             }
         }
         for (region, channels) in scopes {
@@ -82,8 +82,11 @@ impl Renderer {
         }
         for (brick_time, level, index) in released {
             if let Some(table) = bricks[level].as_mut() {
-                table.drop_record(queue, arena, index, brick_time);
+                table.drop_record(arena, index, brick_time);
             }
+        }
+        for table in bricks.iter_mut().flatten() {
+            table.flush(queue, arena);
         }
     }
 

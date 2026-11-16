@@ -3,15 +3,12 @@
 @group(6) @binding(3) var shadow_objects: texture_depth_2d;
 @group(6) @binding(4) var shadow_compare: sampler_comparison;
 
-fn structure_lighting(albedo: vec3<f32>, texel: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    let structure = structure_tap(texel);
-    if (structure.z <= 0.0) {
+fn structure_lighting(albedo: vec3<f32>, structure: vec4<f32>, world: vec3<f32>) -> vec3<f32> {
+    let packed = structure_sample_normal(structure);
+    if (packed.w < 0.5) {
         return albedo;
     }
-    var normal = octahedral_decode(structure.xy * 2.0 - vec2<f32>(1.0));
-    if (dot(normal, normal) <= 0.0) {
-        return albedo;
-    }
+    var normal = packed.xyz;
     if (dot(normal, frame.light.xyz) < 0.0) {
         normal = -normal;
     }

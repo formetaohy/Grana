@@ -203,9 +203,9 @@ impl Oit {
         let epoch = self.next_epoch();
         if epoch == 1 {
             encoder.clear_buffer(&self.keys, 0, None);
+            encoder.clear_buffer(&self.counts, 0, None);
         }
         self.epoch = epoch;
-        encoder.clear_buffer(&self.counts, 0, None);
         epoch
     }
 }

@@ -56,6 +56,10 @@ impl Renderer {
                 || !scene.splats.is_empty());
         let surfaces = !scene.layers.is_empty();
         let splats_present = !scene.splats.is_empty();
+        let volume_visible = scene
+            .channels
+            .iter()
+            .any(|row| row.visible && row.opacity > 0.0);
         let motion = view_motion(camera, viewport, bounds, time, exposure);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
@@ -106,6 +110,8 @@ impl Renderer {
             info,
             dummy_oit,
             dummy_ao,
+            dummy_normal,
+            dummy_volume,
             budget,
             sections,
             sliced,
@@ -442,20 +448,19 @@ impl Renderer {
             }
             if continuing {
                 let previous = target.view;
+                let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume);
                 let history = target.history.as_mut().expect("the history is allocated");
                 temporal_pass.capture(
                     device,
-                    queue,
                     &mut encoder,
                     history,
                     &previous,
+                    scene_table.group(),
                     &crate::temporal::Inputs {
                         accumulated: &target.accumulation_view,
                         counts: &target.count_view,
                         fresh: target.scene.color(),
-                        depth: target.scene.depth(),
-                        volume: target.guide.view(),
-                        normal: target.gbuffer.as_ref().map(crate::target::Gbuffer::normal),
+                        geometry: &geometry,
                     },
                 );
                 seeding = true;
@@ -562,16 +567,13 @@ impl Renderer {
         if target.samples < sampling.ceiling() && ready && !expired {
             target.samples += 1;
             info.samples = target.samples;
-            let volume_visible = scene
-                .channels
-                .iter()
-                .any(|row| row.visible && row.opacity > 0.0);
-            if volume_visible && !slice && target.volume.is_none() {
-                target.volume = Some(crate::target::Volume::new(
-                    device,
-                    &layouts.volume_read,
-                    size,
-                ));
+            if !slice
+                && (volume_visible || surfaces || temporal.is_some())
+                && target.volume.is_none()
+            {
+                let staged = crate::target::Volume::new(device, &layouts.volume_read, size);
+                staged.clear(&mut encoder);
+                target.volume = Some(staged);
             }
             if volume_visible
                 && !slice
@@ -611,20 +613,15 @@ impl Renderer {
                     target.scene.depth(),
                     size,
                 );
-                let ao = crate::ao::Ao::new(
-                    device,
-                    layouts,
-                    gtao,
-                    gbuffer.normal(),
-                    target.scene.depth(),
-                    target.guide.view(),
-                    size,
-                );
+                let ao = crate::ao::Ao::new(device, layouts, gtao, size);
                 target.gbuffer = Some(gbuffer);
                 target.ao = Some(ao);
             }
-            if reset && !volume_visible {
-                target.guide.clear(&mut encoder);
+            if reset
+                && !volume_visible
+                && let Some(staged) = target.volume.as_ref()
+            {
+                staged.clear(&mut encoder);
             }
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
@@ -657,20 +654,6 @@ impl Renderer {
             let occupancy = occupancy_group.as_ref().expect("the occupancy is ready");
             if slice {
                 crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
-                if volume_visible {
-                    volume.draw_surface(
-                        &mut encoder,
-                        crate::volume::SurfaceFrame {
-                            normal: target.guide.view(),
-                            region: viewport,
-                            scene: group,
-                            level: level_group,
-                            atlas: atlas.group(),
-                            depth_group: target.scene.depth_group(),
-                            occupancy,
-                        },
-                    );
-                }
             } else if surfaces && let Some(gbuffer) = target.gbuffer.as_ref() {
                 if let Some(mesh_passes) = meshes.as_ref() {
                     mesh_passes.draw_gbuffer(
@@ -681,31 +664,6 @@ impl Renderer {
                         group,
                     );
                 }
-                if volume_visible {
-                    volume.draw_surface(
-                        &mut encoder,
-                        crate::volume::SurfaceFrame {
-                            normal: target.guide.view(),
-                            region: viewport,
-                            scene: group,
-                            level: level_group,
-                            atlas: atlas.group(),
-                            depth_group: target.scene.depth_group(),
-                            occupancy,
-                        },
-                    );
-                }
-                target
-                    .ao
-                    .as_ref()
-                    .expect("the ambient occlusion target is ready")
-                    .evaluate(
-                        queue,
-                        &mut encoder,
-                        &data,
-                        size,
-                        crate::ao::Ambient::new(AMBIENT_REACH, AMBIENT_STRENGTH, sample_index),
-                    );
             } else {
                 crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             }
@@ -718,6 +676,7 @@ impl Renderer {
                     crate::volume::MarchFrame {
                         radiance: staged.radiance(),
                         surface: staged.surface(),
+                        normal: staged.normal(),
                         scene: group,
                         level: level_group,
                         atlas: atlas.group(),
@@ -726,6 +685,21 @@ impl Renderer {
                         shadow: shadow_group,
                     },
                 );
+            }
+            let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume);
+            if surfaces && !slice && target.gbuffer.is_some() {
+                target
+                    .ao
+                    .as_ref()
+                    .expect("the ambient occlusion target is ready")
+                    .evaluate(
+                        queue,
+                        &mut encoder,
+                        &data,
+                        size,
+                        crate::ao::Ambient::new(AMBIENT_REACH, AMBIENT_STRENGTH, sample_index),
+                        &geometry,
+                    );
             }
             let ao_group: &BindGroup = target.ao.as_ref().map_or(&*dummy_ao, crate::ao::Ao::group);
             let oit_epoch = target
@@ -924,6 +898,7 @@ impl Renderer {
                     device,
                     queue,
                     &mut encoder,
+                    group,
                     crate::temporal::Reuse {
                         history,
                         view: &view_now,
@@ -933,9 +908,7 @@ impl Renderer {
                             accumulated: &target.accumulation_view,
                             counts: &target.count_view,
                             fresh: target.scene.color(),
-                            depth: target.scene.depth(),
-                            volume: target.guide.view(),
-                            normal: target.gbuffer.as_ref().map(crate::target::Gbuffer::normal),
+                            geometry: &geometry,
                         },
                     },
                 );

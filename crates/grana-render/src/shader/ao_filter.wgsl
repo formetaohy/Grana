@@ -1,30 +1,27 @@
 @group(0) @binding(1) var filtered_ao: texture_2d<f32>;
-@group(0) @binding(2) var filter_depth: texture_depth_2d;
-@group(0) @binding(3) var filter_normal: texture_2d<f32>;
 
 const MAX_SLOPE: f32 = 8.0;
 
 fn tap_world(at: vec2<i32>) -> vec4<f32> {
     let extent = vec2<i32>(ao.extent.xy);
-    let pixel = clamp(at, vec2<i32>(0), extent - vec2<i32>(1));
-    let depth = textureLoad(filter_depth, pixel, 0);
-    if (depth >= 1.0) {
+    let pixel = clamp(at * AO_SCALE, vec2<i32>(0), extent - vec2<i32>(1));
+    let depth = visible_depth(pixel);
+    if (depth >= UNREACHED_DEPTH) {
         return vec4<f32>(0.0);
     }
-    return vec4<f32>(world_of(ndc_of(vec2<f32>(pixel)), depth), 1.0);
+    return vec4<f32>(world_of(region_ndc(vec2<f32>(pixel), ao.region), depth), 1.0);
 }
 
 @fragment
 fn fs_filter(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(position.xy);
-    let depth = textureLoad(filter_depth, pixel, 0);
-    if (depth >= 1.0) {
+    let surface = visible_surface(pixel);
+    if (!surface.known || length(surface.normal) < NORMAL_REACH) {
         return vec4<f32>(1.0);
     }
-    let world = world_of(ndc_of(vec2<f32>(pixel)), depth);
+    let world = world_of(region_ndc(vec2<f32>(pixel), ao.region), surface.depth);
     let view = normalize(ao.eye.xyz - world);
-    let normal = octahedral_decode(textureLoad(filter_normal, pixel, 0).xy);
-    let facing = max(abs(dot(normalize(normal), view)), FLOOR);
+    let facing = max(abs(dot(normalize(surface.normal), view)), FLOOR);
     let span = f32(AO_SCALE) * pixel_world(world);
     let tolerance = clamp(span / facing, span, span * MAX_SLOPE);
     let extent = vec2<i32>(textureDimensions(filtered_ao));
@@ -38,7 +35,7 @@ fn fs_filter(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 vec2<i32>(0),
                 extent - vec2<i32>(1),
             );
-            let tap = tap_world(at * AO_SCALE);
+            let tap = tap_world(at);
             if (tap.w < 0.5) {
                 continue;
             }

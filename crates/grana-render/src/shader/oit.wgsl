@@ -3,6 +3,7 @@
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
 
 const OIT_ALPHA_FLOOR: f32 = 1.0e-3;
+const OIT_NO_SLOT: u32 = 0xffffffffu;
 
 fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     let local = pixel - origin;
@@ -12,10 +13,21 @@ fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     return local.y * size.x + local.x;
 }
 
+fn oit_claim(index: u32, layers: u32, epoch: u32) -> u32 {
+    let claim = epoch << OIT_COUNT_EPOCH_SHIFT;
+    atomicMax(&oit_counts[index], claim);
+    let slot = atomicAdd(&oit_counts[index], 1u) - claim;
+    if (slot < layers) {
+        return slot;
+    }
+    atomicMin(&oit_counts[index], claim | OIT_COUNT_MASK);
+    return OIT_NO_SLOT;
+}
+
 fn oit_insert(index: u32, layers: u32, epoch: u32, depth: f32, premultiplied: vec4<f32>) -> bool {
     let base = index * layers;
-    let slot = atomicAdd(&oit_counts[index], 1u);
-    if (slot >= layers) {
+    let slot = oit_claim(index, layers, epoch);
+    if (slot == OIT_NO_SLOT) {
         return false;
     }
     let key = oit_key(epoch, depth, slot);
@@ -61,3 +73,4 @@ fn oit_residual(alpha: f32, color: vec3<f32>, depth: f32) -> Residual {
     output.moment = vec2<f32>(clamp(depth, 0.0, 1.0) * tau, 0.0);
     return output;
 }
+

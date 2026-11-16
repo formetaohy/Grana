@@ -114,13 +114,16 @@ impl Renderer {
                         atlas.write(queue, pack, slot, &units[..span]);
                         occupy(
                             words,
-                            occupancy.as_ref(),
+                            occupancy.as_mut(),
                             queue,
                             slot,
                             pack,
                             maximum,
                             summary,
                         );
+                    }
+                    if let Some(occupancy) = occupancy.as_ref() {
+                        occupancy.seal(queue, slot);
                     }
                     atlas.written(slot);
                     if time == *now {
@@ -159,7 +162,7 @@ impl Renderer {
             if maximum <= 0.0 {
                 atlas.assign_hollow(time, level, index);
                 if publish && let Some(table) = tables[level].as_mut() {
-                    table.set_record(queue, arena, index, BrickRecord::hollow(time, *content));
+                    table.set_record(arena, index, BrickRecord::hollow(time, *content));
                 }
                 if current {
                     *generation += 1;
@@ -173,7 +176,10 @@ impl Renderer {
             if let Some(brick) = evicted
                 && let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut)
             {
-                other.drop_record(queue, arena, brick.index, brick.time);
+                other.drop_record(arena, brick.index, brick.time);
+            }
+            if let Some(occupancy) = occupancy.as_mut() {
+                occupancy.reset(slot);
             }
             let mut base = 0;
             for pack in 0..pack_count {
@@ -181,7 +187,7 @@ impl Renderer {
                 atlas.write(queue, pack, slot, &units[base..base + step]);
                 occupy(
                     words,
-                    occupancy.as_ref(),
+                    occupancy.as_mut(),
                     queue,
                     slot,
                     pack,
@@ -190,19 +196,20 @@ impl Renderer {
                 );
                 base += step;
             }
+            if let Some(occupancy) = occupancy.as_ref() {
+                occupancy.seal(queue, slot);
+            }
             atlas.assign(slot, ResidentBrick { time, level, index }, *pin, demand);
             if publish && let Some(table) = tables[level].as_mut() {
-                table.set_record(
-                    queue,
-                    arena,
-                    index,
-                    BrickRecord::new(slot + 1, time, *content),
-                );
+                table.set_record(arena, index, BrickRecord::new(slot + 1, time, *content));
             }
             if current {
                 *generation += 1;
             }
             refreshes.remove(request);
+        }
+        for table in tables.iter_mut().flatten() {
+            table.flush(queue, arena);
         }
     }
 }
@@ -275,7 +282,7 @@ fn stage(
 
 fn occupy(
     words: &mut [u32],
-    occupancy: Option<&Occupancy>,
+    occupancy: Option<&mut Occupancy>,
     queue: &Queue,
     slot: u32,
     pack: usize,

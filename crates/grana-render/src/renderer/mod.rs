@@ -190,8 +190,10 @@ pub struct Renderer {
     meshes: Option<MeshPasses>,
     splats: Option<SplatPasses>,
     dummy: TextureView,
+    dummy_normal: TextureView,
     dummy_oit: Oit,
     dummy_ao: BindGroup,
+    dummy_volume: crate::target::Volume,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -253,8 +255,10 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
+        let dummy_normal = dummy_normal(device);
         let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
         let dummy_ao = crate::ao::dummy(device, queue, &layouts);
+        let dummy_volume = dummy_volume(device, queue, &layouts);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -268,7 +272,7 @@ impl Renderer {
         let sections = Sections::new(device, &layouts, pipelines);
         let present = Present::new(device, format, pipelines);
         let volume = VolumePass::new(device, &layouts, pipelines);
-        let temporal = TemporalPass::new(device, queue, pipelines);
+        let temporal = TemporalPass::new(device, &layouts, pipelines);
         let overlay = Overlays::new(device, pipelines);
         Self {
             present,
@@ -292,8 +296,10 @@ impl Renderer {
             splats: None,
             layouts,
             dummy,
+            dummy_normal,
             dummy_oit,
             dummy_ao,
+            dummy_volume,
             atlas_sampler,
             pyramid: None,
             channels: 0,
@@ -618,9 +624,9 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         let size = frame.resolution;
-        let (mut target, created) =
-            self.targets
-                .take(device, queue, &self.layouts, &self.present, size);
+        let (mut target, created) = self
+            .targets
+            .take(device, &self.layouts, &self.present, size);
         if created {
             if let Some(convergence) = self.convergence.as_mut() {
                 convergence.forget();
@@ -633,13 +639,13 @@ impl Renderer {
         info
     }
 
-    pub fn reserve_target(&mut self, device: &Device, queue: &Queue, size: [u32; 2]) {
+    pub fn reserve_target(&mut self, device: &Device, size: [u32; 2]) {
         assert!(
             size[0] > 0 && size[1] > 0,
             "a reserved target covers a positive surface"
         );
         self.targets
-            .reserve(device, queue, &self.layouts, &self.present, size);
+            .reserve(device, &self.layouts, &self.present, size);
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {
@@ -923,4 +929,24 @@ pub(super) fn dummy_texture(device: &Device, queue: &Queue) -> TextureView {
         label: Some("grana.atlas.dummy.view"),
         ..Default::default()
     })
+}
+
+fn dummy_normal(device: &Device) -> TextureView {
+    crate::target::attachment(
+        device,
+        "grana.normal.dummy",
+        [1, 1],
+        crate::target::NORMAL_FORMAT,
+        TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+fn dummy_volume(device: &Device, queue: &Queue, layouts: &Layouts) -> crate::target::Volume {
+    let volume = crate::target::Volume::new(device, &layouts.volume_read, [1, 1]);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("grana.volume.dummy"),
+    });
+    volume.clear(&mut encoder);
+    queue.submit([encoder.finish()]);
+    volume
 }

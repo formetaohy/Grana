@@ -292,7 +292,7 @@ impl Engine {
         if view.display == Display::Still && self.resolved(view.display) {
             let interactive = Display::Interactive.resolution(size);
             if interactive != size {
-                self.renderer.reserve_target(device, queue, interactive);
+                self.renderer.reserve_target(device, interactive);
             }
         }
         Ok(())

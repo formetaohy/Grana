@@ -20,6 +20,8 @@ const GTAO: &str = concat!(
     "\n",
     include_str!("shader/octahedral.wgsl"),
     "\n",
+    include_str!("shader/geometry.wgsl"),
+    "\n",
     include_str!("shader/gtao.wgsl")
 );
 
@@ -27,6 +29,8 @@ const FILTER: &str = concat!(
     include_str!("shader/ao_common.wgsl"),
     "\n",
     include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/geometry.wgsl"),
     "\n",
     include_str!("shader/ao_filter.wgsl")
 );
@@ -75,7 +79,7 @@ pub(crate) struct Ao {
     half: TextureView,
     view: TextureView,
     read: BindGroup,
-    write: BindGroup,
+    data: BindGroup,
     filter: BindGroup,
     pipeline: RenderPipeline,
     filter_pipeline: RenderPipeline,
@@ -110,16 +114,7 @@ impl AoPipeline {
 }
 
 impl Ao {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        device: &Device,
-        layouts: &Layouts,
-        pipeline: &AoPipeline,
-        normal: &TextureView,
-        depth: &TextureView,
-        volume: &TextureView,
-        size: [u32; 2],
-    ) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, pipeline: &AoPipeline, size: [u32; 2]) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0,
             "an ambient occlusion target covers a positive surface"
@@ -143,27 +138,13 @@ impl Ao {
                 resource: BindingResource::TextureView(&view),
             }],
         });
-        let write = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.ao.write.group"),
-            layout: &layouts.ao_write,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(depth),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::TextureView(normal),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(volume),
-                },
-            ],
+        let data = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.ao.data.group"),
+            layout: &layouts.ao_data,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            }],
         });
         let filter = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.ao.filter.group"),
@@ -177,14 +158,6 @@ impl Ao {
                     binding: 1,
                     resource: BindingResource::TextureView(&half_view),
                 },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::TextureView(depth),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(normal),
-                },
             ],
         });
         Self {
@@ -193,7 +166,7 @@ impl Ao {
             half: half_view,
             view,
             read,
-            write,
+            data,
             filter,
             pipeline: pipeline.gtao.clone(),
             filter_pipeline: pipeline.filter.clone(),
@@ -212,6 +185,7 @@ impl Ao {
         frame: &FrameData,
         resolution: [u32; 2],
         ambient: Ambient,
+        geometry: &BindGroup,
     ) {
         assert!(
             frame.viewport[0] + frame.viewport[2] <= resolution[0] as f32
@@ -245,10 +219,13 @@ impl Ao {
         ];
         self.pass(
             encoder,
-            "grana.ao.pass",
-            &self.half,
-            &self.pipeline,
-            &self.write,
+            Stage {
+                label: "grana.ao.pass",
+                target: &self.half,
+                pipeline: &self.pipeline,
+                group: &self.data,
+            },
+            geometry,
             [
                 first[0],
                 first[1],
@@ -258,10 +235,13 @@ impl Ao {
         );
         self.pass(
             encoder,
-            "grana.ao.filter.pass",
-            &self.view,
-            &self.filter_pipeline,
-            &self.filter,
+            Stage {
+                label: "grana.ao.filter.pass",
+                target: &self.view,
+                pipeline: &self.filter_pipeline,
+                group: &self.filter,
+            },
+            geometry,
             region,
         );
     }
@@ -269,16 +249,14 @@ impl Ao {
     fn pass(
         &self,
         encoder: &mut CommandEncoder,
-        label: &str,
-        target: &TextureView,
-        pipeline: &RenderPipeline,
-        group: &BindGroup,
+        stage: Stage<'_>,
+        geometry: &BindGroup,
         region: [u32; 4],
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some(label),
+            label: Some(stage.label),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
+                view: stage.target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -298,10 +276,18 @@ impl Ao {
             1.0,
         );
         pass.set_scissor_rect(region[0], region[1], region[2], region[3]);
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, group, &[]);
+        pass.set_pipeline(stage.pipeline);
+        pass.set_bind_group(0, stage.group, &[]);
+        pass.set_bind_group(1, geometry, &[]);
         pass.draw(0..SIDE, 0..1);
     }
+}
+
+struct Stage<'a> {
+    label: &'static str,
+    target: &'a TextureView,
+    pipeline: &'a RenderPipeline,
+    group: &'a BindGroup,
 }
 
 fn output(device: &Device, label: &'static str, size: [u32; 2]) -> Texture {

@@ -6,11 +6,13 @@ struct March {
     radiance: vec3<f32>,
     transmittance: f32,
     surface: vec2<f32>,
+    normal: vec4<f32>,
 }
 
 struct VolumeOutput {
     @location(0) radiance: vec4<f32>,
     @location(1) surface: vec2<f32>,
+    @location(2) normal: vec4<f32>,
 }
 
 fn march_volume(
@@ -21,7 +23,7 @@ fn march_volume(
     dither: f32,
     peaks: ptr<function, array<f32, CHANNEL_LIMIT>>,
 ) -> March {
-    var march = March(vec3<f32>(0.0), 1.0, vec2<f32>(0.0, 1.0));
+    var march = March(vec3<f32>(0.0), 1.0, vec2<f32>(0.0, 1.0), vec4<f32>(0.0));
     if (finish <= begin) {
         return march;
     }
@@ -81,15 +83,15 @@ fn march_volume(
             let tau = sample.extinction * segment * walk.voxels;
             let alpha = 1.0 - exp(-tau);
             if (alpha > 0.0) {
+                let world = origin + direction * cursor;
                 let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
-                march.radiance += march.transmittance
-                    * alpha
-                    * structure_lighting(albedo, texel, origin + direction * cursor);
+                march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(texel), world);
                 march.transmittance *= 1.0 - alpha;
             }
             if (march.surface.y >= 1.0
                 && (1.0 - march.transmittance >= SURFACE_OPACITY || sample.peak)) {
                 march.surface = vec2<f32>(cursor, clip_depth(origin + direction * cursor));
+                march.normal = structure_sample_normal(structure_tap(texel));
             }
             cursor += segment;
             samples += 1u;
@@ -118,7 +120,7 @@ fn march_peaks(march: March, peaks: array<f32, CHANNEL_LIMIT>) -> March {
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
     let ndc = input.ndc + frame.jitter.xy;
-    let pixel = vec2<i32>(floor(input.clip_position.xy * frame.volume.xy));
+    let pixel = vec2<i32>(input.clip_position.xy) * 2;
     let resolution = resolve(pixel, ndc);
     var peaks: array<f32, CHANNEL_LIMIT>;
     if (projection()) {
@@ -137,5 +139,9 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     if (projection()) {
         march = march_peaks(march, peaks);
     }
-    return VolumeOutput(vec4<f32>(march.radiance, 1.0 - march.transmittance), march.surface);
+    return VolumeOutput(
+        vec4<f32>(march.radiance, 1.0 - march.transmittance),
+        march.surface,
+        march.normal,
+    );
 }

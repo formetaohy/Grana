@@ -82,9 +82,13 @@ fn block_at(column: Column, voxel: vec3<f32>, layer: u32) -> Block {
         return Block(base, texel, 0u, exit_layer(column, voxel, base, far, layer));
     }
     let coord = cell_coord(clamp(voxel, base, far) - base);
+    let index = cell_index(coord);
     let low = min(base + vec3<f32>(coord) * CELL_SIDE, far);
     let high = min(low + vec3<f32>(CELL_SIDE), far);
-    let packs = occupied_packs(slot - 1u, cell_index(coord)) & frame.packs.y;
+    var packs = 0u;
+    if (occupied_cell(slot - 1u, index)) {
+        packs = occupied_packs(slot - 1u, index) & frame.packs.y;
+    }
     let end = select(
         exit_layer(column, voxel, low, high, layer),
         exit_layer(column, voxel, base, far, layer),

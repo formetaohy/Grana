@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_volume::{BrickGrid, Level, Pyramid};
+use std::ops::Range;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 use crate::atlas::Atlas;
@@ -133,6 +134,7 @@ pub(crate) struct BrickTable {
     base: u32,
     time: Option<u32>,
     records: Vec<BrickRecord>,
+    dirty: Option<Range<usize>>,
     revision: u64,
 }
 
@@ -165,6 +167,7 @@ impl BrickTable {
             base,
             time: None,
             records: vec![BrickRecord::MISSING; grid.count()],
+            dirty: None,
             revision: 0,
         }
     }
@@ -185,7 +188,6 @@ impl BrickTable {
         atlas: &Atlas,
         arena: &BrickArena,
     ) {
-        let mut changed = Vec::new();
         for resident in atlas.residents(time, self.level) {
             let record = match resident.slot {
                 Some(slot) => BrickRecord::new(slot + 1, time, content),
@@ -193,36 +195,37 @@ impl BrickTable {
             };
             if self.records[resident.index] != record {
                 self.records[resident.index] = record;
-                changed.push(resident.index);
+                self.mark(resident.index);
             }
         }
-        changed.sort_unstable();
-        for run in runs(&changed) {
-            self.upload(queue, arena, run);
-        }
+        self.flush(queue, arena);
         self.time = Some(time);
     }
 
-    fn upload(&mut self, queue: &Queue, arena: &BrickArena, records: std::ops::Range<usize>) {
+    fn mark(&mut self, index: usize) {
+        self.dirty = Some(match self.dirty.take() {
+            Some(range) => range.start.min(index)..range.end.max(index + 1),
+            None => index..index + 1,
+        });
+    }
+
+    pub fn flush(&mut self, queue: &Queue, arena: &BrickArena) {
+        let Some(range) = self.dirty.take() else {
+            return;
+        };
         assert!(
-            !records.is_empty() && self.base as usize + records.end <= arena.records(),
+            !range.is_empty() && self.base as usize + range.end <= arena.records(),
             "a brick record run lies inside the arena"
         );
         self.revision += 1;
         queue.write_buffer(
             arena.buffer(),
-            (self.base as u64 + records.start as u64) * RECORD_BYTES,
-            bytemuck::cast_slice(&self.records[records]),
+            (self.base as u64 + range.start as u64) * RECORD_BYTES,
+            bytemuck::cast_slice(&self.records[range]),
         );
     }
 
-    pub fn set_record(
-        &mut self,
-        queue: &Queue,
-        arena: &BrickArena,
-        index: usize,
-        record: BrickRecord,
-    ) {
+    pub fn set_record(&mut self, arena: &BrickArena, index: usize, record: BrickRecord) {
         assert!(
             self.base as usize + index < arena.records(),
             "a brick record lies inside the arena"
@@ -231,33 +234,16 @@ impl BrickTable {
             return;
         }
         self.records[index] = record;
-        self.upload(queue, arena, index..index + 1);
+        self.mark(index);
     }
 
-    pub fn drop_record(&mut self, queue: &Queue, arena: &BrickArena, index: usize, time: u32) {
+    pub fn drop_record(&mut self, arena: &BrickArena, index: usize, time: u32) {
         if self.records[index].time() == time {
-            self.set_record(queue, arena, index, BrickRecord::MISSING);
+            self.set_record(arena, index, BrickRecord::MISSING);
         }
     }
 
     pub fn time(&self) -> Option<u32> {
         self.time
     }
-}
-
-fn runs(sorted: &[usize]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
-    let mut start = 0;
-    std::iter::from_fn(move || {
-        if start >= sorted.len() {
-            return None;
-        }
-        let low = sorted[start];
-        let mut end = start + 1;
-        while end < sorted.len() && sorted[end] == sorted[end - 1] + 1 {
-            end += 1;
-        }
-        let run = low..sorted[end - 1] + 1;
-        start = end;
-        Some(run)
-    })
 }

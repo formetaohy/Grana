@@ -94,6 +94,11 @@ fn view_direction(point: vec3<f32>) -> vec3<f32> {
     return normalize(frame.eye.xyz - point);
 }
 
+fn clip_depth(world: vec3<f32>) -> f32 {
+    let clip = frame.view_projection * vec4<f32>(world, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
+
 fn lens_shift(clip_w: f32) -> vec2<f32> {
     return frame.lens.xy * (clip_w / frame.lens.z - 1.0);
 }

@@ -18,14 +18,6 @@ fn world_of(ndc: vec2<f32>, depth: f32) -> vec3<f32> {
     return clip.xyz / clip.w;
 }
 
-fn ndc_of(pixel: vec2<f32>) -> vec2<f32> {
-    let local = pixel - ao.region.xy + vec2<f32>(0.5);
-    return vec2<f32>(
-        local.x / ao.region.z * 2.0 - 1.0,
-        1.0 - local.y / ao.region.w * 2.0,
-    );
-}
-
 fn pixel_world(world: vec3<f32>) -> f32 {
     let span = select(1.0, length(world - ao.eye.xyz), ao.noise.z > 0.5);
     return span / max(ao.noise.y, FLOOR);

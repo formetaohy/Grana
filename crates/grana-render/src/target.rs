@@ -1,5 +1,5 @@
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, CommandEncoder, Device,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Color, CommandEncoder, Device,
     Extent3d, LoadOp, Operations, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
     RenderPassDescriptor, StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat,
     TextureUsages, TextureView, TextureViewDescriptor,
@@ -9,13 +9,13 @@ pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
-pub(crate) const GUIDE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-pub(crate) const GBUFFER_NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float;
 pub(crate) const GBUFFER_ID_FORMAT: TextureFormat = TextureFormat::R16Uint;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
 pub(crate) const VOLUME_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const VOLUME_SURFACE_FORMAT: TextureFormat = TextureFormat::Rg32Float;
+pub(crate) const VOLUME_NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
 pub(crate) fn volume_size(size: [u32; 2]) -> [u32; 2] {
     assert!(
@@ -100,7 +100,7 @@ impl Gbuffer {
             device,
             "grana.gbuffer.normal",
             size,
-            GBUFFER_NORMAL_FORMAT,
+            NORMAL_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
         let id = attachment(
@@ -147,6 +147,7 @@ impl Gbuffer {
 pub(crate) struct Volume {
     radiance: TextureView,
     surface: TextureView,
+    normal: TextureView,
     group: BindGroup,
 }
 
@@ -167,6 +168,13 @@ impl Volume {
             VOLUME_SURFACE_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
+        let normal = attachment(
+            device,
+            "grana.volume.normal",
+            extent,
+            VOLUME_NORMAL_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.volume.group"),
             layout,
@@ -179,11 +187,16 @@ impl Volume {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&surface),
                 },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&normal),
+                },
             ],
         });
         Self {
             radiance,
             surface,
+            normal,
             group,
         }
     }
@@ -196,8 +209,45 @@ impl Volume {
         &self.surface
     }
 
+    pub fn normal(&self) -> &TextureView {
+        &self.normal
+    }
+
     pub fn group(&self) -> &BindGroup {
         &self.group
+    }
+
+    pub fn clear(&self, encoder: &mut CommandEncoder) {
+        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.volume.clear.pass"),
+            color_attachments: &[
+                Some(empty(&self.radiance, Color::TRANSPARENT)),
+                Some(empty(
+                    &self.surface,
+                    Color {
+                        r: 0.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                )),
+                Some(empty(&self.normal, Color::TRANSPARENT)),
+            ],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+    }
+}
+
+fn empty(view: &TextureView, color: Color) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Clear(color),
+            store: StoreOp::Store,
+        },
     }
 }
 

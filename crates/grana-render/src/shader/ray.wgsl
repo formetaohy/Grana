@@ -45,11 +45,6 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
-fn clip_depth(world: vec3<f32>) -> f32 {
-    let clip = frame.view_projection * vec4<f32>(world, 1.0);
-    return clamp(clip.z / clip.w, 0.0, 1.0);
-}
-
 fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
     let ray = camera_ray(ndc);
     let origin = ray.origin;

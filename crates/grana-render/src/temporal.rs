@@ -8,20 +8,32 @@ use wgpu::{
     PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
     RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
     ShaderSource, ShaderStages, StoreOp, Texture, TextureDescriptor, TextureDimension,
-    TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
-    VertexState,
+    TextureSampleType, TextureUsages, TextureView, TextureViewDimension, VertexState,
 };
 
 use crate::frame::FrameData;
+use crate::layout::Layouts;
 use crate::target::{self, ACCUMULATION_FORMAT, COUNT_FORMAT};
 
 const CAPTURE: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
     include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/geometry.wgsl"),
+    "\n",
+    include_str!("shader/temporal_surface.wgsl"),
     "\n",
     include_str!("shader/temporal_capture.wgsl")
 );
 const SEED: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
     include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/geometry.wgsl"),
+    "\n",
+    include_str!("shader/temporal_surface.wgsl"),
     "\n",
     include_str!("shader/temporal_seed.wgsl")
 );
@@ -65,9 +77,6 @@ impl Temporal {
 pub(crate) struct ViewCamera {
     view_projection: [[f32; 4]; 4],
     inverse: [[f32; 4]; 4],
-    eye: [f32; 4],
-    lens: [f32; 4],
-    projection: [f32; 4],
 }
 
 impl ViewCamera {
@@ -75,9 +84,6 @@ impl ViewCamera {
         Self {
             view_projection: data.view_projection,
             inverse: data.inv_view_projection,
-            eye: data.eye,
-            lens: data.lens,
-            projection: data.projection,
         }
     }
 }
@@ -136,20 +142,9 @@ impl History {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct CaptureData {
-    region: [u32; 4],
-    local: [u32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct SeedData {
-    current: [[f32; 4]; 4],
-    current_inverse: [[f32; 4]; 4],
     previous: [[f32; 4]; 4],
     previous_inverse: [[f32; 4]; 4],
-    region: [u32; 4],
-    local: [u32; 4],
     flags: [f32; 4],
 }
 
@@ -157,9 +152,7 @@ pub(crate) struct Inputs<'a> {
     pub(crate) accumulated: &'a TextureView,
     pub(crate) counts: &'a TextureView,
     pub(crate) fresh: &'a TextureView,
-    pub(crate) depth: &'a TextureView,
-    pub(crate) volume: &'a TextureView,
-    pub(crate) normal: Option<&'a TextureView>,
+    pub(crate) geometry: &'a BindGroup,
 }
 
 pub(crate) struct Reuse<'a> {
@@ -175,35 +168,18 @@ pub(crate) struct TemporalPass {
     seed: RenderPipeline,
     capture_layout: BindGroupLayout,
     seed_layout: BindGroupLayout,
-    capture_uniforms: Buffer,
     seed_uniforms: Buffer,
-    dummy_float: TextureView,
 }
 
 impl TemporalPass {
-    pub(crate) fn new(device: &Device, queue: &Queue, pipelines: &Pipelines) -> Self {
+    pub(crate) fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let capture_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.temporal.capture.layout"),
-            entries: &[
-                uniform(0),
-                texture(1),
-                texture(2),
-                depth(3),
-                texture(4),
-                texture(5),
-            ],
+            entries: &[texture(0), texture(1)],
         });
         let seed_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.temporal.seed.layout"),
-            entries: &[
-                uniform(0),
-                texture(1),
-                texture(2),
-                texture(3),
-                depth(4),
-                texture(5),
-                texture(6),
-            ],
+            entries: &[uniform(0), texture(1), texture(2), texture(3)],
         });
         let capture_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.temporal.capture"),
@@ -213,8 +189,11 @@ impl TemporalPass {
             label: Some("grana.temporal.seed"),
             source: ShaderSource::Wgsl(SEED.into()),
         });
-        let capture_pipeline =
-            pipeline_layout(device, "grana.temporal.capture.pipeline", &capture_layout);
+        let capture_pipeline = pipeline_layout(
+            device,
+            "grana.temporal.capture.pipeline",
+            &[&layouts.scene, &layouts.geometry, &capture_layout],
+        );
         let capture = pipeline(
             device,
             "grana.temporal.capture",
@@ -223,7 +202,11 @@ impl TemporalPass {
             [(ACCUMULATION_FORMAT, None), (ACCUMULATION_FORMAT, None)],
             pipelines,
         );
-        let seed_pipeline = pipeline_layout(device, "grana.temporal.seed.pipeline", &seed_layout);
+        let seed_pipeline = pipeline_layout(
+            device,
+            "grana.temporal.seed.pipeline",
+            &[&layouts.scene, &layouts.geometry, &seed_layout],
+        );
         let seed = pipeline(
             device,
             "grana.temporal.seed",
@@ -231,11 +214,6 @@ impl TemporalPass {
             &seed_pipeline,
             [(ACCUMULATION_FORMAT, Some(ADD)), (COUNT_FORMAT, Some(ADD))],
             pipelines,
-        );
-        let capture_uniforms = buffer(
-            device,
-            "grana.temporal.capture.uniforms",
-            size_of::<CaptureData>(),
         );
         let seed_uniforms = buffer(
             device,
@@ -247,9 +225,7 @@ impl TemporalPass {
             seed,
             capture_layout,
             seed_layout,
-            capture_uniforms,
             seed_uniforms,
-            dummy_float: dummy(device, queue, "grana.temporal.dummy", ACCUMULATION_FORMAT),
         }
     }
 
@@ -271,48 +247,25 @@ impl TemporalPass {
     pub(crate) fn capture(
         &self,
         device: &Device,
-        queue: &Queue,
         encoder: &mut CommandEncoder,
         history: &mut History,
         view: &FrameView,
+        scene: &BindGroup,
         inputs: &Inputs<'_>,
     ) {
         let region = view.region;
         if view.camera.is_some() && region[2] > 0 && region[3] > 0 {
-            let data = CaptureData {
-                region,
-                local: [region[2], region[3], 0, 0],
-            };
-            queue.write_buffer(&self.capture_uniforms, 0, bytemuck::bytes_of(&data));
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("grana.temporal.capture.group"),
                 layout: &self.capture_layout,
                 entries: &[
                     BindGroupEntry {
                         binding: 0,
-                        resource: self.capture_uniforms.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
                         resource: BindingResource::TextureView(inputs.accumulated),
                     },
                     BindGroupEntry {
-                        binding: 2,
+                        binding: 1,
                         resource: BindingResource::TextureView(inputs.counts),
-                    },
-                    BindGroupEntry {
-                        binding: 3,
-                        resource: BindingResource::TextureView(inputs.depth),
-                    },
-                    BindGroupEntry {
-                        binding: 4,
-                        resource: BindingResource::TextureView(inputs.volume),
-                    },
-                    BindGroupEntry {
-                        binding: 5,
-                        resource: BindingResource::TextureView(
-                            inputs.normal.unwrap_or(&self.dummy_float),
-                        ),
                     },
                 ],
             });
@@ -320,7 +273,7 @@ impl TemporalPass {
                 encoder,
                 "grana.temporal.capture.pass",
                 &self.capture,
-                &group,
+                [scene, inputs.geometry, &group],
                 [&history.color_view, &history.geometry_view],
                 region,
             );
@@ -334,6 +287,7 @@ impl TemporalPass {
         device: &Device,
         queue: &Queue,
         encoder: &mut CommandEncoder,
+        scene: &BindGroup,
         reuse: Reuse<'_>,
     ) {
         let Reuse {
@@ -355,12 +309,8 @@ impl TemporalPass {
             "a view reprojects within a positive reach"
         );
         let data = SeedData {
-            current: current.view_projection,
-            current_inverse: current.inverse,
             previous: previous.view_projection,
             previous_inverse: previous.inverse,
-            region,
-            local: [region[2], region[3], 0, 0],
             flags: [
                 length,
                 if current == previous { 1.0 } else { 0.0 },
@@ -389,27 +339,13 @@ impl TemporalPass {
                     binding: 3,
                     resource: BindingResource::TextureView(inputs.fresh),
                 },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::TextureView(inputs.depth),
-                },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: BindingResource::TextureView(inputs.volume),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: BindingResource::TextureView(
-                        inputs.normal.unwrap_or(&self.dummy_float),
-                    ),
-                },
             ],
         });
         target_pass(
             encoder,
             "grana.temporal.seed.pass",
             &self.seed,
-            &group,
+            [scene, inputs.geometry, &group],
             [inputs.accumulated, inputs.counts],
             region,
         );
@@ -428,7 +364,7 @@ fn target_pass(
     encoder: &mut CommandEncoder,
     label: &'static str,
     pipeline: &RenderPipeline,
-    group: &BindGroup,
+    groups: [&BindGroup; 3],
     attachments: [&TextureView; 2],
     region: [u32; 4],
 ) {
@@ -457,7 +393,9 @@ fn target_pass(
         ..Default::default()
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, group, &[]);
+    for (index, group) in groups.iter().enumerate() {
+        pass.set_bind_group(index as u32, *group, &[]);
+    }
     pass.set_viewport(
         region[0] as f32,
         region[1] as f32,
@@ -496,19 +434,6 @@ fn texture(binding: u32) -> BindGroupLayoutEntry {
     }
 }
 
-fn depth(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: ShaderStages::FRAGMENT,
-        ty: BindingType::Texture {
-            sample_type: TextureSampleType::Depth,
-            view_dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
 fn buffer(device: &Device, label: &'static str, size: usize) -> Buffer {
     device.create_buffer(&BufferDescriptor {
         label: Some(label),
@@ -540,57 +465,17 @@ fn attachment(
     })
 }
 
-fn dummy(
-    device: &Device,
-    queue: &Queue,
-    label: &'static str,
-    format: wgpu::TextureFormat,
-) -> TextureView {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some(label),
-        size: Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format,
-        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let data: &[u8] = &[0u8; 8];
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(data.len() as u32),
-            rows_per_image: Some(1),
-        },
-        Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-    );
-    texture.create_view(&TextureViewDescriptor::default())
-}
-
 fn pipeline_layout(
     device: &Device,
     label: &'static str,
-    layout: &BindGroupLayout,
+    layouts: &[&BindGroupLayout],
 ) -> PipelineLayout {
     device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some(label),
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &layouts
+            .iter()
+            .map(|layout| Some(*layout))
+            .collect::<Vec<_>>(),
         immediate_size: 0,
     })
 }

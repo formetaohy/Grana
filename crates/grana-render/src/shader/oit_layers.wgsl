@@ -18,6 +18,10 @@ struct Proxy {
     color: vec3<f32>,
 }
 
+fn gathered(index: u32) -> u32 {
+    return oit_count_layers(oit_counts[index], frame.oit.y, frame.oit.z);
+}
+
 fn gather_layers(clip_position: vec4<f32>) -> Layers {
     var layers: Layers;
     layers.count = 0u;
@@ -33,7 +37,7 @@ fn gather_layers(clip_position: vec4<f32>) -> Layers {
     }
     let index = u32(local.y) * u32(size.x) + u32(local.x);
     let base = index * frame.oit.y;
-    let stored = min(oit_counts[index], frame.oit.y);
+    let stored = gathered(index);
     for (var slot = 0u; slot < stored; slot += 1u) {
         let key = oit_keys[base + slot];
         if (oit_key_epoch(key) != frame.oit.z) {

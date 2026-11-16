@@ -9,7 +9,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::target::{
-    DEPTH_FORMAT, GUIDE_FORMAT, SCENE_FORMAT, VOLUME_FORMAT, VOLUME_SURFACE_FORMAT,
+    DEPTH_FORMAT, SCENE_FORMAT, VOLUME_FORMAT, VOLUME_NORMAL_FORMAT, VOLUME_SURFACE_FORMAT,
 };
 
 const MARCH: &str = concat!(
@@ -76,33 +76,6 @@ const SLICE: &str = concat!(
     include_str!("shader/slice.wgsl")
 );
 
-const SURFACE: &str = concat!(
-    "enable wgpu_binding_array;\n",
-    include_str!("shader/screen.wgsl"),
-    "\n",
-    include_str!("shader/scene.wgsl"),
-    "\n",
-    include_str!("shader/color.wgsl"),
-    "\n",
-    include_str!("shader/octahedral.wgsl"),
-    "\n",
-    include_str!("shader/brick.wgsl"),
-    "\n",
-    include_str!("shader/band.wgsl"),
-    "\n",
-    include_str!("shader/volume_sample.wgsl"),
-    "\n",
-    include_str!("shader/structure_tap.wgsl"),
-    "\n",
-    include_str!("shader/occupancy.wgsl"),
-    "\n",
-    include_str!("shader/volume_walk.wgsl"),
-    "\n",
-    include_str!("shader/ray.wgsl"),
-    "\n",
-    include_str!("shader/surface.wgsl")
-);
-
 pub(crate) const BLEND: BlendState = BlendState {
     color: BlendComponent {
         src_factor: BlendFactor::One,
@@ -120,12 +93,12 @@ pub(crate) struct VolumePass {
     march: RenderPipeline,
     composite: RenderPipeline,
     slice: RenderPipeline,
-    surface: RenderPipeline,
 }
 
 pub(crate) struct MarchFrame<'a> {
     pub radiance: &'a TextureView,
     pub surface: &'a TextureView,
+    pub normal: &'a TextureView,
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
     pub atlas: &'a BindGroup,
@@ -151,16 +124,6 @@ pub(crate) struct SliceFrame<'a> {
     pub atlas: &'a BindGroup,
 }
 
-pub(crate) struct SurfaceFrame<'a> {
-    pub normal: &'a TextureView,
-    pub region: [u32; 4],
-    pub scene: &'a BindGroup,
-    pub level: &'a BindGroup,
-    pub atlas: &'a BindGroup,
-    pub depth_group: &'a BindGroup,
-    pub occupancy: &'a BindGroup,
-}
-
 impl VolumePass {
     pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let march = pipeline(
@@ -169,7 +132,11 @@ impl VolumePass {
             "grana.volume.march",
             "fs_main",
             MARCH,
-            &[(VOLUME_FORMAT, None), (VOLUME_SURFACE_FORMAT, None)],
+            &[
+                (VOLUME_FORMAT, None),
+                (VOLUME_SURFACE_FORMAT, None),
+                (VOLUME_NORMAL_FORMAT, None),
+            ],
             pipelines,
         );
         let composite = pipeline(
@@ -190,20 +157,10 @@ impl VolumePass {
             &[(SCENE_FORMAT, Some(BLEND))],
             pipelines,
         );
-        let surface = pipeline(
-            device,
-            &layouts.volume_surface,
-            "grana.volume.surface",
-            "fs_surface",
-            SURFACE,
-            &[(GUIDE_FORMAT, None)],
-            pipelines,
-        );
         Self {
             march,
             composite,
             slice,
-            surface,
         }
     }
 
@@ -222,6 +179,20 @@ impl VolumePass {
                 }),
                 Some(RenderPassColorAttachment {
                     view: frame.surface,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 1.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: StoreOp::Store,
+                    },
+                }),
+                Some(RenderPassColorAttachment {
+                    view: frame.normal,
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
@@ -269,31 +240,6 @@ impl VolumePass {
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.level, &[]);
         pass.set_bind_group(2, frame.atlas, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
-    pub fn draw_surface(&self, encoder: &mut CommandEncoder, frame: SurfaceFrame<'_>) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.volume.surface.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: frame.normal,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        viewport(&mut pass, frame.region);
-        pass.set_pipeline(&self.surface);
-        pass.set_bind_group(0, frame.scene, &[]);
-        pass.set_bind_group(1, frame.level, &[]);
-        pass.set_bind_group(2, frame.atlas, &[]);
-        pass.set_bind_group(3, frame.depth_group, &[]);
-        pass.set_bind_group(5, frame.occupancy, &[]);
         pass.draw(0..3, 0..1);
     }
 }

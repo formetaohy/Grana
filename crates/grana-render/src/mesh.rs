@@ -17,7 +17,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{GBUFFER_ID_FORMAT, GBUFFER_NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{GBUFFER_ID_FORMAT, NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -278,7 +278,7 @@ impl MeshPasses {
                 compilation_options: Default::default(),
                 targets: &[
                     Some(ColorTargetState {
-                        format: GBUFFER_NORMAL_FORMAT,
+                        format: NORMAL_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),

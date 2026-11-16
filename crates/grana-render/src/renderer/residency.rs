@@ -113,7 +113,6 @@ impl TargetCache {
     pub(super) fn take(
         &mut self,
         device: &Device,
-        queue: &Queue,
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
@@ -129,7 +128,7 @@ impl TargetCache {
                 let index = (0..self.slots.len())
                     .find(|index| *index != self.current)
                     .unwrap_or(0);
-                self.slots[index] = Some(FrameTarget::new(device, queue, layouts, present, size));
+                self.slots[index] = Some(FrameTarget::new(device, layouts, present, size));
                 (index, true)
             }
         };
@@ -147,7 +146,6 @@ impl TargetCache {
     pub(super) fn reserve(
         &mut self,
         device: &Device,
-        queue: &Queue,
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
@@ -163,7 +161,7 @@ impl TargetCache {
         let slot = (0..self.slots.len())
             .find(|index| *index != self.current)
             .unwrap_or(0);
-        self.slots[slot] = Some(FrameTarget::new(device, queue, layouts, present, size));
+        self.slots[slot] = Some(FrameTarget::new(device, layouts, present, size));
     }
 }
 
@@ -177,7 +175,7 @@ pub(super) struct FrameTarget {
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: Option<Oit>,
-    pub(super) guide: crate::guide::Guide,
+    pub(super) geometry: Option<(GeometryKey, BindGroup)>,
     pub(super) gbuffer: Option<crate::target::Gbuffer>,
     pub(super) ao: Option<crate::ao::Ao>,
     pub(super) volume: Option<crate::target::Volume>,
@@ -195,6 +193,12 @@ pub(super) struct FrameTarget {
     pub(super) holds: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct GeometryKey {
+    pub(super) object: bool,
+    pub(super) volume: bool,
+}
+
 pub(super) struct FadeTarget {
     pub(super) texture: Texture,
     pub(super) count: Texture,
@@ -204,7 +208,6 @@ pub(super) struct FadeTarget {
 impl FrameTarget {
     pub(super) fn new(
         device: &Device,
-        queue: &Queue,
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
@@ -238,7 +241,7 @@ impl FrameTarget {
             present_group,
             fade: None,
             oit: None,
-            guide: crate::guide::Guide::new(device, queue, size),
+            geometry: None,
             gbuffer: None,
             ao: None,
             volume: None,
@@ -255,6 +258,55 @@ impl FrameTarget {
             seeded: false,
             holds: false,
         }
+    }
+
+    pub(super) fn geometry(
+        &mut self,
+        device: &Device,
+        layouts: &Layouts,
+        dummy_normal: &TextureView,
+        dummy_volume: &crate::target::Volume,
+    ) -> BindGroup {
+        let key = GeometryKey {
+            object: self.gbuffer.is_some(),
+            volume: self.volume.is_some(),
+        };
+        let stale = self.geometry.as_ref().is_none_or(|(held, _)| *held != key);
+        if stale {
+            let normal = self
+                .gbuffer
+                .as_ref()
+                .map_or(dummy_normal, crate::target::Gbuffer::normal);
+            let volume = self.volume.as_ref().unwrap_or(dummy_volume);
+            let group = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("grana.geometry.group"),
+                layout: &layouts.geometry,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(self.scene.depth()),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(normal),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(volume.surface()),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(volume.normal()),
+                    },
+                ],
+            });
+            self.geometry = Some((key, group));
+        }
+        self.geometry
+            .as_ref()
+            .expect("the geometry group is ready")
+            .1
+            .clone()
     }
 
     pub(super) fn fade_group(&mut self, device: &Device, present: &Present) -> &BindGroup {
