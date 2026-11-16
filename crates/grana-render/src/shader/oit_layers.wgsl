@@ -6,8 +6,6 @@
 
 const MAXIMUM_ENTRIES: u32 = 9u;
 
-const MINIMUM_TRANSMITTANCE: f32 = 0.003;
-
 const OIT_EPOCH_SHIFT: u32 = 24u;
 
 struct Layers {

@@ -16,17 +16,90 @@ const SHADER: &str = include_str!("shader/converge.wgsl");
 const FORMAT: TextureFormat = TextureFormat::Rg16Float;
 const ROW: u64 = 256;
 const SLOTS: usize = 6;
+const DEVIATION_TO_SIGMA: f32 = 1.2533;
+const WINDOW: usize = 4;
+const REPORT_FLOOR: usize = 2;
 const WEIGHT_FLOOR: f32 = 1.0e-6;
 const LEVEL_LIMIT: u32 = 16;
-const STALL_LIMIT: u32 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sampling {
+    floor: u32,
+    ceiling: u32,
+    error: f32,
+}
+
+impl Sampling {
+    pub const fn new(floor: u32, ceiling: u32, error: f32) -> Self {
+        assert!(floor > 0, "a sampling holds at least one sample");
+        assert!(
+            ceiling >= floor,
+            "a sampling ceiling covers its floor of samples"
+        );
+        assert!(
+            error > 0.0,
+            "a sampling resolves below a positive relative error"
+        );
+        Self {
+            floor,
+            ceiling,
+            error,
+        }
+    }
+
+    pub const fn single() -> Self {
+        Self {
+            floor: 1,
+            ceiling: 1,
+            error: 1.0,
+        }
+    }
+
+    pub fn floor(self) -> u32 {
+        self.floor
+    }
+
+    pub fn ceiling(self) -> u32 {
+        self.ceiling
+    }
+
+    pub fn error(self) -> f32 {
+        self.error
+    }
+
+    pub fn measuring(self) -> bool {
+        self.ceiling > 1 && self.error < f32::INFINITY
+    }
+
+    pub fn met(self, estimate: Option<Estimate>) -> bool {
+        estimate
+            .is_some_and(|estimate| estimate.samples >= self.floor && estimate.error <= self.error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Estimate {
+    samples: u32,
+    error: f32,
+}
+
+impl Estimate {
+    pub fn samples(self) -> u32 {
+        self.samples
+    }
+
+    pub fn error(self) -> f32 {
+        self.error
+    }
+}
 
 pub(crate) struct Convergence {
     pipelines: Stages,
     target: Option<Target>,
     readback: Readback,
     queued: VecDeque<(u64, u32)>,
+    deviations: VecDeque<f32>,
     generation: u64,
-    stalls: u32,
 }
 
 struct Stages {
@@ -84,17 +157,19 @@ impl Convergence {
             target: None,
             readback: Readback::new(device, "grana.converge", ROW, SLOTS),
             queued: VecDeque::new(),
+            deviations: VecDeque::new(),
             generation: 0,
-            stalls: 0,
         }
     }
 
     pub(crate) fn forget(&mut self) {
         self.target = None;
+        self.deviations.clear();
         self.generation += 1;
     }
 
     pub(crate) fn reset(&mut self) {
+        self.deviations.clear();
         self.generation += 1;
     }
 
@@ -171,24 +246,7 @@ impl Convergence {
         self.readback.register();
     }
 
-    pub(crate) fn read(&mut self, device: &Device) -> Option<(u32, f32)> {
-        let mut fresh = self.drain(device);
-        if fresh.is_none() && self.readback.pending() {
-            self.stalls += 1;
-            if self.stalls >= STALL_LIMIT {
-                self.stalls = 0;
-                device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("the graphics device failed while reading back the convergence");
-                fresh = self.drain(device);
-            }
-        } else {
-            self.stalls = 0;
-        }
-        fresh
-    }
-
-    fn drain(&mut self, device: &Device) -> Option<(u32, f32)> {
+    pub(crate) fn poll(&mut self, device: &Device) -> Option<Estimate> {
         let mut fresh = None;
         while let Some((_, bytes)) = self.readback.take(device) {
             let Some((generation, samples)) = self.queued.pop_front() else {
@@ -198,12 +256,21 @@ impl Convergence {
                 continue;
             }
             let weight = sample(&bytes, 1);
-            let deviation = if weight <= WEIGHT_FLOOR {
-                0.0
-            } else {
-                sample(&bytes, 0) / weight
-            };
-            fresh = Some((samples, deviation));
+            if weight <= WEIGHT_FLOOR {
+                continue;
+            }
+            let deviation = sample(&bytes, 0) / weight;
+            self.deviations.push_back(deviation);
+            if self.deviations.len() > WINDOW {
+                self.deviations.pop_front();
+            }
+            if self.deviations.len() >= REPORT_FLOOR {
+                let smoothed = self.deviations.iter().sum::<f32>() / self.deviations.len() as f32;
+                fresh = Some(Estimate {
+                    samples,
+                    error: DEVIATION_TO_SIGMA * smoothed / (samples as f32).sqrt(),
+                });
+            }
         }
         fresh
     }

@@ -260,11 +260,12 @@ impl<A: Clone> Ui<A> {
                     Vec2::new(instance.rect[0], instance.rect[1]),
                     Vec2::new(instance.rect[2], instance.rect[3]),
                 );
-                self.scene_bounds = if self.scene_bounds.is_empty() {
-                    rect
-                } else {
+                self.scene_bounds = if self.scene_seen {
                     self.scene_bounds.union(rect)
+                } else {
+                    rect
                 };
+                self.scene_seen = true;
             }
         }
     }

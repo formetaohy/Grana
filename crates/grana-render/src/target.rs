@@ -1,8 +1,8 @@
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, CommandEncoder, Device,
-    Extent3d, LoadOp, Operations, RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
-    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor,
+    Extent3d, LoadOp, Operations, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages, TextureView, TextureViewDescriptor,
 };
 
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -12,6 +12,7 @@ pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
+pub(crate) const ID_FORMAT: TextureFormat = TextureFormat::R32Uint;
 
 pub(crate) struct SceneTarget {
     color: TextureView,
@@ -25,35 +26,20 @@ impl SceneTarget {
             size[0] > 0 && size[1] > 0,
             "the scene target needs a non empty surface"
         );
-        let extent = Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        };
-        let color = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.scene.color"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: SCENE_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
-        let depth = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.scene.depth"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: DEPTH_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
+        let color = attachment(
+            device,
+            "grana.scene.color",
+            size,
+            SCENE_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let depth = attachment(
+            device,
+            "grana.scene.depth",
+            size,
+            DEPTH_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
         let depth_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.scene.depth.group"),
             layout: depth_layout,
@@ -79,6 +65,71 @@ impl SceneTarget {
 
     pub fn depth_group(&self) -> &BindGroup {
         &self.depth_group
+    }
+}
+
+pub(crate) struct Gbuffer {
+    normal: TextureView,
+    id: TextureView,
+    group: BindGroup,
+}
+
+impl Gbuffer {
+    pub fn new(
+        device: &Device,
+        layout: &BindGroupLayout,
+        depth: &TextureView,
+        size: [u32; 2],
+    ) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a geometry buffer covers a positive surface"
+        );
+        let normal = attachment(
+            device,
+            "grana.gbuffer.normal",
+            size,
+            NORMAL_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let id = attachment(
+            device,
+            "grana.gbuffer.id",
+            size,
+            ID_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.gbuffer.group"),
+            layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&normal),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&id),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+            ],
+        });
+        Self { normal, id, group }
+    }
+
+    pub fn normal(&self) -> &TextureView {
+        &self.normal
+    }
+
+    pub fn id(&self) -> &TextureView {
+        &self.id
+    }
+
+    pub fn group(&self) -> &BindGroup {
+        &self.group
     }
 }
 
@@ -126,6 +177,31 @@ pub(crate) fn view(texture: &Texture) -> TextureView {
     texture.create_view(&TextureViewDescriptor::default())
 }
 
+pub(crate) fn attachment(
+    device: &Device,
+    label: &'static str,
+    size: [u32; 2],
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
+}
+
 pub(crate) fn clear(encoder: &mut CommandEncoder, color: &TextureView, depth: &TextureView) {
     let _ = encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("grana.scene.clear.pass"),
@@ -138,7 +214,7 @@ pub(crate) fn clear(encoder: &mut CommandEncoder, color: &TextureView, depth: &T
                 store: StoreOp::Store,
             },
         })],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
             view: depth,
             depth_ops: Some(Operations {
                 load: LoadOp::Clear(1.0),

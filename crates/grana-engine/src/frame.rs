@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use grana_display::Camera;
-use grana_render::{Display, Frame, FrameInfo, Renderer, Temporal};
+use grana_render::{Display, Frame, FrameInfo, Renderer, Sampling, Temporal};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
 
@@ -16,9 +16,9 @@ pub(crate) struct View<'a> {
     pub viewport: [u32; 4],
     pub size: [u32; 2],
     pub resolution: [u32; 2],
-    pub samples: u32,
-    pub budget: Option<Duration>,
     pub display: Display,
+    pub sampling: Sampling,
+    pub budget: Option<Duration>,
     pub level_cap: usize,
     pub overlays: &'a [grana_render::Overlay<'a>],
 }
@@ -45,7 +45,7 @@ pub(crate) fn draw(
             region: frame.scene.region,
             clip: frame.scene.clip,
             exposure: frame.scene.exposure,
-            samples: frame.samples,
+            sampling: frame.sampling,
             budget: frame.budget,
             scene: &scene,
             display: frame.display,

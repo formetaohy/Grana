@@ -56,6 +56,8 @@ struct ChannelData {
 
 const SHADING_TAU: f32 = 0.020203;
 
+const MINIMUM_TRANSMITTANCE: f32 = 0.003;
+
 struct CameraRay {
     origin: vec3<f32>,
     direction: vec3<f32>,

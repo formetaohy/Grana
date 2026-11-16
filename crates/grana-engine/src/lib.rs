@@ -7,8 +7,8 @@ mod spot;
 mod view;
 mod viewport;
 
-pub use display::{Display, View};
-pub use engine::{Engine, Picked, SAMPLE_LIMIT};
+pub use display::{Display, SAMPLE_CEILING, View};
+pub use engine::{Engine, Picked};
 pub use grana_render::Overlay;
 pub use splat::{SplatCache, SplatMembers};
 pub use view::{Key, Lens, RenderedScene, Targets, frame, key, plan, plan_with, restyle};

@@ -32,7 +32,7 @@ use wgpu::{
 use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
-use crate::converge::Convergence;
+use crate::converge::{Convergence, Estimate, Sampling};
 use crate::frame::{FrameData, VolumeLighting, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
@@ -111,15 +111,9 @@ pub(super) fn carried_frame(time: u32, frames: u32) -> u32 {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct VolumeTargets<'a> {
+pub(crate) struct SliceTargets<'a> {
     pub(crate) color: &'a TextureView,
     pub(crate) depth: &'a TextureView,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Lighting<'a> {
-    pub(crate) shadow: &'a BindGroup,
-    pub(crate) ao: &'a BindGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,7 +160,7 @@ pub struct Frame<'a, 'b> {
     pub region: Region,
     pub clip: Clip,
     pub exposure: f32,
-    pub samples: u32,
+    pub sampling: Sampling,
     pub budget: Option<Duration>,
     pub scene: &'a SceneFrame<'b>,
     pub display: Display,
@@ -623,7 +617,6 @@ impl Renderer {
             frame.exposure.is_finite() && frame.exposure > 0.0,
             "an exposure scales radiance by a positive factor"
         );
-        assert!(frame.samples > 0, "a target resolves at least one sample");
         let size = frame.resolution;
         let (mut target, created) =
             self.targets
@@ -821,9 +814,11 @@ impl Renderer {
     }
 
     pub fn convergence(&mut self, device: &Device) -> Option<(u32, f32)> {
-        self.convergence
-            .as_mut()
-            .and_then(|convergence| convergence.read(device))
+        self.convergence.as_mut().and_then(|convergence| {
+            convergence
+                .poll(device)
+                .map(|estimate| (estimate.samples(), estimate.error()))
+        })
     }
 
     pub fn wide_picture(

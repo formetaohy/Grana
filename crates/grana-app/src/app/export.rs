@@ -131,7 +131,7 @@ impl App {
     }
 
     pub(super) fn native_width(&self) -> u32 {
-        self.viewport().size[0].max(1)
+        self.viewport().region[2].max(1)
     }
 
     pub(super) fn pose(&self) -> Pose {

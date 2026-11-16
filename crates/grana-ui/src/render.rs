@@ -24,7 +24,6 @@ const UI_SHADER: &str = include_str!("shader/ui.wgsl");
 const MINIMUM_INSTANCES: usize = 512;
 const OVERLAY_SLOT: usize = Layer::ALL.len();
 const SLOTS: usize = OVERLAY_SLOT + 1;
-const DIRECT_COVERAGE: u64 = 2;
 const READBACK_ALIGNMENT: u32 = 256;
 
 const PREMULTIPLIED: BlendState = BlendState {
@@ -472,7 +471,7 @@ impl Renderer {
         let (scissors, count) = damage.scissors(|rect| self.clip(rect), self.region());
         self.prepare_groups(atlases, scene);
         let groups = self.layer_groups(&layers);
-        if matches!(damage, Damage::Full) || covers_surface(&scissors[..count], self.region()) {
+        if matches!(damage, Damage::Full) {
             self.paint_whole(encoder, target_view, &groups);
             self.canvas_stale = true;
             return;
@@ -858,18 +857,6 @@ fn group_key(scene: usize, instances: u64, atlases: Atlases<'_>) -> u64 {
         key = (key ^ value).wrapping_mul(0x0000_0100_0000_01b3);
     }
     key
-}
-
-fn covers_surface(scissors: &[[u32; 4]], region: [u32; 4]) -> bool {
-    let area = u64::from(region[2]) * u64::from(region[3]);
-    if area == 0 {
-        return true;
-    }
-    let damaged = scissors
-        .iter()
-        .map(|rect| u64::from(rect[2]) * u64::from(rect[3]))
-        .sum::<u64>();
-    damaged.saturating_mul(DIRECT_COVERAGE) >= area
 }
 
 fn texture_entry(binding: u32) -> BindGroupLayoutEntry {

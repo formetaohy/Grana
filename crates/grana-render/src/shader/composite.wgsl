@@ -8,8 +8,6 @@ const SEGMENT_STRIDE: f32 = 8.0;
 struct March {
     radiance: vec3<f32>,
     transmittance: f32,
-    moment: f32,
-    mass: f32,
     hit: vec4<f32>,
     normal: vec4<f32>,
 }
@@ -96,12 +94,10 @@ fn march_volume(
 ) -> March {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
-    var moment = 0.0;
-    var mass = 0.0;
     var hit = vec4<f32>(0.0);
     var hit_normal = vec4<f32>(0.0);
     if (finish <= begin) {
-        return March(radiance, transmittance, moment, mass, hit, hit_normal);
+        return March(radiance, transmittance, hit, hit_normal);
     }
     var t = begin;
     var samples = 0u;
@@ -154,14 +150,16 @@ fn march_volume(
             let tau = sample.a * segment * voxels_per_world;
             if (tau > 0.0) {
                 let alpha = 1.0 - exp(-tau);
-                let absorbed = transmittance * alpha;
-                radiance += absorbed * volume_lighting(sample.rgb, texel, origin + direction * cursor);
-                moment += absorbed * cursor;
-                mass += absorbed;
+                if (!SURFACE_PASS) {
+                    radiance += transmittance * alpha * volume_lighting(sample.rgb, texel, origin + direction * cursor);
+                }
                 transmittance *= 1.0 - alpha;
                 if (hit.w <= 0.0 && tau >= SHADING_TAU) {
                     hit = vec4<f32>(level_world(band, local), 1.0);
                     hit_normal = vec4<f32>(structure_normal(texel), 1.0);
+                }
+                if (SURFACE_PASS && hit.w > 0.0) {
+                    complete = true;
                 }
             }
             cursor += segment;
@@ -172,5 +170,5 @@ fn march_volume(
         }
         t = max(cursor, boundary);
     }
-    return March(radiance, transmittance, moment, mass, hit, hit_normal);
+    return March(radiance, transmittance, hit, hit_normal);
 }

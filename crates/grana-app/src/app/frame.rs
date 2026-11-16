@@ -86,20 +86,18 @@ impl App {
     }
 
     pub(super) fn fit_view(&mut self) {
-        let Some(surface) = self.surface.as_ref() else {
-            return;
-        };
-        let Some(scene) = self.session.scene() else {
-            return;
-        };
-        let scale = surface.window.scale_factor() as f32;
-        let size = surface.gpu.size();
-        let viewport = Viewport::screen(scale, size);
-        self.stage.set_region(viewport.region);
+        let scale = self
+            .surface
+            .as_ref()
+            .map_or(1.0, |surface| surface.window.scale_factor() as f32);
+        self.stage.set_pixels_per_point(scale);
+        let viewport = self.viewport();
         let sized = viewport.region[2] > 64 && viewport.region[3] > 64;
-        if self.needs_fit && sized {
-            self.camera
-                .fit(scene.dataset.world_size(), viewport.aspect());
+        if self.needs_fit
+            && sized
+            && let Some(world) = self.session.scene().map(|scene| scene.dataset.world_size())
+        {
+            self.camera.fit(world, viewport.aspect());
             self.needs_fit = false;
         }
     }
@@ -113,7 +111,7 @@ impl App {
             .surface
             .as_ref()
             .map_or([1, 1], |surface| surface.gpu.size());
-        Viewport::screen(scale, size)
+        Viewport::screen(scale, size, self.stage.region())
     }
 
     pub(super) fn render(&mut self, display: Display) -> Option<Duration> {

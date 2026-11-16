@@ -7,11 +7,6 @@ struct VertexOutput {
     @location(0) ndc: vec2<f32>,
 }
 
-struct VolumeOutput {
-    @location(0) color: vec4<f32>,
-    @location(1) normal: vec4<f32>,
-}
-
 struct Resolution {
     origin: vec3<f32>,
     direction: vec3<f32>,

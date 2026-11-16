@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use grana_display::Camera;
-use grana_render::{FrameInfo, Renderer};
+use grana_render::{FrameInfo, Renderer, Sampling};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -13,17 +13,10 @@ use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::{self, Sink};
 use grana_page::Format;
 
-const DEVIATION_TO_SIGMA: f32 = 1.2533;
-const DEVIATION_WINDOW: usize = 4;
-const IMAGE_SAMPLE_LIMIT: u32 = 64;
-const MOVIE_SAMPLE_LIMIT: u32 = 32;
-const IMAGE_SAMPLE_FLOOR: u32 = 16;
-const MOVIE_SAMPLE_FLOOR: u32 = 8;
+const IMAGE_SAMPLING: Sampling = Sampling::new(16, 64, 0.0035);
+const MOVIE_SAMPLING: Sampling = Sampling::new(8, 32, 0.005);
+const TEMPORAL_SAMPLING: Sampling = Sampling::new(2, 8, 0.005);
 const TEMPORAL_HISTORY: f32 = 16.0;
-const TEMPORAL_SAMPLE_LIMIT: u32 = 8;
-const TEMPORAL_SAMPLE_FLOOR: u32 = 2;
-const IMAGE_ERROR: f32 = 0.0035;
-const MOVIE_ERROR: f32 = 0.005;
 const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
 
@@ -38,15 +31,9 @@ pub(crate) struct Export {
     poses: Vec<Pose>,
     frame: usize,
     attempts: u32,
-    samples: u32,
-    floor: u32,
-    base_samples: u32,
-    base_floor: u32,
-    error: f32,
-    converged: bool,
+    still: Sampling,
     history: bool,
     temporal: Option<grana_render::Temporal>,
-    deviations: std::collections::VecDeque<f32>,
     viewport: grana_engine::Viewport,
     lens: Option<(Camera, u32)>,
     transparent: bool,
@@ -136,17 +123,6 @@ impl Export {
                     .map_err(|error| error.to_string())?,
             },
         };
-        let samples = if movie {
-            MOVIE_SAMPLE_LIMIT
-        } else {
-            IMAGE_SAMPLE_LIMIT
-        };
-        let floor = if movie {
-            MOVIE_SAMPLE_FLOOR
-        } else {
-            IMAGE_SAMPLE_FLOOR
-        };
-        let error = if movie { MOVIE_ERROR } else { IMAGE_ERROR };
         let lens = detail_lens(&poses, viewport.size[1]);
         let temporal = movie.then(|| grana_render::Temporal::new(TEMPORAL_HISTORY));
         Ok(Self {
@@ -154,15 +130,13 @@ impl Export {
             poses,
             frame: 0,
             attempts: 0,
-            samples,
-            floor,
-            base_samples: samples,
-            base_floor: floor,
-            error,
-            converged: false,
+            still: if movie {
+                MOVIE_SAMPLING
+            } else {
+                IMAGE_SAMPLING
+            },
             history: false,
             temporal,
-            deviations: std::collections::VecDeque::new(),
             viewport,
             lens,
             transparent,
@@ -179,6 +153,14 @@ impl Export {
                 camera,
                 height: *height,
             })
+    }
+
+    fn sampling(&self) -> Sampling {
+        if self.history {
+            TEMPORAL_SAMPLING
+        } else {
+            self.still
+        }
     }
 
     pub(crate) fn pose(&self) -> Pose {
@@ -223,7 +205,7 @@ impl Export {
                 region: scene.region,
                 clip: scene.clip,
                 exposure: scene.exposure,
-                samples: self.samples,
+                sampling: self.sampling(),
                 budget: None,
                 scene: &frame,
                 display: grana_render::Display::Export,
@@ -236,30 +218,10 @@ impl Export {
         };
         self.attempts += 1;
         self.history = info.history;
-        if self.history {
-            self.samples = TEMPORAL_SAMPLE_LIMIT;
-            self.floor = TEMPORAL_SAMPLE_FLOOR;
-        } else {
-            self.samples = self.base_samples;
-            self.floor = self.base_floor;
-        }
         if info.truncated {
             return self.fail(truncation(&info));
         }
-        if let Some((samples, deviation)) = renderer.convergence(device) {
-            self.deviations.push_back(deviation);
-            if self.deviations.len() > DEVIATION_WINDOW {
-                self.deviations.pop_front();
-            }
-            if self.deviations.len() == DEVIATION_WINDOW {
-                let smoothed = self.deviations.iter().sum::<f32>() / DEVIATION_WINDOW as f32;
-                let standard_error = DEVIATION_TO_SIGMA * smoothed / (samples as f32).sqrt();
-                self.converged = samples >= self.floor && standard_error <= self.error;
-            }
-        }
-        let resolved =
-            info.samples >= self.samples || (self.converged && info.samples >= self.floor);
-        if !resolved || !info.settled {
+        if !info.converged {
             if self.attempts > self.attempts_limit() {
                 return self
                     .fail("the export could not resolve the volume being streamed".to_string());
@@ -344,8 +306,6 @@ impl Export {
             grana_page::write_document(&path, format, &grana_vector::Document::of(page))?;
             self.frame += 1;
             self.attempts = 0;
-            self.converged = false;
-            self.deviations.clear();
             return Ok(Some(path));
         }
         let instances = figure::instances(ui, figure);
@@ -411,8 +371,6 @@ impl Export {
         }
         self.frame += 1;
         self.attempts = 0;
-        self.converged = false;
-        self.deviations.clear();
         if self.frame < self.poses.len() {
             self.sink = Some(sink);
             return Ok(None);

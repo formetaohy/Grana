@@ -14,7 +14,7 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::renderer::VolumeTargets;
+use crate::renderer::SliceTargets;
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 
@@ -685,7 +685,7 @@ impl SplatPasses {
     pub fn draw_slice(
         &self,
         encoder: &mut CommandEncoder,
-        targets: VolumeTargets<'_>,
+        targets: SliceTargets<'_>,
         region: [u32; 4],
         scene: &BindGroup,
     ) {

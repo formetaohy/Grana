@@ -30,11 +30,13 @@ pub(crate) struct Layouts {
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
     pub ao_compute: BindGroupLayout,
+    pub gbuffer: BindGroupLayout,
     pub source: BindGroupLayout,
     pub occupancy: BindGroupLayout,
     pub bake: BindGroupLayout,
     pub bake_pipeline: PipelineLayout,
     pub volume: PipelineLayout,
+    pub volume_surface: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
@@ -43,7 +45,7 @@ pub(crate) struct Layouts {
     pub splat_pick: PipelineLayout,
     pub splat_cull_pipeline: PipelineLayout,
     pub ao_pipeline: PipelineLayout,
-    pub ao_surface: PipelineLayout,
+    pub gbuffer_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub section: BindGroupLayout,
     pub section_style: BindGroupLayout,
@@ -321,6 +323,19 @@ impl Layouts {
                 &scene, &level, &atlas, &depth, &oit_read, &occupancy, &shadow,
             ],
         );
+        let volume_surface = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.volume.surface.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&level),
+                Some(&atlas),
+                Some(&depth),
+                None,
+                Some(&occupancy),
+                Some(&shadow),
+            ],
+            immediate_size: 0,
+        });
         let bake = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.bake.layout"),
             entries: &[
@@ -393,7 +408,46 @@ impl Layouts {
             immediate_size: 0,
         });
         let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao_compute]);
-        let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
+        let gbuffer_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.gbuffer.pipeline.layout"),
+            bind_group_layouts: &[Some(&scene), Some(&objects), None, None, None, Some(&pick)],
+            immediate_size: 0,
+        });
+        let gbuffer = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.gbuffer.layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Uint,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let section = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.section.layout"),
             entries: &[
@@ -439,11 +493,13 @@ impl Layouts {
             oit_read,
             ao_read,
             ao_compute,
+            gbuffer,
             source,
             occupancy,
             bake,
             bake_pipeline,
             volume,
+            volume_surface,
             cull,
             plan_pipeline,
             mesh_cull,
@@ -453,7 +509,7 @@ impl Layouts {
             splat_cull_pipeline,
             shadow_pipeline,
             ao_pipeline,
-            ao_surface,
+            gbuffer_pipeline,
             section,
             section_style,
             section_pipeline,

@@ -3,15 +3,13 @@ use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferDescriptor,
     BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
-    ComputePipelineDescriptor, Device, Extent3d, LoadOp, Operations, Queue,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    ShaderModuleDescriptor, ShaderSource, StoreOp, Texture, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    ComputePipelineDescriptor, Device, Extent3d, Queue, ShaderModuleDescriptor, ShaderSource,
+    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
 use crate::frame::FrameData;
 use crate::layout::Layouts;
-use crate::target::{DEPTH_FORMAT, NORMAL_FORMAT};
 
 const WORKGROUP: u32 = 8;
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -30,14 +28,37 @@ struct AoData {
 
 const _: () = assert!(size_of::<AoData>() == 192);
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ambient {
+    pub(crate) reach: f32,
+    pub(crate) strength: f32,
+    pub(crate) sample: u32,
+}
+
+impl Ambient {
+    pub(crate) fn new(reach: f32, strength: f32, sample: u32) -> Self {
+        assert!(
+            reach.is_finite() && reach > 0.0,
+            "an ambient occlusion reach is a positive screen distance"
+        );
+        assert!(
+            strength.is_finite() && (0.0..=1.0).contains(&strength),
+            "an ambient occlusion strength lies in the unit interval"
+        );
+        Self {
+            reach,
+            strength,
+            sample,
+        }
+    }
+}
+
 pub(crate) struct Ao {
-    normal: TextureView,
-    depth: TextureView,
+    _texture: Texture,
     read: BindGroup,
     compute: BindGroup,
     pipeline: ComputePipeline,
     uniform: Buffer,
-    size: [u32; 2],
 }
 
 pub(crate) struct AoPipeline {
@@ -71,6 +92,8 @@ impl Ao {
         device: &Device,
         layouts: &Layouts,
         pipeline: &ComputePipeline,
+        normal: &TextureView,
+        depth: &TextureView,
         volume: &TextureView,
         size: [u32; 2],
     ) -> Self {
@@ -78,27 +101,21 @@ impl Ao {
             size[0] > 0 && size[1] > 0,
             "an ambient occlusion target covers a positive surface"
         );
-        let normal = attachment(
-            device,
-            "grana.ao.normal",
-            size,
-            NORMAL_FORMAT,
-            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        );
-        let depth = attachment(
-            device,
-            "grana.ao.depth",
-            size,
-            DEPTH_FORMAT,
-            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        );
-        let output = attachment(
-            device,
-            "grana.ao.output",
-            size,
-            OUTPUT_FORMAT,
-            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
-        );
+        let output = device.create_texture(&TextureDescriptor {
+            label: Some("grana.ao.output"),
+            size: Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: OUTPUT_FORMAT,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let output_view = output.create_view(&TextureViewDescriptor::default());
         let uniform = device.create_buffer(&BufferDescriptor {
             label: Some("grana.ao.uniforms"),
             size: size_of::<AoData>() as u64,
@@ -110,7 +127,7 @@ impl Ao {
             layout: &layouts.ao_read,
             entries: &[BindGroupEntry {
                 binding: 0,
-                resource: BindingResource::TextureView(&output),
+                resource: BindingResource::TextureView(&output_view),
             }],
         });
         let compute = device.create_bind_group(&BindGroupDescriptor {
@@ -123,15 +140,15 @@ impl Ao {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(&depth),
+                    resource: BindingResource::TextureView(depth),
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&normal),
+                    resource: BindingResource::TextureView(normal),
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&output),
+                    resource: BindingResource::TextureView(&output_view),
                 },
                 BindGroupEntry {
                     binding: 5,
@@ -141,54 +158,16 @@ impl Ao {
         });
         let pipeline = pipeline.clone();
         Self {
-            normal,
-            depth,
+            _texture: output,
             read,
             compute,
             pipeline,
             uniform,
-            size,
         }
-    }
-
-    pub fn size(&self) -> [u32; 2] {
-        self.size
-    }
-
-    pub fn normal(&self) -> &TextureView {
-        &self.normal
-    }
-
-    pub fn depth(&self) -> &TextureView {
-        &self.depth
     }
 
     pub fn group(&self) -> &BindGroup {
         &self.read
-    }
-
-    pub fn clear(&self, encoder: &mut CommandEncoder) {
-        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.ao.clear.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &self.normal,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: &self.depth,
-                depth_ops: Some(Operations {
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
     }
 
     pub fn evaluate(
@@ -196,25 +175,26 @@ impl Ao {
         queue: &Queue,
         encoder: &mut CommandEncoder,
         frame: &FrameData,
-        reach: f32,
-        strength: f32,
-        sample: u32,
+        resolution: [u32; 2],
+        ambient: Ambient,
     ) {
         assert!(
-            reach.is_finite() && reach > 0.0,
-            "an ambient occlusion reach is a positive screen distance"
-        );
-        assert!(
-            strength.is_finite() && (0.0..=1.0).contains(&strength),
-            "an ambient occlusion strength lies in the unit interval"
+            frame.viewport[0] + frame.viewport[2] <= resolution[0] as f32
+                && frame.viewport[1] + frame.viewport[3] <= resolution[1] as f32,
+            "the ambient occlusion view lies on the target"
         );
         let data = AoData {
             view_projection: frame.view_projection,
             inverse_view_projection: frame.inv_view_projection,
             eye: frame.eye,
-            extent: [self.size[0] as f32, self.size[1] as f32, reach, strength],
+            extent: [
+                resolution[0] as f32,
+                resolution[1] as f32,
+                ambient.reach,
+                ambient.strength,
+            ],
             noise: [
-                sample as f32,
+                ambient.sample as f32,
                 frame.march[3],
                 1.0 - frame.projection[0],
                 0.0,
@@ -228,11 +208,9 @@ impl Ao {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.compute, &[]);
-        pass.dispatch_workgroups(
-            self.size[0].div_ceil(WORKGROUP),
-            self.size[1].div_ceil(WORKGROUP),
-            1,
-        );
+        let width = frame.viewport[2] as u32;
+        let height = frame.viewport[3] as u32;
+        pass.dispatch_workgroups(width.div_ceil(WORKGROUP), height.div_ceil(WORKGROUP), 1);
     }
 }
 
@@ -280,29 +258,4 @@ pub(crate) fn dummy(device: &Device, queue: &Queue, layouts: &Layouts) -> BindGr
             ),
         }],
     })
-}
-
-fn attachment(
-    device: &Device,
-    label: &str,
-    size: [u32; 2],
-    format: TextureFormat,
-    usage: TextureUsages,
-) -> TextureView {
-    device
-        .create_texture(&TextureDescriptor {
-            label: Some(label),
-            size: Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format,
-            usage,
-            view_formats: &[],
-        })
-        .create_view(&TextureViewDescriptor::default())
 }

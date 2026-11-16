@@ -43,6 +43,7 @@ pub struct Ui<A = ()> {
     pub(crate) overlay: LayerBuffer,
     pub(crate) damage: crate::paint::Damage,
     pub(crate) scene_bounds: Rect,
+    pub(crate) scene_seen: bool,
     pub(crate) scene_view: Option<wgpu::TextureView>,
     pub(crate) change: Change,
     pub(crate) scale: f32,
@@ -100,6 +101,7 @@ impl<A: Clone> Ui<A> {
             overlay: LayerBuffer::default(),
             damage: crate::paint::Damage::None,
             scene_bounds: Rect::ZERO,
+            scene_seen: false,
             scene_view: None,
             change: Change::default(),
             scale: 1.0,
@@ -348,6 +350,7 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn present<'a>(&mut self, element: Element<'a, A>) {
+        self.scene_seen = false;
         let mut canvases: SecondaryMap<NodeId, CanvasPaint<'a>> = SecondaryMap::new();
         let removed = self.tree.apply(element, &mut canvases);
         self.prune(&removed);

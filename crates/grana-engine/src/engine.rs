@@ -14,7 +14,6 @@ use crate::splat::{SplatCache, SplatMembers};
 use crate::view::{self, RenderedScene};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
-pub const SAMPLE_LIMIT: u32 = 32;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Content {
@@ -275,7 +274,7 @@ impl Engine {
                     viewport: [0, 0, size[0], size[1]],
                     size,
                     resolution,
-                    samples: SAMPLE_LIMIT,
+                    sampling: view.display.sampling(),
                     budget: view.budget,
                     display: view.display.render(),
                     level_cap: view.level_cap,

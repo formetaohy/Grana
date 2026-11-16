@@ -23,7 +23,7 @@ impl Renderer {
             region: bounds,
             clip,
             exposure,
-            samples,
+            sampling,
             budget: convergence_budget,
             scene,
             display,
@@ -410,7 +410,7 @@ impl Renderer {
             && !moved
             && !*exporting
             && !assured
-            && samples > 1
+            && sampling.ceiling() > 1
             && target.samples > 0
         {
             target.fade_group(device, present);
@@ -427,6 +427,7 @@ impl Renderer {
         if reset {
             target.deadline =
                 convergence_budget.and_then(|budget| Instant::now().checked_add(budget));
+            target.estimate = None;
         }
         let expired = target
             .deadline
@@ -453,7 +454,7 @@ impl Renderer {
                         fresh: target.scene.color(),
                         depth: target.scene.depth(),
                         volume: target.guide.view(),
-                        normal: target.ao.as_ref().map(crate::ao::Ao::normal),
+                        normal: target.gbuffer.as_ref().map(crate::target::Gbuffer::normal),
                     },
                 );
                 seeding = true;
@@ -466,6 +467,12 @@ impl Renderer {
         if reset && let Some(convergence) = convergence.as_mut() {
             convergence.reset();
         }
+        if let Some(convergence) = convergence.as_mut()
+            && let Some(estimate) = convergence.poll(device)
+        {
+            target.estimate = Some(estimate);
+        }
+        let resolved = sampling.met(target.estimate);
         info.samples = target.samples;
         info.rebuilt = false;
         if reset {
@@ -501,9 +508,9 @@ impl Renderer {
             }
         }
         let sample_index = if reset && !assured && temporal.is_some() {
-            (sequence % u64::from(samples)) as u32
+            (sequence % u64::from(sampling.ceiling())) as u32
         } else {
-            target.samples.min(samples - 1)
+            target.samples.min(sampling.ceiling() - 1)
         };
         let offset = sample::offset(sample_index, [width, height]);
         data.jitter = [
@@ -512,7 +519,7 @@ impl Renderer {
             sample_index as f32,
             scene.step_scale.max(1.0e-3),
         ];
-        data.lens = crate::frame::lens(camera, sample_index, samples, aspect);
+        data.lens = crate::frame::lens(camera, sample_index, sampling.ceiling(), aspect);
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
         scene_table.write_frame(queue, data);
         if replan {
@@ -544,7 +551,7 @@ impl Renderer {
             }
             planner.encode(&mut encoder, scene_table.group());
         }
-        if target.samples < samples && ready && !expired {
+        if target.samples < sampling.ceiling() && ready && !expired {
             target.samples += 1;
             info.samples = target.samples;
             let volume_visible = scene
@@ -584,45 +591,30 @@ impl Renderer {
                     );
                 }
             }
-            if reset && (surfaces || volume_visible) {
-                target.guide.clear(&mut encoder);
+            if let Some(mesh_passes) = meshes.as_mut() {
+                mesh_passes.write_uniforms(queue, &data, scene.shading);
             }
-            if surfaces && !slice {
-                if target
-                    .ao
-                    .as_ref()
-                    .is_none_or(|ao| ao.size() != [width, height])
-                {
-                    target.ao = Some(crate::ao::Ao::new(
-                        device,
-                        layouts,
-                        gtao.pipeline(),
-                        target.guide.view(),
-                        [width, height],
-                    ));
-                }
-                let ao = target
-                    .ao
-                    .as_ref()
-                    .expect("the ambient occlusion target is ready");
-                ao.clear(&mut encoder);
-                if let Some(mesh_passes) = meshes.as_ref() {
-                    mesh_passes.draw_gbuffer(
-                        &mut encoder,
-                        ao.normal(),
-                        ao.depth(),
-                        viewport,
-                        scene_table.group(),
-                    );
-                }
-                ao.evaluate(
-                    queue,
-                    &mut encoder,
-                    &data,
-                    AMBIENT_REACH,
-                    AMBIENT_STRENGTH,
-                    sample_index,
+            if surfaces && !slice && target.gbuffer.is_none() {
+                let gbuffer = crate::target::Gbuffer::new(
+                    device,
+                    &layouts.gbuffer,
+                    target.scene.depth(),
+                    size,
                 );
+                let ao = crate::ao::Ao::new(
+                    device,
+                    layouts,
+                    gtao.pipeline(),
+                    gbuffer.normal(),
+                    target.scene.depth(),
+                    target.guide.view(),
+                    size,
+                );
+                target.gbuffer = Some(gbuffer);
+                target.ao = Some(ao);
+            }
+            if reset && !volume_visible {
+                target.guide.clear(&mut encoder);
             }
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
@@ -646,16 +638,69 @@ impl Renderer {
                     shadow.encode_tau(&mut encoder, groups, volume);
                 }
             }
-            crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
+            let group = scene_table.group();
             let shadow_group = shadow
                 .as_ref()
                 .map(Shadow::group)
                 .expect("the shadow is ready");
-            let ao_group: &BindGroup = target.ao.as_ref().map_or(&*dummy_ao, crate::ao::Ao::group);
-            let group = scene_table.group();
-            if let Some(mesh_passes) = meshes.as_mut() {
-                mesh_passes.write_uniforms(queue, &data, scene.shading);
+            let occupancy = occupancy_group.as_ref().expect("the occupancy is ready");
+            if slice {
+                crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
+                if volume_visible {
+                    volume.draw_surface(
+                        &mut encoder,
+                        crate::volume::SurfaceFrame {
+                            normal: target.guide.view(),
+                            region: viewport,
+                            scene: group,
+                            level: level_group,
+                            atlas: atlas.group(),
+                            depth_group: target.scene.depth_group(),
+                            occupancy,
+                            shadow: shadow_group,
+                        },
+                    );
+                }
+            } else if surfaces && let Some(gbuffer) = target.gbuffer.as_ref() {
+                if let Some(mesh_passes) = meshes.as_ref() {
+                    mesh_passes.draw_gbuffer(
+                        &mut encoder,
+                        viewport,
+                        gbuffer,
+                        target.scene.depth(),
+                        group,
+                    );
+                }
+                if volume_visible {
+                    volume.draw_surface(
+                        &mut encoder,
+                        crate::volume::SurfaceFrame {
+                            normal: target.guide.view(),
+                            region: viewport,
+                            scene: group,
+                            level: level_group,
+                            atlas: atlas.group(),
+                            depth_group: target.scene.depth_group(),
+                            occupancy,
+                            shadow: shadow_group,
+                        },
+                    );
+                }
+                target
+                    .ao
+                    .as_ref()
+                    .expect("the ambient occlusion target is ready")
+                    .evaluate(
+                        queue,
+                        &mut encoder,
+                        &data,
+                        size,
+                        crate::ao::Ambient::new(AMBIENT_REACH, AMBIENT_STRENGTH, sample_index),
+                    );
+            } else {
+                crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             }
+            let ao_group: &BindGroup = target.ao.as_ref().map_or(&*dummy_ao, crate::ao::Ao::group);
             let oit_epoch = target
                 .oit
                 .as_mut()
@@ -678,14 +723,13 @@ impl Renderer {
                         &mut encoder,
                         crate::volume::VolumeFrame {
                             target: target.scene.color(),
-                            normal: target.guide.view(),
                             region: viewport,
                             scene: group,
                             level: level_group,
                             atlas: atlas.group(),
                             depth_group: target.scene.depth_group(),
                             oit: oit_group,
-                            occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
+                            occupancy,
                             shadow: shadow_group,
                         },
                         crate::volume::VolumePath::Composite,
@@ -720,7 +764,7 @@ impl Renderer {
                 if let Some(splat_passes) = splats.as_ref() {
                     splat_passes.draw_slice(
                         &mut encoder,
-                        VolumeTargets {
+                        SliceTargets {
                             color: target.scene.color(),
                             depth: target.scene.depth(),
                         },
@@ -728,19 +772,6 @@ impl Renderer {
                         group,
                     );
                 }
-            } else if let Some(mesh_passes) = meshes.as_ref() {
-                mesh_passes.draw_volume(
-                    &mut encoder,
-                    VolumeTargets {
-                        color: target.scene.color(),
-                        depth: target.scene.depth(),
-                    },
-                    viewport,
-                    Lighting {
-                        shadow: shadow_group,
-                        ao: ao_group,
-                    },
-                );
             }
             if let Some(oit) = oit {
                 {
@@ -827,29 +858,33 @@ impl Renderer {
                         splat_passes.draw_color(&mut pass, group, oit.write_group());
                     }
                 }
-                if !volume_visible {
-                    oit_resolve
-                        .get_or_insert_with(|| OitResolve::new(device, layouts, pipelines))
-                        .draw(
-                            &mut encoder,
-                            target.scene.color(),
-                            viewport,
-                            group,
-                            oit.read_group(),
-                        );
-                }
+            }
+            if surfaces
+                && !slice
+                && let Some(gbuffer) = target.gbuffer.as_ref()
+            {
+                meshes
+                    .as_ref()
+                    .expect("a geometry buffer carries mesh passes")
+                    .draw_deferred(
+                        &mut encoder,
+                        viewport,
+                        target.scene.color(),
+                        gbuffer.group(),
+                        shadow_group,
+                        ao_group,
+                    );
             }
             if volume_visible && !slice {
                 let volume_frame = crate::volume::VolumeFrame {
                     target: target.scene.color(),
-                    normal: target.guide.view(),
                     region: viewport,
                     scene: group,
                     level: level_group,
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
                     oit: oit_group,
-                    occupancy: occupancy_group.as_ref().expect("the occupancy is ready"),
+                    occupancy,
                     shadow: shadow_group,
                 };
                 let path = if projected {
@@ -858,6 +893,19 @@ impl Renderer {
                     crate::volume::VolumePath::Composite
                 };
                 volume.draw(device, layouts, pipelines, &mut encoder, volume_frame, path);
+            }
+            if let Some(oit) = oit
+                && !volume_visible
+            {
+                oit_resolve
+                    .get_or_insert_with(|| OitResolve::new(device, layouts, pipelines))
+                    .draw(
+                        &mut encoder,
+                        target.scene.color(),
+                        viewport,
+                        group,
+                        oit.read_group(),
+                    );
             }
             if !scene.overlays.is_empty() {
                 overlay.prepare(
@@ -868,7 +916,7 @@ impl Renderer {
                 );
                 overlay.draw(&mut encoder, target.scene.color(), viewport);
             }
-            if *exporting && target.samples > 1 {
+            if sampling.measuring() && target.samples > 1 {
                 convergence
                     .get_or_insert_with(|| Convergence::new(device, pipelines))
                     .encode(
@@ -908,7 +956,7 @@ impl Renderer {
                             fresh: target.scene.color(),
                             depth: target.scene.depth(),
                             volume: target.guide.view(),
-                            normal: target.ao.as_ref().map(crate::ao::Ao::normal),
+                            normal: target.gbuffer.as_ref().map(crate::target::Gbuffer::normal),
                         },
                     },
                 );
@@ -919,7 +967,7 @@ impl Renderer {
             target.samples = 0;
             info.samples = 0;
         }
-        info.converged = ready && (target.samples >= samples || expired);
+        info.converged = ready && (target.samples >= sampling.ceiling() || resolved || expired);
         if ready {
             if let Some(active) = fade.as_mut() {
                 active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);

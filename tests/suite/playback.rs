@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_display::Camera;
-use grana_engine::{Display, Engine, SAMPLE_LIMIT};
+use grana_engine::{Display, Engine, SAMPLE_CEILING};
 use grana_session::Session;
 
 use crate::support::gpu;
@@ -191,16 +191,15 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
         engine.poll_pick(gpu.device());
         std::thread::sleep(Duration::from_millis(1));
     }
-    for _ in 0..SAMPLE_LIMIT * 4 {
+    for _ in 0..SAMPLE_CEILING * 4 {
         draw(&mut engine, &mut session, Display::Still);
-        if engine.info().samples >= SAMPLE_LIMIT {
+        if engine.info().converged {
             break;
         }
     }
     assert!(
-        engine.info().samples >= SAMPLE_LIMIT,
-        "a still view keeps sampling to {} samples, reached {}",
-        SAMPLE_LIMIT,
+        engine.info().converged && engine.info().samples > 1,
+        "a still view samples until it converges, reached {} samples",
         engine.info().samples
     );
 }

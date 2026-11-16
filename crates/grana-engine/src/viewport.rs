@@ -8,13 +8,14 @@ pub struct Viewport {
 }
 
 impl Viewport {
-    pub fn screen(scale: f32, size: [u32; 2]) -> Self {
+    pub fn screen(scale: f32, size: [u32; 2], region: [u32; 4]) -> Self {
         assert!(scale > 0.0, "a screen holds a positive pixel density");
         Self {
             size,
             pixels_per_point: scale,
-            region: region(size),
+            region,
         }
+        .checked()
     }
 
     pub fn export(size: OutputSize) -> Self {
@@ -22,14 +23,15 @@ impl Viewport {
         Self {
             size,
             pixels_per_point: 1.0,
-            region: region(size),
+            region: [0, 0, size[0], size[1]],
         }
+        .checked()
     }
 
     pub fn points(&self) -> [f32; 4] {
         [
-            0.0,
-            0.0,
+            self.region[0] as f32 / self.pixels_per_point,
+            self.region[1] as f32 / self.pixels_per_point,
             self.region[2] as f32 / self.pixels_per_point,
             self.region[3] as f32 / self.pixels_per_point,
         ]
@@ -38,12 +40,25 @@ impl Viewport {
     pub fn aspect(&self) -> f32 {
         self.region[2].max(1) as f32 / self.region[3].max(1) as f32
     }
-}
 
-fn region(size: [u32; 2]) -> [u32; 4] {
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "a viewport covers at least one pixel"
-    );
-    [0, 0, size[0], size[1]]
+    fn checked(self) -> Self {
+        assert!(
+            self.size[0] > 0 && self.size[1] > 0,
+            "a viewport covers at least one pixel"
+        );
+        let Self { region, size, .. } = self;
+        assert!(
+            region[2] > 0 && region[3] > 0,
+            "a view lies on a positive surface"
+        );
+        assert!(
+            region[0] + region[2] <= size[0] && region[1] + region[3] <= size[1],
+            "the view lies on the surface"
+        );
+        assert!(
+            self.pixels_per_point > 0.0,
+            "a screen holds a positive pixel density"
+        );
+        self
+    }
 }

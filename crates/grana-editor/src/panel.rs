@@ -44,6 +44,43 @@ pub(crate) fn dock_available(size: Vec2, transport: bool) -> f32 {
     (bottom - top).max(DOCK_MINIMUM)
 }
 
+fn dock_extent(workspace: &Workspace, full: Rect, transport: bool) -> f32 {
+    let stored = if workspace.dock_height > 0.0 {
+        workspace.dock_height
+    } else {
+        DOCK_DEFAULT
+    };
+    stored.clamp(DOCK_MINIMUM, dock_available(full.size(), transport))
+}
+
+fn stage_rect(workspace: &Workspace, frames: usize, full: Rect) -> Rect {
+    let transport = frames > 1;
+    let left = full.min.x
+        + MARGIN
+        + if workspace.sidebar_hidden {
+            0.0
+        } else {
+            SIDEBAR_WIDTH + GAP
+        };
+    let right = full.max.x - MARGIN;
+    let bottom = full.max.y
+        - MARGIN
+        - if transport {
+            TRANSPORT_HEIGHT + GAP
+        } else {
+            0.0
+        };
+    let floor = if workspace.panel.is_some() {
+        bottom - dock_extent(workspace, full, transport) - GAP
+    } else {
+        bottom
+    };
+    Rect::from_min_max(
+        Vec2::new(left, full.min.y + MARGIN + TOOLBAR_HEIGHT + GAP + GAP),
+        Vec2::new(right, floor),
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
     Statistics,
@@ -122,8 +159,9 @@ pub fn build(
         workspace.last_panel = panel;
     }
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
-    stage.set_viewport(full);
+    stage.set_pixels_per_point(ui.scale());
     let Some(scene) = view.scene else {
+        stage.set_viewport(full);
         let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
             let mut ctx = ui.build();
@@ -157,6 +195,8 @@ pub fn build(
     }
     workspace.prepare(view, ui.size());
     let palette = crate::palette::resolve(ui, view, workspace);
+    let frames = scene.frame_count() as usize;
+    stage.set_viewport(stage_rect(workspace, frames, full));
     let state = View {
         access: view.access,
         revision: view.revision,
@@ -183,7 +223,7 @@ pub fn build(
     };
     let elements = {
         let mut ctx = ui.build();
-        let layout = Layout::new(&mut ctx, &state, full);
+        let layout = Layout::new(&mut ctx, workspace, frames, full);
         view_elements(&mut ctx, &layout, &state, full)
     };
     ui.present(grana_ui::place(full, elements));
@@ -226,16 +266,19 @@ pub struct Layout {
     pub toolbar_right: Rect,
     pub sidebar: Rect,
     pub viewport: Rect,
-    pub left: f32,
-    pub right: f32,
     pub transport: Option<Rect>,
     pub dock: Option<Rect>,
     pub sidebar_visible: bool,
 }
 
 impl Layout {
-    fn new(ctx: &mut BuildContext<'_, Message>, state: &View<'_>, full: Rect) -> Self {
-        let chrome = state.workspace.chrome;
+    fn new(
+        ctx: &mut BuildContext<'_, Message>,
+        workspace: &Workspace,
+        frames: usize,
+        full: Rect,
+    ) -> Self {
+        let chrome = workspace.chrome;
         let top = full.min.y + MARGIN;
         let toolbar_left = Rect::from_min_size(
             Vec2::new(full.min.x + MARGIN + chrome.leading, top),
@@ -250,7 +293,7 @@ impl Layout {
             Vec2::new(full.max.x - MARGIN - controls - TOOLBAR_RIGHT, top),
             Vec2::new(TOOLBAR_RIGHT, TOOLBAR_HEIGHT),
         );
-        let sidebar_open = !state.workspace.sidebar_hidden;
+        let sidebar_open = !workspace.sidebar_hidden;
         let sidebar_t = ctx.animate(
             Key::new("sidebar.open").id(),
             if sidebar_open { 1.0 } else { 0.0 },
@@ -280,11 +323,7 @@ impl Layout {
                 0.0
             };
         let right = full.max.x - MARGIN;
-        let transport_height = if state.scene.frame_count() > 1 {
-            TRANSPORT_HEIGHT
-        } else {
-            0.0
-        };
+        let transport_height = if frames > 1 { TRANSPORT_HEIGHT } else { 0.0 };
         let transport = (transport_height > 0.0).then(|| {
             Rect::from_min_max(
                 Vec2::new(left, full.max.y - MARGIN - transport_height),
@@ -292,19 +331,13 @@ impl Layout {
             )
         });
         let dock_bottom = transport.map_or(full.max.y - MARGIN, |rect| rect.min.y - GAP);
-        let dock_open = state.workspace.panel.is_some();
+        let dock_open = workspace.panel.is_some();
         let dock_t = ctx.animate(
             Key::new("dock.open").id(),
             if dock_open { 1.0 } else { 0.0 },
             Motion::spatial_default(),
         );
-        let dock_available = dock_available(full.size(), transport_height > 0.0);
-        let dock_stored = if state.workspace.dock_height > 0.0 {
-            state.workspace.dock_height
-        } else {
-            DOCK_DEFAULT
-        };
-        let dock_height = dock_stored.clamp(DOCK_MINIMUM, dock_available);
+        let dock_height = dock_extent(workspace, full, transport_height > 0.0);
         let dock = (dock_t > 0.005).then(|| {
             let height = ctx.animate(
                 Key::new("dock.height.spring").id(),
@@ -321,31 +354,11 @@ impl Layout {
             toolbar_left,
             toolbar_right,
             sidebar,
-            viewport: full,
-            left,
-            right,
+            viewport: stage_rect(workspace, frames, full),
             transport,
             dock,
             sidebar_visible,
         }
-    }
-
-    pub fn overlay_top(&self) -> f32 {
-        self.toolbar_left.max.y + GAP
-    }
-
-    pub fn content(&self) -> Rect {
-        Rect::from_min_max(
-            Vec2::new(self.left, self.overlay_top() + GAP),
-            Vec2::new(self.right, self.floor()),
-        )
-    }
-
-    pub fn floor(&self) -> f32 {
-        let transport = self
-            .transport
-            .map_or(self.viewport.max.y - MARGIN, |rect| rect.min.y - GAP);
-        self.dock.map_or(transport, |rect| rect.min.y - GAP)
     }
 }
 

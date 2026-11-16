@@ -4,6 +4,7 @@
 const COVERAGE: f32 = 0.01;
 const MINIMUM_ALPHA: f32 = 1.0e-4;
 const DEVIATION_LIMIT: f32 = 8.0;
+const RADIANCE_FLOOR: f32 = 0.01;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -35,7 +36,11 @@ fn fs_error(input: VertexOutput) -> @location(0) vec4<f32> {
         abs(straight.r - mean.r),
         max(abs(straight.g - mean.g), abs(straight.b - mean.b)),
     );
-    return vec4<f32>(min(delta, DEVIATION_LIMIT), 1.0, 0.0, 0.0);
+    let scale = max(
+        max(mean.r, max(mean.g, mean.b)),
+        RADIANCE_FLOOR,
+    );
+    return vec4<f32>(min(delta / scale, DEVIATION_LIMIT), 1.0, 0.0, 0.0);
 }
 
 @fragment

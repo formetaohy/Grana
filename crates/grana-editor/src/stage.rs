@@ -66,7 +66,7 @@ pub struct Stage {
 
     hovered: bool,
     viewport: Rect,
-    region: [u32; 4],
+    pixels_per_point: f32,
     modifiers: Modifiers,
 }
 
@@ -85,7 +85,7 @@ impl Stage {
 
             hovered: false,
             viewport: Rect::ZERO,
-            region: [0, 0, 1, 1],
+            pixels_per_point: 1.0,
             modifiers: Modifiers::default(),
         }
     }
@@ -98,12 +98,37 @@ impl Stage {
         self.viewport
     }
 
-    pub fn set_region(&mut self, region: [u32; 4]) {
-        self.region = region;
+    pub fn set_pixels_per_point(&mut self, scale: f32) {
+        assert!(
+            scale.is_finite() && scale > 0.0,
+            "a stage covers a positive pixel density"
+        );
+        self.pixels_per_point = scale;
+    }
+
+    pub fn pixels_per_point(&self) -> f32 {
+        self.pixels_per_point
     }
 
     pub fn region(&self) -> [u32; 4] {
-        self.region
+        let scale = self.pixels_per_point;
+        let low = (self.viewport.min * scale).round().max(Vec2::ZERO);
+        let high = (self.viewport.max * scale).round().max(low + Vec2::ONE);
+        [
+            low.x as u32,
+            low.y as u32,
+            (high.x - low.x) as u32,
+            (high.y - low.y) as u32,
+        ]
+    }
+
+    pub fn quad(&self) -> Rect {
+        let [x, y, width, height] = self.region();
+        let scale = self.pixels_per_point;
+        Rect::from_min_size(
+            Vec2::new(x as f32, y as f32) / scale,
+            Vec2::new(width as f32, height as f32) / scale,
+        )
     }
 
     pub fn contains(&self, point: Vec2) -> bool {

@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use grana_display::Camera;
+use grana_render::Sampling;
 use grana_scene::Scene;
+
+const STILL_FLOOR: u32 = 8;
+pub const SAMPLE_CEILING: u32 = 64;
+const STILL_ERROR: f32 = 0.01;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Display {
@@ -17,6 +22,13 @@ impl Display {
 
     pub fn resolution(self, size: [u32; 2]) -> [u32; 2] {
         self.render().resolution(size)
+    }
+
+    pub(crate) fn sampling(self) -> Sampling {
+        match self {
+            Self::Still => Sampling::new(STILL_FLOOR, SAMPLE_CEILING, STILL_ERROR),
+            Self::Interactive | Self::Playback => Sampling::single(),
+        }
     }
 
     pub(crate) fn render(self) -> grana_render::Display {

@@ -16,9 +16,8 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::renderer::{Lighting, VolumeTargets};
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{ID_FORMAT, NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -27,22 +26,46 @@ const CULL_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh_cull.wgsl")
 );
-const VOLUME_SHADER: &str = concat!(
+const GBUFFER_SHADER: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/mesh_gbuffer.wgsl")
+);
+const FORWARD_SHADER: &str = concat!(
+    include_str!("shader/mesh_binding.wgsl"),
+    "\n",
+    include_str!("shader/mesh_binding_forward.wgsl"),
+    "\n",
     include_str!("shader/brdf.wgsl"),
-    "
-",
+    "\n",
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/shadow_sample.wgsl"),
     "\n",
     include_str!("shader/oit.wgsl"),
     "\n",
-    include_str!("shader/mesh.wgsl")
-);
-const AO_SHADER: &str = concat!(
-    include_str!("shader/scene.wgsl"),
+    include_str!("shader/mesh_common.wgsl"),
     "\n",
-    include_str!("shader/mesh_ao.wgsl")
+    include_str!("shader/mesh_shade.wgsl"),
+    "\n",
+    include_str!("shader/mesh_forward.wgsl")
+);
+const DEFERRED_SHADER: &str = concat!(
+    include_str!("shader/mesh_binding.wgsl"),
+    "\n",
+    include_str!("shader/mesh_binding_deferred.wgsl"),
+    "\n",
+    include_str!("shader/brdf.wgsl"),
+    "\n",
+    include_str!("shader/tau_codec.wgsl"),
+    "\n",
+    include_str!("shader/shadow_sample.wgsl"),
+    "\n",
+    include_str!("shader/mesh_common.wgsl"),
+    "\n",
+    include_str!("shader/mesh_shade.wgsl"),
+    "\n",
+    include_str!("shader/mesh_deferred.wgsl")
 );
 const OPAQUE_NARROW: usize = 0;
 const OPAQUE_WIDE: usize = 1;
@@ -88,6 +111,7 @@ pub(crate) struct StyleData {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct MeshUniforms {
     view_projection: [[f32; 4]; 4],
+    inverse_view_projection: [[f32; 4]; 4],
     eye: [f32; 4],
     light: [f32; 4],
     shading: [f32; 4],
@@ -109,7 +133,7 @@ const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 48);
-    assert!(size_of::<MeshUniforms>() == 384);
+    assert!(size_of::<MeshUniforms>() == 448);
 };
 
 pub(crate) struct MeshPasses {
@@ -120,14 +144,17 @@ pub(crate) struct MeshPasses {
     resident: u64,
     cull: ComputePipeline,
     shadow_cull: ComputePipeline,
-    volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     color_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
-    ao_pipeline: RenderPipeline,
+    gbuffer_pipeline: RenderPipeline,
+    deferred_pipeline: RenderPipeline,
     uniforms: Buffer,
     uniform_group: BindGroup,
+    styles: Table<StyleData>,
+    style_group: BindGroup,
+    cached_styles: Vec<StyleData>,
 }
 
 impl MeshPasses {
@@ -145,11 +172,25 @@ impl MeshPasses {
                 count: None,
             }],
         });
-        let volume_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.mesh.pipeline_layout"),
+        let oit_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.oit.pipeline_layout"),
             bind_group_layouts: &[
                 Some(&uniform_layout),
                 Some(&layouts.objects),
+                Some(&layouts.styles),
+                Some(&layouts.shadow),
+                Some(&layouts.oit_write),
+                None,
+                None,
+                Some(&layouts.ao_read),
+            ],
+            immediate_size: 0,
+        });
+        let deferred_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.deferred.pipeline_layout"),
+            bind_group_layouts: &[
+                Some(&uniform_layout),
+                Some(&layouts.gbuffer),
                 Some(&layouts.styles),
                 Some(&layouts.shadow),
                 None,
@@ -168,17 +209,15 @@ impl MeshPasses {
             ],
             immediate_size: 0,
         });
-        let oit_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.mesh.oit.pipeline_layout"),
+        let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.pick.pipeline_layout"),
             bind_group_layouts: &[
                 Some(&uniform_layout),
                 Some(&layouts.objects),
-                Some(&layouts.styles),
-                Some(&layouts.shadow),
-                Some(&layouts.oit_write),
                 None,
                 None,
-                Some(&layouts.ao_read),
+                None,
+                Some(&layouts.pick),
             ],
             immediate_size: 0,
         });
@@ -202,20 +241,24 @@ impl MeshPasses {
             compilation_options: Default::default(),
             cache: pipelines.cache(),
         });
-        let volume_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh"),
-            source: ShaderSource::Wgsl(VOLUME_SHADER.into()),
+        let gbuffer_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.mesh.gbuffer"),
+            source: ShaderSource::Wgsl(GBUFFER_SHADER.into()),
         });
-        let ao_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.ao"),
-            source: ShaderSource::Wgsl(AO_SHADER.into()),
+        let forward_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.mesh.forward"),
+            source: ShaderSource::Wgsl(FORWARD_SHADER.into()),
         });
-        let ao_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.ao"),
-            layout: Some(&layouts.ao_surface),
+        let deferred_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.mesh.deferred"),
+            source: ShaderSource::Wgsl(DEFERRED_SHADER.into()),
+        });
+        let gbuffer_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.gbuffer"),
+            layout: Some(&layouts.gbuffer_pipeline),
             vertex: VertexState {
-                module: &ao_module,
-                entry_point: Some("vs_ao"),
+                module: &gbuffer_module,
+                entry_point: Some("vs_gbuffer"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
             },
@@ -223,8 +266,40 @@ impl MeshPasses {
             depth_stencil: Some(depth_state(true, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &ao_module,
-                entry_point: Some("fs_ao"),
+                module: &gbuffer_module,
+                entry_point: Some("fs_gbuffer"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(ColorTargetState {
+                        format: NORMAL_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: ID_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: pipelines.cache(),
+        });
+        let deferred_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.deferred"),
+            layout: Some(&deferred_layout),
+            vertex: VertexState {
+                module: &deferred_module,
+                entry_point: Some("vs_fullscreen"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &deferred_module,
+                entry_point: Some("fs_deferred"),
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
                     format: SCENE_FORMAT,
@@ -239,7 +314,7 @@ impl MeshPasses {
             label: Some("grana.mesh.shadow"),
             layout: Some(&shadow_layout),
             vertex: VertexState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("vs_shadow"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
@@ -251,36 +326,11 @@ impl MeshPasses {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let volume_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh"),
-            layout: Some(&volume_layout),
-            vertex: VertexState {
-                module: &volume_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &volume_module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: pipelines.cache(),
-        });
         let oit_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.mesh.oit"),
             layout: Some(&oit_layout),
             vertex: VertexState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
@@ -289,7 +339,7 @@ impl MeshPasses {
             depth_stencil: Some(depth_state(false, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("fs_oit_key"),
                 compilation_options: Default::default(),
                 targets: &[],
@@ -301,7 +351,7 @@ impl MeshPasses {
             label: Some("grana.mesh.oit.color"),
             layout: Some(&oit_layout),
             vertex: VertexState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
@@ -310,7 +360,7 @@ impl MeshPasses {
             depth_stencil: Some(depth_state(false, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("fs_oit_color"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::residual_targets(),
@@ -318,23 +368,11 @@ impl MeshPasses {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.mesh.pick.pipeline_layout"),
-            bind_group_layouts: &[
-                Some(&uniform_layout),
-                Some(&layouts.objects),
-                None,
-                None,
-                None,
-                Some(&layouts.pick),
-            ],
-            immediate_size: 0,
-        });
         let pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.mesh.pick"),
             layout: Some(&pick_layout),
             vertex: VertexState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
@@ -343,7 +381,7 @@ impl MeshPasses {
             depth_stencil: Some(depth_state(true, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &volume_module,
+                module: &forward_module,
                 entry_point: Some("fs_pick"),
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
@@ -369,6 +407,8 @@ impl MeshPasses {
                 resource: uniforms.as_entire_binding(),
             }],
         });
+        let styles = Table::new(device, "grana.mesh.styles");
+        let style_group = bind_group(device, &layouts.styles, styles.buffer());
         Self {
             slots: HashMap::new(),
             active: Vec::new(),
@@ -377,14 +417,17 @@ impl MeshPasses {
             resident: 0,
             cull,
             shadow_cull,
-            volume_pipeline,
             oit_pipeline,
             color_pipeline,
             pick_pipeline,
             shadow_pipeline,
-            ao_pipeline,
+            gbuffer_pipeline,
+            deferred_pipeline,
             uniforms,
             uniform_group,
+            styles,
+            style_group,
+            cached_styles: Vec::new(),
         }
     }
 
@@ -438,7 +481,29 @@ impl MeshPasses {
             slot.write_pick(device, queue, layer.style_start);
             self.active.push(layer.key);
         }
+        self.write_styles(device, queue, layouts, scene.styles);
         self.evict();
+    }
+
+    fn write_styles(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        styles: &[Style],
+    ) {
+        let data = styles
+            .iter()
+            .map(|style| style_data(*style))
+            .collect::<Vec<_>>();
+        if data == self.cached_styles {
+            return;
+        }
+        let grown = self.styles.write(device, queue, &data);
+        if grown {
+            self.style_group = bind_group(device, &layouts.styles, self.styles.buffer());
+        }
+        self.cached_styles = data;
     }
 
     fn evict(&mut self) {
@@ -461,6 +526,7 @@ impl MeshPasses {
     pub fn write_uniforms(&self, queue: &Queue, frame: &crate::frame::FrameData, shading: Shading) {
         let uniforms = MeshUniforms {
             view_projection: frame.view_projection,
+            inverse_view_projection: frame.inv_view_projection,
             eye: frame.eye,
             light: frame.light,
             shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
@@ -518,28 +584,44 @@ impl MeshPasses {
     pub fn draw_gbuffer(
         &self,
         encoder: &mut CommandEncoder,
-        normal: &TextureView,
-        depth: &TextureView,
         region: [u32; 4],
+        gbuffer: &crate::target::Gbuffer,
+        depth: &TextureView,
         scene: &BindGroup,
     ) {
         let width = region[2].max(1);
         let height = region[3].max(1);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.mesh.ao.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: normal,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
+            label: Some("grana.mesh.gbuffer.pass"),
+            color_attachments: &[
+                Some(RenderPassColorAttachment {
+                    view: gbuffer.normal(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: StoreOp::Store,
+                    },
+                }),
+                Some(RenderPassColorAttachment {
+                    view: gbuffer.id(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
+                        }),
+                        store: StoreOp::Store,
+                    },
+                }),
+            ],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                 view: depth,
                 depth_ops: Some(Operations {
-                    load: LoadOp::Load,
+                    load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -555,11 +637,54 @@ impl MeshPasses {
             1.0,
         );
         pass.set_scissor_rect(region[0], region[1], width, height);
-        pass.set_pipeline(&self.ao_pipeline);
+        pass.set_pipeline(&self.gbuffer_pipeline);
         pass.set_bind_group(0, scene, &[]);
         for key in &self.active {
             self.slots[key].draw_gbuffer(&mut pass);
         }
+    }
+
+    pub fn draw_deferred(
+        &self,
+        encoder: &mut CommandEncoder,
+        region: [u32; 4],
+        color: &TextureView,
+        gbuffer: &BindGroup,
+        shadow: &BindGroup,
+        ao: &BindGroup,
+    ) {
+        let width = region[2].max(1);
+        let height = region[3].max(1);
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.mesh.deferred.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: color,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        pass.set_viewport(
+            region[0] as f32,
+            region[1] as f32,
+            width as f32,
+            height as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(region[0], region[1], width, height);
+        pass.set_pipeline(&self.deferred_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(1, gbuffer, &[]);
+        pass.set_bind_group(2, &self.style_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
+        pass.set_bind_group(7, ao, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     pub fn draw_shadow(&self, encoder: &mut CommandEncoder, target: &TextureView) {
@@ -580,54 +705,6 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         for key in &self.active {
             self.slots[key].draw(&mut pass, SHADOW_NARROW, SHADOW_WIDE);
-        }
-    }
-
-    pub fn draw_volume(
-        &self,
-        encoder: &mut CommandEncoder,
-        targets: VolumeTargets<'_>,
-        region: [u32; 4],
-        lighting: Lighting<'_>,
-    ) {
-        let width = region[2].max(1);
-        let height = region[3].max(1);
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.mesh.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: targets.color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: targets.depth,
-                depth_ops: Some(Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            width as f32,
-            height as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(region[0], region[1], width, height);
-        pass.set_pipeline(&self.volume_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
-        pass.set_bind_group(3, lighting.shadow, &[]);
-        pass.set_bind_group(7, lighting.ao, &[]);
-        for key in &self.active {
-            self.slots[key].draw(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
         }
     }
 
@@ -843,6 +920,7 @@ impl MeshSlot {
 
     fn draw_gbuffer<'a>(&'a self, pass: &mut RenderPass<'a>) {
         pass.set_bind_group(1, &self.object_group, &[]);
+        pass.set_bind_group(5, &self.pick_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         if let Some(indices) = &self.narrow {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
@@ -888,11 +966,10 @@ impl MeshSlot {
         }
     }
 
-    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, narrow: usize, wide: usize) -> u32 {
+    fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_bind_group(2, &self.style_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        let mut draws = 0;
         if let Some(indices) = &self.narrow {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
             pass.multi_draw_indexed_indirect(
@@ -900,7 +977,6 @@ impl MeshSlot {
                 self.commands.offset(narrow),
                 self.object_count,
             );
-            draws += 1;
         }
         if let Some(indices) = &self.wide {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
@@ -909,9 +985,7 @@ impl MeshSlot {
                 self.commands.offset(wide),
                 self.object_count,
             );
-            draws += 1;
         }
-        draws
     }
 }
 

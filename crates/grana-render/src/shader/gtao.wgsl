@@ -54,17 +54,17 @@ fn store(pixel: vec2<i32>, value: f32) {
 
 @compute @workgroup_size(8, 8)
 fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let width = u32(ao.extent.x);
-    let height = u32(ao.extent.y);
-    if (id.x >= width || id.y >= height) {
+    let origin = vec2<i32>(vec2<u32>(ao.region.xy));
+    let span = vec2<u32>(ao.region.zw);
+    if (id.x >= span.x || id.y >= span.y) {
         return;
     }
-    let pixel = vec2<i32>(id.xy);
-    let volume_at = pixel + vec2<i32>(ao.region.xy);
+    let pixel = origin + vec2<i32>(id.xy);
+    let extent = vec2<i32>(ao.extent.xy);
     var depth = textureLoad(surface_depth, pixel, 0);
     var raw_normal = textureLoad(surface_normal, pixel, 0).xyz;
     var surface = depth < 1.0 && length(raw_normal) >= 0.5;
-    let volume_sample = textureLoad(volume_normal, volume_at, 0);
+    let volume_sample = textureLoad(volume_normal, pixel, 0);
     let depth_of_volume = volume_sample.w;
     let normal_of_volume = volume_sample.xyz;
     let volume = depth_of_volume < 1.0 && length(normal_of_volume) >= 0.5;
@@ -111,8 +111,8 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
                 let sample_pixel = vec2<i32>(floor(projected.xy));
                 if (sample_pixel.x < 0
                     || sample_pixel.y < 0
-                    || sample_pixel.x >= i32(width)
-                    || sample_pixel.y >= i32(height)) {
+                    || sample_pixel.x >= extent.x
+                    || sample_pixel.y >= extent.y) {
                     continue;
                 }
                 let sample_depth = textureLoad(surface_depth, sample_pixel, 0);

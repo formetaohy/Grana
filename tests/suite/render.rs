@@ -5,8 +5,8 @@ use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::{
-    Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, SplatChunk, Splats, Style,
-    Versions,
+    Frame, Layer, LayerKey, PickId, Renderer, Requests, Sampling, SceneFrame, SplatChunk, Splats,
+    Style, Versions,
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
@@ -41,7 +41,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         region: view.region,
         clip: Clip::none(),
         exposure: 1.0,
-        samples: SAMPLES,
+        sampling: Sampling::new(1, SAMPLES, 1.0),
         budget: None,
         scene: view.scene,
         display: view.display,
@@ -269,7 +269,7 @@ fn measures_the_convergence_of_a_volume() {
     settle(&gpu, &mut renderer, &view, &volume);
     renderer.set_exporting(true);
     let mut reset = frame(&view);
-    reset.samples = 12;
+    reset.sampling = Sampling::new(1, 12, 1.0);
     reset.exposure = 1.4;
     renderer
         .draw(gpu.device(), gpu.queue(), reset)
@@ -277,7 +277,7 @@ fn measures_the_convergence_of_a_volume() {
     let mut metrics = Vec::new();
     for _ in 0..24 {
         let mut drawn = frame(&view);
-        drawn.samples = 12;
+        drawn.sampling = Sampling::new(1, 12, 1.0);
         drawn.exposure = 1.4;
         let info = renderer
             .draw(gpu.device(), gpu.queue(), drawn)
@@ -306,7 +306,7 @@ fn measures_the_convergence_of_a_volume() {
     let mut restarted = None;
     for _ in 0..4 {
         let mut drawn = frame(&view);
-        drawn.samples = 12;
+        drawn.sampling = Sampling::new(1, 12, 1.0);
         drawn.exposure = 1.8;
         renderer
             .draw(gpu.device(), gpu.queue(), drawn)
@@ -1358,7 +1358,7 @@ struct Take<'a, 'b> {
     camera: &'a Camera,
     scene: &'a SceneFrame<'b>,
     time: u32,
-    samples: u32,
+    sampling: Sampling,
     history: Option<f32>,
 }
 
@@ -1379,7 +1379,7 @@ fn take(
         region: Region::none(),
         clip: Clip::none(),
         exposure: 1.0,
-        samples: view.samples,
+        sampling: view.sampling,
         budget: None,
         scene: view.scene,
         display: grana_render::Display::Export,
@@ -1403,7 +1403,7 @@ fn take(
             }
             continue;
         }
-        if info.samples >= view.samples && !info.fading {
+        if info.samples >= view.sampling.ceiling() && !info.fading {
             return (read_pixels(gpu, view.texture, [SIDE, SIDE]), info);
         }
     }
@@ -1449,7 +1449,7 @@ fn reuses_the_history_of_a_still_camera() {
             camera: &camera,
             scene: &scene,
             time: 0,
-            samples: 8,
+            sampling: Sampling::new(1, 8, 1.0),
             history: None,
         },
     );
@@ -1463,7 +1463,7 @@ fn reuses_the_history_of_a_still_camera() {
             camera: &camera,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: Some(TEMPORAL),
         },
     );
@@ -1479,7 +1479,7 @@ fn reuses_the_history_of_a_still_camera() {
             camera: &camera,
             scene: &scene,
             time: 1,
-            samples: 32,
+            sampling: Sampling::new(1, 32, 1.0),
             history: None,
         },
     );
@@ -1493,7 +1493,7 @@ fn reuses_the_history_of_a_still_camera() {
             camera: &camera,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: None,
         },
     );
@@ -1549,7 +1549,7 @@ fn reprojects_the_history_of_a_moving_camera() {
             camera: &camera,
             scene: &scene,
             time: 0,
-            samples: 8,
+            sampling: Sampling::new(1, 8, 1.0),
             history: None,
         },
     );
@@ -1563,7 +1563,7 @@ fn reprojects_the_history_of_a_moving_camera() {
             camera: &moved,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: Some(TEMPORAL),
         },
     );
@@ -1578,7 +1578,7 @@ fn reprojects_the_history_of_a_moving_camera() {
             camera: &moved,
             scene: &scene,
             time: 1,
-            samples: 32,
+            sampling: Sampling::new(1, 32, 1.0),
             history: None,
         },
     );
@@ -1592,7 +1592,7 @@ fn reprojects_the_history_of_a_moving_camera() {
             camera: &moved,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: None,
         },
     );
@@ -1655,7 +1655,7 @@ fn drops_the_history_of_another_shot() {
             camera: &camera,
             scene: &first,
             time: 0,
-            samples: 8,
+            sampling: Sampling::new(1, 8, 1.0),
             history: None,
         },
     );
@@ -1669,7 +1669,7 @@ fn drops_the_history_of_another_shot() {
             camera: &camera,
             scene: &second,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: Some(TEMPORAL),
         },
     );
@@ -1684,7 +1684,7 @@ fn drops_the_history_of_another_shot() {
             camera: &camera,
             scene: &second,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: None,
         },
     );
@@ -1711,7 +1711,7 @@ fn drawn<'a, 'b>(
         region: Region::none(),
         clip: Clip::none(),
         exposure: 1.0,
-        samples: 8,
+        sampling: Sampling::new(1, 8, 1.0),
         budget: None,
         scene,
         display: grana_render::Display::Still,
@@ -2361,7 +2361,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
             camera: &camera,
             scene: &scene,
             time: 0,
-            samples: 8,
+            sampling: Sampling::new(1, 8, 1.0),
             history: None,
         },
     );
@@ -2375,7 +2375,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
             camera: &panned,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: Some(TEMPORAL),
         },
     );
@@ -2391,7 +2391,7 @@ fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
             camera: &moved,
             scene: &scene,
             time: 1,
-            samples: 1,
+            sampling: Sampling::new(1, 1, 1.0),
             history: Some(TEMPORAL),
         },
     );

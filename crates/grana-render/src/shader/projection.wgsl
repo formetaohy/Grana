@@ -7,8 +7,6 @@ fn march_projected(
 ) -> March {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
-    var moment = 0.0;
-    var mass = 0.0;
     var peak = array<f32, CHANNEL_LIMIT>();
     for (var channel = 0u; channel < CHANNEL_LIMIT; channel += 1u) {
         peak[channel] = -1.0;
@@ -16,7 +14,7 @@ fn march_projected(
     let count = u32(frame.march.z);
     let packs = (count + PACK - 1u) / PACK;
     if (finish <= begin) {
-        return March(radiance, transmittance, moment, mass, vec4<f32>(0.0), vec4<f32>(0.0));
+        return March(radiance, transmittance, vec4<f32>(0.0), vec4<f32>(0.0));
     }
     var t = begin;
     var samples = 0u;
@@ -75,10 +73,7 @@ fn march_projected(
             let weight = tau * segment * voxels_per_world;
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);
-                let absorbed = transmittance * alpha;
-                radiance += absorbed * volume_lighting(albedo, texel, origin + direction * cursor);
-                moment += absorbed * cursor;
-                mass += absorbed;
+                radiance += transmittance * alpha * volume_lighting(albedo, texel, origin + direction * cursor);
                 transmittance *= 1.0 - alpha;
             }
             cursor += segment;
@@ -101,22 +96,19 @@ fn march_projected(
         radiance += transmittance * opacity * color;
         transmittance *= 1.0 - opacity;
     }
-    return March(radiance, transmittance, moment, mass, vec4<f32>(0.0), vec4<f32>(0.0));
+    return March(radiance, transmittance, vec4<f32>(0.0), vec4<f32>(0.0));
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> VolumeOutput {
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let ndc = input.ndc + frame.jitter.xy;
     if (slice_active()) {
         let ray = camera_ray(ndc);
         let crossing = slice_crossing(ray.origin, ray.direction);
         if (crossing.w < 0.5) {
-            return VolumeOutput(vec4<f32>(0.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+            return vec4<f32>(0.0);
         }
-        return VolumeOutput(
-            slice_color(crossing.xyz),
-            vec4<f32>(0.0, 0.0, 0.0, clip_depth(crossing.xyz)),
-        );
+        return slice_color(crossing.xyz);
     }
     let resolution = resolve(input.clip_position, ndc);
     let layers = append_residual(gather_layers(input.clip_position), input.clip_position);
@@ -129,28 +121,16 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     );
     var radiance = segment.radiance;
     var transmittance = segment.transmittance;
-    var moment = segment.moment;
-    var mass = segment.mass;
     for (var index = 0u; index < layers.count; index += 1u) {
         let layer = vec4<f32>(
             unpack2x16float(layers.color[index].x),
             unpack2x16float(layers.color[index].y),
         );
-        let absorbed = transmittance * layer.a;
-        moment += absorbed * layers.depth[index];
-        mass += absorbed;
         radiance += transmittance * layer.rgb;
         transmittance *= 1.0 - layer.a;
         if (transmittance < MINIMUM_TRANSMITTANCE) {
             break;
         }
     }
-    var depth = 1.0;
-    if (mass > 1.0e-4) {
-        depth = clip_depth(resolution.origin + resolution.direction * (moment / mass));
-    }
-    return VolumeOutput(
-        vec4<f32>(radiance, 1.0 - transmittance),
-        vec4<f32>(0.0, 0.0, 0.0, depth),
-    );
+    return vec4<f32>(radiance, 1.0 - transmittance);
 }
