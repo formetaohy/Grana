@@ -40,6 +40,8 @@ impl Renderer {
             return;
         };
         let mut released = Vec::new();
+        let mut resident = Vec::new();
+        let mut dropped = Vec::new();
         let evicted = atlas.evict_other_frames(*time);
         for brick in evicted {
             if let Some(table) = bricks[brick.level].as_mut() {
@@ -65,12 +67,13 @@ impl Renderer {
                         for x in first[0]..=last[0] {
                             let coord = BrickCoord::new(x, y, z);
                             let index = grid.index(coord);
-                            for brick in atlas.held(level, index) {
+                            atlas.affect(level, index, &mut resident, &mut dropped);
+                            for brick in &resident {
                                 refreshes
                                     .insert(BrickRequest::of(brick.time, level, coord, channels));
                             }
-                            for hollow in atlas.release_hollow(level, index) {
-                                released.push((hollow, level, index));
+                            for time in &dropped {
+                                released.push((*time, level, index));
                             }
                         }
                     }

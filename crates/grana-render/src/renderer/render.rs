@@ -1,4 +1,6 @@
-use super::signature::{SceneSummary, ShadowKeys, channel_style, digest, hash_camera};
+use super::signature::{
+    SceneSummary, ShadowKeys, ShadowVolume, channel_style, digest, hash_camera,
+};
 use super::*;
 use std::time::Instant;
 
@@ -322,10 +324,13 @@ impl Renderer {
         let shadow_keys = ShadowKeys::of(
             versions.objects(),
             scene_summary.visibility(),
-            shadow_revision,
-            time,
-            channel_key,
-            shadow_level,
+            ShadowVolume {
+                revision: shadow_revision,
+                writes: atlas.level_writes(shadow_level),
+                time,
+                style: channel_key,
+                level: shadow_level,
+            },
             &space,
         );
         let ray = crate::frame::Ray {

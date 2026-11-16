@@ -91,8 +91,3 @@ fn sample_pack(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
     let texel = texel_at(texel_map(slot - 1u, base), clamp(voxel, base, base + vec3<f32>(BRICK_SIDE)));
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }
-
-fn level_voxels_per_world(band: u32, direction: vec3<f32>) -> f32 {
-    let g = level_frame(band);
-    return length(level_rate(band, direction) * g.dims);
-}

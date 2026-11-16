@@ -177,6 +177,7 @@ impl BakeQueue {
             return &[];
         }
         self.entries.clear();
+        let mut complete = true;
         'bands: for (band, level) in levels.iter().enumerate() {
             for resident in atlas.residents(time, *level) {
                 let Some(slot) = resident.slot else {
@@ -193,6 +194,7 @@ impl BakeQueue {
                     continue;
                 }
                 if self.entries.len() == capacity {
+                    complete = false;
                     break 'bands;
                 }
                 self.staged.insert(slot, key);
@@ -204,7 +206,9 @@ impl BakeQueue {
                 });
             }
         }
-        self.collected = Some(stamp);
+        if complete {
+            self.collected = Some(stamp);
+        }
         &self.entries
     }
 }

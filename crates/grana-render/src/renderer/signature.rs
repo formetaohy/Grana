@@ -160,19 +160,39 @@ pub(super) struct ShadowKeys {
     objects: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ShadowVolume {
+    pub(super) revision: u64,
+    pub(super) writes: u64,
+    pub(super) time: u32,
+    pub(super) style: u64,
+    pub(super) level: usize,
+}
+
 impl ShadowKeys {
     pub(super) fn of(
         objects: u64,
         visibility: u64,
-        revision: u64,
-        time: u32,
-        style: u64,
-        level: usize,
+        volume: ShadowVolume,
         space: &ShadowSpace,
     ) -> Self {
+        let ShadowVolume {
+            revision,
+            writes,
+            time,
+            style,
+            level,
+        } = volume;
         let space = space.digest();
         Self {
-            volume: digest(&[style, level as u64, u64::from(time), revision, space]),
+            volume: digest(&[
+                style,
+                level as u64,
+                u64::from(time),
+                revision,
+                writes,
+                space,
+            ]),
             objects: digest(&[objects, visibility, space]),
         }
     }

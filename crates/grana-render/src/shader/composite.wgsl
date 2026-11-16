@@ -6,84 +6,153 @@ struct March {
     transmittance: f32,
 }
 
-fn march_volume(
+struct Travel {
+    walk: Walk,
+    held: u32,
+    occupied: bool,
+    samples: u32,
+    cells: u32,
+}
+
+struct Journey {
+    travel: Travel,
+    march: March,
+}
+
+fn travel_open(
+    origin: vec3<f32>,
+    begin: f32,
+    reach: f32,
+    direction: vec3<f32>,
+    dither: f32,
+    hint: u32,
+    taken: vec2<u32>,
+) -> Travel {
+    let band = band_for(begin, dither);
+    let sight = volume_reachable(origin, band, hint, begin, direction);
+    return Travel(walk_open(direction, begin, reach, sight), 0xffffffffu, true, taken.x, taken.y);
+}
+
+fn journey_begin(
+    origin: vec3<f32>,
+    begin: f32,
+    reach: f32,
+    direction: vec3<f32>,
+    dither: f32,
+) -> Journey {
+    let travel = travel_open(
+        origin,
+        begin,
+        reach,
+        direction,
+        dither,
+        band_count(),
+        vec2<u32>(0u, 0u),
+    );
+    return Journey(travel, March(vec3<f32>(0.0), 1.0));
+}
+
+fn march_layer(march: March, layer: vec4<f32>) -> March {
+    return March(
+        march.radiance + march.transmittance * layer.rgb,
+        march.transmittance * (1.0 - layer.a),
+    );
+}
+
+fn journey_march(
+    journey: Journey,
     origin: vec3<f32>,
     begin: f32,
     finish: f32,
+    reach: f32,
     direction: vec3<f32>,
     dither: f32,
-) -> March {
-    var radiance = vec3<f32>(0.0);
-    var transmittance = 1.0;
+) -> Journey {
+    var travel = journey.travel;
+    var march = journey.march;
     if (finish <= begin) {
-        return March(radiance, transmittance);
+        return journey;
+    }
+    let resumed = begin < travel.walk.exit
+        && travel.walk.entry <= begin
+        && band_for(begin, dither) == travel.walk.sight.band;
+    if (!resumed) {
+        let hint = travel.walk.sight.band;
+        travel = travel_open(
+            origin,
+            begin,
+            reach,
+            direction,
+            dither,
+            hint,
+            vec2<u32>(travel.samples, travel.cells),
+        );
     }
     var t = begin;
-    var samples = 0u;
-    var cells = 0u;
-    var walk = walk_open(
-        direction,
-        begin,
-        finish,
-        volume_reachable(origin, band_for(begin, dither), band_count(), begin, direction),
-    );
-    while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y) {
-        if (!inside_level(walk.sight)) {
+    while (t < finish && travel.samples < frame.bounds.x && travel.cells < frame.bounds.y) {
+        if (!inside_level(travel.walk.sight)) {
             break;
         }
-        if (t >= walk.exit) {
-            let sight = volume_reachable(origin, band_for(t, dither), walk.sight.band, t, direction);
-            walk = walk_open(direction, t, finish, sight);
+        if (t >= travel.walk.exit) {
+            let hint = travel.walk.sight.band;
+            travel = travel_open(
+                origin,
+                t,
+                reach,
+                direction,
+                dither,
+                hint,
+                vec2<u32>(travel.samples, travel.cells),
+            );
             continue;
         }
-        if (!walk.sight.usable) {
-            cells += 1u;
-            t = walk.exit;
+        if (!travel.walk.sight.usable) {
+            travel.cells += 1u;
+            t = travel.walk.exit;
             continue;
         }
-        let slot = walk.sight.slot - 1u;
-        var held = 0xffffffffu;
-        var occupied = true;
+        let slot = travel.walk.sight.slot - 1u;
         var cursor = t;
-        while (cursor < walk.exit && samples < frame.bounds.x && cells < frame.bounds.y) {
-            cells += 1u;
+        let limit = min(travel.walk.exit, finish);
+        while (cursor < limit && travel.samples < frame.bounds.x && travel.cells < frame.bounds.y) {
+            travel.cells += 1u;
             let stride = local_step(cursor);
-            let voxel = walk_voxel(walk, cursor);
-            let coord = walk_cell(walk, voxel);
+            let voxel = walk_voxel(travel.walk, cursor);
+            let coord = walk_cell(travel.walk, voxel);
             let cell = cell_index(coord);
-            if (cell != held) {
-                held = cell;
-                occupied = occupied_cell(slot, cell);
+            if (cell != travel.held) {
+                travel.held = cell;
+                travel.occupied = occupied_cell(slot, cell);
             }
-            if (!occupied) {
-                let reach = walk_cell_span(walk, coord, voxel);
-                let gap = stride * ceil(max(reach, 0.0) / stride);
-                cursor = min(cursor + max(gap, stride), walk.exit);
+            if (!travel.occupied) {
+                let cell_reach = walk_cell_span(travel.walk, coord, voxel);
+                let gap = stride * ceil(max(cell_reach, 0.0) / stride);
+                cursor = min(cursor + max(gap, stride), limit);
                 continue;
             }
-            let texel = walk_texel(walk, voxel);
+            let texel = walk_texel(travel.walk, voxel);
             let sample = optical_sample(texel);
             let advance = clamp(
-                SEGMENT_ERROR / max(sample.a * walk.voxels, 1.0e-9),
+                SEGMENT_ERROR / max(sample.a * travel.walk.voxels, 1.0e-9),
                 stride,
                 stride * SEGMENT_STRIDE,
             );
-            let segment = min(advance, walk.exit - cursor);
-            let tau = sample.a * segment * walk.voxels;
+            let segment = min(advance, limit - cursor);
+            let tau = sample.a * segment * travel.walk.voxels;
             if (tau > 0.0) {
                 let alpha = 1.0 - exp(-tau);
-                radiance += transmittance
+                march.radiance += march.transmittance
                     * alpha
                     * structure_lighting(sample.rgb, texel, origin + direction * cursor);
-                transmittance *= 1.0 - alpha;
+                march.transmittance *= 1.0 - alpha;
             }
             cursor += segment;
-            samples += 1u;
-            if (transmittance < MINIMUM_TRANSMITTANCE) {
-                return March(radiance, transmittance);
+            travel.samples += 1u;
+            if (march.transmittance < MINIMUM_TRANSMITTANCE) {
+                return Journey(travel, march);
             }
         }
-        t = walk.exit;
+        t = max(cursor, t);
     }
-    return March(radiance, transmittance);
+    return Journey(travel, march);
 }

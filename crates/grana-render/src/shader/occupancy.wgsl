@@ -19,3 +19,14 @@ fn occupied_brick(slot: u32) -> bool {
 fn occupied_cell(slot: u32, cell: u32) -> bool {
     return occupancy_reaches(occupied[slot * OCCUPANCY_WORDS + 1u + cell]);
 }
+
+fn occupied_packs(slot: u32, cell: u32) -> u32 {
+    let word = occupied[slot * OCCUPANCY_WORDS + 1u + cell];
+    var bits = 0u;
+    for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
+        if (word[pack] >= frame.occupancy.x) {
+            bits |= 1u << pack;
+        }
+    }
+    return bits;
+}

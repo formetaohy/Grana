@@ -106,9 +106,12 @@ pub(crate) struct Atlas {
     buckets: BTreeMap<u64, Bucket>,
     versions: Vec<u32>,
     writes: u64,
+    level_writes: Vec<u64>,
     now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
+    frames: BTreeMap<(u32, usize), Vec<u32>>,
     hollow: HashSet<(u32, usize, usize)>,
+    hollowed: BTreeMap<(u32, usize), Vec<usize>>,
     pruned: Option<[u32; 2]>,
 }
 
@@ -246,9 +249,12 @@ impl Atlas {
             buckets: BTreeMap::new(),
             versions: vec![0; capacity],
             writes: 0,
+            level_writes: Vec::new(),
             now: 0,
             identity: HashMap::new(),
+            frames: BTreeMap::new(),
             hollow: HashSet::new(),
+            hollowed: BTreeMap::new(),
             pruned: None,
         }
     }
@@ -284,52 +290,79 @@ impl Atlas {
     pub fn written(&mut self, slot: u32) {
         self.versions[slot as usize] = self.versions[slot as usize].wrapping_add(1);
         self.writes = self.writes.wrapping_add(1);
+        let Some(brick) = self.slots[slot as usize].brick else {
+            return;
+        };
+        if self.level_writes.len() <= brick.level {
+            self.level_writes.resize(brick.level + 1, 0);
+        }
+        self.level_writes[brick.level] = self.level_writes[brick.level].wrapping_add(1);
     }
 
     pub fn writes(&self) -> u64 {
         self.writes
     }
 
-    pub fn held(&self, level: usize, index: usize) -> Vec<ResidentBrick> {
-        self.slots
-            .iter()
-            .filter_map(|entry| {
-                let brick = entry.brick?;
-                (brick.level == level && brick.index == index).then_some(brick)
-            })
-            .collect()
+    pub fn level_writes(&self, level: usize) -> u64 {
+        self.level_writes.get(level).copied().unwrap_or(0)
     }
 
-    pub fn release_hollow(&mut self, level: usize, index: usize) -> Vec<u32> {
-        let released = self
-            .hollow
-            .iter()
-            .filter(|(_, hollow_level, hollow_index)| {
-                *hollow_level == level && *hollow_index == index
-            })
-            .map(|(time, _, _)| *time)
-            .collect::<Vec<_>>();
-        for time in &released {
-            self.hollow.remove(&(*time, level, index));
+    pub fn affect(
+        &mut self,
+        level: usize,
+        index: usize,
+        held: &mut Vec<ResidentBrick>,
+        released: &mut Vec<u32>,
+    ) {
+        held.clear();
+        released.clear();
+        for (time, framed) in self.frames.keys().copied() {
+            if framed == level && self.identity.contains_key(&(time, level, index)) {
+                held.push(ResidentBrick { time, level, index });
+            }
         }
-        released
+        for time in self.pruned.unwrap_or([u32::MAX; 2]) {
+            if self.unhollow(time, level, index) {
+                released.push(time);
+            }
+        }
+    }
+
+    fn unhollow(&mut self, time: u32, level: usize, index: usize) -> bool {
+        if !self.hollow.remove(&(time, level, index)) {
+            return false;
+        }
+        let empty = {
+            let hollowed = self.hollowed.entry((time, level)).or_default();
+            if let Some(position) = hollowed.iter().position(|hollow| *hollow == index) {
+                hollowed.remove(position);
+            }
+            hollowed.is_empty()
+        };
+        if empty {
+            self.hollowed.remove(&(time, level));
+        }
+        true
     }
 
     pub fn evict_other_frames(&mut self, time: u32) -> Vec<ResidentBrick> {
         let mut evicted = Vec::new();
-        for slot in 0..self.slots.len() {
-            let Some(brick) = self.slots[slot].brick else {
-                continue;
-            };
-            if brick.time == time {
+        for (frame, slots) in std::mem::take(&mut self.frames) {
+            if frame.0 == time {
+                self.frames.insert(frame, slots);
                 continue;
             }
-            self.unplace(slot as u32);
-            self.slots[slot].brick = None;
-            self.identity
-                .remove(&(brick.time, brick.level, brick.index));
-            self.free.push(slot as u32);
-            evicted.push(brick);
+            for slot in slots {
+                let brick = self.slots[slot as usize]
+                    .brick
+                    .expect("a framed slot holds a brick");
+                self.unplace(slot);
+                self.slots[slot as usize].brick = None;
+                self.identity
+                    .remove(&(brick.time, brick.level, brick.index));
+                self.free.push(slot);
+                evicted.push(brick);
+            }
         }
         evicted
     }
@@ -339,15 +372,20 @@ impl Atlas {
     }
 
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
-        self.hollow.insert((time, level, index));
+        if self.pruned.is_some_and(|frames| !frames.contains(&time)) {
+            return;
+        }
+        if self.hollow.insert((time, level, index)) {
+            self.hollowed.entry((time, level)).or_default().push(index);
+        }
     }
 
     pub fn prune(&mut self, frames: [u32; 2]) {
         if self.pruned == Some(frames) {
             return;
         }
-        self.hollow
-            .retain(|(time, _, _)| *time == frames[0] || *time == frames[1]);
+        self.hollow.retain(|(time, _, _)| frames.contains(time));
+        self.hollowed.retain(|(time, _), _| frames.contains(time));
         self.pruned = Some(frames);
     }
 
@@ -357,30 +395,33 @@ impl Atlas {
         self.slots.fill(Slot::EMPTY);
         self.buckets.clear();
         self.identity.clear();
+        self.frames.clear();
         self.hollow.clear();
+        self.hollowed.clear();
+        self.level_writes.clear();
         self.pruned = None;
     }
 
     pub fn residents(&self, time: u32, level: usize) -> Vec<Resident> {
         let mut residents = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| {
-                let brick = entry.brick?;
-                (brick.time == time && brick.level == level).then_some(Resident {
-                    index: brick.index,
-                    slot: Some(slot as u32),
-                })
+            .frames
+            .get(&(time, level))
+            .into_iter()
+            .flatten()
+            .map(|slot| Resident {
+                index: self.slots[*slot as usize]
+                    .brick
+                    .expect("a framed slot holds a brick")
+                    .index,
+                slot: Some(*slot),
             })
             .collect::<Vec<_>>();
         residents.extend(
-            self.hollow
-                .iter()
-                .filter(|(hollow_time, hollow_level, _)| {
-                    *hollow_time == time && *hollow_level == level
-                })
-                .map(|(_, _, index)| Resident {
+            self.hollowed
+                .get(&(time, level))
+                .into_iter()
+                .flatten()
+                .map(|index| Resident {
                     index: *index,
                     slot: None,
                 }),
@@ -427,7 +468,20 @@ impl Atlas {
         self.slots[victim as usize].brick = None;
         self.identity
             .remove(&(brick.time, brick.level, brick.index));
+        self.forget(brick.time, brick.level, victim);
         Some((victim, Some(brick)))
+    }
+
+    fn forget(&mut self, time: u32, level: usize, slot: u32) {
+        let Some(slots) = self.frames.get_mut(&(time, level)) else {
+            return;
+        };
+        if let Some(position) = slots.iter().position(|framed| *framed == slot) {
+            slots.remove(position);
+        }
+        if slots.is_empty() {
+            self.frames.remove(&(time, level));
+        }
     }
 
     fn victim(&self, pin: u64, allow_future: bool, demand: bool) -> Option<u32> {
@@ -538,10 +592,15 @@ impl Atlas {
             self.unplace(slot);
             self.identity
                 .remove(&(previous.time, previous.level, previous.index));
+            self.forget(previous.time, previous.level, slot);
         }
-        self.hollow.remove(&(brick.time, brick.level, brick.index));
+        self.unhollow(brick.time, brick.level, brick.index);
         self.identity
             .insert((brick.time, brick.level, brick.index), slot);
+        self.frames
+            .entry((brick.time, brick.level))
+            .or_default()
+            .push(slot);
         self.slots[slot as usize].brick = Some(brick);
         self.slots[slot as usize].held = hold;
         self.place(slot, pin, brick.time > self.now);

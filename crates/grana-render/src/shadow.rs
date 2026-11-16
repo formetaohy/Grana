@@ -31,8 +31,6 @@ const TAU_SHADER: &str = concat!(
     "\n",
     include_str!("shader/optical.wgsl"),
     "\n",
-    include_str!("shader/extinction.wgsl"),
-    "\n",
     include_str!("shader/tau.wgsl")
 );
 
