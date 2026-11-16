@@ -32,7 +32,7 @@ use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
 use crate::converge::Convergence;
-use crate::frame::{FrameData, VolumeView};
+use crate::frame::{FrameData, VolumeLighting, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
 use crate::occupancy::Occupancy;

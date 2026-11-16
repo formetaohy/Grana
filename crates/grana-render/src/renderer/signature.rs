@@ -208,15 +208,18 @@ pub(super) struct SceneSummary {
     style: u64,
     bounds: (Vec3, Vec3),
     visibility: u64,
+    surfaces: bool,
 }
 
 impl SceneSummary {
     pub(super) fn of(scene: &SceneFrame<'_>, world: Vec3) -> Self {
+        let (bounds, surfaces) = surface_summary(scene, world);
         Self {
             objects: scene.versions.objects(),
             style: scene.versions.style(),
-            bounds: shadow_bounds(scene, world),
+            bounds,
             visibility: shadow_visibility(scene.layers, scene.styles),
+            surfaces,
         }
     }
 
@@ -231,23 +234,29 @@ impl SceneSummary {
     pub(super) fn visibility(self) -> u64 {
         self.visibility
     }
+
+    pub(super) fn surfaces(self) -> bool {
+        self.surfaces
+    }
 }
 
-pub(super) fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {
+fn surface_summary(scene: &SceneFrame<'_>, world: Vec3) -> ((Vec3, Vec3), bool) {
     let mut low = -0.5 * world;
     let mut high = 0.5 * world;
+    let mut surfaces = false;
     for layer in scene.layers {
         for (object, group) in layer.mesh.groups().iter().enumerate() {
             if !scene.styles[layer.style_start + object].visible() {
                 continue;
             }
+            surfaces = true;
             let object_low = Vec3::from(group.min());
             let object_high = object_low + UNIT * Vec3::from(group.scale());
             low = low.min(object_low);
             high = high.max(object_high);
         }
     }
-    (low, high)
+    ((low, high), surfaces)
 }
 
 pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {

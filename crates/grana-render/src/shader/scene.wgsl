@@ -35,6 +35,7 @@ struct FrameData {
     slice_view: vec4<f32>,
     occupancy: vec4<f32>,
     bounds: vec4<u32>,
+    lighting: vec4<u32>,
 }
 
 struct ChannelData {

@@ -46,6 +46,7 @@ pub(crate) struct FrameData {
     pub slice_view: [f32; 4],
     pub occupancy: [f32; 4],
     pub bounds: [u32; 4],
+    pub lighting: [u32; 4],
 }
 
 #[repr(C)]
@@ -66,7 +67,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1376);
+    assert!(size_of::<FrameData>() == 1392);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -83,6 +84,8 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, slice) == 1312);
     assert!(std::mem::offset_of!(FrameData, slice_view) == 1328);
     assert!(std::mem::offset_of!(FrameData, occupancy) == 1344);
+    assert!(std::mem::offset_of!(FrameData, bounds) == 1360);
+    assert!(std::mem::offset_of!(FrameData, lighting) == 1376);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -101,6 +104,11 @@ pub(crate) struct Ray {
     pub(crate) channels: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VolumeLighting {
+    pub(crate) surfaces: bool,
+}
+
 const UNREACHED: f32 = 1.0e19;
 
 impl FrameData {
@@ -111,6 +119,7 @@ impl FrameData {
         shading: Shading,
         ray: Ray,
         space: ShadowSpace,
+        lighting: VolumeLighting,
     ) -> Self {
         assert_eq!(
             tables.len(),
@@ -231,6 +240,7 @@ impl FrameData {
             slice_view,
             occupancy: [1.0, 0.0, 0.0, 0.0],
             bounds: ray.bounds,
+            lighting: [u32::from(lighting.surfaces), 0, 0, 0],
         }
     }
 }

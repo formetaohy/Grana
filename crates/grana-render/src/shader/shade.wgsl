@@ -24,6 +24,9 @@ fn structure_sample(texel: vec3<f32>) -> vec4<f32> {
 }
 
 fn structure_normal(texel: vec3<f32>) -> vec3<f32> {
+    if (frame.lighting.x == 0u) {
+        return vec3<f32>(0.0);
+    }
     let structure = structure_sample(texel);
     if (structure.z <= 0.0) {
         return vec3<f32>(0.0);
@@ -32,6 +35,9 @@ fn structure_normal(texel: vec3<f32>) -> vec3<f32> {
 }
 
 fn volume_lighting(albedo: vec3<f32>, texel: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    if (frame.lighting.x == 0u) {
+        return albedo;
+    }
     let structure = structure_sample(texel);
     if (structure.z <= 0.0) {
         return albedo;

@@ -314,6 +314,9 @@ impl Renderer {
             .levels()
             .map(|level| bricks[level].as_ref().expect("the band table exists"))
             .collect::<Vec<&BrickTable>>();
+        let lighting = VolumeLighting {
+            surfaces: scene_summary.surfaces(),
+        };
         let step = crate::frame::step_length(camera, tables[0], scene.step_scale);
         let ray_bounds =
             crate::frame::sample_bounds(camera, tables[0], step, scene.step_scale, height)?;
@@ -336,6 +339,7 @@ impl Renderer {
             scene.shading,
             ray,
             space,
+            lighting,
         );
         data.viewport = [
             viewport[0] as f32,
@@ -594,7 +598,7 @@ impl Renderer {
                     level: level_group,
                     atlas: atlas.group(),
                 };
-                if !slice && scene.shading.shadows > 0.0 {
+                if !slice && scene.shading.shadows > 0.0 && lighting.surfaces {
                     let object = shadow_keys.objects();
                     if *object_key != Some(object) {
                         *object_key = Some(object);
