@@ -141,7 +141,12 @@ pub fn build(
         return frame;
     };
     if workspace.panel == Some(Panel::Statistics) && view.measure.set().is_none() {
-        if let Some(set) = scene.objects.iter().find(|set| set.detected() > 0)
+        let chosen = scene
+            .objects
+            .iter()
+            .find(|set| set.detected() > 0)
+            .or_else(|| scene.objects.iter().next());
+        if let Some(set) = chosen
             && workspace.measure_request != Some(set.id())
         {
             workspace.measure_request = Some(set.id());

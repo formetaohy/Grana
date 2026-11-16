@@ -53,6 +53,17 @@ impl<A: Clone> Ui<A> {
         let focus_visible = self.focus_visible;
         let pointer = self.pointer;
         let size = self.size;
+        let mut bars = std::mem::take(&mut self.scrollbars);
+        bars.clear();
+        bars.extend(self.tree.scrolls.iter().filter_map(|id| {
+            let node = self.tree.nodes.get(*id)?;
+            let scroll = node.scroll?;
+            let spec = node.scroll_spec?;
+            if scroll.bar <= 0.01 || scroll.limit() <= 0.0 {
+                return None;
+            }
+            Some((node.rect, spec.axis, scroll))
+        }));
         let mut instances = std::mem::take(&mut self.scratch);
         instances.clear();
         {
@@ -87,22 +98,8 @@ impl<A: Clone> Ui<A> {
                 );
                 painter.pop_clip(previous);
             }
-            let bars = self
-                .tree
-                .scrolls
-                .iter()
-                .filter_map(|id| {
-                    let node = self.tree.nodes.get(*id)?;
-                    let scroll = node.scroll?;
-                    let spec = node.scroll_spec?;
-                    if scroll.bar <= 0.01 || scroll.limit() <= 0.0 {
-                        return None;
-                    }
-                    Some((node.rect, spec.axis, scroll))
-                })
-                .collect::<Vec<_>>();
-            for (outer, axis, scroll) in bars {
-                let bar = crate::scroll::bar(outer, axis, scroll);
+            for (outer, axis, scroll) in &bars {
+                let bar = crate::scroll::bar(*outer, *axis, *scroll);
                 painter.rect(
                     bar.thumb,
                     Corners::capsule(),
@@ -149,6 +146,7 @@ impl<A: Clone> Ui<A> {
             self.overlay.assign(&instances.material);
         }
         self.scratch = instances;
+        self.scrollbars = bars;
         self.tooltip = tooltip;
     }
 }

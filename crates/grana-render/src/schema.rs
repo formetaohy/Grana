@@ -285,6 +285,15 @@ impl<'a> Overlay<'a> {
     }
 }
 
+pub fn overlay_digest(overlays: &[Overlay<'_>]) -> u64 {
+    let mut digest = Digest::new();
+    digest.mix(overlays.len() as u64);
+    for overlay in overlays {
+        digest.mix(overlay.digest());
+    }
+    digest.finish()
+}
+
 pub struct SceneFrame<'a> {
     pub versions: Versions,
     pub channels: &'a [ChannelRow],

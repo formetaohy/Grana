@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use grana_display::CameraState;
 use grana_gpu::Pipelines;
-use grana_render::{Digest, FrameInfo, PickId, Renderer, Requests};
+use grana_render::{FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
 use grana_volume::{BrickData, BrickRequest, Clip, Damage, Pyramid, Region};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
@@ -43,7 +45,7 @@ struct Identities {
 struct Prepared {
     structure: u64,
     display: u64,
-    targets: view::Targets,
+    targets: Arc<view::Targets>,
     rendered: RenderedScene,
 }
 
@@ -51,7 +53,7 @@ struct Plan {
     structure: u64,
     camera: CameraState,
     height: u32,
-    targets: view::Targets,
+    targets: Arc<view::Targets>,
 }
 
 pub struct Engine {
@@ -143,7 +145,7 @@ impl Engine {
         let keys = view::key(view.scene);
         let content = Content {
             scene: keys.digest(),
-            overlays: overlay_key(view.overlays),
+            overlays: grana_render::overlay_digest(view.overlays),
             camera: view.camera.state(),
             region: view.scene.region,
             clip: view.scene.clip,
@@ -179,28 +181,28 @@ impl Engine {
                     && plan.camera == content.camera
                     && plan.height == size[1] =>
             {
-                plan.targets.clone()
+                Arc::clone(&plan.targets)
             }
             _ => {
-                let targets = view::plan_with(
+                let targets = Arc::new(view::plan_with(
                     view.scene,
                     Some(view::Lens {
                         camera: view.camera,
                         height: size[1],
                     }),
                     &mut self.splats,
-                );
+                ));
                 self.plan = Some(Plan {
                     structure: keys.structure(),
                     camera: content.camera,
                     height: size[1],
-                    targets: targets.clone(),
+                    targets: Arc::clone(&targets),
                 });
                 targets
             }
         };
         if self.prepared.as_ref().is_none_or(|prepared| {
-            prepared.structure != keys.structure() || prepared.targets != detail
+            prepared.structure != keys.structure() || prepared.targets.as_ref() != detail.as_ref()
         }) {
             let rendered = view::frame(view.scene, &detail, &mut self.splats)?;
             self.prepared = Some(Prepared {
@@ -348,13 +350,4 @@ impl Engine {
     pub fn pick_pending(&self) -> bool {
         self.pending_pick.is_some()
     }
-}
-
-fn overlay_key(overlays: &[grana_render::Overlay<'_>]) -> u64 {
-    let mut key = Digest::new();
-    key.mix(overlays.len() as u64);
-    for overlay in overlays {
-        key.mix(overlay.digest());
-    }
-    key.finish()
 }

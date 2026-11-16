@@ -378,7 +378,7 @@ impl Renderer {
             exposure,
             epoch: *epoch,
             size,
-            overlay: overlay_digest(scene.overlays),
+            overlay: crate::schema::overlay_digest(scene.overlays),
         };
         let structure = signature.digest();
         let transition = signature.transition();
@@ -920,15 +920,6 @@ impl Renderer {
         target.view = view_now;
         Ok(*info)
     }
-}
-
-fn overlay_digest(overlays: &[crate::schema::Overlay<'_>]) -> u64 {
-    let mut digest = crate::schema::Digest::new();
-    digest.mix(overlays.len() as u64);
-    for overlay in overlays {
-        digest.mix(overlay.digest());
-    }
-    digest.finish()
 }
 
 fn view_motion(camera: &Camera, viewport: [u32; 4], clip: Region, time: u32, exposure: f32) -> u64 {
