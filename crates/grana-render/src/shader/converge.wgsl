@@ -1,5 +1,6 @@
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var reference: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> origin: vec4<u32>;
 
 const COVERAGE: f32 = 0.01;
 const MINIMUM_ALPHA: f32 = 1.0e-4;
@@ -24,7 +25,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 @fragment
 fn fs_error(input: VertexOutput) -> @location(0) vec4<f32> {
-    let pixel = vec2<i32>(input.clip_position.xy);
+    let pixel = vec2<i32>(input.clip_position.xy) + vec2<i32>(origin.xy);
     let sample = textureLoad(source, pixel, 0);
     let sum = textureLoad(reference, pixel, 0);
     if (sum.a <= COVERAGE) {

@@ -578,54 +578,20 @@ impl MeshPasses {
         depth: &TextureView,
         scene: &BindGroup,
     ) {
-        let width = region[2].max(1);
-        let height = region[3].max(1);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.mesh.gbuffer.pass"),
-            color_attachments: &[
-                Some(RenderPassColorAttachment {
-                    view: gbuffer.normal(),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                }),
-                Some(RenderPassColorAttachment {
-                    view: gbuffer.id(),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 0.0,
-                        }),
-                        store: StoreOp::Store,
-                    },
-                }),
-            ],
+            color_attachments: &[Some(load(gbuffer.normal())), Some(load(gbuffer.id()))],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                 view: depth,
                 depth_ops: Some(Operations {
-                    load: LoadOp::Clear(1.0),
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 }),
                 stencil_ops: None,
             }),
             ..Default::default()
         });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            width as f32,
-            height as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(region[0], region[1], width, height);
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.gbuffer_pipeline);
         pass.set_bind_group(0, scene, &[]);
         for key in &self.active {
@@ -642,31 +608,13 @@ impl MeshPasses {
         shadow: &BindGroup,
         ao: &BindGroup,
     ) {
-        let width = region[2].max(1);
-        let height = region[3].max(1);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.mesh.deferred.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: StoreOp::Store,
-                },
-            })],
+            color_attachments: &[Some(load(color))],
             depth_stencil_attachment: None,
             ..Default::default()
         });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            width as f32,
-            height as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(region[0], region[1], width, height);
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.deferred_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(1, gbuffer, &[]);
@@ -981,6 +929,18 @@ fn bind_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> Bin
             resource: buffer.as_entire_binding(),
         }],
     })
+}
+
+fn load(view: &TextureView) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Load,
+            store: StoreOp::Store,
+        },
+    }
 }
 
 fn vertex_layout() -> VertexBufferLayout<'static> {

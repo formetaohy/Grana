@@ -21,9 +21,8 @@ fn dither(seed: vec2<f32>) -> f32 {
 
 @fragment
 fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let pixel = vec2<i32>(floor(position.xy)) * AO_SCALE;
-    let extent = vec2<i32>(ao.extent.xy);
-    let surface = visible_surface(pixel);
+    let pixel = vec2<i32>(floor(position.xy)) * SURFACE_SCALE;
+    let surface = surface_at(pixel / SURFACE_SCALE);
     if (!surface.known || length(surface.normal) < NORMAL_REACH) {
         return vec4<f32>(1.0);
     }
@@ -57,14 +56,8 @@ fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 if (projected.w < 0.5) {
                     continue;
                 }
-                let sample_pixel = vec2<i32>(floor(projected.xy));
-                if (sample_pixel.x < 0
-                    || sample_pixel.y < 0
-                    || sample_pixel.x >= extent.x
-                    || sample_pixel.y >= extent.y) {
-                    continue;
-                }
-                let sample_depth = visible_depth(sample_pixel);
+                let sample_pixel = region_texel(vec2<i32>(floor(projected.xy)));
+                let sample_depth = surface_depth(sample_pixel / SURFACE_SCALE);
                 if (sample_depth >= UNREACHED_DEPTH) {
                     continue;
                 }

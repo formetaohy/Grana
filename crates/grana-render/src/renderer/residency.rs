@@ -176,8 +176,10 @@ pub(super) struct FrameTarget {
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: Option<Oit>,
     pub(super) geometry: Option<(GeometryKey, BindGroup)>,
+    pub(super) objects: Option<BindGroup>,
     pub(super) gbuffer: Option<crate::target::Gbuffer>,
     pub(super) ao: Option<crate::ao::Ao>,
+    pub(super) surface: Option<crate::surface::Target>,
     pub(super) volume: Option<crate::target::Volume>,
     pub(super) size: [u32; 2],
     pub(super) samples: u32,
@@ -242,8 +244,10 @@ impl FrameTarget {
             fade: None,
             oit: None,
             geometry: None,
+            objects: None,
             gbuffer: None,
             ao: None,
+            surface: None,
             volume: None,
             size,
             samples: 0,
@@ -265,11 +269,12 @@ impl FrameTarget {
         device: &Device,
         layouts: &Layouts,
         dummy_normal: &TextureView,
-        dummy_volume: &crate::target::Volume,
+        dummy_volume: &crate::target::Unreached,
+        volume: bool,
     ) -> BindGroup {
         let key = GeometryKey {
             object: self.gbuffer.is_some(),
-            volume: self.volume.is_some(),
+            volume,
         };
         let stale = self.geometry.as_ref().is_none_or(|(held, _)| *held != key);
         if stale {
@@ -277,7 +282,10 @@ impl FrameTarget {
                 .gbuffer
                 .as_ref()
                 .map_or(dummy_normal, crate::target::Gbuffer::normal);
-            let volume = self.volume.as_ref().unwrap_or(dummy_volume);
+            let (surface, volume_normal) = match self.volume.as_ref().filter(|_| volume) {
+                Some(volume) => (volume.surface(), volume.normal()),
+                None => (dummy_volume.surface(), dummy_volume.normal()),
+            };
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("grana.geometry.group"),
                 layout: &layouts.geometry,
@@ -292,11 +300,11 @@ impl FrameTarget {
                     },
                     BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(volume.surface()),
+                        resource: wgpu::BindingResource::TextureView(surface),
                     },
                     BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(volume.normal()),
+                        resource: wgpu::BindingResource::TextureView(volume_normal),
                     },
                 ],
             });
@@ -306,6 +314,36 @@ impl FrameTarget {
             .as_ref()
             .expect("the geometry group is ready")
             .1
+            .clone()
+    }
+
+    pub(super) fn objects(&mut self, device: &Device, layouts: &Layouts) -> BindGroup {
+        let stale = self.objects.is_none();
+        if stale {
+            let normal = self
+                .gbuffer
+                .as_ref()
+                .expect("the object surface reads a geometry buffer")
+                .normal();
+            let group = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("grana.object.surface.group"),
+                layout: &layouts.object_surface,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(self.scene.depth()),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(normal),
+                    },
+                ],
+            });
+            self.objects = Some(group);
+        }
+        self.objects
+            .as_ref()
+            .expect("the object surface group is ready")
             .clone()
     }
 
@@ -331,13 +369,13 @@ impl FrameTarget {
         &fade.group
     }
 
-    pub(super) fn snapshot(&mut self, encoder: &mut CommandEncoder) {
+    pub(super) fn snapshot(&mut self, encoder: &mut CommandEncoder, region: [u32; 4]) {
         let Some(fade) = self.fade.as_ref() else {
             return;
         };
         let extent = wgpu::Extent3d {
-            width: self.size[0],
-            height: self.size[1],
+            width: region[2].max(1),
+            height: region[3].max(1),
             depth_or_array_layers: 1,
         };
         for (source, destination) in [
@@ -348,13 +386,21 @@ impl FrameTarget {
                 TexelCopyTextureInfo {
                     texture: source,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin: wgpu::Origin3d {
+                        x: region[0],
+                        y: region[1],
+                        z: 0,
+                    },
                     aspect: TextureAspect::All,
                 },
                 TexelCopyTextureInfo {
                     texture: destination,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin: wgpu::Origin3d {
+                        x: region[0],
+                        y: region[1],
+                        z: 0,
+                    },
                     aspect: TextureAspect::All,
                 },
                 extent,

@@ -1,9 +1,15 @@
+mod allocate;
 mod damage;
+mod draw;
 mod feedback;
+mod plan;
 mod render;
 mod residency;
+mod resolve;
 mod signature;
+mod timing;
 mod upload;
+mod view;
 
 use residency::{
     FrameTarget, LevelKey, Levels, Mode, Residency, ResidencyDemand, Resident, TargetCache,
@@ -185,6 +191,8 @@ pub struct Renderer {
     planner: Option<Planner>,
     shadow: Option<Shadow>,
     volume: VolumePass,
+    clear: crate::clear::Clear,
+    surface: crate::surface::Pipeline,
     oit_resolve: Option<OitResolve>,
     gtao: crate::ao::AoPipeline,
     meshes: Option<MeshPasses>,
@@ -193,7 +201,7 @@ pub struct Renderer {
     dummy_normal: TextureView,
     dummy_oit: Oit,
     dummy_ao: BindGroup,
-    dummy_volume: crate::target::Volume,
+    dummy_volume: crate::target::Unreached,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -258,7 +266,7 @@ impl Renderer {
         let dummy_normal = dummy_normal(device);
         let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
         let dummy_ao = crate::ao::dummy(device, queue, &layouts);
-        let dummy_volume = dummy_volume(device, queue, &layouts);
+        let dummy_volume = dummy_volume(device, queue);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -272,6 +280,8 @@ impl Renderer {
         let sections = Sections::new(device, &layouts, pipelines);
         let present = Present::new(device, format, pipelines);
         let volume = VolumePass::new(device, &layouts, pipelines);
+        let clear = crate::clear::Clear::new(device, pipelines);
+        let surface = crate::surface::Pipeline::new(device, &layouts, pipelines);
         let temporal = TemporalPass::new(device, &layouts, pipelines);
         let overlay = Overlays::new(device, pipelines);
         Self {
@@ -290,6 +300,8 @@ impl Renderer {
             planner: None,
             shadow: None,
             volume,
+            clear,
+            surface,
             oit_resolve: None,
             gtao: crate::ao::AoPipeline::new(device, &layouts, pipelines),
             meshes: None,
@@ -861,8 +873,12 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.picture"),
         });
-        self.present
-            .quantize(&mut encoder, &view, &target.present_group);
+        self.present.quantize(
+            &mut encoder,
+            &view,
+            &target.present_group,
+            [0, 0, size[0], size[1]],
+        );
         queue.submit([encoder.finish()]);
         (texture, size)
     }
@@ -941,12 +957,6 @@ fn dummy_normal(device: &Device) -> TextureView {
     )
 }
 
-fn dummy_volume(device: &Device, queue: &Queue, layouts: &Layouts) -> crate::target::Volume {
-    let volume = crate::target::Volume::new(device, &layouts.volume_read, [1, 1]);
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("grana.volume.dummy"),
-    });
-    volume.clear(&mut encoder);
-    queue.submit([encoder.finish()]);
-    volume
+fn dummy_volume(device: &Device, queue: &Queue) -> crate::target::Unreached {
+    crate::target::Unreached::new(device, queue)
 }

@@ -1,10 +1,8 @@
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Color, CommandEncoder, Device,
-    Extent3d, LoadOp, Operations, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
-    RenderPassDescriptor, StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureUsages, TextureView, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Device, Extent3d, Queue,
+    RenderPass, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
-
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
@@ -216,39 +214,86 @@ impl Volume {
     pub fn group(&self) -> &BindGroup {
         &self.group
     }
+}
 
-    pub fn clear(&self, encoder: &mut CommandEncoder) {
-        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.volume.clear.pass"),
-            color_attachments: &[
-                Some(empty(&self.radiance, Color::TRANSPARENT)),
-                Some(empty(
-                    &self.surface,
-                    Color {
-                        r: 0.0,
-                        g: 1.0,
-                        b: 0.0,
-                        a: 1.0,
-                    },
-                )),
-                Some(empty(&self.normal, Color::TRANSPARENT)),
-            ],
-            depth_stencil_attachment: None,
-            ..Default::default()
+pub(crate) struct Unreached {
+    _surface: Texture,
+    _normal: Texture,
+    surface: TextureView,
+    normal: TextureView,
+}
+
+impl Unreached {
+    pub fn new(device: &Device, queue: &Queue) -> Self {
+        let surface = device.create_texture(&TextureDescriptor {
+            label: Some("grana.volume.surface.unreached"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: VOLUME_SURFACE_FORMAT,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
         });
+        let normal = device.create_texture(&TextureDescriptor {
+            label: Some("grana.volume.normal.unreached"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: VOLUME_NORMAL_FORMAT,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        write(queue, &surface, &[0.0f32, 1.0], 8);
+        write(queue, &normal, &[0u8; 8], 8);
+        let surface_view = surface.create_view(&TextureViewDescriptor::default());
+        let normal_view = normal.create_view(&TextureViewDescriptor::default());
+        Self {
+            _surface: surface,
+            _normal: normal,
+            surface: surface_view,
+            normal: normal_view,
+        }
+    }
+
+    pub fn surface(&self) -> &TextureView {
+        &self.surface
+    }
+
+    pub fn normal(&self) -> &TextureView {
+        &self.normal
     }
 }
 
-fn empty(view: &TextureView, color: Color) -> RenderPassColorAttachment<'_> {
-    RenderPassColorAttachment {
-        view,
-        depth_slice: None,
-        resolve_target: None,
-        ops: Operations {
-            load: LoadOp::Clear(color),
-            store: StoreOp::Store,
+fn write(queue: &Queue, texture: &Texture, bytes: &[impl bytemuck::Pod], row: u32) {
+    queue.write_texture(
+        TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
         },
-    }
+        bytemuck::cast_slice(bytes),
+        TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(row),
+            rows_per_image: Some(1),
+        },
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> Texture {
@@ -320,26 +365,16 @@ pub(crate) fn attachment(
         .create_view(&TextureViewDescriptor::default())
 }
 
-pub(crate) fn clear(encoder: &mut CommandEncoder, color: &TextureView, depth: &TextureView) {
-    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
-        label: Some("grana.scene.clear.pass"),
-        color_attachments: &[Some(RenderPassColorAttachment {
-            view: color,
-            depth_slice: None,
-            resolve_target: None,
-            ops: Operations {
-                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-            view: depth,
-            depth_ops: Some(Operations {
-                load: LoadOp::Clear(1.0),
-                store: StoreOp::Store,
-            }),
-            stencil_ops: None,
-        }),
-        ..Default::default()
-    });
+pub(crate) fn viewport(pass: &mut RenderPass<'_>, region: [u32; 4]) {
+    let width = region[2].max(1);
+    let height = region[3].max(1);
+    pass.set_viewport(
+        region[0] as f32,
+        region[1] as f32,
+        width as f32,
+        height as f32,
+        0.0,
+        1.0,
+    );
+    pass.set_scissor_rect(region[0], region[1], width, height);
 }

@@ -22,6 +22,8 @@ const GTAO: &str = concat!(
     "\n",
     include_str!("shader/geometry.wgsl"),
     "\n",
+    include_str!("shader/surface.wgsl"),
+    "\n",
     include_str!("shader/gtao.wgsl")
 );
 
@@ -31,6 +33,8 @@ const FILTER: &str = concat!(
     include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/geometry.wgsl"),
+    "\n",
+    include_str!("shader/surface.wgsl"),
     "\n",
     include_str!("shader/ao_filter.wgsl")
 );
@@ -185,7 +189,7 @@ impl Ao {
         frame: &FrameData,
         resolution: [u32; 2],
         ambient: Ambient,
-        geometry: &BindGroup,
+        surface: &BindGroup,
     ) {
         assert!(
             frame.viewport[0] + frame.viewport[2] <= resolution[0] as f32
@@ -225,7 +229,7 @@ impl Ao {
                 pipeline: &self.pipeline,
                 group: &self.data,
             },
-            geometry,
+            surface,
             [
                 first[0],
                 first[1],
@@ -241,7 +245,7 @@ impl Ao {
                 pipeline: &self.filter_pipeline,
                 group: &self.filter,
             },
-            geometry,
+            surface,
             region,
         );
     }
@@ -250,7 +254,7 @@ impl Ao {
         &self,
         encoder: &mut CommandEncoder,
         stage: Stage<'_>,
-        geometry: &BindGroup,
+        surface: &BindGroup,
         region: [u32; 4],
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -267,18 +271,10 @@ impl Ao {
             depth_stencil_attachment: None,
             ..Default::default()
         });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            region[2] as f32,
-            region[3] as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(region[0], region[1], region[2], region[3]);
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(stage.pipeline);
         pass.set_bind_group(0, stage.group, &[]);
-        pass.set_bind_group(1, geometry, &[]);
+        pass.set_bind_group(1, surface, &[]);
         pass.draw(0..SIDE, 0..1);
     }
 }

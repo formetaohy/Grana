@@ -3,8 +3,8 @@ use grana_gpu::Pipelines;
 use wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
     BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent,
-    BlendFactor, BlendOperation, BlendState, Buffer, BufferUsages, Color, ColorTargetState,
-    ColorWrites, CommandEncoder, Device, FilterMode, FragmentState, LoadOp, Operations,
+    BlendFactor, BlendOperation, BlendState, Buffer, BufferUsages, ColorTargetState, ColorWrites,
+    CommandEncoder, Device, FilterMode, FragmentState, LoadOp, Operations,
     PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
     RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerDescriptor,
     ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureFormat, TextureSampleType,
@@ -216,48 +216,37 @@ impl Present {
         target: &TextureView,
         count: &TextureView,
         group: &BindGroup,
-        reset: bool,
+        region: [u32; 4],
     ) {
-        let load = if reset {
-            LoadOp::Clear(Color::TRANSPARENT)
-        } else {
-            LoadOp::Load
-        };
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.present.accumulate.pass"),
-            color_attachments: &[
-                Some(RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load,
-                        store: StoreOp::Store,
-                    },
-                }),
-                Some(RenderPassColorAttachment {
-                    view: count,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load,
-                        store: StoreOp::Store,
-                    },
-                }),
-            ],
+            color_attachments: &[Some(load(target)), Some(load(count))],
             ..Default::default()
         });
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.accumulate);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 
-    pub fn present(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
-        self.draw(encoder, target, &self.present, group);
+    pub fn present(
+        &self,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        group: &BindGroup,
+        region: [u32; 4],
+    ) {
+        self.draw(encoder, target, &self.present, group, region);
     }
 
-    pub fn quantize(&self, encoder: &mut CommandEncoder, target: &TextureView, group: &BindGroup) {
-        self.draw(encoder, target, &self.quantize, group);
+    pub fn quantize(
+        &self,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        group: &BindGroup,
+        region: [u32; 4],
+    ) {
+        self.draw(encoder, target, &self.quantize, group, region);
     }
 
     fn draw(
@@ -266,23 +255,29 @@ impl Present {
         target: &TextureView,
         pipeline: &RenderPipeline,
         group: &BindGroup,
+        region: [u32; 4],
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.present.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
+            color_attachments: &[Some(load(target))],
             ..Default::default()
         });
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+fn load(view: &TextureView) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Load,
+            store: StoreOp::Store,
+        },
     }
 }
 

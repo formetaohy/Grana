@@ -24,7 +24,7 @@ const INNER: std::ops::Range<usize> = APRON..APRON + BRICK_SIDE as usize;
 pub(super) struct UploadScratch {
     units: Vec<u16>,
     summaries: Vec<f32>,
-    words: Vec<u32>,
+    values: Vec<f32>,
 }
 
 impl UploadScratch {
@@ -32,7 +32,7 @@ impl UploadScratch {
         Self {
             units: Vec::new(),
             summaries: vec![0.0; PACK_LIMIT * CELL_COUNT],
-            words: vec![0; CELL_WORDS],
+            values: vec![0.0; CELL_WORDS],
         }
     }
 }
@@ -68,7 +68,7 @@ impl Renderer {
         let UploadScratch {
             units,
             summaries,
-            words,
+            values,
         } = staging;
         for (request, data) in bricks {
             let BrickRequest {
@@ -112,18 +112,10 @@ impl Renderer {
                         let maximum =
                             stage(&mut units[..span], summary, pyramid, total, data, pack);
                         atlas.write(queue, pack, slot, &units[..span]);
-                        occupy(
-                            words,
-                            occupancy.as_mut(),
-                            queue,
-                            slot,
-                            pack,
-                            maximum,
-                            summary,
-                        );
+                        occupy(values, occupancy.as_mut(), slot, pack, maximum, summary);
                     }
-                    if let Some(occupancy) = occupancy.as_ref() {
-                        occupancy.seal(queue, slot);
+                    if let Some(occupancy) = occupancy.as_mut() {
+                        occupancy.flush(queue, slot);
                     }
                     atlas.written(slot);
                     if time == *now {
@@ -186,9 +178,8 @@ impl Renderer {
                 let step = voxels * pack_texels(pack_components(total, pack));
                 atlas.write(queue, pack, slot, &units[base..base + step]);
                 occupy(
-                    words,
+                    values,
                     occupancy.as_mut(),
-                    queue,
                     slot,
                     pack,
                     maxima[pack],
@@ -196,8 +187,8 @@ impl Renderer {
                 );
                 base += step;
             }
-            if let Some(occupancy) = occupancy.as_ref() {
-                occupancy.seal(queue, slot);
+            if let Some(occupancy) = occupancy.as_mut() {
+                occupancy.flush(queue, slot);
             }
             atlas.assign(slot, ResidentBrick { time, level, index }, *pin, demand);
             if publish && let Some(table) = tables[level].as_mut() {
@@ -281,9 +272,8 @@ fn stage(
 }
 
 fn occupy(
-    words: &mut [u32],
+    values: &mut [f32],
     occupancy: Option<&mut Occupancy>,
-    queue: &Queue,
     slot: u32,
     pack: usize,
     maximum: f32,
@@ -292,11 +282,11 @@ fn occupy(
     let Some(occupancy) = occupancy else {
         return;
     };
-    words[0] = (maximum / UNIT_MAXIMUM).to_bits();
-    for (word, cell) in words[1..].iter_mut().zip(summary) {
-        *word = (cell / UNIT_MAXIMUM).to_bits();
+    values[0] = maximum / UNIT_MAXIMUM;
+    for (value, cell) in values[1..].iter_mut().zip(summary) {
+        *value = cell / UNIT_MAXIMUM;
     }
-    occupancy.write(queue, slot, pack, words);
+    occupancy.stage(slot, pack, values);
 }
 
 fn pack_mask(channels: grana_volume::ChannelSet, count: usize) -> u64 {

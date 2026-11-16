@@ -6,11 +6,16 @@ use crate::atlas::PACK_LIMIT;
 
 pub(crate) const CELL_WORDS: usize = 1 + CELL_COUNT;
 
-pub(crate) const STRIDE_WORDS: usize = CELL_WORDS * (1 + PACK_LIMIT);
+pub(crate) const STRIDE_WORDS: usize = CELL_WORDS;
+
+const VALUE_LIMIT: f32 = 65535.0;
+
+const MASK_SHIFT: u32 = 16;
 
 pub(crate) struct Occupancy {
     buffer: Buffer,
-    fold: Vec<u32>,
+    columns: Vec<u16>,
+    words: Vec<u32>,
     slots: usize,
 }
 
@@ -28,7 +33,8 @@ impl Occupancy {
         });
         Self {
             buffer,
-            fold: vec![0; slots * CELL_WORDS],
+            columns: vec![0; slots * PACK_LIMIT * CELL_WORDS],
+            words: vec![0; STRIDE_WORDS],
             slots,
         }
     }
@@ -37,20 +43,16 @@ impl Occupancy {
         &self.buffer
     }
 
-    fn place(slot: usize) -> usize {
-        slot * STRIDE_WORDS * size_of::<u32>()
-    }
-
     pub fn reset(&mut self, slot: u32) {
         assert!(
             (slot as usize) < self.slots,
             "an occupancy slot lies inside the table"
         );
-        let start = slot as usize * CELL_WORDS;
-        self.fold[start..start + CELL_WORDS].fill(0);
+        let start = slot as usize * PACK_LIMIT * CELL_WORDS;
+        self.columns[start..start + PACK_LIMIT * CELL_WORDS].fill(0);
     }
 
-    pub fn write(&mut self, queue: &Queue, slot: u32, pack: usize, words: &[u32]) {
+    pub fn stage(&mut self, slot: u32, pack: usize, values: &[f32]) {
         assert!(
             (slot as usize) < self.slots,
             "an occupancy slot lies inside the table"
@@ -60,29 +62,44 @@ impl Occupancy {
             "an occupancy pack names one of the channel packs"
         );
         assert!(
-            words.len() == CELL_WORDS,
-            "an occupancy pack holds one brick word and one word per cell"
+            values.len() == CELL_WORDS,
+            "an occupancy pack holds one brick value and one value per cell"
         );
-        let start = slot as usize * CELL_WORDS;
-        for (folded, word) in self.fold[start..start + CELL_WORDS].iter_mut().zip(words) {
-            if f32::from_bits(*word) > f32::from_bits(*folded) {
-                *folded = *word;
-            }
+        let start = (slot as usize * PACK_LIMIT + pack) * CELL_WORDS;
+        for (column, value) in self.columns[start..start + CELL_WORDS]
+            .iter_mut()
+            .zip(values)
+        {
+            *column = quantize(*value);
         }
-        let offset = Self::place(slot as usize) + (1 + pack) * CELL_WORDS * size_of::<u32>();
-        queue.write_buffer(&self.buffer, offset as u64, cast_slice(words));
     }
 
-    pub fn seal(&self, queue: &Queue, slot: u32) {
+    pub fn flush(&mut self, queue: &Queue, slot: u32) {
         assert!(
             (slot as usize) < self.slots,
             "an occupancy slot lies inside the table"
         );
-        let start = slot as usize * CELL_WORDS;
+        let base = slot as usize * PACK_LIMIT * CELL_WORDS;
+        for (word, occupied) in self.words.iter_mut().enumerate() {
+            let mut value = 0u16;
+            let mut packs = 0u32;
+            for pack in 0..PACK_LIMIT {
+                let column = self.columns[base + pack * CELL_WORDS + word];
+                value = value.max(column);
+                if column != 0 {
+                    packs |= 1 << pack;
+                }
+            }
+            *occupied = u32::from(value) | (packs << MASK_SHIFT);
+        }
         queue.write_buffer(
             &self.buffer,
-            Self::place(slot as usize) as u64,
-            cast_slice(&self.fold[start..start + CELL_WORDS]),
+            (slot as usize * STRIDE_WORDS * size_of::<u32>()) as u64,
+            cast_slice(&self.words),
         );
     }
+}
+
+fn quantize(value: f32) -> u16 {
+    (value * VALUE_LIMIT).round().clamp(0.0, VALUE_LIMIT) as u16
 }

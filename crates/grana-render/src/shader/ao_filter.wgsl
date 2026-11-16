@@ -2,30 +2,32 @@
 
 const MAX_SLOPE: f32 = 8.0;
 
-fn tap_world(at: vec2<i32>) -> vec4<f32> {
-    let extent = vec2<i32>(ao.extent.xy);
-    let pixel = clamp(at * AO_SCALE, vec2<i32>(0), extent - vec2<i32>(1));
-    let depth = visible_depth(pixel);
+fn tap_frame(at: vec2<i32>) -> vec4<f32> {
+    let low = vec2<i32>(ao.region.xy) / SURFACE_SCALE;
+    let high = (vec2<i32>(ao.region.xy) + vec2<i32>(ao.region.zw) - vec2<i32>(1)) / SURFACE_SCALE;
+    let tap = clamp(at, low, high);
+    let depth = surface_depth(tap);
     if (depth >= UNREACHED_DEPTH) {
         return vec4<f32>(0.0);
     }
+    let pixel = tap * SURFACE_SCALE;
     return vec4<f32>(world_of(region_ndc(vec2<f32>(pixel), ao.region), depth), 1.0);
 }
 
 @fragment
 fn fs_filter(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(position.xy);
-    let surface = visible_surface(pixel);
+    let surface = surface_at(pixel / SURFACE_SCALE);
     if (!surface.known || length(surface.normal) < NORMAL_REACH) {
         return vec4<f32>(1.0);
     }
     let world = world_of(region_ndc(vec2<f32>(pixel), ao.region), surface.depth);
     let view = normalize(ao.eye.xyz - world);
     let facing = max(abs(dot(normalize(surface.normal), view)), FLOOR);
-    let span = f32(AO_SCALE) * pixel_world(world);
+    let span = f32(SURFACE_SCALE) * pixel_world(world);
     let tolerance = clamp(span / facing, span, span * MAX_SLOPE);
     let extent = vec2<i32>(textureDimensions(filtered_ao));
-    let base = (pixel - vec2<i32>(1)) / AO_SCALE;
+    let base = (pixel - vec2<i32>(1)) / SURFACE_SCALE;
     var sum = 0.0;
     var weight = 0.0;
     for (var y = 0; y < 2; y += 1) {
@@ -35,7 +37,7 @@ fn fs_filter(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 vec2<i32>(0),
                 extent - vec2<i32>(1),
             );
-            let tap = tap_world(at);
+            let tap = tap_frame(at);
             if (tap.w < 0.5) {
                 continue;
             }
@@ -45,7 +47,7 @@ fn fs_filter(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         }
     }
     if (weight <= 0.0) {
-        return vec4<f32>(textureLoad(filtered_ao, pixel / AO_SCALE, 0).r);
+        return vec4<f32>(textureLoad(filtered_ao, pixel / SURFACE_SCALE, 0).r);
     }
     return vec4<f32>(sum / weight);
 }

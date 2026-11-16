@@ -22,6 +22,10 @@ const CAPTURE: &str = concat!(
     "\n",
     include_str!("shader/geometry.wgsl"),
     "\n",
+    include_str!("shader/object_surface.wgsl"),
+    "\n",
+    include_str!("shader/volume_surface.wgsl"),
+    "\n",
     include_str!("shader/temporal_surface.wgsl"),
     "\n",
     include_str!("shader/temporal_capture.wgsl")
@@ -32,6 +36,10 @@ const SEED: &str = concat!(
     include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/geometry.wgsl"),
+    "\n",
+    include_str!("shader/object_surface.wgsl"),
+    "\n",
+    include_str!("shader/volume_surface.wgsl"),
     "\n",
     include_str!("shader/temporal_surface.wgsl"),
     "\n",
@@ -396,15 +404,7 @@ fn target_pass(
     for (index, group) in groups.iter().enumerate() {
         pass.set_bind_group(index as u32, *group, &[]);
     }
-    pass.set_viewport(
-        region[0] as f32,
-        region[1] as f32,
-        region[2] as f32,
-        region[3] as f32,
-        0.0,
-        1.0,
-    );
-    pass.set_scissor_rect(region[0], region[1], region[2], region[3]);
+    crate::target::viewport(&mut pass, region);
     pass.draw(0..3, 0..1);
 }
 

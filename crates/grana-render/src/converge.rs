@@ -4,13 +4,15 @@ use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, ColorTargetState, ColorWrites,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, ColorTargetState, ColorWrites,
     CommandEncoder, Device, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor,
-    PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
     RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Texture,
     TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
 };
+
+use crate::target;
 
 const SHADER: &str = include_str!("shader/converge.wgsl");
 const FORMAT: TextureFormat = TextureFormat::Rg16Float;
@@ -116,18 +118,38 @@ struct Stages {
 }
 
 struct Target {
-    size: [u32; 2],
+    region: [u32; 2],
     texture: Texture,
     views: Vec<TextureView>,
+    origin: Buffer,
     error: BindGroup,
     reduces: Vec<BindGroup>,
+}
+
+pub(crate) struct Sampled<'a> {
+    pub(crate) region: [u32; 4],
+    pub(crate) color: &'a TextureView,
+    pub(crate) accumulation: &'a TextureView,
 }
 
 impl Convergence {
     pub(crate) fn new(device: &Device, pipelines: &Pipelines) -> Self {
         let error_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.converge.error.layout"),
-            entries: &[texture_entry(0), texture_entry(1)],
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.converge.reduce.layout"),
@@ -182,19 +204,24 @@ impl Convergence {
     pub(crate) fn encode(
         &mut self,
         device: &Device,
+        queue: &Queue,
         paint: &mut CommandEncoder,
-        size: [u32; 2],
-        color: &TextureView,
-        accumulation: &TextureView,
+        sampled: Sampled<'_>,
         samples: u32,
     ) {
+        let Sampled {
+            region,
+            color,
+            accumulation,
+        } = sampled;
         let Some(slot) = self.readback.reserve() else {
             return;
         };
+        let size = [region[2].max(1), region[3].max(1)];
         if self
             .target
             .as_ref()
-            .is_none_or(|target| target.size != size)
+            .is_none_or(|target| target.region != size)
         {
             self.target = Some(Target::new(
                 device,
@@ -207,6 +234,11 @@ impl Convergence {
         }
         let generation = self.generation;
         let target = self.target.as_ref().expect("the converge target is ready");
+        queue.write_buffer(
+            &target.origin,
+            0,
+            bytemuck::bytes_of(&[region[0], region[1], 0, 0]),
+        );
         let mut pass = paint.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.converge.error.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -220,11 +252,13 @@ impl Convergence {
             })],
             ..Default::default()
         });
+        target::viewport(&mut pass, [0, 0, size[0], size[1]]);
         pass.set_pipeline(&self.pipelines.error);
         pass.set_bind_group(0, &target.error, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
         for level in 1..target.views.len() {
+            let size = level_size(target.region, level as u32);
             let mut pass = paint.begin_render_pass(&RenderPassDescriptor {
                 label: Some("grana.converge.reduce.pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -238,6 +272,7 @@ impl Convergence {
                 })],
                 ..Default::default()
             });
+            target::viewport(&mut pass, [0, 0, size[0], size[1]]);
             pass.set_pipeline(&self.pipelines.reduce);
             pass.set_bind_group(0, &target.reduces[level - 1], &[]);
             pass.draw(0..3, 0..1);
@@ -342,6 +377,12 @@ impl Target {
                 })
             })
             .collect::<Vec<_>>();
+        let origin = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.converge.origin"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let error = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.converge.error.group"),
             layout: &stages.error_layout,
@@ -353,6 +394,10 @@ impl Target {
                 BindGroupEntry {
                     binding: 1,
                     resource: BindingResource::TextureView(accumulation),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: origin.as_entire_binding(),
                 },
             ],
         });
@@ -369,13 +414,18 @@ impl Target {
             })
             .collect();
         Self {
-            size,
+            region: size,
             texture,
             views,
+            origin,
             error,
             reduces,
         }
     }
+}
+
+fn level_size(size: [u32; 2], level: u32) -> [u32; 2] {
+    [(size[0] >> level).max(1), (size[1] >> level).max(1)]
 }
 
 fn texture_entry(binding: u32) -> BindGroupLayoutEntry {

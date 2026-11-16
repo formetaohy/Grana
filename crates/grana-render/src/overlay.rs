@@ -221,15 +221,7 @@ impl Overlays {
             depth_stencil_attachment: None,
             ..Default::default()
         });
-        pass.set_viewport(
-            viewport[0] as f32,
-            viewport[1] as f32,
-            viewport[2] as f32,
-            viewport[3] as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(viewport[0], viewport[1], viewport[2], viewport[3]);
+        crate::target::viewport(&mut pass, viewport);
         pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(0, buffer.slice(..));
         for draw in &self.draws {

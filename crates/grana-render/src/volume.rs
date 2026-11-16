@@ -164,46 +164,26 @@ impl VolumePass {
         }
     }
 
-    pub fn march(&self, encoder: &mut CommandEncoder, frame: MarchFrame<'_>) {
+    pub fn march(&self, encoder: &mut CommandEncoder, region: [u32; 4], frame: MarchFrame<'_>) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.volume.march.pass"),
             color_attachments: &[
-                Some(RenderPassColorAttachment {
-                    view: frame.radiance,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                }),
-                Some(RenderPassColorAttachment {
-                    view: frame.surface,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 1.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: StoreOp::Store,
-                    },
-                }),
-                Some(RenderPassColorAttachment {
-                    view: frame.normal,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                }),
+                Some(load(frame.radiance)),
+                Some(load(frame.surface)),
+                Some(load(frame.normal)),
             ],
             depth_stencil_attachment: None,
             ..Default::default()
         });
+        crate::target::viewport(
+            &mut pass,
+            [
+                region[0] / 2,
+                region[1] / 2,
+                region[2].div_ceil(2),
+                region[3].div_ceil(2),
+            ],
+        );
         pass.set_pipeline(&self.march);
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.level, &[]);
@@ -252,34 +232,24 @@ fn color_pass<'a>(
 ) -> wgpu::RenderPass<'a> {
     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some(label),
-        color_attachments: &[Some(RenderPassColorAttachment {
-            view: target,
-            depth_slice: None,
-            resolve_target: None,
-            ops: Operations {
-                load: LoadOp::Load,
-                store: StoreOp::Store,
-            },
-        })],
+        color_attachments: &[Some(load(target))],
         depth_stencil_attachment: None,
         ..Default::default()
     });
-    viewport(&mut pass, region);
+    crate::target::viewport(&mut pass, region);
     pass
 }
 
-fn viewport(pass: &mut wgpu::RenderPass<'_>, region: [u32; 4]) {
-    let width = region[2].max(1);
-    let height = region[3].max(1);
-    pass.set_viewport(
-        region[0] as f32,
-        region[1] as f32,
-        width as f32,
-        height as f32,
-        0.0,
-        1.0,
-    );
-    pass.set_scissor_rect(region[0], region[1], width, height);
+fn load(view: &TextureView) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Load,
+            store: StoreOp::Store,
+        },
+    }
 }
 
 fn pipeline(
