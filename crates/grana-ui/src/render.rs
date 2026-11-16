@@ -23,7 +23,9 @@ const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
 const MINIMUM_INSTANCES: usize = 512;
 const OVERLAY_SLOT: usize = Layer::ALL.len();
-const SLOTS: usize = Layer::ALL.len() + 1;
+const SLOTS: usize = OVERLAY_SLOT + 1;
+const DIRECT_COVERAGE: u64 = 2;
+const READBACK_ALIGNMENT: u32 = 256;
 
 const PREMULTIPLIED: BlendState = BlendState {
     color: BlendComponent {
@@ -44,49 +46,6 @@ struct Uniforms {
     viewport: [f32; 2],
     scale: f32,
     padding: f32,
-}
-
-struct Surface {
-    texture: Texture,
-    linear: TextureView,
-    encoded: TextureView,
-}
-
-impl Surface {
-    fn new(device: &Device, label: &str, size: [u32; 2], encoded: TextureFormat) -> Self {
-        let linear = raw(encoded);
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some(label),
-            size: Extent3d {
-                width: size[0].max(1),
-                height: size[1].max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: encoded,
-            usage: TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC,
-            view_formats: &[linear],
-        });
-        let default = texture.create_view(&TextureViewDescriptor::default());
-        let raw_view = texture.create_view(&TextureViewDescriptor {
-            format: Some(linear),
-            ..Default::default()
-        });
-        let (encoded_view, linear_view) = if encoded.is_srgb() {
-            (default, raw_view)
-        } else {
-            (raw_view, default)
-        };
-        Self {
-            texture,
-            linear: linear_view,
-            encoded: encoded_view,
-        }
-    }
 }
 
 pub struct Figure<'a> {
@@ -141,6 +100,26 @@ impl Damage {
     }
 }
 
+pub(crate) struct Layers<'a> {
+    pub content: &'a LayerBuffer,
+    pub chrome: &'a LayerBuffer,
+    pub popup: &'a LayerBuffer,
+    pub hud: &'a LayerBuffer,
+    pub overlay: &'a LayerBuffer,
+}
+
+impl<'a> Layers<'a> {
+    fn all(&self) -> [&'a LayerBuffer; SLOTS] {
+        [
+            self.content,
+            self.chrome,
+            self.popup,
+            self.hud,
+            self.overlay,
+        ]
+    }
+}
+
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
     pub scene: Option<&'a TextureView>,
@@ -148,11 +127,7 @@ pub(crate) struct PaintFrame<'a> {
     pub reset: bool,
     pub damage: Damage,
     pub atlases: Atlases<'a>,
-    pub content: &'a LayerBuffer,
-    pub chrome: &'a LayerBuffer,
-    pub popup: &'a LayerBuffer,
-    pub hud: &'a LayerBuffer,
-    pub overlay: &'a LayerBuffer,
+    pub layers: Layers<'a>,
 }
 
 struct InstanceBuffer {
@@ -226,13 +201,12 @@ pub struct Renderer {
     device: Device,
     queue: Queue,
     format: TextureFormat,
-    encoded: TextureFormat,
     size: [u32; 2],
     scale: f32,
-    canvas: Option<Surface>,
+    canvas: Option<Canvas>,
+    canvas_stale: bool,
     dummy: TextureView,
-    present_encoded: RenderPipeline,
-    present_linear: RenderPipeline,
+    blit: RenderPipeline,
     erase: RenderPipeline,
     ui: RenderPipeline,
     figure: RenderPipeline,
@@ -251,6 +225,34 @@ pub struct Renderer {
     ui_groups: [Option<(u64, BindGroup)>; SLOTS],
 }
 
+struct Canvas {
+    texture: Texture,
+    view: TextureView,
+}
+
+impl Canvas {
+    fn new(device: &Device, size: [u32; 2], format: TextureFormat) -> Self {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("grana.ui.canvas"),
+            size: Extent3d {
+                width: size[0].max(1),
+                height: size[1].max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        Self { texture, view }
+    }
+}
+
 impl Renderer {
     pub fn new(
         device: &Device,
@@ -258,8 +260,10 @@ impl Renderer {
         format: TextureFormat,
         pipelines: &Pipelines,
     ) -> Self {
-        let encoded = srgb(format);
-        let linear = raw(encoded);
+        assert!(
+            !format.is_srgb(),
+            "the interface paints display space bytes into a linear surface"
+        );
         let ui_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.ui.layout"),
             entries: &[
@@ -293,7 +297,7 @@ impl Renderer {
         });
         let blit_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.ui.blit.layout"),
-            entries: &[texture_entry(0), sampler_entry(1)],
+            entries: &[texture_entry(0)],
         });
         let ui_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.ui.pipeline_layout"),
@@ -313,21 +317,12 @@ impl Renderer {
             label: Some("grana.ui"),
             source: ShaderSource::Wgsl(UI_SHADER.into()),
         });
-        let present_encoded = fullscreen_pipeline(
+        let blit = fullscreen_pipeline(
             device,
-            "grana.ui.present.encoded",
+            "grana.ui.blit",
             &blit_pipeline_layout,
             &blit_shader,
-            "fs_present_encoded",
-            format,
-            pipelines,
-        );
-        let present_linear = fullscreen_pipeline(
-            device,
-            "grana.ui.present.linear",
-            &blit_pipeline_layout,
-            &blit_shader,
-            "fs_present_linear",
+            "fs_copy",
             format,
             pipelines,
         );
@@ -342,7 +337,7 @@ impl Renderer {
             &erase_layout,
             &blit_shader,
             "fs_clear",
-            linear,
+            format,
             pipelines,
         );
         let ui = instance_pipeline(
@@ -350,7 +345,7 @@ impl Renderer {
             "grana.ui.instances",
             &ui_pipeline_layout,
             &ui_shader,
-            linear,
+            format,
             PREMULTIPLIED,
             pipelines,
         );
@@ -382,13 +377,12 @@ impl Renderer {
             device: device.clone(),
             queue: queue.clone(),
             format,
-            encoded,
             size: [0, 0],
             scale: 1.0,
             canvas: None,
+            canvas_stale: true,
             dummy: dummy(device),
-            present_encoded,
-            present_linear,
+            blit,
             erase,
             ui,
             figure,
@@ -423,32 +417,144 @@ impl Renderer {
             return false;
         }
         self.size = size;
-        let device = self.device.clone();
-        self.canvas = Some(Surface::new(&device, "grana.ui.canvas", size, self.encoded));
+        self.canvas = Some(Canvas::new(&self.device, size, self.format));
+        self.canvas_stale = true;
         self.canvas_generation = self.canvas_generation.wrapping_add(1);
         self.blit_cache = None;
         self.ui_groups = std::array::from_fn(|_| None);
         true
     }
 
-    pub fn read_color(&mut self) -> (Vec<u8>, [u32; 2], TextureFormat) {
-        let surface = self.canvas.as_ref().expect("the renderer is sized");
+    pub fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn write_uniforms(&mut self, scale: f32) {
+        self.scale = scale;
+        if self.uniform_state == Some((scale, self.size)) {
+            return;
+        }
+        self.uniform_state = Some((scale, self.size));
+        let uniforms = Uniforms {
+            viewport: [self.size[0] as f32, self.size[1] as f32],
+            scale,
+            padding: 0.0,
+        };
+        self.queue
+            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+    }
+
+    pub(crate) fn paint(&mut self, encoder: &mut CommandEncoder, frame: PaintFrame<'_>) {
+        let PaintFrame {
+            target: target_view,
+            scene,
+            scene_changed,
+            reset,
+            damage,
+            atlases,
+            layers,
+        } = frame;
+        assert!(
+            self.size[0] > 0 && self.size[1] > 0,
+            "the UI renderer needs a sized target"
+        );
+        let layers = layers.all();
+        let reupload = self.upload(&layers);
+        let damage = if reset || (scene_changed || reupload) && matches!(damage, Damage::None) {
+            Damage::Full
+        } else {
+            damage
+        };
+        let (scissors, count) = damage.scissors(|rect| self.clip(rect), self.region());
+        self.prepare_groups(atlases, scene);
+        let groups = self.layer_groups(&layers);
+        if matches!(damage, Damage::Full) || covers_surface(&scissors[..count], self.region()) {
+            self.paint_whole(encoder, target_view, &groups);
+            self.canvas_stale = true;
+            return;
+        }
+        let canvas = self.canvas.as_ref().expect("the renderer is sized");
+        if self.canvas_stale {
+            self.paint_whole(encoder, &canvas.view, &groups);
+            self.canvas_stale = false;
+        } else if count > 0 {
+            self.paint_layers(
+                encoder,
+                &canvas.view,
+                &[groups[Layer::Content.index()]],
+                &scissors[..count],
+                true,
+            );
+            self.paint_layers(
+                encoder,
+                &canvas.view,
+                &groups[1..],
+                &scissors[..count],
+                false,
+            );
+        }
+        if self
+            .blit_cache
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != self.canvas_generation)
+        {
+            let group = self.blit_group(&canvas.view);
+            self.blit_cache = Some((self.canvas_generation, group));
+        }
+        let group = &self
+            .blit_cache
+            .as_ref()
+            .expect("the blit group is cached")
+            .1;
+        fullscreen(
+            encoder,
+            &self.blit,
+            group,
+            target_view,
+            LoadOp::Clear(wgpu::Color::BLACK),
+        );
+    }
+
+    pub(crate) fn capture(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        atlases: Atlases<'_>,
+        layers: Layers<'_>,
+        scene: Option<&TextureView>,
+    ) -> Texture {
+        assert!(
+            self.size[0] > 0 && self.size[1] > 0,
+            "the UI renderer needs a sized target"
+        );
+        let layers = layers.all();
+        self.upload(&layers);
+        self.prepare_groups(atlases, scene);
+        let image = Canvas::new(&self.device, self.size, self.format);
+        let groups = self.layer_groups(&layers);
+        self.paint_whole(encoder, &image.view, &groups);
+        image.texture
+    }
+
+    pub fn read_color(
+        &self,
+        mut encoder: CommandEncoder,
+        texture: &Texture,
+    ) -> (Vec<u8>, [u32; 2], TextureFormat) {
         let [width, height] = self.size;
-        let padded = (width * 4).div_ceil(256) * 256;
+        let padded = (width * 4).div_ceil(READBACK_ALIGNMENT) * READBACK_ALIGNMENT;
         let buffer = self.device.create_buffer(&BufferDescriptor {
             label: Some("grana.ui.readback"),
             size: u64::from(padded * height),
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("grana.ui.readback"),
-            });
         encoder.copy_texture_to_buffer(
             TexelCopyTextureInfo {
-                texture: &surface.texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -483,154 +589,67 @@ impl Renderer {
         }
         drop(data);
         buffer.unmap();
-        (pixels, [width, height], raw(self.format))
+        (pixels, [width, height], self.format)
     }
 
-    pub fn queue(&self) -> &Queue {
-        &self.queue
-    }
-
-    pub fn write_uniforms(&mut self, scale: f32) {
-        self.scale = scale;
-        if self.uniform_state == Some((scale, self.size)) {
-            return;
-        }
-        self.uniform_state = Some((scale, self.size));
-        let uniforms = Uniforms {
-            viewport: [self.size[0] as f32, self.size[1] as f32],
-            scale,
-            padding: 0.0,
-        };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
-    }
-
-    pub(crate) fn paint(&mut self, encoder: &mut CommandEncoder, frame: PaintFrame<'_>) {
-        let PaintFrame {
-            target: target_view,
-            scene,
-            scene_changed,
-            reset,
-            damage,
-            atlases,
-            content,
-            chrome,
-            popup,
-            hud,
-            overlay,
-        } = frame;
-        assert!(
-            self.size[0] > 0 && self.size[1] > 0,
-            "the UI renderer needs a sized target"
-        );
-        let canvas = self.canvas.as_ref().expect("the renderer is sized");
-        let canvas_linear = canvas.linear.clone();
-        let canvas_encoded = canvas.encoded.clone();
-
-        let layers = [content, chrome, popup, hud, overlay];
+    fn upload(&mut self, layers: &[&LayerBuffer; SLOTS]) -> bool {
         let changed: [bool; SLOTS] =
             std::array::from_fn(|index| self.revisions[index] != layers[index].revision);
-        let reupload = changed.iter().any(|changed| *changed);
-        let damage = if reset || (scene_changed || reupload) && matches!(damage, Damage::None) {
-            Damage::Full
-        } else {
-            damage
-        };
-        let (scissors, count) = damage.scissors(|rect| self.clip(rect), self.region());
-        if reupload {
-            for index in 0..SLOTS {
-                if !changed[index] {
-                    continue;
-                }
-                self.buffers.buffers[index].upload(
-                    &self.device,
-                    &self.queue,
-                    "grana.ui.instances",
-                    layers[index],
-                );
-                self.revisions[index] = layers[index].revision;
+        for index in 0..SLOTS {
+            if !changed[index] {
+                continue;
             }
+            self.buffers.buffers[index].upload(
+                &self.device,
+                &self.queue,
+                "grana.ui.instances",
+                layers[index],
+            );
+            self.revisions[index] = layers[index].revision;
         }
-        self.prepare_groups(atlases, scene);
-        if count > 0 {
-            let full = matches!(damage, Damage::Full);
-            let content_group = &self.ui_groups[Layer::Content.index()]
-                .as_ref()
-                .expect("the content group is cached")
-                .1;
-            self.paint_layers(
-                encoder,
-                &canvas_linear,
-                &[(content_group, content.material.len())],
-                &scissors[..count],
-                !full,
-                full,
-            );
-            let chrome_group = &self.ui_groups[Layer::Chrome.index()]
-                .as_ref()
-                .expect("the chrome group is cached")
-                .1;
-            self.paint_layers(
-                encoder,
-                &canvas_linear,
-                &[(chrome_group, chrome.material.len())],
-                &scissors[..count],
-                false,
-                false,
-            );
-            let popup_group = &self.ui_groups[Layer::Popup.index()]
-                .as_ref()
-                .expect("the popup group is cached")
-                .1;
-            let hud_group = &self.ui_groups[Layer::Hud.index()]
-                .as_ref()
-                .expect("the hud group is cached")
-                .1;
-            let overlay_group = &self.ui_groups[OVERLAY_SLOT]
-                .as_ref()
-                .expect("the overlay group is cached")
-                .1;
-            let interface = [
-                (popup_group, popup.material.len()),
-                (hud_group, hud.material.len()),
-                (overlay_group, overlay.material.len()),
-            ];
-            self.paint_layers(
-                encoder,
-                &canvas_linear,
-                &interface,
-                &scissors[..count],
-                false,
-                false,
-            );
-        }
+        changed.iter().any(|changed| *changed)
+    }
 
-        if self
-            .blit_cache
-            .as_ref()
-            .is_none_or(|(generation, _)| *generation != self.canvas_generation)
-        {
-            let group = self.blit_group(&canvas_encoded);
-            self.blit_cache = Some((self.canvas_generation, group));
+    fn layer_groups<'a>(
+        &'a self,
+        layers: &[&LayerBuffer; SLOTS],
+    ) -> [(&'a BindGroup, usize); SLOTS] {
+        std::array::from_fn(|index| {
+            let group = &self.ui_groups[index]
+                .as_ref()
+                .expect("the interface group is cached")
+                .1;
+            (group, layers[index].material.len())
+        })
+    }
+
+    fn paint_whole(
+        &self,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        layers: &[(&BindGroup, usize)],
+    ) {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.ui.whole.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: PassOperations {
+                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.ui);
+        for (group, count) in layers {
+            if *count == 0 {
+                continue;
+            }
+            pass.set_bind_group(0, *group, &[]);
+            pass.draw(0..6, 0..*count as u32);
         }
-        let group = &self
-            .blit_cache
-            .as_ref()
-            .expect("the blit group is cached")
-            .1;
-        let pipeline = if self.format.is_srgb() {
-            &self.present_linear
-        } else {
-            &self.present_encoded
-        };
-        fullscreen(
-            encoder,
-            pipeline,
-            group,
-            target_view,
-            LoadOp::Clear(wgpu::Color::BLACK),
-            None,
-        );
     }
 
     fn prepare_groups(&mut self, atlases: Atlases<'_>, scene: Option<&TextureView>) {
@@ -673,9 +692,8 @@ impl Renderer {
         layers: &[(&BindGroup, usize)],
         scissors: &[[u32; 4]],
         erase: bool,
-        clear: bool,
     ) {
-        if !erase && !clear && layers.iter().all(|(_, count)| *count == 0) {
+        if !erase && layers.iter().all(|(_, count)| *count == 0) {
             return;
         }
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -685,11 +703,7 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: PassOperations {
-                    load: if clear {
-                        LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                    } else {
-                        LoadOp::Load
-                    },
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 },
             })],
@@ -778,16 +792,10 @@ impl Renderer {
         self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.ui.blit.group"),
             layout: &self.blit_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(source),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&self.sampler),
-                },
-            ],
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(source),
+            }],
         })
     }
 
@@ -852,24 +860,16 @@ fn group_key(scene: usize, instances: u64, atlases: Atlases<'_>) -> u64 {
     key
 }
 
-fn raw(format: TextureFormat) -> TextureFormat {
-    match format {
-        TextureFormat::Bgra8UnormSrgb => TextureFormat::Bgra8Unorm,
-        TextureFormat::Rgba8UnormSrgb => TextureFormat::Rgba8Unorm,
-        TextureFormat::Bgra8Unorm => TextureFormat::Bgra8Unorm,
-        TextureFormat::Rgba8Unorm => TextureFormat::Rgba8Unorm,
-        other => panic!("the interface cannot encode {other:?}"),
+fn covers_surface(scissors: &[[u32; 4]], region: [u32; 4]) -> bool {
+    let area = u64::from(region[2]) * u64::from(region[3]);
+    if area == 0 {
+        return true;
     }
-}
-
-fn srgb(format: TextureFormat) -> TextureFormat {
-    match format {
-        TextureFormat::Bgra8Unorm => TextureFormat::Bgra8UnormSrgb,
-        TextureFormat::Rgba8Unorm => TextureFormat::Rgba8UnormSrgb,
-        TextureFormat::Bgra8UnormSrgb => TextureFormat::Bgra8UnormSrgb,
-        TextureFormat::Rgba8UnormSrgb => TextureFormat::Rgba8UnormSrgb,
-        other => panic!("the interface cannot encode {other:?}"),
-    }
+    let damaged = scissors
+        .iter()
+        .map(|rect| u64::from(rect[2]) * u64::from(rect[3]))
+        .sum::<u64>();
+    damaged.saturating_mul(DIRECT_COVERAGE) >= area
 }
 
 fn texture_entry(binding: u32) -> BindGroupLayoutEntry {
@@ -909,7 +909,6 @@ fn fullscreen(
     group: &BindGroup,
     target: &TextureView,
     load: LoadOp<wgpu::Color>,
-    scissor: Option<[u32; 4]>,
 ) {
     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("grana.ui.fullscreen.pass"),
@@ -926,9 +925,6 @@ fn fullscreen(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[]);
-    if let Some(scissor) = scissor {
-        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-    }
     pass.draw(0..3, 0..1);
 }
 

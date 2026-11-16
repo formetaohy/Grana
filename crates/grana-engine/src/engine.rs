@@ -56,6 +56,11 @@ struct Plan {
     targets: Arc<view::Targets>,
 }
 
+struct Failure {
+    content: Content,
+    detail: String,
+}
+
 pub struct Engine {
     renderer: Renderer,
     pending_pick: Option<Identities>,
@@ -64,6 +69,7 @@ pub struct Engine {
     splats: SplatCache,
     image: Option<ViewportImage>,
     content: Option<Content>,
+    failure: Option<Failure>,
     resolution: [u32; 2],
     generation: u64,
     image_revision: u64,
@@ -85,6 +91,7 @@ impl Engine {
             splats: SplatCache::new(),
             image: None,
             content: None,
+            failure: None,
             resolution: [0, 0],
             generation: 0,
             image_revision: 0,
@@ -100,6 +107,7 @@ impl Engine {
         self.plan = None;
         self.splats.clear();
         self.content = None;
+        self.failure = None;
         self.info = FrameInfo::default();
     }
 
@@ -112,6 +120,7 @@ impl Engine {
         self.generation = self.renderer.generation();
         self.pending_pick = None;
         self.content = None;
+        self.failure = None;
         self.info = FrameInfo::default();
     }
 
@@ -142,9 +151,31 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        let keys = view::key(view.scene);
-        let content = Content {
-            scene: keys.digest(),
+        let content = self.content_of(&view);
+        if self.content == Some(content) && self.resolved(view.display) {
+            return Ok(());
+        }
+        if let Some(failure) = self.failure.as_ref().filter(|held| held.content == content) {
+            return Err(failure.detail.clone());
+        }
+        match self.render(device, queue, view, content) {
+            Ok(()) => {
+                self.failure = None;
+                Ok(())
+            }
+            Err(detail) => {
+                self.failure = Some(Failure {
+                    content,
+                    detail: detail.clone(),
+                });
+                Err(detail)
+            }
+        }
+    }
+
+    fn content_of(&self, view: &View<'_>) -> Content {
+        Content {
+            scene: view::key(view.scene).digest(),
             overlays: grana_render::overlay_digest(view.overlays),
             camera: view.camera.state(),
             region: view.scene.region,
@@ -153,10 +184,17 @@ impl Engine {
             size: view.size,
             level_cap: view.level_cap,
             generation: self.generation,
-        };
-        if self.content == Some(content) && self.resolved(view.display) {
-            return Ok(());
         }
+    }
+
+    fn render(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        view: View<'_>,
+        content: Content,
+    ) -> Result<(), String> {
+        let keys = view::key(view.scene);
         let moving = self.content.is_some_and(|previous| {
             previous.camera != content.camera
                 || previous.size != content.size
@@ -238,6 +276,7 @@ impl Engine {
                     size,
                     resolution,
                     samples: SAMPLE_LIMIT,
+                    budget: view.budget,
                     display: view.display.render(),
                     level_cap: view.level_cap,
                     overlays: view.overlays,
@@ -272,6 +311,10 @@ impl Engine {
         self.info
     }
 
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_ref().map(|failure| failure.detail.as_str())
+    }
+
     fn resolved(&self, display: Display) -> bool {
         let info = self.info;
         if display == Display::Interactive {
@@ -284,10 +327,7 @@ impl Engine {
             .image
             .as_ref()
             .is_some_and(|image| image.size == self.resolution);
-        detailed
-            && info.samples >= SAMPLE_LIMIT
-            && !info.fading
-            && info.view.resident >= info.view.demand
+        detailed && info.converged && !info.fading && info.view.resident >= info.view.demand
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {

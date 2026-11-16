@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use grana_display::Camera;
 use grana_scene::Scene;
 
@@ -32,6 +34,7 @@ pub struct View<'a> {
     pub camera: &'a Camera,
     pub size: [u32; 2],
     pub display: Display,
+    pub budget: Option<Duration>,
     pub level_cap: usize,
     pub overlays: &'a [grana_render::Overlay<'a>],
 }

@@ -1,5 +1,6 @@
 use super::signature::{SceneSummary, ShadowKeys, channel_style, digest, hash_camera};
 use super::*;
+use std::time::Instant;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
@@ -23,6 +24,7 @@ impl Renderer {
             clip,
             exposure,
             samples,
+            budget: convergence_budget,
             scene,
             display,
             level_cap: _,
@@ -307,7 +309,7 @@ impl Renderer {
             *generation,
             time,
             channel_key,
-            ladder,
+            ladder.base + ladder.count - 1,
             &space,
         );
         let tables = ladder
@@ -411,6 +413,13 @@ impl Renderer {
             target.samples = 0;
         }
         let reset = target.samples == 0;
+        if reset {
+            target.deadline =
+                convergence_budget.and_then(|budget| Instant::now().checked_add(budget));
+        }
+        let expired = target
+            .deadline
+            .is_some_and(|deadline| deadline <= Instant::now());
         let mut seeding = false;
         if reset {
             target.seeded = false;
@@ -522,7 +531,7 @@ impl Renderer {
             }
             planner.encode(&mut encoder, scene_table.group());
         }
-        if target.samples < samples && ready {
+        if target.samples < samples && ready && !expired {
             target.samples += 1;
             info.samples = target.samples;
             let volume_visible = scene
@@ -873,6 +882,7 @@ impl Renderer {
             target.samples = 0;
             info.samples = 0;
         }
+        info.converged = ready && (target.samples >= samples || expired);
         if ready {
             if let Some(active) = fade.as_mut() {
                 active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);

@@ -113,12 +113,17 @@ impl Gpu {
         let description = format!("{} · {:?}", info.name, info.backend);
         println!("grana: using {description}");
         let capabilities = surface.get_capabilities(&adapter);
-        let format = capabilities
+        let Some(format) = capabilities
             .formats
             .iter()
             .copied()
             .find(|format| !format.is_srgb())
-            .unwrap_or(capabilities.formats[0]);
+        else {
+            panic!(
+                "the window surface offers no linear colour format for display space bytes ({:?})",
+                capabilities.formats
+            );
+        };
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,

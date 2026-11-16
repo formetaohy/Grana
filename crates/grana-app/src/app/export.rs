@@ -303,7 +303,7 @@ impl App {
                 timeline: session.timeline(),
                 jobs: session.progress(),
                 localizations: session.localizations(),
-                io: session.io(exporting, export_message),
+                io: session.io(exporting, export_message, None),
                 batch: session.batch(),
                 stitch: session.stitch().map(|stitch| stitch.view()),
                 history: session.history(),

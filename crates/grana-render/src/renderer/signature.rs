@@ -166,19 +166,12 @@ impl ShadowKeys {
         generation: u64,
         time: u32,
         style: u64,
-        ladder: Ladder,
+        level: usize,
         space: &ShadowSpace,
     ) -> Self {
         let space = space.digest();
         Self {
-            volume: digest(&[
-                style,
-                ladder.base as u64,
-                ladder.count as u64,
-                u64::from(time),
-                generation,
-                space,
-            ]),
+            volume: digest(&[style, level as u64, u64::from(time), generation, space]),
             objects: digest(&[objects, visibility, space]),
         }
     }

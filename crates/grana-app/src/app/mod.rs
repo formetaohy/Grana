@@ -7,7 +7,7 @@ use glam::Vec2;
 
 use grana_display::Camera;
 use grana_editor::{Frame, Stage, Workspace};
-use grana_engine::{Display, Engine, SAMPLE_LIMIT};
+use grana_engine::{Display, Engine};
 use grana_gpu::Gpu;
 use grana_i18n::Language;
 use grana_scene::Revision;
@@ -42,6 +42,8 @@ const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const INTERACTION_HOLD: Duration = Duration::from_millis(220);
+const CONVERGENCE_BUDGET: Duration = Duration::from_millis(400);
+const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
@@ -321,11 +323,8 @@ impl App {
         let info = self.frame_info();
         let loaded = self.session.scene().is_some();
         let streamed = info.view.resident >= info.view.demand;
-        let settled = loaded
-            && streamed
-            && info.samples >= SAMPLE_LIMIT
-            && !info.fading
-            && !self.session.previewing();
+        let settled =
+            loaded && streamed && info.converged && !info.fading && !self.session.previewing();
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
             && self.elapsed_frames > 30
@@ -374,7 +373,7 @@ impl App {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let (pixels, size, format) = surface.ui.renderer_mut().read_color();
+        let (pixels, size, format) = surface.ui.capture();
         let pixels = if format == wgpu::TextureFormat::Bgra8Unorm {
             let mut swapped = pixels;
             for pixel in swapped.chunks_mut(4) {

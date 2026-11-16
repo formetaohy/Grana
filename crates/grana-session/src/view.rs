@@ -88,6 +88,7 @@ pub struct IoView<'a> {
     pub loading: Option<&'a str>,
     pub document: Option<(&'a str, usize, usize)>,
     pub message: Option<&'a Message>,
+    pub failure: Option<&'a str>,
     pub name: Option<String>,
     pub dirty: bool,
     pub pending: usize,

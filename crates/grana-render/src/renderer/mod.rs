@@ -13,6 +13,7 @@ use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use bytemuck::cast_slice;
 use glam::Vec3;
@@ -88,6 +89,7 @@ pub struct ViewInfo {
 pub struct FrameInfo {
     pub view: ViewInfo,
     pub samples: u32,
+    pub converged: bool,
     pub seeded: bool,
     pub history: bool,
     pub rebuilt: bool,
@@ -165,6 +167,7 @@ pub struct Frame<'a, 'b> {
     pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
+    pub budget: Option<Duration>,
     pub scene: &'a SceneFrame<'b>,
     pub display: Display,
     pub level_cap: usize,

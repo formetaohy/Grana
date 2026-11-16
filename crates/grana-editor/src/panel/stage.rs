@@ -423,34 +423,37 @@ pub(super) fn toast<'a>(
     layout: &Layout,
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    let Some(message) = state.io.message else {
-        return Vec::new();
+    let (text, kind) = match (state.io.failure, state.io.message) {
+        (Some(failure), _) => (failure.to_string(), grana_session::Kind::Error),
+        (None, Some(message)) => (message.text().to_string(), message.kind()),
+        (None, None) => return Vec::new(),
     };
     let palette = ctx.theme().palette;
     let stage = layout.content().shrink(STAGE_INSET);
     let ceiling = stage.max.y;
     let width = (stage.width() - 32.0).min(420.0);
     let style = TextStyle::new(ctx.theme().font(Level::Body), palette.on_surface).wrapping();
-    let layout_text = ctx.layout_text(message.text(), style, width - 56.0);
+    let layout_text = ctx.layout_text(&text, style, width - 56.0);
     let height = (layout_text.size.y + 20.0).max(38.0);
     let rect = Rect::from_min_size(
         Vec2::new(stage.center().x - width * 0.5, ceiling - height),
         Vec2::new(width, height),
     );
-    let (mark, tint) = match message.kind() {
+    let (mark, tint) = match kind {
         grana_session::Kind::Error => (Icon::Warning, palette.error),
         grana_session::Kind::Info => (Icon::Info, palette.tertiary),
     };
     let appear = ctx.animate(
-        Key::new(message.text()).id(),
+        Key::new(&text).id(),
         1.0,
         grana_ui::Motion::effect_default(),
     );
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
+    let key = text.clone();
     vec![
         grana_ui::canvas(Length::Fill, height)
             .view(
-                (mark, tint, appear.to_bits(), message.text().to_string()),
+                (mark, tint, appear.to_bits(), key),
                 move |_, painter, info| {
                     let rect = info.rect;
                     icon::paint(

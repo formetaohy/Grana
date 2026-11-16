@@ -453,6 +453,7 @@ impl Session {
         &'a self,
         exporting: Option<(u32, u32)>,
         export_message: Option<String>,
+        failure: Option<&'a str>,
     ) -> IoView<'a> {
         let frames = self.scene.as_ref().map_or(0, |scene| scene.frame_count());
         let interval = self
@@ -465,6 +466,7 @@ impl Session {
             loading: self.loading.as_deref(),
             document,
             message: self.message.as_ref(),
+            failure,
             name: self.document_name(),
             dirty: self.dirty(),
             pending: self.in_flight.len(),

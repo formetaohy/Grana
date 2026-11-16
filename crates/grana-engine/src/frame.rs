@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use grana_display::Camera;
 use grana_render::{Display, Frame, FrameInfo, Renderer, Temporal};
 use grana_scene::Scene;
@@ -15,6 +17,7 @@ pub(crate) struct View<'a> {
     pub size: [u32; 2],
     pub resolution: [u32; 2],
     pub samples: u32,
+    pub budget: Option<Duration>,
     pub display: Display,
     pub level_cap: usize,
     pub overlays: &'a [grana_render::Overlay<'a>],
@@ -43,6 +46,7 @@ pub(crate) fn draw(
             clip: frame.scene.clip,
             exposure: frame.scene.exposure,
             samples: frame.samples,
+            budget: frame.budget,
             scene: &scene,
             display: frame.display,
             level_cap: frame.level_cap,

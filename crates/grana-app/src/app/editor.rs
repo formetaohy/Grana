@@ -9,7 +9,8 @@ use super::App;
 fn session_view<'a>(
     session: &'a Session,
     export: Option<(u32, u32)>,
-    message: Option<&str>,
+    export_message: Option<&str>,
+    failure: Option<&'a str>,
 ) -> SessionView<'a> {
     SessionView {
         access: session.access(),
@@ -20,7 +21,7 @@ fn session_view<'a>(
         timeline: session.timeline(),
         jobs: session.progress(),
         localizations: session.localizations(),
-        io: session.io(export, message.map(str::to_owned)),
+        io: session.io(export, export_message.map(str::to_owned), failure),
         batch: session.batch(),
         stitch: session.stitch().map(|stitch| stitch.view()),
         history: session.history(),
@@ -40,6 +41,7 @@ impl App {
         let App {
             surface,
             session,
+            engine,
             camera,
             stage,
             workspace,
@@ -61,7 +63,8 @@ impl App {
         let actions = surface
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());
-        let view = session_view(session, export.progress(), output.as_deref());
+        let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
+        let view = session_view(session, export.progress(), output.as_deref(), failure);
         let frame = grana_editor::build(&mut surface.ui, actions, &view, camera, stage, workspace);
         let wait = surface.ui.finish();
         (frame, wait)
@@ -72,6 +75,7 @@ impl App {
             let App {
                 surface,
                 session,
+                engine,
                 camera,
                 stage,
                 workspace,
@@ -82,7 +86,8 @@ impl App {
             let Some(surface) = surface.as_mut() else {
                 return false;
             };
-            let view = session_view(session, export.progress(), output.as_deref());
+            let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
+            let view = session_view(session, export.progress(), output.as_deref(), failure);
             let mut frame = Frame::default();
             grana_editor::apply(
                 &mut surface.ui,

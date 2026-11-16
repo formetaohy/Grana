@@ -43,6 +43,7 @@ pub struct Ui<A = ()> {
     pub(crate) overlay: LayerBuffer,
     pub(crate) damage: crate::paint::Damage,
     pub(crate) scene_bounds: Rect,
+    pub(crate) scene_view: Option<wgpu::TextureView>,
     pub(crate) change: Change,
     pub(crate) scale: f32,
     pub(crate) size: Vec2,
@@ -99,6 +100,7 @@ impl<A: Clone> Ui<A> {
             overlay: LayerBuffer::default(),
             damage: crate::paint::Damage::None,
             scene_bounds: Rect::ZERO,
+            scene_view: None,
             change: Change::default(),
             scale: 1.0,
             size: Vec2::ZERO,
@@ -202,10 +204,6 @@ impl<A: Clone> Ui<A> {
 
     pub fn set_cursor(&mut self, cursor: Cursor) {
         self.cursor = cursor;
-    }
-
-    pub fn renderer_mut(&mut self) -> &mut Renderer {
-        &mut self.renderer
     }
 
     pub fn renderer_and_atlas(
@@ -413,6 +411,7 @@ impl<A: Clone> Ui<A> {
             damage.full();
         }
         let damage = paint_damage(damage, self.scale, self.size);
+        self.scene_view = scene.cloned();
         {
             let Self {
                 renderer,
@@ -435,11 +434,7 @@ impl<A: Clone> Ui<A> {
                         glyphs: text.atlas(),
                         images,
                     },
-                    overlay,
-                    content: &layers[Layer::Content.index()],
-                    chrome: &layers[Layer::Chrome.index()],
-                    popup: &layers[Layer::Popup.index()],
-                    hud: &layers[Layer::Hud.index()],
+                    layers: layer_set(layers, overlay),
                 },
             );
         }
@@ -449,6 +444,25 @@ impl<A: Clone> Ui<A> {
         self.change.scene = false;
         self.change.reset = false;
         self.damage = crate::paint::Damage::None;
+    }
+
+    pub fn capture(&mut self) -> (Vec<u8>, [u32; 2], wgpu::TextureFormat) {
+        let mut encoder =
+            self.renderer
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("grana.ui.capture"),
+                });
+        let image = self.renderer.capture(
+            &mut encoder,
+            crate::render::Atlases {
+                glyphs: self.text.atlas(),
+                images: &self.images,
+            },
+            layer_set(&self.layers, &self.overlay),
+            self.scene_view.as_ref(),
+        );
+        self.renderer.read_color(encoder, &image)
     }
 
     pub fn figure_instances(
@@ -530,6 +544,19 @@ impl<A: Clone> Ui<A> {
         }
         self.tree.mark_dirty();
         self.change.reset = true;
+    }
+}
+
+fn layer_set<'a>(
+    layers: &'a [LayerBuffer; Layer::ALL.len()],
+    overlay: &'a LayerBuffer,
+) -> crate::render::Layers<'a> {
+    crate::render::Layers {
+        content: &layers[Layer::Content.index()],
+        chrome: &layers[Layer::Chrome.index()],
+        popup: &layers[Layer::Popup.index()],
+        hud: &layers[Layer::Hud.index()],
+        overlay,
     }
 }
 

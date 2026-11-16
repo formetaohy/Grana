@@ -3551,6 +3551,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                             camera: &camera,
                             size,
                             display: Display::Still,
+                            budget: None,
                             level_cap: 99,
                             overlays: &[],
                         },

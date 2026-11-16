@@ -497,6 +497,14 @@ fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
             error: false,
         };
     }
+    if let Some(failure) = view.io.failure {
+        return Status {
+            text: grana_i18n::shell::nothing_opened(language).to_string(),
+            detail: failure.to_string(),
+            busy: false,
+            error: true,
+        };
+    }
     if let Some(message) = view.io.message {
         return Status {
             text: match message.kind() {

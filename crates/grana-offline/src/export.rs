@@ -224,6 +224,7 @@ impl Export {
                 clip: scene.clip,
                 exposure: scene.exposure,
                 samples: self.samples,
+                budget: None,
                 scene: &frame,
                 display: grana_render::Display::Export,
                 level_cap: usize::MAX,
