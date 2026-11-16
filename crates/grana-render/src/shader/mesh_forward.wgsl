@@ -12,7 +12,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
         clip.xy + mesh.jitter.xy * clip.w + lens_shift(clip.w),
         clip.zw,
     );
-    output.normal = decode_normal(input.normal);
+    output.normal = octahedral_decode(input.normal * 2.0 - vec2<f32>(1.0));
     output.position = position;
     output.object = input.object;
     return output;
@@ -32,22 +32,7 @@ fn vs_shadow(input: VertexInput) -> ShadowOutput {
 }
 
 @fragment
-fn fs_oit_key(input: VertexOutput) {
-    if (is_outside(input)) {
-        discard;
-    }
-    let origin = vec2<i32>(mesh.viewport.xy);
-    let size = vec2<i32>(mesh.viewport.zw);
-    let pixel = vec2<i32>(input.clip_position.xy);
-    let index = oit_index(origin, size, pixel);
-    if (index < 0) {
-        discard;
-    }
-    oit_offer(u32(index), mesh.oit.y, oit_key(mesh.oit.z, input.clip_position.z));
-}
-
-@fragment
-fn fs_oit_color(input: VertexOutput) -> Residual {
+fn fs_oit(input: VertexOutput) -> Residual {
     var output = oit_residual(0.0, vec3<f32>(0.0), 0.0);
     if (is_outside(input)) {
         return output;
@@ -65,21 +50,12 @@ fn fs_oit_color(input: VertexOutput) -> Residual {
         input.position,
         ambient_occlusion(input.clip_position.xy),
     );
-    let slot = oit_slot(
-        u32(index),
-        mesh.oit.y,
-        oit_key(mesh.oit.z, input.clip_position.z),
-    );
-    if (slot >= 0 && oit_claim(u32(index), mesh.oit.y, mesh.oit.z, u32(slot))) {
-        oit_write(
-            u32(index),
-            mesh.oit.y,
-            u32(slot),
-            vec4<f32>(sample.rgb * sample.a, sample.a),
-        );
+    let premultiplied = vec4<f32>(sample.rgb * sample.a, sample.a);
+    let depth = input.clip_position.z;
+    if (oit_insert(u32(index), mesh.oit.y, mesh.oit.z, depth, premultiplied)) {
         return output;
     }
-    return oit_residual(sample.a, sample.rgb, input.clip_position.z);
+    return oit_residual(sample.a, sample.rgb, depth);
 }
 
 @fragment

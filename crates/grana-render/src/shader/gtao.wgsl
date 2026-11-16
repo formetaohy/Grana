@@ -3,15 +3,14 @@ struct AoData {
     inverse_view_projection: mat4x4<f32>,
     eye: vec4<f32>,
     extent: vec4<f32>,
-    noise: vec4<f32>,
     region: vec4<f32>,
+    noise: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> ao: AoData;
 @group(0) @binding(1) var surface_depth: texture_depth_2d;
 @group(0) @binding(2) var surface_normal: texture_2d<f32>;
-@group(0) @binding(3) var ao_output: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var volume_normal: texture_2d<f32>;
+@group(0) @binding(3) var volume_normal: texture_2d<f32>;
 
 const SLICES: u32 = 8u;
 const STEPS: u32 = 5u;
@@ -30,17 +29,18 @@ fn pixel_of(world: vec3<f32>) -> vec4<f32> {
     }
     let ndc = clip.xy / clip.w;
     return vec4<f32>(
-        (ndc.x * 0.5 + 0.5) * ao.extent.x,
-        (0.5 - ndc.y * 0.5) * ao.extent.y,
+        (ndc.x * 0.5 + 0.5) * ao.region.z + ao.region.x,
+        (0.5 - ndc.y * 0.5) * ao.region.w + ao.region.y,
         clip.z / clip.w,
         1.0,
     );
 }
 
 fn ndc_of(pixel: vec2<i32>) -> vec2<f32> {
+    let local = vec2<f32>(pixel) - ao.region.xy + vec2<f32>(0.5);
     return vec2<f32>(
-        (f32(pixel.x) + 0.5) / ao.extent.x * 2.0 - 1.0,
-        1.0 - (f32(pixel.y) + 0.5) / ao.extent.y * 2.0,
+        local.x / ao.region.z * 2.0 - 1.0,
+        1.0 - local.y / ao.region.w * 2.0,
     );
 }
 
@@ -48,22 +48,23 @@ fn dither(seed: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(seed, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-fn store(pixel: vec2<i32>, value: f32) {
-    textureStore(ao_output, pixel, vec4<f32>(value, 0.0, 0.0, 1.0));
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    return vec4<f32>(corners[index], 0.0, 1.0);
 }
 
-@compute @workgroup_size(8, 8)
-fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let origin = vec2<i32>(vec2<u32>(ao.region.xy));
-    let span = vec2<u32>(ao.region.zw);
-    if (id.x >= span.x || id.y >= span.y) {
-        return;
-    }
-    let pixel = origin + vec2<i32>(id.xy);
+@fragment
+fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let pixel = vec2<i32>(position.xy);
     let extent = vec2<i32>(ao.extent.xy);
     var depth = textureLoad(surface_depth, pixel, 0);
-    var raw_normal = textureLoad(surface_normal, pixel, 0).xyz;
-    var surface = depth < 1.0 && length(raw_normal) >= 0.5;
+    var raw_normal = octahedral_decode(textureLoad(surface_normal, pixel, 0).xy);
+    var surface = depth < 1.0;
     let volume_sample = textureLoad(volume_normal, pixel, 0);
     let depth_of_volume = volume_sample.w;
     let normal_of_volume = volume_sample.xyz;
@@ -74,11 +75,10 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
         surface = true;
     }
     if (!surface) {
-        store(pixel, 1.0);
-        return;
+        return vec4<f32>(1.0);
     }
-    let position = world_of(ndc_of(pixel), depth);
-    let view = normalize(ao.eye.xyz - position);
+    let world = world_of(ndc_of(pixel), depth);
+    let view = normalize(ao.eye.xyz - world);
     let normal = normalize(raw_normal);
     let facing = select(normal, -normal, dot(normal, view) < 0.0);
     let across = cross(facing, view);
@@ -90,7 +90,7 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
     );
     let bitangent = cross(facing, tangent);
     let focal = max(ao.noise.y, FLOOR);
-    let depth_scale = select(1.0, length(position - ao.eye.xyz), ao.noise.z > 0.5);
+    let depth_scale = select(1.0, length(world - ao.eye.xyz), ao.noise.z > 0.5);
     let radius = max(ao.extent.z * depth_scale / focal, FLOOR);
     let rotation = dither(vec2<f32>(f32(pixel.x), f32(pixel.y))) * 6.2831853
         + ao.noise.x * 2.39996323;
@@ -103,7 +103,7 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
             var horizon = 0.0;
             for (var step = 1u; step <= STEPS; step += 1u) {
                 let reach = radius * f32(step) / f32(STEPS);
-                let probe = position + direction * (signum * reach);
+                let probe = world + direction * (signum * reach);
                 let projected = pixel_of(probe);
                 if (projected.w < 0.5) {
                     continue;
@@ -120,7 +120,7 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
                     continue;
                 }
                 let occluder = world_of(ndc_of(sample_pixel), sample_depth);
-                let offset = occluder - position;
+                let offset = occluder - world;
                 let distance = length(offset);
                 if (distance < FLOOR || distance > radius * 1.5) {
                     continue;
@@ -135,5 +135,5 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
             occlusion += horizon;
         }
     }
-    store(pixel, clamp(1.0 - ao.extent.w * occlusion / f32(SLICES * 2u), 0.0, 1.0));
+    return vec4<f32>(clamp(1.0 - ao.extent.w * occlusion / f32(SLICES * 2u), 0.0, 1.0));
 }

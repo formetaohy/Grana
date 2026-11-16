@@ -15,6 +15,8 @@ const SHADER: &str = concat!(
     "enable wgpu_binding_array;\n",
     include_str!("shader/scene.wgsl"),
     "\n",
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
     include_str!("shader/volume_sample.wgsl"),

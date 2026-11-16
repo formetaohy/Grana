@@ -9,10 +9,11 @@ pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
-pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const GUIDE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const GBUFFER_NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+pub(crate) const GBUFFER_ID_FORMAT: TextureFormat = TextureFormat::R16Uint;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
-pub(crate) const ID_FORMAT: TextureFormat = TextureFormat::R32Uint;
 
 pub(crate) struct SceneTarget {
     color: TextureView,
@@ -89,14 +90,14 @@ impl Gbuffer {
             device,
             "grana.gbuffer.normal",
             size,
-            NORMAL_FORMAT,
+            GBUFFER_NORMAL_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
         let id = attachment(
             device,
             "grana.gbuffer.id",
             size,
-            ID_FORMAT,
+            GBUFFER_ID_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
         let group = device.create_bind_group(&BindGroupDescriptor {

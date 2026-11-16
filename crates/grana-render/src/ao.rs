@@ -2,18 +2,23 @@ use bytemuck::{Pod, Zeroable};
 use grana_gpu::Pipelines;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferDescriptor,
-    BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
-    ComputePipelineDescriptor, Device, Extent3d, Queue, ShaderModuleDescriptor, ShaderSource,
-    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor,
+    BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device, Extent3d, FragmentState,
+    LoadOp, MultisampleState, Operations, PrimitiveState, Queue, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
+    ShaderSource, StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages, TextureView, TextureViewDescriptor, VertexState,
 };
 
 use crate::frame::FrameData;
 use crate::layout::Layouts;
 
-const WORKGROUP: u32 = 8;
-const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
-const SHADER: &str = include_str!("shader/gtao.wgsl");
+const SIDE: u32 = 3;
+const OUTPUT_FORMAT: TextureFormat = TextureFormat::R8Unorm;
+const SHADER: &str = concat!(
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/gtao.wgsl")
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -22,8 +27,8 @@ struct AoData {
     inverse_view_projection: [[f32; 4]; 4],
     eye: [f32; 4],
     extent: [f32; 4],
-    noise: [f32; 4],
     region: [f32; 4],
+    noise: [f32; 4],
 }
 
 const _: () = assert!(size_of::<AoData>() == 192);
@@ -55,14 +60,15 @@ impl Ambient {
 
 pub(crate) struct Ao {
     _texture: Texture,
+    view: TextureView,
     read: BindGroup,
-    compute: BindGroup,
-    pipeline: ComputePipeline,
+    write: BindGroup,
+    pipeline: RenderPipeline,
     uniform: Buffer,
 }
 
 pub(crate) struct AoPipeline {
-    pipeline: ComputePipeline,
+    pipeline: RenderPipeline,
 }
 
 impl AoPipeline {
@@ -71,18 +77,35 @@ impl AoPipeline {
             label: Some("grana.ao"),
             source: ShaderSource::Wgsl(SHADER.into()),
         });
-        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.ao"),
             layout: Some(&layouts.ao_pipeline),
-            module: &module,
-            entry_point: Some("gtao_main"),
-            compilation_options: Default::default(),
+            vertex: VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &module,
+                entry_point: Some("gtao_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: OUTPUT_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
             cache: pipelines.cache(),
         });
         Self { pipeline }
     }
 
-    pub fn pipeline(&self) -> &ComputePipeline {
+    pub fn pipeline(&self) -> &RenderPipeline {
         &self.pipeline
     }
 }
@@ -91,7 +114,7 @@ impl Ao {
     pub fn new(
         device: &Device,
         layouts: &Layouts,
-        pipeline: &ComputePipeline,
+        pipeline: &RenderPipeline,
         normal: &TextureView,
         depth: &TextureView,
         volume: &TextureView,
@@ -112,7 +135,7 @@ impl Ao {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: OUTPUT_FORMAT,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let output_view = output.create_view(&TextureViewDescriptor::default());
@@ -130,9 +153,9 @@ impl Ao {
                 resource: BindingResource::TextureView(&output_view),
             }],
         });
-        let compute = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.ao.compute.group"),
-            layout: &layouts.ao_compute,
+        let write = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.ao.write.group"),
+            layout: &layouts.ao_write,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
@@ -148,10 +171,6 @@ impl Ao {
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&output_view),
-                },
-                BindGroupEntry {
-                    binding: 5,
                     resource: BindingResource::TextureView(volume),
                 },
             ],
@@ -159,8 +178,9 @@ impl Ao {
         let pipeline = pipeline.clone();
         Self {
             _texture: output,
+            view: output_view,
             read,
-            compute,
+            write,
             pipeline,
             uniform,
         }
@@ -193,24 +213,46 @@ impl Ao {
                 ambient.reach,
                 ambient.strength,
             ],
+            region: frame.viewport,
             noise: [
                 ambient.sample as f32,
                 frame.march[3],
                 1.0 - frame.projection[0],
                 0.0,
             ],
-            region: frame.viewport,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));
-        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ao.pass"),
-            timestamp_writes: None,
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(wgpu::Color::WHITE),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
         });
+        pass.set_viewport(
+            frame.viewport[0],
+            frame.viewport[1],
+            frame.viewport[2],
+            frame.viewport[3],
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(
+            frame.viewport[0] as u32,
+            frame.viewport[1] as u32,
+            frame.viewport[2] as u32,
+            frame.viewport[3] as u32,
+        );
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.compute, &[]);
-        let width = frame.viewport[2] as u32;
-        let height = frame.viewport[3] as u32;
-        pass.dispatch_workgroups(width.div_ceil(WORKGROUP), height.div_ceil(WORKGROUP), 1);
+        pass.set_bind_group(0, &self.write, &[]);
+        pass.draw(0..SIDE, 0..1);
     }
 }
 
@@ -236,10 +278,10 @@ pub(crate) fn dummy(device: &Device, queue: &Queue, layouts: &Layouts) -> BindGr
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &[255u8; 4],
+        &[255u8],
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4),
+            bytes_per_row: Some(1),
             rows_per_image: Some(1),
         },
         Extent3d {

@@ -13,6 +13,8 @@ use crate::volume::BLEND;
 const RESOLVE: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
+    include_str!("shader/oit_key.wgsl"),
+    "\n",
     include_str!("shader/oit_layers.wgsl"),
     "\n",
     include_str!("shader/oit_resolve.wgsl")

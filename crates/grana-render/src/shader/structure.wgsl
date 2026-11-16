@@ -11,18 +11,6 @@ struct BakeEntry {
 const BAKE_TILE: u32 = 4u;
 const BAKE_TILES: u32 = 9u;
 
-fn sign_not_zero(axis: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(select(-1.0, 1.0, axis.x >= 0.0), select(-1.0, 1.0, axis.y >= 0.0));
-}
-
-fn octahedral_encode(normal: vec3<f32>) -> vec2<f32> {
-    let unit = normal / max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-8);
-    if (unit.z >= 0.0) {
-        return unit.xy;
-    }
-    return (vec2<f32>(1.0) - abs(unit.yx)) * sign_not_zero(unit.xy);
-}
-
 fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32> {
     let dx = structure_density(origin + inner + vec3<i32>(1, 0, 0))
         - structure_density(origin + inner - vec3<i32>(1, 0, 0));

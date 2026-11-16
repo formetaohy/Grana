@@ -26,28 +26,8 @@ struct VertexOutput {
 }
 
 struct GbufferOutput {
-    @location(0) normal: vec4<f32>,
+    @location(0) normal: vec2<f32>,
     @location(1) id: u32,
-}
-
-fn sgn(value: f32) -> f32 {
-    if (value < 0.0) {
-        return -1.0;
-    }
-    return 1.0;
-}
-
-fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
-    var x = packed.x * 2.0 - 1.0;
-    var y = packed.y * 2.0 - 1.0;
-    let z = 1.0 - abs(x) - abs(y);
-    if (z < 0.0) {
-        let across = (1.0 - abs(y)) * sgn(x);
-        let down = (1.0 - abs(x)) * sgn(y);
-        x = across;
-        y = down;
-    }
-    return normalize(vec3<f32>(x, y, z));
 }
 
 @vertex
@@ -57,7 +37,7 @@ fn vs_gbuffer(input: VertexInput) -> VertexOutput {
     let clip = frame.view_projection * vec4<f32>(position, 1.0);
     var output: VertexOutput;
     output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
-    output.normal = decode_normal(input.normal);
+    output.normal = octahedral_decode(input.normal * 2.0 - vec2<f32>(1.0));
     output.position = position;
     output.object = input.object;
     return output;
@@ -68,5 +48,5 @@ fn fs_gbuffer(input: VertexOutput) -> GbufferOutput {
     if (outside_region(input.position) || outside_clip(input.position)) {
         discard;
     }
-    return GbufferOutput(vec4<f32>(normalize(input.normal), 1.0), pick_ids[input.object]);
+    return GbufferOutput(octahedral_encode(normalize(input.normal)), pick_ids[input.object]);
 }

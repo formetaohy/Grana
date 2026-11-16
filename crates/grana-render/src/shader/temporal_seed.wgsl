@@ -56,7 +56,7 @@ fn current_geometry(surface: vec2<i32>, local: vec2<i32>) -> Geometry {
     let object = textureLoad(object_depth, surface, 0);
     let volume = textureLoad(volume_normal, surface, 0);
     if (object < 1.0 && (volume.w >= 1.0 || object <= volume.w)) {
-        return Geometry(object, textureLoad(pane_normal, local, 0).xyz, true);
+        return Geometry(object, octahedral_decode(textureLoad(pane_normal, local, 0).xy), true);
     }
     if (volume.w < 1.0) {
         return Geometry(volume.w, volume.xyz, true);

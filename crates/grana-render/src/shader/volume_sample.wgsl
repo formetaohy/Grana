@@ -5,7 +5,7 @@
 const ISO_EXTINCTION: f32 = 8.0;
 const ISO_SOFTNESS: f32 = 0.04;
 const CELL_SIDE: f32 = 8.0;
-const CELL_AXIS: f32 = 4.0;
+const CELL_GRID: u32 = 4u;
 
 struct LevelFrame {
     dims: vec3<f32>,
@@ -39,12 +39,16 @@ fn cell_voxel(band: u32, uvw: vec3<f32>, brick: vec3<u32>) -> vec3<f32> {
 
 fn cell_coord(local: vec3<f32>) -> vec3<u32> {
     return vec3<u32>(
-        clamp(floor(local / CELL_SIDE), vec3<f32>(0.0), vec3<f32>(CELL_AXIS - 1.0)),
+        clamp(
+            floor(local / CELL_SIDE),
+            vec3<f32>(0.0),
+            vec3<f32>(f32(CELL_GRID) - 1.0),
+        ),
     );
 }
 
 fn cell_index(cell: vec3<u32>) -> u32 {
-    return cell.x + u32(CELL_AXIS) * (cell.y + u32(CELL_AXIS) * cell.z);
+    return cell.x + CELL_GRID * (cell.y + CELL_GRID * cell.z);
 }
 
 fn cell_edge(band: u32, uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) -> vec3<f32> {

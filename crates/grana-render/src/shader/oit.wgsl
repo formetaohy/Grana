@@ -1,15 +1,8 @@
 @group(4) @binding(0) var<storage, read_write> oit_keys: array<atomic<u32>>;
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
-@group(4) @binding(3) var<storage, read_write> oit_claims: array<atomic<u32>>;
 
 const OIT_ALPHA_FLOOR: f32 = 1.0e-3;
-const OIT_EPOCH_SHIFT: u32 = 24u;
-
-fn oit_key(epoch: u32, depth: f32) -> u32 {
-    let inverted = ~bitcast<u32>(clamp(depth, 0.0, 1.0));
-    return (epoch << OIT_EPOCH_SHIFT) | (inverted >> 8u);
-}
 
 fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     let local = pixel - origin;
@@ -19,44 +12,36 @@ fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     return local.y * size.x + local.x;
 }
 
-fn oit_offer(index: u32, layers: u32, key: u32) {
+fn oit_insert(index: u32, layers: u32, epoch: u32, depth: f32, premultiplied: vec4<f32>) -> bool {
     let base = index * layers;
-    atomicAdd(&oit_counts[index], 1u);
-    var value = key;
-    for (var slot = 0u; slot < layers; slot += 1u) {
-        if (value == 0u) {
+    let slot = atomicAdd(&oit_counts[index], 1u);
+    if (slot >= layers) {
+        return false;
+    }
+    let key = oit_key(epoch, depth, slot);
+    var carry = key;
+    var placed = false;
+    for (var layer = 0u; layer < layers; layer += 1u) {
+        if (carry == 0u) {
             break;
         }
-        let stored = atomicMax(&oit_keys[base + slot], value);
-        if (stored == value) {
+        let stored = atomicMax(&oit_keys[base + layer], carry);
+        if (stored == carry) {
             break;
         }
-        value = min(stored, value);
-    }
-}
-
-fn oit_slot(index: u32, layers: u32, key: u32) -> i32 {
-    let base = index * layers;
-    let stored = min(atomicLoad(&oit_counts[index]), layers);
-    for (var slot = 0u; slot < stored; slot += 1u) {
-        if (atomicLoad(&oit_keys[base + slot]) == key) {
-            return i32(slot);
+        if (stored < carry) {
+            placed = placed || (carry == key);
+            carry = stored;
         }
     }
-    return -1;
-}
-
-fn oit_claim(index: u32, layers: u32, epoch: u32, slot: u32) -> bool {
-    let base = index * layers;
-    return atomicExchange(&oit_claims[base + slot], epoch) != epoch;
-}
-
-fn oit_write(index: u32, layers: u32, slot: u32, premultiplied: vec4<f32>) {
-    let base = index * layers;
+    if (!placed) {
+        return false;
+    }
     oit_colors[base + slot] = vec2<u32>(
         pack2x16float(premultiplied.rg),
         pack2x16float(premultiplied.ba),
     );
+    return true;
 }
 
 struct Residual {

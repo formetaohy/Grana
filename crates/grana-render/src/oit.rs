@@ -10,8 +10,7 @@ use crate::layout::Layouts;
 const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
 const COLOR_BYTES: u64 = 8;
-const CLAIM_BYTES: u64 = 4;
-const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES + CLAIM_BYTES;
+const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES;
 const RESIDUAL_BYTES: u64 = 12;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
@@ -51,9 +50,8 @@ pub(crate) fn residual_targets() -> [Option<ColorTargetState>; 2] {
 
 pub(crate) struct Oit {
     keys: Buffer,
-    colors: Buffer,
+    _colors: Buffer,
     counts: Buffer,
-    claims: Buffer,
     residual_color: TextureView,
     residual_moment: TextureView,
     write_group: BindGroup,
@@ -95,12 +93,6 @@ impl Oit {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let claims = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.oit.claims"),
-            size: (slots * CLAIM_BYTES).max(4),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let counts = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.oit.counts"),
             size: (capacity * COUNT_BYTES).max(4),
@@ -136,10 +128,6 @@ impl Oit {
                     binding: 2,
                     resource: counts.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: claims.as_entire_binding(),
-                },
             ],
         });
         let read_group = device.create_bind_group(&BindGroupDescriptor {
@@ -170,9 +158,8 @@ impl Oit {
         });
         Self {
             keys,
-            colors,
+            _colors: colors,
             counts,
-            claims,
             residual_color,
             residual_moment,
             write_group,
@@ -216,8 +203,6 @@ impl Oit {
         let epoch = self.next_epoch();
         if epoch == 1 {
             encoder.clear_buffer(&self.keys, 0, None);
-            encoder.clear_buffer(&self.colors, 0, None);
-            encoder.clear_buffer(&self.claims, 0, None);
         }
         self.epoch = epoch;
         encoder.clear_buffer(&self.counts, 0, None);

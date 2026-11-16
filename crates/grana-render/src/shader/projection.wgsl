@@ -14,7 +14,7 @@ fn march_projected(
     let count = u32(frame.march.z);
     let packs = (count + PACK - 1u) / PACK;
     if (finish <= begin) {
-        return March(radiance, transmittance, vec4<f32>(0.0), vec4<f32>(0.0));
+        return March(radiance, transmittance);
     }
     var t = begin;
     var samples = 0u;
@@ -73,7 +73,7 @@ fn march_projected(
             let weight = tau * segment * voxels_per_world;
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);
-                radiance += transmittance * alpha * volume_lighting(albedo, texel, origin + direction * cursor);
+                radiance += transmittance * alpha * structure_lighting(albedo, texel, origin + direction * cursor);
                 transmittance *= 1.0 - alpha;
             }
             cursor += segment;
@@ -96,7 +96,7 @@ fn march_projected(
         radiance += transmittance * opacity * color;
         transmittance *= 1.0 - opacity;
     }
-    return March(radiance, transmittance, vec4<f32>(0.0), vec4<f32>(0.0));
+    return March(radiance, transmittance);
 }
 
 @fragment

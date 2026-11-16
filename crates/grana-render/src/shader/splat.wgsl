@@ -190,23 +190,7 @@ fn fs_slice(input: SplatVertex) -> SliceFragment {
 }
 
 @fragment
-fn fs_oit_key(input: SplatVertex) {
-    let ray = splat_ray(input.world);
-    if (splat_alpha(input, ray.origin, ray.direction) <= 0.0) {
-        discard;
-    }
-    let origin = vec2<i32>(frame.viewport.xy);
-    let size = vec2<i32>(frame.viewport.zw);
-    let pixel = vec2<i32>(input.clip_position.xy);
-    let index = oit_index(origin, size, pixel);
-    if (index < 0) {
-        discard;
-    }
-    oit_offer(u32(index), frame.oit.y, oit_key(frame.oit.z, input.depth));
-}
-
-@fragment
-fn fs_oit_color(input: SplatVertex) -> Residual {
+fn fs_oit(input: SplatVertex) -> Residual {
     var output = oit_residual(0.0, vec3<f32>(0.0), 0.0);
     let ray = splat_ray(input.world);
     let alpha = splat_alpha(input, ray.origin, ray.direction);
@@ -220,9 +204,8 @@ fn fs_oit_color(input: SplatVertex) -> Residual {
     if (index < 0) {
         return output;
     }
-    let slot = oit_slot(u32(index), frame.oit.y, oit_key(frame.oit.z, input.depth));
-    if (slot >= 0 && oit_claim(u32(index), frame.oit.y, frame.oit.z, u32(slot))) {
-        oit_write(u32(index), frame.oit.y, u32(slot), vec4<f32>(input.color * alpha, alpha));
+    let premultiplied = vec4<f32>(input.color * alpha, alpha);
+    if (oit_insert(u32(index), frame.oit.y, frame.oit.z, input.depth, premultiplied)) {
         return output;
     }
     return oit_residual(alpha, input.color, input.depth);

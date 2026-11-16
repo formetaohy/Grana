@@ -37,7 +37,7 @@ fn surface_geometry(surface: vec2<i32>, local: vec2<i32>) -> vec4<f32> {
     let object = textureLoad(object_depth, surface, 0);
     let volume = textureLoad(volume_normal, surface, 0);
     if (object < 1.0 && (volume.w >= 1.0 || object <= volume.w)) {
-        return vec4<f32>(textureLoad(pane_normal, local, 0).xyz, object);
+        return vec4<f32>(octahedral_decode(textureLoad(pane_normal, local, 0).xy), object);
     }
     if (volume.w < 1.0) {
         return volume;

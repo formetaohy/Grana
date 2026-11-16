@@ -17,7 +17,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{ID_FORMAT, NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{GBUFFER_ID_FORMAT, GBUFFER_NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -29,6 +29,8 @@ const CULL_SHADER: &str = concat!(
 const GBUFFER_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
     include_str!("shader/mesh_gbuffer.wgsl")
 );
 const FORWARD_SHADER: &str = concat!(
@@ -36,11 +38,15 @@ const FORWARD_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh_binding_forward.wgsl"),
     "\n",
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
     include_str!("shader/brdf.wgsl"),
     "\n",
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/shadow_sample.wgsl"),
+    "\n",
+    include_str!("shader/oit_key.wgsl"),
     "\n",
     include_str!("shader/oit.wgsl"),
     "\n",
@@ -54,6 +60,8 @@ const DEFERRED_SHADER: &str = concat!(
     include_str!("shader/mesh_binding.wgsl"),
     "\n",
     include_str!("shader/mesh_binding_deferred.wgsl"),
+    "\n",
+    include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/brdf.wgsl"),
     "\n",
@@ -145,7 +153,6 @@ pub(crate) struct MeshPasses {
     cull: ComputePipeline,
     shadow_cull: ComputePipeline,
     oit_pipeline: RenderPipeline,
-    color_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     gbuffer_pipeline: RenderPipeline,
@@ -271,12 +278,12 @@ impl MeshPasses {
                 compilation_options: Default::default(),
                 targets: &[
                     Some(ColorTargetState {
-                        format: NORMAL_FORMAT,
+                        format: GBUFFER_NORMAL_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),
                     Some(ColorTargetState {
-                        format: ID_FORMAT,
+                        format: GBUFFER_ID_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),
@@ -340,28 +347,7 @@ impl MeshPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &forward_module,
-                entry_point: Some("fs_oit_key"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
-            multiview_mask: None,
-            cache: pipelines.cache(),
-        });
-        let color_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.oit.color"),
-            layout: Some(&oit_layout),
-            vertex: VertexState {
-                module: &forward_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &forward_module,
-                entry_point: Some("fs_oit_color"),
+                entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::residual_targets(),
             }),
@@ -418,7 +404,6 @@ impl MeshPasses {
             cull,
             shadow_cull,
             oit_pipeline,
-            color_pipeline,
             pick_pipeline,
             shadow_pipeline,
             gbuffer_pipeline,
@@ -492,6 +477,10 @@ impl MeshPasses {
         layouts: &Layouts,
         styles: &[Style],
     ) {
+        assert!(
+            styles.len() <= usize::from(u16::MAX),
+            "a scene addresses its styles through the 16 bit rows of a geometry buffer"
+        );
         let data = styles
             .iter()
             .map(|style| style_data(*style))
@@ -719,26 +708,6 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.oit_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
-        pass.set_bind_group(3, shadow, &[]);
-        pass.set_bind_group(4, oit, &[]);
-        pass.set_bind_group(7, ao, &[]);
-        for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
-        }
-    }
-
-    pub fn draw_color<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        shadow: &'a BindGroup,
-        oit: &'a BindGroup,
-        ao: &'a BindGroup,
-    ) {
-        if self.active.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.color_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);

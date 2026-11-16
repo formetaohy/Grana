@@ -15,8 +15,16 @@ use wgpu::{
 use crate::frame::FrameData;
 use crate::target::{self, ACCUMULATION_FORMAT, COUNT_FORMAT};
 
-const CAPTURE: &str = include_str!("shader/temporal_capture.wgsl");
-const SEED: &str = include_str!("shader/temporal_seed.wgsl");
+const CAPTURE: &str = concat!(
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/temporal_capture.wgsl")
+);
+const SEED: &str = concat!(
+    include_str!("shader/octahedral.wgsl"),
+    "\n",
+    include_str!("shader/temporal_seed.wgsl")
+);
 
 const HISTORY_LIMIT: f32 = 32.0;
 const MOTION_REACH: f32 = 64.0;

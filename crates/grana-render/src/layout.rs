@@ -29,7 +29,7 @@ pub(crate) struct Layouts {
     pub oit_write: BindGroupLayout,
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
-    pub ao_compute: BindGroupLayout,
+    pub ao_write: BindGroupLayout,
     pub gbuffer: BindGroupLayout,
     pub source: BindGroupLayout,
     pub occupancy: BindGroupLayout,
@@ -253,7 +253,6 @@ impl Layouts {
                 storage(0, ShaderStages::FRAGMENT, false),
                 storage(1, ShaderStages::FRAGMENT, false),
                 storage(2, ShaderStages::FRAGMENT, false),
-                storage(3, ShaderStages::FRAGMENT, false),
             ],
         });
         let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -270,13 +269,13 @@ impl Layouts {
             label: Some("grana.ao.read.layout"),
             entries: &[texture(0, ShaderStages::FRAGMENT)],
         });
-        let ao_compute = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.ao.compute.layout"),
+        let ao = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.ao.write.layout"),
             entries: &[
-                uniform(0, ShaderStages::COMPUTE),
+                uniform(0, ShaderStages::FRAGMENT),
                 BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: ShaderStages::COMPUTE,
+                    visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Depth,
                         view_dimension: TextureViewDimension::D2,
@@ -286,7 +285,7 @@ impl Layouts {
                 },
                 BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: ShaderStages::COMPUTE,
+                    visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
@@ -296,17 +295,7 @@ impl Layouts {
                 },
                 BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba8Unorm,
-                        view_dimension: TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStages::COMPUTE,
+                    visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
@@ -332,7 +321,6 @@ impl Layouts {
                 Some(&depth),
                 None,
                 Some(&occupancy),
-                Some(&shadow),
             ],
             immediate_size: 0,
         });
@@ -407,7 +395,7 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
-        let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao_compute]);
+        let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao]);
         let gbuffer_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.gbuffer.pipeline.layout"),
             bind_group_layouts: &[Some(&scene), Some(&objects), None, None, None, Some(&pick)],
@@ -492,7 +480,7 @@ impl Layouts {
             oit_write,
             oit_read,
             ao_read,
-            ao_compute,
+            ao_write: ao,
             gbuffer,
             source,
             occupancy,

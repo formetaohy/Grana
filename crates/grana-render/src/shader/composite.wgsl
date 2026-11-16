@@ -1,15 +1,9 @@
-@group(5) @binding(0) var<storage, read> occupied: array<u32>;
-
-const OCCUPANCY_WORDS: u32 = 65u;
-const OCCUPANCY_PACKS: u32 = 4u;
 const SEGMENT_ERROR: f32 = 0.02;
 const SEGMENT_STRIDE: f32 = 8.0;
 
 struct March {
     radiance: vec3<f32>,
     transmittance: f32,
-    hit: vec4<f32>,
-    normal: vec4<f32>,
 }
 
 struct Sight {
@@ -18,26 +12,6 @@ struct Sight {
     band: u32,
     cell: vec3<u32>,
     uvw: vec3<f32>,
-}
-
-fn occupied_brick(slot: u32) -> bool {
-    for (var pack = 0u; pack < OCCUPANCY_PACKS; pack += 1u) {
-        let word = (slot * OCCUPANCY_PACKS + pack) * OCCUPANCY_WORDS;
-        if (occupancy_reaches(occupied[word])) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn occupied_cell(slot: u32, cell: u32) -> bool {
-    for (var pack = 0u; pack < OCCUPANCY_PACKS; pack += 1u) {
-        let word = (slot * OCCUPANCY_PACKS + pack) * OCCUPANCY_WORDS + 1u + cell;
-        if (occupancy_reaches(occupied[word])) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn volume_sight(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> Sight {
@@ -94,10 +68,8 @@ fn march_volume(
 ) -> March {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
-    var hit = vec4<f32>(0.0);
-    var hit_normal = vec4<f32>(0.0);
     if (finish <= begin) {
-        return March(radiance, transmittance, hit, hit_normal);
+        return March(radiance, transmittance);
     }
     var t = begin;
     var samples = 0u;
@@ -124,7 +96,7 @@ fn march_volume(
         var held = 0xffffffffu;
         var occupied = true;
         var cursor = t;
-        while (cursor < boundary && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
+        while (cursor < boundary && samples < frame.bounds.x && cells < frame.bounds.y) {
             cells += 1u;
             let stride = local_step(cursor);
             let local = ray_uvw(origin, band, cursor, direction);
@@ -150,17 +122,8 @@ fn march_volume(
             let tau = sample.a * segment * voxels_per_world;
             if (tau > 0.0) {
                 let alpha = 1.0 - exp(-tau);
-                if (!SURFACE_PASS) {
-                    radiance += transmittance * alpha * volume_lighting(sample.rgb, texel, origin + direction * cursor);
-                }
+                radiance += transmittance * alpha * structure_lighting(sample.rgb, texel, origin + direction * cursor);
                 transmittance *= 1.0 - alpha;
-                if (hit.w <= 0.0 && tau >= SHADING_TAU) {
-                    hit = vec4<f32>(level_world(band, local), 1.0);
-                    hit_normal = vec4<f32>(structure_normal(texel), 1.0);
-                }
-                if (SURFACE_PASS && hit.w > 0.0) {
-                    complete = true;
-                }
             }
             cursor += segment;
             samples += 1u;
@@ -170,5 +133,5 @@ fn march_volume(
         }
         t = max(cursor, boundary);
     }
-    return March(radiance, transmittance, hit, hit_normal);
+    return March(radiance, transmittance);
 }

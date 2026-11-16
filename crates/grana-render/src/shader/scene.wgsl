@@ -35,7 +35,6 @@ struct FrameData {
     slice_view: vec4<f32>,
     occupancy: vec4<f32>,
     bounds: vec4<u32>,
-    lighting: vec4<u32>,
 }
 
 struct ChannelData {
@@ -53,8 +52,6 @@ struct ChannelData {
 @group(0) @binding(3) var lut: texture_2d<f32>;
 @group(0) @binding(4) var lut_sampler: sampler;
 @group(0) @binding(5) var extinction_lut: texture_2d<f32>;
-
-const SHADING_TAU: f32 = 0.020203;
 
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
 

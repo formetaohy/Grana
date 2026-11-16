@@ -15,26 +15,6 @@ struct ShadowOutput {
     @builtin(position) clip_position: vec4<f32>,
 }
 
-fn sgn(value: f32) -> f32 {
-    if (value < 0.0) {
-        return -1.0;
-    }
-    return 1.0;
-}
-
-fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
-    var x = packed.x * 2.0 - 1.0;
-    var y = packed.y * 2.0 - 1.0;
-    let z = 1.0 - abs(x) - abs(y);
-    if (z < 0.0) {
-        let across = (1.0 - abs(y)) * sgn(x);
-        let down = (1.0 - abs(x)) * sgn(y);
-        x = across;
-        y = down;
-    }
-    return normalize(vec3<f32>(x, y, z));
-}
-
 fn lens_shift(clip_w: f32) -> vec2<f32> {
     return mesh.lens.xy * (clip_w / mesh.lens.z - 1.0);
 }

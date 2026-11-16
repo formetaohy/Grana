@@ -26,6 +26,8 @@ const CULL_SHADER: &str = concat!(
 const SPLAT_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
+    include_str!("shader/oit_key.wgsl"),
+    "\n",
     include_str!("shader/oit.wgsl"),
     "\n",
     include_str!("shader/splat.wgsl")
@@ -406,7 +408,6 @@ pub(crate) struct SplatPasses {
     cull: ComputePipeline,
     slice: RenderPipeline,
     key: RenderPipeline,
-    color: RenderPipeline,
     pick: RenderPipeline,
     slice_pick: RenderPipeline,
 }
@@ -458,7 +459,7 @@ impl SplatPasses {
             cache: pipelines.cache(),
         });
         let key = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.splat.oit.key"),
+            label: Some("grana.splat.oit"),
             layout: Some(&layouts.splat_oit),
             vertex: VertexState {
                 module: &module,
@@ -474,31 +475,7 @@ impl SplatPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &module,
-                entry_point: Some("fs_oit_key"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
-            multiview_mask: None,
-            cache: pipelines.cache(),
-        });
-        let color = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.splat.oit.color"),
-            layout: Some(&layouts.splat_oit),
-            vertex: VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &module,
-                entry_point: Some("fs_oit_color"),
+                entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::residual_targets(),
             }),
@@ -572,7 +549,6 @@ impl SplatPasses {
             cull,
             slice,
             key,
-            color,
             pick,
             slice_pick,
         }
@@ -743,25 +719,6 @@ impl SplatPasses {
             return;
         }
         pass.set_pipeline(&self.key);
-        pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(4, oit, &[]);
-        for entry in &self.active {
-            let slot = &self.slots[entry];
-            pass.set_bind_group(1, &slot.rows, &[]);
-            pass.draw_indirect(slot.args.buffer(), 0);
-        }
-    }
-
-    pub fn draw_color<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        scene: &'a BindGroup,
-        oit: &'a BindGroup,
-    ) {
-        if self.active.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.color);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(4, oit, &[]);
         for entry in &self.active {

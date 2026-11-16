@@ -33,7 +33,7 @@ use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
 use crate::converge::{Convergence, Estimate, Sampling};
-use crate::frame::{FrameData, VolumeLighting, VolumeView};
+use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
 use crate::occupancy::Occupancy;
@@ -814,9 +814,10 @@ impl Renderer {
     }
 
     pub fn convergence(&mut self, device: &Device) -> Option<(u32, f32)> {
+        let drawn = self.info.samples;
         self.convergence.as_mut().and_then(|convergence| {
             convergence
-                .poll(device)
+                .poll(device, drawn)
                 .map(|estimate| (estimate.samples(), estimate.error()))
         })
     }

@@ -18,7 +18,7 @@ const ROW: u64 = 256;
 const SLOTS: usize = 6;
 const DEVIATION_TO_SIGMA: f32 = 1.2533;
 const WINDOW: usize = 4;
-const REPORT_FLOOR: usize = 2;
+const REPORT_FLOOR: usize = 3;
 const WEIGHT_FLOOR: f32 = 1.0e-6;
 const LEVEL_LIMIT: u32 = 16;
 
@@ -98,8 +98,14 @@ pub(crate) struct Convergence {
     target: Option<Target>,
     readback: Readback,
     queued: VecDeque<(u64, u32)>,
-    deviations: VecDeque<f32>,
+    observations: VecDeque<Observation>,
     generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct Observation {
+    samples: f32,
+    deviation: f32,
 }
 
 struct Stages {
@@ -157,19 +163,19 @@ impl Convergence {
             target: None,
             readback: Readback::new(device, "grana.converge", ROW, SLOTS),
             queued: VecDeque::new(),
-            deviations: VecDeque::new(),
+            observations: VecDeque::new(),
             generation: 0,
         }
     }
 
     pub(crate) fn forget(&mut self) {
         self.target = None;
-        self.deviations.clear();
+        self.observations.clear();
         self.generation += 1;
     }
 
     pub(crate) fn reset(&mut self) {
-        self.deviations.clear();
+        self.observations.clear();
         self.generation += 1;
     }
 
@@ -246,7 +252,7 @@ impl Convergence {
         self.readback.register();
     }
 
-    pub(crate) fn poll(&mut self, device: &Device) -> Option<Estimate> {
+    pub(crate) fn poll(&mut self, device: &Device, drawn: u32) -> Option<Estimate> {
         let mut fresh = None;
         while let Some((_, bytes)) = self.readback.take(device) {
             let Some((generation, samples)) = self.queued.pop_front() else {
@@ -259,21 +265,35 @@ impl Convergence {
             if weight <= WEIGHT_FLOOR {
                 continue;
             }
-            let deviation = sample(&bytes, 0) / weight;
-            self.deviations.push_back(deviation);
-            if self.deviations.len() > WINDOW {
-                self.deviations.pop_front();
+            self.observations.push_back(Observation {
+                samples: samples as f32,
+                deviation: sample(&bytes, 0) / weight,
+            });
+            if self.observations.len() > WINDOW {
+                self.observations.pop_front();
             }
-            if self.deviations.len() >= REPORT_FLOOR {
-                let smoothed = self.deviations.iter().sum::<f32>() / self.deviations.len() as f32;
-                fresh = Some(Estimate {
-                    samples,
-                    error: DEVIATION_TO_SIGMA * smoothed / (samples as f32).sqrt(),
-                });
+            if self.observations.len() < REPORT_FLOOR {
+                continue;
             }
+            let slope = slope(&self.observations);
+            let predicted = drawn.max(samples).max(1);
+            fresh = Some(Estimate {
+                samples: predicted,
+                error: slope / (predicted as f32).sqrt(),
+            });
         }
         fresh
     }
+}
+
+fn slope(observations: &VecDeque<Observation>) -> f32 {
+    let mut weighted = 0.0;
+    let mut reach = 0.0;
+    for observation in observations {
+        weighted += DEVIATION_TO_SIGMA * observation.deviation / observation.samples;
+        reach += 1.0 / observation.samples;
+    }
+    weighted / reach
 }
 
 fn sample(bytes: &[u8], index: usize) -> f32 {

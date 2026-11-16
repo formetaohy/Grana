@@ -8,13 +8,15 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::target::{DEPTH_FORMAT, NORMAL_FORMAT, SCENE_FORMAT};
+use crate::target::{DEPTH_FORMAT, GUIDE_FORMAT, SCENE_FORMAT};
 
 const RADIANCE: &str = concat!(
-    "enable wgpu_binding_array;\nconst SURFACE_PASS: bool = false;\n",
+    "enable wgpu_binding_array;\n",
     include_str!("shader/scene.wgsl"),
     "\n",
     include_str!("shader/color.wgsl"),
+    "\n",
+    include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/brdf.wgsl"),
     "\n",
@@ -24,6 +26,8 @@ const RADIANCE: &str = concat!(
     "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
+    include_str!("shader/structure_tap.wgsl"),
+    "\n",
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/shadow_sample.wgsl"),
@@ -32,10 +36,13 @@ const RADIANCE: &str = concat!(
     "\n",
     include_str!("shader/shade.wgsl"),
     "\n",
+    include_str!("shader/occupancy.wgsl"),
+    "\n",
     include_str!("shader/composite.wgsl"),
     "\n",
     include_str!("shader/slice.wgsl"),
     "\n",
+    include_str!("shader/oit_key.wgsl"),
     include_str!("shader/oit_layers.wgsl"),
     "\n",
     include_str!("shader/ray.wgsl"),
@@ -44,10 +51,12 @@ const RADIANCE: &str = concat!(
 );
 
 const PROJECTION: &str = concat!(
-    "enable wgpu_binding_array;\nconst SURFACE_PASS: bool = false;\n",
+    "enable wgpu_binding_array;\n",
     include_str!("shader/scene.wgsl"),
     "\n",
     include_str!("shader/color.wgsl"),
+    "\n",
+    include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/brdf.wgsl"),
     "\n",
@@ -57,6 +66,8 @@ const PROJECTION: &str = concat!(
     "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
+    include_str!("shader/structure_tap.wgsl"),
+    "\n",
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/shadow_sample.wgsl"),
@@ -65,10 +76,13 @@ const PROJECTION: &str = concat!(
     "\n",
     include_str!("shader/shade.wgsl"),
     "\n",
+    include_str!("shader/occupancy.wgsl"),
+    "\n",
     include_str!("shader/composite.wgsl"),
     "\n",
     include_str!("shader/slice.wgsl"),
     "\n",
+    include_str!("shader/oit_key.wgsl"),
     include_str!("shader/oit_layers.wgsl"),
     "\n",
     include_str!("shader/ray.wgsl"),
@@ -77,12 +91,12 @@ const PROJECTION: &str = concat!(
 );
 
 const SURFACE: &str = concat!(
-    "enable wgpu_binding_array;\nconst SURFACE_PASS: bool = true;\n",
+    "enable wgpu_binding_array;\n",
     include_str!("shader/scene.wgsl"),
     "\n",
     include_str!("shader/color.wgsl"),
     "\n",
-    include_str!("shader/brdf.wgsl"),
+    include_str!("shader/octahedral.wgsl"),
     "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
@@ -90,21 +104,13 @@ const SURFACE: &str = concat!(
     "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
-    include_str!("shader/tau_codec.wgsl"),
+    include_str!("shader/structure_tap.wgsl"),
     "\n",
-    include_str!("shader/shadow_sample.wgsl"),
-    "\n",
-    include_str!("shader/optical.wgsl"),
-    "\n",
-    include_str!("shader/shade.wgsl"),
-    "\n",
-    include_str!("shader/composite.wgsl"),
-    "\n",
-    include_str!("shader/slice.wgsl"),
+    include_str!("shader/occupancy.wgsl"),
     "\n",
     include_str!("shader/ray.wgsl"),
     "\n",
-    include_str!("shader/volume_surface.wgsl")
+    include_str!("shader/surface.wgsl")
 );
 
 pub(crate) const BLEND: BlendState = BlendState {
@@ -152,7 +158,6 @@ pub(crate) struct SurfaceFrame<'a> {
     pub atlas: &'a BindGroup,
     pub depth_group: &'a BindGroup,
     pub occupancy: &'a BindGroup,
-    pub shadow: &'a BindGroup,
 }
 
 impl VolumePass {
@@ -172,7 +177,7 @@ impl VolumePass {
             "grana.volume.surface",
             "fs_surface",
             SURFACE,
-            [(NORMAL_FORMAT, None)],
+            [(GUIDE_FORMAT, None)],
             pipelines,
         );
         Self {
@@ -255,7 +260,6 @@ impl VolumePass {
         pass.set_bind_group(2, frame.atlas, &[]);
         pass.set_bind_group(3, frame.depth_group, &[]);
         pass.set_bind_group(5, frame.occupancy, &[]);
-        pass.set_bind_group(6, frame.shadow, &[]);
         pass.draw(0..3, 0..1);
     }
 }

@@ -23,7 +23,7 @@ fn fs_deferred(@builtin(position) position: vec4<f32>) -> DeferredOutput {
     if (row == 0u) {
         return DeferredOutput(vec4<f32>(0.0));
     }
-    let stored = textureLoad(gbuffer_normal, pixel, 0);
+    let stored = octahedral_decode(textureLoad(gbuffer_normal, pixel, 0).xy);
     let extent = vec2<f32>(textureDimensions(gbuffer_depth));
     let ndc = vec2<f32>(
         (f32(pixel.x) + 0.5) / extent.x * 2.0 - 1.0,
@@ -33,7 +33,7 @@ fn fs_deferred(@builtin(position) position: vec4<f32>) -> DeferredOutput {
     let world = clip.xyz / clip.w;
     return DeferredOutput(shade(
         styles[row - 1u],
-        stored.xyz,
+        stored,
         world,
         ambient_occlusion(position.xy),
     ));

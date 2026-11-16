@@ -4,7 +4,7 @@ use wgpu::{
     TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
-use crate::target::NORMAL_FORMAT;
+use crate::target::GUIDE_FORMAT;
 
 pub(crate) struct Guide {
     view: TextureView,
@@ -27,7 +27,7 @@ impl Guide {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: NORMAL_FORMAT,
+            format: GUIDE_FORMAT,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
