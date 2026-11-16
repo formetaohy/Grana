@@ -522,6 +522,13 @@ impl Renderer {
         ];
         data.lens = crate::frame::lens(camera, sample_index, sampling.ceiling(), aspect);
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
+        let volume_extent = crate::target::volume_size(size);
+        data.volume = [
+            size[0] as f32 / volume_extent[0] as f32,
+            size[1] as f32 / volume_extent[1] as f32,
+            volume_extent[0] as f32,
+            volume_extent[1] as f32,
+        ];
         scene_table.write_frame(queue, data);
         if replan {
             let scale = bucket_scale(
@@ -559,11 +566,13 @@ impl Renderer {
                 .channels
                 .iter()
                 .any(|row| row.visible && row.opacity > 0.0);
-            let projected = scene.channels.iter().any(|row| {
-                row.visible
-                    && row.opacity > 0.0
-                    && row.volume.mode() == grana_display::VolumeMode::Maximum
-            });
+            if volume_visible && !slice && target.volume.is_none() {
+                target.volume = Some(crate::target::Volume::new(
+                    device,
+                    &layouts.volume_read,
+                    size,
+                ));
+            }
             if volume_visible
                 && !slice
                 && let Some(bake) = bake.as_ref()
@@ -700,6 +709,24 @@ impl Renderer {
             } else {
                 crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             }
+            if volume_visible
+                && !slice
+                && let Some(staged) = target.volume.as_ref()
+            {
+                volume.march(
+                    &mut encoder,
+                    crate::volume::MarchFrame {
+                        radiance: staged.radiance(),
+                        surface: staged.surface(),
+                        scene: group,
+                        level: level_group,
+                        atlas: atlas.group(),
+                        object: target.scene.depth_group(),
+                        occupancy,
+                        shadow: shadow_group,
+                    },
+                );
+            }
             let ao_group: &BindGroup = target.ao.as_ref().map_or(&*dummy_ao, crate::ao::Ao::group);
             let oit_epoch = target
                 .oit
@@ -716,23 +743,15 @@ impl Renderer {
             let oit_group: &BindGroup = oit.map_or(dummy_oit.read_group(), Oit::read_group);
             if slice {
                 if volume_visible {
-                    volume.draw(
-                        device,
-                        layouts,
-                        pipelines,
+                    volume.draw_slice(
                         &mut encoder,
-                        crate::volume::VolumeFrame {
+                        crate::volume::SliceFrame {
                             target: target.scene.color(),
                             region: viewport,
                             scene: group,
                             level: level_group,
                             atlas: atlas.group(),
-                            depth_group: target.scene.depth_group(),
-                            oit: oit_group,
-                            occupancy,
-                            shadow: shadow_group,
                         },
-                        crate::volume::VolumePath::Composite,
                     );
                 }
                 {
@@ -838,24 +857,21 @@ impl Renderer {
                         ao_group,
                     );
             }
-            if volume_visible && !slice {
-                let volume_frame = crate::volume::VolumeFrame {
-                    target: target.scene.color(),
-                    region: viewport,
-                    scene: group,
-                    level: level_group,
-                    atlas: atlas.group(),
-                    depth_group: target.scene.depth_group(),
-                    oit: oit_group,
-                    occupancy,
-                    shadow: shadow_group,
-                };
-                let path = if projected {
-                    crate::volume::VolumePath::Projection
-                } else {
-                    crate::volume::VolumePath::Composite
-                };
-                volume.draw(device, layouts, pipelines, &mut encoder, volume_frame, path);
+            if volume_visible
+                && !slice
+                && let Some(staged) = target.volume.as_ref()
+            {
+                volume.composite(
+                    &mut encoder,
+                    crate::volume::CompositeFrame {
+                        target: target.scene.color(),
+                        region: viewport,
+                        scene: group,
+                        volume: staged.group(),
+                        object: target.scene.depth_group(),
+                        oit: oit_group,
+                    },
+                );
             }
             if let Some(oit) = oit
                 && !volume_visible

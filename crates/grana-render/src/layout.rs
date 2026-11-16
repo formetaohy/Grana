@@ -34,9 +34,12 @@ pub(crate) struct Layouts {
     pub gbuffer: BindGroupLayout,
     pub source: BindGroupLayout,
     pub occupancy: BindGroupLayout,
+    pub volume_read: BindGroupLayout,
     pub bake: BindGroupLayout,
     pub bake_pipeline: PipelineLayout,
-    pub volume: PipelineLayout,
+    pub volume_march: PipelineLayout,
+    pub volume_composite: PipelineLayout,
+    pub volume_slice: PipelineLayout,
     pub volume_surface: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
@@ -337,12 +340,59 @@ impl Layouts {
                 },
             ],
         });
-        let volume = pipeline_layout(
-            device,
-            "grana.volume.layout",
-            &[
-                &scene, &level, &atlas, &depth, &oit_read, &occupancy, &shadow,
+        let volume_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.volume.read.layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
+        });
+        let volume_march = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.volume.march.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&level),
+                Some(&atlas),
+                Some(&depth),
+                None,
+                Some(&occupancy),
+                Some(&shadow),
+            ],
+            immediate_size: 0,
+        });
+        let volume_composite = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.volume.composite.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&volume_read),
+                Some(&depth),
+                None,
+                Some(&oit_read),
+            ],
+            immediate_size: 0,
+        });
+        let volume_slice = pipeline_layout(
+            device,
+            "grana.volume.slice.layout",
+            &[&scene, &level, &atlas],
         );
         let volume_surface = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.volume.surface.layout"),
@@ -521,9 +571,12 @@ impl Layouts {
             gbuffer,
             source,
             occupancy,
+            volume_read,
             bake,
             bake_pipeline,
-            volume,
+            volume_march,
+            volume_composite,
+            volume_slice,
             volume_surface,
             cull,
             plan_pipeline,

@@ -14,6 +14,16 @@ pub(crate) const GBUFFER_NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float
 pub(crate) const GBUFFER_ID_FORMAT: TextureFormat = TextureFormat::R16Uint;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
+pub(crate) const VOLUME_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const VOLUME_SURFACE_FORMAT: TextureFormat = TextureFormat::Rg32Float;
+
+pub(crate) fn volume_size(size: [u32; 2]) -> [u32; 2] {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a volume target covers a positive surface"
+    );
+    [size[0].div_ceil(2), size[1].div_ceil(2)]
+}
 
 pub(crate) struct SceneTarget {
     color: TextureView,
@@ -127,6 +137,63 @@ impl Gbuffer {
 
     pub fn id(&self) -> &TextureView {
         &self.id
+    }
+
+    pub fn group(&self) -> &BindGroup {
+        &self.group
+    }
+}
+
+pub(crate) struct Volume {
+    radiance: TextureView,
+    surface: TextureView,
+    group: BindGroup,
+}
+
+impl Volume {
+    pub fn new(device: &Device, layout: &BindGroupLayout, size: [u32; 2]) -> Self {
+        let extent = volume_size(size);
+        let radiance = attachment(
+            device,
+            "grana.volume.radiance",
+            extent,
+            VOLUME_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let surface = attachment(
+            device,
+            "grana.volume.surface",
+            extent,
+            VOLUME_SURFACE_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.volume.group"),
+            layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&radiance),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&surface),
+                },
+            ],
+        });
+        Self {
+            radiance,
+            surface,
+            group,
+        }
+    }
+
+    pub fn radiance(&self) -> &TextureView {
+        &self.radiance
+    }
+
+    pub fn surface(&self) -> &TextureView {
+        &self.surface
     }
 
     pub fn group(&self) -> &BindGroup {

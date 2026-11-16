@@ -114,7 +114,7 @@ impl Renderer {
                         atlas.write(queue, pack, slot, &units[..span]);
                         occupy(
                             words,
-                            occupancy.as_mut(),
+                            occupancy.as_ref(),
                             queue,
                             slot,
                             pack,
@@ -181,7 +181,7 @@ impl Renderer {
                 atlas.write(queue, pack, slot, &units[base..base + step]);
                 occupy(
                     words,
-                    occupancy.as_mut(),
+                    occupancy.as_ref(),
                     queue,
                     slot,
                     pack,
@@ -275,7 +275,7 @@ fn stage(
 
 fn occupy(
     words: &mut [u32],
-    occupancy: Option<&mut Occupancy>,
+    occupancy: Option<&Occupancy>,
     queue: &Queue,
     slot: u32,
     pack: usize,

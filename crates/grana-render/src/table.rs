@@ -256,6 +256,7 @@ fn channel_data(
 ) -> ChannelTable {
     let mut floor = f32::INFINITY;
     let mut channels = 0u32;
+    let mut peaks = 0u32;
     let rows = rows
         .iter()
         .enumerate()
@@ -280,7 +281,10 @@ fn channel_data(
             if opacity > 0.0 {
                 channels |= 1 << index;
                 let reach = match mode {
-                    VolumeMode::Maximum => start,
+                    VolumeMode::Maximum => {
+                        peaks |= 1 << index;
+                        start
+                    }
                     VolumeMode::Blend | VolumeMode::Isosurface => threshold,
                 };
                 floor = floor.min(reach);
@@ -305,7 +309,7 @@ fn channel_data(
     ChannelTable {
         rows,
         floor,
-        packs: [channels, packs, 0, 0],
+        packs: [channels, packs, peaks, 0],
     }
 }
 

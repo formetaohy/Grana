@@ -68,7 +68,6 @@ struct Slot {
     used: u64,
     held: bool,
     order: u32,
-    future: bool,
 }
 
 impl Slot {
@@ -77,14 +76,7 @@ impl Slot {
         used: 0,
         held: false,
         order: 0,
-        future: false,
     };
-}
-
-#[derive(Default)]
-struct Bucket {
-    current: Vec<u32>,
-    future: Vec<u32>,
 }
 
 pub(crate) struct AtlasBinding<'a> {
@@ -103,7 +95,8 @@ pub(crate) struct Atlas {
     slot_grid: [u32; 3],
     free: Vec<u32>,
     slots: Vec<Slot>,
-    buckets: BTreeMap<u64, Bucket>,
+    buckets: BTreeMap<u64, Vec<u32>>,
+    held: Vec<u32>,
     versions: Vec<u32>,
     writes: u64,
     level_writes: Vec<u64>,
@@ -247,6 +240,7 @@ impl Atlas {
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
             buckets: BTreeMap::new(),
+            held: Vec::new(),
             versions: vec![0; capacity],
             writes: 0,
             level_writes: Vec::new(),
@@ -394,6 +388,7 @@ impl Atlas {
         self.free = (0..capacity).rev().collect();
         self.slots.fill(Slot::EMPTY);
         self.buckets.clear();
+        self.held.clear();
         self.identity.clear();
         self.frames.clear();
         self.hollow.clear();
@@ -434,18 +429,27 @@ impl Atlas {
             let Some(slot) = self.identity.get(&(time, level, index as usize)).copied() else {
                 continue;
             };
-            let brick = self.slots[slot as usize]
-                .brick
-                .expect("a named slot holds a brick");
             self.unplace(slot);
-            self.slots[slot as usize].held = true;
-            self.place(slot, pin, brick.time > self.now);
+            self.hold(slot, true);
+            self.place(slot, pin);
+        }
+    }
+
+    fn hold(&mut self, slot: u32, hold: bool) {
+        let placed = &mut self.slots[slot as usize];
+        if !hold {
+            placed.held = false;
+            return;
+        }
+        if !placed.held {
+            placed.held = true;
+            self.held.push(slot);
         }
     }
 
     pub fn clear_holds(&mut self) {
-        for slot in &mut self.slots {
-            slot.held = false;
+        for slot in self.held.drain(..) {
+            self.slots[slot as usize].held = false;
         }
     }
 
@@ -456,7 +460,7 @@ impl Atlas {
         request: u32,
         demand: bool,
     ) -> Option<(u32, Option<ResidentBrick>)> {
-        self.retime(now);
+        self.now = now;
         if let Some(slot) = self.free.pop() {
             return Some((slot, None));
         }
@@ -500,42 +504,39 @@ impl Atlas {
             if *used >= pin {
                 break;
             }
-            let held = if future {
-                &bucket.future
-            } else {
-                &bucket.current
-            };
-            if let Some(slot) = held.first() {
-                return Some(*slot);
+            if let Some(slot) = bucket
+                .iter()
+                .copied()
+                .find(|slot| self.future(*slot) == future)
+            {
+                return Some(slot);
             }
         }
         None
     }
 
     fn newest(&self, pin: u64, future: bool) -> Option<u32> {
-        let bucket = self.buckets.get(&pin)?;
-        let held = if future {
-            &bucket.future
-        } else {
-            &bucket.current
-        };
-        held.iter()
+        self.buckets
+            .get(&pin)?
+            .iter()
             .copied()
-            .find(|slot| !self.slots[*slot as usize].held)
+            .find(|slot| !self.slots[*slot as usize].held && self.future(*slot) == future)
     }
 
-    fn place(&mut self, slot: u32, used: u64, future: bool) {
+    fn future(&self, slot: u32) -> bool {
+        self.slots[slot as usize]
+            .brick
+            .expect("a placed slot holds a brick")
+            .time
+            > self.now
+    }
+
+    fn place(&mut self, slot: u32, used: u64) {
         let bucket = self.buckets.entry(used).or_default();
-        let held = if future {
-            &mut bucket.future
-        } else {
-            &mut bucket.current
-        };
-        let order = held.len() as u32;
-        held.push(slot);
+        let order = bucket.len() as u32;
+        bucket.push(slot);
         let placed = &mut self.slots[slot as usize];
         placed.used = used;
-        placed.future = future;
         placed.order = order;
     }
 
@@ -546,44 +547,15 @@ impl Atlas {
                 .buckets
                 .get_mut(&place.used)
                 .expect("a slot keeps its usage bucket");
-            let held = if place.future {
-                &mut bucket.future
-            } else {
-                &mut bucket.current
-            };
-            let last = held.pop().expect("a usage bucket holds its slots");
+            let last = bucket.pop().expect("a usage bucket holds its slots");
             if last != slot {
-                held[place.order as usize] = last;
+                bucket[place.order as usize] = last;
                 self.slots[last as usize].order = place.order;
             }
-            bucket.current.is_empty() && bucket.future.is_empty()
+            bucket.is_empty()
         };
         if empty {
             self.buckets.remove(&place.used);
-        }
-    }
-
-    fn retime(&mut self, now: u32) {
-        if self.now == now {
-            return;
-        }
-        self.now = now;
-        let moved = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, place)| {
-                let brick = place.brick?;
-                (place.future != (brick.time > now)).then_some(slot as u32)
-            })
-            .collect::<Vec<_>>();
-        for slot in moved {
-            let brick = self.slots[slot as usize]
-                .brick
-                .expect("a retimed slot holds a brick");
-            let used = self.slots[slot as usize].used;
-            self.unplace(slot);
-            self.place(slot, used, brick.time > now);
         }
     }
 
@@ -602,8 +574,8 @@ impl Atlas {
             .or_default()
             .push(slot);
         self.slots[slot as usize].brick = Some(brick);
-        self.slots[slot as usize].held = hold;
-        self.place(slot, pin, brick.time > self.now);
+        self.hold(slot, hold);
+        self.place(slot, pin);
         self.written(slot);
     }
 

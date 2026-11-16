@@ -2,11 +2,6 @@
 
 const EMPTY_DISTANCE: f32 = 1.0e19;
 
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) ndc: vec2<f32>,
-}
-
 struct Resolution {
     origin: vec3<f32>,
     direction: vec3<f32>,
@@ -14,19 +9,6 @@ struct Resolution {
     exit: f32,
     jitter: f32,
     dither: f32,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    let corners = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0),
-    );
-    var output: VertexOutput;
-    output.clip_position = vec4<f32>(corners[index], 0.0, 1.0);
-    output.ndc = corners[index];
-    return output;
 }
 
 fn object_distance(origin: vec3<f32>, depth: f32, ndc: vec2<f32>) -> f32 {
@@ -68,8 +50,7 @@ fn clip_depth(world: vec3<f32>) -> f32 {
     return clamp(clip.z / clip.w, 0.0, 1.0);
 }
 
-fn resolve(clip_position: vec4<f32>, ndc: vec2<f32>) -> Resolution {
-    let scene_pixel = vec2<i32>(floor(clip_position.xy));
+fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
     let ray = camera_ray(ndc);
     let origin = ray.origin;
     let direction = ray.direction;
@@ -81,7 +62,7 @@ fn resolve(clip_position: vec4<f32>, ndc: vec2<f32>) -> Resolution {
     let lowest_t = min(near_t, far_t);
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
-    let object = object_distance(origin, textureLoad(object_depth, scene_pixel, 0), ndc);
+    let object = object_distance(origin, textureLoad(object_depth, pixel, 0), ndc);
     let region = region_interval(origin, direction);
     let plane = clip_interval(origin, direction);
     let clip = vec2<f32>(max(region.x, plane.x), min(region.y, plane.y));
@@ -90,7 +71,7 @@ fn resolve(clip_position: vec4<f32>, ndc: vec2<f32>) -> Resolution {
         min(min(object, clip.y), 1.0e19),
     );
     let start = max(max(entry, 0.0), clip.x);
-    let jitter = sample_noise(clip_position.xy, frame.jitter.z) * local_step(start);
-    let dither = sample_noise(clip_position.xy, frame.jitter.z + 8.0);
+    let jitter = sample_noise(vec2<f32>(pixel), frame.jitter.z) * local_step(start);
+    let dither = sample_noise(vec2<f32>(pixel), frame.jitter.z + 8.0);
     return Resolution(origin, direction, start, exit, jitter, dither);
 }

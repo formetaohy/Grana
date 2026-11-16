@@ -113,7 +113,7 @@ fn fs_surface(input: VertexOutput) -> @location(0) vec4<f32> {
         let depth = select(1.0, clip_depth(crossing.xyz), crossing.w >= 0.5);
         return vec4<f32>(0.0, 0.0, 0.0, depth);
     }
-    let resolution = resolve(input.clip_position, ndc);
+    let resolution = resolve(vec2<i32>(floor(input.clip_position.xy)), ndc);
     return probe_surface(
         resolution.origin,
         resolution.direction,

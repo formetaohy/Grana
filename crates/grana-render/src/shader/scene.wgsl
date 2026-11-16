@@ -36,6 +36,7 @@ struct FrameData {
     occupancy: vec4<f32>,
     bounds: vec4<u32>,
     packs: vec4<u32>,
+    volume: vec4<f32>,
 }
 
 struct ChannelData {
@@ -200,6 +201,14 @@ const PACK_LIMIT: u32 = CHANNEL_LIMIT / PACK;
 
 fn channel_active(channel: u32) -> bool {
     return (frame.packs.x & (1u << channel)) != 0u;
+}
+
+fn channel_peak(channel: u32) -> bool {
+    return (frame.packs.z & (1u << channel)) != 0u;
+}
+
+fn projection() -> bool {
+    return frame.packs.z != 0u;
 }
 
 fn pack_active(pack: u32) -> bool {

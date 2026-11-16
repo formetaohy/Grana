@@ -42,3 +42,13 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
     }
     return vec4<f32>(0.0);
 }
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let ray = camera_ray(input.ndc + frame.jitter.xy);
+    let crossing = slice_crossing(ray.origin, ray.direction);
+    if (crossing.w < 0.5) {
+        return vec4<f32>(0.0);
+    }
+    return slice_color(crossing.xyz);
+}
