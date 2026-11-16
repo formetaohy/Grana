@@ -400,31 +400,27 @@ impl Theme {
         match role {
             Role::Sheet => Surface {
                 fill: Fill::Solid(p.surface_container_low),
-                backdrop: 0.0,
                 corners: Corners::all(m.corner_xl),
                 border: Border::NONE,
                 shadow: Shadow::new(Color::black_alpha(0.45), 24.0, 8.0),
                 text: p.on_surface,
             },
             Role::FloatingToolbar => Surface {
-                fill: Fill::Solid(p.surface_container.with_alpha(0.95)),
-                backdrop: 18.0,
+                fill: Fill::Solid(p.surface_container),
                 corners: Corners::capsule(),
                 border: Border::NONE,
                 shadow: Shadow::new(Color::black_alpha(0.50), 22.0, 6.0),
                 text: p.on_surface,
             },
             Role::VibrantToolbar => Surface {
-                fill: Fill::Solid(p.primary_container.with_alpha(0.96)),
-                backdrop: 18.0,
+                fill: Fill::Solid(p.primary_container),
                 corners: Corners::capsule(),
                 border: Border::NONE,
                 shadow: Shadow::new(Color::black_alpha(0.52), 24.0, 7.0),
                 text: p.on_primary_container,
             },
             Role::Menu => Surface {
-                fill: Fill::Solid(p.surface_container_high.with_alpha(0.98)),
-                backdrop: 20.0,
+                fill: Fill::Solid(p.surface_container_high),
                 corners: Corners::all(m.corner_lg),
                 border: Border::NONE,
                 shadow: Shadow::new(Color::black_alpha(0.56), 26.0, 8.0),
@@ -432,7 +428,6 @@ impl Theme {
             },
             Role::Card => Surface {
                 fill: Fill::Solid(p.surface_container),
-                backdrop: 0.0,
                 corners: Corners::all(m.corner_lg),
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -440,7 +435,6 @@ impl Theme {
             },
             Role::CardElevated => Surface {
                 fill: Fill::Solid(p.surface_container_high),
-                backdrop: 0.0,
                 corners: Corners::all(m.corner_lg),
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -448,7 +442,6 @@ impl Theme {
             },
             Role::Filled => Surface {
                 fill: Fill::Solid(lift(p.primary, p.on_primary)),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -460,7 +453,6 @@ impl Theme {
             },
             Role::PrimaryContainer => Surface {
                 fill: Fill::Solid(lift(p.primary_container, p.on_primary_container)),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -472,7 +464,6 @@ impl Theme {
             },
             Role::Tonal => Surface {
                 fill: Fill::Solid(lift(p.secondary_container, p.on_secondary_container)),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -484,7 +475,6 @@ impl Theme {
             },
             Role::TertiaryContainer => Surface {
                 fill: Fill::Solid(lift(p.tertiary_container, p.on_tertiary_container)),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -496,7 +486,6 @@ impl Theme {
             },
             Role::SurfaceHigh => Surface {
                 fill: Fill::Solid(lift(p.surface_container_high, p.on_surface)),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -514,7 +503,6 @@ impl Theme {
                 } else {
                     Color::TRANSPARENT
                 }),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border {
                     width: 1.0,
@@ -550,7 +538,6 @@ impl Theme {
                 } else {
                     Color::TRANSPARENT
                 }),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -572,7 +559,6 @@ impl Theme {
                 } else {
                     Color::TRANSPARENT
                 }),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,
@@ -594,7 +580,6 @@ impl Theme {
                 } else {
                     p.surface_container_highest
                 }),
-                backdrop: 0.0,
                 corners: Corners::all(m.corner_sm),
                 border: Border {
                     width: 1.0,
@@ -621,7 +606,6 @@ impl Theme {
                 } else {
                     p.error_container.with_alpha(0.28)
                 }),
-                backdrop: 0.0,
                 corners: button_corners,
                 border: Border::NONE,
                 shadow: Shadow::NONE,

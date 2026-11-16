@@ -57,7 +57,7 @@ fn opaque<A>(node: &crate::node::Node<A>) -> bool {
     (node.popup_spec.is_some() && node.runtime.open)
         || node
             .background
-            .is_some_and(|surface| surface.fill.is_visible() || surface.backdrop > 0.0)
+            .is_some_and(|surface| surface.fill.is_visible())
 }
 
 pub(crate) fn top(hits: &[Hit], pointer: Vec2) -> Option<&Hit> {

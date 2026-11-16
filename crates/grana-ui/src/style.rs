@@ -115,7 +115,6 @@ impl Shadow {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surface {
     pub fill: Fill,
-    pub backdrop: f32,
     pub corners: Corners,
     pub border: Border,
     pub shadow: Shadow,
@@ -125,7 +124,6 @@ pub struct Surface {
 impl Surface {
     pub const NONE: Self = Self {
         fill: Fill::None,
-        backdrop: 0.0,
         corners: Corners::ZERO,
         border: Border::NONE,
         shadow: Shadow::NONE,
@@ -137,11 +135,6 @@ impl Surface {
             fill: Fill::Solid(color),
             ..Self::NONE
         }
-    }
-
-    pub const fn with_backdrop(mut self, backdrop: f32) -> Self {
-        self.backdrop = backdrop;
-        self
     }
 
     pub const fn with_corners(mut self, corners: Corners) -> Self {
@@ -157,7 +150,6 @@ impl Surface {
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
             fill: self.fill.lerp(other.fill, t),
-            backdrop: self.backdrop + (other.backdrop - self.backdrop) * t,
             corners: self.corners.lerp(other.corners, t),
             border: self.border.lerp(other.border, t),
             shadow: self.shadow.lerp(other.shadow, t),

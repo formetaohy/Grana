@@ -48,7 +48,6 @@ impl<A: Clone> Ui<A> {
                     continue;
                 }
                 layer.rebuild = false;
-                layer.reset_backdrop();
                 layer.dirty = Some((0, layer.material.len()));
                 layer.touch();
             }

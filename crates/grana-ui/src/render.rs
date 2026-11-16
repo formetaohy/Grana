@@ -22,8 +22,6 @@ use grana_gpu::layout;
 const BLIT_SHADER: &str = include_str!("shader/blit.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
 const MINIMUM_INSTANCES: usize = 512;
-const MAX_BLUR_MIPS: u32 = 5;
-const BLUR_REACH: u32 = 64;
 const OVERLAY_SLOT: usize = Layer::ALL.len();
 const SLOTS: usize = Layer::ALL.len() + 1;
 
@@ -88,44 +86,6 @@ impl Surface {
             linear: linear_view,
             encoded: encoded_view,
         }
-    }
-}
-
-struct BlurPyramid {
-    sampled: TextureView,
-    mips: Vec<TextureView>,
-}
-
-impl BlurPyramid {
-    fn new(device: &Device, size: [u32; 2], format: TextureFormat) -> Self {
-        let width = (size[0] / 2).max(1);
-        let height = (size[1] / 2).max(1);
-        let mip_count = (width.max(height).ilog2() + 1).clamp(1, MAX_BLUR_MIPS);
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("grana.ui.backdrop"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: mip_count,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let sampled = texture.create_view(&TextureViewDescriptor::default());
-        let mips = (0..mip_count)
-            .map(|level| {
-                texture.create_view(&TextureViewDescriptor {
-                    base_mip_level: level,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
-        Self { sampled, mips }
     }
 }
 
@@ -270,11 +230,9 @@ pub struct Renderer {
     size: [u32; 2],
     scale: f32,
     canvas: Option<Surface>,
-    backdrop: Option<BlurPyramid>,
     dummy: TextureView,
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
-    downsample: RenderPipeline,
     erase: RenderPipeline,
     ui: RenderPipeline,
     figure: RenderPipeline,
@@ -290,10 +248,7 @@ pub struct Renderer {
     uniform_state: Option<(f32, [u32; 2])>,
     canvas_generation: u64,
     blit_cache: Option<(u64, BindGroup)>,
-    backdrop_blits: [Option<BindGroup>; MAX_BLUR_MIPS as usize + 1],
     ui_groups: [Option<(u64, BindGroup)>; SLOTS],
-    content_blur: bool,
-    interface_blur: bool,
 }
 
 impl Renderer {
@@ -334,7 +289,6 @@ impl Renderer {
                 sampler_entry(5),
                 texture_entry(6),
                 sampler_entry(7),
-                texture_entry(8),
             ],
         });
         let blit_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -375,15 +329,6 @@ impl Renderer {
             &blit_shader,
             "fs_present_linear",
             format,
-            pipelines,
-        );
-        let downsample = fullscreen_pipeline(
-            device,
-            "grana.ui.downsample",
-            &blit_pipeline_layout,
-            &blit_shader,
-            "fs_downsample",
-            linear,
             pipelines,
         );
         let erase_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -441,11 +386,9 @@ impl Renderer {
             size: [0, 0],
             scale: 1.0,
             canvas: None,
-            backdrop: None,
             dummy: dummy(device),
             present_encoded,
             present_linear,
-            downsample,
             erase,
             ui,
             figure,
@@ -470,10 +413,7 @@ impl Renderer {
             uniform_state: None,
             canvas_generation: 0,
             blit_cache: None,
-            backdrop_blits: std::array::from_fn(|_| None),
             ui_groups: std::array::from_fn(|_| None),
-            content_blur: false,
-            interface_blur: false,
         }
     }
 
@@ -485,13 +425,9 @@ impl Renderer {
         self.size = size;
         let device = self.device.clone();
         self.canvas = Some(Surface::new(&device, "grana.ui.canvas", size, self.encoded));
-        self.backdrop = Some(BlurPyramid::new(&device, size, raw(self.encoded)));
         self.canvas_generation = self.canvas_generation.wrapping_add(1);
         self.blit_cache = None;
-        self.backdrop_blits = std::array::from_fn(|_| None);
         self.ui_groups = std::array::from_fn(|_| None);
-        self.content_blur = false;
-        self.interface_blur = false;
         true
     }
 
@@ -590,18 +526,11 @@ impl Renderer {
         let canvas = self.canvas.as_ref().expect("the renderer is sized");
         let canvas_linear = canvas.linear.clone();
         let canvas_encoded = canvas.encoded.clone();
-        let backdrop = self.backdrop.as_ref().expect("the renderer is sized");
-        let backdrop_sampled = backdrop.sampled.clone();
 
         let layers = [content, chrome, popup, hud, overlay];
         let changed: [bool; SLOTS] =
             std::array::from_fn(|index| self.revisions[index] != layers[index].revision);
         let reupload = changed.iter().any(|changed| *changed);
-        let content_refresh = reset || scene_changed || changed[Layer::Content.index()];
-        let interface_refresh = content_refresh
-            || changed[Layer::Chrome.index()]
-            || changed[Layer::Popup.index()]
-            || changed[Layer::Hud.index()];
         let damage = if reset || (scene_changed || reupload) && matches!(damage, Damage::None) {
             Damage::Full
         } else {
@@ -622,7 +551,7 @@ impl Renderer {
                 self.revisions[index] = layers[index].revision;
             }
         }
-        self.prepare_groups(atlases, scene, &backdrop_sampled);
+        self.prepare_groups(atlases, scene);
         if count > 0 {
             let full = matches!(damage, Damage::Full);
             let content_group = &self.ui_groups[Layer::Content.index()]
@@ -637,19 +566,6 @@ impl Renderer {
                 !full,
                 full,
             );
-            let region = if full {
-                None
-            } else {
-                Some(self.reach(&scissors[..count]))
-            };
-            if chrome.backdrop {
-                if content_refresh || !self.content_blur {
-                    self.update_backdrop(encoder, &canvas_linear, region);
-                    self.content_blur = true;
-                }
-            } else {
-                self.content_blur = false;
-            }
             let chrome_group = &self.ui_groups[Layer::Chrome.index()]
                 .as_ref()
                 .expect("the chrome group is cached")
@@ -662,14 +578,6 @@ impl Renderer {
                 false,
                 false,
             );
-            if popup.backdrop || hud.backdrop {
-                if interface_refresh || !self.interface_blur {
-                    self.update_backdrop(encoder, &canvas_linear, region);
-                    self.interface_blur = true;
-                }
-            } else {
-                self.interface_blur = false;
-            }
             let popup_group = &self.ui_groups[Layer::Popup.index()]
                 .as_ref()
                 .expect("the popup group is cached")
@@ -725,24 +633,11 @@ impl Renderer {
         );
     }
 
-    fn prepare_groups(
-        &mut self,
-        atlases: Atlases<'_>,
-        scene: Option<&TextureView>,
-        backdrop: &TextureView,
-    ) {
+    fn prepare_groups(&mut self, atlases: Atlases<'_>, scene: Option<&TextureView>) {
         let scene_id = scene.map_or(0, |view| view as *const TextureView as usize);
         let scene = scene.unwrap_or(&self.dummy);
         for slot in 0..SLOTS {
-            let content = slot == Layer::Content.index();
-            let target = if content { &self.dummy } else { backdrop };
-            let backdrop_id = if content { 0 } else { self.canvas_generation };
-            let key = group_key(
-                scene_id,
-                backdrop_id,
-                self.buffers.buffers[slot].generation,
-                atlases,
-            );
+            let key = group_key(scene_id, self.buffers.buffers[slot].generation, atlases);
             if self.ui_groups[slot]
                 .as_ref()
                 .is_some_and(|(held, _)| *held == key)
@@ -752,7 +647,6 @@ impl Renderer {
             let group = self.ui_group(
                 atlases,
                 scene,
-                target,
                 &self.buffers.buffers[slot].buffer,
                 &self.uniforms,
             );
@@ -770,75 +664,6 @@ impl Renderer {
         let width = rect[2].min(self.size[0] - x);
         let height = rect[3].min(self.size[1] - y);
         [x, y, width, height]
-    }
-
-    fn update_backdrop(
-        &mut self,
-        encoder: &mut CommandEncoder,
-        source: &TextureView,
-        region: Option<[u32; 4]>,
-    ) {
-        let Some(backdrop) = self.backdrop.as_ref() else {
-            return;
-        };
-        for (index, target) in backdrop.mips.iter().enumerate() {
-            let input = if index == 0 {
-                source
-            } else {
-                &backdrop.mips[index - 1]
-            };
-            if self.backdrop_blits[index].is_none() {
-                let group = self.blit_group(input);
-                self.backdrop_blits[index] = Some(group);
-            }
-            let group = self.backdrop_blits[index]
-                .as_ref()
-                .expect("the backdrop blit group is cached");
-            let scissor = region.map(|rect| self.backdrop_scissor(rect, index as u32));
-            if scissor.is_some_and(|scissor| scissor[2] == 0 || scissor[3] == 0) {
-                continue;
-            }
-            fullscreen(
-                encoder,
-                &self.downsample,
-                group,
-                target,
-                LoadOp::Clear(wgpu::Color::BLACK),
-                scissor,
-            );
-        }
-    }
-
-    fn reach(&self, scissors: &[[u32; 4]]) -> [u32; 4] {
-        let mut min = [u32::MAX; 2];
-        let mut max = [0u32; 2];
-        for rect in scissors {
-            min[0] = min[0].min(rect[0]);
-            min[1] = min[1].min(rect[1]);
-            max[0] = max[0].max(rect[0] + rect[2]);
-            max[1] = max[1].max(rect[1] + rect[3]);
-        }
-        let left = min[0].saturating_sub(BLUR_REACH).min(self.size[0]);
-        let top = min[1].saturating_sub(BLUR_REACH).min(self.size[1]);
-        let right = max[0].saturating_add(BLUR_REACH).min(self.size[0]);
-        let bottom = max[1].saturating_add(BLUR_REACH).min(self.size[1]);
-        [left, top, right - left, bottom - top]
-    }
-
-    fn backdrop_scissor(&self, rect: [u32; 4], level: u32) -> [u32; 4] {
-        let divisor = 1u32 << (level + 1);
-        let width = ((self.size[0] / 2).max(1) >> level).max(1);
-        let height = ((self.size[1] / 2).max(1) >> level).max(1);
-        let left = (rect[0] / divisor).min(width);
-        let top = (rect[1] / divisor).min(height);
-        let right = (rect[0] + rect[2]).div_ceil(divisor).min(width);
-        let bottom = (rect[1] + rect[3]).div_ceil(divisor).min(height);
-        [
-            left,
-            top,
-            right.saturating_sub(left),
-            bottom.saturating_sub(top),
-        ]
     }
 
     fn paint_layers(
@@ -928,7 +753,6 @@ impl Renderer {
                 images,
             },
             scene,
-            scene,
             &self.figure_instances,
             &self.figure_uniforms,
         );
@@ -971,7 +795,6 @@ impl Renderer {
         &self,
         atlases: Atlases<'_>,
         scene: &TextureView,
-        backdrop: &TextureView,
         instances: &Buffer,
         uniforms: &Buffer,
     ) -> BindGroup {
@@ -1011,20 +834,15 @@ impl Renderer {
                     binding: 7,
                     resource: BindingResource::Sampler(atlases.images.sampler()),
                 },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: BindingResource::TextureView(backdrop),
-                },
             ],
         })
     }
 }
 
-fn group_key(scene: usize, backdrop: u64, instances: u64, atlases: Atlases<'_>) -> u64 {
+fn group_key(scene: usize, instances: u64, atlases: Atlases<'_>) -> u64 {
     let mut key = 0xcbf2_9ce4_8422_2325u64;
     for value in [
         scene as u64,
-        backdrop,
         instances,
         atlases.glyphs.view() as *const TextureView as usize as u64,
         atlases.images.generation(),
