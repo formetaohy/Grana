@@ -6,7 +6,6 @@ use crate::style::{Border, Fill, Shadow, State, Surface};
 pub enum Role {
     Sheet,
     FloatingToolbar,
-    VibrantToolbar,
     Menu,
     Card,
     CardElevated,
@@ -411,13 +410,6 @@ impl Theme {
                 border: Border::NONE,
                 shadow: Shadow::new(Color::black_alpha(0.50), 22.0, 6.0),
                 text: p.on_surface,
-            },
-            Role::VibrantToolbar => Surface {
-                fill: Fill::Solid(p.primary_container),
-                corners: Corners::capsule(),
-                border: Border::NONE,
-                shadow: Shadow::new(Color::black_alpha(0.52), 24.0, 7.0),
-                text: p.on_primary_container,
             },
             Role::Menu => Surface {
                 fill: Fill::Solid(p.surface_container_high),
