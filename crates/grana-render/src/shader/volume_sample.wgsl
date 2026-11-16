@@ -60,22 +60,23 @@ fn cell_edge(band: u32, uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) 
     return edge;
 }
 
-fn cell_delta(
-    band: u32,
-    uvw: vec3<f32>,
-    brick: vec3<u32>,
-    direction: vec3<f32>,
-    minimum: f32,
-) -> f32 {
+fn cell_reach(band: u32, uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) -> f32 {
     let edge = cell_edge(band, uvw, brick, direction);
-    var delta = 1.0e20;
+    var reach = 1.0e20;
     for (var axis = 0u; axis < 3u; axis += 1u) {
         let step = direction[axis];
         if (abs(step) > 1.0e-9) {
-            delta = min(delta, (edge[axis] - uvw[axis]) / step);
+            reach = min(reach, (edge[axis] - uvw[axis]) / step);
         }
     }
-    return max(delta, minimum);
+    return reach;
+}
+
+fn brick_texel(band: u32, uvw: vec3<f32>, brick: vec3<u32>, slot: u32) -> vec3<f32> {
+    let g = level_frame(band);
+    let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
+    let local = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick);
+    return (slot_origin(frame.atlas.xyz, slot) + local + vec3<f32>(1.0)) / extent;
 }
 
 fn sample_pack(band: u32, pack: u32, uvw: vec3<f32>) -> vec4<f32> {
@@ -142,7 +143,7 @@ fn ray_uvw(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> vec3<f
     return level_local(band, origin + direction * t);
 }
 
-fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {
+fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>) -> f32 {
     let g = level_frame(band);
     let edge = brick_edge(uvw, g.dims, direction);
     var delta = 1.0e20;
@@ -152,6 +153,6 @@ fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32)
             delta = min(delta, (edge[axis] - uvw[axis]) / step);
         }
     }
-    return max(delta, minimum);
+    return delta;
 }
 

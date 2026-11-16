@@ -18,7 +18,6 @@ fn march_projected(
     if (finish <= begin) {
         return March(radiance, transmittance, moment, mass, vec4<f32>(0.0), vec4<f32>(0.0));
     }
-    let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
     var t = begin;
     var samples = 0u;
     var cells = 0u;
@@ -26,31 +25,27 @@ fn march_projected(
     while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
         cells += 1u;
         let found = volume_reachable(origin, band_for(t, dither), t, direction);
+        let band = found.band;
+        let direction_uvw = level_rate(band, direction);
+        let cell_step = local_step(t);
+        let exit = boundary_delta(band, found.uvw, direction_uvw);
+        let boundary = min(t + max(exit, max(t, 1.0) * 1.0e-6), finish);
         if (!found.usable) {
-            let skip = ray_uvw(origin, found.band, t, direction);
-            let rate = level_rate(found.band, direction);
-            let edge = boundary_delta(found.band, skip, rate, local_step(t) * 0.25);
-            t = min(t + edge, finish);
+            let gap = cell_step * ceil(max(boundary - t, 0.0) / cell_step);
+            t = min(t + max(gap, cell_step), finish);
             continue;
         }
-        let band = found.band;
         let g = level_frame(band);
-        let direction_uvw = level_rate(band, direction);
         let brick = found.cell;
-        let boundary = min(
-            t + boundary_delta(band, found.uvw, direction_uvw, local_step(t) * 0.25),
-            finish,
-        );
         let record = level_record(band, brick_index(g.grid, brick));
         let slot = brick_display_slot(record) - 1u;
         let voxels_per_world = length(direction_uvw * g.dims);
-        let texel_rate = direction_uvw * g.dims / extent;
-        var texel = (slot_origin(frame.atlas.xyz, slot)
-            + (clamp(found.uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick))
-            + vec3<f32>(1.0)) / extent;
         var cursor = t;
-        while (cursor < boundary && samples < frame.bounds.x && !complete) {
-            let step = local_step(cursor);
+        while (cursor < boundary && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
+            cells += 1u;
+            let stride = local_step(cursor);
+            let local = ray_uvw(origin, band, cursor, direction);
+            let texel = brick_texel(band, local, brick, slot);
             var tau = 0.0;
             var emission = vec3<f32>(0.0);
             for (var pack = 0u; pack < packs; pack += 1u) {
@@ -76,8 +71,7 @@ fn march_projected(
                 }
             }
             let albedo = emission / max(tau, OPTICAL_MINIMUM_TAU);
-            let next = min(cursor + step, boundary);
-            let segment = next - cursor;
+            let segment = min(stride, boundary - cursor);
             let weight = tau * segment * voxels_per_world;
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);
@@ -87,8 +81,7 @@ fn march_projected(
                 mass += absorbed;
                 transmittance *= 1.0 - alpha;
             }
-            texel += texel_rate * segment;
-            cursor = next;
+            cursor += segment;
             samples += 1u;
             if (transmittance < MINIMUM_TRANSMITTANCE) {
                 complete = true;
