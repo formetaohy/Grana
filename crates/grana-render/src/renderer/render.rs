@@ -258,18 +258,6 @@ impl Renderer {
         } else {
             true
         };
-        let reserved = if replan {
-            feedback.as_mut().and_then(Readback::reserve)
-        } else {
-            None
-        };
-        if awaits && !ready_at_time && reserved.is_none() {
-            target.samples = 0;
-            info.samples = 0;
-            info.rebuilt = false;
-            info.fading = false;
-            return Ok(*info);
-        }
         let slot_grid = atlas.slot_grid();
         let mut prepared = [usize::MAX; BAND + 2];
         let mut prepared_count = 0;
@@ -284,6 +272,25 @@ impl Renderer {
             if table.time() != Some(time) {
                 table.rebase(queue, time, *content, atlas, arena);
             }
+        }
+        let tables = ladder
+            .levels()
+            .map(|level| bricks[level].as_ref().expect("the band table exists"))
+            .collect::<Vec<&BrickTable>>();
+        let step = crate::frame::step_length(camera, tables[0], scene.step_scale);
+        let ray_bounds =
+            crate::frame::sample_bounds(camera, tables[0], step, scene.step_scale, height)?;
+        let reserved = if replan {
+            feedback.as_mut().and_then(Readback::reserve)
+        } else {
+            None
+        };
+        if awaits && !ready_at_time && reserved.is_none() {
+            target.samples = 0;
+            info.samples = 0;
+            info.rebuilt = false;
+            info.fading = false;
+            return Ok(*info);
         }
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
@@ -303,25 +310,28 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
+        let shadow_level = ladder.base + ladder.count - 1;
+        let shadow_revision = bricks[shadow_level]
+            .as_ref()
+            .expect("the shadow band carries a table")
+            .revision();
+        if let Some(shadow) = shadow.as_mut() {
+            let voxel = pyramid.level(shadow_level).voxel();
+            let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
+            shadow.resize(device, layouts, shadow::extent(&space, unit));
+        }
         let shadow_keys = ShadowKeys::of(
             versions.objects(),
             scene_summary.visibility(),
-            *generation,
+            shadow_revision,
             time,
             channel_key,
-            ladder.base + ladder.count - 1,
+            shadow_level,
             &space,
         );
-        let tables = ladder
-            .levels()
-            .map(|level| bricks[level].as_ref().expect("the band table exists"))
-            .collect::<Vec<&BrickTable>>();
         let lighting = VolumeLighting {
             surfaces: scene_summary.surfaces(),
         };
-        let step = crate::frame::step_length(camera, tables[0], scene.step_scale);
-        let ray_bounds =
-            crate::frame::sample_bounds(camera, tables[0], step, scene.step_scale, height)?;
         let ray = crate::frame::Ray {
             step,
             bounds: ray_bounds,
@@ -370,6 +380,7 @@ impl Renderer {
         }
         if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
             data.oit[1] = oit.layers();
+            data.oit[2] = oit.next_epoch();
         }
         let signature = Signature {
             data: &data,
@@ -466,6 +477,8 @@ impl Renderer {
                             MeshPasses::new(device, layouts, *budget / 2, pipelines)
                         })
                         .set(device, queue, layouts, scene);
+                } else if let Some(passes) = meshes.as_mut() {
+                    passes.clear();
                 }
                 if splats_present {
                     splats
@@ -547,8 +560,19 @@ impl Renderer {
                 && !slice
                 && let Some(bake) = bake.as_ref()
             {
-                let levels = ladder.levels().collect::<Vec<usize>>();
-                let entries = baked.collect(atlas, &levels, time, *content, bake.capacity());
+                let mut levels = [0usize; BAND];
+                let mut level_count = 0;
+                for level in ladder.levels() {
+                    levels[level_count] = level;
+                    level_count += 1;
+                }
+                let entries = baked.collect(
+                    atlas,
+                    &levels[..level_count],
+                    time,
+                    *content,
+                    bake.capacity(),
+                );
                 if !entries.is_empty() {
                     bake.stage(queue, entries);
                     bake.encode(
@@ -600,7 +624,6 @@ impl Renderer {
                     sample_index,
                 );
             }
-            scene_table.write_shadow_frame(queue, data);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
                     scene: scene_table.shadow_group(),
@@ -616,7 +639,11 @@ impl Renderer {
                             mesh_passes.draw_shadow(&mut encoder, shadow.objects());
                         }
                     }
-                    shadow.encode_tau(&mut encoder, groups, shadow_keys.volume());
+                    let volume = shadow_keys.volume();
+                    if shadow.stale(volume) {
+                        scene_table.write_shadow_frame(queue, data);
+                    }
+                    shadow.encode_tau(&mut encoder, groups, volume);
                 }
             }
             crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
@@ -628,6 +655,17 @@ impl Renderer {
             let group = scene_table.group();
             if let Some(mesh_passes) = meshes.as_mut() {
                 mesh_passes.write_uniforms(queue, &data, scene.shading);
+            }
+            let oit_epoch = target
+                .oit
+                .as_mut()
+                .filter(|_| translucent)
+                .map(|oit| oit.begin(&mut encoder));
+            if let Some(epoch) = oit_epoch {
+                assert_eq!(
+                    epoch, data.oit[2],
+                    "the fragment store opens the epoch the frame names"
+                );
             }
             let oit = target.oit.as_ref().filter(|_| translucent);
             let oit_group: &BindGroup = oit.map_or(dummy_oit.read_group(), Oit::read_group);
@@ -705,7 +743,6 @@ impl Renderer {
                 );
             }
             if let Some(oit) = oit {
-                oit.clear(&mut encoder);
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.key.pass"),

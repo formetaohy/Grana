@@ -14,9 +14,9 @@ use grana_volume::CHANNEL_LIMIT;
 pub(crate) const PACK: usize = 4;
 pub(crate) const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
 
-pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
-pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 8;
+pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 4;
 
 const _: () = assert!(
     PACK_LIMIT == 4,
@@ -94,6 +94,7 @@ pub(crate) struct Atlas {
     free: Vec<u32>,
     slots: Vec<Slot>,
     versions: Vec<u32>,
+    writes: u64,
     identity: HashMap<(u32, usize, usize), u32>,
     hollow: HashSet<(u32, usize, usize)>,
     pruned: Option<[u32; 2]>,
@@ -123,11 +124,12 @@ impl Atlas {
             max_dimension >= slot_side,
             "the adapter cannot hold a padded brick"
         );
-        let slots_per_axis = ((requested as f64).cbrt().ceil() as u32)
-            .max(1)
-            .min(max_dimension / slot_side);
-        let slot_grid = [slots_per_axis; 3];
-        let capacity = (slots_per_axis as usize).pow(3);
+        let limit = (max_dimension / slot_side) as usize;
+        let requested = requested.max(1) as usize;
+        let span = ((requested as f64).cbrt().ceil() as usize).clamp(1, limit);
+        let depth = requested.div_ceil(span * span).clamp(1, limit);
+        let slot_grid = [span as u32, span as u32, depth as u32];
+        let capacity = span * span * depth;
         let dims = slot_grid.map(|count| count * slot_side);
         let packs = channel_count.div_ceil(PACK);
         let components = (0..packs)
@@ -230,6 +232,7 @@ impl Atlas {
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
             versions: vec![0; capacity],
+            writes: 0,
             identity: HashMap::new(),
             hollow: HashSet::new(),
             pruned: None,
@@ -266,6 +269,11 @@ impl Atlas {
 
     pub fn written(&mut self, slot: u32) {
         self.versions[slot as usize] = self.versions[slot as usize].wrapping_add(1);
+        self.writes = self.writes.wrapping_add(1);
+    }
+
+    pub fn writes(&self) -> u64 {
+        self.writes
     }
 
     pub fn held(&self, level: usize, index: usize) -> Vec<ResidentBrick> {

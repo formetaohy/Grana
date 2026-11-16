@@ -59,7 +59,7 @@ impl Renderer {
         let pyramid = self.pyramid.as_ref()?;
         let planner = self.planner.as_ref()?;
         let words = feedback_words(bytes);
-        if words.len() < (BAND + 1) * self.view_words {
+        if words.len() < BAND * self.view_words {
             return None;
         }
         let ladder = meta.levels.ladder;

@@ -16,6 +16,7 @@ const RESIDUAL_BYTES: u64 = 12;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
 const PIXEL_STEP: u64 = 1 << 17;
+const EPOCH_LIMIT: u32 = 255;
 
 pub(crate) const RESIDUAL_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const RESIDUAL_MOMENT_FORMAT: TextureFormat = TextureFormat::Rg16Float;
@@ -60,6 +61,7 @@ pub(crate) struct Oit {
     layers: u32,
     size: [u32; 2],
     capacity: u64,
+    epoch: u32,
 }
 
 impl Oit {
@@ -178,6 +180,7 @@ impl Oit {
             layers: layers as u32,
             size,
             capacity,
+            epoch: 0,
         }
     }
 
@@ -205,11 +208,20 @@ impl Oit {
         &self.residual_moment
     }
 
-    pub fn clear(&self, encoder: &mut CommandEncoder) {
-        encoder.clear_buffer(&self.keys, 0, None);
-        encoder.clear_buffer(&self.colors, 0, None);
+    pub fn next_epoch(&self) -> u32 {
+        self.epoch % EPOCH_LIMIT + 1
+    }
+
+    pub fn begin(&mut self, encoder: &mut CommandEncoder) -> u32 {
+        let epoch = self.next_epoch();
+        if epoch == 1 {
+            encoder.clear_buffer(&self.keys, 0, None);
+            encoder.clear_buffer(&self.colors, 0, None);
+            encoder.clear_buffer(&self.claims, 0, None);
+        }
+        self.epoch = epoch;
         encoder.clear_buffer(&self.counts, 0, None);
-        encoder.clear_buffer(&self.claims, 0, None);
+        epoch
     }
 }
 

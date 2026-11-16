@@ -8,6 +8,8 @@ const MAXIMUM_ENTRIES: u32 = 9u;
 
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
 
+const OIT_EPOCH_SHIFT: u32 = 24u;
+
 struct Layers {
     depth: array<f32, MAXIMUM_ENTRIES>,
     color: array<vec2<u32>, MAXIMUM_ENTRIES>,
@@ -38,7 +40,7 @@ fn gather_layers(clip_position: vec4<f32>) -> Layers {
     let stored = min(oit_counts[index], frame.oit.y);
     for (var slot = 0u; slot < stored; slot += 1u) {
         let key = oit_keys[base + slot];
-        if (key == 0u) {
+        if ((key >> OIT_EPOCH_SHIFT) != frame.oit.z) {
             break;
         }
         if (layers.count > 0u && key == oit_keys[base + slot - 1u]) {

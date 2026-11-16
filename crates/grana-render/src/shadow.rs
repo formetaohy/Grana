@@ -10,7 +10,7 @@ use wgpu::{
 use crate::layout::Layouts;
 
 const OBJECT_SIDE: u32 = 2048;
-const SIDE: [u32; 2] = [112, 256];
+const SIDE: u32 = 256;
 const WORKGROUP: u32 = 4;
 const DEPTH_BIAS: f32 = 2.0 / OBJECT_SIDE as f32;
 const NORMAL_OFFSET: f32 = 2.0;
@@ -122,6 +122,18 @@ impl ShadowSpace {
         }
         key
     }
+
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    pub fn depth(&self) -> f32 {
+        self.depth
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -131,10 +143,17 @@ pub(crate) struct ShadowGroups<'a> {
     pub atlas: &'a BindGroup,
 }
 
-pub fn resolution(world: Vec3, voxel: Vec3) -> [u32; 3] {
-    let reach = (world.length() / voxel.min_element()).round();
-    let side = reach.clamp(SIDE[0] as f32, SIDE[1] as f32) as u32;
-    [side, side, side]
+pub fn extent(space: &ShadowSpace, voxel: f32) -> [u32; 3] {
+    assert!(
+        voxel.is_finite() && voxel > 0.0,
+        "a shadow volume resolves one voxel"
+    );
+    let texels = |reach: f32| (reach / voxel).ceil().max(1.0) as u32;
+    [
+        texels(space.width()).min(SIDE),
+        texels(space.height()).min(SIDE),
+        texels(space.depth()).min(SIDE),
+    ]
 }
 
 pub(crate) struct Shadow {
@@ -142,13 +161,14 @@ pub(crate) struct Shadow {
     read: BindGroup,
     tau_write: BindGroup,
     tau_pipeline: ComputePipeline,
+    sampler: wgpu::Sampler,
+    compare: wgpu::Sampler,
     dims: [u32; 3],
     tau_key: Option<u64>,
 }
 
 impl Shadow {
-    pub fn new(device: &Device, layouts: &Layouts, dims: [u32; 3], pipelines: &Pipelines) -> Self {
-        let tau = volume(device, "grana.shadow.tau", dims);
+    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let objects = depth(device, "grana.shadow.objects", OBJECT_SIDE);
         let sampler = linear(device);
         let compare = device.create_sampler(&SamplerDescriptor {
@@ -161,36 +181,8 @@ impl Shadow {
             compare: Some(CompareFunction::LessEqual),
             ..Default::default()
         });
-        let read = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.shadow.group"),
-            layout: &layouts.shadow,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&tau),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&sampler),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(&objects),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Sampler(&compare),
-                },
-            ],
-        });
-        let tau_write = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.shadow.tau.write"),
-            layout: &layouts.shadow_write,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(&tau),
-            }],
-        });
+        let dims = [1, 1, 1];
+        let (read, tau_write) = groups(device, layouts, dims, &sampler, &compare, &objects);
         let tau_pipeline = pipeline(
             device,
             layouts,
@@ -204,9 +196,29 @@ impl Shadow {
             read,
             tau_write,
             tau_pipeline,
+            sampler,
+            compare,
             dims,
             tau_key: None,
         }
+    }
+
+    pub fn resize(&mut self, device: &Device, layouts: &Layouts, dims: [u32; 3]) {
+        if self.dims == dims {
+            return;
+        }
+        let (read, tau_write) = groups(
+            device,
+            layouts,
+            dims,
+            &self.sampler,
+            &self.compare,
+            &self.objects,
+        );
+        self.read = read;
+        self.tau_write = tau_write;
+        self.dims = dims;
+        self.tau_key = None;
     }
 
     pub fn group(&self) -> &BindGroup {
@@ -233,6 +245,10 @@ impl Shadow {
         });
     }
 
+    pub fn stale(&self, key: u64) -> bool {
+        self.tau_key != Some(key)
+    }
+
     pub fn encode_tau(&mut self, encoder: &mut CommandEncoder, groups: ShadowGroups<'_>, key: u64) {
         if self.tau_key == Some(key) {
             return;
@@ -253,6 +269,48 @@ impl Shadow {
             1,
         );
     }
+}
+
+fn groups(
+    device: &Device,
+    layouts: &Layouts,
+    dims: [u32; 3],
+    sampler: &wgpu::Sampler,
+    compare: &wgpu::Sampler,
+    objects: &TextureView,
+) -> (BindGroup, BindGroup) {
+    let tau = volume(device, "grana.shadow.tau", dims);
+    let read = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.shadow.group"),
+        layout: &layouts.shadow,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&tau),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Sampler(sampler),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(objects),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Sampler(compare),
+            },
+        ],
+    });
+    let tau_write = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.shadow.tau.write"),
+        layout: &layouts.shadow_write,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::TextureView(&tau),
+        }],
+    });
+    (read, tau_write)
 }
 
 fn volume(device: &Device, label: &str, dims: [u32; 3]) -> TextureView {

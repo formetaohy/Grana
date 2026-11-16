@@ -274,7 +274,7 @@ impl Present {
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(Color::BLACK),
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 },
             })],

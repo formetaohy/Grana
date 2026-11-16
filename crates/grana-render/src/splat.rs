@@ -817,8 +817,7 @@ fn place(occupied: &mut [(u32, u32)], len: u32) -> u32 {
         base = end;
     }
     base.checked_add(len)
-        .expect("the splat instance space is exhausted");
-    base
+        .expect("the splat instance space is exhausted")
 }
 
 #[cfg(test)]

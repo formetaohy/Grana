@@ -4,9 +4,11 @@
 @group(4) @binding(3) var<storage, read_write> oit_claims: array<atomic<u32>>;
 
 const OIT_ALPHA_FLOOR: f32 = 1.0e-3;
+const OIT_EPOCH_SHIFT: u32 = 24u;
 
-fn oit_key(depth: f32) -> u32 {
-    return ~bitcast<u32>(clamp(depth, 0.0, 1.0));
+fn oit_key(epoch: u32, depth: f32) -> u32 {
+    let inverted = ~bitcast<u32>(clamp(depth, 0.0, 1.0));
+    return (epoch << OIT_EPOCH_SHIFT) | (inverted >> 8u);
 }
 
 fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
@@ -44,9 +46,9 @@ fn oit_slot(index: u32, layers: u32, key: u32) -> i32 {
     return -1;
 }
 
-fn oit_claim(index: u32, layers: u32, slot: u32) -> bool {
+fn oit_claim(index: u32, layers: u32, epoch: u32, slot: u32) -> bool {
     let base = index * layers;
-    return atomicCompareExchangeWeak(&oit_claims[base + slot], 0u, 1u).exchanged;
+    return atomicExchange(&oit_claims[base + slot], epoch) != epoch;
 }
 
 fn oit_write(index: u32, layers: u32, slot: u32, premultiplied: vec4<f32>) {

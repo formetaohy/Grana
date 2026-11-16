@@ -9,7 +9,8 @@ fn sign_not_zero(axis: vec2<f32>) -> vec2<f32> {
 }
 
 fn octahedral_decode(packed: vec2<f32>) -> vec3<f32> {
-    var normal = vec3<f32>(packed, 1.0 - abs(packed.x) - abs(packed.y));
+    let unit = packed * 2.0 - vec2<f32>(1.0);
+    var normal = vec3<f32>(unit, 1.0 - abs(unit.x) - abs(unit.y));
     if (normal.z < 0.0) {
         normal = vec3<f32>((vec2<f32>(1.0) - abs(normal.yx)) * sign_not_zero(normal.xy), normal.z);
     }

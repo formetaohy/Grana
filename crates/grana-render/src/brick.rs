@@ -133,6 +133,7 @@ pub(crate) struct BrickTable {
     base: u32,
     time: Option<u32>,
     records: Vec<BrickRecord>,
+    revision: u64,
 }
 
 impl BrickTable {
@@ -164,11 +165,16 @@ impl BrickTable {
             base,
             time: None,
             records: vec![BrickRecord::MISSING; grid.count()],
+            revision: 0,
         }
     }
 
     pub fn record_base(&self) -> u32 {
         self.base
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn rebase(
@@ -179,16 +185,35 @@ impl BrickTable {
         atlas: &Atlas,
         arena: &BrickArena,
     ) {
+        let mut changed = Vec::new();
         for resident in atlas.residents(time, self.level) {
             let record = match resident.slot {
                 Some(slot) => BrickRecord::new(slot + 1, time, content),
                 None => BrickRecord::hollow(time, content),
             };
             if self.records[resident.index] != record {
-                self.set_record(queue, arena, resident.index, record);
+                self.records[resident.index] = record;
+                changed.push(resident.index);
             }
         }
+        changed.sort_unstable();
+        for run in runs(&changed) {
+            self.upload(queue, arena, run);
+        }
         self.time = Some(time);
+    }
+
+    fn upload(&mut self, queue: &Queue, arena: &BrickArena, records: std::ops::Range<usize>) {
+        assert!(
+            !records.is_empty() && self.base as usize + records.end <= arena.records(),
+            "a brick record run lies inside the arena"
+        );
+        self.revision += 1;
+        queue.write_buffer(
+            arena.buffer(),
+            (self.base as u64 + records.start as u64) * RECORD_BYTES,
+            bytemuck::cast_slice(&self.records[records]),
+        );
     }
 
     pub fn set_record(
@@ -202,12 +227,11 @@ impl BrickTable {
             self.base as usize + index < arena.records(),
             "a brick record lies inside the arena"
         );
+        if self.records[index] == record {
+            return;
+        }
         self.records[index] = record;
-        queue.write_buffer(
-            arena.buffer(),
-            (self.base as u64 + index as u64) * RECORD_BYTES,
-            bytemuck::bytes_of(&record),
-        );
+        self.upload(queue, arena, index..index + 1);
     }
 
     pub fn drop_record(&mut self, queue: &Queue, arena: &BrickArena, index: usize, time: u32) {
@@ -219,4 +243,21 @@ impl BrickTable {
     pub fn time(&self) -> Option<u32> {
         self.time
     }
+}
+
+fn runs(sorted: &[usize]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        if start >= sorted.len() {
+            return None;
+        }
+        let low = sorted[start];
+        let mut end = start + 1;
+        while end < sorted.len() && sorted[end] == sorted[end - 1] + 1 {
+            end += 1;
+        }
+        let run = low..sorted[end - 1] + 1;
+        start = end;
+        Some(run)
+    })
 }

@@ -131,6 +131,16 @@ impl Bake {
 pub(crate) struct BakeQueue {
     staged: HashMap<u32, u64>,
     entries: Vec<BakeEntry>,
+    collected: Option<Stamp>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    writes: u64,
+    time: u32,
+    content: u32,
+    base: usize,
+    count: usize,
 }
 
 impl BakeQueue {
@@ -138,11 +148,13 @@ impl BakeQueue {
         Self {
             staged: HashMap::new(),
             entries: Vec::new(),
+            collected: None,
         }
     }
 
     pub fn forget(&mut self) {
         self.staged.clear();
+        self.collected = None;
     }
 
     pub fn collect(
@@ -154,13 +166,23 @@ impl BakeQueue {
         capacity: usize,
     ) -> &[BakeEntry] {
         assert!(capacity > 0, "a bake pass stages at least one slot");
+        let stamp = Stamp {
+            writes: atlas.writes(),
+            time,
+            content,
+            base: levels.first().copied().unwrap_or(0),
+            count: levels.len(),
+        };
+        if self.collected == Some(stamp) {
+            return &[];
+        }
         self.entries.clear();
         'bands: for (band, level) in levels.iter().enumerate() {
             for resident in atlas.residents(time, *level) {
                 let Some(slot) = resident.slot else {
                     continue;
                 };
-                let key = stamp(
+                let key = stamp_key(
                     time,
                     content,
                     *level as u32,
@@ -182,11 +204,12 @@ impl BakeQueue {
                 });
             }
         }
+        self.collected = Some(stamp);
         &self.entries
     }
 }
 
-fn stamp(time: u32, content: u32, level: u32, brick: u32, version: u32) -> u64 {
+fn stamp_key(time: u32, content: u32, level: u32, brick: u32, version: u32) -> u64 {
     let mut hash = u64::from(time) ^ u64::from(level).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     hash ^= u64::from(brick).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
     hash ^= u64::from(content).wrapping_mul(0x1656_67b1_9e37_79f9);

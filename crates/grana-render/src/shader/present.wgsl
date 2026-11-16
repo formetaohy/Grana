@@ -52,18 +52,28 @@ fn fs_accumulate(input: VertexOutput) -> Accumulated {
 fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = input.clip_position.xy;
     let weight = screen.fade.x;
+    let fading = weight > 0.0;
     let fresh = resolve(input.uv);
-    let stale = earlier(input.uv);
-    let accumulated = mix(stale, fresh, weight);
-    let coverage = clamp(accumulated.a, 0.0, 1.0);
-    let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
     if screen.flags.z > 0.5 {
         let straight_new = srgb_encode(aces(fresh.rgb * screen.flags.y / max(fresh.a, 1.0e-4)));
-        let straight_old = srgb_encode(aces(stale.rgb * screen.flags.y / max(stale.a, 1.0e-4)));
-        let straight = mix(straight_old, straight_new, weight);
+        var straight = straight_new;
+        var coverage = clamp(fresh.a, 0.0, 1.0);
+        if fading {
+            let stale = earlier(input.uv);
+            let straight_old = srgb_encode(aces(stale.rgb * screen.flags.y / max(stale.a, 1.0e-4)));
+            straight = mix(straight_old, straight_new, weight);
+            coverage = clamp(mix(stale, fresh, weight).a, 0.0, 1.0);
+        }
+        let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
         let encoded = clamp(straight + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), coverage);
     }
+    var accumulated = fresh;
+    if fading {
+        accumulated = mix(earlier(input.uv), fresh, weight);
+    }
+    let coverage = clamp(accumulated.a, 0.0, 1.0);
+    let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
     let straight = accumulated.rgb / max(accumulated.a, 1.0e-4);
     let mapped = aces(straight * screen.flags.y) * coverage;
     let encoded = clamp(srgb_encode(mapped) + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));

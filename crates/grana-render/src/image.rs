@@ -46,11 +46,11 @@ fn capture(
     size: [u32; 2],
     bytes_per_pixel: u32,
 ) -> Vec<u8> {
-    let row = size[0] * bytes_per_pixel;
-    let stride = row.div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT;
+    let row = u64::from(size[0]) * u64::from(bytes_per_pixel);
+    let stride = row.div_ceil(u64::from(COPY_ALIGNMENT)) * u64::from(COPY_ALIGNMENT);
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("grana.image"),
-        size: u64::from(stride) * u64::from(size[1]),
+        size: stride * u64::from(size[1]),
         usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -68,7 +68,7 @@ fn capture(
             buffer: &buffer,
             layout: TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(stride),
+                bytes_per_row: Some(u32::try_from(stride).expect("a captured row fits u32")),
                 rows_per_image: Some(size[1]),
             },
         },
@@ -94,7 +94,7 @@ fn capture(
     let mapped = slice
         .get_mapped_range()
         .expect("the mapped image buffer stays mapped");
-    let mut pixels = Vec::with_capacity((row * size[1]) as usize);
+    let mut pixels = Vec::with_capacity((row * u64::from(size[1])) as usize);
     for line in 0..size[1] as usize {
         let start = line * stride as usize;
         pixels.extend_from_slice(&mapped[start..start + row as usize]);

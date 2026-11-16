@@ -546,8 +546,15 @@ impl MeshPasses {
             }),
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
-        pass.set_scissor_rect(0, 0, width, height);
+        pass.set_viewport(
+            region[0] as f32,
+            region[1] as f32,
+            width as f32,
+            height as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(region[0], region[1], width, height);
         pass.set_pipeline(&self.ao_pipeline);
         pass.set_bind_group(0, scene, &[]);
         for key in &self.active {

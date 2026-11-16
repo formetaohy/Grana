@@ -482,13 +482,17 @@ impl Renderer {
             !pyramid.levels().is_empty(),
             "a pyramid holds at least one level"
         );
-        let finest = BrickGrid::new(pyramid.level(0).extent()).count() as u64;
+        let holdable = pyramid
+            .levels()
+            .iter()
+            .map(|level| BrickGrid::new(level.extent()).count() as u64)
+            .sum::<u64>();
         let texels = (0..channels.div_ceil(PACK))
             .map(|pack| pack_texels(pack_components(channels, pack)))
             .sum::<usize>();
         let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
         let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
-        let requested = (self.budget / slot_bytes).max(1).min(finest);
+        let requested = (self.budget / slot_bytes).max(1).min(holdable);
         let atlas = Atlas::new(
             device,
             crate::atlas::AtlasBinding {
@@ -534,7 +538,7 @@ impl Renderer {
         self.feedback = Some(Readback::new(
             device,
             "grana.feedback",
-            ((BAND + 1) * self.view_words) as u64 * size_of::<u32>() as u64,
+            (BAND * self.view_words) as u64 * size_of::<u32>() as u64,
             FEEDBACK_SLOTS,
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
@@ -542,16 +546,7 @@ impl Renderer {
         let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
         planner.bind_arena(device, &self.layouts, &arena);
         self.planner = Some(planner);
-        let finest = pyramid.level(0);
-        let world = Vec3::from(finest.world_extent());
-        let spacing = finest.spacing();
-        let voxel = Vec3::new(spacing.x(), spacing.y(), spacing.z());
-        self.shadow = Some(Shadow::new(
-            device,
-            &self.layouts,
-            shadow::resolution(world, voxel),
-            &self.pipelines,
-        ));
+        self.shadow = Some(Shadow::new(device, &self.layouts, &self.pipelines));
         self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
             device,

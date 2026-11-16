@@ -40,6 +40,7 @@ impl Signature<'_> {
         let mut data = *data;
         data.jitter = [0.0; 4];
         data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
+        data.oit[2] = 0;
         bytemuck::bytes_of(&data).hash(&mut hasher);
         camera.projection.index().hash(&mut hasher);
         region.hash(&mut hasher);
@@ -163,7 +164,7 @@ impl ShadowKeys {
     pub(super) fn of(
         objects: u64,
         visibility: u64,
-        generation: u64,
+        revision: u64,
         time: u32,
         style: u64,
         level: usize,
@@ -171,7 +172,7 @@ impl ShadowKeys {
     ) -> Self {
         let space = space.digest();
         Self {
-            volume: digest(&[style, level as u64, u64::from(time), generation, space]),
+            volume: digest(&[style, level as u64, u64::from(time), revision, space]),
             objects: digest(&[objects, visibility, space]),
         }
     }

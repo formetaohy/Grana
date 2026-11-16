@@ -208,7 +208,7 @@ fn fs_oit_key(input: VertexOutput) {
     if (index < 0) {
         discard;
     }
-    oit_offer(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
+    oit_offer(u32(index), mesh.oit.y, oit_key(mesh.oit.z, input.clip_position.z));
 }
 
 @fragment
@@ -225,8 +225,12 @@ fn fs_oit_color(input: VertexOutput) -> Residual {
         return output;
     }
     let sample = shade(input, ambient_occlusion(input.clip_position.xy - mesh.viewport.xy));
-    let slot = oit_slot(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
-    if (slot >= 0 && oit_claim(u32(index), mesh.oit.y, u32(slot))) {
+    let slot = oit_slot(
+        u32(index),
+        mesh.oit.y,
+        oit_key(mesh.oit.z, input.clip_position.z),
+    );
+    if (slot >= 0 && oit_claim(u32(index), mesh.oit.y, mesh.oit.z, u32(slot))) {
         oit_write(
             u32(index),
             mesh.oit.y,

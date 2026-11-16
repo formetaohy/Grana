@@ -10,13 +10,14 @@ fn tau_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let step = 1.0 / f32(dims.z);
     let slice = frame.light_reach.x * step;
     let band = band_count() - 1u;
+    let scale = level_voxels_per_world(band, frame.light.xyz) * slice;
     var tau = 0.0;
     for (var layer = 0u; layer < dims.z; layer += 1u) {
         let w = (f32(layer) + 0.5) * step;
         let world = (frame.light_inverse * vec4<f32>(uv, w, 1.0)).xyz;
         let uvw = level_local(band, world);
         if (all(uvw >= vec3<f32>(-1.0e-5)) && all(uvw <= vec3<f32>(1.0 + 1.0e-5))) {
-            tau += channel_extinction(band, uvw) * level_voxels_per_world(band, frame.light.xyz) * slice;
+            tau += channel_extinction(band, uvw) * scale;
         }
         textureStore(tau_output, vec3<u32>(id.xy, layer), vec4<f32>(encoded_tau(tau), 0.0, 0.0, 1.0));
     }

@@ -202,7 +202,7 @@ fn fs_oit_key(input: SplatVertex) {
     if (index < 0) {
         discard;
     }
-    oit_offer(u32(index), frame.oit.y, oit_key(input.depth));
+    oit_offer(u32(index), frame.oit.y, oit_key(frame.oit.z, input.depth));
 }
 
 @fragment
@@ -220,8 +220,8 @@ fn fs_oit_color(input: SplatVertex) -> Residual {
     if (index < 0) {
         return output;
     }
-    let slot = oit_slot(u32(index), frame.oit.y, oit_key(input.depth));
-    if (slot >= 0 && oit_claim(u32(index), frame.oit.y, u32(slot))) {
+    let slot = oit_slot(u32(index), frame.oit.y, oit_key(frame.oit.z, input.depth));
+    if (slot >= 0 && oit_claim(u32(index), frame.oit.y, frame.oit.z, u32(slot))) {
         oit_write(u32(index), frame.oit.y, u32(slot), vec4<f32>(input.color * alpha, alpha));
         return output;
     }

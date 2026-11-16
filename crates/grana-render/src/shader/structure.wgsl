@@ -6,7 +6,7 @@ struct BakeEntry {
 }
 
 @group(5) @binding(0) var<storage, read> bake_entries: array<BakeEntry>;
-@group(5) @binding(1) var structure_output: texture_storage_3d<rgba16float, write>;
+@group(5) @binding(1) var structure_output: texture_storage_3d<rgba8unorm, write>;
 
 const BAKE_TILE: u32 = 4u;
 const BAKE_TILES: u32 = 9u;
@@ -35,7 +35,7 @@ fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32>
         return vec4<f32>(0.0);
     }
     let packed = octahedral_encode(normalize(-gradient));
-    return vec4<f32>(packed.x, packed.y, 1.0, 0.0);
+    return vec4<f32>(packed * 0.5 + vec2<f32>(0.5), 1.0, 0.0);
 }
 
 @compute @workgroup_size(4, 4, 4)

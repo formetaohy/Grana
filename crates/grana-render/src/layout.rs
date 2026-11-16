@@ -330,7 +330,7 @@ impl Layouts {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba16Float,
+                        format: crate::atlas::STRUCTURE_FORMAT,
                         view_dimension: TextureViewDimension::D3,
                     },
                     count: None,

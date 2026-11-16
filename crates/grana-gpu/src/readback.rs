@@ -51,7 +51,6 @@ impl Readback {
     pub fn reserve(&mut self) -> Option<usize> {
         let slot = self.slots.iter().position(|slot| !slot.reserved)?;
         self.slots[slot].reserved = true;
-        self.pending.push_back(slot);
         Some(slot)
     }
 
@@ -112,15 +111,16 @@ impl Readback {
     }
 
     pub fn register(&mut self) {
-        for slot in &mut self.slots {
-            if slot.reserved && slot.mapping.is_none() {
+        for (slot, held) in self.slots.iter_mut().enumerate() {
+            if held.reserved && held.mapping.is_none() {
                 let (sender, receiver) = mpsc::channel();
-                slot.buffer
+                held.buffer
                     .slice(..)
                     .map_async(MapMode::Read, move |result| {
                         let _ = sender.send(result);
                     });
-                slot.mapping = Some(receiver);
+                held.mapping = Some(receiver);
+                self.pending.push_back(slot);
             }
         }
     }

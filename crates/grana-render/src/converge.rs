@@ -4,7 +4,7 @@ use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, Color, ColorTargetState, ColorWrites,
+    BindGroupLayoutEntry, BindingResource, BindingType, ColorTargetState, ColorWrites,
     CommandEncoder, Device, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor,
     PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
     RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Texture,
@@ -133,7 +133,7 @@ impl Convergence {
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(Color::TRANSPARENT),
+                    load: LoadOp::Load,
                     store: StoreOp::Store,
                 },
             })],
@@ -151,7 +151,7 @@ impl Convergence {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color::TRANSPARENT),
+                        load: LoadOp::Load,
                         store: StoreOp::Store,
                     },
                 })],

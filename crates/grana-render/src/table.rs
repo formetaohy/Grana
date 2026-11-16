@@ -189,7 +189,7 @@ impl SceneTable {
         self.floor
     }
 
-    pub fn write_shadow_frame(&mut self, queue: &Queue, frame: FrameData) {
+    pub fn write_shadow_frame(&self, queue: &Queue, frame: FrameData) {
         queue.write_buffer(&self.shadow_frame, 0, bytemuck::bytes_of(&frame));
     }
 
