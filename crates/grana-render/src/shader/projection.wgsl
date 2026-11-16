@@ -71,7 +71,7 @@ fn march_projected(
                 }
             }
             let albedo = emission / max(tau, OPTICAL_MINIMUM_TAU);
-            let segment = min(stride, boundary - cursor);
+            let segment = min(stride, finish - cursor);
             let weight = tau * segment * voxels_per_world;
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);

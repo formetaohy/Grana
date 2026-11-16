@@ -140,7 +140,7 @@ fn march_volume(
             if (!occupied) {
                 let cell_exit = max(cell_reach(band, local, brick, direction_uvw), 0.0);
                 let gap = stride * ceil(cell_exit / stride);
-                cursor = min(cursor + max(gap, stride), boundary);
+                cursor = min(cursor + max(gap, stride), finish);
                 continue;
             }
             let texel = brick_texel(band, local, brick, slot);
@@ -150,7 +150,7 @@ fn march_volume(
                 stride,
                 stride * SEGMENT_STRIDE,
             );
-            let segment = min(advance, boundary - cursor);
+            let segment = min(advance, finish - cursor);
             let tau = sample.a * segment * voxels_per_world;
             if (tau > 0.0) {
                 let alpha = 1.0 - exp(-tau);
