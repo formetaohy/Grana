@@ -1,7 +1,8 @@
 use std::ops::Range;
 
-use crate::brick::{BRICK_APRON, BRICK_SIDE, CELL_AXIS, CELL_COUNT, CELL_SIDE, PADDED_SIDE};
 use crate::{Extent, Intensity};
+
+pub const UNIT_MAXIMUM: f32 = 65535.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VoxelFormat {
@@ -15,6 +16,13 @@ pub enum VoxelData {
     U8(Vec<u8>),
     U16(Vec<u16>),
     F32(Vec<f32>),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VoxelUnits<'a> {
+    data: &'a VoxelData,
+    minimum: f32,
+    scale: f32,
 }
 
 impl VoxelData {
@@ -53,55 +61,12 @@ impl VoxelData {
         Intensity::new(min, max)
     }
 
-    pub fn pack_units(
-        &self,
-        intensity: Intensity,
-        out: &mut [u16],
-        stride: usize,
-        offset: usize,
-        cells: &mut [f32],
-    ) -> f32 {
-        assert!(stride > 0, "a unit stride visits at least one slot");
-        assert!(offset < stride, "a unit offset lies inside the stride");
-        assert_eq!(
-            out.len(),
-            self.voxel_count() * stride,
-            "the destination must hold every voxel at the stride"
-        );
-        assert_eq!(
-            cells.len(),
-            CELL_COUNT,
-            "a packed brick summarizes one cell maximum per cell"
-        );
-        cells.fill(0.0);
-        match self {
-            Self::U8(data) => pack(
-                data.iter().copied(),
-                f32::from,
-                intensity,
-                out,
-                stride,
-                offset,
-                cells,
-            ),
-            Self::U16(data) => pack(
-                data.iter().copied(),
-                f32::from,
-                intensity,
-                out,
-                stride,
-                offset,
-                cells,
-            ),
-            Self::F32(data) => pack(
-                data.iter().copied(),
-                |value| value,
-                intensity,
-                out,
-                stride,
-                offset,
-                cells,
-            ),
+    pub fn units(&self, intensity: Intensity) -> VoxelUnits<'_> {
+        let span = intensity.span();
+        VoxelUnits {
+            data: self,
+            minimum: intensity.min(),
+            scale: if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 },
         }
     }
 
@@ -164,60 +129,31 @@ impl VoxelData {
     }
 }
 
-const UNIT_MAXIMUM: f32 = 65535.0;
-
-fn pack<T>(
-    values: impl Iterator<Item = T>,
-    convert: impl Fn(T) -> f32,
-    intensity: Intensity,
-    out: &mut [u16],
-    stride: usize,
-    offset: usize,
-    cells: &mut [f32],
-) -> f32 {
-    let side = PADDED_SIDE as usize;
-    let inner_start = BRICK_APRON as usize;
-    let inner_end = (BRICK_APRON + BRICK_SIDE) as usize;
-    let cell_side = CELL_SIDE as usize;
-    let span = intensity.span();
-    let minimum = intensity.min();
-    let scale = if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 };
-    let mut maximum = 0.0f32;
-    let (mut x, mut y, mut z) = (0usize, 0usize, 0usize);
-    for (index, raw) in values.enumerate() {
-        let value = convert(raw);
-        let scaled = if span > 0.0 && value.is_finite() {
-            ((value - minimum) * scale).clamp(0.0, UNIT_MAXIMUM)
-        } else {
-            0.0
+impl VoxelUnits<'_> {
+    pub fn visit(&self, range: Range<usize>, mut visit: impl FnMut(f32)) {
+        assert!(
+            range.start < range.end && range.end <= self.data.voxel_count(),
+            "a unit visit covers voxels inside the data"
+        );
+        let minimum = self.minimum;
+        let scale = self.scale;
+        let unit = move |value: f32| {
+            if scale > 0.0 && value.is_finite() {
+                ((value - minimum) * scale).clamp(0.0, UNIT_MAXIMUM)
+            } else {
+                0.0
+            }
         };
-        out[offset + index * stride] = scaled.round() as u16;
-        let unit = scaled / UNIT_MAXIMUM;
-        if unit > maximum {
-            maximum = unit;
-        }
-        if (inner_start..inner_end).contains(&x)
-            && (inner_start..inner_end).contains(&y)
-            && (inner_start..inner_end).contains(&z)
-        {
-            let cell = (x - inner_start) / cell_side
-                + ((y - inner_start) / cell_side) * CELL_AXIS
-                + ((z - inner_start) / cell_side) * CELL_AXIS * CELL_AXIS;
-            if unit > cells[cell] {
-                cells[cell] = unit;
-            }
-        }
-        x += 1;
-        if x == side {
-            x = 0;
-            y += 1;
-            if y == side {
-                y = 0;
-                z += 1;
-            }
+        match self.data {
+            VoxelData::U8(data) => data[range]
+                .iter()
+                .for_each(|&value| visit(unit(f32::from(value)))),
+            VoxelData::U16(data) => data[range]
+                .iter()
+                .for_each(|&value| visit(unit(f32::from(value)))),
+            VoxelData::F32(data) => data[range].iter().for_each(|&value| visit(unit(value))),
         }
     }
-    maximum
 }
 
 fn extract<T: Copy>(

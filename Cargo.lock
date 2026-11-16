@@ -3897,6 +3897,7 @@ dependencies = [
  "grana-gpu",
  "grana-volume",
  "half",
+ "rayon",
  "wgpu",
 ]
 

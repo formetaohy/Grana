@@ -1,26 +1,9 @@
-struct AoData {
-    view_projection: mat4x4<f32>,
-    inverse_view_projection: mat4x4<f32>,
-    eye: vec4<f32>,
-    extent: vec4<f32>,
-    region: vec4<f32>,
-    noise: vec4<f32>,
-}
-
-@group(0) @binding(0) var<uniform> ao: AoData;
 @group(0) @binding(1) var surface_depth: texture_depth_2d;
 @group(0) @binding(2) var surface_normal: texture_2d<f32>;
 @group(0) @binding(3) var volume_normal: texture_2d<f32>;
 
 const SLICES: u32 = 8u;
 const STEPS: u32 = 5u;
-const PI: f32 = 3.14159265359;
-const FLOOR: f32 = 1.0e-5;
-
-fn world_of(ndc: vec2<f32>, depth: f32) -> vec3<f32> {
-    let clip = ao.inverse_view_projection * vec4<f32>(ndc, depth, 1.0);
-    return clip.xyz / clip.w;
-}
 
 fn pixel_of(world: vec3<f32>) -> vec4<f32> {
     let clip = ao.view_projection * vec4<f32>(world, 1.0);
@@ -36,36 +19,19 @@ fn pixel_of(world: vec3<f32>) -> vec4<f32> {
     );
 }
 
-fn ndc_of(pixel: vec2<i32>) -> vec2<f32> {
-    let local = vec2<f32>(pixel) - ao.region.xy + vec2<f32>(0.5);
-    return vec2<f32>(
-        local.x / ao.region.z * 2.0 - 1.0,
-        1.0 - local.y / ao.region.w * 2.0,
-    );
-}
-
 fn dither(seed: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(seed, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let corners = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0),
-    );
-    return vec4<f32>(corners[index], 0.0, 1.0);
-}
-
 @fragment
 fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let pixel = vec2<i32>(position.xy);
+    let pixel = floor(vec2<f32>(position.xy) * f32(AO_SCALE));
+    let at = vec2<i32>(pixel);
     let extent = vec2<i32>(ao.extent.xy);
-    var depth = textureLoad(surface_depth, pixel, 0);
-    var raw_normal = octahedral_decode(textureLoad(surface_normal, pixel, 0).xy);
+    var depth = textureLoad(surface_depth, at, 0);
+    var raw_normal = octahedral_decode(textureLoad(surface_normal, at, 0).xy);
     var surface = depth < 1.0;
-    let volume_sample = textureLoad(volume_normal, pixel, 0);
+    let volume_sample = textureLoad(volume_normal, at, 0);
     let depth_of_volume = volume_sample.w;
     let normal_of_volume = volume_sample.xyz;
     let volume = depth_of_volume < 1.0 && length(normal_of_volume) >= 0.5;
@@ -92,8 +58,7 @@ fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let focal = max(ao.noise.y, FLOOR);
     let depth_scale = select(1.0, length(world - ao.eye.xyz), ao.noise.z > 0.5);
     let radius = max(ao.extent.z * depth_scale / focal, FLOOR);
-    let rotation = dither(vec2<f32>(f32(pixel.x), f32(pixel.y))) * 6.2831853
-        + ao.noise.x * 2.39996323;
+    let rotation = dither(pixel) * 6.2831853 + ao.noise.x * 2.39996323;
     var occlusion = 0.0;
     for (var slice = 0u; slice < SLICES; slice += 1u) {
         let angle = rotation + PI * f32(slice) / f32(SLICES);
@@ -119,7 +84,7 @@ fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 if (sample_depth >= 1.0) {
                     continue;
                 }
-                let occluder = world_of(ndc_of(sample_pixel), sample_depth);
+                let occluder = world_of(ndc_of(vec2<f32>(sample_pixel)), sample_depth);
                 let offset = occluder - world;
                 let distance = length(offset);
                 if (distance < FLOOR || distance > radius * 1.5) {

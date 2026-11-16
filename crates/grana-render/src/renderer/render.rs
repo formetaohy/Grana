@@ -600,7 +600,7 @@ impl Renderer {
                 let ao = crate::ao::Ao::new(
                     device,
                     layouts,
-                    gtao.pipeline(),
+                    gtao,
                     gbuffer.normal(),
                     target.scene.depth(),
                     target.guide.view(),

@@ -35,4 +35,4 @@ pub use series::VolumeSeries;
 pub use slice::SliceFrame;
 pub use spacing::Spacing;
 pub use volume::{Channel, Volume};
-pub use voxel::{VoxelData, VoxelFormat};
+pub use voxel::{UNIT_MAXIMUM, VoxelData, VoxelFormat, VoxelUnits};

@@ -9,6 +9,11 @@ struct BrickRecord {
     content: u32,
 }
 
+struct TexelMap {
+    offset: vec3<f32>,
+    scale: vec3<f32>,
+}
+
 fn brick_holds(record: BrickRecord) -> bool {
     return record.time == frame.tag.x && record.content == frame.tag.w;
 }
@@ -28,27 +33,14 @@ fn brick_display_slot(record: BrickRecord) -> u32 {
     return brick_slot(record);
 }
 
-fn brick_cell(grid: vec3<u32>, dims: vec3<f32>, uvw: vec3<f32>) -> vec3<u32> {
-    let voxel = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * dims;
-    let cell = floor(voxel / BRICK_SIDE);
+fn brick_of(grid: vec3<u32>, dims: vec3<f32>, voxel: vec3<f32>) -> vec3<u32> {
+    let cell = floor(clamp(voxel, vec3<f32>(0.0), dims) / BRICK_SIDE);
     let last = vec3<f32>(grid) - vec3<f32>(1.0);
     return vec3<u32>(clamp(cell, vec3<f32>(0.0), last));
 }
 
 fn brick_origin(cell: vec3<u32>) -> vec3<f32> {
     return vec3<f32>(cell) * BRICK_SIDE;
-}
-
-fn brick_edge(uvw: vec3<f32>, dims: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    var edge = vec3<f32>(0.0);
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        let dim = dims[axis];
-        let voxel = clamp(uvw[axis], 0.0, 1.0) * dim;
-        let origin = floor(voxel / BRICK_SIDE) * BRICK_SIDE;
-        let next = select(min(origin + BRICK_SIDE, dim), origin, direction[axis] < 0.0);
-        edge[axis] = next / dim;
-    }
-    return edge;
 }
 
 fn brick_index(grid: vec3<u32>, cell: vec3<u32>) -> u32 {
@@ -63,15 +55,14 @@ fn slot_origin(atlas_grid: vec3<u32>, slot: u32) -> vec3<f32> {
     return vec3<f32>(f32(column), f32(row), f32(layer)) * PADDED_SIDE;
 }
 
-fn atlas_texel(
-    grid: vec3<u32>,
-    atlas_grid: vec3<u32>,
-    dims: vec3<f32>,
-    slot: u32,
-    uvw: vec3<f32>,
-) -> vec3<f32> {
-    let clamped = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0));
-    let local = clamped * dims - brick_origin(brick_cell(grid, dims, clamped));
-    let size = vec3<f32>(f32(atlas_grid.x), f32(atlas_grid.y), f32(atlas_grid.z)) * PADDED_SIDE;
-    return (slot_origin(atlas_grid, slot) + local + vec3<f32>(1.0)) / size;
+fn texel_map(slot: u32, base: vec3<f32>) -> TexelMap {
+    let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
+    return TexelMap(
+        slot_origin(frame.atlas.xyz, slot) + vec3<f32>(1.0) - base,
+        vec3<f32>(1.0) / extent,
+    );
+}
+
+fn texel_at(map: TexelMap, voxel: vec3<f32>) -> vec3<f32> {
+    return (voxel + map.offset) * map.scale;
 }

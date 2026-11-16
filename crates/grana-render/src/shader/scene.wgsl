@@ -201,14 +201,6 @@ fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
     );
 }
 
-fn occupancy_floor() -> f32 {
-    return frame.occupancy.x;
-}
-
-fn occupancy_reaches(bits: u32) -> bool {
-    return bitcast<f32>(bits) >= occupancy_floor();
-}
-
 const PACK: u32 = 4u;
 
 const CHANNEL_LIMIT: u32 = 16u;

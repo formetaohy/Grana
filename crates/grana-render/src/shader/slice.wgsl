@@ -5,8 +5,8 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
     let bands = band_count();
     for (var band = 0u; band < bands; band += 1u) {
         let g = level_frame(band);
-        let local = band_uvw(band, uvw);
-        let cell = brick_cell(g.grid, g.dims, local);
+        let voxel = band_uvw(band, uvw) * g.dims;
+        let cell = brick_of(g.grid, g.dims, voxel);
         let record = level_record(band, brick_index(g.grid, cell));
         if (brick_hollow(record)) {
             return vec4<f32>(0.0);
@@ -20,7 +20,7 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
             if (!pack_active(pack, count)) {
                 continue;
             }
-            let values = sample_pack(band, pack, local);
+            let values = sample_pack(band, pack, voxel);
             for (var component = 0u; component < PACK; component += 1u) {
                 let channel = pack * PACK + component;
                 if (channel >= count) {

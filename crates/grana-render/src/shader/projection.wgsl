@@ -20,30 +20,47 @@ fn march_projected(
     var samples = 0u;
     var cells = 0u;
     var complete = false;
+    var walk = walk_open(
+        direction,
+        begin,
+        finish,
+        volume_reachable(origin, band_for(begin, dither), band_count(), begin, direction),
+    );
     while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
-        cells += 1u;
-        let found = volume_reachable(origin, band_for(t, dither), t, direction);
-        let band = found.band;
-        let direction_uvw = level_rate(band, direction);
-        let cell_step = local_step(t);
-        let exit = boundary_delta(band, found.uvw, direction_uvw);
-        let boundary = min(t + max(exit, max(t, 1.0) * 1.0e-6), finish);
-        if (!found.usable) {
-            let gap = cell_step * ceil(max(boundary - t, 0.0) / cell_step);
-            t = min(t + max(gap, cell_step), finish);
+        if (!inside_level(walk.sight)) {
+            break;
+        }
+        if (t >= walk.exit) {
+            let sight = volume_reachable(origin, band_for(t, dither), walk.sight.band, t, direction);
+            walk = walk_open(direction, t, finish, sight);
             continue;
         }
-        let g = level_frame(band);
-        let brick = found.cell;
-        let record = level_record(band, brick_index(g.grid, brick));
-        let slot = brick_display_slot(record) - 1u;
-        let voxels_per_world = length(direction_uvw * g.dims);
+        if (!walk.sight.usable) {
+            cells += 1u;
+            t = walk.exit;
+            continue;
+        }
+        let slot = walk.sight.slot - 1u;
+        var held = 0xffffffffu;
+        var occupied = true;
         var cursor = t;
-        while (cursor < boundary && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
+        while (cursor < walk.exit && samples < frame.bounds.x && cells < frame.bounds.y && !complete) {
             cells += 1u;
             let stride = local_step(cursor);
-            let local = ray_uvw(origin, band, cursor, direction);
-            let texel = brick_texel(band, local, brick, slot);
+            let voxel = walk_voxel(walk, cursor);
+            let coord = walk_cell(walk, voxel);
+            let cell = cell_index(coord);
+            if (cell != held) {
+                held = cell;
+                occupied = occupied_cell(slot, cell);
+            }
+            if (!occupied) {
+                let reach = walk_cell_span(walk, coord, voxel);
+                let gap = stride * ceil(max(reach, 0.0) / stride);
+                cursor = min(cursor + max(gap, stride), walk.exit);
+                continue;
+            }
+            let texel = walk_texel(walk, voxel);
             var tau = 0.0;
             var emission = vec3<f32>(0.0);
             for (var pack = 0u; pack < packs; pack += 1u) {
@@ -69,11 +86,13 @@ fn march_projected(
                 }
             }
             let albedo = emission / max(tau, OPTICAL_MINIMUM_TAU);
-            let segment = min(stride, finish - cursor);
-            let weight = tau * segment * voxels_per_world;
+            let segment = min(stride, walk.exit - cursor);
+            let weight = tau * segment * walk.voxels;
             if (weight > 0.0) {
                 let alpha = 1.0 - exp(-weight);
-                radiance += transmittance * alpha * structure_lighting(albedo, texel, origin + direction * cursor);
+                radiance += transmittance
+                    * alpha
+                    * structure_lighting(albedo, texel, origin + direction * cursor);
                 transmittance *= 1.0 - alpha;
             }
             cursor += segment;
@@ -82,7 +101,7 @@ fn march_projected(
                 complete = true;
             }
         }
-        t = max(cursor, boundary);
+        t = walk.exit;
     }
     for (var channel = 0u; channel < count; channel += 1u) {
         if (!channel_maximum(channel) || peak[channel] < 0.0) {

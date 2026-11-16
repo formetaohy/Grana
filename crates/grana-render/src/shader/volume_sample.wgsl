@@ -6,11 +6,17 @@ const ISO_EXTINCTION: f32 = 8.0;
 const ISO_SOFTNESS: f32 = 0.04;
 const CELL_SIDE: f32 = 8.0;
 const CELL_GRID: u32 = 4u;
+const LEVEL_EXIT: f32 = 1.0e20;
 
 struct LevelFrame {
     dims: vec3<f32>,
     grid: vec3<u32>,
     origin: vec3<f32>,
+}
+
+struct VoxelRay {
+    start: vec3<f32>,
+    rate: vec3<f32>,
 }
 
 fn level_frame(band: u32) -> LevelFrame {
@@ -32,9 +38,25 @@ fn band_uvw(band: u32, uvw: vec3<f32>) -> vec3<f32> {
     return level_local(band, level_world(0u, uvw));
 }
 
-fn cell_voxel(band: u32, uvw: vec3<f32>, brick: vec3<u32>) -> vec3<f32> {
-    let g = level_frame(band);
-    return clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick);
+fn voxel_ray(band: u32, origin: vec3<f32>, direction: vec3<f32>) -> VoxelRay {
+    let dims = frame.dims[band].xyz;
+    return VoxelRay(level_local(band, origin) * dims, level_rate(band, direction) * dims);
+}
+
+fn voxel_at(ray: VoxelRay, t: f32) -> vec3<f32> {
+    return ray.start + ray.rate * t;
+}
+
+fn box_exit(low: vec3<f32>, high: vec3<f32>, voxel: vec3<f32>, rate: vec3<f32>) -> f32 {
+    var exit = LEVEL_EXIT;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let step = rate[axis];
+        if (abs(step) > 1.0e-9) {
+            let far = select(low[axis], high[axis], step > 0.0);
+            exit = min(exit, (far - voxel[axis]) / step);
+        }
+    }
+    return exit;
 }
 
 fn cell_coord(local: vec3<f32>) -> vec3<u32> {
@@ -51,47 +73,22 @@ fn cell_index(cell: vec3<u32>) -> u32 {
     return cell.x + CELL_GRID * (cell.y + CELL_GRID * cell.z);
 }
 
-fn cell_edge(band: u32, uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) -> vec3<f32> {
-    let g = level_frame(band);
-    let origin = brick_origin(brick);
-    let base = floor(cell_voxel(band, uvw, brick) / CELL_SIDE) * CELL_SIDE;
-    var edge = vec3<f32>(0.0);
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        let limit = clamp(g.dims[axis] - origin[axis] - base[axis], 0.0, CELL_SIDE);
-        let far = select(base[axis] + limit, base[axis], direction[axis] < 0.0);
-        edge[axis] = (origin[axis] + far) / g.dims[axis];
-    }
-    return edge;
+fn cell_span(base: vec3<f32>, coord: vec3<u32>, far: vec3<f32>, voxel: vec3<f32>, rate: vec3<f32>) -> f32 {
+    let low = base + vec3<f32>(coord) * CELL_SIDE;
+    let high = min(low + vec3<f32>(CELL_SIDE), far);
+    return box_exit(low, high, voxel, rate);
 }
 
-fn cell_reach(band: u32, uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) -> f32 {
-    let edge = cell_edge(band, uvw, brick, direction);
-    var reach = 1.0e20;
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        let step = direction[axis];
-        if (abs(step) > 1.0e-9) {
-            reach = min(reach, (edge[axis] - uvw[axis]) / step);
-        }
-    }
-    return reach;
-}
-
-fn brick_texel(band: u32, uvw: vec3<f32>, brick: vec3<u32>, slot: u32) -> vec3<f32> {
+fn sample_pack(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
     let g = level_frame(band);
-    let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
-    let local = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * g.dims - brick_origin(brick);
-    return (slot_origin(frame.atlas.xyz, slot) + local + vec3<f32>(1.0)) / extent;
-}
-
-fn sample_pack(band: u32, pack: u32, uvw: vec3<f32>) -> vec4<f32> {
-    let g = level_frame(band);
-    let cell = brick_cell(g.grid, g.dims, uvw);
+    let cell = brick_of(g.grid, g.dims, voxel);
     let record = level_record(band, brick_index(g.grid, cell));
     let slot = brick_display_slot(record);
     if (slot == 0u) {
         return vec4<f32>(0.0);
     }
-    let texel = atlas_texel(g.grid, frame.atlas.xyz, g.dims, slot - 1u, uvw);
+    let base = brick_origin(cell);
+    let texel = texel_at(texel_map(slot - 1u, base), clamp(voxel, base, base + vec3<f32>(BRICK_SIDE)));
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }
 
@@ -101,7 +98,7 @@ fn level_voxels_per_world(band: u32, direction: vec3<f32>) -> f32 {
 }
 
 fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
-    let position = band_uvw(band, uvw);
+    let position = band_uvw(band, uvw) * frame.dims[band].xyz;
     let count = u32(frame.march.z);
     let packs = (count + PACK - 1u) / PACK;
     var extinction = 0.0;
@@ -142,21 +139,3 @@ fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
     }
     return extinction;
 }
-
-fn ray_uvw(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> vec3<f32> {
-    return level_local(band, origin + direction * t);
-}
-
-fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>) -> f32 {
-    let g = level_frame(band);
-    let edge = brick_edge(uvw, g.dims, direction);
-    var delta = 1.0e20;
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        let step = direction[axis];
-        if (abs(step) > 1.0e-9) {
-            delta = min(delta, (edge[axis] - uvw[axis]) / step);
-        }
-    }
-    return delta;
-}
-

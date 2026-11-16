@@ -30,6 +30,7 @@ pub(crate) struct Layouts {
     pub oit_read: BindGroupLayout,
     pub ao_read: BindGroupLayout,
     pub ao_write: BindGroupLayout,
+    pub ao_filter: BindGroupLayout,
     pub gbuffer: BindGroupLayout,
     pub source: BindGroupLayout,
     pub occupancy: BindGroupLayout,
@@ -45,6 +46,7 @@ pub(crate) struct Layouts {
     pub splat_pick: PipelineLayout,
     pub splat_cull_pipeline: PipelineLayout,
     pub ao_pipeline: PipelineLayout,
+    pub ao_filter_pipeline: PipelineLayout,
     pub gbuffer_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
     pub section: BindGroupLayout,
@@ -305,6 +307,33 @@ impl Layouts {
                 },
             ],
         });
+        let ao_filter = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.ao.filter.layout"),
+            entries: &[
+                uniform(0, ShaderStages::FRAGMENT),
+                texture(1, ShaderStages::FRAGMENT),
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
@@ -396,6 +425,8 @@ impl Layouts {
             immediate_size: 0,
         });
         let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao]);
+        let ao_filter_pipeline =
+            pipeline_layout(device, "grana.ao.filter.pipeline.layout", &[&ao_filter]);
         let gbuffer_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.gbuffer.pipeline.layout"),
             bind_group_layouts: &[Some(&scene), Some(&objects), None, None, None, Some(&pick)],
@@ -481,6 +512,7 @@ impl Layouts {
             oit_read,
             ao_read,
             ao_write: ao,
+            ao_filter,
             gbuffer,
             source,
             occupancy,
@@ -497,6 +529,7 @@ impl Layouts {
             splat_cull_pipeline,
             shadow_pipeline,
             ao_pipeline,
+            ao_filter_pipeline,
             gbuffer_pipeline,
             section,
             section_style,

@@ -1,17 +1,28 @@
 use grana_volume::{
-    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, CELL_COUNT, CHANNEL_LIMIT, PADDED_SIDE, Pyramid,
+    BRICK_APRON, BRICK_SIDE, BrickData, BrickGrid, BrickRequest, CELL_AXIS, CELL_COUNT, CELL_SIDE,
+    PADDED_SIDE, Pyramid, UNIT_MAXIMUM,
 };
+use rayon::prelude::*;
 use wgpu::Queue;
 
 use crate::atlas::{PACK, PACK_LIMIT, ResidentBrick, pack_components, pack_texels};
 use crate::brick::BrickRecord;
-use crate::occupancy::{OCCUPANCY_WORDS, Occupancy};
+use crate::occupancy::{CELL_WORDS, Occupancy};
 
 use super::Renderer;
 
+const PADDED: usize = PADDED_SIDE as usize;
+
+const APRON: usize = BRICK_APRON as usize;
+
+const CELL: usize = CELL_SIDE as usize;
+
+const SLICE: usize = PADDED * PADDED;
+
+const INNER: std::ops::Range<usize> = APRON..APRON + BRICK_SIDE as usize;
+
 pub(super) struct UploadScratch {
     units: Vec<u16>,
-    cells: Vec<f32>,
     summaries: Vec<f32>,
     words: Vec<u32>,
 }
@@ -20,9 +31,8 @@ impl UploadScratch {
     pub fn new() -> Self {
         Self {
             units: Vec::new(),
-            cells: vec![0.0; CHANNEL_LIMIT * CELL_COUNT],
             summaries: vec![0.0; PACK_LIMIT * CELL_COUNT],
-            words: vec![0; OCCUPANCY_WORDS],
+            words: vec![0; CELL_WORDS],
         }
     }
 }
@@ -57,7 +67,6 @@ impl Renderer {
             .sum::<usize>();
         let UploadScratch {
             units,
-            cells,
             summaries,
             words,
         } = staging;
@@ -99,19 +108,13 @@ impl Renderer {
                         if units.len() < span {
                             units.resize(span, 0);
                         }
-                        let (maximum, summary) = stage(
-                            &mut units[..span],
-                            cells,
-                            &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
-                            pyramid,
-                            total,
-                            data,
-                            pack,
-                        );
+                        let summary = &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT];
+                        let maximum =
+                            stage(&mut units[..span], summary, pyramid, total, data, pack);
                         atlas.write(queue, pack, slot, &units[..span]);
                         occupy(
                             words,
-                            occupancy.as_ref(),
+                            occupancy.as_mut(),
                             queue,
                             slot,
                             pack,
@@ -137,16 +140,14 @@ impl Renderer {
             let mut base = 0;
             for pack in 0..pack_count {
                 let step = voxels * pack_texels(pack_components(total, pack));
-                let (maximum, _) = stage(
+                maxima[pack] = stage(
                     &mut units[base..base + step],
-                    cells,
                     &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
                     pyramid,
                     total,
                     data,
                     pack,
                 );
-                maxima[pack] = maximum;
                 base += step;
             }
             let maximum = maxima[..pack_count].iter().copied().fold(0.0, f32::max);
@@ -180,7 +181,7 @@ impl Renderer {
                 atlas.write(queue, pack, slot, &units[base..base + step]);
                 occupy(
                     words,
-                    occupancy.as_ref(),
+                    occupancy.as_mut(),
                     queue,
                     slot,
                     pack,
@@ -206,36 +207,75 @@ impl Renderer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn stage<'a>(
+fn stage(
     units: &mut [u16],
-    cells: &mut [f32],
-    summary: &'a mut [f32],
+    summary: &mut [f32],
     pyramid: &Pyramid,
     channels: usize,
     data: &BrickData,
     pack: usize,
-) -> (f32, &'a [f32]) {
-    summary.fill(0.0);
-    let texels = pack_texels(pack_components(channels, pack));
-    let mut maximum = 0.0f32;
-    for component in 0..pack_components(channels, pack) {
-        let channel = pack * PACK + component;
-        let intensity = pyramid.channels()[channel].intensity();
-        let channel_cells = &mut cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
-        let value =
-            data.channels()[channel].pack_units(intensity, units, texels, component, channel_cells);
-        maximum = maximum.max(value);
-        for (cell, value) in summary.iter_mut().zip(channel_cells.iter()) {
-            *cell = cell.max(*value);
-        }
-    }
-    (maximum, summary)
+) -> f32 {
+    let components = pack_components(channels, pack);
+    let stride = pack_texels(components);
+    let sources = (0..components)
+        .map(|component| {
+            data.channels()[pack * PACK + component]
+                .units(pyramid.channels()[pack * PACK + component].intensity())
+        })
+        .collect::<Vec<_>>();
+    let (maximum, cells) = units
+        .par_chunks_mut(SLICE * stride)
+        .enumerate()
+        .map(|(slice, chunk)| {
+            let mut cells = [0.0f32; CELL_COUNT];
+            let mut maximum = 0.0f32;
+            let range = slice * SLICE..(slice + 1) * SLICE;
+            let plane = INNER
+                .contains(&slice)
+                .then(|| ((slice - APRON) / CELL) * CELL_AXIS * CELL_AXIS);
+            for (component, source) in sources.iter().enumerate() {
+                let mut x = 0;
+                let mut y = 0;
+                source.visit(range.clone(), |fixed| {
+                    if fixed > maximum {
+                        maximum = fixed;
+                    }
+                    if let Some(plane) = plane
+                        && INNER.contains(&x)
+                        && INNER.contains(&y)
+                    {
+                        let cell = (x - APRON) / CELL + ((y - APRON) / CELL) * CELL_AXIS + plane;
+                        if fixed > cells[cell] {
+                            cells[cell] = fixed;
+                        }
+                    }
+                    chunk[(y * PADDED + x) * stride + component] = fixed.round() as u16;
+                    x += 1;
+                    if x == PADDED {
+                        x = 0;
+                        y += 1;
+                    }
+                });
+            }
+            (maximum, cells)
+        })
+        .reduce(
+            || (0.0f32, [0.0f32; CELL_COUNT]),
+            |left, right| {
+                let mut cells = left.1;
+                for (cell, other) in cells.iter_mut().zip(right.1.iter()) {
+                    *cell = cell.max(*other);
+                }
+                (left.0.max(right.0), cells)
+            },
+        );
+    summary.copy_from_slice(&cells);
+    maximum
 }
 
 fn occupy(
     words: &mut [u32],
-    occupancy: Option<&Occupancy>,
+    occupancy: Option<&mut Occupancy>,
     queue: &Queue,
     slot: u32,
     pack: usize,
@@ -245,9 +285,9 @@ fn occupy(
     let Some(occupancy) = occupancy else {
         return;
     };
-    words[0] = maximum.to_bits();
+    words[0] = (maximum / UNIT_MAXIMUM).to_bits();
     for (word, cell) in words[1..].iter_mut().zip(summary) {
-        *word = cell.to_bits();
+        *word = (cell / UNIT_MAXIMUM).to_bits();
     }
     occupancy.write(queue, slot, pack, words);
 }
