@@ -335,7 +335,9 @@ impl SpotScan {
             i64::from(ranges[2].start),
         ];
         let depth = ranges[2].end - ranges[2].start;
-        let stride = depth.div_ceil(LEVEL_PLANES).max(1);
+        let stride = depth
+            .div_ceil(LEVEL_PLANES)
+            .clamp(1, crate::local::BLOCK as u32);
         let mut levels = BlockLevels::new(
             anchor,
             ranges.clone(),

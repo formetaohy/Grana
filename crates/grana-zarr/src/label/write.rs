@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
 use zarrs::array::{Array, ArrayBuilder, data_type};
 use zarrs::filesystem::FilesystemStore;
-use zarrs::group::{Group, GroupBuilder};
+use zarrs::group::GroupBuilder;
 
 use crate::Image;
 use crate::chunk::Chunk;
@@ -163,6 +163,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
                 .to_string(),
         ));
     }
+    label_index(&directory, image.version()).map_err(&fail)?;
     let levels = image.pyramid().level_count();
     if image.datasets().len() != levels {
         return Err(fail(
@@ -334,17 +335,25 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     }
     let bytes = grana_file::bytes(atomic.staging())
         .map_err(|error| fail(format!("failed to measure the written labels: {error}")))?;
-    atomic.commit().map_err(|error| fail(error.to_string()))?;
-    if let Err(detail) = register_labels(
-        store.clone(),
-        &directory,
-        &labels_group,
-        spec.name,
-        image.version(),
-    ) {
-        let _ = std::fs::remove_dir_all(&root);
+    let published = atomic
+        .commit_held()
+        .map_err(|error| fail(error.to_string()))?;
+    let index = match label_index(&directory, image.version()) {
+        Ok(index) => index,
+        Err(detail) => {
+            published
+                .rollback()
+                .map_err(|error| fail(error.to_string()))?;
+            return Err(fail(detail));
+        }
+    };
+    if let Err(detail) = index.publish(spec.name) {
+        published
+            .rollback()
+            .map_err(|error| fail(error.to_string()))?;
         return Err(fail(detail));
     }
+    published.publish();
     Ok(Written {
         path: root,
         name: spec.name.to_string(),
@@ -455,20 +464,49 @@ where
     Ok(())
 }
 
-fn register_labels(
-    store: Arc<FilesystemStore>,
-    directory: &Path,
-    labels_group: &str,
-    name: &str,
-    version: &str,
-) -> Result<(), String> {
-    let present = directory.join("labels").join("zarr.json").is_file();
-    let mut attributes = if present {
-        let group = Group::open(store.clone(), labels_group).map_err(|error| error.to_string())?;
-        group.attributes().clone()
-    } else {
-        Map::new()
+struct Index {
+    path: PathBuf,
+    value: Value,
+}
+
+impl Index {
+    fn publish(mut self, name: &str) -> Result<(), String> {
+        let labels = self
+            .value
+            .get_mut("attributes")
+            .and_then(|attributes| attributes.get_mut("ome"))
+            .and_then(|ome| ome.get_mut("labels"))
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| "the labels group carries an invalid labels list".to_string())?;
+        if !labels.iter().any(|value| value.as_str() == Some(name)) {
+            labels.push(Value::String(name.to_string()));
+        }
+        let bytes = serde_json::to_vec(&self.value).map_err(|error| error.to_string())?;
+        grana_file::write(&self.path, &bytes)
+            .map_err(|error| format!("failed to publish the metadata of the labels group: {error}"))
+    }
+}
+
+fn label_index(directory: &Path, version: &str) -> Result<Index, String> {
+    let path = directory.join("labels").join("zarr.json");
+    let mut value = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+            .map_err(|error| format!("the labels group carries invalid metadata: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {},
+        }),
+        Err(error) => {
+            return Err(format!(
+                "failed to read the metadata of the labels group: {error}"
+            ));
+        }
     };
+    let attributes = value
+        .get_mut("attributes")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "the labels group carries invalid metadata".to_string())?;
     let ome = attributes
         .entry("ome".to_string())
         .or_insert_with(|| json!({ "version": version }));
@@ -484,20 +522,16 @@ fn register_labels(
             "the dataset labels its images with OME-Zarr {held}, not {version}"
         ));
     }
+    object
+        .entry("version".to_string())
+        .or_insert_with(|| json!(version));
     let labels = object
         .entry("labels".to_string())
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| "the labels group carries an invalid labels list".to_string())?;
-    if !labels.iter().any(|value| value.as_str() == Some(name)) {
-        labels.push(Value::String(name.to_string()));
+        .or_insert_with(|| json!([]));
+    if !labels.is_array() {
+        return Err("the labels group carries an invalid labels list".to_string());
     }
-    let mut builder = GroupBuilder::new();
-    builder.attributes(attributes);
-    let group = builder
-        .build(store, labels_group)
-        .map_err(|error| error.to_string())?;
-    group.store_metadata().map_err(|error| error.to_string())
+    Ok(Index { path, value })
 }
 
 fn spatial_chunks(

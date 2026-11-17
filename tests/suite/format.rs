@@ -933,6 +933,89 @@ fn writes_and_reads_a_label_image() {
             }
         }
     }
+    grana_zarr::write_group_labels(
+        &path,
+        "/",
+        grana_zarr::LabelSpec {
+            name: "spots",
+            frames: &[0],
+            labels: 1,
+            color: [0.0, 1.0, 0.0],
+            opacity: 1.0,
+            properties: &[],
+            fill: &label_fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("a second label image joins the labels group");
+    let crashed = path.join("labels").join("cells");
+    std::fs::rename(&crashed, path.join("labels").join(".cells.old"))
+        .expect("the replacement leaves its backup behind");
+    let staging = path.join("labels").join(".cells.100-0.part");
+    std::fs::create_dir_all(&staging)
+        .expect("the interrupted replacement leaves its staging behind");
+    std::fs::write(staging.join("zarr.json"), "{}")
+        .expect("the staging holds half written metadata");
+    let image = grana_zarr::Image::open(&path).expect("the interrupted image opens");
+    let labels = image.labels().expect("the interrupted labels recover");
+    let mut names = labels.names().map(str::to_string).collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, vec!["cells".to_string(), "spots".to_string()]);
+    let data = labels
+        .get("cells")
+        .expect("the recovered label exists")
+        .read(
+            1,
+            0,
+            &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+            [0, 0, 0],
+        )
+        .expect("the recovered label region reads");
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                assert_eq!(
+                    data[extent.index(x, y, z) as usize],
+                    label_of(x, y, z),
+                    "the recovered label at {x},{y},{z}"
+                );
+            }
+        }
+    }
+    assert!(
+        !path.join("labels").join(".cells.old").exists(),
+        "the backup is consumed by the recovery"
+    );
+    assert!(
+        !staging.exists(),
+        "the staging is reclaimed by the recovery"
+    );
+}
+
+#[test]
+fn rolls_back_an_unpublished_directory_replacement() {
+    let temp = Temp::new("suite-file-rollback");
+    let labels = temp.path().join("labels");
+    let target = labels.join("cells");
+    std::fs::create_dir_all(&target).expect("the previous label image exists");
+    std::fs::write(target.join("zarr.json"), "previous").expect("the previous metadata writes");
+    let atomic = grana_file::Atomic::directory(&target).expect("the replacement stages");
+    std::fs::write(atomic.staging().join("zarr.json"), "replacement")
+        .expect("the replacement writes");
+    let replaced = atomic.commit_held().expect("the replacement publishes");
+    assert_eq!(
+        std::fs::read_to_string(target.join("zarr.json")).expect("the replacement reads"),
+        "replacement"
+    );
+    replaced.rollback().expect("the replacement rolls back");
+    assert_eq!(
+        std::fs::read_to_string(target.join("zarr.json")).expect("the previous label reads"),
+        "previous"
+    );
+    assert!(
+        !labels.join(".cells.old").exists(),
+        "the rollback restores the previous label image"
+    );
 }
 
 #[test]

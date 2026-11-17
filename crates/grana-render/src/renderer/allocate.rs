@@ -1,11 +1,13 @@
 use super::*;
 
+use crate::fragment;
+
 pub(super) struct Needed {
     pub(super) surfaces: bool,
     pub(super) slice: bool,
     pub(super) volume: bool,
     pub(super) translucent: bool,
-    pub(super) budget: u64,
+    pub(super) fragments: u64,
 }
 
 pub(super) fn targets(
@@ -15,7 +17,7 @@ pub(super) fn targets(
     encoder: &mut CommandEncoder,
     target: &mut FrameTarget,
     needed: Needed,
-) {
+) -> Result<FragmentInfo, String> {
     let size = target.size;
     if needed.surfaces && !needed.slice && target.gbuffer.is_none() {
         let gbuffer =
@@ -34,19 +36,16 @@ pub(super) fn targets(
         );
         target.volume = Some(volume);
     }
-    let pixels = u64::from(size[0]) * u64::from(size[1]);
-    if needed.translucent
-        && target
-            .oit
-            .as_ref()
-            .is_none_or(|oit| !oit.fits(size, pixels))
-    {
-        target.oit = Some(Oit::new(
-            device,
-            layouts,
-            size,
-            pixels,
-            needed.budget / FRAGMENT_BUDGET_DIVISOR,
-        ));
+    let mut fragment = FragmentInfo::default();
+    if needed.translucent {
+        let (plan, reduced) = fragment::fit(size, needed.fragments, &device.limits())?;
+        fragment = FragmentInfo {
+            layers: plan.layers(),
+            reduced,
+        };
+        if target.oit.as_ref().is_none_or(|oit| !oit.fits(plan)) {
+            target.oit = Some(Oit::new(device, layouts, plan));
+        }
     }
+    Ok(fragment)
 }

@@ -113,6 +113,13 @@ impl Session {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        if let Err(error) = grana_file::recover(&path) {
+            self.message = Some(Message::error(format!(
+                "failed to recover {}: {error}",
+                path.display()
+            )));
+            return;
+        }
         if let Some(project) = grana_project::package_project(&path) {
             self.begin_project(project);
             return;

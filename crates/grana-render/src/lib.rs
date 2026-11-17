@@ -6,6 +6,7 @@ mod clear;
 mod converge;
 mod culling;
 mod detail;
+mod fragment;
 mod frame;
 mod image;
 mod layout;
@@ -32,9 +33,10 @@ mod volume;
 
 pub use converge::{Estimate, Sampling};
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
+pub use fragment::{Fragment, fit as fragment_fit};
 pub use image::{Pixels, stride as picture_stride, target as picture_target};
 pub use pick::PickId;
-pub use renderer::{Display, Frame, FrameInfo, Renderer, Requests, ViewInfo};
+pub use renderer::{Display, FragmentInfo, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{
     ChannelRow, Digest, Layer, LayerKey, Overlay, SceneFrame, Style, Versions, overlay_digest,
 };

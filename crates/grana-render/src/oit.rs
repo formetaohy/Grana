@@ -5,16 +5,9 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
+use crate::fragment::Fragment;
 use crate::layout::Layouts;
 
-const COUNT_BYTES: u64 = 4;
-const KEY_BYTES: u64 = 4;
-const COLOR_BYTES: u64 = 8;
-const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES;
-const RESIDUAL_BYTES: u64 = 16;
-const MINIMUM_LAYERS: u64 = 2;
-const MAXIMUM_LAYERS: u64 = 8;
-const PIXEL_STEP: u64 = 1 << 17;
 const EPOCH_LIMIT: u32 = 255;
 
 pub(crate) const RESIDUAL_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -69,46 +62,28 @@ pub(crate) struct Oit {
     residual_moment: TextureView,
     write_group: BindGroup,
     read_group: BindGroup,
-    layers: u32,
-    size: [u32; 2],
-    capacity: u64,
+    fragment: Fragment,
     epoch: u32,
 }
 
 impl Oit {
-    pub fn new(
-        device: &Device,
-        layouts: &Layouts,
-        size: [u32; 2],
-        pixels: u64,
-        budget: u64,
-    ) -> Self {
-        assert!(
-            pixels > 0 && size[0] > 0 && size[1] > 0,
-            "a fragment store covers a non empty view of a non empty surface"
-        );
-        let capacity = pixels
-            .div_ceil(PIXEL_STEP)
-            .checked_mul(PIXEL_STEP)
-            .expect("a fragment store holds a finite view");
-        let residual_bytes = u64::from(size[0]) * u64::from(size[1]) * RESIDUAL_BYTES;
-        let layers = allocation(capacity, residual_bytes, budget);
-        let slots = capacity * layers;
+    pub fn new(device: &Device, layouts: &Layouts, fragment: Fragment) -> Self {
+        let size = fragment.size();
         let keys = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.oit.keys"),
-            size: (slots * KEY_BYTES).max(4),
+            size: fragment.keys().max(4),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let colors = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.oit.colors"),
-            size: (slots * COLOR_BYTES).max(8),
+            size: fragment.colors().max(8),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let counts = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.oit.counts"),
-            size: (capacity * COUNT_BYTES).max(4),
+            size: fragment.counts().max(4),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -177,19 +152,17 @@ impl Oit {
             residual_moment,
             write_group,
             read_group,
-            layers: layers as u32,
-            size,
-            capacity,
+            fragment,
             epoch: 0,
         }
     }
 
-    pub fn fits(&self, size: [u32; 2], pixels: u64) -> bool {
-        self.size == size && pixels <= self.capacity
+    pub fn fits(&self, fragment: Fragment) -> bool {
+        self.fragment == fragment
     }
 
     pub fn layers(&self) -> u32 {
-        self.layers
+        self.fragment.layers()
     }
 
     pub fn write_group(&self) -> &BindGroup {
@@ -221,14 +194,6 @@ impl Oit {
         self.epoch = epoch;
         epoch
     }
-}
-
-fn allocation(capacity: u64, residual: u64, budget: u64) -> u64 {
-    let fixed = capacity * COUNT_BYTES + residual;
-    let slot = capacity * SLOT_BYTES;
-    let floor = fixed + MINIMUM_LAYERS * slot;
-    let budget = budget.max(floor);
-    ((budget - fixed) / slot).clamp(MINIMUM_LAYERS, MAXIMUM_LAYERS)
 }
 
 fn residual(

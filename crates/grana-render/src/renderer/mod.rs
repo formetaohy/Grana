@@ -59,7 +59,7 @@ use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
 
-const FRAGMENT_BUDGET_DIVISOR: u64 = 2;
+const FRAGMENT_BUDGET: u64 = 2 << 30;
 
 const RECORD_SHARE: u64 = 8;
 
@@ -82,6 +82,12 @@ pub struct ViewInfo {
     pub resident: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FragmentInfo {
+    pub layers: u32,
+    pub reduced: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameInfo {
     pub view: ViewInfo,
@@ -93,6 +99,7 @@ pub struct FrameInfo {
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
+    pub fragment: FragmentInfo,
 }
 
 #[derive(Default)]
@@ -203,6 +210,7 @@ pub struct Renderer {
     pick_issued: u64,
     sequence: u64,
     info: FrameInfo,
+    fragments: u64,
     pipelines: Pipelines,
 }
 
@@ -218,7 +226,7 @@ impl Renderer {
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let dummy_normal = dummy_normal(device);
-        let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
+        let dummy_oit = Oit::new(device, &layouts, crate::fragment::Fragment::singleton());
         let dummy_ao = crate::ao::dummy(device, queue, &layouts);
         let dummy_volume = dummy_volume(device, queue);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
@@ -276,6 +284,7 @@ impl Renderer {
             pick_issued: 0,
             sequence: 0,
             info: FrameInfo::default(),
+            fragments: FRAGMENT_BUDGET,
             pipelines: pipelines.clone(),
         }
     }
@@ -315,23 +324,23 @@ impl Renderer {
         slots: usize,
         ceiling: u64,
     ) -> Result<(), String> {
-        if self.slots() >= slots {
-            return Ok(());
+        if self.slots() < slots {
+            let slot_bytes = self
+                .resources
+                .as_ref()
+                .map(|held| held.slot_bytes)
+                .filter(|bytes| *bytes > 0)
+                .expect("the dataset is resident before a reserve");
+            let budget = crate::detail::residency_budget(
+                slots,
+                slot_bytes,
+                device.limits().max_texture_dimension_3d,
+                ceiling,
+            )?;
+            self.set_budget(budget);
+            self.set_dataset(device, pyramid);
         }
-        let slot_bytes = self
-            .resources
-            .as_ref()
-            .map(|held| held.slot_bytes)
-            .filter(|bytes| *bytes > 0)
-            .expect("the dataset is resident before a reserve");
-        let budget = crate::detail::residency_budget(
-            slots,
-            slot_bytes,
-            device.limits().max_texture_dimension_3d,
-            ceiling,
-        )?;
-        self.set_budget(budget);
-        self.set_dataset(device, pyramid);
+        self.fragments = ceiling.saturating_sub(self.budget);
         Ok(())
     }
 

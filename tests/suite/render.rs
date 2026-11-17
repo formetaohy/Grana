@@ -1236,6 +1236,48 @@ fn rejects_a_residency_beyond_the_device() {
 }
 
 #[test]
+fn budgets_the_transparent_fragment_store() {
+    let native = wgpu::Limits {
+        max_buffer_size: i64::from(i32::MAX) as u64,
+        max_storage_buffer_binding_size: i32::MAX as u64,
+        ..wgpu::Limits::default()
+    };
+    let (three, reduced) = grana_render::fragment_fit([7680, 4320], 2 << 30, &native)
+        .expect("two gibibytes hold three layers of an eight kay view");
+    assert_eq!(three.layers(), 3);
+    assert!(!reduced, "a roomy budget keeps the transparent layers");
+    assert!(three.bytes() <= 2 << 30);
+    let (single, reduced) = grana_render::fragment_fit([7680, 4320], 1_400_000_000, &native)
+        .expect("a tight budget still holds one layer");
+    assert_eq!(single.layers(), 1);
+    assert!(reduced, "a tight budget reports the reduced transparency");
+    assert!(single.bytes() <= 1_400_000_000);
+    assert!(
+        grana_render::fragment_fit([7680, 4320], 600 << 20, &native).is_err(),
+        "an eight kay view needs more than six hundred mebibytes"
+    );
+    let (capped, reduced) = grana_render::fragment_fit(
+        [7680, 4320],
+        4 << 30,
+        &wgpu::Limits {
+            max_storage_buffer_binding_size: (1 << 30) - 1,
+            ..native
+        },
+    )
+    .expect("a wide budget still caps the layers at the buffer limit");
+    assert_eq!(capped.layers(), 4);
+    assert!(!reduced, "the budget fits the layers the buffer admits");
+    assert!(
+        grana_render::fragment_fit([16384, 9216], 4 << 30, &native).is_err(),
+        "a sixteen kay view cannot hold a fragment store within the export ceiling"
+    );
+    assert!(
+        grana_render::fragment_fit([7680, 4320], 2 << 30, &wgpu::Limits::default()).is_err(),
+        "a downlevel device cannot bind an eight kay fragment store"
+    );
+}
+
+#[test]
 fn sizes_the_export_residency_to_the_finest_level() {
     let Some(gpu) = gpu() else {
         return;

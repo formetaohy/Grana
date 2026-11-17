@@ -198,6 +198,7 @@ pub fn read(path: &Path) -> Result<Labels, Error> {
 
 pub fn read_at(root: &Root, group: &str, parent: &[Layout]) -> Result<Labels, Error> {
     let labels_group = crate::hcs::join(group, "labels");
+    recover(root, &labels_group)?;
     let readable = root.readable();
     if !present(&readable, &labels_group)? {
         return Ok(Labels::empty());
@@ -220,6 +221,18 @@ pub fn read_at(root: &Root, group: &str, parent: &[Layout]) -> Result<Labels, Er
         )?);
     }
     Ok(Labels { images })
+}
+
+fn recover(root: &Root, group: &str) -> Result<(), Error> {
+    let Some(path) = root.path() else {
+        return Ok(());
+    };
+    grana_file::recover_inside(&path.join(group.trim_start_matches('/'))).map_err(|error| {
+        Error::Open {
+            path: root.tag(group),
+            detail: format!("failed to recover the label images: {error}"),
+        }
+    })
 }
 
 fn present(store: &Arc<dyn ReadableStorageTraits>, group: &str) -> Result<bool, Error> {

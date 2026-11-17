@@ -151,6 +151,7 @@ impl Renderer {
             dummy_normal,
             dummy_volume,
             budget,
+            fragments,
             pipelines,
             ..
         } = self;
@@ -238,7 +239,7 @@ impl Renderer {
             info.fading = false;
             return Err(Halt::Hold(*info));
         }
-        allocate::targets(
+        let fragment = match allocate::targets(
             device,
             layouts,
             gtao,
@@ -249,9 +250,13 @@ impl Renderer {
                 slice: shot.slice,
                 volume: shot.volume,
                 translucent: shot.translucent,
-                budget: *budget,
+                fragments: *fragments,
             },
-        );
+        ) {
+            Ok(fragment) => fragment,
+            Err(detail) => return Err(Halt::Fail(detail)),
+        };
+        info.fragment = fragment;
         let planned = plan::shadow(plan::ShadowFrame {
             scene,
             pyramid: &resources.pyramid,

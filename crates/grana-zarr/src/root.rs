@@ -35,6 +35,10 @@ enum Origin {
 
 impl Root {
     pub fn local(path: &Path) -> Result<Self, Error> {
+        grana_file::recover(path).map_err(|error| Error::Open {
+            path: path.display().to_string(),
+            detail: format!("failed to recover the dataset: {error}"),
+        })?;
         let store = FilesystemStore::new(path).map_err(|error| Error::Open {
             path: path.display().to_string(),
             detail: error.to_string(),
@@ -62,6 +66,13 @@ impl Root {
             store: Store::Remote(Arc::new(store)),
             origin: Origin::Remote { target, revision },
         })
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        match &self.origin {
+            Origin::Local(path) => Some(path),
+            Origin::Remote { .. } => None,
+        }
     }
 
     pub fn display(&self) -> String {
