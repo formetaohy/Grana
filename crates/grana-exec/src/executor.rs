@@ -9,6 +9,13 @@ const READ_THREADS: usize = 4;
 const WRITE_THREADS: usize = 2;
 const COMPUTE_CEILING: usize = 8;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    Background,
+    Demand,
+    Immediate,
+}
+
 type Work = Box<dyn FnOnce(&Cancel) + Send + 'static>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +100,7 @@ impl PartialOrd for Task {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Order {
-    priority: u64,
+    priority: Priority,
     arrival: Reverse<u64>,
 }
 
@@ -144,17 +151,13 @@ impl Executor {
         &lanes[role.index()]
     }
 
-    pub fn stamp(&self) -> u64 {
-        self.inner.sequence.fetch_add(1, Ordering::Relaxed)
-    }
-
     pub fn submit(&self, work: impl FnOnce(&Cancel) + Send + 'static) -> Job {
-        self.submit_ordered(0, work)
+        self.submit_with(Priority::Immediate, work)
     }
 
-    pub fn submit_ordered(
+    pub fn submit_with(
         &self,
-        priority: u64,
+        priority: Priority,
         work: impl FnOnce(&Cancel) + Send + 'static,
     ) -> Job {
         let cancel = Cancel::new();

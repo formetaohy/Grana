@@ -54,7 +54,7 @@ fn detects_surfaces_masks_a_channel_and_captures() {
         assert_eq!(scene.derived()[0].spec().source(), 0);
     }
 
-    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))]);
+    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))], &[]);
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
         session.poll();
@@ -187,7 +187,7 @@ fn derives_operator_channels_through_a_project() {
             grana_scene::Operation::Ratio(_)
         ));
     }
-    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))]);
+    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))], &[]);
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
         session.poll();
@@ -3548,9 +3548,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                 let time = session.scene().expect("the series opens").time();
                 if let Some(requests) = engine.poll_requests(gpu.device(), time) {
                     *streamed += requests.volume.len();
-                    let mut bricks = requests.volume.clone();
-                    bricks.extend_from_slice(&requests.prefetch);
-                    session.request(requests.time, &bricks);
+                    session.request(requests.time, &requests.volume, &requests.prefetch);
                 }
                 let bricks = session.take_bricks();
                 if !bricks.is_empty() {
@@ -3647,7 +3645,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
     let bricks = (0..64)
         .map(|_| BrickRequest::new(0, 0, BrickCoord::new(0, 0, 0)))
         .collect::<Vec<_>>();
-    session.request(0, &bricks);
+    session.request(0, &bricks, &[]);
     assert!(session.pending() > 0, "the brick reads are in flight");
     session.execute(Command::Undo);
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -3659,7 +3657,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    session.request(0, &bricks[..1]);
+    session.request(0, &bricks[..1], &[]);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         session.poll();

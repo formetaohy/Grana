@@ -1694,8 +1694,13 @@ impl Session {
             return;
         };
         let drifts = scene.drifts().clone();
-        if let Some(source) = self.source.as_ref() {
-            source.set_drifts(drifts);
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let rebuilt = source.drifts().digest() != drifts.digest();
+        source.set_drifts(drifts);
+        if rebuilt {
+            self.install_channels();
         }
         self.reload_streamed();
     }

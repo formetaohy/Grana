@@ -199,16 +199,6 @@ impl App {
         let size = window.inner_size();
         window.set_ime_allowed(false);
         window.set_theme(Some(winit::window::Theme::Dark));
-        let gpu = Gpu::new(window.clone(), [size.width, size.height]);
-        let mut ui: Ui<grana_editor::Message> =
-            Ui::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
-        ui.set_clipboard(Box::new(SystemClipboard::new()));
-        self.pending_engine = Some(spawn_engine(
-            gpu.device.clone(),
-            gpu.queue.clone(),
-            gpu.format(),
-            gpu.pipelines().clone(),
-        ));
         if let Some(target) = self.startup.take() {
             if grana_session::is_remote(&target) {
                 self.session.begin_remote(target);
@@ -216,6 +206,16 @@ impl App {
                 self.session.open_path(PathBuf::from(target));
             }
         }
+        let gpu = Gpu::new(window.clone(), [size.width, size.height]);
+        self.pending_engine = Some(spawn_engine(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            gpu.format(),
+            gpu.pipelines().clone(),
+        ));
+        let mut ui: Ui<grana_editor::Message> =
+            Ui::new(&gpu.device, &gpu.queue, gpu.format(), gpu.pipelines());
+        ui.set_clipboard(Box::new(SystemClipboard::new()));
         self.replaced = self.session.replaced();
         self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
@@ -307,7 +307,7 @@ impl App {
             delay = delay.min(active);
         }
         if !self.workspace.playback.playing && self.streaming() {
-            delay = delay.min(STREAM_POLL);
+            delay = delay.min(self.stream_poll());
         }
         if self.session.stitching() {
             delay = delay.min(STREAM_POLL);

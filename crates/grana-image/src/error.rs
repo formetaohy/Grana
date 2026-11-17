@@ -25,3 +25,14 @@ impl From<Error> for String {
         error.to_string()
     }
 }
+
+impl Error {
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::Unsupported { .. } | Self::Resolved { .. } => false,
+            Self::Open { .. } | Self::Zarr(_) | Self::Tiff(_) | Self::Czi(_) | Self::Readout(_) => {
+                true
+            }
+        }
+    }
+}

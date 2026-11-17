@@ -2834,3 +2834,76 @@ fn keeps_every_spot_level_resident_across_magnification() {
         "returning to the near view reuses the resident exact geometry"
     );
 }
+
+#[test]
+fn interactive_resolution_covers_the_whole_frame() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        display: grana_render::Display::Interactive,
+    };
+    let half = [SIDE / 2, SIDE / 2];
+    let reference = background(&gpu, &mut renderer, &view, &target, &volume);
+    settle_with(
+        &gpu,
+        &mut renderer,
+        || {
+            let mut frame = frame(&view);
+            frame.resolution = half;
+            frame
+        },
+        &volume,
+    );
+    let half = Snapshot::new(
+        [SIDE, SIDE],
+        reference,
+        read_pixels(&gpu, &target, [SIDE, SIDE]),
+    );
+    let quarters = [
+        half.painted([0, 0, SIDE / 2, SIDE / 2]),
+        half.painted([SIDE / 2, 0, SIDE, SIDE / 2]),
+        half.painted([0, SIDE / 2, SIDE / 2, SIDE]),
+        half.painted([SIDE / 2, SIDE / 2, SIDE, SIDE]),
+    ];
+    assert!(
+        quarters.iter().all(|painted| *painted > 0),
+        "an interactive frame at half resolution covers every quarter of the surface: {quarters:?}"
+    );
+    settle(&gpu, &mut renderer, &view, &volume);
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let whole = Snapshot::new(
+        [SIDE, SIDE],
+        background(&gpu, &mut renderer, &view, &target, &volume),
+        pixels,
+    );
+    let (fine, coarse) = (whole.coverage(WHOLE), half.coverage(WHOLE));
+    assert!(
+        (fine - coarse).abs() <= 0.02,
+        "both resolutions cover the same area of the surface: {fine} against {coarse}"
+    );
+}

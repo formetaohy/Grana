@@ -17,6 +17,8 @@ const SHADER: &str = concat!(
     include_str!("shader/present.wgsl")
 );
 
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
 const ACCUMULATE: BlendState = BlendState {
     color: BlendComponent {
         src_factor: BlendFactor::One,
@@ -35,6 +37,7 @@ const ACCUMULATE: BlendState = BlendState {
 struct Uniforms {
     flags: [f32; 4],
     fade: [f32; 4],
+    source: [f32; 4],
 }
 
 pub(crate) struct Present {
@@ -173,12 +176,19 @@ impl Present {
         })
     }
 
-    pub fn write(&self, queue: &Queue, exposure: f32, transparent: bool, fade: Option<f32>) {
-        self.write_with(queue, self.encode, exposure, transparent, fade);
+    pub fn write(
+        &self,
+        queue: &Queue,
+        exposure: f32,
+        transparent: bool,
+        fade: Option<f32>,
+        source: [f32; 4],
+    ) {
+        self.write_with(queue, self.encode, exposure, transparent, fade, source);
     }
 
     pub fn write_wide(&self, queue: &Queue, exposure: f32, transparent: bool) {
-        self.write_with(queue, true, exposure, transparent, None);
+        self.write_with(queue, true, exposure, transparent, None, WHOLE);
     }
 
     fn write_with(
@@ -188,6 +198,7 @@ impl Present {
         exposure: f32,
         transparent: bool,
         fade: Option<f32>,
+        source: [f32; 4],
     ) {
         assert!(
             exposure.is_finite() && exposure > 0.0,
@@ -206,6 +217,7 @@ impl Present {
                 0.0,
             ],
             fade: [weight, 0.0, 0.0, 0.0],
+            source,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

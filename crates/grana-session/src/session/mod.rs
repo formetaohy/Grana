@@ -25,9 +25,11 @@ mod seed;
 mod stitch;
 mod tasks;
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
@@ -76,6 +78,25 @@ const MAX_IN_FLIGHT: usize = 8192;
 
 const UPLOAD_BATCH: usize = 64;
 
+const RETRY_FLOOR: Duration = Duration::from_millis(250);
+
+const RETRY_CEILING: Duration = Duration::from_secs(8);
+
+const RETRY_LIMIT: u32 = 6;
+
+struct Failure {
+    attempts: u32,
+    retry_at: Instant,
+}
+
+impl Failure {
+    fn backoff(attempts: u32) -> Duration {
+        RETRY_FLOOR
+            .saturating_mul(1 << attempts.min(5))
+            .min(RETRY_CEILING)
+    }
+}
+
 struct Pending {
     path: PathBuf,
     project: Project,
@@ -114,7 +135,7 @@ pub struct Session {
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
-    failed: HashSet<BrickRequest>,
+    failed: HashMap<BrickRequest, Failure>,
     bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
     loading: Option<String>,
@@ -205,7 +226,7 @@ impl Session {
             analysis: Vec::new(),
             progress: Vec::new(),
             in_flight: HashSet::new(),
-            failed: HashSet::new(),
+            failed: HashMap::new(),
             bricks: Vec::new(),
             pending: None,
             loading: None,
@@ -672,36 +693,59 @@ impl Session {
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         self.tasks.progress()
     }
-    pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {
+    pub fn request(&mut self, time: u32, demand: &[BrickRequest], prefetch: &[BrickRequest]) {
         if self.loading.is_some() {
             return;
         }
-        let Some(source) = self.source.as_ref() else {
+        let now = Instant::now();
+        let Self {
+            source,
+            in_flight,
+            failed,
+            message,
+            ..
+        } = self;
+        let Some(loader) = source.as_ref() else {
             return;
         };
-        let mut batch = Vec::with_capacity(bricks.len().min(MAX_IN_FLIGHT));
-        for request in bricks {
-            if request.time < time || self.in_flight.contains(request) {
-                continue;
+        let mut demand_batch = Vec::with_capacity(demand.len().min(MAX_IN_FLIGHT));
+        let mut prefetch_batch = Vec::with_capacity(prefetch.len().min(MAX_IN_FLIGHT));
+        let mut budget = MAX_IN_FLIGHT;
+        for (bricks, batch) in [(demand, &mut demand_batch), (prefetch, &mut prefetch_batch)] {
+            for request in bricks {
+                if request.time < time || in_flight.contains(request) {
+                    continue;
+                }
+                if let Some(failure) = failed.get(request)
+                    && (failure.attempts >= RETRY_LIMIT || now < failure.retry_at)
+                {
+                    continue;
+                }
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                batch.push(*request);
             }
-            if self.failed.contains(request) {
-                continue;
-            }
-            if batch.len() >= MAX_IN_FLIGHT {
-                break;
-            }
-            batch.push(*request);
         }
-        if batch.is_empty() {
+        if demand_batch.is_empty() && prefetch_batch.is_empty() {
             return;
         }
-        if source.request(&batch) {
-            self.in_flight.extend(batch);
-        } else {
-            self.source = None;
-            self.in_flight.clear();
-            self.message = Some(Message::error("the dataset reader stopped"));
+        in_flight.extend(demand_batch.iter().copied());
+        in_flight.extend(prefetch_batch.iter().copied());
+        if !loader.request(&demand_batch, &prefetch_batch) {
+            *source = None;
+            in_flight.clear();
+            *message = Some(Message::error("the dataset reader stopped"));
         }
+    }
+
+    pub fn retry_wait(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.failed
+            .values()
+            .map(|failure| failure.retry_at.saturating_duration_since(now))
+            .min()
     }
     pub fn set_time(&mut self, time: u32) {
         let Some(scene) = self.scene.as_mut() else {
@@ -713,6 +757,7 @@ impl Session {
         scene.set_time(time);
         self.mask_extents = scene.mask_extents(time);
         self.in_flight.retain(|request| request.time >= time);
+        self.failed.retain(|request, _| request.time >= time);
         if let Some(source) = &self.source {
             source.set_time(time);
         }

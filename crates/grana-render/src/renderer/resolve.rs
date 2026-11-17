@@ -151,6 +151,7 @@ pub(super) struct Presenting<'a> {
     pub(super) present: &'a Present,
     pub(super) target: &'a mut FrameTarget,
     pub(super) surface: &'a TextureView,
+    pub(super) viewport: [u32; 4],
     pub(super) region: [u32; 4],
     pub(super) exposure: f32,
     pub(super) transparent: bool,
@@ -164,20 +165,39 @@ pub(super) fn present(encoder: &mut CommandEncoder, presenting: Presenting<'_>) 
         present,
         target,
         surface,
+        viewport,
         region,
         exposure,
         transparent,
         fade,
     } = presenting;
     let blend = timing::fade(fade);
-    Present::write(present, queue, exposure, transparent, blend);
+    Present::write(
+        present,
+        queue,
+        exposure,
+        transparent,
+        blend,
+        coverage(region, target.size),
+    );
     if fade.is_some() {
         let group = target.fade_group(device, present);
-        Present::present(present, encoder, surface, group, region);
+        Present::present(present, encoder, surface, group, viewport);
         if fade.as_ref().is_some_and(|active| active.weight >= 1.0) {
             *fade = None;
         }
     } else {
-        Present::present(present, encoder, surface, &target.present_group, region);
+        Present::present(present, encoder, surface, &target.present_group, viewport);
     }
+}
+
+fn coverage(region: [u32; 4], size: [u32; 2]) -> [f32; 4] {
+    let width = size[0].max(1) as f32;
+    let height = size[1].max(1) as f32;
+    [
+        region[0] as f32 / width,
+        region[1] as f32 / height,
+        region[2] as f32 / width,
+        region[3] as f32 / height,
+    ]
 }

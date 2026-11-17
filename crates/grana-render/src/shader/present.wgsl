@@ -1,6 +1,7 @@
 struct ScreenUniforms {
     flags: vec4<f32>,
     fade: vec4<f32>,
+    source: vec4<f32>,
 }
 
 struct Accumulated {
@@ -51,15 +52,16 @@ fn fs_accumulate(input: VertexOutput) -> Accumulated {
 @fragment
 fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = input.clip_position.xy;
+    let uv = screen.source.xy + input.uv * screen.source.zw;
     let weight = screen.fade.x;
     let fading = weight > 0.0;
-    let fresh = resolve(input.uv);
+    let fresh = resolve(uv);
     if screen.flags.z > 0.5 {
         let straight_new = srgb_encode(aces(fresh.rgb * screen.flags.y / max(fresh.a, 1.0e-4)));
         var straight = straight_new;
         var coverage = clamp(fresh.a, 0.0, 1.0);
         if fading {
-            let stale = earlier(input.uv);
+            let stale = earlier(uv);
             let straight_old = srgb_encode(aces(stale.rgb * screen.flags.y / max(stale.a, 1.0e-4)));
             straight = mix(straight_old, straight_new, weight);
             coverage = clamp(mix(stale, fresh, weight).a, 0.0, 1.0);
@@ -70,7 +72,7 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     var accumulated = fresh;
     if fading {
-        accumulated = mix(earlier(input.uv), fresh, weight);
+        accumulated = mix(earlier(uv), fresh, weight);
     }
     let coverage = clamp(accumulated.a, 0.0, 1.0);
     let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);

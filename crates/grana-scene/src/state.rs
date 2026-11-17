@@ -360,13 +360,10 @@ impl Scene {
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document().raw());
             hash = mix(hash, set.seed_source().map_or(0, ObjectSetId::raw));
-            for time in 0..self.frame_count() {
-                for seed in set.seeds(time) {
-                    for value in seed {
-                        hash = mix(hash, u64::from(value.to_bits()));
-                    }
-                }
-            }
+            let seeds = (0..self.frame_count())
+                .map(|time| set.seeds(time).len() as u64)
+                .sum::<u64>();
+            hash = mix(hash, seeds);
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.mask_radius.to_bits()));

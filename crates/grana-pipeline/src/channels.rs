@@ -40,6 +40,15 @@ impl From<ChannelsError> for String {
     }
 }
 
+impl ChannelsError {
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::Image(error) => error.retryable(),
+            Self::Derived { .. } => true,
+        }
+    }
+}
+
 enum Kind {
     Mask(Arc<MaskChannel>),
     Restore(RestoreChannel),

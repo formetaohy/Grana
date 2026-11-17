@@ -8,6 +8,7 @@ use super::signature::hash_camera;
 
 #[derive(Clone, Copy)]
 pub(super) struct View {
+    pub(super) surface: [u32; 4],
     pub(super) region: [u32; 4],
     pub(super) height: u32,
     pub(super) aspect: f32,
@@ -33,6 +34,7 @@ impl View {
         let width = region[2].max(1);
         let height = region[3].max(1);
         Self {
+            surface: pixel,
             region,
             height: pixel[3].max(1),
             aspect: width as f32 / height as f32,

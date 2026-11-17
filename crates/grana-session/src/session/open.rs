@@ -575,10 +575,23 @@ impl Session {
                     generation,
                     request,
                     detail,
+                    retryable,
                 } => {
                     if !self.stale(generation) {
                         self.in_flight.remove(&request);
-                        self.failed.insert(request);
+                        let failure = match self.failed.entry(request) {
+                            Entry::Occupied(entry) => entry.into_mut(),
+                            Entry::Vacant(entry) => entry.insert(Failure {
+                                attempts: 0,
+                                retry_at: Instant::now(),
+                            }),
+                        };
+                        failure.attempts += 1;
+                        let exhausted = !retryable || failure.attempts >= RETRY_LIMIT;
+                        if exhausted {
+                            failure.attempts = RETRY_LIMIT;
+                        }
+                        failure.retry_at = Instant::now() + Failure::backoff(failure.attempts);
                         self.message = Some(Message::error(format!(
                             "a volume region could not be read: {detail}"
                         )));

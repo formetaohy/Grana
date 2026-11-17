@@ -15,7 +15,7 @@ const BACKEND_ORDER: &[Backends] = backend_order();
 const fn backend_order() -> &'static [Backends] {
     #[cfg(target_os = "windows")]
     {
-        &[Backends::DX12, Backends::VULKAN]
+        &[Backends::VULKAN, Backends::DX12]
     }
     #[cfg(target_os = "macos")]
     {

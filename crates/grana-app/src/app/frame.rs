@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use grana_engine::{Display, Viewport};
 use grana_render::FrameInfo;
 
-use super::{App, CONVERGENCE_BUDGET, RETRY_INTERVAL};
+use super::{App, CONVERGENCE_BUDGET, RETRY_INTERVAL, STREAM_POLL};
 use crate::stream::{Stream, View as StreamView};
 
 impl App {
@@ -47,11 +47,7 @@ impl App {
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
             if current {
-                let mut bricks =
-                    Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
-                bricks.extend_from_slice(&requests.volume);
-                bricks.extend_from_slice(&requests.prefetch);
-                session.request(requests.time, &bricks);
+                session.request(requests.time, &requests.volume, &requests.prefetch);
             }
         }
         let bricks = session.take_bricks();
@@ -234,5 +230,14 @@ impl App {
             || self.session.plotting()
             || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
             || (self.session.scene().is_some() && info.view.resident < info.view.demand)
+    }
+
+    pub(super) fn stream_poll(&self) -> Duration {
+        if self.session.pending() > 0 {
+            return STREAM_POLL;
+        }
+        self.session.retry_wait().map_or(STREAM_POLL, |wait| {
+            wait.clamp(STREAM_POLL, super::RETRY_INTERVAL)
+        })
     }
 }

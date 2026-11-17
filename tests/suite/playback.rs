@@ -51,9 +51,7 @@ fn play(display: Display, seconds: f64, advancing: bool) -> (u32, usize) {
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time)
         {
-            let mut bricks = requests.volume.clone();
-            bricks.extend_from_slice(&requests.prefetch);
-            session.request(requests.time, &bricks);
+            session.request(requests.time, &requests.volume, &requests.prefetch);
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {
@@ -139,9 +137,7 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
     let draw = |engine: &mut Engine, session: &mut Session, display: Display| {
         let current = session.scene().expect("a scene").time();
         if let Some(requests) = engine.poll_requests(gpu.device(), current) {
-            let mut bricks = requests.volume.clone();
-            bricks.extend_from_slice(&requests.prefetch);
-            session.request(requests.time, &bricks);
+            session.request(requests.time, &requests.volume, &requests.prefetch);
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {

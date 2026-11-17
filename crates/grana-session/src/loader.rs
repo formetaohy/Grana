@@ -2,16 +2,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
 
-use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Priority, Role, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drifts;
 use grana_volume::{BrickRequest, CHANNEL_LIMIT, Fingerprint, PackedBrick, Pyramid, VolumeSeries};
 
-const ATTEMPTS: u32 = 3;
-const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 const CAPACITY: usize = 16;
-const OPENING: u64 = u64::MAX;
 
 pub struct Opened {
     pub name: String,
@@ -40,6 +37,7 @@ pub enum Event {
         generation: u64,
         request: BrickRequest,
         detail: String,
+        retryable: bool,
     },
     Failed(String),
 }
@@ -130,7 +128,7 @@ impl Loader {
         let opening = source.clone();
         let opening_sender = sender.clone();
         let opening_shared = Arc::clone(&shared);
-        reader.submit_ordered(OPENING, move |cancel| {
+        reader.submit_with(Priority::Immediate, move |cancel| {
             open(opening, remote, &opening_shared, cancel, &opening_sender);
         });
         Self {
@@ -157,19 +155,23 @@ impl Loader {
         self.shared.generation.fetch_add(1, AtomicOrdering::Relaxed);
     }
 
-    pub fn request(&self, requests: &[BrickRequest]) -> bool {
+    pub fn request(&self, demand: &[BrickRequest], prefetch: &[BrickRequest]) -> bool {
         if self.shared.closed.load(AtomicOrdering::Relaxed) {
             return false;
         }
+        let current = self.shared.time.load(AtomicOrdering::Relaxed);
         let generation = self.generation();
-        for request in requests.iter().rev() {
-            let request = *request;
-            let priority = self.reader.stamp();
-            let shared = Arc::clone(&self.shared);
-            let events = self.sender.clone();
-            self.reader.submit_ordered(priority, move |cancel| {
-                read(request, generation, &shared, cancel, &events);
-            });
+        for (priority, requests) in [(Priority::Demand, demand), (Priority::Background, prefetch)] {
+            for request in requests.iter().copied() {
+                if request.time < current {
+                    continue;
+                }
+                let shared = Arc::clone(&self.shared);
+                let events = self.sender.clone();
+                self.reader.submit_with(priority, move |cancel| {
+                    read(request, generation, &shared, cancel, &events);
+                });
+            }
         }
         true
     }
@@ -297,13 +299,13 @@ fn read(
     cancel: &Cancel,
     events: &Sender<Event>,
 ) {
-    let current = || shared.generation.load(AtomicOrdering::Relaxed) == generation;
-    let stopped =
-        || shared.closed.load(AtomicOrdering::Relaxed) || cancel.cancelled() || !current();
+    let stopped = || {
+        shared.closed.load(AtomicOrdering::Relaxed)
+            || cancel.cancelled()
+            || shared.generation.load(AtomicOrdering::Relaxed) != generation
+            || request.time < shared.time.load(AtomicOrdering::Relaxed)
+    };
     if stopped() {
-        return;
-    }
-    if request.time < shared.time.load(AtomicOrdering::Relaxed) {
         return;
     }
     let Some(channels) = shared
@@ -320,42 +322,36 @@ fn read(
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .warps(request.time, base);
-    for attempt in 1..=ATTEMPTS {
-        if stopped() {
-            return;
+    match channels.read_brick(
+        request.time,
+        request.level,
+        request.coord,
+        &warps,
+        request.channels,
+    ) {
+        Ok(data) => {
+            let bytes = data.bytes();
+            let packed = PackedBrick::of(&data, channels.pyramid(), request.channels);
+            events.send_until(
+                Event::Brick {
+                    generation,
+                    request,
+                    bytes,
+                    data: packed,
+                },
+                stopped,
+            );
         }
-        match channels.read_brick(
-            request.time,
-            request.level,
-            request.coord,
-            &warps,
-            request.channels,
-        ) {
-            Ok(data) => {
-                let bytes = data.bytes();
-                let packed = PackedBrick::of(&data, channels.pyramid(), request.channels);
-                events.send_until(
-                    Event::Brick {
-                        generation,
-                        request,
-                        bytes,
-                        data: packed,
-                    },
-                    stopped,
-                );
-                return;
-            }
-            Err(detail) if attempt == ATTEMPTS => {
-                events.send_until(
-                    Event::ReadFailed {
-                        generation,
-                        request,
-                        detail: detail.to_string(),
-                    },
-                    stopped,
-                );
-            }
-            Err(_) => std::thread::sleep(RETRY_DELAY),
+        Err(error) => {
+            events.send_until(
+                Event::ReadFailed {
+                    generation,
+                    request,
+                    detail: error.to_string(),
+                    retryable: error.retryable(),
+                },
+                stopped,
+            );
         }
     }
 }

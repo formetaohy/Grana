@@ -676,6 +676,7 @@ impl Renderer {
                     present,
                     target,
                     surface: frame.target,
+                    viewport: prepared.shot.view.surface,
                     region: prepared.shot.view.region,
                     exposure: frame.exposure,
                     transparent: *transparent,
