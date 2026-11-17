@@ -29,15 +29,29 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
         return None;
     };
     let (rows, columns) = grid_size(grid)?;
-    let tiles = match grana_stitch::tiles(std::path::Path::new(folder)) {
-        Ok(tiles) => tiles,
+    let folder = match grana_stitch::folder(std::path::Path::new(folder)) {
+        Ok(folder) => folder,
         Err(detail) => {
             eprintln!("{detail}");
             return Some(ExitCode::FAILURE);
         }
     };
+    if rows * columns != folder.count() {
+        eprintln!(
+            "the {columns} × {rows} grid does not cover {} tiles",
+            folder.count()
+        );
+        return Some(ExitCode::FAILURE);
+    }
+    if channel >= folder.channels().len() {
+        eprintln!(
+            "the tiles name {} channels and channel {channel} was requested",
+            folder.channels().len()
+        );
+        return Some(ExitCode::FAILURE);
+    }
     let request = Request {
-        tiles,
+        tiles: folder.tiles().to_vec(),
         output: PathBuf::from(output),
         rows,
         columns,

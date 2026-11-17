@@ -168,17 +168,27 @@ pub struct TableRequest {
 }
 
 impl TableRequest {
-    pub fn new(scene: &Scene, id: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Self> {
-        let set = scene.objects.get(id)?;
+    pub fn available(scene: &Scene, id: ObjectSetId, group: Group) -> bool {
+        let Some(set) = scene.objects.get(id) else {
+            return false;
+        };
         if group == Group::Molecule && !crate::measure::molecule_grouping(scene, id) {
-            return None;
+            return false;
         }
         if group == Group::Track && set.tracks().is_none() {
-            return None;
+            return false;
         }
         if set.detected() == 0 {
+            return false;
+        }
+        scene.table_revision(id).is_some()
+    }
+
+    pub fn new(scene: &Scene, id: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Self> {
+        if !Self::available(scene, id, group) {
             return None;
         }
+        let set = scene.objects.get(id)?;
         let relations = set
             .relations()
             .iter()

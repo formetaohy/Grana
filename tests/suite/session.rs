@@ -354,6 +354,72 @@ fn samples_an_intensity_profile_through_project_and_protocol() {
     assert_eq!(captured.samples.len(), sample_count);
 }
 
+#[test]
+fn saves_a_cleared_object_set_without_its_stale_table() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "the two nuclei are detected");
+    session.execute(Command::SetMeasureSet(Some(set)));
+    measure(&mut session);
+    assert!(
+        session.measure().table().is_some(),
+        "the statistics table builds"
+    );
+    session.execute(Command::ClearObject(set));
+    settle(&mut session);
+    session.sync_measure();
+    assert!(
+        session.measure().table().is_none(),
+        "a cleared object set holds no table"
+    );
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "nuclei".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([13; 32]),
+    );
+    let temp = Temp::new("suite-measure-cleared");
+    let path = temp.path().join("cleared.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the cleared project writes");
+    let loaded = Project::read(
+        &path,
+        SpillStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the cleared project reads");
+    assert_eq!(loaded, project);
+    let measure = loaded.measure;
+    let mut restored = Measure::new();
+    restored.restore(measure, scene);
+    assert!(
+        restored.table().is_none(),
+        "the cleared statistics restore without a table"
+    );
+}
+
 fn series() -> VolumeSeries {
     let volume = support::spheres(
         Extent::new(64, 32, 32),

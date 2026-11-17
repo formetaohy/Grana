@@ -136,17 +136,11 @@ impl Pyramid {
     }
 
     pub fn fit_level(&self, region: Region, voxels: u64) -> Option<usize> {
+        self.fit_level_by(voxels, |index| region.voxels(self.levels[index]))
+    }
+
+    pub fn fit_level_by(&self, voxels: u64, cost: impl Fn(usize) -> Option<u64>) -> Option<usize> {
         assert!(voxels > 0, "a level budget covers at least one voxel");
-        (0..self.levels.len()).find(|index| {
-            region
-                .voxel_range(self.levels[*index])
-                .is_none_or(|ranges| {
-                    ranges
-                        .iter()
-                        .map(|range| u64::from(range.end - range.start))
-                        .product::<u64>()
-                        <= voxels
-                })
-        })
+        (0..self.levels.len()).find(|index| cost(*index).is_none_or(|cost| cost <= voxels))
     }
 }

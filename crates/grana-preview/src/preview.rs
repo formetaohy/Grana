@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use grana_display::{linear_to_srgb, srgb_to_linear};
 use grana_image::{Image, Source};
@@ -6,6 +8,8 @@ use grana_raster::Bitmap;
 use grana_volume::{Extent, Pyramid};
 
 const PLANE_LIMIT: u64 = 8 << 20;
+
+const CACHE_LIMIT: usize = 512;
 
 const EXPOSURE: f32 = 1.6;
 
@@ -15,6 +19,16 @@ pub fn size(fields: usize) -> u32 {
         401..=900 => 64,
         _ => 48,
     }
+}
+
+pub fn thumbnail(source: &Source, size: u32) -> Result<Bitmap, String> {
+    let key = Key::of(source, size);
+    if let Some(found) = cached(&key) {
+        return Ok(found);
+    }
+    let bitmap = field(source, size)?;
+    store(key, bitmap.clone());
+    Ok(bitmap)
 }
 
 pub fn field(source: &Source, size: u32) -> Result<Bitmap, String> {
@@ -119,4 +133,59 @@ fn band(index: u32, count: u32, extent: u32) -> std::ops::Range<u32> {
     let start = ((u64::from(index) * u64::from(extent)) / u64::from(count)) as u32;
     let end = (((u64::from(index) + 1) * u64::from(extent)) / u64::from(count)) as u32;
     start..end.max(start + 1).min(extent)
+}
+
+#[derive(PartialEq, Eq)]
+struct Key {
+    location: String,
+    series: usize,
+    group: Option<String>,
+    size: u32,
+    stamp: Option<SystemTime>,
+}
+
+impl Key {
+    fn of(source: &Source, size: u32) -> Self {
+        let (location, stamp) = match source {
+            Source::Memory(_) => ("synthetic".to_string(), None),
+            Source::File { path, .. } => (
+                path.display().to_string(),
+                std::fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok(),
+            ),
+            Source::Remote { url, .. } => (url.clone(), None),
+        };
+        Self {
+            location,
+            series: source.series(),
+            group: source.group().map(str::to_string),
+            size,
+            stamp,
+        }
+    }
+}
+
+fn cached(key: &Key) -> Option<Bitmap> {
+    let cache = cache().lock().ok()?;
+    cache
+        .iter()
+        .find(|entry| entry.0 == *key)
+        .map(|entry| entry.1.clone())
+}
+
+fn store(key: Key, bitmap: Bitmap) {
+    let Ok(mut cache) = cache().lock() else {
+        return;
+    };
+    cache.retain(|entry| entry.0 != key);
+    cache.push((key, bitmap));
+    while cache.len() > CACHE_LIMIT {
+        cache.remove(0);
+    }
+}
+
+fn cache() -> &'static Mutex<Vec<(Key, Bitmap)>> {
+    static CACHE: Mutex<Vec<(Key, Bitmap)>> = Mutex::new(Vec::new());
+    &CACHE
 }

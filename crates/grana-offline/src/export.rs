@@ -1,7 +1,9 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use grana_display::Camera;
-use grana_render::{FrameInfo, Renderer, Sampling};
+use grana_gpu::Readback;
+use grana_render::{FrameInfo, Image16, Renderer, Sampling};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -19,6 +21,7 @@ const TEMPORAL_SAMPLING: Sampling = Sampling::new(2, 8, 0.005);
 const TEMPORAL_HISTORY: f32 = 16.0;
 const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
+const READBACK_SLOTS: usize = 2;
 
 pub(crate) enum Step {
     Running,
@@ -30,6 +33,7 @@ pub(crate) struct Export {
     sink: Option<Sink>,
     poses: Vec<Pose>,
     frame: usize,
+    written: usize,
     attempts: u32,
     still: Sampling,
     history: bool,
@@ -40,6 +44,10 @@ pub(crate) struct Export {
     figure: Option<Format>,
     draw: (Texture, TextureView),
     overlay: (Texture, TextureView),
+    picture: (Texture, TextureView),
+    readback: Readback,
+    staged: VecDeque<[u32; 2]>,
+    stride: u64,
 }
 
 impl Export {
@@ -104,6 +112,15 @@ impl Export {
         let draw_view = draw.create_view(&TextureViewDescriptor::default());
         let overlay = capture::texture(device, "grana.export.overlay", format, viewport.size);
         let overlay_view = overlay.create_view(&TextureViewDescriptor::default());
+        let picture = grana_render::picture_target(device, viewport.size);
+        let picture_view = picture.create_view(&TextureViewDescriptor::default());
+        let stride = grana_render::picture_stride(viewport.size[0]);
+        let readback = Readback::new(
+            device,
+            "grana.export.readback",
+            stride * u64::from(viewport.size[1]),
+            READBACK_SLOTS,
+        );
         let sink = match destination {
             Destination::Image { path } => match kind.expect("the still was classified") {
                 Still::Png => Sink::Png { path },
@@ -129,6 +146,7 @@ impl Export {
             sink: Some(sink),
             poses,
             frame: 0,
+            written: 0,
             attempts: 0,
             still: if movie {
                 MOVIE_SAMPLING
@@ -143,6 +161,10 @@ impl Export {
             figure,
             draw: (draw, draw_view),
             overlay: (overlay, overlay_view),
+            picture: (picture, picture_view),
+            readback,
+            staged: VecDeque::new(),
+            stride,
         })
     }
 
@@ -164,11 +186,11 @@ impl Export {
     }
 
     pub(crate) fn pose(&self) -> Pose {
-        self.poses[self.frame]
+        self.poses[self.frame.min(self.poses.len() - 1)]
     }
 
     pub(crate) fn progress(&self) -> (u32, u32) {
-        (self.frame as u32, self.poses.len() as u32)
+        (self.written as u32, self.poses.len() as u32)
     }
 
     pub(crate) fn size(&self) -> [u32; 2] {
@@ -188,6 +210,12 @@ impl Export {
             ui,
             composer,
         } = context;
+        if let Some(step) = self.harvest(device, scene, false) {
+            return step;
+        }
+        if self.frame == self.poses.len() {
+            return self.harvest(device, scene, true).unwrap_or(Step::Running);
+        }
         let pose = self.poses[self.frame];
         let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
@@ -236,8 +264,7 @@ impl Export {
             pose,
         };
         match self.store(ui, drawn, composer) {
-            Ok(Some(path)) => Step::Complete(path),
-            Ok(None) => Step::Running,
+            Ok(step) => step,
             Err(detail) => Step::Failed(detail),
         }
     }
@@ -262,12 +289,73 @@ impl Export {
         Step::Failed(detail)
     }
 
+    fn harvest(&mut self, device: &Device, scene: &Scene, wait: bool) -> Option<Step> {
+        let size = *self.staged.front()?;
+        let stride = self.stride as usize;
+        let readback = &mut self.readback;
+        let image = if wait {
+            readback.take_wait(device, |_, bytes| Image16::decode(bytes, size, stride))
+        } else {
+            readback.take_with(device, |_, bytes| Image16::decode(bytes, size, stride))
+        }?;
+        self.staged.pop_front();
+        let pose = self.poses[self.written.min(self.poses.len() - 1)];
+        let mut sink = self.sink.take().expect("the export is alive");
+        let written = match &sink {
+            Sink::Tiff { path } => {
+                let camera = camera(&pose.camera);
+                let physical =
+                    camera.world_per_point(self.viewport.size[1] as f32, camera.distance());
+                sink::write_picture(
+                    path,
+                    image.size(),
+                    image.pixels(),
+                    scene,
+                    pose.time,
+                    physical,
+                    self.transparent,
+                )
+            }
+            _ => sink.push(pose.time, image.size(), &image, self.transparent),
+        };
+        if let Err(detail) = written {
+            sink.discard();
+            return Some(Step::Failed(detail));
+        }
+        self.written += 1;
+        if self.written == self.poses.len() {
+            return Some(match sink.finish() {
+                Ok(path) => Step::Complete(path),
+                Err(detail) => Step::Failed(detail),
+            });
+        }
+        self.sink = Some(sink);
+        Some(Step::Running)
+    }
     fn store(
         &mut self,
         ui: &mut Ui<()>,
-        drawn: Drawn<'_>,
+        mut drawn: Drawn<'_>,
         composer: &mut Composer,
-    ) -> Result<Option<PathBuf>, String> {
+    ) -> Result<Step, String> {
+        if let Some(format) = self.figure {
+            return match self.write_figure(ui, &mut drawn, format) {
+                Ok(path) => Ok(Step::Complete(path)),
+                Err(detail) => Err(detail),
+            };
+        }
+        let free = self.readback.reserve();
+        let slot = match free {
+            Some(slot) => slot,
+            None => match self.harvest(drawn.device, drawn.scene, true) {
+                Some(Step::Running) => self
+                    .readback
+                    .reserve()
+                    .ok_or_else(|| "the export readback ring stalled".to_string())?,
+                Some(step) => return Ok(step),
+                None => return Err("the export readback ring stalled".to_string()),
+            },
+        };
         let legends = grana_figure::legends(drawn.scene);
         let caption = grana_figure::caption(drawn.scene, drawn.pose.time);
         let labels = grana_figure::labels(drawn.scene, drawn.pose.time);
@@ -283,31 +371,6 @@ impl Export {
             caption: Some(&caption),
             backdrop: !self.transparent,
         };
-        if let Some(format) = self.figure {
-            let marks = figure::marks(ui, figure);
-            let image = drawn.renderer.picture(
-                drawn.device,
-                drawn.queue,
-                drawn.scene.exposure,
-                self.transparent,
-            );
-            let size = image.size();
-            assert_eq!(size, self.viewport.size, "the picture covers the export");
-            let sink = self.sink.take().expect("the export is alive");
-            let Sink::Figure { path } = sink else {
-                unreachable!("a vector figure writes a figure sink")
-            };
-            let mut page = grana_vector::Page::new(size[0] as f32, size[1] as f32);
-            page.set_background(grana_vector::Image::new(
-                size,
-                sink::rgba8(size, image.pixels(), self.transparent),
-            ));
-            grana_page::push(&mut page, &marks)?;
-            grana_page::write_document(&path, format, &grana_vector::Document::of(page))?;
-            self.frame += 1;
-            self.attempts = 0;
-            return Ok(Some(path));
-        }
         let instances = figure::instances(ui, figure);
         let size = self.viewport.size;
         let scale = self.viewport.pixels_per_point;
@@ -332,50 +395,82 @@ impl Export {
             images,
         );
         drawn.queue.submit([encoder.finish()]);
-        let (picture, picture_size) = drawn.renderer.wide_picture(
+        drawn.renderer.present_picture(
+            drawn.device,
+            drawn.queue,
+            &self.picture.1,
+            size,
+            drawn.scene.exposure,
+            self.transparent,
+        );
+        let composed = composer.compose(
+            drawn.device,
+            drawn.queue,
+            &self.picture.1,
+            overlay,
+            size,
+            self.transparent,
+        );
+        let mut encoder = drawn
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("grana.export.readback"),
+            });
+        self.readback
+            .stage_image(&mut encoder, slot, composed, size, self.stride);
+        drawn.queue.submit([encoder.finish()]);
+        self.readback.register();
+        self.staged.push_back(size);
+        self.frame += 1;
+        self.attempts = 0;
+        Ok(Step::Running)
+    }
+
+    fn write_figure(
+        &mut self,
+        ui: &mut Ui<()>,
+        drawn: &mut Drawn<'_>,
+        format: Format,
+    ) -> Result<PathBuf, String> {
+        let legends = grana_figure::legends(drawn.scene);
+        let caption = grana_figure::caption(drawn.scene, drawn.pose.time);
+        let labels = grana_figure::labels(drawn.scene, drawn.pose.time);
+        let annotations = grana_figure::annotations(drawn.scene, drawn.pose.time);
+        let camera = camera(&drawn.pose.camera);
+        let figure = Figure {
+            viewport: &self.viewport,
+            camera: &camera,
+            world: drawn.scene.dataset.world_size(),
+            labels: &labels,
+            annotations: &annotations,
+            legends: &legends,
+            caption: Some(&caption),
+            backdrop: !self.transparent,
+        };
+        let marks = figure::marks(ui, figure);
+        let image = drawn.renderer.picture(
             drawn.device,
             drawn.queue,
             drawn.scene.exposure,
             self.transparent,
         );
-        assert_eq!(picture_size, size, "the picture covers the export");
-        let picture_view = picture.create_view(&TextureViewDescriptor::default());
-        let image = composer.compose(
-            drawn.device,
-            drawn.queue,
-            &picture_view,
-            overlay,
-            size,
-            self.transparent,
-        );
-        let mut sink = self.sink.take().expect("the export is alive");
-        let written = match &sink {
-            Sink::Tiff { path } => {
-                let physical =
-                    camera.world_per_point(self.viewport.size[1] as f32, camera.distance());
-                crate::sink::write_picture(
-                    path,
-                    image.size(),
-                    image.pixels(),
-                    drawn.scene,
-                    drawn.pose.time,
-                    physical,
-                    self.transparent,
-                )
-            }
-            _ => sink.push(drawn.pose.time, image.size(), &image, self.transparent),
+        let size = image.size();
+        assert_eq!(size, self.viewport.size, "the picture covers the export");
+        let sink = self.sink.take().expect("the export is alive");
+        let Sink::Figure { path } = sink else {
+            unreachable!("a vector figure writes a figure sink")
         };
-        if let Err(detail) = written {
-            sink.discard();
-            return Err(detail);
-        }
+        let mut page = grana_vector::Page::new(size[0] as f32, size[1] as f32);
+        page.set_background(grana_vector::Image::new(
+            size,
+            sink::rgba8(size, image.pixels(), self.transparent),
+        ));
+        grana_page::push(&mut page, &marks)?;
+        grana_page::write_document(&path, format, &grana_vector::Document::of(page))?;
         self.frame += 1;
+        self.written += 1;
         self.attempts = 0;
-        if self.frame < self.poses.len() {
-            self.sink = Some(sink);
-            return Ok(None);
-        }
-        sink.finish().map(Some)
+        Ok(path)
     }
 }
 

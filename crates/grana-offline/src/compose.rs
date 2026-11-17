@@ -11,7 +11,6 @@ use wgpu::{
 };
 
 use grana_gpu::Pipelines;
-use grana_render::{Image16, read_image16};
 
 const FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
@@ -107,7 +106,7 @@ impl Composer {
         overlay: &TextureView,
         size: [u32; 2],
         transparent: bool,
-    ) -> Image16 {
+    ) -> &Texture {
         if self.target.is_none() || self.size != size {
             self.target = Some(build_target(device, size));
             self.size = size;
@@ -160,7 +159,7 @@ impl Composer {
         drop(pass);
         queue.submit([encoder.finish()]);
         let (texture, _) = self.target.as_ref().expect("the compose target is ready");
-        read_image16(device, queue, texture, size)
+        texture
     }
 }
 

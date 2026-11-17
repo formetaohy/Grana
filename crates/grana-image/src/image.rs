@@ -581,12 +581,37 @@ fn is_zarr(path: &Path) -> bool {
 
 pub fn is_image(path: &Path) -> bool {
     if path.is_dir() {
-        is_zarr(path)
-    } else {
-        is_czi(path).unwrap_or(false)
-            || is_tiff(path).unwrap_or(false)
-            || grana_readout::is_supported(path)
+        return is_zarr(path);
     }
+    if let Some(prefix) = prefix(path, 10)
+        && recognised(&prefix)
+    {
+        return true;
+    }
+    grana_readout::has_extension(path) && grana_readout::is_supported(path)
+}
+
+fn recognised(prefix: &[u8]) -> bool {
+    prefix.starts_with(b"ZISRAWFILE")
+        || matches!(
+            prefix.get(..4),
+            Some(b"II*\0" | b"MM\0*" | b"II+\0" | b"MM\0+")
+        )
+}
+
+fn prefix(path: &Path, limit: usize) -> Option<Vec<u8>> {
+    let mut file = File::open(path).ok()?;
+    let mut bytes = vec![0u8; limit];
+    let mut filled = 0;
+    while filled < limit {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(_) => return None,
+        }
+    }
+    bytes.truncate(filled);
+    Some(bytes)
 }
 
 pub fn series_count(path: &Path) -> Result<usize, Error> {

@@ -691,47 +691,34 @@ impl Renderer {
         })
     }
 
-    pub fn wide_picture(
+    pub fn present_picture(
         &mut self,
         device: &Device,
         queue: &Queue,
+        picture: &TextureView,
+        size: [u32; 2],
         exposure: f32,
         transparent: bool,
-    ) -> (Texture, [u32; 2]) {
+    ) {
         let target = self
             .targets
             .current()
             .expect("a drawn frame holds a target");
-        let size = target.size;
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("grana.picture"),
-            size: Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: crate::target::WIDE_FORMAT,
-            usage: TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::COPY_SRC
-                | TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&TextureViewDescriptor::default());
+        assert_eq!(
+            target.size, size,
+            "a presented picture covers the drawn frame"
+        );
         self.present.write_wide(queue, exposure, transparent);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.picture"),
         });
         self.present.quantize(
             &mut encoder,
-            &view,
+            picture,
             &target.present_group,
             [0, 0, size[0], size[1]],
         );
         queue.submit([encoder.finish()]);
-        (texture, size)
     }
 
     pub fn picture(
@@ -741,7 +728,14 @@ impl Renderer {
         exposure: f32,
         transparent: bool,
     ) -> crate::image::Image16 {
-        let (texture, size) = self.wide_picture(device, queue, exposure, transparent);
+        let size = self
+            .targets
+            .current()
+            .expect("a drawn frame holds a target")
+            .size;
+        let texture = crate::image::target(device, size);
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        self.present_picture(device, queue, &view, size, exposure, transparent);
         crate::image::read16(device, queue, &texture, size)
     }
 }

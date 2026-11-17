@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3, Vec4};
+use glam::Mat4;
 use grana_gpu::Pipelines;
 use grana_gpu::layout::{sampler, texture};
 use wgpu::{
@@ -45,13 +45,19 @@ const ADDITIVE: BlendState = BlendState {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 struct Vertex {
-    position: [f32; 4],
+    position: [f32; 3],
     uv: [f32; 2],
     tint: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct Camera {
+    view_projection: [[f32; 4]; 4],
+}
+
 const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2, 2 => Float32x4];
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4];
 
 struct Sheet {
     group: BindGroup,
@@ -72,6 +78,8 @@ pub(crate) struct Overlays {
     buffer: Option<Buffer>,
     capacity: usize,
     stamp: u64,
+    camera: Buffer,
+    camera_group: BindGroup,
 }
 
 impl Overlays {
@@ -83,10 +91,37 @@ impl Overlays {
                 sampler(1, ShaderStages::FRAGMENT),
             ],
         });
+        let camera_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.overlay.camera.layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.overlay.pipeline.layout"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), Some(&camera_layout)],
             immediate_size: 0,
+        });
+        let camera = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.overlay.camera"),
+            size: size_of::<Camera>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.overlay.camera.group"),
+            layout: &camera_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: camera.as_entire_binding(),
+            }],
         });
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.overlay"),
@@ -140,6 +175,8 @@ impl Overlays {
             buffer: None,
             capacity: 0,
             stamp: 0,
+            camera,
+            camera_group,
         }
     }
 
@@ -150,7 +187,14 @@ impl Overlays {
         overlays: &[Overlay<'_>],
         view_projection: Mat4,
     ) {
-        let stamp = stamp(overlays, view_projection);
+        queue.write_buffer(
+            &self.camera,
+            0,
+            bytemuck::bytes_of(&Camera {
+                view_projection: view_projection.to_cols_array_2d(),
+            }),
+        );
+        let stamp = stamp(overlays);
         if self.stamp == stamp {
             return;
         }
@@ -178,10 +222,8 @@ impl Overlays {
                 overlay.opacity(),
             ];
             for corner in CORNERS {
-                let world = Vec3::from(overlay.corners()[corner]);
-                let clip = view_projection * Vec4::from((world, 1.0));
                 self.vertices.push(Vertex {
-                    position: clip.to_array(),
+                    position: overlay.corners()[corner],
                     uv: UVS[corner],
                     tint,
                 });
@@ -223,6 +265,7 @@ impl Overlays {
         });
         crate::target::viewport(&mut pass, viewport);
         pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(1, &self.camera_group, &[]);
         pass.set_vertex_buffer(0, buffer.slice(..));
         for draw in &self.draws {
             let Some(sheet) = self.sheets.get(&draw.sheet) else {
@@ -234,14 +277,11 @@ impl Overlays {
     }
 }
 
-fn stamp(overlays: &[Overlay<'_>], view_projection: Mat4) -> u64 {
+fn stamp(overlays: &[Overlay<'_>]) -> u64 {
     let mut digest = Digest::new();
     digest.mix(overlays.len() as u64);
     for overlay in overlays {
         digest.mix(overlay.digest());
-    }
-    for value in view_projection.to_cols_array() {
-        digest.real(value);
     }
     digest.finish()
 }

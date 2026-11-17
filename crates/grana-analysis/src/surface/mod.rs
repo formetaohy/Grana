@@ -35,6 +35,7 @@ use mask::SolidMask;
 use tile::{Tile, TileResult};
 
 use crate::schedule::Budget;
+use crate::work;
 
 const TILE_SIDE: u32 = 96;
 const TILE_Z_FLOOR: u32 = 8;
@@ -55,7 +56,6 @@ const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const SEED_SNAP: i64 = 2;
-const SURFACE_VOXELS: u64 = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedPolicy {
@@ -513,7 +513,7 @@ impl SurfaceBuilder {
 }
 
 pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
-    pyramid.fit_level(region, SURFACE_VOXELS)
+    pyramid.fit_level(region, work::SURFACE_VOXELS)
 }
 
 pub fn recut(

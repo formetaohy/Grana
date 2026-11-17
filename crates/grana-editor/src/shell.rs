@@ -329,7 +329,9 @@ fn stitch_block<'a>(
     let language = ctx.language();
     let grid_key = Key::new("shell.stitch.grid");
     let channel_key = Key::new("shell.stitch.channel");
-    let detail = if stitch.running {
+    let detail = if stitch.scanning {
+        grana_i18n::shell::scanning_tiles(language).to_string()
+    } else if stitch.running {
         grana_i18n::shell::stitching(language, stitch.tiles)
     } else {
         grana_i18n::shell::tile_count(language, stitch.tiles)
@@ -422,18 +424,20 @@ fn stitch_block<'a>(
             .collect::<Vec<_>>();
         popups.push(crate::view::menu(ctx, series_key, 140.0, entries));
     }
-    let confirm = if stitch.running {
+    let confirm = if stitch.running || stitch.scanning {
         Message::Noop
     } else {
         Message::Command(Command::ConfirmStitch)
     };
-    let label = if stitch.running {
+    let label = if stitch.scanning {
+        grana_i18n::shell::scanning_tiles(language).to_string()
+    } else if stitch.running {
         grana_i18n::shell::stitching(language, stitch.tiles)
     } else {
         grana_i18n::shell::stitch(language).to_string()
     };
     let mut row = Vec::new();
-    if stitch.running {
+    if stitch.running || stitch.scanning {
         row.push(crate::view::spinner(ctx, 16.0));
     }
     row.push(

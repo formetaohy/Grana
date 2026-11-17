@@ -34,7 +34,7 @@ impl Previews {
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
-                let Ok(bitmap) = grana_preview::field(&source, size) else {
+                let Ok(bitmap) = grana_preview::thumbnail(&source, size) else {
                     continue;
                 };
                 sink(Event::Thumb { series, bitmap });

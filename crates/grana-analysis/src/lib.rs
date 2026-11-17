@@ -16,6 +16,7 @@ mod schedule;
 mod surface;
 mod table;
 mod track;
+mod work;
 
 pub use cell::{Band, CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
 pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};

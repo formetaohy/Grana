@@ -16,7 +16,6 @@ const FIT_REACH_LIMIT: i64 = 8;
 const FIT_SAMPLES: f64 = 8.0;
 const FIT_MINIMUM: f64 = 0.5;
 const FIT_MAXIMUM: f64 = 2.0;
-const SPOT_VOXEL_LIMIT: u64 = 1 << 30;
 const CORE_MIN: u32 = 64;
 const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
@@ -42,7 +41,7 @@ pub fn spot_level(pyramid: &Pyramid, region: VolumeRegion, params: SpotParams) -
         })
         .unwrap_or(0);
     let affordable = pyramid
-        .fit_level(region, SPOT_VOXEL_LIMIT)
+        .fit_level(region, crate::work::SPOT_VOXELS)
         .unwrap_or(pyramid.level_count() - 1);
     affordable.min(resolvable)
 }

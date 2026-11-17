@@ -7,11 +7,11 @@ use grana_volume::{Intensity, Level, Region};
 
 use crate::coloc::{ColocRead, scale, unit};
 use crate::schedule;
+use crate::work;
 
 pub type LabelRead<'a> = dyn Fn(&[Range<u32>; 3]) -> Result<Vec<u16>, String> + Sync + 'a;
 
 pub const OBJECT_COLOC_FIELDS: usize = 6;
-pub const OBJECT_COLOC_VOXELS: u64 = 128 << 20;
 
 const TILE: [u32; 3] = [128, 128, 16];
 
@@ -21,33 +21,22 @@ pub fn object_coloc_level(
     region: Region,
     anchors: &dyn Fn(u32) -> Vec<ObjectAnchor>,
 ) -> usize {
-    let levels = pyramid.level_count();
-    let mut best = levels - 1;
-    for level in 0..levels {
-        let info = pyramid.level(level);
-        if region.voxel_range(info).is_none() {
-            continue;
-        }
-        let mut total = 0u64;
-        let mut over = false;
-        for time in 0..frames {
-            for anchor in anchors(time) {
-                total += anchor_voxels(info, region, anchor.bounds());
-                if total > OBJECT_COLOC_VOXELS {
-                    over = true;
-                    break;
+    pyramid
+        .fit_level_by(work::OBJECT_COLOC_VOXELS, |level| {
+            let info = pyramid.level(level);
+            region.voxel_range(info)?;
+            let mut total = 0u64;
+            for time in 0..frames {
+                for anchor in anchors(time) {
+                    total += anchor_voxels(info, region, anchor.bounds());
+                    if total > work::OBJECT_COLOC_VOXELS {
+                        return Some(total);
+                    }
                 }
             }
-            if over {
-                break;
-            }
-        }
-        if !over {
-            return level;
-        }
-        best = level;
-    }
-    best
+            Some(total)
+        })
+        .unwrap_or(pyramid.level_count() - 1)
 }
 
 pub struct ObjectColocScan {

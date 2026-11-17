@@ -171,6 +171,15 @@ impl Region {
         (entry <= exit).then_some((entry, exit))
     }
 
+    pub fn voxels(self, level: Level) -> Option<u64> {
+        self.voxel_range(level).map(|ranges| {
+            ranges
+                .iter()
+                .map(|range| u64::from(range.end - range.start))
+                .product()
+        })
+    }
+
     pub fn voxel_range(self, level: Level) -> Option<[Range<u32>; 3]> {
         let extent = level.extent();
         let dims = [extent.x(), extent.y(), extent.z()];

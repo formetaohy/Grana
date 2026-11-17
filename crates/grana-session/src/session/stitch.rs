@@ -1,18 +1,20 @@
+use std::sync::Arc;
 use std::sync::mpsc;
 
 use grana_exec::{Executor, Job, Role};
+use grana_stitch::Folder;
 
 use super::*;
 
+use crate::task::{Poll, Task};
 use crate::view::StitchView;
 
 pub struct Stitch {
     folder: PathBuf,
-    tiles: usize,
-    channels: Vec<String>,
+    scan: Option<Arc<Folder>>,
+    scanning: Option<Task<Result<Arc<Folder>, String>>>,
     channel: usize,
     series: usize,
-    series_count: usize,
     rows: usize,
     columns: usize,
     output: PathBuf,
@@ -26,16 +28,18 @@ struct Running {
 
 impl Stitch {
     pub fn view(&self) -> StitchView {
+        let scan = self.scan.as_deref();
         StitchView {
             folder: self.folder.display().to_string(),
-            tiles: self.tiles,
-            channels: self.channels.clone(),
+            tiles: scan.map_or(0, |folder| folder.count()),
+            channels: scan.map_or_else(Vec::new, |folder| folder.channels().to_vec()),
             channel: self.channel,
             series: self.series,
-            series_count: self.series_count,
+            series_count: scan.map_or(0, |folder| folder.series()),
             rows: self.rows,
             columns: self.columns,
             running: self.running.is_some(),
+            scanning: self.scanning.is_some(),
         }
     }
 }
@@ -55,51 +59,24 @@ impl Session {
         if self.scene.is_some() {
             return false;
         }
-        let tiles = match grana_stitch::tiles(&folder) {
-            Ok(tiles) if tiles.len() >= 2 => tiles,
-            Ok(_) => {
-                self.message = Some(Message::error(
-                    "a tile folder holds at least two images".to_string(),
-                ));
-                return false;
-            }
-            Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
-                return false;
-            }
-        };
-        let first = &tiles[0];
-        let channels = grana_image::Image::open(first)
-            .map(|image| {
-                image
-                    .pyramid()
-                    .channels()
-                    .iter()
-                    .map(|channel| channel.name().to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let series_count = grana_stitch::series_count(&tiles).unwrap_or(1);
         let name = folder.file_name().map_or_else(
             || "stitched".to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
         let parent = folder.parent().unwrap_or(&folder).to_path_buf();
         let output = parent.join(format!("{name}-stitched.ome.zarr"));
-        if grana_image::is_image(&output) && fresh(&output, &tiles) {
-            self.begin_load(output);
-            return true;
-        }
-        let (rows, columns) = grana_stitch::default_grid(tiles.len());
+        let scanning = folder.clone();
+        let task = Task::spawn(Role::Read, move |_, sink| {
+            sink(grana_stitch::folder(&scanning).map_err(|error| error.to_string()));
+        });
         self.stitch = Some(Stitch {
             folder,
-            tiles: tiles.len(),
-            channels,
+            scan: None,
+            scanning: Some(task),
             channel: 0,
             series: 0,
-            series_count,
-            rows,
-            columns,
+            rows: 0,
+            columns: 0,
             output,
             running: None,
         });
@@ -108,10 +85,17 @@ impl Session {
     }
 
     pub(super) fn set_stitch_grid(&mut self, rows: usize, columns: usize) -> bool {
-        let Some(stitch) = self.stitch.as_mut() else {
+        let Some(stitch) = self
+            .stitch
+            .as_mut()
+            .filter(|stitch| stitch.running.is_none())
+        else {
             return false;
         };
-        if stitch.running.is_some() || rows == 0 || columns == 0 || rows * columns != stitch.tiles {
+        if rows == 0
+            || columns == 0
+            || rows * columns != stitch.scan.as_ref().map_or(0, |folder| folder.count())
+        {
             return false;
         }
         stitch.rows = rows;
@@ -120,10 +104,19 @@ impl Session {
     }
 
     pub(super) fn set_stitch_channel(&mut self, channel: usize) -> bool {
-        let Some(stitch) = self.stitch.as_mut() else {
+        let Some(stitch) = self
+            .stitch
+            .as_mut()
+            .filter(|stitch| stitch.running.is_none())
+        else {
             return false;
         };
-        if stitch.running.is_some() || channel >= stitch.channels.len() {
+        if channel
+            >= stitch
+                .scan
+                .as_ref()
+                .map_or(0, |folder| folder.channels().len())
+        {
             return false;
         }
         stitch.channel = channel;
@@ -131,10 +124,14 @@ impl Session {
     }
 
     pub(super) fn set_stitch_series(&mut self, series: usize) -> bool {
-        let Some(stitch) = self.stitch.as_mut() else {
+        let Some(stitch) = self
+            .stitch
+            .as_mut()
+            .filter(|stitch| stitch.running.is_none())
+        else {
             return false;
         };
-        if stitch.running.is_some() || series >= stitch.series_count {
+        if series >= stitch.scan.as_ref().map_or(0, |folder| folder.series()) {
             return false;
         }
         stitch.series = series;
@@ -145,29 +142,40 @@ impl Session {
         let Some(stitch) = self.stitch.as_mut() else {
             return false;
         };
-        if stitch.running.is_some() {
+        if stitch.running.is_some() || stitch.scan.is_none() {
             return false;
         }
-        let tiles = match grana_stitch::tiles(&stitch.folder) {
-            Ok(tiles) => tiles,
-            Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
-                return false;
-            }
-        };
-        let request = grana_stitch::Request {
-            tiles,
-            output: stitch.output.clone(),
-            rows: stitch.rows,
-            columns: stitch.columns,
-            channel: stitch.channel,
-            series: stitch.series,
-        };
+        let request = (
+            stitch.folder.clone(),
+            stitch.output.clone(),
+            stitch.rows,
+            stitch.columns,
+            stitch.channel,
+            stitch.series,
+        );
         let (sender, outcome) = mpsc::channel();
         let job = Executor::lane(Role::Compute).submit(move |cancel| {
-            let written = grana_stitch::stitch(&request, cancel)
-                .map_err(|error| error.to_string())
-                .map(|_| request.output);
+            let (folder, output, rows, columns, channel, series) = request;
+            let written = grana_stitch::folder(&folder)
+                .and_then(|folder| {
+                    if rows * columns != folder.count() {
+                        return Err(grana_stitch::Error::new(format!(
+                            "the {} × {rows} grid does not cover {} tiles",
+                            columns,
+                            folder.count()
+                        )));
+                    }
+                    let request = grana_stitch::Request {
+                        tiles: folder.tiles().to_vec(),
+                        output: output.clone(),
+                        rows,
+                        columns,
+                        channel,
+                        series,
+                    };
+                    grana_stitch::stitch(&request, cancel).map(|_| output)
+                })
+                .map_err(|error| error.to_string());
             let _ = sender.send(written);
         });
         stitch.running = Some(Running { job, outcome });
@@ -187,6 +195,9 @@ impl Session {
     }
 
     pub(super) fn poll_stitch(&mut self) -> bool {
+        if self.poll_stitch_scan() {
+            return true;
+        }
         let outcome = match self
             .stitch
             .as_ref()
@@ -216,6 +227,55 @@ impl Session {
                 self.message = Some(Message::error(
                     "the stitcher stopped before it wrote the mosaic".to_string(),
                 ));
+                true
+            }
+        }
+    }
+
+    fn poll_stitch_scan(&mut self) -> bool {
+        let Some(stitch) = self.stitch.as_mut() else {
+            return false;
+        };
+        let Some(task) = stitch.scanning.as_ref() else {
+            return false;
+        };
+        match task.poll() {
+            Poll::Event(Ok(folder)) => {
+                stitch.scanning = None;
+                if folder.count() < 2 {
+                    self.message = Some(Message::error(
+                        "a tile folder holds at least two images".to_string(),
+                    ));
+                    self.stitch = None;
+                    return true;
+                }
+                if grana_image::is_image(&stitch.output) && fresh(&stitch.output, folder.tiles()) {
+                    let output = stitch.output.clone();
+                    self.stitch = None;
+                    self.begin_load(output);
+                    return true;
+                }
+                stitch.rows = folder.rows();
+                stitch.columns = folder.columns();
+                stitch.channel = stitch
+                    .channel
+                    .min(folder.channels().len().saturating_sub(1));
+                stitch.series = stitch.series.min(folder.series().saturating_sub(1));
+                stitch.scan = Some(folder);
+                self.message = None;
+                true
+            }
+            Poll::Event(Err(detail)) => {
+                self.message = Some(Message::error(detail));
+                self.stitch = None;
+                true
+            }
+            Poll::Empty => false,
+            Poll::Closed => {
+                self.message = Some(Message::error(
+                    "the tile folder could not be scanned".to_string(),
+                ));
+                self.stitch = None;
                 true
             }
         }

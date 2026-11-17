@@ -7,6 +7,7 @@ labels! {
     package => "Share" / "分享包";
     open_image => "Open Image…" / "打开图像…";
     tiles => "Tiles" / "瓦片";
+    scanning_tiles => "Scanning the tiles" / "正在扫描瓦片";
     stitch => "Stitch" / "拼接";
     channel => "Channel" / "通道";
     series => "Series" / "序列";

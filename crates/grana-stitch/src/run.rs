@@ -75,29 +75,6 @@ impl Summary {
     }
 }
 
-pub fn series_count(tiles: &[Source]) -> Result<usize, Error> {
-    if tiles.is_empty() {
-        return Err(Error::new("a mosaic holds at least one tile"));
-    }
-    let mut count = None;
-    for source in tiles {
-        let image = Image::open_with_cache(source, None)
-            .map_err(|error| Error::new(format!("failed to open {}: {error}", source.label())))?;
-        let scened = image.series().len();
-        match count {
-            None => count = Some(scened),
-            Some(known) if known == scened => {}
-            Some(known) => {
-                return Err(Error::new(format!(
-                    "{} holds {scened} series and the first tile holds {known}",
-                    source.label()
-                )));
-            }
-        }
-    }
-    Ok(count.expect("a mosaic holds a tile"))
-}
-
 pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
     if cancel.cancelled() {
         return Err(Error::new(CANCELLED));

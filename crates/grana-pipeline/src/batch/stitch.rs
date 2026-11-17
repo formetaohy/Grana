@@ -16,17 +16,19 @@ pub(super) fn place(
     progress: &Progress<'_>,
     cancel: &Cancel,
 ) -> Result<(), String> {
-    let tiles = grana_stitch::tiles(dataset.path()).map_err(|error| error.to_string())?;
-    if tiles.len() != spec.tiles() {
+    let folder = grana_stitch::folder(dataset.path()).map_err(|error| error.to_string())?;
+    if folder.count() != spec.tiles() {
         return Err(format!(
             "{} holds {} tiles and the grid names {}",
             dataset.path().display(),
-            tiles.len(),
+            folder.count(),
             spec.tiles()
         ));
     }
-    let channel =
-        grana_stitch::channel_of(&tiles[0], &spec.channel).map_err(|error| error.to_string())?;
+    let channel = folder
+        .channel(&spec.channel)
+        .map_err(|error| error.to_string())?;
+    let tiles = folder.tiles().to_vec();
     let folder = output.join(STITCHED).join(dataset.key());
     let path = folder.join(format!("{}.ome.zarr", grana_scene::slug(&dataset.title())));
     if current(&path, &tiles) {

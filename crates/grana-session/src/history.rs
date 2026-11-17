@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_animation::Timeline;
-use grana_scene::{Measure, MeasureState, ObjectSetId, Scene, SceneState};
+use grana_scene::{Measure, MeasureState, Scene, SceneState};
 
 use crate::command::{Action, Edit};
 
@@ -16,24 +16,9 @@ pub(crate) struct Snapshot {
 
 impl Snapshot {
     pub(crate) fn capture(scene: &Scene, measure: &Measure, timeline: &Timeline) -> Self {
-        let mut state = measure.state();
-        let set = state
-            .set
-            .and_then(ObjectSetId::from_raw)
-            .and_then(|id| scene.objects.get(id));
-        if !set.is_some_and(|set| set.detected() > 0) {
-            state.filters.clear();
-            state.lasso = None;
-            state.sort = None;
-            state.columns.clear();
-            state.axes = [0; 2];
-            if set.is_none() {
-                state.set = None;
-            }
-        }
         Self {
             scene: scene.state(),
-            measure: state,
+            measure: measure.state(scene),
             timeline: timeline.clone(),
         }
     }

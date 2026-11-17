@@ -145,6 +145,7 @@ pub struct StitchView {
     pub rows: usize,
     pub columns: usize,
     pub running: bool,
+    pub scanning: bool,
 }
 
 pub struct SessionView<'a> {

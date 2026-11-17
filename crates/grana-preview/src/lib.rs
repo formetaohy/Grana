@@ -1,3 +1,3 @@
 mod preview;
 
-pub use preview::{field, size};
+pub use preview::{field, size, thumbnail};

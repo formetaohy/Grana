@@ -540,13 +540,7 @@ impl Measure {
             self.set = None;
             self.origin = None;
             self.pending = None;
-            self.table = None;
-            self.retained = None;
-            self.clear_plot();
-            self.clear_rows();
-            self.visible.clear();
-            self.lasso = None;
-            self.axes = [0; 2];
+            self.drop_table();
             self.dirty = true;
             return None;
         }
@@ -554,7 +548,17 @@ impl Measure {
         let moved = self.time != time;
         self.time = time;
         if !busy && !self.settled(scene) {
-            let key = MeasureKey::of(scene, id, self.group, self.aggregate)?;
+            let Some(request) = MeasureKey::of(scene, id, self.group, self.aggregate)
+                .zip(TableRequest::new(scene, id, self.group, self.aggregate))
+            else {
+                self.origin = None;
+                self.pending = None;
+                if self.table.is_some() {
+                    self.drop_table();
+                }
+                return None;
+            };
+            let (key, request) = request;
             if self.group == Group::Object
                 && let Some((held, table)) = self.basis.as_ref()
                 && *held == key.basis()
@@ -563,11 +567,7 @@ impl Measure {
                 self.install(key, Some(Arc::clone(table)));
                 return None;
             }
-            let request = self.laid(
-                scene,
-                id,
-                TableRequest::new(scene, id, self.group, self.aggregate)?,
-            );
+            let request = self.laid(scene, id, request);
             self.pending = Some(request.key());
             return Some(request.with_retained(self.retained_keys()));
         }
@@ -663,19 +663,42 @@ impl Measure {
         })
     }
 
-    pub fn state(&self) -> MeasureState {
+    pub fn state(&self, scene: &Scene) -> MeasureState {
+        let set = self
+            .set
+            .filter(|id| scene.objects.get(*id).is_some())
+            .map(ObjectSetId::raw);
+        let measured = self.table.is_some()
+            && self
+                .set
+                .is_some_and(|id| TableRequest::available(scene, id, self.group));
         MeasureState {
-            set: self.set.map(ObjectSetId::raw),
+            set,
             group: self.group,
             aggregate: self.aggregate,
             scope: self.scope,
-            filters: self.filters.clone(),
-            lasso: self.table.as_ref().and(self.lasso.clone()),
-            sort: self.sort,
-            columns: self.visible.clone(),
+            filters: match measured {
+                true => self.filters.clone(),
+                false => Vec::new(),
+            },
+            lasso: match measured {
+                true => self.table.as_ref().and(self.lasso.clone()),
+                false => None,
+            },
+            sort: match measured {
+                true => self.sort,
+                false => None,
+            },
+            columns: match measured {
+                true => self.visible.clone(),
+                false => Vec::new(),
+            },
             visibility: self.visibility,
             view: self.view,
-            axes: self.axes,
+            axes: match measured {
+                true => self.axes,
+                false => [0; 2],
+            },
         }
     }
 
@@ -813,25 +836,18 @@ impl Measure {
         self.dirty = true;
         self.pending = None;
         self.clear_plot();
-        self.clear_rows();
         self.origin = None;
         let Some(id) = self.set else {
-            self.table = None;
-            self.visible.clear();
-            self.lasso = None;
-            self.axes = [0; 2];
+            self.drop_table();
             return;
         };
         if scene.objects.get(id).is_none() {
             self.set = None;
-            self.table = None;
-            self.visible.clear();
-            self.lasso = None;
-            self.axes = [0; 2];
+            self.drop_table();
             return;
         }
         let Some(request) = TableRequest::new(scene, id, self.group, self.aggregate) else {
-            self.table = None;
+            self.drop_table();
             return;
         };
         let request = self.laid(scene, id, request);
@@ -875,10 +891,7 @@ impl Measure {
             .map(|table| (column_keys(&table), std::mem::take(&mut self.visible)))
             .or_else(|| self.retained.take());
         let Some(table) = table else {
-            self.table = None;
-            self.visible.clear();
-            self.lasso = None;
-            self.axes = [0; 2];
+            self.drop_table();
             return;
         };
         let keys = column_keys(&table);
@@ -1169,6 +1182,19 @@ impl Measure {
         self.rows = None;
         self.rows_pending = None;
         self.nearest = None;
+    }
+
+    fn drop_table(&mut self) {
+        self.dirty = true;
+        self.table = None;
+        self.retained = None;
+        self.visible.clear();
+        self.filters.clear();
+        self.lasso = None;
+        self.sort = None;
+        self.axes = [0; 2];
+        self.clear_rows();
+        self.clear_plot();
     }
 
     fn scope_frame(&self) -> Option<u32> {

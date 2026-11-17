@@ -3,8 +3,8 @@ mod run;
 mod tile;
 
 pub use mosaic::{Edge, Offset, Plane, Side, estimate, solve};
-pub use run::{Request, Summary, series_count, stitch};
-pub use tile::{channel_of, default_grid, tiles};
+pub use run::{Request, Summary, stitch};
+pub use tile::{Folder, default_grid, folder, unfold};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{detail}")]

@@ -3,7 +3,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use wgpu::{
     Buffer, BufferAsyncError, BufferDescriptor, BufferUsages, CommandEncoder, Device, MapMode,
-    PollType,
+    PollType, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
 };
 
 const COPY_ALIGNMENT: u64 = 4;
@@ -20,17 +20,17 @@ pub struct Readback {
 }
 
 impl Readback {
-    pub fn new(device: &Device, label: &'static str, row: u64, slots: usize) -> Self {
+    pub fn new(device: &Device, label: &'static str, size: u64, slots: usize) -> Self {
         assert!(
-            row > 0 && row.is_multiple_of(COPY_ALIGNMENT),
-            "a readback row is a whole number of aligned bytes"
+            size > 0 && size.is_multiple_of(COPY_ALIGNMENT),
+            "a readback slot is a whole number of aligned bytes"
         );
         assert!(slots > 0, "a readback ring holds at least one slot");
         let slots = (0..slots)
             .map(|_| Slot {
                 buffer: device.create_buffer(&BufferDescriptor {
                     label: Some(label),
-                    size: row,
+                    size,
                     usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
@@ -69,7 +69,7 @@ impl Readback {
         &self,
         encoder: &mut CommandEncoder,
         slot: usize,
-        texture: &wgpu::Texture,
+        texture: &Texture,
         row: u64,
     ) {
         self.stage_level(encoder, slot, texture, 0, row);
@@ -79,7 +79,7 @@ impl Readback {
         &self,
         encoder: &mut CommandEncoder,
         slot: usize,
-        texture: &wgpu::Texture,
+        texture: &Texture,
         level: u32,
         row: u64,
     ) {
@@ -88,15 +88,15 @@ impl Readback {
             "a pixel readback row fits its staging buffer"
         );
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
+            TexelCopyTextureInfo {
                 texture,
                 mip_level: level,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::TexelCopyBufferInfo {
+            TexelCopyBufferInfo {
                 buffer: &self.slots[slot].buffer,
-                layout: wgpu::TexelCopyBufferLayout {
+                layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(u32::try_from(row).expect("a readback row fits u32")),
                     rows_per_image: Some(1),
@@ -105,6 +105,42 @@ impl Readback {
             wgpu::Extent3d {
                 width: 1,
                 height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    pub fn stage_image(
+        &self,
+        encoder: &mut CommandEncoder,
+        slot: usize,
+        texture: &Texture,
+        size: [u32; 2],
+        stride: u64,
+    ) {
+        let reach = stride * u64::from(size[1]);
+        assert!(
+            stride.is_multiple_of(COPY_ALIGNMENT) && reach <= self.slots[slot].buffer.size(),
+            "a staged image fits its readback slot"
+        );
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &self.slots[slot].buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(u32::try_from(stride).expect("a staged row fits u32")),
+                    rows_per_image: Some(size[1]),
+                },
+            },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
                 depth_or_array_layers: 1,
             },
         );
@@ -130,10 +166,32 @@ impl Readback {
         device: &Device,
         read: impl FnOnce(usize, &[u8]) -> R,
     ) -> Option<R> {
+        self.poll(device, false, read)
+    }
+
+    pub fn take_wait<R>(
+        &mut self,
+        device: &Device,
+        read: impl FnOnce(usize, &[u8]) -> R,
+    ) -> Option<R> {
+        self.poll(device, true, read)
+    }
+
+    fn poll<R>(
+        &mut self,
+        device: &Device,
+        wait: bool,
+        read: impl FnOnce(usize, &[u8]) -> R,
+    ) -> Option<R> {
         let slot = *self.pending.front()?;
-        device
-            .poll(PollType::Poll)
-            .expect("the graphics device failed while reading back a frame");
+        match device.poll(if wait {
+            PollType::wait_indefinitely()
+        } else {
+            PollType::Poll
+        }) {
+            Ok(_) => {}
+            Err(error) => panic!("the graphics device failed while reading back a frame: {error}"),
+        }
         let receiver = self.slots[slot]
             .mapping
             .as_ref()

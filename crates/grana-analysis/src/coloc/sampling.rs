@@ -2,9 +2,8 @@ use grana_measure::{COLOC_BLOCK_MAX, ColocPrecision};
 use grana_volume::{Level, Pyramid, Region};
 
 use super::grid::Grid;
+use crate::work;
 
-const BALANCED_VOXELS: u64 = 1 << 22;
-const FAST_VOXELS: u64 = 1 << 20;
 const SAMPLE_VOXELS: u64 = 1 << 19;
 
 pub struct ColocSampling {
@@ -65,25 +64,14 @@ pub fn coloc_sampling(
     );
     let frames = pyramid.frame_count();
     assert!(frames > 0, "a colocalization sample covers a frame");
-    let levels = (0..pyramid.level_count())
-        .filter_map(|index| voxels(region, pyramid.level(index)).map(|voxels| (index, voxels)))
-        .collect::<Vec<_>>();
-    assert!(
-        !levels.is_empty(),
-        "the colocalization region overlaps the dataset"
-    );
     let budget = match precision {
         ColocPrecision::Full => u64::MAX,
-        ColocPrecision::Balanced => BALANCED_VOXELS,
-        ColocPrecision::Fast => FAST_VOXELS,
+        ColocPrecision::Balanced => work::COLOC_BALANCED_VOXELS,
+        ColocPrecision::Fast => work::COLOC_FAST_VOXELS,
     };
-    let level = levels
-        .iter()
-        .find(|(_, count)| *count <= budget)
-        .map_or_else(
-            || levels.last().expect("the sampling level exists").0,
-            |(index, _)| *index,
-        );
+    let level = pyramid
+        .fit_level_by(budget, |index| region.voxels(pyramid.level(index)))
+        .unwrap_or(pyramid.level_count() - 1);
     let info = pyramid.level(level);
     let ranges = region
         .voxel_range(info)
@@ -117,15 +105,6 @@ fn sampled(lengths: &[u32; 3], stride: u32) -> u64 {
         .iter()
         .map(|length| u64::from(length.div_ceil(stride)))
         .product()
-}
-
-fn voxels(region: Region, level: Level) -> Option<u64> {
-    region.voxel_range(level).map(|ranges| {
-        ranges
-            .iter()
-            .map(|range| u64::from(range.end - range.start))
-            .product()
-    })
 }
 
 fn block_size(block: u32, info: Level, base: Level, stride: u32, dims: [u32; 3]) -> [u32; 3] {

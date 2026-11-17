@@ -12,14 +12,14 @@ use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::local::LocalField;
+use crate::work;
 use grana_object::FilamentParams;
 use grana_object::Mask;
 
-const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
 
 pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
-    pyramid.fit_level(Region::none(), MAX_VOXELS)
+    pyramid.fit_level(Region::none(), work::FILAMENT_VOXELS)
 }
 
 pub(super) struct Grid {
@@ -108,8 +108,9 @@ impl FilamentScan {
             .map(|value| u64::from(*value))
             .product::<u64>();
         assert!(
-            voxel_count <= MAX_VOXELS,
-            "a filament scan holds at most {MAX_VOXELS} voxels"
+            voxel_count <= work::FILAMENT_VOXELS,
+            "a filament scan holds at most {} voxels",
+            work::FILAMENT_VOXELS
         );
         let stride = [
             1,

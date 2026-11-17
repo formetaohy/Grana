@@ -4,9 +4,9 @@ use grana_object::CellParams;
 use grana_volume::{Level, Pyramid, Region};
 
 use super::ridge;
+use crate::work;
 
 const BAND_BYTES: u64 = 512 << 20;
-const BAND_CEILING: u64 = 2 << 30;
 const VOXEL_BYTES: u64 = 16;
 
 pub(crate) fn pad(level: Level, reach: f32) -> u32 {
@@ -62,19 +62,11 @@ pub(crate) fn level(
     if !(reach.is_finite() && reach > 0.0) {
         return None;
     }
-    for index in 0..pyramid.level_count() {
+    pyramid.fit_level_by(work::CELL_VOXELS, |index| {
         let info = pyramid.level(index);
-        let Some(ranges) = region.voxel_range(info) else {
-            continue;
-        };
-        if ranges.iter().any(Range::is_empty) {
-            continue;
-        }
-        if working_bytes(&ranges, info, params, reach) <= BAND_CEILING {
-            return Some(index);
-        }
-    }
-    None
+        let ranges = region.voxel_range(info)?;
+        (!ranges.iter().any(Range::is_empty)).then(|| working_voxels(&ranges, info, params, reach))
+    })
 }
 
 pub(crate) fn count(ranges: &[Range<u32>; 3], band: u32) -> usize {
@@ -99,7 +91,7 @@ pub(crate) fn expanded(range: &Range<u32>, core: Range<u32>, pad: u32) -> Range<
     start..end
 }
 
-fn working_bytes(ranges: &[Range<u32>; 3], level: Level, params: CellParams, reach: f32) -> u64 {
+fn working_voxels(ranges: &[Range<u32>; 3], level: Level, params: CellParams, reach: f32) -> u64 {
     let width = ranges[0].end - ranges[0].start;
     let height = ranges[1].end - ranges[1].start;
     let depth = ranges[2].end - ranges[2].start;
@@ -108,7 +100,5 @@ fn working_bytes(ranges: &[Range<u32>; 3], level: Level, params: CellParams, rea
     let planes = preferred(ranges, level, params, reach)
         .saturating_add(overhead)
         .min(depth);
-    plane
-        .saturating_mul(u64::from(planes))
-        .saturating_mul(VOXEL_BYTES)
+    plane.saturating_mul(u64::from(planes))
 }

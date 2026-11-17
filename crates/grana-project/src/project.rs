@@ -180,7 +180,7 @@ impl Project {
             source,
             fingerprint,
             scene: scene.state(),
-            measure: measure.state(),
+            measure: measure.state(scene),
             view,
             views,
         }

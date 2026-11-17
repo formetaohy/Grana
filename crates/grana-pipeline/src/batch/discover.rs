@@ -296,13 +296,8 @@ fn tiles_of(folder: &Path) -> usize {
 }
 
 fn tile_entries(folder: &Path, group: &str) -> Vec<DatasetEntry> {
-    let scenes = grana_stitch::tiles(folder)
-        .ok()
-        .and_then(|tiles| tiles.into_iter().next())
-        .and_then(|tile| {
-            tile.path()
-                .and_then(|path| grana_image::series_count(path).ok())
-        })
+    let scenes = grana_stitch::folder(folder)
+        .map(|folder| folder.series())
         .unwrap_or(1);
     if scenes < 2 {
         return vec![DatasetEntry::new(folder.to_path_buf(), group.to_string())];
