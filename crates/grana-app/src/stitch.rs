@@ -44,7 +44,7 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
         channel,
         series,
     };
-    match grana_stitch::stitch(&request) {
+    match grana_stitch::stitch(&request, &grana_exec::Cancel::new()) {
         Ok(summary) => {
             println!(
                 "{} × {} × {} · {} channels · {} frames · {} tiles · series {} · {} levels · {:.1} MiB",

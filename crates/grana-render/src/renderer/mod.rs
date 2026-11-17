@@ -1,17 +1,17 @@
 mod allocate;
-mod damage;
 mod draw;
 mod plan;
 mod render;
 mod residency;
 mod resolve;
+mod resources;
 mod signature;
 mod timing;
-mod upload;
 mod view;
 
 use plan::Residence;
 use residency::{FrameTarget, LevelKey, Levels, Mode, TargetCache, ViewKey, ViewState};
+use resources::Resources;
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -22,7 +22,7 @@ use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_display::Camera;
 use grana_gpu::{Pipelines, Readback};
-use grana_volume::{BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region};
+use grana_volume::{BrickGrid, BrickRequest, Clip, Damage, Level, PackedBrick, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
     Operations, Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
@@ -38,7 +38,6 @@ use crate::converge::{Convergence, Estimate, Sampling};
 use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
-use crate::occupancy::Occupancy;
 use crate::oit::Oit;
 use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
@@ -170,18 +169,7 @@ pub struct Renderer {
     layouts: Layouts,
     present: Present,
     targets: TargetCache,
-    scene: Option<crate::table::SceneTable>,
-    atlas: Option<Atlas>,
-    occupancy: Option<Occupancy>,
-    occupancy_group: Option<BindGroup>,
-    bake: Option<Bake>,
-    baked: BakeQueue,
-    upload: crate::upload::Upload,
-    arena: Option<BrickArena>,
-    level_group: Option<BindGroup>,
-    bricks: Vec<Option<BrickTable>>,
-    planner: Option<Planner>,
-    shadow: Option<Shadow>,
+    resources: Option<Resources>,
     volume: VolumePass,
     clear: crate::clear::Clear,
     surface: crate::surface::Pipeline,
@@ -195,13 +183,9 @@ pub struct Renderer {
     dummy_ao: BindGroup,
     dummy_volume: crate::target::Unreached,
     atlas_sampler: Sampler,
-    pyramid: Option<Pyramid>,
-    channels: usize,
     time: u32,
-    summary: Option<signature::SceneSummary>,
     motion: Option<u64>,
     budget: u64,
-    slot_bytes: u64,
     residence: Residence,
     prefetch: bool,
     transparent: bool,
@@ -257,18 +241,7 @@ impl Renderer {
         Self {
             present,
             targets: TargetCache::new(),
-            scene: None,
-            atlas: None,
-            occupancy: None,
-            occupancy_group: None,
-            bake: None,
-            baked: BakeQueue::new(),
-            upload: crate::upload::Upload::new(),
-            arena: None,
-            level_group: None,
-            bricks: Vec::new(),
-            planner: None,
-            shadow: None,
+            resources: None,
             volume,
             clear,
             surface,
@@ -283,13 +256,9 @@ impl Renderer {
             dummy_ao,
             dummy_volume,
             atlas_sampler,
-            pyramid: None,
-            channels: 0,
             time: 0,
-            summary: None,
             motion: None,
             budget,
-            slot_bytes: 0,
             residence: Residence::new(),
             prefetch: false,
             transparent: false,
@@ -319,7 +288,7 @@ impl Renderer {
     }
 
     pub fn slot_bytes(&self) -> u64 {
-        self.slot_bytes
+        self.resources.as_ref().map_or(0, |held| held.slot_bytes)
     }
 
     pub fn generation(&self) -> u64 {
@@ -327,11 +296,11 @@ impl Renderer {
     }
 
     pub fn slots(&self) -> usize {
-        self.atlas.as_ref().map_or(0, Atlas::slots)
+        self.resources.as_ref().map_or(0, Resources::slots)
     }
 
     pub fn first_level(&self) -> usize {
-        self.arena.as_ref().map_or(0, BrickArena::first)
+        self.resources.as_ref().map_or(0, Resources::first_level)
     }
 
     pub fn set_budget(&mut self, budget: u64) {
@@ -349,13 +318,15 @@ impl Renderer {
         if self.slots() >= slots {
             return Ok(());
         }
-        assert!(
-            self.slot_bytes > 0,
-            "the dataset is resident before a reserve"
-        );
+        let slot_bytes = self
+            .resources
+            .as_ref()
+            .map(|held| held.slot_bytes)
+            .filter(|bytes| *bytes > 0)
+            .expect("the dataset is resident before a reserve");
         let budget = crate::detail::residency_budget(
             slots,
-            self.slot_bytes,
+            slot_bytes,
             device.limits().max_texture_dimension_3d,
             ceiling,
         )?;
@@ -369,7 +340,8 @@ impl Renderer {
     }
 
     pub fn holds(&self, pyramid: &Pyramid) -> bool {
-        self.pyramid.as_ref().is_some_and(|held| {
+        self.resources.as_ref().is_some_and(|held| {
+            let held = &held.pyramid;
             held.levels() == pyramid.levels()
                 && held.frame_count() == pyramid.frame_count()
                 && held.channel_count() == pyramid.channel_count()
@@ -382,13 +354,13 @@ impl Renderer {
             self.holds(pyramid),
             "an invalidated dataset keeps the resident layout"
         );
-        self.pyramid = Some(pyramid.clone());
-        self.upload.discard();
+        let resources = self
+            .resources
+            .as_mut()
+            .expect("an invalidated dataset is resident");
+        resources.pyramid = pyramid.clone();
+        resources.invalidate();
         self.residence.invalidate();
-        if let Some(atlas) = self.atlas.as_mut() {
-            atlas.reset();
-        }
-        self.baked.forget();
         self.info = FrameInfo::default();
     }
 
@@ -412,90 +384,19 @@ impl Renderer {
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
-        let channels = pyramid.channel_count();
-        self.upload.discard();
-        assert!(
-            (1..=CHANNEL_LIMIT).contains(&channels),
-            "a dataset holds one to {CHANNEL_LIMIT} channels"
-        );
-        assert!(
-            !pyramid.levels().is_empty(),
-            "a pyramid holds at least one level"
-        );
-        let holdable = pyramid
-            .levels()
-            .iter()
-            .map(|level| BrickGrid::new(level.extent()).count() as u64)
-            .sum::<u64>();
-        let packed = (0..pack_count(channels))
-            .map(|pack| texels(components(channels, pack)))
-            .sum::<usize>();
-        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * packed as u64;
-        let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
-        let requested = (self.budget / slot_bytes).max(1).min(holdable);
-        let atlas = Atlas::new(
-            device,
-            crate::atlas::AtlasBinding {
-                layout: &self.layouts.atlas,
-                source: &self.layouts.source,
-                dummy: &self.dummy,
-                sampler: &self.atlas_sampler,
-            },
-            channels,
-            requested,
-            device.limits().max_texture_dimension_3d,
-        );
-        let slots = atlas.slots();
-        let occupancy = Occupancy::new(device, slots);
-        let bake = Bake::new(
+        let resources = Resources::new(
             device,
             &self.layouts,
-            atlas.structure(),
-            slots,
             &self.pipelines,
+            &self.atlas_sampler,
+            &self.dummy,
+            self.budget,
+            pyramid,
         );
-        let limit = (self.budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
-        let arena = BrickArena::new(device, pyramid, limit)
-            .expect("the record budget holds the coarsest level");
-        let level_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.level.group"),
-            layout: &self.layouts.level,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: arena.buffer().as_entire_binding(),
-            }],
-        });
-        let occupancy_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.occupancy.group"),
-            layout: &self.layouts.occupancy,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: occupancy.buffer().as_entire_binding(),
-            }],
-        });
-        self.residence.setup(device, slots, pyramid.level_count());
-        self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
-        let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
-        planner.bind_arena(device, &self.layouts, &arena);
-        self.planner = Some(planner);
-        self.shadow = Some(Shadow::new(device, &self.layouts, &self.pipelines));
-        self.scene = Some(crate::table::SceneTable::new(
-            device,
-            &self.layouts,
-            channels,
-        ));
-        self.atlas = Some(atlas);
-        self.occupancy = Some(occupancy);
-        self.occupancy_group = Some(occupancy_group);
-        self.bake = Some(bake);
-        self.baked.forget();
-        self.arena = Some(arena);
-        self.level_group = Some(level_group);
-        self.pyramid = Some(pyramid.clone());
-        self.channels = channels;
-        self.slot_bytes = slot_bytes;
+        self.residence
+            .setup(device, resources.slots(), pyramid.level_count());
+        self.resources = Some(resources);
         self.time = 0;
-        self.summary = None;
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.clear();
         }
@@ -553,18 +454,45 @@ impl Renderer {
     }
 
     pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
-        let pyramid = self.pyramid.as_ref()?;
-        let planner = self.planner.as_ref()?;
-        let atlas = self.atlas.as_mut()?;
-        let requests =
-            self.residence
-                .poll(device, pyramid, planner, atlas, self.time, self.prefetch)?;
+        let time = self.time;
+        let prefetch = self.prefetch;
+        let resources = self.resources.as_mut()?;
+        let requests = self.residence.poll(
+            device,
+            &resources.pyramid,
+            &resources.planner,
+            &mut resources.atlas,
+            time,
+            prefetch,
+        )?;
         self.info.view = requests.view;
         Some(requests)
     }
 
     pub fn requests_pending(&self) -> bool {
         self.residence.pending()
+    }
+
+    pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {
+        let Some(resources) = self.resources.as_mut() else {
+            return;
+        };
+        resources.upload(bricks, &mut self.residence, self.time);
+    }
+
+    pub fn damage(&mut self, damages: &[Damage]) {
+        let Some(resources) = self.resources.as_mut() else {
+            return;
+        };
+        let scopes = resources.scopes(damages);
+        if scopes.is_empty() {
+            return;
+        }
+        for target in self.targets.iter_mut() {
+            target.shot = None;
+            target.holds = false;
+        }
+        resources.damage(&scopes, &mut self.residence, self.time);
     }
 
     pub fn reserve_target(&mut self, device: &Device, size: [u32; 2]) {
@@ -591,8 +519,11 @@ impl Renderer {
             return false;
         }
         let offset = [point[0] - region[0], point[1] - region[1]];
+        let Some(resources) = self.resources.as_ref() else {
+            return false;
+        };
+        let group = resources.scene.group();
         let Self {
-            scene,
             meshes,
             splats,
             sections,
@@ -604,9 +535,6 @@ impl Renderer {
             sliced,
             ..
         } = self;
-        let Some(scene) = scene.as_ref() else {
-            return false;
-        };
         let target = PickTarget::ensure(device, pick_target);
         let readback = pick_readback
             .get_or_insert_with(|| Readback::new(device, "grana.pick.readback", PICK_ROW, 1));
@@ -616,7 +544,6 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.pick"),
         });
-        let group = scene.group();
         if *sliced {
             {
                 let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {

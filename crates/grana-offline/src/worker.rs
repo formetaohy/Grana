@@ -105,7 +105,7 @@ fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
         Ok(context) => context,
         Err(detail) => return finish(Outcome::Failed { detail }),
     };
-    let outcome = context.run(task, cancel.flag(), &mut |frame, total| {
+    let outcome = context.run(task, cancel, &mut |frame, total| {
         sender.send_until(Event::Progress { id, frame, total }, stopped);
     });
     finish(outcome);

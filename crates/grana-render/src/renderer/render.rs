@@ -136,14 +136,7 @@ impl Renderer {
         let Self {
             layouts,
             present,
-            scene: scene_table,
-            atlas,
-            arena,
-            bricks,
-            pyramid,
-            channels,
-            summary,
-            shadow,
+            resources,
             gtao,
             meshes,
             splats,
@@ -155,30 +148,23 @@ impl Renderer {
             exporting,
             info,
             residence,
-            upload,
             dummy_normal,
             dummy_volume,
             budget,
             pipelines,
             ..
         } = self;
-        let (Some(scene_table), Some(pyramid), Some(arena), Some(atlas)) = (
-            scene_table.as_mut(),
-            pyramid.as_ref(),
-            arena.as_ref(),
-            atlas.as_mut(),
-        ) else {
-            upload.discard();
+        let Some(resources) = resources.as_mut() else {
             return Err(Halt::Blank);
         };
         let scene = frame.scene;
         assert_eq!(
             scene.channels.len(),
-            *channels,
+            resources.channels,
             "the scene carries one row per channel"
         );
         assert!(
-            frame.time < pyramid.frame_count(),
+            frame.time < resources.pyramid.frame_count(),
             "the requested frame lies inside the time series"
         );
         *sliced = shot.slice;
@@ -192,14 +178,17 @@ impl Renderer {
                 .slice()
                 .map(|slice| slice.plane(frame.camera.pivot())),
         );
-        atlas.prune([frame.time, carried_frame(frame.time, pyramid.frame_count())]);
+        resources.atlas.prune([
+            frame.time,
+            carried_frame(frame.time, resources.pyramid.frame_count()),
+        ]);
         let outlook = residence.adapt(Adapt {
-            pyramid,
+            pyramid: &resources.pyramid,
             camera: frame.camera,
             region: frame.region,
             view,
-            arena,
-            slots: atlas.slots(),
+            arena: &resources.arena,
+            slots: resources.atlas.slots(),
             size: frame.size,
             time: frame.time,
             versions: scene.versions,
@@ -210,7 +199,13 @@ impl Renderer {
         });
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {
-            scene_table.publish(device, queue, upload, pyramid, scene.channels);
+            resources.scene.publish(
+                device,
+                queue,
+                &mut resources.upload,
+                &resources.pyramid,
+                scene.channels,
+            );
             residence.set_style(channel);
         }
         let stale = residence.passes_outdated(scene.versions);
@@ -219,17 +214,17 @@ impl Renderer {
         info.view.level = outlook.ladder.base;
         info.truncated = outlook.truncated;
         plan::prepare(plan::Tables {
-            bricks,
-            pyramid,
+            bricks: &mut resources.bricks,
+            pyramid: &resources.pyramid,
             levels: outlook.levels,
-            atlas,
-            arena,
-            upload,
+            atlas: &resources.atlas,
+            arena: &resources.arena,
+            upload: &mut resources.upload,
             time: frame.time,
             content: residence.content(),
         });
-        upload.encode(device, queue, encoder);
-        let tables = plan::tables(bricks, outlook.levels);
+        resources.upload.encode(device, queue, encoder);
+        let tables = plan::tables(&resources.bricks, outlook.levels);
         let (step, ray_bounds) =
             match plan::ray(frame.camera, tables[0], scene.step_scale, view.height) {
                 Ok(ray) => ray,
@@ -259,20 +254,19 @@ impl Renderer {
         );
         let planned = plan::shadow(plan::ShadowFrame {
             scene,
-            pyramid,
+            pyramid: &resources.pyramid,
             ladder: outlook.ladder,
-            bricks,
-            atlas,
+            bricks: &resources.bricks,
+            atlas: &resources.atlas,
             versions: scene.versions,
-            summary,
+            summary: &mut resources.summary,
             channel,
             time: frame.time,
         });
-        if let Some(shadow) = shadow.as_mut() {
-            let voxel = pyramid.level(planned.level).voxel();
-            let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
-            shadow.resize(device, layouts, shadow::extent(&planned.space, unit));
-        }
+        let shadow = &mut resources.shadow;
+        let voxel = resources.pyramid.level(planned.level).voxel();
+        let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
+        shadow.resize(device, layouts, shadow::extent(&planned.space, unit));
         let mut data = plan::data(plan::Frame {
             camera: frame.camera,
             region: frame.region,
@@ -285,13 +279,13 @@ impl Renderer {
             ray: crate::frame::Ray {
                 step,
                 bounds: ray_bounds,
-                channels: *channels,
+                channels: resources.channels,
             },
             space: planned.space,
             translucent: shot.translucent,
             awaits: shot.awaits,
             content: residence.content(),
-            table: scene_table,
+            table: &resources.scene,
             oit: target.oit.as_ref(),
         });
         let signature = Signature {
@@ -342,7 +336,7 @@ impl Renderer {
                         device,
                         history: target.history.as_mut().expect("the history is allocated"),
                         previous: target.view,
-                        scene: scene_table.group(),
+                        scene: resources.scene.group(),
                         geometry: &geometry,
                         accumulated: &target.accumulation_view,
                         counts: &target.count_view,
@@ -376,14 +370,14 @@ impl Renderer {
             }
             if let Some(passes) = splats.as_mut() {
                 passes.rewind(queue);
-                passes.cull_volume(encoder, scene_table.group());
+                passes.cull_volume(encoder, resources.scene.group());
             }
             if !shot.slice
                 && let Some(passes) = meshes.as_mut()
             {
-                passes.cull_volume(encoder, scene_table.group());
+                passes.cull_volume(encoder, resources.scene.group());
                 if scene.shading.shadows > 0.0 {
-                    passes.cull_shadow(encoder, scene_table.group());
+                    passes.cull_shadow(encoder, resources.scene.group());
                 }
             }
         }
@@ -417,12 +411,7 @@ impl Renderer {
         let Self {
             layouts,
             present,
-            scene: scene_table,
-            atlas,
-            level_group,
-            bricks,
-            planner,
-            pyramid,
+            resources,
             volume,
             clear,
             surface: surface_pass,
@@ -430,13 +419,9 @@ impl Renderer {
             gtao: _,
             meshes,
             splats,
-            shadow,
             convergence,
             temporal: temporal_pass,
             info,
-            occupancy_group,
-            bake,
-            baked,
             sections,
             overlay,
             dummy_oit,
@@ -446,15 +431,7 @@ impl Renderer {
             pipelines,
             ..
         } = self;
-        let (Some(scene_table), Some(atlas), Some(planner), Some(pyramid)) = (
-            scene_table.as_mut(),
-            atlas.as_mut(),
-            planner.as_mut(),
-            pyramid.as_ref(),
-        ) else {
-            return;
-        };
-        let Some(level_group) = level_group.as_ref() else {
+        let Some(resources) = resources.as_mut() else {
             return;
         };
         let scene = frame.scene;
@@ -490,18 +467,18 @@ impl Renderer {
             volume_extent[0] as f32,
             volume_extent[1] as f32,
         ];
-        scene_table.write_frame(queue, *data);
+        resources.scene.write_frame(queue, *data);
         if prepared.replan {
-            let tables = plan::tables(bricks, prepared.levels);
+            let tables = plan::tables(&resources.bricks, prepared.levels);
             plan::schedule(
-                planner,
+                &mut resources.planner,
                 queue,
                 frame.camera,
                 &tables,
                 prepared.levels,
                 frame.time,
             );
-            planner.encode(encoder, scene_table.group());
+            resources.planner.encode(encoder, resources.scene.group());
         }
         let drawing =
             target.samples < frame.sampling.ceiling() && prepared.ready && !started.expired;
@@ -509,38 +486,34 @@ impl Renderer {
             target.samples += 1;
             info.samples = target.samples;
             let content = data.tag[3];
-            if prepared.shot.volume
-                && !prepared.shot.slice
-                && let Some(bake) = bake.as_ref()
-            {
+            if prepared.shot.volume && !prepared.shot.slice {
                 let mut ladder_levels = [0usize; BAND];
                 let mut count = 0;
                 for level in prepared.ladder.levels() {
                     ladder_levels[count] = level;
                     count += 1;
                 }
-                let entries = baked.collect(
-                    atlas,
+                let entries = resources.baked.collect(
+                    &resources.atlas,
                     &ladder_levels[..count],
                     frame.time,
                     content,
-                    bake.capacity(),
+                    resources.bake.capacity(),
                 );
                 if !entries.is_empty() {
-                    bake.stage(queue, entries);
-                    bake.encode(
+                    resources.bake.stage(queue, entries);
+                    resources.bake.encode(
                         encoder,
                         entries.len() as u32,
-                        scene_table.group(),
-                        level_group,
-                        atlas.source(),
+                        resources.scene.group(),
+                        &resources.level_group,
+                        resources.atlas.source(),
                     );
                 }
             }
             if let Some(passes) = meshes.as_mut() {
                 passes.write_uniforms(queue, data, scene.shading);
             }
-            let occupancy = occupancy_group.as_ref().expect("the occupancy is ready");
             draw::encode(draw::Stage {
                 device,
                 queue,
@@ -548,13 +521,13 @@ impl Renderer {
                 encoder,
                 target,
                 scene,
-                table: scene_table,
+                table: &resources.scene,
                 groups: draw::Groups {
-                    level: level_group,
-                    atlas: atlas.group(),
-                    occupancy,
+                    level: &resources.level_group,
+                    atlas: resources.atlas.group(),
+                    occupancy: &resources.occupancy_group,
                 },
-                shadow: shadow.as_mut(),
+                shadow: Some(&mut resources.shadow),
                 keys: prepared.shadow,
                 volume_pass: volume,
                 clear,
@@ -611,7 +584,7 @@ impl Renderer {
                     .shot
                     .temporal
                     .expect("the seeding frame carries a history request");
-                let spacing = pyramid.level(prepared.ladder.base).spacing();
+                let spacing = resources.pyramid.level(prepared.ladder.base).spacing();
                 let tolerance =
                     crate::temporal::tolerance(spacing.x().max(spacing.y()).max(spacing.z()));
                 let geometry = target.geometry(
@@ -631,7 +604,7 @@ impl Renderer {
                         view: &prepared.view,
                         length: request.history(),
                         tolerance,
-                        scene: scene_table.group(),
+                        scene: resources.scene.group(),
                         geometry: &geometry,
                         accumulated: &target.accumulation_view,
                         counts: &target.count_view,
@@ -660,7 +633,7 @@ impl Renderer {
     ) {
         let Self {
             present,
-            planner,
+            resources,
             transparent,
             fade,
             info,
@@ -686,9 +659,9 @@ impl Renderer {
         }
         info.fading = prepared.ready && fade.is_some();
         if let Some(slot) = prepared.reserved
-            && let Some(planner) = planner.as_ref()
+            && let Some(resources) = resources.as_ref()
         {
-            residence.stage(encoder, slot, planner, prepared.residency);
+            residence.stage(encoder, slot, &resources.planner, prepared.residency);
         }
         info.seeded = target.seeded;
         info.history = prepared.shot.temporal.is_some()

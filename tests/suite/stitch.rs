@@ -78,7 +78,7 @@ fn writes_a_stitched_mosaic() {
         channel: 0,
         series: 0,
     };
-    let summary = stitch(&request).expect("the mosaic stitches");
+    let summary = stitch(&request, &grana_exec::Cancel::new()).expect("the mosaic stitches");
     assert_eq!(
         (summary.width(), summary.height(), summary.depth()),
         (width as u32, width as u32, DEPTH)

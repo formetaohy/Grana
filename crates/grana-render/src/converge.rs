@@ -4,25 +4,25 @@ use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, ColorTargetState, ColorWrites,
-    CommandEncoder, Device, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor,
-    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Texture,
-    TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages,
+    CommandEncoder, ComputePipeline, ComputePipelineDescriptor, Device, PipelineLayoutDescriptor,
+    Queue, ShaderModuleDescriptor, ShaderSource, ShaderStages, TextureSampleType, TextureView,
+    TextureViewDimension,
 };
 
-use crate::target;
-
-const SHADER: &str = include_str!("shader/converge.wgsl");
-const FORMAT: TextureFormat = TextureFormat::Rg16Float;
-const ROW: u64 = 256;
+const MEASURE: &str = include_str!("shader/converge_measure.wgsl");
+const REDUCE: &str = include_str!("shader/converge_reduce.wgsl");
+const ROW: u64 = 8;
 const SLOTS: usize = 6;
+const GROUP: u32 = 256;
+const GROUPS: u32 = 1024;
+const FIRST: u32 = 2;
+const GROWTH_NUMERATOR: u32 = 4;
+const GROWTH_DENOMINATOR: u32 = 3;
 const DEVIATION_TO_SIGMA: f32 = 1.2533;
 const WINDOW: usize = 4;
 const REPORT_FLOOR: usize = 3;
 const WEIGHT_FLOOR: f32 = 1.0e-6;
-const LEVEL_LIMIT: u32 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sampling {
@@ -102,6 +102,7 @@ pub(crate) struct Convergence {
     queued: VecDeque<(u64, u32)>,
     observations: VecDeque<Observation>,
     generation: u64,
+    measured: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -111,19 +112,20 @@ struct Observation {
 }
 
 struct Stages {
-    error: RenderPipeline,
-    reduce: RenderPipeline,
-    error_layout: BindGroupLayout,
+    measure: ComputePipeline,
+    reduce: ComputePipeline,
+    measure_layout: BindGroupLayout,
     reduce_layout: BindGroupLayout,
 }
 
 struct Target {
     region: [u32; 2],
-    texture: Texture,
-    views: Vec<TextureView>,
-    origin: Buffer,
-    error: BindGroup,
-    reduces: Vec<BindGroup>,
+    groups: u32,
+    frame: Buffer,
+    counts: Buffer,
+    total: Buffer,
+    measure: BindGroup,
+    reduce: BindGroup,
 }
 
 pub(crate) struct Sampled<'a> {
@@ -134,52 +136,44 @@ pub(crate) struct Sampled<'a> {
 
 impl Convergence {
     pub(crate) fn new(device: &Device, pipelines: &Pipelines) -> Self {
-        let error_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.converge.error.layout"),
+        let measure_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.converge.measure.layout"),
             entries: &[
                 texture_entry(0),
                 texture_entry(1),
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniform_entry(2),
+                storage_entry(3, false),
             ],
         });
         let reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.converge.reduce.layout"),
-            entries: &[texture_entry(0)],
+            entries: &[
+                storage_entry(0, true),
+                storage_entry(1, false),
+                uniform_entry(2),
+            ],
         });
-        let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.converge"),
-            source: ShaderSource::Wgsl(SHADER.into()),
-        });
-        let error = pipeline(
+        let measure = pipeline(
             device,
-            "grana.converge.error",
-            &shader,
-            &error_layout,
-            "fs_error",
+            "grana.converge.measure",
+            MEASURE,
+            &measure_layout,
+            "measure",
             pipelines,
         );
         let reduce = pipeline(
             device,
             "grana.converge.reduce",
-            &shader,
+            REDUCE,
             &reduce_layout,
-            "fs_reduce",
+            "reduce",
             pipelines,
         );
         Self {
             pipelines: Stages {
-                error,
+                measure,
                 reduce,
-                error_layout,
+                measure_layout,
                 reduce_layout,
             },
             target: None,
@@ -187,18 +181,30 @@ impl Convergence {
             queued: VecDeque::new(),
             observations: VecDeque::new(),
             generation: 0,
+            measured: 0,
         }
     }
 
     pub(crate) fn forget(&mut self) {
         self.target = None;
         self.observations.clear();
+        self.measured = 0;
         self.generation += 1;
     }
 
     pub(crate) fn reset(&mut self) {
         self.observations.clear();
+        self.measured = 0;
         self.generation += 1;
+    }
+
+    fn due(&self, samples: u32) -> bool {
+        samples >= FIRST
+            && samples
+                >= self
+                    .measured
+                    .saturating_mul(GROWTH_NUMERATOR)
+                    .div_ceil(GROWTH_DENOMINATOR)
     }
 
     pub(crate) fn encode(
@@ -209,6 +215,9 @@ impl Convergence {
         sampled: Sampled<'_>,
         samples: u32,
     ) {
+        if !self.due(samples) {
+            return;
+        }
         let Sampled {
             region,
             color,
@@ -232,54 +241,38 @@ impl Convergence {
             ));
             self.generation += 1;
         }
+        self.measured = samples;
         let generation = self.generation;
         let target = self.target.as_ref().expect("the converge target is ready");
         queue.write_buffer(
-            &target.origin,
+            &target.frame,
             0,
-            bytemuck::bytes_of(&[region[0], region[1], 0, 0]),
+            bytemuck::bytes_of(&[region[0], region[1], size[0], size[1]]),
         );
-        let mut pass = paint.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.converge.error.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &target.views[0],
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        target::viewport(&mut pass, [0, 0, size[0], size[1]]);
-        pass.set_pipeline(&self.pipelines.error);
-        pass.set_bind_group(0, &target.error, &[]);
-        pass.draw(0..3, 0..1);
-        drop(pass);
-        for level in 1..target.views.len() {
-            let size = level_size(target.region, level as u32);
-            let mut pass = paint.begin_render_pass(&RenderPassDescriptor {
-                label: Some("grana.converge.reduce.pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &target.views[level],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
+        queue.write_buffer(
+            &target.counts,
+            0,
+            bytemuck::bytes_of(&[target.groups, 0u32, 0u32, 0u32]),
+        );
+        {
+            let mut pass = paint.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("grana.converge.measure.pass"),
+                timestamp_writes: None,
             });
-            target::viewport(&mut pass, [0, 0, size[0], size[1]]);
-            pass.set_pipeline(&self.pipelines.reduce);
-            pass.set_bind_group(0, &target.reduces[level - 1], &[]);
-            pass.draw(0..3, 0..1);
+            pass.set_pipeline(&self.pipelines.measure);
+            pass.set_bind_group(0, &target.measure, &[]);
+            pass.dispatch_workgroups(target.groups, 1, 1);
         }
-        let level = (target.views.len() - 1) as u32;
-        self.readback
-            .stage_level(paint, slot, &target.texture, level, ROW);
+        {
+            let mut pass = paint.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("grana.converge.reduce.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipelines.reduce);
+            pass.set_bind_group(0, &target.reduce, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        self.readback.stage(paint, slot, 0, &target.total, ROW);
         self.queued.push_back((generation, samples));
     }
 
@@ -334,13 +327,12 @@ fn slope(observations: &VecDeque<Observation>) -> f32 {
 }
 
 fn sample(bytes: &[u8], index: usize) -> f32 {
-    let offset = index * 2;
-    half::f16::from_bits(u16::from_le_bytes(
-        bytes[offset..offset + 2]
+    let offset = index * size_of::<f32>();
+    f32::from_le_bytes(
+        bytes[offset..offset + size_of::<f32>()]
             .try_into()
-            .expect("a deviation sample holds two bytes"),
-    ))
-    .to_f32()
+            .expect("a deviation sample holds four bytes"),
+    )
 }
 
 impl Target {
@@ -351,43 +343,37 @@ impl Target {
         color: &TextureView,
         accumulation: &TextureView,
     ) -> Self {
-        let levels = u32::BITS - size[0].max(size[1]).leading_zeros();
-        let levels = levels.clamp(1, LEVEL_LIMIT);
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("grana.converge"),
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: FORMAT,
-            usage: TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let views = (0..levels)
-            .map(|level| {
-                texture.create_view(&TextureViewDescriptor {
-                    label: Some("grana.converge.level"),
-                    base_mip_level: level,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect::<Vec<_>>();
-        let origin = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.converge.origin"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let pixels = u64::from(size[0]) * u64::from(size[1]);
+        let groups = pixels
+            .div_ceil(u64::from(GROUP))
+            .clamp(1, u64::from(GROUPS)) as u32;
+        let frame = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.converge.frame"),
+            size: 4 * size_of::<u32>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let error = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.converge.error.group"),
-            layout: &stages.error_layout,
+        let counts = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.converge.counts"),
+            size: 4 * size_of::<u32>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let partials = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.converge.partials"),
+            size: u64::from(GROUPS) * 2 * size_of::<f32>() as u64,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let total = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.converge.total"),
+            size: 2 * size_of::<f32>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let measure = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.converge.measure.group"),
+            layout: &stages.measure_layout,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
@@ -399,41 +385,48 @@ impl Target {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: origin.as_entire_binding(),
+                    resource: frame.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: partials.as_entire_binding(),
                 },
             ],
         });
-        let reduces = (1..levels as usize)
-            .map(|level| {
-                device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("grana.converge.reduce.group"),
-                    layout: &stages.reduce_layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(&views[level - 1]),
-                    }],
-                })
-            })
-            .collect();
+        let reduce = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.converge.reduce.group"),
+            layout: &stages.reduce_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: partials.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: total.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: counts.as_entire_binding(),
+                },
+            ],
+        });
         Self {
             region: size,
-            texture,
-            views,
-            origin,
-            error,
-            reduces,
+            groups,
+            frame,
+            counts,
+            total,
+            measure,
+            reduce,
         }
     }
-}
-
-fn level_size(size: [u32; 2], level: u32) -> [u32; 2] {
-    [(size[0] >> level).max(1), (size[1] >> level).max(1)]
 }
 
 fn texture_entry(binding: u32) -> BindGroupLayoutEntry {
     BindGroupLayoutEntry {
         binding,
-        visibility: ShaderStages::FRAGMENT,
+        visibility: ShaderStages::COMPUTE,
         ty: BindingType::Texture {
             sample_type: TextureSampleType::Float { filterable: false },
             view_dimension: TextureViewDimension::D2,
@@ -443,42 +436,55 @@ fn texture_entry(binding: u32) -> BindGroupLayoutEntry {
     }
 }
 
+fn uniform_entry(binding: u32) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: ShaderStages::COMPUTE,
+        ty: BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn storage_entry(binding: u32, read_only: bool) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: ShaderStages::COMPUTE,
+        ty: BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 fn pipeline(
     device: &Device,
     label: &'static str,
-    shader: &wgpu::ShaderModule,
+    source: &str,
     layout: &BindGroupLayout,
-    fragment: &str,
+    entry: &str,
     pipelines: &Pipelines,
-) -> RenderPipeline {
+) -> ComputePipeline {
+    let module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some(label),
+        source: ShaderSource::Wgsl(source.into()),
+    });
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some(label),
         bind_group_layouts: &[Some(layout)],
         immediate_size: 0,
     });
-    device.create_render_pipeline(&RenderPipelineDescriptor {
+    device.create_compute_pipeline(&ComputePipelineDescriptor {
         label: Some(label),
         layout: Some(&pipeline_layout),
-        vertex: VertexState {
-            module: shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: Default::default(),
-        fragment: Some(FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: &[Some(ColorTargetState {
-                format: FORMAT,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
+        module: &module,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
         cache: pipelines.cache(),
     })
 }

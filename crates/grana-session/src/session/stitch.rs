@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+use grana_exec::{Executor, Job, Role};
+
 use super::*;
 
 use crate::view::StitchView;
@@ -14,7 +16,12 @@ pub struct Stitch {
     rows: usize,
     columns: usize,
     output: PathBuf,
-    running: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+    running: Option<Running>,
+}
+
+struct Running {
+    job: Job,
+    outcome: mpsc::Receiver<Result<PathBuf, String>>,
 }
 
 impl Stitch {
@@ -156,28 +163,25 @@ impl Session {
             channel: stitch.channel,
             series: stitch.series,
         };
-        let (sender, receiver) = mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("grana-stitch".to_string())
-            .spawn(move || {
-                let outcome = grana_stitch::stitch(&request).map_err(|error| error.to_string());
-                let _ = sender.send(outcome.map(|_| request.output));
-            });
-        match spawned {
-            Ok(_) => {
-                stitch.running = Some(receiver);
-                true
-            }
-            Err(error) => {
-                self.message = Some(Message::error(format!(
-                    "the stitcher did not start: {error}"
-                )));
-                false
-            }
-        }
+        let (sender, outcome) = mpsc::channel();
+        let job = Executor::lane(Role::Compute).submit(move |cancel| {
+            let written = grana_stitch::stitch(&request, cancel)
+                .map_err(|error| error.to_string())
+                .map(|_| request.output);
+            let _ = sender.send(written);
+        });
+        stitch.running = Some(Running { job, outcome });
+        true
     }
 
     pub(super) fn cancel_stitch(&mut self) -> bool {
+        if let Some(running) = self
+            .stitch
+            .as_mut()
+            .and_then(|stitch| stitch.running.take())
+        {
+            running.job.cancel();
+        }
         self.stitch = None;
         true
     }
@@ -188,7 +192,7 @@ impl Session {
             .as_ref()
             .and_then(|stitch| stitch.running.as_ref())
         {
-            Some(receiver) => receiver.try_recv(),
+            Some(running) => running.outcome.try_recv(),
             None => return false,
         };
         match outcome {

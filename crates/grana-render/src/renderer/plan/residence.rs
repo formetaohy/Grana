@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 use super::super::signature::digest;
@@ -11,6 +12,8 @@ use crate::schema::Versions;
 const FEEDBACK_SLOTS: usize = 4;
 
 const PREFETCH_LIMIT: usize = 1024;
+
+const RESTORE_BUCKET: u32 = 0;
 
 const PREFETCH_SHARE: usize = 4;
 
@@ -49,6 +52,8 @@ pub(crate) struct Residence {
     settled: Option<ViewKey>,
     planned: Option<ViewKey>,
     demand: Option<ResidencyDemand>,
+    missing: Missing,
+    stale: bool,
     passes: Option<Passes>,
     cap: Option<usize>,
     level: Option<usize>,
@@ -56,6 +61,74 @@ pub(crate) struct Residence {
     rejection: Option<(u64, usize)>,
     cache: Option<(u64, VolumeFit)>,
     view: ViewInfo,
+}
+
+#[derive(Default)]
+struct Missing {
+    time: Option<u32>,
+    demanded: HashMap<usize, Vec<u64>>,
+    entries: BTreeMap<(u32, usize, u32), (usize, BrickRequest)>,
+    shown: HashMap<(usize, u32), u32>,
+    absent: [usize; BAND],
+}
+
+impl Missing {
+    fn begin(&mut self, time: u32) {
+        self.time = Some(time);
+        for bits in self.demanded.values_mut() {
+            bits.fill(0);
+        }
+        self.entries.clear();
+        self.shown.clear();
+        self.absent = [0; BAND];
+    }
+
+    fn clear(&mut self) {
+        self.time = None;
+        self.demanded.clear();
+        self.entries.clear();
+        self.shown.clear();
+        self.absent = [0; BAND];
+    }
+
+    fn demands(&mut self, level: usize, index: u32) {
+        let word = index as usize / u64::BITS as usize;
+        let bits = self.demanded.entry(level).or_default();
+        let fitted = word + 1;
+        if bits.len() < fitted {
+            bits.resize(fitted, 0);
+        }
+        bits[word] |= 1 << (index % u64::BITS);
+    }
+
+    fn demanded(&self, level: usize, index: u32) -> bool {
+        let word = index as usize / u64::BITS as usize;
+        self.demanded.get(&level).is_some_and(|bits| {
+            bits.get(word)
+                .is_some_and(|bits| bits & (1 << (index % u64::BITS)) != 0)
+        })
+    }
+
+    fn want(&mut self, bucket: u32, band: usize, level: usize, index: u32, request: BrickRequest) {
+        if self.shown.insert((level, index), bucket).is_some() {
+            return;
+        }
+        self.entries.insert((bucket, level, index), (band, request));
+        self.absent[band] += 1;
+    }
+
+    fn supply(&mut self, level: usize, index: u32) {
+        let Some(bucket) = self.shown.remove(&(level, index)) else {
+            return;
+        };
+        if let Some((band, _)) = self.entries.remove(&(bucket, level, index)) {
+            self.absent[band] -= 1;
+        }
+    }
+
+    fn requests(&self) -> impl Iterator<Item = BrickRequest> + '_ {
+        self.entries.values().map(|(_, request)| *request)
+    }
 }
 
 pub(crate) struct Adapt<'a> {
@@ -104,6 +177,8 @@ impl Residence {
             settled: None,
             planned: None,
             demand: None,
+            missing: Missing::default(),
+            stale: true,
             passes: None,
             cap: None,
             level: None,
@@ -143,6 +218,8 @@ impl Residence {
         self.settled = None;
         self.planned = None;
         self.demand = None;
+        self.missing.clear();
+        self.stale = true;
         self.passes = None;
         self.cap = None;
         self.level = None;
@@ -159,6 +236,8 @@ impl Residence {
         self.settled = None;
         self.planned = None;
         self.demand = None;
+        self.missing.clear();
+        self.stale = true;
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
@@ -174,6 +253,8 @@ impl Residence {
         self.passes = None;
         self.settled = None;
         self.demand = None;
+        self.missing.clear();
+        self.stale = true;
         self.cap = None;
         self.level = None;
         self.rejection = None;
@@ -434,6 +515,7 @@ impl Residence {
             .all(|band| demands_complete(band, key.assured))
             .then_some(key);
         self.demand = Some(ResidencyDemand { key, bands });
+        self.stale = true;
     }
 
     fn observe(&mut self, key: &ViewKey, bands: &[Demand], pyramid: &Pyramid) {
@@ -480,10 +562,17 @@ impl Residence {
         time: u32,
         prefetch: bool,
     ) -> Option<Requests> {
-        let demand = self.demand.as_ref()?;
-        if demand.key.time != time {
+        if self
+            .demand
+            .as_ref()
+            .is_none_or(|demand| demand.key.time != time)
+        {
             return None;
         }
+        if self.stale {
+            self.rebuild(pyramid, atlas);
+        }
+        let demand = self.demand.as_ref().expect("the demand is staged");
         let mut requests = Requests {
             time: demand.key.time,
             ..Default::default()
@@ -492,34 +581,18 @@ impl Residence {
             level: demand.key.levels.ladder.base,
             ..Default::default()
         };
-        let mut missing = Vec::new();
-        for band in &demand.bands {
-            let grid = BrickGrid::new(pyramid.level(band.info.level).extent());
-            let mut absent = Vec::new();
-            for (request, bucket) in band.requests.iter().zip(&band.buckets) {
-                let index = grid.index(request.coord);
-                if atlas.slot(request.time, request.level, index).is_some()
-                    || atlas.is_hollow(request.time, request.level, index)
-                {
-                    continue;
-                }
-                absent.push((*bucket, *request));
-            }
-            view.visible += band.info.visible;
-            view.demand += band.info.demand;
-            view.resident += band.info.demand - absent.len();
-            missing.extend(absent);
-        }
-        missing.sort_by_key(|(bucket, _)| *bucket);
-        for (_, request) in missing {
-            requests.volume.push(request);
+        for (band, demand) in demand.bands.iter().enumerate() {
+            view.visible += demand.info.visible;
+            view.demand += demand.info.demand;
+            view.resident += demand.info.demand - self.missing.absent[band];
         }
         self.refreshes.retain(|request| {
             let grid = BrickGrid::new(pyramid.level(request.level).extent());
             let index = grid.index(request.coord);
             atlas.slot(request.time, request.level, index).is_some()
         });
-        requests.volume.splice(0..0, self.refreshes.iter().copied());
+        requests.volume.extend(self.refreshes.iter().copied());
+        requests.volume.extend(self.missing.requests());
         if requests.volume.is_empty() && prefetch {
             let issued = prefetch_requests(
                 &Prefetch {
@@ -538,6 +611,71 @@ impl Residence {
         self.view = view;
         requests.view = view;
         Some(requests)
+    }
+
+    fn rebuild(&mut self, pyramid: &Pyramid, atlas: &Atlas) {
+        self.stale = false;
+        let Some(demand) = self.demand.as_ref() else {
+            self.missing.clear();
+            return;
+        };
+        self.missing.begin(demand.key.time);
+        for (band, entries) in demand.bands.iter().enumerate() {
+            let grid = BrickGrid::new(pyramid.level(entries.info.level).extent());
+            for (request, bucket) in entries.requests.iter().zip(&entries.buckets) {
+                let index = grid.index(request.coord);
+                self.missing.demands(request.level, index as u32);
+                if atlas.slot(request.time, request.level, index).is_some()
+                    || atlas.is_hollow(request.time, request.level, index)
+                {
+                    continue;
+                }
+                self.missing
+                    .want(*bucket, band, request.level, index as u32, *request);
+            }
+        }
+    }
+
+    pub(crate) fn supply(&mut self, time: u32, level: usize, index: usize) {
+        if self.stale
+            || self
+                .demand
+                .as_ref()
+                .is_none_or(|demand| demand.key.time != time)
+        {
+            return;
+        }
+        self.missing.supply(level, index as u32);
+    }
+
+    pub(crate) fn release(&mut self, pyramid: &Pyramid, time: u32, level: usize, index: usize) {
+        if self.stale {
+            return;
+        }
+        let Some(demand) = self.demand.as_ref() else {
+            return;
+        };
+        if demand.key.time != time {
+            return;
+        }
+        let ladder = demand.key.levels.ladder;
+        let Some(band) = level
+            .checked_sub(ladder.base)
+            .filter(|band| *band < ladder.count)
+        else {
+            return;
+        };
+        if !self.missing.demanded(level, index as u32) {
+            return;
+        }
+        let grid = BrickGrid::new(pyramid.level(level).extent());
+        let request = BrickRequest::new(time, level, grid.coord(index));
+        self.missing
+            .want(RESTORE_BUCKET, band, level, index as u32, request);
+    }
+
+    pub(crate) fn restale(&mut self) {
+        self.stale = true;
     }
 }
 

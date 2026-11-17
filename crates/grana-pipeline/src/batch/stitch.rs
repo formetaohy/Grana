@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use grana_exec::Cancel;
 use grana_image::Source;
 use grana_protocol::StitchSpec;
 use grana_stitch::Request;
@@ -13,6 +14,7 @@ pub(super) fn place(
     dataset: &mut DatasetEntry,
     spec: &StitchSpec,
     progress: &Progress<'_>,
+    cancel: &Cancel,
 ) -> Result<(), String> {
     let tiles = grana_stitch::tiles(dataset.path()).map_err(|error| error.to_string())?;
     if tiles.len() != spec.tiles() {
@@ -45,7 +47,11 @@ pub(super) fn place(
         channel,
         series: dataset.scene(),
     };
-    grana_stitch::stitch(&request).map_err(|error| error.to_string())?;
+    match grana_stitch::stitch(&request, cancel) {
+        Ok(_) => {}
+        Err(_) if cancel.cancelled() => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    }
     dataset.set_stitched(path);
     Ok(())
 }

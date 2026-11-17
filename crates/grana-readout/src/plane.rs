@@ -1,11 +1,15 @@
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use grana_volume::{VoxelData, VoxelFormat};
 use openreadout_core::{PixelType, Plane};
 
 pub(crate) type Key = (u32, u32, u32, u32);
+
+const SHARDS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct View {
@@ -76,6 +80,70 @@ impl Cache {
     }
 }
 
+pub(crate) struct Shards {
+    shards: Vec<Mutex<Cache>>,
+}
+
+impl Shards {
+    pub(crate) fn new(budget: usize) -> Self {
+        let each = (budget / SHARDS).max(1);
+        Self {
+            shards: (0..SHARDS).map(|_| Mutex::new(Cache::new(each))).collect(),
+        }
+    }
+
+    pub(crate) fn get(&self, key: &Key) -> Option<Arc<Plane>> {
+        self.shard(key)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(key)
+    }
+
+    pub(crate) fn put(&self, key: Key, plane: Arc<Plane>, bytes: usize) {
+        self.shard(&key)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .put(key, plane, bytes);
+    }
+
+    fn shard(&self, key: &Key) -> &Mutex<Cache> {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        &self.shards[(hasher.finish() as usize) % self.shards.len()]
+    }
+}
+
+pub(crate) trait Sample: Send {
+    fn sample(plane: &Plane, at: usize) -> Self;
+}
+
+impl Sample for u8 {
+    fn sample(plane: &Plane, at: usize) -> Self {
+        plane.data[at]
+    }
+}
+
+impl Sample for u16 {
+    fn sample(plane: &Plane, at: usize) -> Self {
+        u16::from_le_bytes([plane.data[at], plane.data[at + 1]])
+    }
+}
+
+impl Sample for f32 {
+    fn sample(plane: &Plane, at: usize) -> Self {
+        if plane.pixel_type == PixelType::Float {
+            f32::from_le_bytes([
+                plane.data[at],
+                plane.data[at + 1],
+                plane.data[at + 2],
+                plane.data[at + 3],
+            ])
+        } else {
+            plane.pixel_type.sample_f64(&plane.data[at..]) as f32
+        }
+    }
+}
+
 pub(crate) fn allocate(format: VoxelFormat, voxels: usize) -> VoxelData {
     match format {
         VoxelFormat::U8 => VoxelData::U8(vec![0; voxels]),
@@ -84,59 +152,28 @@ pub(crate) fn allocate(format: VoxelFormat, voxels: usize) -> VoxelData {
     }
 }
 
-pub(crate) fn copy(
+pub(crate) fn rows<T: Sample>(
     plane: &Plane,
     sample: usize,
     x: &Range<u32>,
     y: &Range<u32>,
-    offset: usize,
-    target: &mut VoxelData,
+    target: &mut [T],
 ) {
     let width = (x.end - x.start) as usize;
+    let height = (y.end - y.start) as usize;
+    assert_eq!(
+        target.len(),
+        width * height,
+        "a plane rectangle fills exactly the requested voxels"
+    );
     let samples = plane.samples_per_pixel as usize;
     let bytes = plane.pixel_type.bytes_per_sample();
     let row_bytes = plane.row_bytes();
-    match target {
-        VoxelData::U8(values) => {
-            for (row, line) in y.clone().enumerate() {
-                let start =
-                    row_bytes * line as usize + (x.start as usize * samples + sample) * bytes;
-                let slot = offset + row * width;
-                for (column, value) in values[slot..slot + width].iter_mut().enumerate() {
-                    *value = plane.data[start + column * samples * bytes];
-                }
-            }
-        }
-        VoxelData::U16(values) => {
-            for (row, line) in y.clone().enumerate() {
-                let start =
-                    row_bytes * line as usize + (x.start as usize * samples + sample) * bytes;
-                let slot = offset + row * width;
-                for (column, value) in values[slot..slot + width].iter_mut().enumerate() {
-                    let at = start + column * samples * bytes;
-                    *value = u16::from_le_bytes([plane.data[at], plane.data[at + 1]]);
-                }
-            }
-        }
-        VoxelData::F32(values) => {
-            for (row, line) in y.clone().enumerate() {
-                let start =
-                    row_bytes * line as usize + (x.start as usize * samples + sample) * bytes;
-                let slot = offset + row * width;
-                for (column, value) in values[slot..slot + width].iter_mut().enumerate() {
-                    let at = start + column * samples * bytes;
-                    *value = if plane.pixel_type == PixelType::Float {
-                        f32::from_le_bytes([
-                            plane.data[at],
-                            plane.data[at + 1],
-                            plane.data[at + 2],
-                            plane.data[at + 3],
-                        ])
-                    } else {
-                        plane.pixel_type.sample_f64(&plane.data[at..]) as f32
-                    };
-                }
-            }
+    for (row, line) in y.clone().enumerate() {
+        let start = row_bytes * line as usize + (x.start as usize * samples + sample) * bytes;
+        let slot = row * width;
+        for (column, value) in target[slot..slot + width].iter_mut().enumerate() {
+            *value = T::sample(plane, start + column * samples * bytes);
         }
     }
 }

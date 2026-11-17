@@ -21,7 +21,7 @@ impl<T: Send + 'static> Task<T> {
             let mut sink = |event: T| {
                 sender.send_until(event, || cancel.cancelled());
             };
-            work(cancel.flag(), &mut sink);
+            work(cancel, &mut sink);
         });
         Self { events, job }
     }

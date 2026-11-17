@@ -1,0 +1,385 @@
+use bytemuck::cast_slice;
+use grana_volume::{
+    BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, ChannelSet, Damage, PADDED_SIDE, Pack,
+    PackedBrick, UNIT_MAXIMUM,
+};
+
+use crate::atlas::ResidentBrick;
+use crate::brick::BrickRecord;
+use crate::occupancy::{CELL_WORDS, Occupancy};
+
+use super::*;
+
+const APRON: u32 = 1;
+
+pub(super) struct Resources {
+    pub(super) pyramid: Pyramid,
+    pub(super) atlas: Atlas,
+    pub(super) arena: BrickArena,
+    pub(super) bricks: Vec<Option<BrickTable>>,
+    pub(super) occupancy: Occupancy,
+    pub(super) occupancy_group: BindGroup,
+    pub(super) bake: Bake,
+    pub(super) baked: BakeQueue,
+    pub(super) upload: crate::upload::Upload,
+    pub(super) level_group: BindGroup,
+    pub(super) planner: Planner,
+    pub(super) shadow: Shadow,
+    pub(super) scene: crate::table::SceneTable,
+    pub(super) channels: usize,
+    pub(super) slot_bytes: u64,
+    pub(super) summary: Option<signature::SceneSummary>,
+}
+
+impl Resources {
+    pub(super) fn new(
+        device: &Device,
+        layouts: &Layouts,
+        pipelines: &Pipelines,
+        sampler: &Sampler,
+        dummy: &TextureView,
+        budget: u64,
+        pyramid: &Pyramid,
+    ) -> Self {
+        let channels = pyramid.channel_count();
+        assert!(
+            (1..=CHANNEL_LIMIT).contains(&channels),
+            "a dataset holds one to {CHANNEL_LIMIT} channels"
+        );
+        assert!(
+            !pyramid.levels().is_empty(),
+            "a pyramid holds at least one level"
+        );
+        let holdable = pyramid
+            .levels()
+            .iter()
+            .map(|level| BrickGrid::new(level.extent()).count() as u64)
+            .sum::<u64>();
+        let packed = (0..pack_count(channels))
+            .map(|pack| texels(components(channels, pack)))
+            .sum::<usize>();
+        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * packed as u64;
+        let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
+        let requested = (budget / slot_bytes).max(1).min(holdable);
+        let atlas = Atlas::new(
+            device,
+            crate::atlas::AtlasBinding {
+                layout: &layouts.atlas,
+                source: &layouts.source,
+                dummy,
+                sampler,
+            },
+            channels,
+            requested,
+            device.limits().max_texture_dimension_3d,
+        );
+        let slots = atlas.slots();
+        let occupancy = Occupancy::new(device, slots);
+        let bake = Bake::new(device, layouts, atlas.structure(), slots, pipelines);
+        let limit = (budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
+        let arena = BrickArena::new(device, pyramid, limit)
+            .expect("the record budget holds the coarsest level");
+        let level_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.level.group"),
+            layout: &layouts.level,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: arena.buffer().as_entire_binding(),
+            }],
+        });
+        let occupancy_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.occupancy.group"),
+            layout: &layouts.occupancy,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: occupancy.buffer().as_entire_binding(),
+            }],
+        });
+        let mut planner = Planner::new(device, layouts, slots, pipelines);
+        planner.bind_arena(device, layouts, &arena);
+        let shadow = Shadow::new(device, layouts, pipelines);
+        let scene = crate::table::SceneTable::new(device, layouts, channels);
+        Self {
+            pyramid: pyramid.clone(),
+            atlas,
+            arena,
+            bricks: (0..pyramid.level_count()).map(|_| None).collect(),
+            occupancy,
+            occupancy_group,
+            bake,
+            baked: BakeQueue::new(),
+            upload: crate::upload::Upload::new(),
+            level_group,
+            planner,
+            shadow,
+            scene,
+            channels,
+            slot_bytes,
+            summary: None,
+        }
+    }
+
+    pub(super) fn slots(&self) -> usize {
+        self.atlas.slots()
+    }
+
+    pub(super) fn first_level(&self) -> usize {
+        self.arena.first()
+    }
+
+    pub(super) fn invalidate(&mut self) {
+        self.upload.discard();
+        self.atlas.reset();
+        self.baked.forget();
+        self.summary = None;
+    }
+
+    pub(super) fn scopes(&self, damages: &[Damage]) -> Vec<(Region, ChannelSet)> {
+        damages
+            .iter()
+            .filter_map(|damage| {
+                let channels = self.scope(damage.channels());
+                (!channels.is_empty()).then(|| (damage.region(), channels))
+            })
+            .collect()
+    }
+
+    fn scope(&self, channels: ChannelSet) -> ChannelSet {
+        channels
+            .iter()
+            .filter(|channel| *channel < self.channels)
+            .fold(ChannelSet::NONE, |scope, channel| {
+                let first = channel / PACK * PACK;
+                (first..first + PACK)
+                    .filter(|member| *member < self.channels)
+                    .fold(scope, ChannelSet::with)
+            })
+    }
+
+    pub(super) fn damage(
+        &mut self,
+        scopes: &[(Region, ChannelSet)],
+        residence: &mut Residence,
+        time: u32,
+    ) {
+        residence.clear_prefetch();
+        let Self {
+            pyramid,
+            arena,
+            atlas,
+            bricks,
+            upload,
+            ..
+        } = self;
+        let refreshes = residence.refreshes();
+        let mut released = Vec::new();
+        let mut resident = Vec::new();
+        let mut dropped = Vec::new();
+        for brick in atlas.evict_other_frames(time) {
+            if let Some(table) = bricks[brick.level].as_mut() {
+                table.drop_record(arena, brick.index, brick.time);
+            }
+        }
+        for (region, channels) in scopes {
+            for level in arena.first()..pyramid.level_count() {
+                let source = pyramid.level(level);
+                let Some(ranges) = region.voxel_range(source) else {
+                    continue;
+                };
+                let extent = source.extent();
+                let limits = [extent.x(), extent.y(), extent.z()];
+                let ranges = [0, 1, 2].map(|axis| {
+                    ranges[axis].start.saturating_sub(APRON)
+                        ..(ranges[axis].end + APRON).min(limits[axis])
+                });
+                let grid = BrickGrid::new(extent);
+                let (first, last) = grid.cover(&ranges);
+                for z in first[2]..=last[2] {
+                    for y in first[1]..=last[1] {
+                        for x in first[0]..=last[0] {
+                            let coord = BrickCoord::new(x, y, z);
+                            let index = grid.index(coord);
+                            atlas.affect(level, index, &mut resident, &mut dropped);
+                            for brick in &resident {
+                                refreshes
+                                    .insert(BrickRequest::of(brick.time, level, coord, *channels));
+                            }
+                            for time in &dropped {
+                                released.push((*time, level, index));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (brick_time, level, index) in released {
+            if let Some(table) = bricks[level].as_mut() {
+                table.drop_record(arena, index, brick_time);
+            }
+        }
+        for table in bricks.iter_mut().flatten() {
+            table.flush(upload, arena);
+        }
+        residence.restale();
+    }
+
+    pub(super) fn upload(
+        &mut self,
+        bricks: &[(BrickRequest, PackedBrick)],
+        residence: &mut Residence,
+        time: u32,
+    ) {
+        let Self {
+            bricks: tables,
+            atlas,
+            arena,
+            pyramid,
+            channels,
+            upload,
+            occupancy,
+            ..
+        } = self;
+        let content = residence.content();
+        let pin = residence.pin();
+        let mut generation = residence.generation();
+        let mut supplied = Vec::new();
+        let mut released = Vec::new();
+        let total = *channels;
+        let mut values = [0.0f32; CELL_WORDS];
+        {
+            let (prefetched, refreshes) = residence.streams();
+            for (request, packed) in bricks {
+                let BrickRequest {
+                    time: held,
+                    level,
+                    coord,
+                    channels: scope,
+                } = *request;
+                if level >= pyramid.level_count()
+                    || level < arena.first()
+                    || held >= pyramid.frame_count()
+                    || packed.channels() != total
+                {
+                    continue;
+                }
+                let extent = pyramid.level(level).extent();
+                if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
+                    || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
+                    || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
+                {
+                    continue;
+                }
+                let grid = BrickGrid::new(extent);
+                let index = grid.index(coord);
+                if let Some(slot) = atlas.slot(held, level, index) {
+                    let refresh = refreshes.remove(request);
+                    if refresh || !scope.covers(total) {
+                        for (pack, block) in packed.packs() {
+                            push_texels(upload, atlas, pack, slot, block);
+                            occupy(&mut values, occupancy, slot, pack, block);
+                        }
+                        occupancy.flush(upload, slot);
+                        atlas.written(slot);
+                        if held == time {
+                            generation += 1;
+                        }
+                    }
+                    continue;
+                }
+                if !scope.covers(total) || atlas.is_hollow(held, level, index) {
+                    continue;
+                }
+                let maximum = packed
+                    .packs()
+                    .map(|(_, block)| block.maximum())
+                    .fold(0.0, f32::max);
+                let current = held == time;
+                let publish = current
+                    && tables[level]
+                        .as_ref()
+                        .is_some_and(|table| table.time() == Some(held));
+                if maximum <= 0.0 {
+                    atlas.assign_hollow(held, level, index);
+                    if publish && let Some(table) = tables[level].as_mut() {
+                        table.set_record(arena, index, BrickRecord::hollow(held, content));
+                    }
+                    if current {
+                        generation += 1;
+                    }
+                    supplied.push((held, level, index));
+                    continue;
+                }
+                let demand = !prefetched.contains(request);
+                let Some((slot, evicted)) = atlas.allocate(pin, time, held, demand) else {
+                    continue;
+                };
+                if let Some(brick) = evicted {
+                    if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut) {
+                        other.drop_record(arena, brick.index, brick.time);
+                    }
+                    released.push((brick.time, brick.level, brick.index));
+                }
+                occupancy.reset(slot);
+                for (pack, block) in packed.packs() {
+                    push_texels(upload, atlas, pack, slot, block);
+                    occupy(&mut values, occupancy, slot, pack, block);
+                }
+                occupancy.flush(upload, slot);
+                atlas.assign(
+                    slot,
+                    ResidentBrick {
+                        time: held,
+                        level,
+                        index,
+                    },
+                    pin,
+                    demand,
+                );
+                if publish && let Some(table) = tables[level].as_mut() {
+                    table.set_record(arena, index, BrickRecord::new(slot + 1, held, content));
+                }
+                if current {
+                    generation += 1;
+                }
+                supplied.push((held, level, index));
+                refreshes.remove(request);
+            }
+        }
+        residence.set_generation(generation);
+        for (held, level, index) in supplied {
+            residence.supply(held, level, index);
+        }
+        for (held, level, index) in released {
+            residence.release(pyramid, held, level, index);
+        }
+        for table in tables.iter_mut().flatten() {
+            table.flush(upload, arena);
+        }
+    }
+}
+
+fn occupy(values: &mut [f32], occupancy: &mut Occupancy, slot: u32, pack: usize, block: &Pack) {
+    values[0] = block.maximum() / UNIT_MAXIMUM;
+    for (value, cell) in values[1..].iter_mut().zip(block.cells()) {
+        *value = cell / UNIT_MAXIMUM;
+    }
+    occupancy.stage(slot, pack, values);
+}
+
+fn push_texels(
+    upload: &mut crate::upload::Upload,
+    atlas: &Atlas,
+    pack: usize,
+    slot: u32,
+    block: &grana_volume::Pack,
+) {
+    let origin = atlas.origin(slot);
+    upload.texture(
+        atlas.texture(pack),
+        [origin.x, origin.y, origin.z],
+        [PADDED_SIDE, PADDED_SIDE, PADDED_SIDE],
+        block.row_pitch(),
+        PADDED_SIDE,
+        cast_slice(block.rows()),
+    );
+}

@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
 use grana_archive::{Channel as WriteChannel, ImageSpec};
+use grana_exec::Cancel;
 use grana_image::{Image, Source};
 use grana_volume::{Extent, Intensity, Level, Spacing};
 
 use crate::Error;
 use crate::mosaic::{self, Edge, Offset, Plane, Side};
+
+const CANCELLED: &str = "the stitch was cancelled";
 
 const REGISTRATION_SIDE: u32 = 1024;
 const FEATHER: f32 = 32.0;
@@ -96,21 +99,28 @@ pub fn series_count(tiles: &[Source]) -> Result<usize, Error> {
     Ok(count.expect("a mosaic holds a tile"))
 }
 
-pub fn stitch(request: &Request) -> Result<Summary, Error> {
-    let mosaic = Mosaic::new(request)?;
+pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
+    if cancel.cancelled() {
+        return Err(Error::new(CANCELLED));
+    }
+    let mosaic = Mosaic::new(request, cancel)?;
     let name = request.output.file_stem().map_or_else(
         || "stitched".to_string(),
         |stem| stem.to_string_lossy().into_owned(),
     );
     let levels = mosaic.levels();
     let channels = mosaic.channels();
-    let mut fill =
-        |level: usize,
-         time: u32,
-         channel: usize,
-         origin: [u32; 3],
-         length: [u32; 3],
-         out: &mut [f32]| { mosaic.fill(level, time, channel, origin, length, out) };
+    let mut fill = |level: usize,
+                    time: u32,
+                    channel: usize,
+                    origin: [u32; 3],
+                    length: [u32; 3],
+                    out: &mut [f32]| {
+        if cancel.cancelled() {
+            return Err(CANCELLED.to_string());
+        }
+        mosaic.fill(level, time, channel, origin, length, out)
+    };
     let mut progress = |_: usize, _: usize| {};
     let mut image = ImageSpec {
         name: &name,
@@ -150,7 +160,7 @@ struct Mosaic {
 }
 
 impl Mosaic {
-    fn new(request: &Request) -> Result<Self, Error> {
+    fn new(request: &Request, cancel: &Cancel) -> Result<Self, Error> {
         if request.rows == 0 || request.columns == 0 {
             return Err(Error::new(
                 "a tile grid holds at least one row and one column",
@@ -247,6 +257,9 @@ impl Mosaic {
         let mut solved = Vec::with_capacity(frames as usize);
         let mut failure = None;
         for time in 0..frames {
+            if cancel.cancelled() {
+                return Err(Error::new(CANCELLED));
+            }
             match frame_positions(&images, request, time, registration, scale) {
                 Ok(positions) => solved.push(Some(positions)),
                 Err(error) => {

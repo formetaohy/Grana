@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,8 +19,12 @@ impl Cancel {
     pub fn cancelled(&self) -> bool {
         self.flag.load(Ordering::Relaxed)
     }
+}
 
-    pub fn flag(&self) -> &AtomicBool {
+impl Deref for Cancel {
+    type Target = AtomicBool;
+
+    fn deref(&self) -> &AtomicBool {
         &self.flag
     }
 }

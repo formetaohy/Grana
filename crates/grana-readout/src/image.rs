@@ -1,19 +1,20 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
     VoxelData, VoxelFormat, pad_brick,
 };
 use openreadout_core::region::{self, ResolutionLevel};
-use openreadout_core::{Dataset, ImageInfo, PixelType, Plane, PlaneIndex};
+use openreadout_core::{ImageInfo, PixelType, Plane, PlaneIndex};
 
 use crate::error::Error;
 use crate::family::Family;
 use crate::open;
 use crate::plane::{self, View};
 use crate::probe;
+use crate::reader::{self, Readers};
 use crate::scene::{self, Scene};
 
 const CACHE_BYTES: usize = 256 << 20;
@@ -45,8 +46,8 @@ pub struct Image {
     samples: u32,
     views: Vec<View>,
     pyramid: Pyramid,
-    dataset: Mutex<Box<dyn Dataset>>,
-    cache: Mutex<plane::Cache>,
+    readers: Readers,
+    cache: plane::Shards,
 }
 
 impl Image {
@@ -72,8 +73,8 @@ impl Image {
         let frames = scene.frames();
         let interval = interval(image);
         let mut dataset = document.dataset;
-        let mut cache = plane::Cache::new(CACHE_BYTES);
-        let probes = probe::intensities(path, &mut *dataset, image, &views, &mut cache)?;
+        let mut probe_cache = plane::Cache::new(CACHE_BYTES);
+        let probes = probe::intensities(path, &mut *dataset, image, &views, &mut probe_cache)?;
         let channels = views
             .iter()
             .enumerate()
@@ -95,8 +96,8 @@ impl Image {
             samples,
             views,
             pyramid,
-            dataset: Mutex::new(dataset),
-            cache: Mutex::new(cache),
+            readers: Readers::new(path.to_path_buf(), dataset, reader::limit()),
+            cache: plane::Shards::new(CACHE_BYTES),
         })
     }
 
@@ -135,18 +136,70 @@ impl Image {
         let view = *self.views.get(channel).ok_or_else(|| {
             Error::region(&self.path, "the requested channel lies outside the image")
         })?;
-        self.clamp(&x, &y, &z, extent)?;
-        let width = (x.end - x.start) as usize;
-        let height = (y.end - y.start) as usize;
-        let depth = (z.end - z.start) as usize;
+        let ranges = [x, y, z];
+        self.clamp(&ranges, extent)?;
+        let width = (ranges[0].end - ranges[0].start) as usize;
+        let height = (ranges[1].end - ranges[1].start) as usize;
+        let depth = (ranges[2].end - ranges[2].start) as usize;
         let mut data = plane::allocate(view.format, width * height * depth);
-        let slice = width * height;
-        for index in 0..depth {
-            let position = z.start + index as u32;
-            let plane = self.plane(time, level, view, position)?;
-            plane::copy(&plane, view.sample, &x, &y, index * slice, &mut data);
+        match &mut data {
+            VoxelData::U8(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::U16(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::F32(values) => self.read_planes(time, level, view, &ranges, values)?,
         }
         Ok(data)
+    }
+
+    fn read_planes<T: plane::Sample>(
+        &self,
+        time: u32,
+        level: usize,
+        view: View,
+        ranges: &[Range<u32>; 3],
+        values: &mut [T],
+    ) -> Result<(), Error> {
+        let x = &ranges[0];
+        let y = &ranges[1];
+        let z = &ranges[2];
+        let slice = (x.end - x.start) as usize * (y.end - y.start) as usize;
+        let depth = (z.end - z.start) as usize;
+        assert_eq!(
+            values.len(),
+            slice * depth,
+            "a plane block covers exactly the requested region"
+        );
+        let threads = depth.min(self.readers.limit()).max(1);
+        let read = |start: u32, block: &mut [T]| -> Result<(), Error> {
+            for (index, target) in block.chunks_mut(slice).enumerate() {
+                let plane = self.plane(time, level, view, start + index as u32)?;
+                plane::rows(&plane, view.sample, x, y, target);
+            }
+            Ok(())
+        };
+        if threads == 1 {
+            return read(z.start, values);
+        }
+        let stride = depth.div_ceil(threads) * slice;
+        let outcomes: Vec<Result<(), Error>> = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(threads);
+            let mut start = z.start;
+            for block in values.chunks_mut(stride) {
+                let planes = block.len() / slice;
+                handles.push(scope.spawn(move || read(start, block)));
+                start += planes as u32;
+            }
+            handles
+                .into_iter()
+                .map(|handle| match handle.join() {
+                    Ok(outcome) => outcome,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                })
+                .collect()
+        });
+        for outcome in outcomes {
+            outcome?;
+        }
+        Ok(())
     }
 
     pub fn read_brick(
@@ -208,13 +261,8 @@ impl Image {
             })
     }
 
-    fn clamp(
-        &self,
-        x: &Range<u32>,
-        y: &Range<u32>,
-        z: &Range<u32>,
-        extent: Extent,
-    ) -> Result<(), Error> {
+    fn clamp(&self, ranges: &[Range<u32>; 3], extent: Extent) -> Result<(), Error> {
+        let [x, y, z] = ranges;
         if x.end <= x.start || y.end <= y.start || z.end <= z.start {
             return Err(Error::region(&self.path, "a requested region is empty"));
         }
@@ -234,20 +282,11 @@ impl Image {
             view.channel,
             z,
         );
-        let cached = self
-            .cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&key);
-        if let Some(plane) = cached {
+        if let Some(plane) = self.cache.get(&key) {
             return Ok(plane);
         }
         let extent = self.extent(level)?;
-        let plane = {
-            let mut dataset = self
-                .dataset
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+        let plane = self.readers.with(|dataset| {
             dataset
                 .read_plane_level(
                     self.index,
@@ -258,8 +297,8 @@ impl Image {
                     },
                     key.0,
                 )
-                .map_err(|error| Error::read(&self.path, error.to_string()))?
-        };
+                .map_err(|error| Error::read(&self.path, error.to_string()))
+        })?;
         if plane.pixel_type != self.pixel || plane.samples_per_pixel != self.samples {
             return Err(Error::read(
                 &self.path,
@@ -276,10 +315,7 @@ impl Image {
             return Err(Error::read(&self.path, "a plane holds an unexpected size"));
         }
         let plane = Arc::new(plane);
-        self.cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .put(key, Arc::clone(&plane), plane.data.len());
+        self.cache.put(key, Arc::clone(&plane), plane.data.len());
         Ok(plane)
     }
 }

@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use grana_exec::Cancel;
+
 const WAIT: Duration = Duration::from_millis(25);
 
 pub(super) struct Gate {
@@ -33,13 +35,13 @@ impl Gate {
         self.paused.load(Ordering::Relaxed)
     }
 
-    pub(super) fn hold(&self, cancel: &AtomicBool) -> bool {
+    pub(super) fn hold(&self, cancel: &Cancel) -> bool {
         if !self.paused() {
-            return !cancel.load(Ordering::Relaxed);
+            return !cancel.cancelled();
         }
         let mut guard = self.lock.lock().unwrap_or_else(|error| error.into_inner());
         while self.paused() {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.cancelled() {
                 return false;
             }
             guard = self
@@ -48,6 +50,6 @@ impl Gate {
                 .unwrap_or_else(|error| error.into_inner())
                 .0;
         }
-        !cancel.load(Ordering::Relaxed)
+        !cancel.cancelled()
     }
 }

@@ -11,10 +11,10 @@ mod stitch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use grana_exec::{Pipe, Poll, Sender};
+use grana_exec::{Cancel, Pipe, Poll, Sender};
 use grana_protocol::Protocol;
 use thiserror::Error;
 
@@ -118,13 +118,13 @@ pub enum DiscoverError {
 
 pub struct Batch {
     events: Pipe<Event>,
-    cancel: Arc<AtomicBool>,
+    cancel: Cancel,
     gate: Arc<Gate>,
 }
 
 #[derive(Clone)]
 pub struct Control {
-    cancel: Arc<AtomicBool>,
+    cancel: Cancel,
     gate: Arc<Gate>,
 }
 
@@ -142,7 +142,7 @@ impl Control {
     }
 
     pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.trigger();
         self.gate.resume();
     }
 }
@@ -150,9 +150,9 @@ impl Control {
 impl Batch {
     pub fn start(plan: Plan) -> Self {
         let (events, pipe) = Pipe::new(CAPACITY);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancel::new();
         let gate = Gate::new();
-        let token = Arc::clone(&cancel);
+        let token = cancel.clone();
         let pause = Arc::clone(&gate);
         std::thread::Builder::new()
             .name("grana-batch".to_string())
@@ -167,7 +167,7 @@ impl Batch {
 
     pub fn control(&self) -> Control {
         Control {
-            cancel: Arc::clone(&self.cancel),
+            cancel: self.cancel.clone(),
             gate: Arc::clone(&self.gate),
         }
     }
@@ -187,7 +187,7 @@ impl Batch {
 
 impl Drop for Batch {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.trigger();
         self.gate.resume();
     }
 }
@@ -203,14 +203,14 @@ struct Task<'a> {
     corrected: bool,
     capture: Option<&'a dyn Capture>,
     events: &'a Sender<Event>,
-    cancel: &'a AtomicBool,
+    cancel: &'a Cancel,
     gate: &'a Gate,
 }
 
 struct Progress<'a> {
     index: usize,
     events: &'a Sender<Event>,
-    cancel: &'a AtomicBool,
+    cancel: &'a Cancel,
     gate: &'a Gate,
 }
 
@@ -220,7 +220,7 @@ impl Progress<'_> {
     }
 }
 
-fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc<Gate>) {
+fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
     let mut plan = plan;
     let corrections = match manifest::corrections(&plan) {
         Ok(corrections) => corrections,
@@ -240,7 +240,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         let _ = events.send(Event::Done { cancelled: false });
         return;
     }
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.cancelled() {
         let _ = events.send(Event::Done { cancelled: true });
         return;
     }
@@ -261,7 +261,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             let events = events.clone();
-            let cancel = Arc::clone(&cancel);
+            let cancel = cancel.clone();
             let gate = Arc::clone(&gate);
             let next = &next;
             let rows = &rows;
@@ -297,7 +297,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             });
         }
     });
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.cancelled() {
         let mut rows = lock(&rows);
         for row in rows.iter_mut() {
             if row.is_none() {
@@ -436,14 +436,14 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     let _ = events.send(Event::Comparison(report));
     drop(rows);
     let _ = events.send(Event::Done {
-        cancelled: cancel.load(Ordering::Relaxed),
+        cancelled: cancel.cancelled(),
     });
 }
 
 fn restitch(
     plan: &mut Plan,
     events: &Sender<Event>,
-    cancel: &AtomicBool,
+    cancel: &Cancel,
     gate: &Gate,
 ) -> Result<(), String> {
     let Some(spec) = plan.protocol.stitch().cloned() else {
@@ -460,7 +460,7 @@ fn restitch(
             cancel,
             gate,
         };
-        stitch::place(&output, dataset, &spec, &progress)?;
+        stitch::place(&output, dataset, &spec, &progress, cancel)?;
     }
     Ok(())
 }
@@ -556,7 +556,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
             );
         }
         Err(detail) => {
-            if task.cancel.load(Ordering::Relaxed) {
+            if task.cancel.cancelled() {
                 store(
                     rows,
                     index,

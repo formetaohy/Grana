@@ -7,6 +7,7 @@ mod number;
 mod open;
 mod plane;
 mod probe;
+mod reader;
 mod scene;
 
 pub use error::Error;

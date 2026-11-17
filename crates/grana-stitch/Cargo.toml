@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 grana-archive = { workspace = true }
+grana-exec = { workspace = true }
 grana-warp = { workspace = true }
 grana-image = { workspace = true }
 grana-volume = { workspace = true }
