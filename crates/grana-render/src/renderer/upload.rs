@@ -1,3 +1,4 @@
+use bytemuck::cast_slice;
 use grana_volume::{
     BRICK_APRON, BRICK_SIDE, BrickData, BrickGrid, BrickRequest, CELL_AXIS, CELL_COUNT, CELL_SIDE,
     PADDED_SIDE, Pyramid, UNIT_MAXIMUM,
@@ -5,7 +6,7 @@ use grana_volume::{
 use rayon::prelude::*;
 use wgpu::Queue;
 
-use crate::atlas::{PACK, PACK_LIMIT, ResidentBrick, pack_components, pack_texels};
+use crate::atlas::{PACK, PACK_LIMIT, ResidentBrick, pack_components, pack_texels, row_pitch};
 use crate::brick::BrickRecord;
 use crate::occupancy::{CELL_WORDS, Occupancy};
 
@@ -17,12 +18,10 @@ const APRON: usize = BRICK_APRON as usize;
 
 const CELL: usize = CELL_SIDE as usize;
 
-const SLICE: usize = PADDED * PADDED;
-
 const INNER: std::ops::Range<usize> = APRON..APRON + BRICK_SIDE as usize;
 
 pub(super) struct UploadScratch {
-    units: Vec<u16>,
+    arena: Vec<u16>,
     summaries: Vec<f32>,
     values: Vec<f32>,
 }
@@ -30,9 +29,41 @@ pub(super) struct UploadScratch {
 impl UploadScratch {
     pub fn new() -> Self {
         Self {
-            units: Vec::new(),
+            arena: Vec::new(),
             summaries: vec![0.0; PACK_LIMIT * CELL_COUNT],
             values: vec![0.0; CELL_WORDS],
+        }
+    }
+}
+
+struct Layout {
+    first: [usize; PACK_LIMIT],
+    row: [u32; PACK_LIMIT],
+    span: [usize; PACK_LIMIT],
+    count: usize,
+    elements: usize,
+}
+
+impl Layout {
+    fn of(channels: usize) -> Self {
+        let count = channels.div_ceil(PACK);
+        let mut first = [0; PACK_LIMIT];
+        let mut row = [0; PACK_LIMIT];
+        let mut span = [0; PACK_LIMIT];
+        let mut elements = 0;
+        for pack in 0..count {
+            let pitch = row_pitch(pack_components(channels, pack));
+            first[pack] = elements;
+            row[pack] = pitch;
+            span[pack] = pitch as usize / size_of::<u16>() * PADDED * PADDED;
+            elements += span[pack];
+        }
+        Self {
+            first,
+            row,
+            span,
+            count,
+            elements,
         }
     }
 }
@@ -46,13 +77,10 @@ impl Renderer {
             pyramid,
             channels,
             time: now,
-            content,
-            generation,
-            pin,
-            prefetched,
+            residence,
             staging,
+            scratch,
             occupancy,
-            refreshes,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(arena)) =
@@ -60,16 +88,17 @@ impl Renderer {
         else {
             return;
         };
+        let content = residence.content();
+        let pin = residence.pin();
+        let mut generation = residence.generation();
+        let (prefetched, refreshes) = residence.streams();
         let total = *channels;
-        let pack_count = total.div_ceil(PACK);
-        let texels = (0..pack_count)
-            .map(|pack| pack_texels(pack_components(total, pack)))
-            .sum::<usize>();
+        let layout = Layout::of(total);
         let UploadScratch {
-            units,
+            arena: units,
             summaries,
             values,
-        } = staging;
+        } = scratch;
         for (request, data) in bricks {
             let BrickRequest {
                 time,
@@ -103,15 +132,15 @@ impl Renderer {
             if let Some(slot) = atlas.slot(time, level, index) {
                 let refresh = refreshes.remove(request);
                 if refresh || !scope.covers(total) {
-                    for pack in pack_range(pack_count, packs) {
-                        let span = pack_texels(pack_components(total, pack)) * voxels;
+                    for pack in pack_range(layout.count, packs) {
+                        let span = layout.span[pack];
                         if units.len() < span {
                             units.resize(span, 0);
                         }
                         let summary = &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT];
                         let maximum =
                             stage(&mut units[..span], summary, pyramid, total, data, pack);
-                        atlas.write(queue, pack, slot, &units[..span]);
+                        staging.push(pack, slot, layout.row[pack], cast_slice(&units[..span]));
                         occupy(values, occupancy.as_mut(), slot, pack, maximum, summary);
                     }
                     if let Some(occupancy) = occupancy.as_mut() {
@@ -119,7 +148,7 @@ impl Renderer {
                     }
                     atlas.written(slot);
                     if time == *now {
-                        *generation += 1;
+                        generation += 1;
                     }
                 }
                 continue;
@@ -127,25 +156,24 @@ impl Renderer {
             if !scope.covers(total) || atlas.is_hollow(time, level, index) {
                 continue;
             }
-            let span = voxels * texels;
-            if units.len() < span {
-                units.resize(span, 0);
+            if units.len() < layout.elements {
+                units.resize(layout.elements, 0);
             }
             let mut maxima = [0.0f32; PACK_LIMIT];
-            let mut base = 0;
-            for pack in 0..pack_count {
-                let step = voxels * pack_texels(pack_components(total, pack));
+            for pack in 0..layout.count {
+                let first = layout.first[pack];
+                let span = layout.span[pack];
+                let summary = &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT];
                 maxima[pack] = stage(
-                    &mut units[base..base + step],
-                    &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
+                    &mut units[first..first + span],
+                    summary,
                     pyramid,
                     total,
                     data,
                     pack,
                 );
-                base += step;
             }
-            let maximum = maxima[..pack_count].iter().copied().fold(0.0, f32::max);
+            let maximum = maxima[..layout.count].iter().copied().fold(0.0, f32::max);
             let current = time == *now;
             let publish = current
                 && tables[level]
@@ -154,15 +182,15 @@ impl Renderer {
             if maximum <= 0.0 {
                 atlas.assign_hollow(time, level, index);
                 if publish && let Some(table) = tables[level].as_mut() {
-                    table.set_record(arena, index, BrickRecord::hollow(time, *content));
+                    table.set_record(arena, index, BrickRecord::hollow(time, content));
                 }
                 if current {
-                    *generation += 1;
+                    generation += 1;
                 }
                 continue;
             }
             let demand = !prefetched.contains(request);
-            let Some((slot, evicted)) = atlas.allocate(*pin, *now, time, demand) else {
+            let Some((slot, evicted)) = atlas.allocate(pin, *now, time, demand) else {
                 continue;
             };
             if let Some(brick) = evicted
@@ -173,10 +201,15 @@ impl Renderer {
             if let Some(occupancy) = occupancy.as_mut() {
                 occupancy.reset(slot);
             }
-            let mut base = 0;
-            for pack in 0..pack_count {
-                let step = voxels * pack_texels(pack_components(total, pack));
-                atlas.write(queue, pack, slot, &units[base..base + step]);
+            for pack in 0..layout.count {
+                let first = layout.first[pack];
+                let span = layout.span[pack];
+                staging.push(
+                    pack,
+                    slot,
+                    layout.row[pack],
+                    cast_slice(&units[first..first + span]),
+                );
                 occupy(
                     values,
                     occupancy.as_mut(),
@@ -185,20 +218,20 @@ impl Renderer {
                     maxima[pack],
                     &summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT],
                 );
-                base += step;
             }
             if let Some(occupancy) = occupancy.as_mut() {
                 occupancy.flush(queue, slot);
             }
-            atlas.assign(slot, ResidentBrick { time, level, index }, *pin, demand);
+            atlas.assign(slot, ResidentBrick { time, level, index }, pin, demand);
             if publish && let Some(table) = tables[level].as_mut() {
-                table.set_record(arena, index, BrickRecord::new(slot + 1, time, *content));
+                table.set_record(arena, index, BrickRecord::new(slot + 1, time, content));
             }
             if current {
-                *generation += 1;
+                generation += 1;
             }
             refreshes.remove(request);
         }
+        residence.set_generation(generation);
         for table in tables.iter_mut().flatten() {
             table.flush(queue, arena);
         }
@@ -215,6 +248,12 @@ fn stage(
 ) -> f32 {
     let components = pack_components(channels, pack);
     let stride = pack_texels(components);
+    let row = units.len() / (PADDED * PADDED);
+    assert_eq!(
+        units.len(),
+        row * PADDED * PADDED,
+        "a staged brick holds one padded cube of rows"
+    );
     let sources = (0..components)
         .map(|component| {
             data.channels()[pack * PACK + component]
@@ -222,12 +261,12 @@ fn stage(
         })
         .collect::<Vec<_>>();
     let (maximum, cells) = units
-        .par_chunks_mut(SLICE * stride)
+        .par_chunks_mut(row * PADDED)
         .enumerate()
         .map(|(slice, chunk)| {
             let mut cells = [0.0f32; CELL_COUNT];
             let mut maximum = 0.0f32;
-            let range = slice * SLICE..(slice + 1) * SLICE;
+            let range = slice * PADDED * PADDED..(slice + 1) * PADDED * PADDED;
             let plane = INNER
                 .contains(&slice)
                 .then(|| ((slice - APRON) / CELL) * CELL_AXIS * CELL_AXIS);
@@ -247,7 +286,7 @@ fn stage(
                             cells[cell] = fixed;
                         }
                     }
-                    chunk[(y * PADDED + x) * stride + component] = fixed.round() as u16;
+                    chunk[y * row + x * stride + component] = fixed.round() as u16;
                     x += 1;
                     if x == PADDED {
                         x = 0;

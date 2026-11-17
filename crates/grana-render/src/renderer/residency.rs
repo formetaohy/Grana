@@ -7,7 +7,7 @@ pub(super) struct Levels {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(super) struct Residency {
+pub(super) struct ViewKey {
     pub(super) epoch: u64,
     pub(super) data: u64,
     pub(super) prefetch: bool,
@@ -19,12 +19,6 @@ pub(super) struct Residency {
     pub(super) field_of_view: f32,
     pub(super) size: [u32; 2],
     pub(super) levels: Levels,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct Resident {
-    pub(super) objects: u64,
-    pub(super) style: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,7 +34,7 @@ pub(super) struct ViewState<'a> {
     pub(super) levels: Levels,
 }
 
-impl Residency {
+impl ViewKey {
     pub(super) fn of(epoch: u64, data: u64, mode: Mode, time: u32, view: ViewState<'_>) -> Self {
         let ViewState {
             camera,
@@ -77,11 +71,6 @@ impl LevelKey {
             count: levels.ladder.count,
         }
     }
-}
-
-pub(super) struct ResidencyDemand {
-    pub(super) residency: Residency,
-    pub(super) bands: Vec<Demand>,
 }
 
 pub(super) struct TargetCache {

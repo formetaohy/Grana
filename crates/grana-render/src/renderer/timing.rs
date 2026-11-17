@@ -19,6 +19,7 @@ pub(super) struct Begin<'a> {
     pub(super) assured: bool,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Started {
     pub(super) reset: bool,
     pub(super) snapshot: bool,

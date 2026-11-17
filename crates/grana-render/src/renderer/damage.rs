@@ -23,22 +23,22 @@ impl Renderer {
             target.shot = None;
             target.holds = false;
         }
-        self.prefetched.clear();
-        self.prefetch_issued.clear();
         let Self {
             pyramid,
             arena,
             atlas,
             bricks,
-            refreshes,
+            residence,
             time,
             ..
         } = self;
+        residence.clear_prefetch();
         let (Some(pyramid), Some(arena), Some(atlas)) =
             (pyramid.as_ref(), arena.as_ref(), atlas.as_mut())
         else {
             return;
         };
+        let refreshes = residence.refreshes();
         let mut released = Vec::new();
         let mut resident = Vec::new();
         let mut dropped = Vec::new();

@@ -321,3 +321,7 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
     );
     ShadowPlan { space, keys, level }
 }
+
+mod residence;
+
+pub(crate) use residence::{Adapt, Residence};

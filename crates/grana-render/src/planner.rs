@@ -1,7 +1,7 @@
 use bytemuck::{bytes_of, cast_slice};
 use glam::Vec3;
 use grana_gpu::Pipelines;
-use grana_volume::{BRICK_SIDE, BrickGrid, Pyramid, Region};
+use grana_volume::{BrickGrid, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
     CommandEncoder, ComputePass, ComputePipeline, ComputePipelineDescriptor, Device, Queue,
@@ -413,20 +413,6 @@ pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -
     BUCKET_COUNT as f32 / far.max(1.0e-6)
 }
 
-fn brick_bounds(level: grana_volume::Level, low: Vec3, size: Vec3) -> (Vec3, Vec3) {
-    let basis = level.basis();
-    let mut low_world = Vec3::from(level.origin());
-    let mut high_world = low_world;
-    for axis in 0..3 {
-        let column = Vec3::from(basis.column(axis));
-        let first = column * low[axis];
-        let second = column * (low[axis] + size[axis]);
-        low_world += first.min(second);
-        high_world += first.max(second);
-    }
-    (low_world, high_world)
-}
-
 pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
     table.grid.count() as u32
 }
@@ -647,7 +633,7 @@ pub(crate) fn volume_counts(
     let scale = camera.pixels_per_world_at(height);
     let radius = 0.5 * Vec3::from(pyramid.level(base).world_extent()).length();
     let planes = crate::frame::planes(camera.view_projection(aspect, radius));
-    let eye = camera.eye();
+    let frustum = crate::culling::Frustum::new(planes, camera.eye(), region);
     let mut counts = [0usize; BAND];
     for (band, slot) in counts.iter_mut().enumerate().take(count) {
         let level = pyramid.level(base + band);
@@ -661,73 +647,9 @@ pub(crate) fn volume_counts(
         } else {
             f32::INFINITY
         };
-        *slot = band_visible(level, lower, upper, eye, &planes, region);
+        *slot = frustum.count(level, lower, upper);
     }
     counts
-}
-
-fn band_visible(
-    level: grana_volume::Level,
-    lower: f32,
-    upper: f32,
-    eye: Vec3,
-    planes: &[[f32; 4]; 6],
-    region: Region,
-) -> usize {
-    let extent = level.extent();
-    let counts = BrickGrid::new(extent).counts();
-    let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
-    let mut visible = 0;
-    for z in 0..counts[2] {
-        for y in 0..counts[1] {
-            for x in 0..counts[0] {
-                let cell = Vec3::new(x as f32, y as f32, z as f32) * BRICK_SIDE as f32;
-                let size = (dims - cell).min(Vec3::splat(BRICK_SIDE as f32));
-                let (low, high) = brick_bounds(level, cell, size);
-                if outside_frustum(low, high, planes) || outside_region(low, high, region) {
-                    continue;
-                }
-                let (near, far) = reach(low, high, eye);
-                if far >= lower && near < upper {
-                    visible += 1;
-                }
-            }
-        }
-    }
-    visible
-}
-
-fn outside_frustum(low: Vec3, high: Vec3, planes: &[[f32; 4]; 6]) -> bool {
-    planes.iter().any(|plane| {
-        let direction = Vec3::from_array([plane[0], plane[1], plane[2]]);
-        let positive = Vec3::new(
-            if plane[0] >= 0.0 { high.x } else { low.x },
-            if plane[1] >= 0.0 { high.y } else { low.y },
-            if plane[2] >= 0.0 { high.z } else { low.z },
-        );
-        direction.dot(positive) + plane[3] < 0.0
-    })
-}
-
-fn outside_region(low: Vec3, high: Vec3, region: Region) -> bool {
-    if !region.enabled() {
-        return false;
-    }
-    let half = region.half();
-    let middle = 0.5 * (low + high);
-    let extent = 0.5 * (high - low);
-    let offset = middle - region.center();
-    (0..3).any(|axis| {
-        let direction = region.axis(axis);
-        let reach = extent.dot(direction.abs());
-        offset.dot(direction).abs() > half[axis] + reach
-    })
-}
-
-fn reach(low: Vec3, high: Vec3, eye: Vec3) -> (f32, f32) {
-    let near = (eye.clamp(low, high) - eye).length();
-    let far = (eye - low).abs().max((eye - high).abs()).length();
-    (near, far)
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

@@ -1,7 +1,6 @@
 mod allocate;
 mod damage;
 mod draw;
-mod feedback;
 mod plan;
 mod render;
 mod residency;
@@ -11,10 +10,8 @@ mod timing;
 mod upload;
 mod view;
 
-use residency::{
-    FrameTarget, LevelKey, Levels, Mode, Residency, ResidencyDemand, Resident, TargetCache,
-    ViewState,
-};
+use plan::Residence;
+use residency::{FrameTarget, LevelKey, Levels, Mode, TargetCache, ViewKey, ViewState};
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -24,8 +21,7 @@ use std::time::Duration;
 use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_display::Camera;
-use grana_gpu::Pipelines;
-use grana_gpu::Readback;
+use grana_gpu::{Pipelines, Readback};
 use grana_volume::{BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
@@ -48,8 +44,8 @@ use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, VolumeFit, bucket_scale,
-    capacities, decode_plan, fit_measured, fit_volume, volume_dispatch,
+    self, BAND, FitView, Ladder, Limits, Planner, Schedule, VolumeFit, bucket_scale, capacities,
+    fit_measured, fit_volume, volume_dispatch,
 };
 use crate::present::Present;
 use crate::sample;
@@ -64,13 +60,7 @@ use grana_volume::CHANNEL_LIMIT;
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
 
-const FEEDBACK_SLOTS: usize = 4;
-
 const FRAGMENT_BUDGET_DIVISOR: u64 = 2;
-
-const PREFETCH_LIMIT: usize = 1024;
-
-const PREFETCH_SHARE: usize = 4;
 
 const RECORD_SHARE: u64 = 8;
 
@@ -184,7 +174,8 @@ pub struct Renderer {
     occupancy_group: Option<BindGroup>,
     bake: Option<Bake>,
     baked: BakeQueue,
-    staging: upload::UploadScratch,
+    staging: crate::staging::Staging,
+    scratch: upload::UploadScratch,
     arena: Option<BrickArena>,
     level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
@@ -206,31 +197,12 @@ pub struct Renderer {
     pyramid: Option<Pyramid>,
     channels: usize,
     time: u32,
-    volume_level: Option<usize>,
-    volume_measure: Vec<Option<usize>>,
-    volume_rejection: Option<(u64, usize)>,
-    fit_cache: Option<(u64, VolumeFit)>,
     summary: Option<signature::SceneSummary>,
     motion: Option<u64>,
-    level_cap: Option<usize>,
     budget: u64,
     slot_bytes: u64,
-    feedback: Option<Readback>,
-    frames: Vec<Option<Residency>>,
-    view_words: usize,
-    view_bytes: u64,
-    epoch: u64,
-    resident: Option<Resident>,
-    channels_key: Option<u64>,
-    content: u32,
-    generation: u64,
-    pin: u64,
+    residence: Residence,
     prefetch: bool,
-    prefetched: HashSet<BrickRequest>,
-    prefetch_key: Option<u64>,
-    prefetch_issued: Vec<BrickRequest>,
-    refreshes: HashSet<BrickRequest>,
-    prefetch_rate: f32,
     transparent: bool,
     exporting: bool,
     convergence: Option<Convergence>,
@@ -240,9 +212,6 @@ pub struct Renderer {
     sections: Sections,
     sliced: bool,
     overlay: Overlays,
-    settled: Option<Residency>,
-    planned: Option<Residency>,
-    demand: Option<ResidencyDemand>,
     viewport: Option<[u32; 4]>,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
@@ -293,7 +262,8 @@ impl Renderer {
             occupancy_group: None,
             bake: None,
             baked: BakeQueue::new(),
-            staging: upload::UploadScratch::new(),
+            staging: crate::staging::Staging::new(device),
+            scratch: upload::UploadScratch::new(),
             arena: None,
             level_group: None,
             bricks: Vec::new(),
@@ -316,31 +286,12 @@ impl Renderer {
             pyramid: None,
             channels: 0,
             time: 0,
-            volume_level: None,
-            volume_measure: Vec::new(),
-            volume_rejection: None,
-            fit_cache: None,
             summary: None,
             motion: None,
-            level_cap: None,
             budget,
             slot_bytes: 0,
-            feedback: None,
-            frames: vec![None; FEEDBACK_SLOTS],
-            view_words: 0,
-            view_bytes: 0,
-            epoch: 0,
-            resident: None,
-            channels_key: None,
-            content: 0,
-            generation: 0,
-            pin: 0,
+            residence: Residence::new(),
             prefetch: false,
-            prefetched: HashSet::new(),
-            prefetch_key: None,
-            prefetch_issued: Vec::new(),
-            refreshes: HashSet::new(),
-            prefetch_rate: 1.0,
             transparent: false,
             exporting: false,
             convergence: None,
@@ -350,9 +301,6 @@ impl Renderer {
             sections,
             sliced: false,
             overlay,
-            settled: None,
-            planned: None,
-            demand: None,
             viewport: None,
             pick_target: None,
             pick_readback: None,
@@ -375,7 +323,7 @@ impl Renderer {
     }
 
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.residence.generation()
     }
 
     pub fn slots(&self) -> usize {
@@ -435,44 +383,23 @@ impl Renderer {
             "an invalidated dataset keeps the resident layout"
         );
         self.pyramid = Some(pyramid.clone());
-        self.content = self.content.wrapping_add(1);
+        self.staging.discard();
+        self.residence.invalidate();
         if let Some(atlas) = self.atlas.as_mut() {
             atlas.reset();
         }
         self.baked.forget();
-        self.channels_key = None;
-        self.frames.fill(None);
-        self.settled = None;
-        self.planned = None;
-        self.demand = None;
-        self.prefetched.clear();
-        self.prefetch_key = None;
-        self.prefetch_issued.clear();
-        self.refreshes.clear();
-        self.generation = self.generation.wrapping_add(1);
         self.info = FrameInfo::default();
     }
 
     pub fn begin_export(&mut self) {
         self.targets.clear();
-        self.resident = None;
         if let Some(convergence) = self.convergence.as_mut() {
             convergence.forget();
         }
-        self.settled = None;
-        self.demand = None;
+        self.residence.begin_export();
         self.exporting = true;
         self.fade = None;
-        self.level_cap = None;
-        self.volume_level = None;
-        self.volume_rejection = None;
-        self.planned = None;
-        self.prefetched.clear();
-        self.prefetch_key = None;
-        self.prefetch_issued.clear();
-        self.refreshes.clear();
-        self.prefetch_rate = 1.0;
-        self.frames.fill(None);
         self.motion = None;
         self.info = FrameInfo::default();
     }
@@ -486,6 +413,7 @@ impl Renderer {
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
         let channels = pyramid.channel_count();
+        self.staging.discard();
         assert!(
             (1..=CHANNEL_LIMIT).contains(&channels),
             "a dataset holds one to {CHANNEL_LIMIT} channels"
@@ -545,15 +473,7 @@ impl Renderer {
                 resource: occupancy.buffer().as_entire_binding(),
             }],
         });
-        self.view_words = planner::plan_words(slots);
-        self.view_bytes = (self.view_words * size_of::<u32>()) as u64;
-        self.feedback = Some(Readback::new(
-            device,
-            "grana.feedback",
-            (BAND * self.view_words) as u64 * size_of::<u32>() as u64,
-            FEEDBACK_SLOTS,
-        ));
-        self.frames = vec![None; FEEDBACK_SLOTS];
+        self.residence.setup(device, slots, pyramid.level_count());
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
         let mut planner = Planner::new(device, &self.layouts, slots, &self.pipelines);
         planner.bind_arena(device, &self.layouts, &arena);
@@ -576,10 +496,6 @@ impl Renderer {
         self.channels = channels;
         self.slot_bytes = slot_bytes;
         self.time = 0;
-        self.volume_level = None;
-        self.volume_measure = vec![None; pyramid.level_count()];
-        self.volume_rejection = None;
-        self.fit_cache = None;
         self.summary = None;
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.clear();
@@ -593,20 +509,6 @@ impl Renderer {
         }
         self.pick_readback = None;
         self.pick_pending = false;
-        self.epoch += 1;
-        self.resident = None;
-        self.channels_key = None;
-        self.content = 0;
-        self.pin = 0;
-        self.prefetched.clear();
-        self.prefetch_key = None;
-        self.prefetch_issued.clear();
-        self.refreshes.clear();
-        self.prefetch_rate = 1.0;
-        self.generation = 0;
-        self.settled = None;
-        self.planned = None;
-        self.demand = None;
         self.exporting = false;
         self.fade = None;
         self.motion = None;
@@ -643,12 +545,27 @@ impl Renderer {
             if let Some(convergence) = self.convergence.as_mut() {
                 convergence.forget();
             }
-            self.settled = None;
+            self.residence.forget_settled();
         }
-        self.level_cap = Some(frame.level_cap);
+        self.residence.set_cap(frame.level_cap);
         let info = self.render(device, queue, &mut target, frame);
         self.targets.put(target);
         info
+    }
+
+    pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
+        let pyramid = self.pyramid.as_ref()?;
+        let planner = self.planner.as_ref()?;
+        let atlas = self.atlas.as_mut()?;
+        let requests =
+            self.residence
+                .poll(device, pyramid, planner, atlas, self.time, self.prefetch)?;
+        self.info.view = requests.view;
+        Some(requests)
+    }
+
+    pub fn requests_pending(&self) -> bool {
+        self.residence.pending()
     }
 
     pub fn reserve_target(&mut self, device: &Device, size: [u32; 2]) {

@@ -41,6 +41,7 @@ pub(super) struct Draw<'a> {
     pub(super) dummy_normal: &'a TextureView,
     pub(super) dummy_volume: &'a crate::target::Unreached,
     pub(super) object_key: &'a mut Option<u64>,
+    pub(super) ambient: bool,
 }
 
 pub(super) fn encode(draw: Draw<'_>) {
@@ -79,6 +80,7 @@ pub(super) fn encode(draw: Draw<'_>) {
         dummy_normal,
         dummy_volume,
         object_key,
+        ambient,
     } = draw;
     let region = view.region;
     let deferred = surfaces && !slice && target.gbuffer.is_some();
@@ -149,7 +151,7 @@ pub(super) fn encode(draw: Draw<'_>) {
             },
         );
     }
-    if deferred {
+    if deferred && ambient && target.ao.is_some() && target.surface.is_some() {
         let resolution = target.size;
         let merged = if volume_visible {
             Some(target.geometry(device, layouts, dummy_normal, dummy_volume, true))
@@ -161,22 +163,22 @@ pub(super) fn encode(draw: Draw<'_>) {
         } else {
             Some(target.objects(device, layouts))
         };
-        if let (Some(ao), Some(resolved)) = (target.ao.as_ref(), target.surface.as_ref()) {
-            let source = match (&merged, &objects) {
-                (Some(group), _) => crate::surface::Source::Merged(group),
-                (None, Some(group)) => crate::surface::Source::Objects(group),
-                (None, None) => unreachable!("a resolved surface names its source"),
-            };
-            surface.resolve(encoder, resolved, region, source);
-            ao.evaluate(
-                queue,
-                encoder,
-                data,
-                resolution,
-                crate::ao::Ambient::new(AMBIENT_REACH, AMBIENT_STRENGTH, sample),
-                resolved.read(),
-            );
-        }
+        let source = match (&merged, &objects) {
+            (Some(group), _) => crate::surface::Source::Merged(group),
+            (None, Some(group)) => crate::surface::Source::Objects(group),
+            (None, None) => unreachable!("a resolved surface names its source"),
+        };
+        let ao = target.ao.as_ref().expect("the ambient occlusion is ready");
+        let resolved = target.surface.as_ref().expect("the scene surface is ready");
+        surface.resolve(encoder, resolved, region, source);
+        ao.evaluate(
+            queue,
+            encoder,
+            data,
+            resolution,
+            crate::ao::Ambient::new(AMBIENT_REACH, AMBIENT_STRENGTH, sample),
+            resolved.read(),
+        );
     }
     if slice {
         let targets = SliceTargets {

@@ -1,12 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use bytemuck::cast_slice;
 use grana_volume::PADDED_SIDE;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindingResource, Device,
-    Queue, Sampler, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
-    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor, TextureViewDimension,
+    Sampler, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+    TextureView, TextureViewDescriptor, TextureViewDimension,
 };
 
 use grana_volume::CHANNEL_LIMIT;
@@ -35,6 +33,11 @@ pub(crate) fn pack_texels(components: usize) -> usize {
         3 | 4 => 4,
         _ => unreachable!("a channel pack holds one to four channels"),
     }
+}
+
+pub(crate) fn row_pitch(components: usize) -> u32 {
+    let row = PADDED_SIDE * pack_bytes(pack_texels(components)) as u32;
+    row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
 }
 
 fn pack_format(components: usize) -> TextureFormat {
@@ -88,7 +91,6 @@ pub(crate) struct AtlasBinding<'a> {
 
 pub(crate) struct Atlas {
     textures: Vec<Texture>,
-    components: Vec<usize>,
     structure_storage: TextureView,
     source: BindGroup,
     group: BindGroup,
@@ -232,7 +234,6 @@ impl Atlas {
         });
         Self {
             textures,
-            components,
             structure_storage,
             source,
             group,
@@ -579,37 +580,25 @@ impl Atlas {
         self.written(slot);
     }
 
-    pub fn write(&self, queue: &Queue, pack: usize, slot: u32, units: &[u16]) {
-        let texels = pack_texels(self.components[pack]);
-        assert_eq!(
-            units.len() as u64,
-            (PADDED_SIDE as u64).pow(3) * texels as u64,
-            "a packed brick fills one slot"
+    pub fn texture(&self, pack: usize) -> &Texture {
+        assert!(
+            pack < self.textures.len(),
+            "a brick pack names one of the atlas textures"
+        );
+        &self.textures[pack]
+    }
+
+    pub fn origin(&self, slot: u32) -> wgpu::Origin3d {
+        assert!(
+            (slot as usize) < self.slots.len(),
+            "a brick slot lies inside the atlas"
         );
         let origin = slot_origin(slot, self.slot_grid);
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &self.textures[pack],
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin[0],
-                    y: origin[1],
-                    z: origin[2],
-                },
-                aspect: TextureAspect::All,
-            },
-            cast_slice(units),
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(PADDED_SIDE * pack_bytes(texels) as u32),
-                rows_per_image: Some(PADDED_SIDE),
-            },
-            wgpu::Extent3d {
-                width: PADDED_SIDE,
-                height: PADDED_SIDE,
-                depth_or_array_layers: PADDED_SIDE,
-            },
-        );
+        wgpu::Origin3d {
+            x: origin[0],
+            y: origin[1],
+            z: origin[2],
+        }
     }
 }
 
