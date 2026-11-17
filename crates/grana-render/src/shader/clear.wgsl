@@ -1,8 +1,3 @@
-struct Cleared {
-    @location(0) first: vec4<f32>,
-    @location(1) second: vec4<f32>,
-}
-
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     let corners = array<vec2<f32>, 3>(
@@ -16,9 +11,4 @@ fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fs_color() -> @location(0) vec4<f32> {
     return vec4<f32>(0.0);
-}
-
-@fragment
-fn fs_pair() -> Cleared {
-    return Cleared(vec4<f32>(0.0), vec4<f32>(0.0));
 }

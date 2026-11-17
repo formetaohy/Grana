@@ -14,7 +14,6 @@ pub(super) struct Features {
     pub(super) translucent: bool,
     pub(super) volume: bool,
     pub(super) surfaces: bool,
-    pub(super) ambient: bool,
 }
 
 pub(super) struct Groups<'a> {
@@ -41,7 +40,6 @@ pub(super) struct Stage<'a> {
     pub(super) meshes: Option<&'a MeshPasses>,
     pub(super) splats: Option<&'a SplatPasses>,
     pub(super) sections: &'a Sections,
-    pub(super) overlay: &'a mut Overlays,
     pub(super) data: &'a FrameData,
     pub(super) features: Features,
     pub(super) sample: u32,
@@ -70,7 +68,6 @@ pub(super) fn encode(stage: Stage<'_>) {
         meshes,
         splats,
         sections,
-        overlay,
         data,
         features,
         sample,
@@ -134,20 +131,15 @@ pub(super) fn encode(stage: Stage<'_>) {
         dummy_oit,
     });
     finish::encode(finish::Stage {
-        device,
-        queue,
         encoder,
         target,
-        scene,
         table,
         level,
         atlas,
         oit_resolve,
         splats,
         sections,
-        overlay,
         volume_pass,
-        data,
         features,
     });
 }

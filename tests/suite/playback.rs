@@ -1,14 +1,15 @@
 use std::time::{Duration, Instant};
 
 use grana_display::Camera;
-use grana_engine::{Engine, Presentation, SAMPLE_CEILING};
+use grana_engine::{Engine, SETTLE};
+use grana_render::Delivery;
 use grana_session::Session;
 
 use crate::support::gpu;
 
 const PLAYBACK: Duration = Duration::from_millis(90);
 
-fn play(presentation: Presentation, seconds: f64, advancing: bool) -> (u32, usize) {
+fn play(delivery: Delivery, seconds: f64, advancing: bool) -> (u32, usize) {
     let Some(gpu) = gpu() else {
         return (0, 0);
     };
@@ -58,7 +59,7 @@ fn play(presentation: Presentation, seconds: f64, advancing: bool) -> (u32, usiz
             engine.upload(&bricks);
         }
         if advancing
-            && engine.info().samples > 0
+            && engine.info().drawn
             && last_advance.is_none_or(|last| last.elapsed() >= PLAYBACK)
         {
             time = (current + 1) % frames;
@@ -73,8 +74,7 @@ fn play(presentation: Presentation, seconds: f64, advancing: bool) -> (u32, usiz
                     scene: session.scene().expect("a scene"),
                     camera: &camera,
                     size: [320, 320],
-                    presentation,
-                    budget: None,
+                    delivery,
                     level_cap: 99,
                     overlays: &[],
                 },
@@ -88,7 +88,7 @@ fn play(presentation: Presentation, seconds: f64, advancing: bool) -> (u32, usiz
 
 #[test]
 fn playback_advances_through_the_time_series() {
-    let (time, draws) = play(Presentation::Playback, 6.0, true);
+    let (time, draws) = play(Delivery::Awaited, 6.0, true);
     assert!(
         time >= 8,
         "playback advanced {time} frames in six seconds with {draws} draws"
@@ -97,7 +97,7 @@ fn playback_advances_through_the_time_series() {
 
 #[test]
 fn a_still_resolves_the_frame_it_shows() {
-    let (time, draws) = play(Presentation::Converge, 3.0, false);
+    let (time, draws) = play(Delivery::Immediate, 3.0, false);
     assert_eq!(
         time, 0,
         "a still moved away from its frame in {draws} draws"
@@ -134,7 +134,7 @@ fn a_frame_lands_at_the_full_viewport() {
     let mut camera = Camera::new(35.0);
     camera.fit(scene.dataset.world_size(), 1.0);
     let size = [320, 320];
-    let draw = |engine: &mut Engine, session: &mut Session, presentation: Presentation| {
+    let draw = |engine: &mut Engine, session: &mut Session, delivery: Delivery| {
         let current = session.scene().expect("a scene").time();
         if let Some(requests) = engine.poll_requests(gpu.device(), current) {
             session.request(requests.time, &requests.volume, &requests.prefetch);
@@ -151,19 +151,18 @@ fn a_frame_lands_at_the_full_viewport() {
                     scene: session.scene().expect("a scene"),
                     camera: &camera,
                     size,
-                    presentation,
-                    budget: None,
+                    delivery,
                     level_cap: 99,
                     overlays: &[],
                 },
             )
             .expect("the viewport draws");
     };
-    draw(&mut engine, &mut session, Presentation::Converge);
-    assert!(engine.info().samples > 0, "a still frame starts sampling");
+    draw(&mut engine, &mut session, Delivery::Immediate);
+    assert!(engine.info().drawn, "a still frame draws");
     let revision = engine.image_revision();
     session.execute(grana_session::Command::SetExposure(2.0));
-    draw(&mut engine, &mut session, Presentation::Converge);
+    draw(&mut engine, &mut session, Delivery::Immediate);
     assert_ne!(
         engine.image_revision(),
         revision,
@@ -177,23 +176,22 @@ fn a_frame_lands_at_the_full_viewport() {
         engine.poll_pick(gpu.device());
         std::thread::sleep(Duration::from_millis(1));
     }
-    for _ in 0..SAMPLE_CEILING * 4 {
-        draw(&mut engine, &mut session, Presentation::Converge);
-        if engine.info().converged {
+    for _ in 0..SETTLE * 4 {
+        draw(&mut engine, &mut session, Delivery::Immediate);
+        if engine.info().age >= SETTLE {
             break;
         }
     }
+    let age = engine.info().age;
     assert!(
-        engine.info().converged && engine.info().samples > 1,
-        "a still view samples until it converges, reached {} samples",
-        engine.info().samples
+        age >= SETTLE,
+        "a still view settles until its history fills, reached {age} frames"
     );
-    let samples = engine.info().samples;
     session.execute(grana_session::Command::SetExposure(0.5));
-    draw(&mut engine, &mut session, Presentation::Converge);
+    draw(&mut engine, &mut session, Delivery::Immediate);
     assert_eq!(
-        engine.info().samples,
-        samples,
-        "an exposure change presents the converged samples instead of sampling again"
+        engine.info().age,
+        age,
+        "an exposure change presents the settled history instead of drawing again"
     );
 }

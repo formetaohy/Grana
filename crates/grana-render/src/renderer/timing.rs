@@ -1,92 +1,62 @@
-use std::time::{Duration, Instant};
-
 use super::*;
-use crate::converge::Sampling;
-use crate::temporal::Temporal;
+use glam::Mat4;
 
 pub(super) struct Begin<'a> {
     pub(super) target: &'a mut FrameTarget,
-    pub(super) sampling: Sampling,
-    pub(super) budget: Option<Duration>,
     pub(super) levels: LevelKey,
-    pub(super) transition: u64,
     pub(super) structure: u64,
-    pub(super) shot: u64,
-    pub(super) temporal: Option<Temporal>,
-    pub(super) sequence: u64,
-    pub(super) fade: &'a mut Option<Fade>,
+    pub(super) view: u64,
+    pub(super) camera: Mat4,
     pub(super) exporting: bool,
     pub(super) assured: bool,
+    pub(super) fade: &'a mut Option<Fade>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Started {
     pub(super) reset: bool,
+    pub(super) moved: bool,
+    pub(super) changed: bool,
     pub(super) snapshot: bool,
-    pub(super) continuing: bool,
-    pub(super) expired: bool,
-    pub(super) sample: u32,
+    pub(super) phase: u32,
 }
 
 pub(super) fn begin(begin: Begin<'_>) -> Started {
     let Begin {
         target,
-        sampling,
-        budget,
         levels,
-        transition,
         structure,
-        shot,
-        temporal,
-        sequence,
-        fade,
+        view,
+        camera,
         exporting,
         assured,
+        fade,
     } = begin;
-    let moved = target.transition != Some(transition);
-    if moved {
+    let moved = target.camera.is_some_and(|held| held != camera);
+    let changed = target.view != Some(view);
+    if moved || changed {
         *fade = None;
     }
     let snapshot = target.levels.is_some_and(|previous| previous != levels)
         && !moved
         && !exporting
         && !assured
-        && sampling.ceiling() > 1
-        && target.samples > 0;
-    target.transition = Some(transition);
+        && target.camera.is_some();
     target.levels = Some(levels);
-    if target.signature != Some(structure) {
-        target.signature = Some(structure);
-        target.samples = 0;
-    }
-    let reset = target.samples == 0;
+    let reset = target.structure != Some(structure);
+    target.structure = Some(structure);
+    target.view = Some(view);
+    target.camera = Some(camera);
     if reset {
-        target.deadline = budget.and_then(|budget| Instant::now().checked_add(budget));
-        target.estimate = None;
+        target.taa.invalidate();
+        target.phase = 0;
     }
-    let expired = target
-        .deadline
-        .is_some_and(|deadline| deadline <= Instant::now());
-    let mut continuing = false;
-    if reset {
-        target.seeded = false;
-        continuing = temporal.is_some() && target.holds && target.shot == Some(shot);
-        if !continuing {
-            target.holds = false;
-        }
-        target.shot = Some(shot);
-    }
-    let sample = if reset && !assured && temporal.is_some() {
-        (sequence % u64::from(sampling.ceiling())) as u32
-    } else {
-        target.samples.min(sampling.ceiling() - 1)
-    };
     Started {
         reset,
+        moved,
+        changed,
         snapshot,
-        continuing,
-        expired,
-        sample,
+        phase: target.phase,
     }
 }
 

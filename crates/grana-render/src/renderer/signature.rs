@@ -5,73 +5,40 @@ use grana_display::CameraState;
 #[derive(Clone, Copy)]
 pub(super) struct Signature<'a> {
     pub(super) data: &'a FrameData,
-    pub(super) camera: CameraState,
     pub(super) region: [u32; 4],
-    pub(super) levels: Levels,
     pub(super) versions: Versions,
     pub(super) channels: u64,
     pub(super) content: u32,
-    pub(super) generation: u64,
     pub(super) time: u32,
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
-    pub(super) overlay: u64,
+    pub(super) step: f32,
 }
 
 impl Signature<'_> {
-    pub(super) fn digest(self) -> u64 {
+    pub(super) fn structure(self) -> u64 {
         let Self {
             data,
-            camera,
             region,
-            levels,
             versions,
             channels,
             content,
-            generation,
             time,
             epoch,
             size,
-            overlay,
+            step,
         } = self;
         let mut hasher = DefaultHasher::new();
-        let mut data = *data;
-        data.jitter = [0.0; 4];
-        data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
-        data.oit[2] = 0;
-        bytemuck::bytes_of(&data).hash(&mut hasher);
-        camera.projection.index().hash(&mut hasher);
         region.hash(&mut hasher);
-        levels.ladder.base.hash(&mut hasher);
-        levels.ladder.count.hash(&mut hasher);
-        levels.capacity.hash(&mut hasher);
+        size.hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
-        size.hash(&mut hasher);
+        content.hash(&mut hasher);
+        channels.hash(&mut hasher);
         versions.data().hash(&mut hasher);
         versions.objects().hash(&mut hasher);
         versions.style().hash(&mut hasher);
-        channels.hash(&mut hasher);
-        content.hash(&mut hasher);
-        generation.hash(&mut hasher);
-        overlay.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub(super) fn shot(self) -> u64 {
-        let Self {
-            data,
-            region,
-            versions,
-            channels,
-            content,
-            epoch,
-            size,
-            overlay,
-            ..
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        region.hash(&mut hasher);
+        step.to_bits().hash(&mut hasher);
         data.clip.map(f32::to_bits).hash(&mut hasher);
         data.slice.map(f32::to_bits).hash(&mut hasher);
         data.slice_view.map(f32::to_bits).hash(&mut hasher);
@@ -79,56 +46,24 @@ impl Signature<'_> {
         for axis in data.region_axis {
             axis.map(f32::to_bits).hash(&mut hasher);
         }
-        epoch.hash(&mut hasher);
-        size.hash(&mut hasher);
-        versions.data().hash(&mut hasher);
-        versions.objects().hash(&mut hasher);
-        versions.style().hash(&mut hasher);
-        channels.hash(&mut hasher);
-        content.hash(&mut hasher);
-        overlay.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub(super) fn transition(self) -> u64 {
-        let Self {
-            data,
-            camera,
-            region,
-            versions,
-            channels,
-            content,
-            time,
-            epoch,
-            size,
-            overlay,
-            ..
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        hash_camera(camera, &mut hasher);
         data.light.map(f32::to_bits).hash(&mut hasher);
-        data.region_center.map(f32::to_bits).hash(&mut hasher);
-        for axis in data.region_axis {
-            axis.map(f32::to_bits).hash(&mut hasher);
-        }
+        data.light_reach.map(f32::to_bits).hash(&mut hasher);
         data.shading.map(f32::to_bits).hash(&mut hasher);
         for value in &data.march[1..] {
             value.to_bits().hash(&mut hasher);
         }
-        data.clip.map(f32::to_bits).hash(&mut hasher);
-        data.tag.hash(&mut hasher);
-        region.hash(&mut hasher);
-        time.hash(&mut hasher);
-        epoch.hash(&mut hasher);
-        size.hash(&mut hasher);
-        versions.data().hash(&mut hasher);
-        versions.objects().hash(&mut hasher);
-        versions.style().hash(&mut hasher);
-        channels.hash(&mut hasher);
-        content.hash(&mut hasher);
-        overlay.hash(&mut hasher);
         hasher.finish()
     }
+}
+
+pub(super) fn view(data: &FrameData) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for column in data.view_projection {
+        column.map(f32::to_bits).hash(&mut hasher);
+    }
+    data.lens[2].to_bits().hash(&mut hasher);
+    data.lens[3].to_bits().hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(super) fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {

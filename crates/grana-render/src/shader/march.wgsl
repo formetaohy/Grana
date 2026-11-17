@@ -87,10 +87,13 @@ fn march_volume(
                 let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
                 march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(texel), world);
                 march.transmittance *= 1.0 - alpha;
+                if (march.surface.x <= 0.0) {
+                    march.surface.x = clip_depth(world);
+                }
             }
             if (march.surface.y >= 1.0
                 && (1.0 - march.transmittance >= SURFACE_OPACITY || sample.peak)) {
-                march.surface = vec2<f32>(cursor, clip_depth(origin + direction * cursor));
+                march.surface.y = clip_depth(origin + direction * cursor);
                 march.normal = structure_sample_normal(structure_tap(texel));
             }
             cursor += segment;
@@ -119,7 +122,7 @@ fn march_peaks(march: March, peaks: array<f32, CHANNEL_LIMIT>) -> March {
 
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
-    let ndc = input.ndc + frame.jitter.xy;
+    let ndc = input.ndc - frame.jitter.xy;
     let pixel = vec2<i32>(input.clip_position.xy);
     let resolution = resolve(pixel, ndc);
     var peaks: array<f32, CHANNEL_LIMIT>;

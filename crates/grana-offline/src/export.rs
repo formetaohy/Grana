@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use grana_display::Camera;
 use grana_gpu::Readback;
-use grana_render::{FrameInfo, Renderer, Sampling};
+use grana_render::{Delivery, FrameInfo, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -15,10 +15,8 @@ use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
 use grana_page::Format;
 
-const IMAGE_SAMPLING: Sampling = Sampling::new(16, 64, 0.0035);
-const MOVIE_SAMPLING: Sampling = Sampling::new(8, 32, 0.005);
-const TEMPORAL_SAMPLING: Sampling = Sampling::new(2, 8, 0.005);
-const TEMPORAL_HISTORY: f32 = 16.0;
+const STILL_FRAMES: u32 = grana_render::SETTLE;
+const MOVIE_FRAMES: u32 = 1;
 const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
 const READBACK_SLOTS: usize = 2;
@@ -35,9 +33,8 @@ pub(crate) struct Export {
     frame: usize,
     written: usize,
     attempts: u32,
-    still: Sampling,
-    history: bool,
-    temporal: Option<grana_render::Temporal>,
+    frames: u32,
+    drawn: u32,
     viewport: grana_engine::Viewport,
     lens: Option<(Camera, u32)>,
     transparent: bool,
@@ -141,20 +138,15 @@ impl Export {
             },
         };
         let lens = detail_lens(&poses, viewport.size[1]);
-        let temporal = movie.then(|| grana_render::Temporal::new(TEMPORAL_HISTORY));
+        let frames = if movie { MOVIE_FRAMES } else { STILL_FRAMES };
         Ok(Self {
             sink: Some(sink),
             poses,
             frame: 0,
             written: 0,
             attempts: 0,
-            still: if movie {
-                MOVIE_SAMPLING
-            } else {
-                IMAGE_SAMPLING
-            },
-            history: false,
-            temporal,
+            frames,
+            drawn: 0,
             viewport,
             lens,
             transparent,
@@ -175,14 +167,6 @@ impl Export {
                 camera,
                 height: *height,
             })
-    }
-
-    fn sampling(&self) -> Sampling {
-        if self.history {
-            TEMPORAL_SAMPLING
-        } else {
-            self.still
-        }
     }
 
     pub(crate) fn pose(&self) -> Pose {
@@ -232,23 +216,22 @@ impl Export {
                 region: scene.region,
                 clip: scene.clip,
                 exposure: scene.exposure,
-                sampling: self.sampling(),
-                budget: None,
                 scene: &frame,
-                delivery: grana_render::Delivery::Assured,
+                delivery: Delivery::Assured,
                 level_cap: usize::MAX,
-                temporal: self.temporal,
             },
         ) {
             Ok(info) => info,
             Err(detail) => return self.fail(detail),
         };
         self.attempts += 1;
-        self.history = info.history;
         if info.truncated {
             return self.fail(truncation(&info));
         }
-        if !info.converged {
+        if info.drawn {
+            self.drawn += 1;
+        }
+        if self.drawn < self.frames {
             if self.attempts > self.attempts_limit() {
                 return self
                     .fail("the export could not resolve the volume being streamed".to_string());
@@ -410,6 +393,7 @@ impl Export {
         self.staged.push_back(size);
         self.frame += 1;
         self.attempts = 0;
+        self.drawn = 0;
         Ok(Step::Running)
     }
 
@@ -455,6 +439,7 @@ impl Export {
         self.frame += 1;
         self.written += 1;
         self.attempts = 0;
+        self.drawn = 0;
         Ok(path)
     }
 }

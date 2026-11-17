@@ -7,7 +7,7 @@ use wgpu::{
     StoreOp, TextureView, VertexState,
 };
 
-use crate::target::{ACCUMULATION_FORMAT, COUNT_FORMAT, DEPTH_FORMAT, SCENE_FORMAT};
+use crate::target::{DEPTH_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = include_str!("shader/clear.wgsl");
 const SIDE: u32 = 3;
@@ -15,7 +15,6 @@ const SIDE: u32 = 3;
 pub(crate) struct Clear {
     scene: RenderPipeline,
     depth: RenderPipeline,
-    accumulation: RenderPipeline,
 }
 
 impl Clear {
@@ -78,20 +77,7 @@ impl Clear {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let accumulation = pair(
-            device,
-            &module,
-            &layout,
-            "grana.clear.accumulation",
-            ACCUMULATION_FORMAT,
-            COUNT_FORMAT,
-            pipelines,
-        );
-        Self {
-            scene,
-            depth,
-            accumulation,
-        }
+        Self { scene, depth }
     }
 
     pub fn scene(
@@ -121,44 +107,6 @@ impl Clear {
         });
         crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.depth);
-        pass.draw(0..SIDE, 0..1);
-    }
-
-    pub fn accumulation(
-        &self,
-        encoder: &mut CommandEncoder,
-        accumulation: &TextureView,
-        count: &TextureView,
-        region: [u32; 4],
-    ) {
-        self.pair_pass(
-            encoder,
-            "grana.clear.accumulation.pass",
-            &self.accumulation,
-            [accumulation, count],
-            region,
-        );
-    }
-
-    fn pair_pass(
-        &self,
-        encoder: &mut CommandEncoder,
-        label: &'static str,
-        pipeline: &RenderPipeline,
-        attachments: [&TextureView; 2],
-        region: [u32; 4],
-    ) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some(label),
-            color_attachments: &[
-                Some(attachment(attachments[0])),
-                Some(attachment(attachments[1])),
-            ],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        crate::target::viewport(&mut pass, region);
-        pass.set_pipeline(pipeline);
         pass.draw(0..SIDE, 0..1);
     }
 }
@@ -207,38 +155,6 @@ fn opaque(format: wgpu::TextureFormat) -> ColorTargetState {
         blend: None,
         write_mask: ColorWrites::ALL,
     }
-}
-
-fn pair(
-    device: &Device,
-    module: &wgpu::ShaderModule,
-    layout: &wgpu::PipelineLayout,
-    label: &'static str,
-    first: wgpu::TextureFormat,
-    second: wgpu::TextureFormat,
-    pipelines: &Pipelines,
-) -> RenderPipeline {
-    device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: VertexState {
-            module,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: MultisampleState::default(),
-        fragment: Some(FragmentState {
-            module,
-            entry_point: Some("fs_pair"),
-            compilation_options: Default::default(),
-            targets: &[Some(opaque(first)), Some(opaque(second))],
-        }),
-        multiview_mask: None,
-        cache: pipelines.cache(),
-    })
 }
 
 fn attachment(view: &TextureView) -> RenderPassColorAttachment<'_> {

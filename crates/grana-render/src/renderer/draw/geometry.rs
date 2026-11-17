@@ -89,7 +89,7 @@ pub(super) fn encode(stage: Stage<'_>) {
             },
         );
     }
-    if deferred && features.ambient && target.ao.is_some() && target.surface.is_some() {
+    if deferred && target.ao.is_some() && target.surface.is_some() {
         let resolution = target.size;
         let merged = if features.volume {
             Some(target.geometry(device, layouts, dummy_normal, dummy_volume, true))

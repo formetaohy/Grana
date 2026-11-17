@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{Camera, CameraState};
-use grana_engine::{Engine, Presentation};
+use grana_engine::{Engine, SETTLE};
 use grana_measure::MeasureView;
 use grana_object::{
     CellParams, IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
@@ -12,6 +12,7 @@ use grana_object::{
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
+use grana_render::Delivery;
 use grana_scene::{Dataset, Drift, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_store::SpillStore;
@@ -3792,8 +3793,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                             scene: session.scene().expect("the series opens"),
                             camera: &camera,
                             size,
-                            presentation: Presentation::Converge,
-                            budget: None,
+                            delivery: Delivery::Immediate,
                             level_cap: 99,
                             overlays: &[],
                         },
@@ -3801,7 +3801,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                     .expect("the viewport draws");
                 let waiting = match until {
                     Some(revision) => engine.image_revision() <= revision,
-                    None => !engine.info().converged,
+                    None => engine.info().age < SETTLE,
                 };
                 if !waiting {
                     break;

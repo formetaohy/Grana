@@ -4,39 +4,29 @@ use crate::table::SceneTable;
 use crate::volume::SliceFrame;
 
 pub(super) struct Stage<'a> {
-    pub(super) device: &'a Device,
-    pub(super) queue: &'a Queue,
     pub(super) encoder: &'a mut CommandEncoder,
     pub(super) target: &'a FrameTarget,
-    pub(super) scene: &'a SceneFrame<'a>,
     pub(super) table: &'a SceneTable,
     pub(super) level: &'a BindGroup,
     pub(super) atlas: &'a BindGroup,
     pub(super) oit_resolve: &'a OitResolve,
     pub(super) splats: Option<&'a SplatPasses>,
     pub(super) sections: &'a Sections,
-    pub(super) overlay: &'a mut Overlays,
     pub(super) volume_pass: &'a VolumePass,
-    pub(super) data: &'a FrameData,
     pub(super) features: Features,
 }
 
 pub(super) fn encode(stage: Stage<'_>) {
     let Stage {
-        device,
-        queue,
         encoder,
         target,
-        scene,
         table,
         level,
         atlas,
         oit_resolve,
         splats,
         sections,
-        overlay,
         volume_pass,
-        data,
         features,
     } = stage;
     let region = features.region;
@@ -82,15 +72,6 @@ pub(super) fn encode(stage: Stage<'_>) {
             table.group(),
             oit.read_group(),
         );
-    }
-    if !scene.overlays.is_empty() {
-        overlay.prepare(
-            device,
-            queue,
-            scene.overlays,
-            glam::Mat4::from_cols_array_2d(&data.view_projection),
-        );
-        overlay.draw(encoder, target.scene.color(), region);
     }
 }
 

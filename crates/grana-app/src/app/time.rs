@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_animation::Keyframe;
-use grana_engine::Presentation;
+use grana_render::Delivery;
 
 use super::{App, PLAYBACK_INTERVAL, STREAM_POLL};
 
@@ -13,18 +13,18 @@ impl App {
     }
 
     pub(super) fn playback_delay(&self) -> Duration {
-        if self.frame_info().samples == 0 {
+        if !self.frame_info().drawn {
             STREAM_POLL
         } else {
             self.playback_wait()
         }
     }
 
-    pub(super) fn presentation(&self, animating: bool) -> Presentation {
-        if !animating && !self.workspace.playback.previewing && self.workspace.playback.playing {
-            Presentation::Playback
+    pub(super) fn delivery(&self) -> Delivery {
+        if !self.workspace.playback.previewing && self.workspace.playback.playing {
+            Delivery::Awaited
         } else {
-            Presentation::Converge
+            Delivery::Immediate
         }
     }
 
@@ -60,7 +60,7 @@ impl App {
             return;
         }
         let current = scene.time();
-        if self.frame_info().samples == 0 {
+        if !self.frame_info().drawn {
             return;
         }
         let now = Instant::now();

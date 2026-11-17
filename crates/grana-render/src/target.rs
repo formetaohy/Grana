@@ -4,8 +4,6 @@ use wgpu::{
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float;
 pub(crate) const GBUFFER_ID_FORMAT: TextureFormat = TextureFormat::R16Uint;
@@ -292,9 +290,15 @@ fn write(queue: &Queue, texture: &Texture, bytes: &[impl bytemuck::Pod], row: u3
     );
 }
 
-pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> Texture {
+pub(crate) fn image(
+    device: &Device,
+    label: &'static str,
+    size: [u32; 2],
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> Texture {
     device.create_texture(&TextureDescriptor {
-        label: Some("grana.scene.accumulation"),
+        label: Some(label),
         size: Extent3d {
             width: size[0],
             height: size[1],
@@ -303,31 +307,8 @@ pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> Texture {
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: ACCUMULATION_FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_SRC
-            | TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-
-pub(crate) fn count(device: &Device, size: [u32; 2]) -> Texture {
-    device.create_texture(&TextureDescriptor {
-        label: Some("grana.scene.count"),
-        size: Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: COUNT_FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_SRC
-            | TextureUsages::COPY_DST,
+        format,
+        usage,
         view_formats: &[],
     })
 }
@@ -343,22 +324,7 @@ pub(crate) fn attachment(
     format: TextureFormat,
     usage: TextureUsages,
 ) -> TextureView {
-    device
-        .create_texture(&TextureDescriptor {
-            label: Some(label),
-            size: Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format,
-            usage,
-            view_formats: &[],
-        })
-        .create_view(&TextureViewDescriptor::default())
+    view(&image(device, label, size, format, usage))
 }
 
 pub(crate) fn viewport(pass: &mut RenderPass<'_>, region: [u32; 4]) {

@@ -5,8 +5,8 @@ use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::{
-    Frame, Layer, LayerKey, PickId, Renderer, Requests, Sampling, SceneFrame, SplatChunk, Splats,
-    Style, Versions,
+    Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, SplatChunk, Splats, Style,
+    Versions,
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
@@ -17,7 +17,7 @@ use grana_volume::{
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, splat, versions};
 
 const SIDE: u32 = 128;
-const SAMPLES: u32 = 4;
+const FRAMES: u32 = 8;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const EMPTY: Extent = Extent::new(16, 16, 16);
@@ -41,12 +41,9 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         region: view.region,
         clip: Clip::none(),
         exposure: 1.0,
-        sampling: Sampling::new(1, SAMPLES, 1.0),
-        budget: None,
         scene: view.scene,
         delivery: view.delivery,
         level_cap: usize::MAX,
-        temporal: None,
     }
 }
 
@@ -157,7 +154,7 @@ fn settle_with<'a, 'b: 'a>(
             .draw(gpu.device(), gpu.queue(), build())
             .expect("the frame draws");
         if !renderer.requests_pending() {
-            while info.samples < SAMPLES || info.fading {
+            while info.drawn && (info.age < FRAMES || info.fading) {
                 info = renderer
                     .draw(gpu.device(), gpu.queue(), build())
                     .expect("the frame draws");
@@ -239,94 +236,6 @@ fn snapshot(
     settle(gpu, renderer, view, volume);
     let image = read_pixels(gpu, texture, [SIDE, SIDE]);
     Snapshot::new([SIDE, SIDE], reference, image)
-}
-
-#[test]
-fn measures_the_convergence_of_a_volume() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        region: Region::none(),
-        scene: &scene,
-        viewport: WHOLE,
-        delivery: grana_render::Delivery::Assured,
-    };
-    settle(&gpu, &mut renderer, &view, &volume);
-    renderer.set_exporting(true);
-    let mut reset = frame(&view);
-    reset.sampling = Sampling::new(1, 12, 1.0);
-    reset.exposure = 1.4;
-    renderer
-        .draw(gpu.device(), gpu.queue(), reset)
-        .expect("the frame draws");
-    let mut metrics = Vec::new();
-    for _ in 0..24 {
-        let mut drawn = frame(&view);
-        drawn.sampling = Sampling::new(1, 12, 1.0);
-        drawn.exposure = 1.4;
-        let info = renderer
-            .draw(gpu.device(), gpu.queue(), drawn)
-            .expect("the frame draws");
-        gpu.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("failed to wait for the gpu");
-        if let Some(metric) = renderer.convergence(&gpu) {
-            metrics.push(metric);
-        }
-        if info.samples >= 12 {
-            break;
-        }
-    }
-    assert!(!metrics.is_empty(), "the render measures no convergence");
-    assert!(
-        metrics.first().is_some_and(|(samples, _)| *samples >= 2),
-        "the first metric comes before a second sample"
-    );
-    let standard_error = |(samples, error): (u32, f32)| error / (samples as f32).sqrt();
-    assert!(
-        standard_error(*metrics.last().expect("a metric is measured"))
-            < standard_error(*metrics.first().expect("a metric is measured")),
-        "the standard error does not fall as samples accumulate: {metrics:?}"
-    );
-    let mut restarted = None;
-    for _ in 0..4 {
-        let mut drawn = frame(&view);
-        drawn.sampling = Sampling::new(1, 12, 1.0);
-        drawn.exposure = 1.8;
-        let info = renderer
-            .draw(gpu.device(), gpu.queue(), drawn)
-            .expect("the frame draws");
-        gpu.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("failed to wait for the gpu");
-        restarted = Some(info.samples);
-    }
-    assert!(
-        restarted.is_some_and(|samples| samples > 4),
-        "a changed exposure presents the accumulated samples instead of sampling again: {restarted:?}"
-    );
 }
 
 #[test]
@@ -804,7 +713,7 @@ fn assure(
         .draw(gpu.device(), gpu.queue(), frame(view))
         .expect("the frame draws");
     for _ in 0..512 {
-        if info.samples >= SAMPLES && info.settled {
+        if info.drawn && info.settled {
             assert!(
                 !info.truncated,
                 "a complete assured frame lost bricks to the budget"
@@ -854,13 +763,13 @@ fn assured_pixels(
         let info = renderer
             .draw(gpu.device(), gpu.queue(), frame(&view))
             .expect("the frame draws");
-        assert_eq!(
-            info.samples, 0,
-            "an assured frame consumed samples before its bricks arrived"
+        assert!(
+            !info.drawn,
+            "an assured frame drew before its bricks arrived"
         );
     }
     let info = assure(gpu, &mut renderer, &view, volume);
-    assert_eq!(info.samples, SAMPLES, "the assured frame stopped short");
+    assert!(info.drawn, "the assured frame stopped short");
     read_pixels(gpu, &target, [SIDE, SIDE])
 }
 
@@ -1128,7 +1037,7 @@ fn stream_levels(
             .draw(gpu.device(), gpu.queue(), frame(view))
             .expect("the frame draws");
         if !renderer.requests_pending() {
-            while info.samples < SAMPLES || info.fading {
+            while info.drawn && (info.age < FRAMES || info.fading) {
                 info = renderer
                     .draw(gpu.device(), gpu.queue(), frame(view))
                     .expect("the frame draws");
@@ -1203,7 +1112,7 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
     let view_texture = target.create_view(&Default::default());
     let view = ladder_view(&view_texture, &camera, &scene);
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
-    assert_eq!(info.samples, SAMPLES, "the constrained view never resolved");
+    assert!(info.drawn, "the constrained view never resolved");
     assert!(
         info.view.level > 0,
         "the budget still asks for the finest level"
@@ -1326,7 +1235,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
     let mut view = ladder_view(&view_texture, &camera, &scene);
     view.delivery = grana_render::Delivery::Assured;
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
-    assert_eq!(info.samples, SAMPLES, "the sized export never resolved");
+    assert!(info.drawn, "the sized export never resolved");
     assert_eq!(info.view.level, 0, "the sized export coarsens its level");
     assert_eq!(
         info.view.visible, info.view.demand,
@@ -1361,7 +1270,7 @@ fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
     let view_texture = target.create_view(&Default::default());
     let view = ladder_view(&view_texture, &camera, &scene);
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
-    assert_eq!(info.samples, SAMPLES, "the roomy view never resolved");
+    assert!(info.drawn, "the roomy view never resolved");
     assert_eq!(info.view.level, 0, "a roomy budget coarsens the volume");
     assert_eq!(info.view.visible, info.view.demand);
     assert!(!info.truncated);
@@ -1374,365 +1283,9 @@ fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
             .draw(gpu.device(), gpu.queue(), frame(view))
             .expect("the frame draws");
         assert!(info.settled, "an idle fitted frame replans");
-        assert_eq!(info.samples, SAMPLES, "an idle fitted frame resamples");
+        assert!(info.drawn, "an idle fitted frame draws");
         assert!(!info.truncated, "an idle fitted frame truncates");
     }
-}
-
-const TEMPORAL: f32 = 16.0;
-
-fn deviation(first: &[[u8; 4]], second: &[[u8; 4]]) -> f64 {
-    assert_eq!(first.len(), second.len(), "two takes cover one surface");
-    let total = first
-        .iter()
-        .zip(second)
-        .map(|(left, right)| {
-            (0..3)
-                .map(|channel| {
-                    let delta = f64::from(left[channel]) - f64::from(right[channel]);
-                    delta * delta
-                })
-                .sum::<f64>()
-        })
-        .sum::<f64>();
-    total / (3 * first.len()) as f64
-}
-
-struct Take<'a, 'b> {
-    texture: &'a wgpu::Texture,
-    camera: &'a Camera,
-    scene: &'a SceneFrame<'b>,
-    time: u32,
-    sampling: Sampling,
-    history: Option<f32>,
-}
-
-fn take(
-    gpu: &Gpu,
-    renderer: &mut Renderer,
-    volume: &Volume,
-    view: &Take<'_, '_>,
-) -> (Vec<[u8; 4]>, grana_render::FrameInfo) {
-    let target = view.texture.create_view(&Default::default());
-    let build = || Frame {
-        target: &target,
-        size: [SIDE, SIDE],
-        camera: view.camera,
-        viewport: WHOLE,
-        time: view.time,
-        region: Region::none(),
-        clip: Clip::none(),
-        exposure: 1.0,
-        sampling: view.sampling,
-        budget: None,
-        scene: view.scene,
-        delivery: grana_render::Delivery::Assured,
-        level_cap: usize::MAX,
-        temporal: view.history.map(grana_render::Temporal::new),
-    };
-    let mut info = grana_render::FrameInfo::default();
-    for _ in 0..256 {
-        info = renderer
-            .draw(gpu.device(), gpu.queue(), build())
-            .expect("the frame draws");
-        if renderer.requests_pending() {
-            if let Some(requests) = next_demand(gpu, renderer) {
-                let bricks = pack(volume, &requests.volume);
-                renderer.upload(&bricks);
-            }
-            continue;
-        }
-        if info.samples >= view.sampling.ceiling() && !info.fading {
-            return (read_pixels(gpu, view.texture, [SIDE, SIDE]), info);
-        }
-    }
-    panic!("the take never settled: {info:?}");
-}
-
-#[test]
-fn reuses_the_history_of_a_still_camera() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let single = volume.pyramid();
-    let pyramid = Pyramid::new(
-        single.levels().to_vec(),
-        single.stored(),
-        single.channels().to_vec(),
-        2,
-        1.0,
-    );
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let target = texture(&gpu, SIDE);
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let (_first_pixels, first) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 0,
-            sampling: Sampling::new(1, 8, 1.0),
-            history: None,
-        },
-    );
-    assert!(!first.seeded, "the first take invents a history");
-    let (reused, second) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: Some(TEMPORAL),
-        },
-    );
-    assert!(second.seeded, "the still camera discards its history");
-    assert!(second.history, "the history is not retained");
-    let mut reference = build_renderer(&gpu, &pyramid);
-    let (reference_pixels, _) = take(
-        &gpu,
-        &mut reference,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 32, 1.0),
-            history: None,
-        },
-    );
-    let mut control = build_renderer(&gpu, &pyramid);
-    let (control_pixels, _) = take(
-        &gpu,
-        &mut control,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: None,
-        },
-    );
-    let seeded = deviation(&reused, &reference_pixels);
-    let fresh = deviation(&control_pixels, &reference_pixels);
-    assert!(
-        seeded * 4.0 < fresh,
-        "a still camera reuses {seeded:.1} against one sample of {fresh:.1}"
-    );
-}
-
-#[test]
-fn reprojects_the_history_of_a_moving_camera() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let single = volume.pyramid();
-    let pyramid = Pyramid::new(
-        single.levels().to_vec(),
-        single.stored(),
-        single.channels().to_vec(),
-        2,
-        1.0,
-    );
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let mut channels = channels(&pyramid, &transfers);
-    for row in &mut channels {
-        row.volume = VolumeStyle::default().with_mode(grana_display::VolumeMode::Isosurface);
-    }
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mut moved = camera.clone();
-    moved.orbit(glam::Vec2::new(0.1, 0.05));
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let target = texture(&gpu, SIDE);
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let (_first_pixels, first) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 0,
-            sampling: Sampling::new(1, 8, 1.0),
-            history: None,
-        },
-    );
-    assert!(!first.seeded, "the first take invents a history");
-    let (reused, second) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &moved,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: Some(TEMPORAL),
-        },
-    );
-    assert!(second.seeded, "the moving camera discards its history");
-    let mut reference = build_renderer(&gpu, &pyramid);
-    let (reference_pixels, _) = take(
-        &gpu,
-        &mut reference,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &moved,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 32, 1.0),
-            history: None,
-        },
-    );
-    let mut control = build_renderer(&gpu, &pyramid);
-    let (control_pixels, _) = take(
-        &gpu,
-        &mut control,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &moved,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: None,
-        },
-    );
-    let seeded = deviation(&reused, &reference_pixels);
-    let fresh = deviation(&control_pixels, &reference_pixels);
-    assert!(
-        seeded * 4.0 < fresh,
-        "a moving camera reprojects {seeded:.1} against one sample of {fresh:.1}"
-    );
-}
-
-#[test]
-fn drops_the_history_of_another_shot() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let single = volume.pyramid();
-    let pyramid = Pyramid::new(
-        single.levels().to_vec(),
-        single.stored(),
-        single.channels().to_vec(),
-        2,
-        1.0,
-    );
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let first_transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let first_channels = channels(&pyramid, &first_transfers);
-    let first = SceneFrame {
-        versions: versions(),
-        channels: &first_channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let second_transfers = [TransferFunction::tinted([1.0, 0.3, 0.2])];
-    let second_channels = channels(&pyramid, &second_transfers);
-    let second = SceneFrame {
-        versions: versions(),
-        channels: &second_channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let target = texture(&gpu, SIDE);
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let (settled_pixels, settled) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &first,
-            time: 0,
-            sampling: Sampling::new(1, 8, 1.0),
-            history: None,
-        },
-    );
-    assert!(!settled.seeded, "the first take invents a history");
-    let (reused, dropped) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &second,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: Some(TEMPORAL),
-        },
-    );
-    assert!(!dropped.seeded, "another shot reuses the old history");
-    let mut control = build_renderer(&gpu, &pyramid);
-    let (control_pixels, _) = take(
-        &gpu,
-        &mut control,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &second,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: None,
-        },
-    );
-    let fresh = deviation(&reused, &control_pixels);
-    let stale = deviation(&reused, &settled_pixels);
-    assert!(
-        fresh * 8.0 < stale,
-        "the new shot carries the old frame ({fresh:.1} against {stale:.1})"
-    );
 }
 
 fn drawn<'a, 'b>(
@@ -1749,13 +1302,47 @@ fn drawn<'a, 'b>(
         region: Region::none(),
         clip: Clip::none(),
         exposure: 1.0,
-        sampling: Sampling::new(1, 8, 1.0),
-        budget: None,
         scene,
         delivery: grana_render::Delivery::Immediate,
         level_cap: usize::MAX,
-        temporal: None,
     }
+}
+
+#[test]
+fn keeps_the_history_until_the_content_moves() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let channels = channels(&pyramid, &[TransferFunction::tinted([0.4, 0.8, 1.0])]);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = bare_scene(versions(), &channels);
+    let target = texture(&gpu, SIDE);
+    let view = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let first = renderer
+        .draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &scene))
+        .expect("the frame draws");
+    assert!(!first.history, "the first frame invented a history");
+    let mut clipped = drawn(&view, &camera, &scene);
+    clipped.clip = Clip::new(Vec3::X, 0.0);
+    let cut = renderer
+        .draw(gpu.device(), gpu.queue(), clipped)
+        .expect("the frame draws");
+    assert!(!cut.history, "a clip change reused the previous history");
+    assert_eq!(cut.age, 1, "a clip change kept the settle age");
+    renderer
+        .draw(gpu.device(), gpu.queue(), drawn(&view, &camera, &scene))
+        .expect("the frame draws");
+    let mut moved = camera.clone();
+    moved.orbit(glam::Vec2::new(0.1, 0.05));
+    let orbited = renderer
+        .draw(gpu.device(), gpu.queue(), drawn(&view, &moved, &scene))
+        .expect("the frame draws");
+    assert!(orbited.history, "a moved camera dropped its history");
+    assert_eq!(orbited.age, 1, "a moved camera kept the settle age");
 }
 
 #[test]
@@ -1782,16 +1369,13 @@ fn separates_data_object_and_style_versions() {
     };
     let first = draw(&mut renderer, &bare_scene(base, &channels));
     assert!(first.rebuilt, "the first frame reused an empty scene");
-    assert_eq!(
-        first.samples, 1,
-        "the first frame reused accumulated samples"
-    );
+    assert_eq!(first.age, 1, "the first frame reused its settle age");
     let still = draw(&mut renderer, &bare_scene(base, &channels));
     assert!(
         !still.rebuilt,
         "an unchanged scene rebuilt the object buffers"
     );
-    assert_eq!(still.samples, 2, "an unchanged scene dropped its samples");
+    assert_eq!(still.age, 2, "an unchanged scene dropped its samples");
     let mut shifted = camera.clone();
     shifted.orbit(glam::Vec2::new(0.2, 0.1));
     let orbiting = renderer
@@ -1811,13 +1395,13 @@ fn separates_data_object_and_style_versions() {
         restyled.rebuilt,
         "a style version kept the previous object styles"
     );
-    assert_eq!(restyled.samples, 1, "a style version kept the samples");
+    assert!(!restyled.history, "a style version kept the history");
     let channel = draw(&mut renderer, &bare_scene(styled, &other_channels));
     assert!(
         !channel.rebuilt,
         "a channel style rebuilt the object buffers"
     );
-    assert_eq!(channel.samples, 1, "a channel style kept the samples");
+    assert!(!channel.history, "a channel style kept the history");
     let reloaded = draw(
         &mut renderer,
         &bare_scene(
@@ -1829,7 +1413,8 @@ fn separates_data_object_and_style_versions() {
         !reloaded.rebuilt,
         "a data version rebuilt the object buffers"
     );
-    assert_eq!(reloaded.samples, 1, "a data version kept the samples");
+    assert_eq!(reloaded.age, 1, "a data version kept the samples");
+    assert!(!reloaded.history, "a data version kept the history");
     let moved = draw(
         &mut renderer,
         &bare_scene(
@@ -1909,10 +1494,7 @@ fn restyles_a_channel_without_replanning_the_residency() {
         !renderer.requests_pending(),
         "a channel style replanned the streamed residency"
     );
-    assert_eq!(
-        info.samples, 1,
-        "a channel style kept the accumulated samples"
-    );
+    assert!(!info.history, "a channel style kept the history");
     assert!(!info.rebuilt, "a channel style rebuilt the object buffers");
 }
 
@@ -2351,86 +1933,6 @@ fn composites_soft_splats_through_the_depth_layers() {
         "the opacity scales the splat: {} against {}",
         solid.contrast(core),
         faint.contrast(core)
-    );
-}
-
-#[test]
-fn keeps_the_history_of_a_panning_slice_and_drops_it_for_another_plane() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let single = volume.pyramid();
-    let pyramid = Pyramid::new(
-        single.levels().to_vec(),
-        single.stored(),
-        single.channels().to_vec(),
-        2,
-        1.0,
-    );
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let target = texture(&gpu, SIDE);
-    let camera = slice_camera(&pyramid, 16);
-    let mut panned = camera.clone();
-    panned.pan(glam::Vec2::new(6.0, -4.0), SIDE as f32);
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let (_, first) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &camera,
-            scene: &scene,
-            time: 0,
-            sampling: Sampling::new(1, 8, 1.0),
-            history: None,
-        },
-    );
-    assert!(!first.seeded, "the first take invents a history");
-    let (_, second) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &panned,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: Some(TEMPORAL),
-        },
-    );
-    assert!(second.seeded, "a panned slice discards its history");
-    assert!(second.history, "the panned slice holds no history");
-    let moved = slice_camera(&pyramid, 18);
-    let (_, third) = take(
-        &gpu,
-        &mut renderer,
-        &volume,
-        &Take {
-            texture: &target,
-            camera: &moved,
-            scene: &scene,
-            time: 1,
-            sampling: Sampling::new(1, 1, 1.0),
-            history: Some(TEMPORAL),
-        },
-    );
-    assert!(
-        !third.seeded,
-        "another plane reuses the history of the old one"
     );
 }
 

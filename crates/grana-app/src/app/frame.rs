@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use grana_engine::{Presentation, Viewport};
-use grana_render::FrameInfo;
+use grana_engine::Viewport;
+use grana_render::{Delivery, FrameInfo, SETTLE};
 
-use super::{App, CONVERGENCE_BUDGET, RETRY_INTERVAL, STREAM_POLL};
+use super::{App, RETRY_INTERVAL, STREAM_POLL};
 use crate::stream::{Stream, View as StreamView};
 
 impl App {
@@ -110,10 +110,9 @@ impl App {
         Viewport::screen(scale, size, self.stage.region())
     }
 
-    pub(super) fn render(&mut self, presentation: Presentation) -> Option<Duration> {
+    pub(super) fn render(&mut self, delivery: Delivery) -> Option<Duration> {
         let viewport = self.viewport();
         let cap = self.level_cap();
-        let budget = self.capture.is_none().then_some(CONVERGENCE_BUDGET);
         let overlays = super::overlay::overlays(&self.session);
         let scene = self.session.scene();
         let outcome = {
@@ -131,8 +130,7 @@ impl App {
                         scene,
                         camera,
                         size: [viewport.region[2], viewport.region[3]],
-                        presentation,
-                        budget,
+                        delivery,
                         level_cap: cap,
                         overlays: &overlays,
                     },
@@ -207,9 +205,9 @@ impl App {
             .map_or_else(FrameInfo::default, grana_engine::Engine::info)
     }
 
-    pub(super) fn converging(&self) -> bool {
+    pub(super) fn settling(&self) -> bool {
         let info = self.frame_info();
-        (info.samples > 0 && !info.converged) || info.fading
+        (info.drawn && info.age < SETTLE) || info.fading
     }
 
     pub(super) fn streaming(&self) -> bool {

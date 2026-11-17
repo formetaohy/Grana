@@ -16,7 +16,6 @@ use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
 
 use bytemuck::cast_slice;
 use glam::Vec3;
@@ -34,7 +33,6 @@ use wgpu::{
 use crate::atlas::Atlas;
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
-use crate::converge::{Convergence, Estimate, Sampling};
 use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
@@ -47,13 +45,12 @@ use crate::planner::{
     fit_measured, fit_volume, volume_dispatch,
 };
 use crate::present::Present;
-use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
-use crate::target::{self, SceneTarget};
-use crate::temporal::{FrameView, Temporal, TemporalPass};
+use crate::taa;
+use crate::target::SceneTarget;
 use crate::volume::VolumePass;
 use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
@@ -91,9 +88,8 @@ pub struct FragmentInfo {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameInfo {
     pub view: ViewInfo,
-    pub samples: u32,
-    pub converged: bool,
-    pub seeded: bool,
+    pub drawn: bool,
+    pub age: u32,
     pub history: bool,
     pub rebuilt: bool,
     pub settled: bool,
@@ -150,12 +146,9 @@ pub struct Frame<'a, 'b> {
     pub region: Region,
     pub clip: Clip,
     pub exposure: f32,
-    pub sampling: Sampling,
-    pub budget: Option<Duration>,
     pub scene: &'a SceneFrame<'b>,
     pub delivery: Delivery,
     pub level_cap: usize,
-    pub temporal: Option<Temporal>,
 }
 
 pub struct Renderer {
@@ -183,8 +176,7 @@ pub struct Renderer {
     prefetch: bool,
     transparent: bool,
     exporting: bool,
-    convergence: Option<Convergence>,
-    temporal: TemporalPass,
+    taa: taa::Resolve,
     fade: Option<Fade>,
     sections: Sections,
     sliced: bool,
@@ -231,7 +223,7 @@ impl Renderer {
         let volume = VolumePass::new(device, &layouts, pipelines);
         let clear = crate::clear::Clear::new(device, pipelines);
         let surface = crate::surface::Pipeline::new(device, &layouts, pipelines);
-        let temporal = TemporalPass::new(device, &layouts, pipelines);
+        let taa = taa::Resolve::new(device, &layouts, pipelines);
         let overlay = Overlays::new(device, pipelines);
         Self {
             present,
@@ -258,8 +250,7 @@ impl Renderer {
             prefetch: false,
             transparent: false,
             exporting: false,
-            convergence: None,
-            temporal,
+            taa,
             fade: None,
             sections,
             sliced: false,
@@ -363,9 +354,6 @@ impl Renderer {
 
     pub fn begin_export(&mut self) {
         self.targets.clear();
-        if let Some(convergence) = self.convergence.as_mut() {
-            convergence.forget();
-        }
         self.residence.begin_export();
         self.exporting = true;
         self.fade = None;
@@ -402,9 +390,6 @@ impl Renderer {
         self.targets.clear();
         self.viewport = None;
         self.present_region = None;
-        if let Some(convergence) = self.convergence.as_mut() {
-            convergence.forget();
-        }
         self.pick_readback = None;
         self.pick_pending = false;
         self.exporting = false;
@@ -432,9 +417,6 @@ impl Renderer {
             .targets
             .take(device, &self.layouts, &self.present, size);
         if created {
-            if let Some(convergence) = self.convergence.as_mut() {
-                convergence.forget();
-            }
             self.residence.forget_settled();
         }
         self.residence.set_cap(frame.level_cap);
@@ -479,8 +461,8 @@ impl Renderer {
             return;
         }
         for target in self.targets.iter_mut() {
-            target.shot = None;
-            target.holds = false;
+            target.structure = None;
+            target.taa.invalidate();
         }
         resources.damage(&scopes, &mut self.residence, self.time);
     }
@@ -663,15 +645,6 @@ impl Renderer {
         self.pick_pending
     }
 
-    pub fn convergence(&mut self, device: &Device) -> Option<(u32, f32)> {
-        let drawn = self.info.samples;
-        self.convergence.as_mut().and_then(|convergence| {
-            convergence
-                .poll(device, drawn)
-                .map(|estimate| (estimate.samples(), estimate.error()))
-        })
-    }
-
     pub fn present_only(
         &mut self,
         device: &Device,
@@ -693,7 +666,7 @@ impl Renderer {
         let Some(target) = self.targets.current() else {
             return false;
         };
-        if target.samples == 0 {
+        if target.camera.is_none() {
             return false;
         }
         self.present.write(

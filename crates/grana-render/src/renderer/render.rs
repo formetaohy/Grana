@@ -6,25 +6,25 @@ use super::signature::{ShadowKeys, channel_style};
 use super::timing::{self, Begin};
 use super::view::View;
 use super::*;
+use crate::jitter;
+use crate::taa;
+use glam::Mat4;
 
 #[derive(Clone, Copy)]
 pub(super) struct Shot {
-    view: View,
-    awaits: bool,
-    assured: bool,
-    slice: bool,
-    translucent: bool,
-    surfaces: bool,
-    splats: bool,
-    volume: bool,
-    temporal: Option<Temporal>,
+    pub(super) view: View,
+    pub(super) awaits: bool,
+    pub(super) assured: bool,
+    pub(super) slice: bool,
+    pub(super) translucent: bool,
+    pub(super) surfaces: bool,
+    pub(super) splats: bool,
+    pub(super) volume: bool,
 }
 
 impl Shot {
     fn of(frame: &Frame<'_, '_>) -> Self {
         let slice = frame.camera.slice().is_some();
-        let slice_objects =
-            slice && (!frame.scene.layers.is_empty() || !frame.scene.splats.is_empty());
         Self {
             view: View::new(
                 frame.viewport,
@@ -50,7 +50,6 @@ impl Shot {
                 .channels
                 .iter()
                 .any(|row| row.visible && row.opacity > 0.0),
-            temporal: frame.temporal.filter(|_| !slice_objects),
         }
     }
 }
@@ -60,7 +59,6 @@ struct Prepared {
     levels: Levels,
     ladder: Ladder,
     data: FrameData,
-    view: FrameView,
     started: timing::Started,
     reserved: Option<usize>,
     residency: ViewKey,
@@ -87,6 +85,7 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
+        self.info.drawn = false;
         let shot = Shot::of(&frame);
         let mut prepared = match self.prepare(device, queue, &mut encoder, target, &frame, shot) {
             Ok(prepared) => prepared,
@@ -109,9 +108,6 @@ impl Renderer {
     }
 
     fn register(&mut self) {
-        if let Some(convergence) = self.convergence.as_mut() {
-            convergence.register();
-        }
         self.residence.register();
     }
 
@@ -129,7 +125,6 @@ impl Renderer {
         self.prefetch = frame.delivery.prefetches();
         self.viewport = Some(frame.viewport);
         self.present_region = Some(view.region);
-        let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = Some(view.motion);
         let Self {
@@ -141,14 +136,10 @@ impl Renderer {
             splats,
             sections,
             sliced,
-            convergence,
-            temporal: temporal_pass,
             fade,
             exporting,
             info,
             residence,
-            dummy_normal,
-            dummy_volume,
             budget,
             fragments,
             pipelines,
@@ -232,8 +223,6 @@ impl Renderer {
             };
         let reserved = residence.reserve(outlook.replan);
         if shot.awaits && !outlook.ready && reserved.is_none() {
-            target.samples = 0;
-            info.samples = 0;
             info.rebuilt = false;
             info.fading = false;
             return Err(Halt::Hold(*info));
@@ -271,7 +260,7 @@ impl Renderer {
         let voxel = resources.pyramid.level(planned.level).voxel();
         let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
         shadow.resize(device, layouts, shadow::extent(&planned.space, unit));
-        let mut data = plan::data(plan::Frame {
+        let data = plan::data(plan::Frame {
             camera: frame.camera,
             region: frame.region,
             clip: frame.clip,
@@ -294,83 +283,48 @@ impl Renderer {
         });
         let signature = Signature {
             data: &data,
-            camera: frame.camera.state(),
             region: view.region,
-            levels: outlook.levels,
             versions: scene.versions,
             channels: channel,
             content: residence.content(),
-            generation: residence.generation(),
             time: frame.time,
             epoch: residence.epoch(),
             size: target.size,
-            overlay: crate::schema::overlay_digest(scene.overlays),
+            step: scene.step_scale,
         };
         let started = timing::begin(Begin {
             target,
-            sampling: frame.sampling,
-            budget: frame.budget,
             levels: LevelKey::of(outlook.levels),
-            transition: signature.transition(),
-            structure: signature.digest(),
-            shot: signature.shot(),
-            temporal: shot.temporal,
-            sequence,
-            fade,
+            structure: signature.structure(),
+            view: signature::view(&data),
+            camera: Mat4::from_cols_array_2d(&data.view_projection),
             exporting: *exporting,
             assured: shot.assured,
+            fade,
         });
         if started.snapshot {
             target.fade_group(device, present);
             target.snapshot(encoder, view.region);
             *fade = Some(Fade { weight: 0.0 });
         }
-        if started.reset {
-            if shot.temporal.is_some() {
-                temporal_pass.ensure(&mut target.history, device, target.size);
+        if stale {
+            if shot.surfaces {
+                meshes
+                    .get_or_insert_with(|| MeshPasses::new(device, layouts, *budget / 2, pipelines))
+                    .set(device, queue, layouts, scene);
+            } else if let Some(passes) = meshes.as_mut() {
+                passes.clear();
             }
-            if started.continuing {
-                let geometry =
-                    target.geometry(device, layouts, dummy_normal, dummy_volume, shot.volume);
-                resolve::capture(
-                    temporal_pass,
-                    encoder,
-                    resolve::Capture {
-                        device,
-                        history: target.history.as_mut().expect("the history is allocated"),
-                        previous: target.view,
-                        scene: resources.scene.group(),
-                        geometry: &geometry,
-                        accumulated: &target.accumulation_view,
-                        counts: &target.count_view,
-                        fresh: target.scene.color(),
-                    },
-                );
-            } else {
-                TemporalPass::invalidate(&mut target.history);
+            if shot.splats {
+                splats
+                    .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))
+                    .set(device, queue, layouts, scene.splats);
+            } else if let Some(passes) = splats.as_mut() {
+                passes.clear();
             }
-            if let Some(convergence) = convergence.as_mut() {
-                convergence.reset();
-            }
-            if stale {
-                if shot.surfaces {
-                    meshes
-                        .get_or_insert_with(|| {
-                            MeshPasses::new(device, layouts, *budget / 2, pipelines)
-                        })
-                        .set(device, queue, layouts, scene);
-                } else if let Some(passes) = meshes.as_mut() {
-                    passes.clear();
-                }
-                if shot.splats {
-                    splats
-                        .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))
-                        .set(device, queue, layouts, scene.splats);
-                } else if let Some(passes) = splats.as_mut() {
-                    passes.clear();
-                }
-                residence.load_passes(scene.versions);
-            }
+            residence.load_passes(scene.versions);
+        }
+        if started.reset || started.moved {
             if let Some(passes) = splats.as_mut() {
                 passes.rewind(queue);
                 passes.cull_volume(encoder, resources.scene.group());
@@ -384,20 +338,17 @@ impl Renderer {
                 }
             }
         }
-        let view_now = FrameView::of(&data, view.region);
-        data.jitter = [0.0; 4];
         Ok(Prepared {
             shot,
             levels: outlook.levels,
             ladder: outlook.ladder,
             data,
-            view: view_now,
             started,
             reserved,
             residency: outlook.key,
             shadow: planned.keys,
             replan: outlook.replan,
-            rebuilt: started.reset && stale,
+            rebuilt: stale,
             ready: outlook.ready,
         })
     }
@@ -413,53 +364,40 @@ impl Renderer {
     ) {
         let Self {
             layouts,
-            present,
             resources,
             volume,
             clear,
             surface: surface_pass,
             oit_resolve,
-            gtao: _,
             meshes,
             splats,
-            convergence,
-            temporal: temporal_pass,
-            info,
             sections,
-            overlay,
-            dummy_oit,
+            info,
             dummy_ao,
+            dummy_oit,
             dummy_normal,
             dummy_volume,
-            pipelines,
             ..
         } = self;
         let Some(resources) = resources.as_mut() else {
             return;
         };
-        let scene = frame.scene;
-        let view = prepared.shot.view;
+        let shot = prepared.shot;
+        let view = shot.view;
         let started = prepared.started;
+        let ladder = prepared.ladder;
         let data = &mut prepared.data;
-        if let Some(convergence) = convergence.as_mut()
-            && let Some(estimate) = convergence.poll(device, target.samples)
-        {
-            target.estimate = Some(estimate);
-        }
-        let resolved = frame.sampling.met(target.estimate);
-        info.samples = target.samples;
-        info.rebuilt = prepared.rebuilt;
-        let offset = sample::offset(started.sample, [view.region[2], view.region[3]]);
+        let offset = jitter::offset(started.phase, [view.region[2], view.region[3]]);
         data.jitter = [
             offset.x,
             offset.y,
-            started.sample as f32,
-            scene.step_scale.max(1.0e-3),
+            started.phase as f32,
+            frame.scene.step_scale.max(1.0e-3),
         ];
         data.lens = crate::frame::lens(
             frame.camera,
-            started.sample,
-            frame.sampling.ceiling(),
+            started.phase % taa::APERTURE_PHASE,
+            taa::APERTURE_PHASE,
             view.aspect,
         );
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
@@ -476,146 +414,83 @@ impl Renderer {
             );
             resources.planner.encode(encoder, resources.scene.group());
         }
-        let drawing =
-            target.samples < frame.sampling.ceiling() && prepared.ready && !started.expired;
-        if drawing {
-            target.samples += 1;
-            info.samples = target.samples;
-            let content = data.tag[3];
-            if prepared.shot.volume && !prepared.shot.slice {
-                let mut ladder_levels = [0usize; BAND];
-                let mut count = 0;
-                for level in prepared.ladder.levels() {
-                    ladder_levels[count] = level;
-                    count += 1;
-                }
-                let entries = resources.baked.collect(
-                    &resources.atlas,
-                    &ladder_levels[..count],
-                    frame.time,
-                    content,
-                    resources.bake.capacity(),
-                );
-                if !entries.is_empty() {
-                    resources.bake.stage(queue, entries);
-                    resources.bake.encode(
-                        encoder,
-                        entries.len() as u32,
-                        resources.scene.group(),
-                        &resources.level_group,
-                        resources.atlas.source(),
-                    );
-                }
-            }
-            if let Some(passes) = meshes.as_mut() {
-                passes.write_uniforms(queue, data, scene.shading);
-            }
-            draw::encode(draw::Stage {
-                device,
-                queue,
-                layouts,
-                encoder,
-                target,
-                scene,
-                table: &resources.scene,
-                groups: draw::Groups {
-                    level: &resources.level_group,
-                    atlas: resources.atlas.group(),
-                    occupancy: &resources.occupancy_group,
-                },
-                shadow: Some(&mut resources.shadow),
-                keys: prepared.shadow,
-                volume_pass: volume,
-                clear,
-                surface: surface_pass,
-                oit_resolve,
-                meshes: meshes.as_ref(),
-                splats: splats.as_ref(),
-                sections,
-                overlay,
-                data,
-                features: draw::Features {
-                    region: view.region,
-                    slice: prepared.shot.slice,
-                    translucent: prepared.shot.translucent,
-                    volume: prepared.shot.volume,
-                    surfaces: prepared.shot.surfaces,
-                    ambient: started.reset,
-                },
-                sample: started.sample,
-                dummy_ao,
-                dummy_oit,
-                dummy_normal,
-                dummy_volume,
-            });
-            if frame.sampling.measuring() && target.samples > 1 {
-                resolve::measure(
-                    encoder,
-                    resolve::Measure {
-                        device,
-                        queue,
-                        pipelines,
-                        convergence,
-                        sampled: crate::converge::Sampled {
-                            region: view.region,
-                            color: target.scene.color(),
-                            accumulation: &target.accumulation_view,
-                        },
-                        samples: target.samples,
-                    },
-                );
-            }
-            resolve::accumulate(
-                encoder,
-                resolve::Accumulate {
-                    clear,
-                    present,
-                    target,
-                    region: view.region,
-                    reset: started.reset,
-                },
-            );
-            if started.continuing && target.samples == 1 {
-                let request = prepared
-                    .shot
-                    .temporal
-                    .expect("the seeding frame carries a history request");
-                let spacing = resources.pyramid.level(prepared.ladder.base).spacing();
-                let tolerance =
-                    crate::temporal::tolerance(spacing.x().max(spacing.y()).max(spacing.z()));
-                let geometry = target.geometry(
-                    device,
-                    layouts,
-                    dummy_normal,
-                    dummy_volume,
-                    prepared.shot.volume,
-                );
-                resolve::seed(
-                    temporal_pass,
-                    encoder,
-                    resolve::Seed {
-                        device,
-                        queue,
-                        history: target.history.as_ref().expect("the history is captured"),
-                        view: &prepared.view,
-                        length: request.history(),
-                        tolerance,
-                        scene: resources.scene.group(),
-                        geometry: &geometry,
-                        accumulated: &target.accumulation_view,
-                        counts: &target.count_view,
-                        fresh: target.scene.color(),
-                    },
-                );
-                target.seeded = true;
-            }
-            target.holds = true;
-        } else if !prepared.ready {
-            target.samples = 0;
-            info.samples = 0;
+        info.rebuilt = prepared.rebuilt;
+        if !prepared.ready {
+            return;
         }
-        info.converged = prepared.ready
-            && (target.samples >= frame.sampling.ceiling() || resolved || started.expired);
+        let content = data.tag[3];
+        if shot.volume && !shot.slice {
+            let mut ladder_levels = [0usize; BAND];
+            let mut count = 0;
+            for level in ladder.levels() {
+                ladder_levels[count] = level;
+                count += 1;
+            }
+            let entries = resources.baked.collect(
+                &resources.atlas,
+                &ladder_levels[..count],
+                frame.time,
+                content,
+                resources.bake.capacity(),
+            );
+            if !entries.is_empty() {
+                resources.bake.stage(queue, entries);
+                resources.bake.encode(
+                    encoder,
+                    entries.len() as u32,
+                    resources.scene.group(),
+                    &resources.level_group,
+                    resources.atlas.source(),
+                );
+            }
+        }
+        if let Some(passes) = meshes.as_mut() {
+            passes.write_uniforms(queue, data, frame.scene.shading);
+        }
+        draw::encode(draw::Stage {
+            device,
+            queue,
+            layouts,
+            encoder,
+            target,
+            scene: frame.scene,
+            table: &resources.scene,
+            groups: draw::Groups {
+                level: &resources.level_group,
+                atlas: resources.atlas.group(),
+                occupancy: &resources.occupancy_group,
+            },
+            shadow: Some(&mut resources.shadow),
+            keys: prepared.shadow,
+            volume_pass: volume,
+            clear,
+            surface: surface_pass,
+            oit_resolve,
+            meshes: meshes.as_ref(),
+            splats: splats.as_ref(),
+            sections,
+            data,
+            features: draw::Features {
+                region: view.region,
+                slice: shot.slice,
+                translucent: shot.translucent,
+                volume: shot.volume,
+                surfaces: shot.surfaces,
+            },
+            sample: started.phase,
+            dummy_ao,
+            dummy_oit,
+            dummy_normal,
+            dummy_volume,
+        });
+        target.age = if started.reset || started.changed {
+            1
+        } else {
+            target.age.saturating_add(1)
+        };
+        target.phase = target.phase.wrapping_add(1);
+        info.drawn = true;
+        info.age = target.age;
     }
 
     fn resolve(
@@ -628,44 +503,56 @@ impl Renderer {
         prepared: &Prepared,
     ) {
         let Self {
+            layouts,
             present,
+            taa,
             resources,
             transparent,
             fade,
             info,
             residence,
+            overlay,
+            dummy_normal,
+            dummy_volume,
             ..
         } = self;
-        if prepared.ready {
-            resolve::present(
-                encoder,
-                resolve::Presenting {
-                    device,
-                    queue,
-                    present,
-                    target,
-                    surface: frame.target,
-                    viewport: prepared.shot.view.region,
-                    region: prepared.shot.view.region,
-                    exposure: frame.exposure,
-                    transparent: *transparent,
-                    fade,
-                },
-            );
-        }
-        info.fading = prepared.ready && fade.is_some();
-        if let Some(slot) = prepared.reserved
-            && let Some(resources) = resources.as_ref()
-        {
+        let (Some(resources), true) = (resources.as_ref(), prepared.ready) else {
+            info.fading = false;
+            if let (Some(slot), Some(resources)) = (prepared.reserved, resources.as_ref()) {
+                residence.stage(encoder, slot, &resources.planner, prepared.residency);
+            }
+            return;
+        };
+        let view = prepared.shot.view;
+        let intact = resolve::encode(resolve::Stage {
+            device,
+            queue,
+            encoder,
+            layouts,
+            present,
+            taa,
+            scene: resources.scene.group(),
+            target,
+            overlay,
+            overlays: frame.scene.overlays,
+            data: &prepared.data,
+            surface: frame.target,
+            fade,
+            region: view.region,
+            exposure: frame.exposure,
+            transparent: *transparent,
+            volume: prepared.shot.volume,
+            phase: prepared.started.phase,
+            reset: prepared.started.reset,
+            moved: prepared.started.moved,
+            dummy_normal,
+            dummy_volume,
+        });
+        info.history = intact;
+        info.fading = fade.is_some();
+        if let Some(slot) = prepared.reserved {
             residence.stage(encoder, slot, &resources.planner, prepared.residency);
         }
-        info.seeded = target.seeded;
-        info.history = prepared.shot.temporal.is_some()
-            && target
-                .history
-                .as_ref()
-                .is_some_and(crate::temporal::History::ready);
-        target.view = prepared.view;
     }
 }
 

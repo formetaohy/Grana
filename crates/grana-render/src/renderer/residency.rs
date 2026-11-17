@@ -1,4 +1,5 @@
 use super::*;
+use glam::{Mat4, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Levels {
@@ -135,11 +136,7 @@ impl TargetCache {
 
 pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
-    pub(super) accumulation: Texture,
-    pub(super) accumulation_view: TextureView,
-    pub(super) count: Texture,
-    pub(super) count_view: TextureView,
-    pub(super) accumulate_group: BindGroup,
+    pub(super) taa: crate::taa::History,
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: Option<Oit>,
@@ -150,17 +147,13 @@ pub(super) struct FrameTarget {
     pub(super) surface: Option<crate::surface::Target>,
     pub(super) volume: Option<crate::target::Volume>,
     pub(super) size: [u32; 2],
-    pub(super) samples: u32,
-    pub(super) estimate: Option<Estimate>,
-    pub(super) deadline: Option<std::time::Instant>,
-    pub(super) signature: Option<u64>,
-    pub(super) transition: Option<u64>,
+    pub(super) structure: Option<u64>,
+    pub(super) view: Option<u64>,
+    pub(super) camera: Option<Mat4>,
+    pub(super) jitter: Vec2,
     pub(super) levels: Option<LevelKey>,
-    pub(super) shot: Option<u64>,
-    pub(super) view: FrameView,
-    pub(super) history: Option<crate::temporal::History>,
-    pub(super) seeded: bool,
-    pub(super) holds: bool,
+    pub(super) age: u32,
+    pub(super) phase: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -170,9 +163,8 @@ pub(super) struct GeometryKey {
 }
 
 pub(super) struct FadeTarget {
-    pub(super) texture: Texture,
-    pub(super) count: Texture,
-    pub(super) group: BindGroup,
+    texture: Texture,
+    group: BindGroup,
 }
 
 impl FrameTarget {
@@ -183,31 +175,11 @@ impl FrameTarget {
         size: [u32; 2],
     ) -> Self {
         let scene = SceneTarget::new(device, &layouts.depth, size);
-        let accumulation = target::accumulation(device, size);
-        let accumulation_view = target::view(&accumulation);
-        let count = target::count(device, size);
-        let count_view = target::view(&count);
-        let accumulate_group = present.bind(
-            device,
-            scene.color(),
-            scene.color(),
-            scene.color(),
-            scene.color(),
-        );
-        let present_group = present.bind(
-            device,
-            &accumulation_view,
-            &count_view,
-            &accumulation_view,
-            &count_view,
-        );
+        let taa = crate::taa::History::new(device, size);
+        let present_group = present.bind(device, taa.resolved(), taa.resolved());
         Self {
             scene,
-            accumulation,
-            accumulation_view,
-            count,
-            count_view,
-            accumulate_group,
+            taa,
             present_group,
             fade: None,
             oit: None,
@@ -218,17 +190,13 @@ impl FrameTarget {
             surface: None,
             volume: None,
             size,
-            samples: 0,
-            estimate: None,
-            deadline: None,
-            signature: None,
-            transition: None,
+            structure: None,
+            view: None,
+            camera: None,
+            jitter: Vec2::ZERO,
             levels: None,
-            shot: None,
-            view: FrameView::default(),
-            history: None,
-            seeded: false,
-            holds: false,
+            age: 0,
+            phase: 0,
         }
     }
 
@@ -316,63 +284,60 @@ impl FrameTarget {
     }
 
     pub(super) fn fade_group(&mut self, device: &Device, present: &Present) -> &BindGroup {
-        let fade = self.fade.get_or_insert_with(|| {
-            let texture = target::accumulation(device, self.size);
-            let view = target::view(&texture);
-            let count = target::count(device, self.size);
-            let count_view = target::view(&count);
-            let group = present.bind(
+        let Self {
+            taa, fade, size, ..
+        } = self;
+        let size = *size;
+        let held = fade.get_or_insert_with(|| {
+            let texture = crate::target::image(
                 device,
-                &self.accumulation_view,
-                &self.count_view,
-                &view,
-                &count_view,
+                "grana.fade",
+                size,
+                crate::target::SCENE_FORMAT,
+                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             );
-            FadeTarget {
-                texture,
-                count,
-                group,
-            }
+            let view = crate::target::view(&texture);
+            let group = present.bind(device, taa.resolved(), &view);
+            FadeTarget { texture, group }
         });
-        &fade.group
+        &held.group
     }
 
     pub(super) fn snapshot(&mut self, encoder: &mut CommandEncoder, region: [u32; 4]) {
         let Some(fade) = self.fade.as_ref() else {
             return;
         };
-        let extent = wgpu::Extent3d {
+        let extent = Extent3d {
             width: region[2].max(1),
             height: region[3].max(1),
             depth_or_array_layers: 1,
         };
-        for (source, destination) in [
-            (&self.accumulation, &fade.texture),
-            (&self.count, &fade.count),
-        ] {
-            encoder.copy_texture_to_texture(
-                TexelCopyTextureInfo {
-                    texture: source,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: region[0],
-                        y: region[1],
-                        z: 0,
-                    },
-                    aspect: TextureAspect::All,
+        encoder.copy_texture_to_texture(
+            TexelCopyTextureInfo {
+                texture: self.taa.resolved_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: region[0],
+                    y: region[1],
+                    z: 0,
                 },
-                TexelCopyTextureInfo {
-                    texture: destination,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: region[0],
-                        y: region[1],
-                        z: 0,
-                    },
-                    aspect: TextureAspect::All,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyTextureInfo {
+                texture: &fade.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: region[0],
+                    y: region[1],
+                    z: 0,
                 },
-                extent,
-            );
-        }
+                aspect: TextureAspect::All,
+            },
+            extent,
+        );
+    }
+
+    pub(super) fn resolved(&self) -> &TextureView {
+        self.taa.resolved()
     }
 }

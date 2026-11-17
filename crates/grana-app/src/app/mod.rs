@@ -42,7 +42,6 @@ const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const INTERACTION_HOLD: Duration = Duration::from_millis(220);
-const CONVERGENCE_BUDGET: Duration = Duration::from_millis(400);
 const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
@@ -284,9 +283,9 @@ impl App {
         self.autosave();
         self.advance_playback();
         self.advance_animation();
-        let presentation = self.presentation(animating);
+        let delivery = self.delivery();
         self.fit_view();
-        let mut delay = self.render(presentation).unwrap_or(Duration::MAX);
+        let mut delay = self.render(delivery).unwrap_or(Duration::MAX);
         if let Some(wait) = wait {
             delay = delay.min(wait);
         }
@@ -294,7 +293,7 @@ impl App {
             delay = delay.min(self.playback_delay());
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.session.scene().is_some() && self.converging() {
+        } else if self.session.scene().is_some() && self.settling() {
             delay = Duration::ZERO;
         }
         if let Some(active) = self.activity_wait() {
@@ -317,8 +316,11 @@ impl App {
         let info = self.frame_info();
         let loaded = self.session.scene().is_some();
         let streamed = info.view.resident >= info.view.demand;
-        let settled =
-            loaded && streamed && info.converged && !info.fading && !self.session.previewing();
+        let settled = loaded
+            && streamed
+            && info.age >= grana_render::SETTLE
+            && !info.fading
+            && !self.session.previewing();
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
             && self.elapsed_frames > 30

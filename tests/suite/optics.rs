@@ -6,7 +6,7 @@ use grana_volume::{BrickGrid, Clip, Extent, PackedBrick, Pyramid, Region, Spacin
 use crate::support::{Gpu, gpu, read_pixels, spheres, splat, versions};
 
 const SIDE: u32 = 384;
-const SAMPLES: u32 = 48;
+const FRAMES: u32 = 32;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 
 #[test]
@@ -81,12 +81,9 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             region: Region::none(),
             clip: Clip::none(),
             exposure: 1.0,
-            sampling: grana_render::Sampling::new(1, SAMPLES, 1.0),
-            budget: None,
             scene: &scene,
             delivery: grana_render::Delivery::Assured,
             level_cap: usize::MAX,
-            temporal: None,
         };
         settle(&gpu, &mut renderer, &frame, &volume);
         read_pixels(&gpu, &texture, [SIDE, SIDE])
@@ -177,7 +174,7 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
             .draw(gpu.device(), gpu.queue(), copy(frame))
             .expect("the frame draws");
         if !renderer.requests_pending() {
-            while info.samples < SAMPLES || info.fading {
+            while info.drawn && (info.age < FRAMES || info.fading) {
                 info = renderer
                     .draw(gpu.device(), gpu.queue(), copy(frame))
                     .expect("the frame draws");
@@ -211,12 +208,9 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
         region: frame.region,
         clip: frame.clip,
         exposure: frame.exposure,
-        sampling: frame.sampling,
-        budget: None,
         scene: frame.scene,
         delivery: frame.delivery,
         level_cap: frame.level_cap,
-        temporal: frame.temporal,
     }
 }
 
