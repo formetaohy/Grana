@@ -165,6 +165,7 @@ grana-tiff = { workspace = true }
 grana-text = { workspace = true }
 grana-ui = { workspace = true }
 grana-vector = { workspace = true }
+grana-video = { workspace = true }
 grana-volume = { workspace = true }
 grana-warp = { workspace = true }
 grana-weight = { workspace = true }

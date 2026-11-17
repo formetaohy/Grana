@@ -487,7 +487,7 @@ impl Encode for SetState {
         writer.bool(self.labels);
         self.label.encode(writer);
         writer.count(self.hidden.len());
-        for mask in &self.hidden {
+        for mask in self.hidden.iter() {
             writer.count(mask.len());
             for hidden in mask {
                 writer.bool(*hidden);

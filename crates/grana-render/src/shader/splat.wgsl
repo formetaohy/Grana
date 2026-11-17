@@ -159,7 +159,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     let center = data.center.xyz;
     let sigma = max(data.sigma.xyz, vec3<f32>(1.0e-7));
     let clip_center = frame.view_projection * vec4<f32>(center, 1.0);
-    let world_per_pixel = clip_center.w / max(frame.march.w, 1.0e-6);
+    let world_per_pixel = clip_center.w / max(frame.sampling.x, 1.0e-6);
     let floor = SPLAT_REACH * SPLAT_MINIMUM_SIGMA * world_per_pixel;
     let extent = vec2<f32>(
         max(SPLAT_REACH * splat_extent(frame.right.xyz, sigma), floor),

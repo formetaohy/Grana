@@ -232,6 +232,7 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
             clip,
             aspect: view.aspect,
             height: view.height,
+            display_height: view.display_height,
             time,
         },
         ladder,

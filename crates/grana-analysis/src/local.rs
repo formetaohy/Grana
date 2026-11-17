@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
+use std::mem::size_of;
 use std::ops::Range;
 
-use grana_volume::Intensity;
+use grana_volume::{Intensity, Level, Pyramid, Region};
+
+use crate::work;
 
 pub(crate) const BLOCK: i64 = 8;
 pub(crate) const WINDOW: i64 = 2;
@@ -131,6 +134,53 @@ pub(crate) struct LocalField(Grid);
 
 const BUCKET: usize = (BLOCK * BLOCK * BLOCK) as usize;
 
+const _: () = {
+    assert!(BUCKET as u64 == work::FIELD_BLOCK_VOXELS);
+    assert!(BUCKET as u64 * size_of::<f32>() as u64 == work::FIELD_BUCKET_BYTES);
+    assert!(size_of::<u32>() as u64 == work::FIELD_COUNT_BYTES);
+    assert!(size_of::<Option<(f32, f32)>>() as u64 == work::FIELD_LEVEL_BYTES);
+    assert!(size_of::<f32>() as u64 == work::FIELD_BACKGROUND_BYTES);
+    assert!(size_of::<f32>() as u64 == work::FIELD_SIGNAL_BYTES);
+};
+
+fn block_counts(region: &[Range<u32>; 3]) -> [usize; 3] {
+    [0, 1, 2].map(|axis| (region[axis].end - region[axis].start).div_ceil(BLOCK as u32) as usize)
+}
+
+fn column_count(blocks: [usize; 3]) -> usize {
+    blocks[0] * blocks[1]
+}
+
+pub(crate) fn footprint(blocks: [usize; 3]) -> u64 {
+    let columns = column_count(blocks) as u64;
+    columns * (work::FIELD_BUCKET_BYTES + work::FIELD_COUNT_BYTES + work::FIELD_LEVEL_BYTES)
+        + columns * blocks[2] as u64 * (work::FIELD_BACKGROUND_BYTES + work::FIELD_SIGNAL_BYTES)
+}
+
+pub fn field_bytes(level: Level, region: Region) -> u64 {
+    region
+        .voxel_range(level)
+        .map_or(0, |ranges| footprint(block_counts(&ranges)))
+}
+
+pub(crate) fn bounded_level(
+    pyramid: &Pyramid,
+    region: Region,
+    candidate: usize,
+) -> Result<usize, String> {
+    let coarsest = pyramid.level_count() - 1;
+    (candidate..=coarsest)
+        .find(|level| field_bytes(pyramid.level(*level), region) <= work::FIELD_FRAME_BYTES)
+        .ok_or_else(|| {
+            format!(
+                "the block field of the detection region needs {} MiB per frame at the coarsest level {} and the field budget holds {} MiB; crop the region to a smaller plane",
+                field_bytes(pyramid.level(coarsest), region) >> 20,
+                coarsest,
+                work::FIELD_FRAME_BYTES >> 20,
+            )
+        })
+}
+
 pub struct BlockLevels {
     anchor: [i64; 3],
     region: [Range<u32>; 3],
@@ -160,9 +210,8 @@ impl BlockLevels {
             region.iter().all(|range| !range.is_empty()),
             "a block field covers a non empty region"
         );
-        let blocks = [0, 1, 2]
-            .map(|axis| (region[axis].end - region[axis].start).div_ceil(BLOCK as u32) as usize);
-        let columns = blocks[0] * blocks[1];
+        let blocks = block_counts(&region);
+        let columns = column_count(blocks);
         let width = (cover[0].end - cover[0].start) as usize;
         let height = (cover[1].end - cover[1].start) as usize;
         Self {

@@ -3405,6 +3405,7 @@ dependencies = [
  "grana-tiff",
  "grana-ui",
  "grana-vector",
+ "grana-video",
  "grana-volume",
  "grana-warp",
  "grana-weight",

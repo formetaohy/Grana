@@ -302,7 +302,7 @@ impl Curation {
         }
     }
 
-    pub(crate) fn keep(&mut self, time: u32, anchors: &[ObjectAnchor], voxel: f32) -> Option<Kept> {
+    pub(crate) fn keep(&self, time: u32, anchors: &[ObjectAnchor], voxel: f32) -> Option<Kept> {
         let removed = self.removed.get(time as usize)?;
         if removed.is_empty() {
             return None;

@@ -7,6 +7,7 @@ mod geometry;
 mod imaris;
 mod measure;
 mod mesh;
+mod movie;
 mod optics;
 mod playback;
 mod provenance;

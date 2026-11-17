@@ -661,7 +661,7 @@ impl Decode for SetState {
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackColor>::decode(reader)?;
         let classifier = Option::<ClassifierState>::decode(reader)?;
-        let object_coloc = Option::<ObjectColoc>::decode(reader)?;
+        let object_coloc = Option::<Arc<ObjectColoc>>::decode(reader)?;
         let label_export = Option::<LabelExport>::decode(reader)?;
         let localization = Option::<LocalizationSource>::decode(reader)?;
         let seeds = decode_seeds(reader)?;
@@ -679,7 +679,7 @@ impl Decode for SetState {
             visible,
             labels,
             label,
-            hidden,
+            hidden: Arc::new(hidden),
             opacity,
             material,
             params,
@@ -696,7 +696,7 @@ impl Decode for SetState {
             relations: Vec::<RelationState>::decode(reader)?,
             provenance: Provenance::decode(reader)?,
             version: reader.u32()?,
-            curation: Curation::decode(reader)?,
+            curation: Arc::<Curation>::decode(reader)?,
             document: grana_scene::Revision::from_raw(reader.u64()?),
         };
         Ok(state)

@@ -162,7 +162,7 @@ pub struct TableRequest {
     tracks: Option<TrackSet>,
     frame_interval: f32,
     classifier: Option<grana_measure::Classifier>,
-    coloc: Option<ObjectColoc>,
+    coloc: Option<Arc<ObjectColoc>>,
     basis: Option<Arc<Table>>,
     retained: Vec<String>,
 }
@@ -227,7 +227,7 @@ impl TableRequest {
             tracks: set.tracks().map(|layer| layer.set().clone()),
             frame_interval: scene.dataset.frame_interval(),
             classifier: set.classifier().cloned(),
-            coloc: set.object_coloc().cloned(),
+            coloc: set.shared_object_coloc(),
             basis: None,
             retained: Vec::new(),
         })

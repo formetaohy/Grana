@@ -114,12 +114,12 @@ impl Recorder {
     }
 
     pub fn finish(mut self) -> Result<(), Error> {
-        self.stop()?;
-        let result = self.join();
-        result.and_then(|()| match self.fault() {
+        let stopped = self.stop();
+        let joined = self.join();
+        match self.fault() {
             Some(detail) => Err(Error::Encode(detail)),
-            None => Ok(()),
-        })
+            None => joined.and(stopped),
+        }
     }
 
     pub fn abort(mut self) {

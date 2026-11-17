@@ -209,9 +209,9 @@ impl Ao {
             region: frame.viewport,
             noise: [
                 ambient.sample as f32,
-                frame.march[3],
+                frame.sampling[0],
                 1.0 - frame.projection[0],
-                0.0,
+                frame.sampling[1],
             ],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));

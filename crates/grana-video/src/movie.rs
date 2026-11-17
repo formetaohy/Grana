@@ -12,6 +12,8 @@ const HIGH_PROFILES: [u8; 4] = [100, 110, 122, 144];
 const AVC_DEPTH: u16 = 0x0018;
 const PNG_DEPTH: u16 = 0x0020;
 const QUICKTIME: [u8; 4] = *b"qt  ";
+const MEDIA_BOX_HEADER: [u8; 8] = [0, 0, 0, 0, b'm', b'd', b'a', b't'];
+const MEDIA_BOX_PAYLOAD_LIMIT: u64 = u32::MAX as u64 - 8;
 
 pub(crate) enum Codec {
     H264 { sps: Vec<u8>, pps: Vec<u8> },
@@ -26,9 +28,30 @@ pub(crate) struct Movie {
     fps: u32,
     samples: Vec<u32>,
     keys: Vec<u32>,
-    media: u64,
-    start: u64,
+    chunks: Vec<Chunk>,
+    media: Option<MediaBox>,
     alpha: bool,
+}
+
+struct Chunk {
+    offset: u64,
+    samples: u32,
+}
+
+struct MediaBox {
+    header: u64,
+    bytes: u64,
+    samples: u32,
+}
+
+impl MediaBox {
+    fn admits(&self, length: u32) -> bool {
+        self.bytes + u64::from(length) <= MEDIA_BOX_PAYLOAD_LIMIT
+    }
+
+    fn size(&self) -> u32 {
+        u32::try_from(self.bytes + 8).expect("a media box carries its size in four bytes")
+    }
 }
 
 impl Movie {
@@ -43,10 +66,7 @@ impl Movie {
             detail: error.to_string(),
         })?;
         let mut sink = BufWriter::new(file);
-        let header = ftyp(alpha);
-        write(&mut sink, &temporary, &header)?;
-        write(&mut sink, &temporary, &[0; 8])?;
-        let start = (header.len() + 8) as u64;
+        write(&mut sink, &temporary, &ftyp(alpha))?;
         Ok(Self {
             path: path.to_path_buf(),
             atomic: Some(atomic),
@@ -55,8 +75,8 @@ impl Movie {
             fps,
             samples: Vec::new(),
             keys: Vec::new(),
-            media: 0,
-            start,
+            chunks: Vec::new(),
+            media: None,
             alpha,
         })
     }
@@ -66,44 +86,35 @@ impl Movie {
     }
 
     pub fn sample(&mut self, bytes: &[u8], key: bool) -> Result<(), Error> {
-        let length = u32::try_from(bytes.len()).map_err(|_| {
-            Error::Encode("an encoded sample outgrew its four byte length".to_string())
-        })?;
-        let temporary = self
-            .atomic
+        let length = sample_length(bytes.len())?;
+        if !self
+            .media
             .as_ref()
-            .expect("the movie is open")
-            .staging()
-            .to_path_buf();
+            .is_some_and(|media| media.admits(length))
+        {
+            self.open_media()?;
+        }
+        let temporary = self.staging();
         write(&mut self.sink, &temporary, bytes)?;
         self.samples.push(length);
         if key {
             self.keys.push(self.samples.len() as u32);
         }
-        self.media += u64::from(length);
+        let media = self.media.as_mut().expect("a media box is open");
+        media.bytes += u64::from(length);
+        media.samples += 1;
         Ok(())
     }
 
     pub fn finish(mut self, codec: Codec) -> Result<(), Error> {
-        let mdat = u32::try_from(self.media + 8)
-            .map_err(|_| Error::Encode("the movie outgrew a four gigabyte file".to_string()))?;
-        let temporary = self
-            .atomic
-            .as_ref()
-            .expect("the movie is open")
-            .staging()
-            .to_path_buf();
+        self.close_media()?;
+        let moov = self.moov(&codec);
+        let temporary = self.staging();
         let fault = |error: std::io::Error| Error::Write {
             path: temporary.clone(),
             detail: error.to_string(),
         };
-        self.sink
-            .seek(SeekFrom::Start(self.start - 8))
-            .map_err(fault)?;
-        self.sink.write_all(&mdat.to_be_bytes()).map_err(fault)?;
-        self.sink.write_all(b"mdat").map_err(fault)?;
         self.sink.seek(SeekFrom::End(0)).map_err(fault)?;
-        let moov = self.moov(&codec);
         self.sink.write_all(&moov).map_err(fault)?;
         self.sink.flush().map_err(fault)?;
         self.atomic
@@ -114,6 +125,53 @@ impl Movie {
                 path: self.path.clone(),
                 detail: error.to_string(),
             })
+    }
+
+    fn staging(&self) -> PathBuf {
+        self.atomic
+            .as_ref()
+            .expect("the movie is open")
+            .staging()
+            .to_path_buf()
+    }
+
+    fn open_media(&mut self) -> Result<(), Error> {
+        self.close_media()?;
+        let temporary = self.staging();
+        let fault = |error: std::io::Error| Error::Write {
+            path: temporary.clone(),
+            detail: error.to_string(),
+        };
+        let header = self.sink.seek(SeekFrom::End(0)).map_err(fault)?;
+        self.sink.write_all(&MEDIA_BOX_HEADER).map_err(fault)?;
+        self.media = Some(MediaBox {
+            header,
+            bytes: 0,
+            samples: 0,
+        });
+        Ok(())
+    }
+
+    fn close_media(&mut self) -> Result<(), Error> {
+        let Some(media) = self.media.take() else {
+            return Ok(());
+        };
+        let temporary = self.staging();
+        let fault = |error: std::io::Error| Error::Write {
+            path: temporary.clone(),
+            detail: error.to_string(),
+        };
+        self.sink
+            .seek(SeekFrom::Start(media.header))
+            .map_err(fault)?;
+        self.sink
+            .write_all(&media.size().to_be_bytes())
+            .map_err(fault)?;
+        self.chunks.push(Chunk {
+            offset: media.header + 8,
+            samples: media.samples,
+        });
+        Ok(())
     }
 
     fn moov(&self, codec: &Codec) -> Vec<u8> {
@@ -153,11 +211,14 @@ impl Movie {
         push_u32(&mut stts, self.samples.len() as u32);
         push_u32(&mut stts, 1);
 
+        let runs = chunk_runs(&self.chunks);
         let mut stsc = Vec::new();
-        push_u32(&mut stsc, 1);
-        push_u32(&mut stsc, 1);
-        push_u32(&mut stsc, self.samples.len() as u32);
-        push_u32(&mut stsc, 1);
+        push_u32(&mut stsc, runs.len() as u32);
+        for (first, samples) in runs {
+            push_u32(&mut stsc, first);
+            push_u32(&mut stsc, samples);
+            push_u32(&mut stsc, 1);
+        }
 
         let mut stsz = Vec::new();
         push_u32(&mut stsz, 0);
@@ -165,10 +226,6 @@ impl Movie {
         for sample in &self.samples {
             push_u32(&mut stsz, *sample);
         }
-
-        let mut stco = Vec::new();
-        push_u32(&mut stco, 1);
-        push_u32(&mut stco, self.start as u32);
 
         let mut stss = Vec::new();
         push_u32(&mut stss, self.keys.len() as u32);
@@ -183,11 +240,56 @@ impl Movie {
                 full_box(*b"stts", 0, 0, stts),
                 full_box(*b"stsc", 0, 0, stsc),
                 full_box(*b"stsz", 0, 0, stsz),
-                full_box(*b"stco", 0, 0, stco),
+                chunk_offsets(&self.chunks),
                 full_box(*b"stss", 0, 0, stss),
             ]
             .concat(),
         )
+    }
+}
+
+fn sample_length(bytes: usize) -> Result<u32, Error> {
+    u32::try_from(bytes)
+        .ok()
+        .filter(|length| u64::from(*length) <= MEDIA_BOX_PAYLOAD_LIMIT)
+        .ok_or_else(|| Error::Encode("an encoded sample outgrew a media box".to_string()))
+}
+
+fn chunk_runs(chunks: &[Chunk]) -> Vec<(u32, u32)> {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let repeated = runs
+            .last()
+            .is_some_and(|(_, samples)| *samples == chunk.samples);
+        if !repeated {
+            runs.push((index as u32 + 1, chunk.samples));
+        }
+    }
+    runs
+}
+
+fn chunk_offsets(chunks: &[Chunk]) -> Vec<u8> {
+    let narrow: Option<Vec<u32>> = chunks
+        .iter()
+        .map(|chunk| u32::try_from(chunk.offset).ok())
+        .collect();
+    match narrow {
+        Some(offsets) => {
+            let mut stco = Vec::new();
+            push_u32(&mut stco, offsets.len() as u32);
+            for offset in offsets {
+                push_u32(&mut stco, offset);
+            }
+            full_box(*b"stco", 0, 0, stco)
+        }
+        None => {
+            let mut co64 = Vec::new();
+            push_u32(&mut co64, chunks.len() as u32);
+            for chunk in chunks {
+                push_u64(&mut co64, chunk.offset);
+            }
+            full_box(*b"co64", 0, 0, co64)
+        }
     }
 }
 
@@ -355,6 +457,10 @@ fn push_u16(out: &mut Vec<u8>, value: u16) {
 }
 
 fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_be_bytes());
+}
+
+fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 

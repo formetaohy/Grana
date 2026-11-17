@@ -38,3 +38,4 @@ pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
 pub use schedule::{parallel, receive, workers};
 pub use surface::{SeedPolicy, Sources, SurfaceBuilder, apply, merge, recut, split, surface_level};
 pub use track::TrackLinker;
+pub use work::FIELD_PEAK_BYTES;

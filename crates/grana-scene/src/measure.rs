@@ -55,6 +55,7 @@ pub struct Measure {
     plot_stamp: u64,
     origin: Option<MeasureKey>,
     pending: Option<MeasureKey>,
+    pending_state: Option<MeasureState>,
     materialize_pending: Option<Vec<usize>>,
     deferred_filter: Option<FilterIntent>,
     time: u32,
@@ -95,6 +96,7 @@ impl Measure {
             plot_stamp: 0,
             origin: None,
             pending: None,
+            pending_state: None,
             materialize_pending: None,
             deferred_filter: None,
             time: 0,
@@ -517,6 +519,7 @@ impl Measure {
         self.table = None;
         self.basis = None;
         self.retained = None;
+        self.pending_state = None;
         self.materialize_pending = None;
         self.deferred_filter = None;
         self.clear_rows();
@@ -588,6 +591,9 @@ impl Measure {
             self.remember_basis(key, table);
         }
         self.adopt(table);
+        if let Some(state) = self.pending_state.take() {
+            self.apply_state(state);
+        }
     }
 
     fn laid(&self, scene: &Scene, id: ObjectSetId, request: TableRequest) -> TableRequest {
@@ -673,105 +679,103 @@ impl Measure {
             && self
                 .set
                 .is_some_and(|id| TableRequest::available(scene, id, self.group));
-        let table = self.table.as_deref().filter(|_| measured);
-        let key = |column: usize| {
-            table
-                .and_then(|table| table.columns().get(column))
-                .map(|column| column.key().to_string())
+        let names = match measured || self.table.is_none() {
+            true => self.names(),
+            false => Names::default(),
         };
         MeasureState {
             set,
             group: self.group,
             aggregate: self.aggregate,
             scope: self.scope,
-            filters: match measured {
-                true => self
-                    .filters
-                    .iter()
-                    .filter_map(|filter| {
-                        Some(FilterRange::new(
-                            &key(filter.column())?,
-                            filter.minimum(),
-                            filter.maximum(),
-                        ))
-                    })
-                    .collect(),
-                false => Vec::new(),
-            },
-            lasso: match measured {
-                true => self.lasso.as_ref().and_then(|lasso| {
-                    LassoPath::new(&key(lasso.x())?, &key(lasso.y())?, lasso.points().to_vec())
-                }),
-                false => None,
-            },
-            sort: match measured {
-                true => self
-                    .sort
-                    .and_then(|(column, descending)| Some((key(column)?, descending))),
-                false => None,
-            },
-            columns: match table {
-                Some(table) => table
-                    .columns()
-                    .iter()
-                    .zip(&self.visible)
-                    .map(|(column, visible)| (column.key().to_string(), *visible))
-                    .collect(),
-                None => Vec::new(),
-            },
+            filters: names.filters,
+            lasso: names.lasso,
+            sort: names.sort,
+            columns: names.columns,
             visibility: self.visibility,
             view: self.view,
-            axes: table.and_then(|_| Some([key(self.axes[0])?, key(self.axes[1])?])),
+            axes: names.axes,
+        }
+    }
+
+    fn names(&self) -> Names {
+        match self.table.as_deref() {
+            Some(table) => Names::of(
+                table,
+                &self.filters,
+                self.lasso.as_ref(),
+                self.sort,
+                &self.visible,
+                self.axes,
+            ),
+            None => self
+                .pending_state
+                .as_ref()
+                .map_or_else(Names::default, |state| Names {
+                    filters: state.filters.clone(),
+                    lasso: state.lasso.clone(),
+                    sort: state.sort.clone(),
+                    columns: state.columns.clone(),
+                    axes: state.axes.clone(),
+                }),
         }
     }
 
     pub fn restore(&mut self, state: MeasureState, scene: &Scene) {
-        let MeasureState {
-            set,
-            group,
-            aggregate,
-            scope,
-            filters,
-            lasso,
-            sort,
-            columns,
-            visibility,
-            view,
-            axes,
-        } = state;
         self.set = None;
-        self.group = group;
-        self.aggregate = aggregate;
-        self.scope = scope;
+        self.group = state.group;
+        self.aggregate = state.aggregate;
+        self.scope = state.scope;
         self.time = scene.time();
-        self.table = None;
-        self.clear_rows();
-        self.visible.clear();
-        self.filters.clear();
-        self.lasso = None;
-        self.sort = None;
-        self.visibility = visibility;
-        self.view = view;
-        self.axes = [0; 2];
-        self.clear_plot();
+        self.visibility = state.visibility;
+        self.view = state.view;
+        self.drop_table();
         self.origin = None;
+        self.pending = None;
+        self.materialize_pending = None;
+        self.deferred_filter = None;
         self.dirty = true;
-        let Some(set) = set else {
+        let set = state
+            .set
+            .and_then(ObjectSetId::from_raw)
+            .filter(|id| scene.objects.get(*id).is_some());
+        self.set = set;
+        self.pending_state = set.map(|_| state);
+    }
+
+    pub fn settle(&mut self, scene: &Scene) {
+        let Some(id) = self.set else {
+            self.drop_table();
+            self.pending_state = None;
             return;
         };
-        self.set = Some(ObjectSetId::new(set));
-        self.retained = None;
-        self.rebuild(scene);
-        let Some(table) = self.table.as_deref() else {
+        let Some(request) = TableRequest::new(scene, id, self.group, self.aggregate) else {
+            self.drop_table();
+            self.pending_state = None;
             return;
         };
-        self.visible = default_visibility(table);
-        for (key, visible) in &columns {
+        let request = self.laid(scene, id, request);
+        let key = request.key();
+        self.pending = Some(key);
+        let table = request
+            .with_retained(self.retained_keys())
+            .build()
+            .map(Arc::new);
+        self.install(key, table);
+    }
+
+    fn apply_state(&mut self, state: MeasureState) {
+        let Some(table) = self.table.as_ref().map(Arc::clone) else {
+            return;
+        };
+        self.visible = default_visibility(&table);
+        for (key, visible) in &state.columns {
             if let Some(column) = table.column(key) {
                 self.visible[column] = *visible;
             }
         }
-        self.filters = filters
+        self.filters = state
+            .filters
             .iter()
             .filter_map(|filter| {
                 Some(Filter::new(
@@ -781,19 +785,20 @@ impl Measure {
                 ))
             })
             .collect();
-        self.sort = sort
+        self.sort = state
+            .sort
             .and_then(|(key, descending)| table.column(&key).map(|column| (column, descending)));
-        self.lasso = lasso.and_then(|lasso| {
+        self.lasso = state.lasso.and_then(|lasso| {
             let x = table.column(lasso.x())?;
             let y = table.column(lasso.y())?;
             Lasso::new(x, y, lasso.points().to_vec())
         });
-        self.axes = match axes {
+        self.axes = match state.axes {
             Some([x, y]) => match (table.column(&x), table.column(&y)) {
                 (Some(x), Some(y)) => [x, y],
-                _ => preferred_axes(table),
+                _ => preferred_axes(&table),
             },
-            None => preferred_axes(table),
+            None => preferred_axes(&table),
         };
         self.pin();
         self.refresh_nearest();
@@ -807,14 +812,15 @@ impl Measure {
         hash = mix(hash, u64::from(self.group.index()));
         hash = mix(hash, u64::from(self.aggregate.index()));
         hash = mix(hash, u64::from(self.scope.index()));
-        for filter in &self.filters {
-            hash = mix(hash, filter.column() as u64);
+        let names = self.names();
+        for filter in &names.filters {
+            hash = mix_key(hash, filter.key());
             hash = mix(hash, u64::from(filter.minimum().to_bits()));
             hash = mix(hash, u64::from(filter.maximum().to_bits()));
         }
-        if let Some(lasso) = &self.lasso {
-            hash = mix(hash, lasso.x() as u64);
-            hash = mix(hash, lasso.y() as u64);
+        if let Some(lasso) = &names.lasso {
+            hash = mix_key(hash, lasso.x());
+            hash = mix_key(hash, lasso.y());
             hash = mix(hash, lasso.points().len() as u64);
             for point in lasso.points() {
                 hash = mix(hash, u64::from(point[0].to_bits()));
@@ -836,53 +842,29 @@ impl Measure {
                 }
             }
         }
-        if let Some((column, descending)) = self.sort {
-            hash = mix(hash, column as u64);
-            hash = mix(hash, u64::from(u8::from(descending)));
+        if let Some((column, descending)) = &names.sort {
+            hash = mix_key(hash, column);
+            hash = mix(hash, u64::from(u8::from(*descending)));
         }
-        for visible in &self.visible {
+        for (key, visible) in &names.columns {
+            hash = mix_key(hash, key);
             hash = mix(hash, u64::from(u8::from(*visible)));
         }
         hash = mix(hash, u64::from(u8::from(self.visibility)));
         hash = mix(hash, u64::from(self.view.index()));
-        hash = mix(hash, self.axes[0] as u64);
-        mix(hash, self.axes[1] as u64)
-    }
-
-    pub fn rebuild(&mut self, scene: &Scene) {
-        self.dirty = true;
-        self.pending = None;
-        self.clear_plot();
-        self.origin = None;
-        let Some(id) = self.set else {
-            self.drop_table();
-            return;
-        };
-        if scene.objects.get(id).is_none() {
-            self.set = None;
-            self.drop_table();
-            return;
+        match &names.axes {
+            Some([x, y]) => {
+                hash = mix_key(hash, x);
+                mix_key(hash, y)
+            }
+            None => mix(hash, 0),
         }
-        let Some(request) = TableRequest::new(scene, id, self.group, self.aggregate) else {
-            self.drop_table();
-            return;
-        };
-        let request = self.laid(scene, id, request);
-        let key = request.key();
-        self.origin = Some(key);
-        let table = request
-            .with_retained(self.retained_keys())
-            .build()
-            .map(Arc::new);
-        if let Some(table) = table.as_ref() {
-            self.remember_basis(key, table);
-        }
-        self.adopt(table);
     }
 
     fn invalidate(&mut self) {
         self.dirty = true;
         self.pending = None;
+        self.pending_state = None;
         self.materialize_pending = None;
         self.deferred_filter = None;
         self.origin = None;
@@ -1205,6 +1187,7 @@ impl Measure {
         self.dirty = true;
         self.table = None;
         self.retained = None;
+        self.pending_state = None;
         self.visible.clear();
         self.filters.clear();
         self.lasso = None;
@@ -1263,6 +1246,68 @@ impl MaterializeRequest {
         let values = self.table.scan(&self.columns);
         (self.table, values)
     }
+}
+
+#[derive(Default)]
+struct Names {
+    filters: Vec<FilterRange>,
+    lasso: Option<LassoPath>,
+    sort: Option<(String, bool)>,
+    columns: Vec<(String, bool)>,
+    axes: Option<[String; 2]>,
+}
+
+impl Names {
+    fn of(
+        table: &Table,
+        filters: &[Filter],
+        lasso: Option<&Lasso>,
+        sort: Option<(usize, bool)>,
+        visible: &[bool],
+        axes: [usize; 2],
+    ) -> Self {
+        let key = |column: usize| {
+            table
+                .columns()
+                .get(column)
+                .map(|column| column.key().to_string())
+        };
+        let axes = match (key(axes[0]), key(axes[1])) {
+            (Some(x), Some(y)) => Some([x, y]),
+            _ => None,
+        };
+        Self {
+            filters: filters
+                .iter()
+                .filter_map(|filter| {
+                    Some(FilterRange::new(
+                        &key(filter.column())?,
+                        filter.minimum(),
+                        filter.maximum(),
+                    ))
+                })
+                .collect(),
+            lasso: lasso.and_then(|lasso| {
+                LassoPath::new(&key(lasso.x())?, &key(lasso.y())?, lasso.points().to_vec())
+            }),
+            sort: sort.and_then(|(column, descending)| Some((key(column)?, descending))),
+            columns: table
+                .columns()
+                .iter()
+                .zip(visible)
+                .map(|(column, visible)| (column.key().to_string(), *visible))
+                .collect(),
+            axes,
+        }
+    }
+}
+
+fn mix_key(hash: u64, key: &str) -> u64 {
+    let mut hash = mix(hash, key.len() as u64);
+    for byte in key.bytes() {
+        hash = mix(hash, u64::from(byte));
+    }
+    hash
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

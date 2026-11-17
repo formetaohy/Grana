@@ -38,7 +38,7 @@ fn gtao_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         across_length > FLOOR,
     );
     let bitangent = cross(facing, tangent);
-    let focal = max(ao.noise.y, FLOOR);
+    let focal = max(ao.noise.w, FLOOR);
     let depth_scale = select(1.0, length(world - ao.eye.xyz), ao.noise.z > 0.5);
     let radius = max(ao.extent.z * depth_scale / focal, FLOOR);
     let rotation = dither(vec2<f32>(pixel)) * 6.2831853 + ao.noise.x * 2.39996323;

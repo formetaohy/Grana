@@ -126,7 +126,7 @@ pub struct ObjectSet {
     visible: bool,
     labels: bool,
     label: Option<ObjectColor>,
-    hidden: Vec<Vec<bool>>,
+    hidden: Arc<Vec<Vec<bool>>>,
     hidden_total: usize,
     opacity: f32,
     material: Material,
@@ -139,7 +139,7 @@ pub struct ObjectSet {
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
-    object_coloc: Option<ObjectColoc>,
+    object_coloc: Option<Arc<ObjectColoc>>,
     label_export: Option<LabelExport>,
     localization: Option<LocalizationSource>,
     track_bounds: Mutex<Option<TrackBounds>>,
@@ -152,7 +152,7 @@ pub struct ObjectSet {
     relations: Vec<Relation>,
     provenance: Provenance,
     version: u32,
-    curation: Curation,
+    curation: Arc<Curation>,
 }
 
 impl ObjectSet {
@@ -182,7 +182,7 @@ impl ObjectSet {
             visible: true,
             labels: false,
             label: None,
-            hidden: Vec::new(),
+            hidden: Arc::new(Vec::new()),
             hidden_total: 0,
             opacity: 1.0,
             material: Material::DEFAULT,
@@ -208,7 +208,7 @@ impl ObjectSet {
             relations: Vec::new(),
             provenance: Provenance::detection(),
             version: grana_object::Algorithm::Detection.version(),
-            curation: Curation::default(),
+            curation: Arc::new(Curation::default()),
         }
     }
 
@@ -283,7 +283,7 @@ impl ObjectSet {
             self.channel,
             self.params,
             self.seeds.clone(),
-            self.curation.clone(),
+            self.curation.as_ref().clone(),
             self.provenance.clone(),
         )
     }
@@ -370,7 +370,11 @@ impl ObjectSet {
     }
 
     pub fn object_coloc(&self) -> Option<&ObjectColoc> {
-        self.object_coloc.as_ref()
+        self.object_coloc.as_deref()
+    }
+
+    pub fn shared_object_coloc(&self) -> Option<Arc<ObjectColoc>> {
+        self.object_coloc.clone()
     }
 
     pub fn label_export(&self) -> Option<&LabelExport> {
@@ -485,11 +489,11 @@ impl ObjectSet {
     }
 
     pub(crate) fn set_object_coloc(&mut self, coloc: Option<ObjectColoc>, stamp: Revision) -> bool {
-        if self.object_coloc == coloc {
+        if self.object_coloc.as_deref() == coloc.as_ref() {
             return false;
         }
         let pair = coloc.as_ref().map(ObjectColoc::pair);
-        self.object_coloc = coloc;
+        self.object_coloc = coloc.map(Arc::new);
         match pair {
             Some(pair) => {
                 if matches!(
@@ -764,13 +768,14 @@ impl ObjectSet {
             if !hidden {
                 return false;
             }
-            self.hidden = self
-                .frames
-                .iter()
-                .map(|slot| vec![false; slot.objects()])
-                .collect();
+            self.hidden = Arc::new(
+                self.frames
+                    .iter()
+                    .map(|slot| vec![false; slot.objects()])
+                    .collect::<Vec<_>>(),
+            );
         }
-        let mask = &mut self.hidden[time as usize];
+        let mask = &mut Arc::make_mut(&mut self.hidden)[time as usize];
         let mut changed = false;
         let mut delta = 0isize;
         for object in objects {
@@ -805,23 +810,24 @@ impl ObjectSet {
             .iter()
             .map(|slot| slot.frame.as_ref().map(Frame::objects))
             .collect::<Vec<_>>();
-        self.curation.seed(counts.len());
-        self.curation.record_hidden(time, anchors);
+        let curation = Arc::make_mut(&mut self.curation);
+        curation.seed(counts.len());
+        curation.record_hidden(time, anchors);
     }
 
     pub(crate) fn clear_hidden(&mut self, stamp: Revision) -> bool {
         if self.hidden.is_empty() {
             return false;
         }
-        self.hidden.clear();
+        Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;
-        self.curation.clear_hidden();
+        Arc::make_mut(&mut self.curation).clear_hidden();
         self.shape = stamp;
         self.document = self.document.next();
         true
     }
 
-    pub(crate) fn restore_hidden(&mut self, hidden: Vec<Vec<bool>>) {
+    pub(crate) fn restore_hidden(&mut self, hidden: Arc<Vec<Vec<bool>>>) {
         if hidden.is_empty() {
             self.hidden = hidden;
             self.hidden_total = 0;
@@ -913,7 +919,7 @@ impl ObjectSet {
         ObjectSource::live(
             self.frame_handles(),
             self.visibility.clone(),
-            self.hidden.clone(),
+            Arc::clone(&self.hidden),
             self.localization_filter(),
             self.tracks.as_ref().map(TrackLayer::shared_set),
         )
@@ -1179,7 +1185,7 @@ impl ObjectSet {
             visible: self.visible,
             labels: self.labels,
             label: self.label,
-            hidden: self.hidden.clone(),
+            hidden: Arc::clone(&self.hidden),
             opacity: self.opacity,
             material: self.material,
             params: self.params,
@@ -1205,7 +1211,7 @@ impl ObjectSet {
                 .collect(),
             provenance: self.provenance.clone(),
             version: self.version,
-            curation: self.curation.clone(),
+            curation: Arc::clone(&self.curation),
             document: self.document,
         }
     }
@@ -1267,7 +1273,7 @@ impl ObjectSet {
             visible,
             labels,
             label,
-            hidden: Vec::new(),
+            hidden: Arc::new(Vec::new()),
             hidden_total: 0,
             opacity,
             material,
@@ -1340,9 +1346,10 @@ impl ObjectSet {
             }
         }
         set.settle_pages();
+        let curation = Arc::make_mut(&mut set.curation);
         for time in 0..set.frames.len() {
             let stamp = set.frames[time].stamp;
-            set.curation.set_applied(time as u32, stamp);
+            curation.set_applied(time as u32, stamp);
         }
         if let Some(coloc) = object_coloc {
             assert_eq!(
@@ -1658,8 +1665,9 @@ impl ObjectSet {
         if !self.curation.is_empty() {
             self.apply_curation(stamp);
         }
-        self.curation.seed(self.frames.len());
-        self.curation.record(time, keep, &frame.anchors());
+        let curation = Arc::make_mut(&mut self.curation);
+        curation.seed(self.frames.len());
+        curation.record(time, keep, &frame.anchors());
         let removed = keep
             .iter()
             .enumerate()
@@ -1676,10 +1684,10 @@ impl ObjectSet {
     }
 
     pub(crate) fn set_curation(&mut self, curation: Curation) -> bool {
-        if self.curation == curation {
+        if self.curation.as_ref() == &curation {
             return false;
         }
-        self.curation = curation;
+        self.curation = Arc::new(curation);
         self.document = self.document.next();
         true
     }
@@ -1717,12 +1725,13 @@ impl ObjectSet {
             };
             self.install_retained(time, pruned, &removed, stamp);
         }
+        let curation = Arc::make_mut(&mut self.curation);
         for time in 0..self.frames.len() {
             let stamp = self.frames[time].stamp;
-            self.curation.set_applied(time as u32, stamp);
+            curation.set_applied(time as u32, stamp);
         }
         self.reapply_hidden(stamp);
-        self.curation.set_pending(pending);
+        Arc::make_mut(&mut self.curation).set_pending(pending);
         applied
     }
 
@@ -1749,7 +1758,7 @@ impl ObjectSet {
             return 0;
         }
         if self.tracks.is_none() {
-            let dropped = self.curation.forget_edits();
+            let dropped = Arc::make_mut(&mut self.curation).forget_edits();
             self.document = self.document.next();
             return dropped;
         }
@@ -1813,8 +1822,11 @@ impl ObjectSet {
                 dropped.push(index);
             }
         }
-        for index in dropped.into_iter().rev() {
-            self.curation.remove_edit(index);
+        if !dropped.is_empty() {
+            let curation = Arc::make_mut(&mut self.curation);
+            for index in dropped.into_iter().rev() {
+                curation.remove_edit(index);
+            }
         }
         if applied > 0 || self.curation.dropped() > 0 {
             self.shape = stamp;
@@ -1913,8 +1925,9 @@ impl ObjectSet {
         if !done {
             return false;
         }
-        self.curation.seed(self.frames.len());
-        self.curation.record_edit(edit);
+        let curation = Arc::make_mut(&mut self.curation);
+        curation.seed(self.frames.len());
+        curation.record_edit(edit);
         self.revision = stamp;
         self.shape = stamp;
         self.document = self.document.next();
@@ -1947,7 +1960,8 @@ impl ObjectSet {
             .expect("the pruned object lies inside the time series");
         slot.stamp = stamp;
         slot.frame = placed;
-        if let Some(mask) = self.hidden.get_mut(time as usize) {
+        let hidden = Arc::make_mut(&mut self.hidden);
+        if let Some(mask) = hidden.get_mut(time as usize) {
             *mask = retained(mask, objects);
         }
         if let Some((thickness, pruned)) = self.track_thickness().zip(pruned_tracks.flatten()) {
@@ -2007,7 +2021,7 @@ impl ObjectSet {
             visible: self.visible,
             labels: self.labels,
             label,
-            hidden: self.hidden.clone(),
+            hidden: Arc::clone(&self.hidden),
             hidden_total: self.hidden_total,
             opacity: self.opacity,
             material: self.material,
@@ -2040,7 +2054,7 @@ impl ObjectSet {
             relations,
             version: provenance.algorithm().version(),
             provenance,
-            curation: Curation::default(),
+            curation: Arc::new(Curation::default()),
         };
         if duplicate
             .hidden
@@ -2168,7 +2182,7 @@ impl ObjectSet {
             visible: self.visible,
             labels: self.labels,
             label,
-            hidden,
+            hidden: Arc::new(hidden),
             hidden_total,
             opacity: self.opacity,
             material: self.material,
@@ -2194,7 +2208,7 @@ impl ObjectSet {
             relations,
             provenance: self.provenance.clone(),
             version: self.version,
-            curation: self.curation.combined(&other.curation),
+            curation: Arc::new(self.curation.combined(&other.curation)),
         };
         Ok(merged)
     }
@@ -2421,7 +2435,8 @@ impl ObjectSet {
         self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
-        self.hidden.clear();
+        Arc::make_mut(&mut self.hidden).clear();
+        self.hidden_total = 0;
         slot.stamp = stamp;
         slot.frame = Some(placed);
     }
@@ -2449,7 +2464,8 @@ impl ObjectSet {
         self.shape = stamp;
         self.document = self.document.next();
         self.visibility = Visibility::All;
-        self.hidden.clear();
+        Arc::make_mut(&mut self.hidden).clear();
+        self.hidden_total = 0;
         slot.stamp = stamp;
         slot.frame = placed;
     }
@@ -2518,7 +2534,8 @@ impl ObjectSet {
         for slot in &mut self.frames {
             slot.frame = None;
         }
-        self.hidden.clear();
+        Arc::make_mut(&mut self.hidden).clear();
+        self.hidden_total = 0;
         self.revision = stamp;
         self.shape = stamp;
         self.document = self.document.next();

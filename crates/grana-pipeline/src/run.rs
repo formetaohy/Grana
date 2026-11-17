@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::channels::Channels;
+use grana_analysis::local::field_bytes;
 use grana_analysis::{
-    ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun, SeedPolicy, Sources,
-    SpotScanner, SurfaceBuilder, coloc_sampling, filament_level, relate_frames, spot_level,
-    surface_level,
+    ColocScan, ColocScanConfig, FIELD_PEAK_BYTES, FilamentScan, ObjectColocScan, RelationRun,
+    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, coloc_sampling, filament_level,
+    relate_frames, spot_level, surface_level,
 };
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, Roi};
@@ -69,6 +70,10 @@ const FILAMENT_VOXEL_BYTES: u64 = 12;
 
 fn frame_window(totals: u32, workers: usize, per_frame: usize) -> usize {
     (workers / per_frame.max(1)).max(1).min(totals as usize)
+}
+
+fn held_frames(peak: u64, frame: u64) -> usize {
+    (peak / frame.max(1)).max(1) as usize
 }
 
 fn install(sink: &mut dyn FnMut(Event)) -> impl FnMut(Notice<ObjectFrame>) + '_ {
@@ -528,7 +533,7 @@ fn spots(
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
-    let level_index = spot_level(pyramid, region, params);
+    let level_index = spot_level(pyramid, region, params)?;
     let level = pyramid.level(level_index);
     let scanner = SpotScanner::new(
         level_index,
@@ -541,7 +546,8 @@ fn spots(
     );
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, FRAME_WORKERS);
+    let window = frame_window(totals, workers, FRAME_WORKERS)
+        .min(held_frames(FIELD_PEAK_BYTES, field_bytes(level, region)));
     let share = (workers / window).max(1);
     let completed = pipeline(
         totals,
@@ -603,13 +609,12 @@ fn surfaces(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
-    let level_index = surface_level(pyramid, region).ok_or_else(|| {
-        "the dataset is too large to detect surfaces at any resolution level".to_string()
-    })?;
+    let level_index = surface_level(pyramid, region)?;
     let level = pyramid.level(level_index);
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, FRAME_WORKERS);
+    let window = frame_window(totals, workers, FRAME_WORKERS)
+        .min(held_frames(FIELD_PEAK_BYTES, field_bytes(level, region)));
     let share = (workers / window).max(1);
     let completed = pipeline(
         totals,
@@ -708,9 +713,9 @@ fn filaments(
     let domain = Domain::new(region, info);
     let extent = info.extent();
     let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());
-    let held = (FILAMENT_BYTES / (voxels * FILAMENT_VOXEL_BYTES).max(1)).max(1) as usize;
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, 1).min(held);
+    let window = frame_window(totals, workers, 1)
+        .min(held_frames(FILAMENT_BYTES, voxels * FILAMENT_VOXEL_BYTES));
     let intensity = pyramid.channels()[channel].intensity();
     let completed = pipeline(
         totals,

@@ -420,6 +420,80 @@ fn saves_a_cleared_object_set_without_its_stale_table() {
     );
 }
 
+#[test]
+fn restores_the_statistics_view_when_the_deferred_table_lands() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::SetMeasureSet(Some(set)));
+    measure(&mut session);
+    let table = session.measure().table().expect("the table is built");
+    let visible = session.measure().visible();
+    let hidden = visible
+        .iter()
+        .rposition(|visible| *visible)
+        .expect("the table shows a column");
+    let sorted = visible
+        .iter()
+        .position(|visible| *visible)
+        .expect("the table shows a column");
+    let hidden_key = table.columns()[hidden].key().to_string();
+    let sorted_key = table.columns()[sorted].key().to_string();
+    session.execute(Command::SetColumnVisible {
+        index: hidden,
+        visible: false,
+    });
+    session.execute(Command::ToggleSort(sorted));
+    let scene = session.scene().expect("the series stays open");
+    let state = session.measure().state(scene);
+    let mut restored = Measure::new();
+    restored.restore(state, scene);
+    assert!(
+        restored.table().is_none(),
+        "restoring defers the table build to the background"
+    );
+    let pending = restored.state(scene);
+    assert!(
+        pending
+            .columns
+            .iter()
+            .any(|(key, visible)| *key == hidden_key && !visible),
+        "a pending restore keeps its hidden column"
+    );
+    let request = restored
+        .request(scene, false)
+        .expect("the pending restore asks for its table");
+    let key = request.key();
+    let table = request.build().expect("the restored table builds");
+    restored.install(key, Some(std::sync::Arc::new(table)));
+    let table = restored.table().expect("the restored table lands");
+    let hidden = table.column(&hidden_key).expect("the hidden column lands");
+    let sorted = table.column(&sorted_key).expect("the sorted column lands");
+    assert!(
+        !restored.visible()[hidden],
+        "the restored column stays hidden"
+    );
+    assert_eq!(
+        restored.sort(),
+        Some((sorted, false)),
+        "the restored sort survives"
+    );
+}
+
 fn series() -> VolumeSeries {
     let volume = support::spheres(
         Extent::new(64, 32, 32),

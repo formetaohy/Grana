@@ -92,7 +92,7 @@ pub struct SetState {
     pub visible: bool,
     pub labels: bool,
     pub label: Option<ObjectColor>,
-    pub hidden: Vec<Vec<bool>>,
+    pub hidden: Arc<Vec<Vec<bool>>>,
     pub opacity: f32,
     pub material: Material,
     pub params: ObjectParams,
@@ -101,7 +101,7 @@ pub struct SetState {
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
     pub classifier: Option<grana_measure::ClassifierState>,
-    pub object_coloc: Option<ObjectColoc>,
+    pub object_coloc: Option<Arc<ObjectColoc>>,
     pub label_export: Option<LabelExport>,
     pub localization: Option<LocalizationSource>,
     pub seeds: Seeds,
@@ -109,7 +109,7 @@ pub struct SetState {
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
     pub version: u32,
-    pub curation: Curation,
+    pub curation: Arc<Curation>,
     pub document: Revision,
 }
 

@@ -97,6 +97,7 @@ pub(crate) struct VolumeView<'a> {
     pub clip: Clip,
     pub aspect: f32,
     pub height: u32,
+    pub display_height: u32,
     pub time: u32,
 }
 
@@ -136,6 +137,7 @@ impl FrameData {
             clip,
             aspect,
             height,
+            display_height,
             time,
         } = view;
         let first = tables[0];
@@ -152,7 +154,7 @@ impl FrameData {
             None => ([0.0; 4], [0.0; 4]),
         };
         let pixel_scale = camera.pixels_per_world(height);
-        let sampling = pixel_scale;
+        let display_scale = camera.pixels_per_world(display_height);
         let orthographic = camera.projection().orthographic();
         let half = camera.half_height();
         let (half_width, half_height) = if orthographic {
@@ -180,7 +182,7 @@ impl FrameData {
             }
             bases[band] = table.record_base();
             if band > 0 && !orthographic {
-                edge[band - 1] = table.voxel.min_element() * sampling;
+                edge[band - 1] = table.voxel.min_element() * pixel_scale;
             }
         }
         Self {
@@ -203,7 +205,7 @@ impl FrameData {
             }),
             atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
             shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
-            march: [ray.step, shading.shadows, ray.channels as f32, pixel_scale],
+            march: [ray.step, shading.shadows, ray.channels as f32, 0.0],
             viewport: [0.0; 4],
             jitter: [0.0; 4],
             planes: planes(view_projection),
@@ -231,7 +233,7 @@ impl FrameData {
                 half_height,
             ],
             lens: [0.0, 0.0, camera.focus(), camera.aperture()],
-            sampling: [sampling, 0.0, 0.0, 0.0],
+            sampling: [pixel_scale, display_scale, 0.0, 0.0],
             slice,
             slice_view,
             occupancy: [1.0, 0.0, 0.0, 0.0],

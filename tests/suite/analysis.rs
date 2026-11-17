@@ -7,6 +7,7 @@ use grana_analysis::{
     CellSeed, ColocScan, ColocScanConfig, FilamentScan, GrowField, Growth, Reference, Sources,
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
     local::{BlockField, BlockLevels},
+    surface_level,
 };
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::Source;
@@ -355,6 +356,28 @@ fn extract_surfaces_at(
         )
         .expect("a surface frame is detected")
         .expect("surface detection completes")
+}
+
+#[test]
+fn coarsens_the_surface_level_to_bound_the_block_field() {
+    let finest = Level::new(Extent::new(8192, 8192, 8), Spacing::new(0.1, 0.1, 0.1));
+    let channel = ChannelInfo::new(
+        "detection",
+        [1.0, 1.0, 1.0],
+        Intensity::new(0.0, 1.0),
+        Intensity::new(0.0, 1.0),
+        VoxelFormat::F32,
+    );
+    let coarsened = Pyramid::new(
+        vec![finest, finest.coarser()],
+        1,
+        vec![channel.clone()],
+        1,
+        1.0,
+    );
+    assert_eq!(surface_level(&coarsened, Region::none()), Ok(1));
+    let alone = Pyramid::new(vec![finest], 1, vec![channel], 1, 1.0);
+    assert!(surface_level(&alone, Region::none()).is_err());
 }
 
 #[test]

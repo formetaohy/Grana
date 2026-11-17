@@ -21,11 +21,10 @@ impl ObjectSource {
     pub(crate) fn live(
         frames: Vec<Option<Frame>>,
         visibility: Visibility,
-        hidden: Vec<Vec<bool>>,
+        hidden: Arc<Vec<Vec<bool>>>,
         localization: LocalizationFilter,
         tracks: Option<Arc<TrackSet>>,
     ) -> Self {
-        let hidden = Arc::new(hidden);
         let restricted = !matches!(visibility, Visibility::All)
             || hidden.iter().any(|mask| mask.iter().any(|hidden| *hidden));
         Self {

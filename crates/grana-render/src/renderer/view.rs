@@ -11,6 +11,7 @@ pub(super) struct View {
     pub(super) surface: [u32; 4],
     pub(super) region: [u32; 4],
     pub(super) height: u32,
+    pub(super) display_height: u32,
     pub(super) aspect: f32,
     pub(super) motion: u64,
 }
@@ -36,7 +37,8 @@ impl View {
         Self {
             surface: pixel,
             region,
-            height: pixel[3].max(1),
+            height,
+            display_height: pixel[3].max(1),
             aspect: width as f32 / height as f32,
             motion: motion(camera, region, clip, time, exposure),
         }

@@ -27,7 +27,11 @@ pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, 
 
 type Region = [[usize; 2]; 3];
 
-pub fn spot_level(pyramid: &Pyramid, region: VolumeRegion, params: SpotParams) -> usize {
+pub fn spot_level(
+    pyramid: &Pyramid,
+    region: VolumeRegion,
+    params: SpotParams,
+) -> Result<usize, String> {
     let sigma = params.diameter() / FWHM_PER_SIGMA;
     let resolvable = (0..pyramid.level_count())
         .rev()
@@ -41,7 +45,7 @@ pub fn spot_level(pyramid: &Pyramid, region: VolumeRegion, params: SpotParams) -
     let affordable = pyramid
         .fit_level(region, crate::work::SPOT_VOXELS)
         .unwrap_or(pyramid.level_count() - 1);
-    affordable.min(resolvable)
+    crate::local::bounded_level(pyramid, region, affordable.min(resolvable))
 }
 
 pub struct SpotScanner {
