@@ -3,7 +3,7 @@
 
 fn volume_texel(pixel: vec2<i32>) -> vec2<i32> {
     let extent = vec2<i32>(textureDimensions(volume_surface));
-    return clamp(pixel / SURFACE_SCALE, vec2<i32>(0), extent - vec2<i32>(1));
+    return clamp(pixel, vec2<i32>(0), extent - vec2<i32>(1));
 }
 
 fn volume_surface_at(pixel: vec2<i32>) -> Surface {

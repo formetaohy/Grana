@@ -53,7 +53,7 @@ pub(crate) struct Target {
 
 impl Target {
     pub fn new(device: &Device, layouts: &Layouts, size: [u32; 2]) -> Self {
-        let extent = crate::target::volume_size(size);
+        let extent = [size[0].div_ceil(2), size[1].div_ceil(2)];
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("grana.scene.surface"),
             size: Extent3d {

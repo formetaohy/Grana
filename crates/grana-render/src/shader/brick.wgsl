@@ -58,7 +58,7 @@ fn slot_origin(atlas_grid: vec3<u32>, slot: u32) -> vec3<f32> {
 fn texel_map(slot: u32, base: vec3<f32>) -> TexelMap {
     let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
     return TexelMap(
-        slot_origin(frame.atlas.xyz, slot) + vec3<f32>(1.0) - base,
+        slot_origin(frame.atlas.xyz, slot) + vec3<f32>(1.5) - base,
         vec3<f32>(1.0) / extent,
     );
 }

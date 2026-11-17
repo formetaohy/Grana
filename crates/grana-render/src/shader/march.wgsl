@@ -120,7 +120,7 @@ fn march_peaks(march: March, peaks: array<f32, CHANNEL_LIMIT>) -> March {
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
     let ndc = input.ndc + frame.jitter.xy;
-    let pixel = vec2<i32>(input.clip_position.xy) * 2;
+    let pixel = vec2<i32>(input.clip_position.xy);
     let resolution = resolve(pixel, ndc);
     var peaks: array<f32, CHANNEL_LIMIT>;
     if (projection()) {

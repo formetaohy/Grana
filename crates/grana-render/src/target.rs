@@ -15,14 +15,6 @@ pub(crate) const VOLUME_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const VOLUME_SURFACE_FORMAT: TextureFormat = TextureFormat::Rg32Float;
 pub(crate) const VOLUME_NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-pub(crate) fn volume_size(size: [u32; 2]) -> [u32; 2] {
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "a volume target covers a positive surface"
-    );
-    [size[0].div_ceil(2), size[1].div_ceil(2)]
-}
-
 pub(crate) struct SceneTarget {
     color: TextureView,
     depth: TextureView,
@@ -151,7 +143,11 @@ pub(crate) struct Volume {
 
 impl Volume {
     pub fn new(device: &Device, layout: &BindGroupLayout, size: [u32; 2]) -> Self {
-        let extent = volume_size(size);
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a volume target covers a positive surface"
+        );
+        let extent = size;
         let radiance = attachment(
             device,
             "grana.volume.radiance",

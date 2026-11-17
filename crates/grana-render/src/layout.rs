@@ -352,7 +352,7 @@ impl Layouts {
             bind_group_layouts: &[
                 Some(&scene),
                 Some(&volume_read),
-                Some(&depth),
+                None,
                 None,
                 Some(&oit_read),
             ],

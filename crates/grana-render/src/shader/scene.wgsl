@@ -36,7 +36,6 @@ struct FrameData {
     occupancy: vec4<f32>,
     bounds: vec4<u32>,
     packs: vec4<u32>,
-    volume: vec4<f32>,
 }
 
 struct ChannelData {

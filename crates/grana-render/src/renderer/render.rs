@@ -464,13 +464,6 @@ impl Renderer {
             view.aspect,
         );
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
-        let volume_extent = crate::target::volume_size(target.size);
-        data.volume = [
-            target.size[0] as f32 / volume_extent[0] as f32,
-            target.size[1] as f32 / volume_extent[1] as f32,
-            volume_extent[0] as f32,
-            volume_extent[1] as f32,
-        ];
         resources.scene.write_frame(queue, *data);
         if prepared.replan {
             let tables = plan::tables(&resources.bricks, prepared.levels);

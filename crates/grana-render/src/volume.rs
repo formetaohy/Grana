@@ -112,7 +112,6 @@ pub(crate) struct CompositeFrame<'a> {
     pub region: [u32; 4],
     pub scene: &'a BindGroup,
     pub volume: &'a BindGroup,
-    pub object: &'a BindGroup,
     pub oit: &'a BindGroup,
 }
 
@@ -175,15 +174,7 @@ impl VolumePass {
             depth_stencil_attachment: None,
             ..Default::default()
         });
-        crate::target::viewport(
-            &mut pass,
-            [
-                region[0] / 2,
-                region[1] / 2,
-                region[2].div_ceil(2),
-                region[3].div_ceil(2),
-            ],
-        );
+        crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.march);
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.level, &[]);
@@ -204,7 +195,6 @@ impl VolumePass {
         pass.set_pipeline(&self.composite);
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.volume, &[]);
-        pass.set_bind_group(2, frame.object, &[]);
         pass.set_bind_group(4, frame.oit, &[]);
         pass.draw(0..3, 0..1);
     }

@@ -101,7 +101,6 @@ pub(super) fn encode(stage: Stage<'_>) {
                 region,
                 scene: table.group(),
                 volume: staged.group(),
-                object: target.scene.depth_group(),
                 oit: oit_group,
             },
         );
