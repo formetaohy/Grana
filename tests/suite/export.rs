@@ -503,27 +503,29 @@ fn runs_an_export_on_the_worker_thread() {
     let started = std::time::Instant::now();
     let mut progress = Vec::new();
     let finished = loop {
-        let (events, alive) = worker.drain();
         let mut finished = None;
-        for event in events {
-            match event {
-                grana_offline::Event::Progress { frame, total, .. } => {
+        loop {
+            match handle.poll() {
+                grana_exec::Poll::Event(grana_offline::Event::Progress { frame, total }) => {
                     progress.push((frame, total));
                 }
-                grana_offline::Event::Finished { outcome, .. } => finished = Some(outcome),
+                grana_exec::Poll::Event(grana_offline::Event::Finished { outcome }) => {
+                    finished = Some(outcome);
+                    break;
+                }
+                grana_exec::Poll::Empty => break,
+                grana_exec::Poll::Closed => panic!("the export worker stopped"),
             }
         }
         if let Some(outcome) = finished {
             break outcome;
         }
-        assert!(alive, "the export worker stopped");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(120),
             "the export worker never finished"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
-    assert_eq!(handle.id(), 1);
     match finished {
         Outcome::Complete { path: saved } => assert_eq!(saved, path),
         Outcome::Failed { detail } => panic!("the export failed: {detail}"),

@@ -9,6 +9,12 @@ const GENEROUS_HALF: [u32; 3] = [9, 9, 6];
 const HALF_LIMIT: [u32; 3] = [6, 6, 4];
 const QUADRATURE: usize = 512;
 const ENCLOSED_ENERGY: f64 = 0.99;
+const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn mix(hash: u64, value: u64) -> u64 {
+    (hash ^ value).wrapping_mul(HASH_PRIME)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PsfParams {
@@ -430,10 +436,17 @@ impl KernelBank {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MeasuredPsf {
     spacing: Spacing,
     kernels: Vec<Kernel>,
+    digest: u64,
+}
+
+impl PartialEq for MeasuredPsf {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest == other.digest
+    }
 }
 
 impl MeasuredPsf {
@@ -447,7 +460,16 @@ impl MeasuredPsf {
             kernels.iter().all(|kernel| kernel.dims() == dims),
             "the depth bands of a measured point spread function share one extent"
         );
-        Self { spacing, kernels }
+        let digest = digest(spacing, &kernels);
+        Self {
+            spacing,
+            kernels,
+            digest,
+        }
+    }
+
+    pub fn digest(&self) -> u64 {
+        self.digest
     }
 
     pub fn spacing(&self) -> Spacing {
@@ -514,6 +536,45 @@ impl Psf {
             Self::Measured(psf) => psf.bank(spacing, planes),
         }
     }
+
+    pub fn digest(&self) -> u64 {
+        match self {
+            Self::Theoretical(params) => params_digest(*params),
+            Self::Measured(psf) => psf.digest(),
+        }
+    }
+}
+
+fn params_digest(params: PsfParams) -> u64 {
+    let mut hash = HASH_OFFSET;
+    for value in [
+        params.numerical_aperture(),
+        params.wavelength(),
+        params.immersion(),
+        params.sample(),
+        params.depth(),
+    ] {
+        hash = mix(hash, u64::from(value.to_bits()));
+    }
+    hash
+}
+
+fn digest(spacing: Spacing, kernels: &[Kernel]) -> u64 {
+    let mut hash = HASH_OFFSET;
+    for value in [spacing.x(), spacing.y(), spacing.z()] {
+        hash = mix(hash, u64::from(value.to_bits()));
+    }
+    hash = mix(hash, kernels.len() as u64);
+    for kernel in kernels {
+        for value in kernel.dims() {
+            hash = mix(hash, u64::from(value));
+        }
+        hash = mix(hash, kernel.values().len() as u64);
+        for value in kernel.values() {
+            hash = mix(hash, u64::from(value.to_bits()));
+        }
+    }
+    hash
 }
 
 struct Sampled {

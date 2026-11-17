@@ -257,33 +257,7 @@ impl Scene {
             match spec.operation() {
                 Operation::Mask { set } => hash = mix(hash, set.raw()),
                 Operation::Restore(restore) => {
-                    match restore.psf() {
-                        grana_optics::Psf::Theoretical(params) => {
-                            for value in [
-                                params.numerical_aperture(),
-                                params.wavelength(),
-                                params.immersion(),
-                                params.sample(),
-                                params.depth(),
-                            ] {
-                                hash = mix(hash, u64::from(value.to_bits()));
-                            }
-                        }
-                        grana_optics::Psf::Measured(psf) => {
-                            for value in [psf.spacing().x(), psf.spacing().y(), psf.spacing().z()] {
-                                hash = mix(hash, u64::from(value.to_bits()));
-                            }
-                            for value in psf.dims() {
-                                hash = mix(hash, u64::from(value));
-                            }
-                            hash = mix(hash, u64::from(psf.layers()));
-                            for kernel in psf.kernels() {
-                                for value in kernel.values() {
-                                    hash = mix(hash, u64::from(value.to_bits()));
-                                }
-                            }
-                        }
-                    }
+                    hash = mix(hash, restore.psf().digest());
                     hash = mix(hash, u64::from(restore.iterations()));
                 }
                 Operation::Smooth(smooth) => {

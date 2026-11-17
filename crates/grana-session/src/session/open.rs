@@ -399,7 +399,13 @@ impl Session {
 
     pub fn document_hash(&self) -> Option<u64> {
         let scene = self.scene.as_ref()?;
-        Some(scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document())
+        let views = self
+            .views
+            .iter()
+            .fold(0u64, |hash, view| hash.rotate_left(7) ^ view.document());
+        Some(
+            scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document() ^ views,
+        )
     }
 
     pub(super) fn reset(&mut self) {

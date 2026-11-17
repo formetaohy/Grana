@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use grana_exec::Poll;
 use grana_image::Image;
 use grana_offline::{Event, Handle, Outcome, Plan, Task, Worker};
 use grana_pipeline::Channels;
@@ -77,27 +78,32 @@ impl Export {
     }
 
     pub fn poll(&mut self) -> Vec<Report> {
-        let (events, alive) = self.worker.drain();
+        let Some(handle) = self.active.as_ref() else {
+            return Vec::new();
+        };
         let mut reports = Vec::new();
-        for event in events {
-            match event {
-                Event::Progress { id, frame, total } => {
-                    if self.active.as_ref().is_some_and(|handle| handle.id() == id) {
-                        self.progress = Some((frame, total));
-                    }
+        let mut ended = false;
+        loop {
+            match handle.poll() {
+                Poll::Event(Event::Progress { frame, total }) => {
+                    self.progress = Some((frame, total));
                 }
-                Event::Finished { id, outcome } => {
-                    if self.active.as_ref().is_some_and(|handle| handle.id() == id) {
-                        self.active = None;
-                        self.progress = None;
-                        reports.push(Report::Finished(outcome));
-                    }
+                Poll::Event(Event::Finished { outcome }) => {
+                    reports.push(Report::Finished(outcome));
+                    ended = true;
+                    break;
+                }
+                Poll::Empty => break,
+                Poll::Closed => {
+                    reports.push(Report::Closed);
+                    ended = true;
+                    break;
                 }
             }
         }
-        if !alive && self.active.take().is_some() {
+        if ended {
+            self.active = None;
             self.progress = None;
-            reports.push(Report::Closed);
         }
         reports
     }

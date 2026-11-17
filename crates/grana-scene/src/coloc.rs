@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use grana_measure::{
     ColocCost, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocStatistics,
     ColocThresholdRange, ColocThresholds,
@@ -45,7 +47,7 @@ impl MaskKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColocResult {
     thresholds: ColocThresholds,
-    series: ColocSeries,
+    series: Arc<ColocSeries>,
 }
 
 impl ColocResult {
@@ -55,7 +57,10 @@ impl ColocResult {
     }
 
     pub fn from_parts(thresholds: ColocThresholds, series: ColocSeries) -> Self {
-        Self { thresholds, series }
+        Self {
+            thresholds,
+            series: Arc::new(series),
+        }
     }
 
     pub fn pair(&self) -> ColocPair {

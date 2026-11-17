@@ -24,6 +24,12 @@ const HEADER: usize = MAGIC.len() + VERSION_BYTES + LENGTH + STEPS;
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
 const STALE_AGE: Duration = Duration::from_secs(3600);
+const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn mix(hash: u64, value: u64) -> u64 {
+    (hash ^ value).wrapping_mul(HASH_PRIME)
+}
 
 pub const EXTENSION: &str = "grana";
 
@@ -92,6 +98,14 @@ impl NamedView {
             view,
         }
     }
+
+    pub fn document(&self) -> u64 {
+        let mut hash = HASH_OFFSET;
+        for byte in self.name.bytes() {
+            hash = mix(hash, u64::from(byte));
+        }
+        mix(hash, self.view.document())
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -128,6 +142,44 @@ pub struct ViewState {
     pub camera: CameraState,
     pub timeline: Timeline,
     pub export: Export,
+}
+
+impl ViewState {
+    pub fn document(&self) -> u64 {
+        let mut hash = HASH_OFFSET;
+        for value in self.camera.pivot {
+            hash = mix(hash, u64::from(value.to_bits()));
+        }
+        for value in [
+            self.camera.yaw,
+            self.camera.pitch,
+            self.camera.distance,
+            self.camera.fov_y,
+            self.camera.aperture,
+            self.camera.focus,
+        ] {
+            hash = mix(hash, u64::from(value.to_bits()));
+        }
+        hash = mix(hash, self.camera.projection.index() as u64);
+        match self.camera.slice {
+            Some(slice) => {
+                hash = mix(hash, 1);
+                hash = mix(hash, slice.axis() as u64);
+                for value in slice.right().to_array() {
+                    hash = mix(hash, u64::from(value.to_bits()));
+                }
+                for value in slice.up().to_array() {
+                    hash = mix(hash, u64::from(value.to_bits()));
+                }
+                hash = mix(hash, u64::from(slice.step().to_bits()));
+            }
+            None => hash = mix(hash, 0),
+        }
+        hash = mix(hash, self.timeline.document());
+        hash = mix(hash, u64::from(self.export.image));
+        hash = mix(hash, u64::from(self.export.movie));
+        mix(hash, u64::from(self.export.transparent))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -257,7 +257,10 @@ impl SurfaceSet {
                     details.cancel();
                     return;
                 }
-                detail::build(details, base);
+                let held = Arc::clone(&details);
+                if grana_exec::contain(move || detail::build(held, base)).is_err() {
+                    details.cancel();
+                }
             });
         }
         Ok((mesh, available))

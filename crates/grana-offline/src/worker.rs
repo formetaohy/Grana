@@ -1,4 +1,4 @@
-use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
+use grana_exec::{Cancel, Executor, Pipe, Poll, Role, contain};
 
 use crate::offline::{Offline, Outcome};
 use crate::task::Task;
@@ -6,95 +6,70 @@ use crate::task::Task;
 const CAPACITY: usize = 64;
 
 pub struct Handle {
-    id: u64,
     cancel: Cancel,
+    events: Pipe<Event>,
 }
 
 impl Handle {
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
     pub fn cancel(&self) {
         self.cancel.trigger();
+    }
+
+    pub fn poll(&self) -> Poll<Event> {
+        self.events.poll()
     }
 }
 
 pub enum Event {
-    Progress { id: u64, frame: u32, total: u32 },
-    Finished { id: u64, outcome: Outcome },
+    Progress { frame: u32, total: u32 },
+    Finished { outcome: Outcome },
 }
 
 pub struct Worker {
-    events: Pipe<Event>,
-    sender: Sender<Event>,
     executor: Executor,
-    next: u64,
 }
 
 impl Worker {
     pub fn spawn() -> Self {
-        let (sender, events) = Pipe::new(CAPACITY);
         Self {
-            events,
-            sender,
             executor: Executor::new(Role::Compute, 1),
-            next: 1,
         }
     }
 
     pub fn submit(&mut self, task: Task) -> Handle {
-        let id = self.next;
-        self.next += 1;
-        let sender = self.sender.clone();
-        let job = self
-            .executor
-            .submit(move |cancel| run(id, task, cancel, &sender));
-        Handle {
-            id,
-            cancel: job.token(),
-        }
-    }
-
-    pub fn drain(&mut self) -> (Vec<Event>, bool) {
-        let mut events = Vec::new();
-        loop {
-            match self.events.poll() {
-                Poll::Event(event) => events.push(event),
-                Poll::Empty => return (events, true),
-                Poll::Closed => return (events, false),
+        let (sender, events) = Pipe::new(CAPACITY);
+        let job = self.executor.submit(move |cancel| {
+            if let Err(fault) = contain(|| run(task, cancel, &sender)) {
+                sender.send_until(
+                    Event::Finished {
+                        outcome: Outcome::Failed {
+                            detail: fault.describe("the export"),
+                        },
+                    },
+                    || cancel.cancelled(),
+                );
             }
+        });
+        Handle {
+            cancel: job.token(),
+            events,
         }
     }
 }
 
-fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
+fn run(task: Task, cancel: &Cancel, sender: &grana_exec::Sender<Event>) {
     let stopped = || cancel.cancelled();
     let finish = |outcome: Outcome| {
-        sender.send_until(Event::Finished { id, outcome }, stopped);
+        sender.send_until(Event::Finished { outcome }, stopped);
     };
     if cancel.cancelled() {
         return finish(Outcome::Cancelled);
     }
     if let Some(written) = crate::page::write(&task.plan) {
-        sender.send_until(
-            Event::Progress {
-                id,
-                frame: 0,
-                total: 1,
-            },
-            stopped,
-        );
+        sender.send_until(Event::Progress { frame: 0, total: 1 }, stopped);
         let outcome = match written {
             Ok(path) => {
-                sender.send_until(
-                    Event::Progress {
-                        id,
-                        frame: 1,
-                        total: 1,
-                    },
-                    stopped,
-                );
+                sender.send_until(Event::Progress { frame: 1, total: 1 }, stopped);
                 Outcome::Complete { path }
             }
             Err(detail) => Outcome::Failed { detail },
@@ -106,7 +81,7 @@ fn run(id: u64, task: Task, cancel: &Cancel, sender: &Sender<Event>) {
         Err(detail) => return finish(Outcome::Failed { detail }),
     };
     let outcome = context.run(task, cancel, &mut |frame, total| {
-        sender.send_until(Event::Progress { id, frame, total }, stopped);
+        sender.send_until(Event::Progress { frame, total }, stopped);
     });
     finish(outcome);
 }

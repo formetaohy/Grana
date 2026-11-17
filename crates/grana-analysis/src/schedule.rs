@@ -61,10 +61,7 @@ impl Budget {
             bytes <= self.limit,
             "a unit of work fits the shared array budget"
         );
-        let mut used = self
-            .used
-            .lock()
-            .expect("the array budget is never poisoned");
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
         while *used + bytes > self.limit {
             if halted() {
                 return false;
@@ -72,7 +69,7 @@ impl Budget {
             let (guard, _) = self
                 .released
                 .wait_timeout(used, BUDGET_POLL)
-                .expect("the array budget is never poisoned");
+                .unwrap_or_else(|error| error.into_inner());
             used = guard;
         }
         *used += bytes;
@@ -80,10 +77,7 @@ impl Budget {
     }
 
     pub(crate) fn release(&self, bytes: u64) {
-        let mut used = self
-            .used
-            .lock()
-            .expect("the array budget is never poisoned");
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
         assert!(
             *used >= bytes,
             "a released reservation was acquired beforehand"
@@ -109,6 +103,8 @@ pub(crate) struct Run<'a> {
     pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
+const HELD_PER_WORKER: usize = 4;
+
 pub(crate) fn ordered<L, T>(
     run: Run<'_>,
     local: impl Fn() -> L + Sync,
@@ -129,79 +125,96 @@ where
     if total == 0 {
         return Ok(true);
     }
-    let next = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let (sender, receiver) = mpsc::channel::<Result<(usize, T), String>>();
-    let (retired, retired_receiver) = mpsc::channel::<Option<L>>();
-    let completed = parallel(|scope| {
-        for _ in 0..workers.max(1) {
-            let sender = sender.clone();
-            let retired = retired.clone();
-            let next = &next;
-            let stop = &stop;
-            let local = &local;
-            let work = &work;
-            scope.spawn(move |_| {
-                let mut state = None;
-                loop {
-                    if halted(cancel, stop) {
-                        break;
-                    }
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-                    let state = state.get_or_insert_with(local);
-                    let outcome = work(state, index);
-                    let failed = outcome.is_err();
-                    if sender.send(outcome.map(|value| (index, value))).is_err() {
-                        break;
-                    }
-                    if failed {
-                        stop.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                }
-                let _ = retired.send(state);
-            });
+    let workers = workers.max(1).min(total);
+    let window = workers.saturating_mul(HELD_PER_WORKER).min(total);
+    let mut states = (0..workers).map(|_| local()).collect::<Vec<_>>();
+    let mut done = 0usize;
+    let mut base = 0usize;
+    let mut failure = None;
+    while base < total {
+        if cancel.load(Ordering::Relaxed) {
+            break;
         }
-        drop(sender);
-        drop(retired);
-        let mut pending: Vec<Option<T>> = (0..total).map(|_| None).collect();
-        let mut assembled = 0usize;
-        let mut done = 0usize;
-        while let Some(message) = receive(&receiver) {
-            match message {
-                Ok((index, value)) => {
-                    done += 1;
-                    pending[index] = Some(value);
-                    while assembled < total {
-                        let Some(value) = pending[assembled].take() else {
+        let end = (base + window).min(total);
+        let next = AtomicUsize::new(base);
+        let slots = Mutex::new((0..end - base).map(|_| None).collect::<Vec<Option<T>>>());
+        let error = Mutex::new(None::<String>);
+        parallel(|scope| {
+            for state in states.iter_mut() {
+                let next = &next;
+                let slots = &slots;
+                let error = &error;
+                let work = &work;
+                scope.spawn(move |_| {
+                    loop {
+                        if cancel.load(Ordering::Relaxed) || error_is_some(error) {
                             break;
-                        };
-                        sink(assembled, value)?;
-                        assembled += 1;
+                        }
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= end {
+                            break;
+                        }
+                        match work(state, index) {
+                            Ok(value) => {
+                                slots.lock().unwrap_or_else(|error| error.into_inner())
+                                    [index - base] = Some(value);
+                            }
+                            Err(detail) => {
+                                *error.lock().unwrap_or_else(|error| error.into_inner()) =
+                                    Some(detail);
+                                break;
+                            }
+                        }
                     }
-                    progress(done, total);
-                }
-                Err(detail) => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Err(detail);
-                }
+                });
             }
+        });
+        let collected =
+            std::mem::take(&mut *slots.lock().unwrap_or_else(|error| error.into_inner()));
+        let mut missing = false;
+        for (offset, value) in collected.into_iter().enumerate() {
+            let Some(value) = value else {
+                missing = true;
+                break;
+            };
+            if let Err(detail) = sink(base + offset, value) {
+                failure = Some(detail);
+                break;
+            }
+            done += 1;
+            progress(done, total);
         }
-        if done == total {
-            return Ok(true);
+        if failure.is_none() {
+            failure = error
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
         }
-        if cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
-            return Ok(false);
+        if missing || failure.is_some() {
+            break;
         }
-        Err("a worker stopped before its unit of work was completed".to_string())
-    })?;
-    for state in retired_receiver.into_iter().flatten() {
+        base = end;
+    }
+    for state in states {
         finish(state);
     }
-    Ok(completed)
+    if done == total {
+        return Ok(true);
+    }
+    if let Some(detail) = failure {
+        return Err(detail);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    Err("a worker stopped before its unit of work was completed".to_string())
+}
+
+fn error_is_some(error: &Mutex<Option<String>>) -> bool {
+    error
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_some()
 }
 
 pub(crate) fn map<T, R>(items: &[T], workers: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R>
@@ -232,8 +245,4 @@ where
         .into_iter()
         .map(|value| value.expect("every item is mapped"))
         .collect()
-}
-
-fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {
-    cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed)
 }

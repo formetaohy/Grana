@@ -129,7 +129,15 @@ impl Loader {
         let opening_sender = sender.clone();
         let opening_shared = Arc::clone(&shared);
         reader.submit_with(Priority::Immediate, move |cancel| {
-            open(opening, remote, &opening_shared, cancel, &opening_sender);
+            let opened = grana_exec::contain(|| {
+                open(opening, remote, &opening_shared, cancel, &opening_sender)
+            });
+            if let Err(fault) = opened {
+                opening_sender
+                    .send_until(Event::Failed(fault.describe("opening the dataset")), || {
+                        cancel.cancelled()
+                    });
+            }
         });
         Self {
             events,
@@ -169,7 +177,19 @@ impl Loader {
                 let shared = Arc::clone(&self.shared);
                 let events = self.sender.clone();
                 self.reader.submit_with(priority, move |cancel| {
-                    read(request, generation, &shared, cancel, &events);
+                    let outcome =
+                        grana_exec::contain(|| read(request, generation, &shared, cancel, &events));
+                    if let Err(fault) = outcome {
+                        events.send_until(
+                            Event::ReadFailed {
+                                generation,
+                                request,
+                                detail: fault.describe("reading a brick"),
+                                retryable: false,
+                            },
+                            || cancel.cancelled(),
+                        );
+                    }
                 });
             }
         }

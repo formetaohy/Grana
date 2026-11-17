@@ -273,24 +273,34 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
                         break;
                     }
                     let protocol = corrections[index].as_ref().unwrap_or(&plan.protocol);
-                    work(
-                        plan,
-                        &Task {
-                            protocol,
-                            workers,
-                            digest: protocol.digest(),
-                            evidence: evidence[index],
+                    let task = Task {
+                        protocol,
+                        workers,
+                        digest: protocol.digest(),
+                        evidence: evidence[index],
+                        index,
+                        project: plan.project,
+                        channels: plan.channels,
+                        corrected: corrections[index].is_some(),
+                        capture: plan.capture.as_deref(),
+                        events: &events,
+                        cancel: &cancel,
+                        gate: &gate,
+                    };
+                    if let Err(fault) = grana_exec::contain(|| work(plan, &task, rows)) {
+                        let detail = fault.describe(&plan.datasets[index].title());
+                        store(
+                            rows,
                             index,
-                            project: plan.project,
-                            channels: plan.channels,
-                            corrected: corrections[index].is_some(),
-                            capture: plan.capture.as_deref(),
-                            events: &events,
-                            cancel: &cancel,
-                            gate: &gate,
-                        },
-                        rows,
-                    );
+                            Row {
+                                status: "failed",
+                                objects: 0,
+                                detail: detail.clone(),
+                                quality: Vec::new(),
+                            },
+                        );
+                        let _ = events.send(Event::Failed(detail));
+                    }
                 }
             });
         }

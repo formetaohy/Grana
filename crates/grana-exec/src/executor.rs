@@ -201,10 +201,10 @@ impl Drop for Executor {
 fn serve(inner: &Inner) {
     loop {
         let task = take(inner);
-        let Some(task) = task else {
+        let Some(Task { cancel, work, .. }) = task else {
             return;
         };
-        (task.work)(&task.cancel);
+        let _ = crate::fault::contain(move || work(&cancel));
     }
 }
 
