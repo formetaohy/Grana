@@ -282,18 +282,19 @@ impl Image {
             view.channel,
             z,
         );
-        if let Some(plane) = self.cache.get(&key) {
-            return Ok(plane);
-        }
-        let extent = self.extent(level)?;
+        self.cache.fetch(&key, || self.load_plane(key, view))
+    }
+
+    fn load_plane(&self, key: plane::Key, view: View) -> Result<Arc<Plane>, Error> {
+        let extent = self.extent(key.0 as usize)?;
         let plane = self.readers.with(|dataset| {
             dataset
                 .read_plane_level(
                     self.index,
                     PlaneIndex {
                         c: view.channel,
-                        z,
-                        t: time,
+                        z: key.3,
+                        t: key.1,
                     },
                     key.0,
                 )
@@ -314,9 +315,7 @@ impl Image {
         if plane.data.len() != plane.expected_len() {
             return Err(Error::read(&self.path, "a plane holds an unexpected size"));
         }
-        let plane = Arc::new(plane);
-        self.cache.put(key, Arc::clone(&plane), plane.data.len());
-        Ok(plane)
+        Ok(Arc::new(plane))
     }
 }
 

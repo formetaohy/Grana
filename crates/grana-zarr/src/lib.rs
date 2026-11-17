@@ -6,6 +6,8 @@ mod hcs;
 mod image;
 mod label;
 mod metadata;
+mod parallel;
+mod plan;
 mod root;
 mod schema;
 mod transform;

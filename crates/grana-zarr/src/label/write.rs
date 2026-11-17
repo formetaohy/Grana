@@ -11,6 +11,7 @@ use crate::Image;
 use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::metadata::{Axis, AxisKind};
+use crate::parallel;
 
 const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
@@ -18,7 +19,7 @@ const CHUNK_Z: u32 = 32;
 const LABEL_LIMIT: usize = u16::MAX as usize;
 
 pub type ChunkFill<'a> =
-    dyn FnMut(usize, u32, [u32; 3], [u32; 3], &mut [u16]) -> Result<(), String> + 'a;
+    dyn Fn(usize, u32, [u32; 3], [u32; 3], &mut [u16]) -> Result<(), String> + Send + Sync + 'a;
 
 pub struct LabelSpec<'a> {
     pub name: &'a str,
@@ -27,7 +28,7 @@ pub struct LabelSpec<'a> {
     pub color: [f32; 3],
     pub opacity: f32,
     pub properties: &'a [(u32, String)],
-    pub fill: &'a mut ChunkFill<'a>,
+    pub fill: &'a ChunkFill<'a>,
     pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
@@ -281,20 +282,16 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     group
         .store_metadata()
         .map_err(|error| fail(error.to_string()))?;
-    let chunks = (0..levels)
+    let per_level = (0..levels)
         .map(|level| {
             let extent = image.pyramid().level(level).extent();
             let chunk = chunk_shape(extent, &kinds, x, y, z);
             spatial_chunks(extent, &chunk, x, y, z)
         })
-        .sum::<usize>()
-        * spec.frames.len();
-    let mut stats = Stats {
-        done: 0,
-        total: chunks,
-        bytes: 0,
-    };
-    for level in 0..levels {
+        .collect::<Vec<_>>();
+    let total = per_level.iter().sum::<usize>() * spec.frames.len();
+    let mut base = 0;
+    for (level, chunks) in per_level.iter().enumerate() {
         let extent = image.pyramid().level(level).extent();
         let chunk = chunk_shape(extent, &kinds, x, y, z);
         let shape = shape(extent, image.pyramid().frame_count(), &kinds);
@@ -327,12 +324,16 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
                 z,
                 chunk: &chunk,
             },
-            &mut stats,
-            &mut *spec.fill,
+            base,
+            total,
+            spec.fill,
             &mut *spec.progress,
         )
         .map_err(&fail)?;
+        base += chunks * spec.frames.len();
     }
+    let bytes = grana_file::bytes(atomic.staging())
+        .map_err(|error| fail(format!("failed to measure the written labels: {error}")))?;
     atomic.commit().map_err(|error| fail(error.to_string()))?;
     if let Err(detail) = register_labels(
         store.clone(),
@@ -349,7 +350,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         name: spec.name.to_string(),
         labels: spec.labels,
         frames: spec.frames.len(),
-        bytes: stats.bytes,
+        bytes,
     })
 }
 
@@ -367,22 +368,17 @@ struct Geometry<'a> {
     chunk: &'a [u64],
 }
 
-struct Stats {
-    done: usize,
-    total: usize,
-    bytes: u64,
-}
-
 fn write_level<S>(
     array: &Array<S>,
     slice: Slice<'_>,
     geometry: Geometry<'_>,
-    stats: &mut Stats,
-    fill: &mut ChunkFill<'_>,
+    base: usize,
+    total: usize,
+    fill: &ChunkFill<'_>,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<(), String>
 where
-    S: ?Sized + zarrs::storage::WritableStorageTraits + 'static,
+    S: ?Sized + zarrs::storage::WritableStorageTraits + Sync + 'static,
 {
     let Slice {
         image,
@@ -410,45 +406,52 @@ where
         u64::from(spatial[1]).div_ceil(chunk[y]),
         u64::from(depth_extent).div_ceil(depth),
     ];
-    let mut indices = vec![0u64; kinds.len()];
-    for &frame in frames {
-        for cz in 0..counts[2] {
-            for cy in 0..counts[1] {
-                for cx in 0..counts[0] {
-                    let origin = [
-                        (cx * chunk[x]) as u32,
-                        (cy * chunk[y]) as u32,
-                        (cz * depth) as u32,
-                    ];
-                    let length = [
-                        (chunk[x]).min(u64::from(spatial[0] - origin[0])) as u32,
-                        (chunk[y]).min(u64::from(spatial[1] - origin[1])) as u32,
-                        depth.min(u64::from(depth_extent - origin[2])) as u32,
-                    ];
-                    let voxels = (length[0] as usize) * (length[1] as usize) * (length[2] as usize);
-                    let mut region = vec![0u16; voxels];
-                    fill(level, frame, origin, length, &mut region)?;
-                    let mut data = vec![0u16; block.voxels()];
-                    block.stage(length, &region, &mut data);
-                    for (index, kind) in kinds.iter().enumerate() {
-                        indices[index] = match kind {
-                            Kind::Time => u64::from(frame),
-                            Kind::Channel | Kind::Other => 0,
-                            Kind::Space if index == x => cx,
-                            Kind::Space if index == y => cy,
-                            Kind::Space => cz,
-                        };
-                    }
-                    array
-                        .store_chunk(&indices, data)
-                        .map_err(|error| error.to_string())?;
-                    stats.bytes += (block.voxels() * 2) as u64;
-                    stats.done += 1;
-                    progress(stats.done, stats.total);
-                }
-            }
-        }
-    }
+    let columns = counts[0] as usize;
+    let planes = columns * counts[1] as usize;
+    let per_frame = planes * counts[2] as usize;
+    parallel::write_each(
+        frames.len() * per_frame,
+        &mut |done, _| progress(base + done, total),
+        |index| {
+            let frame = frames[index / per_frame];
+            let held = index % per_frame;
+            let coords = [
+                (held % columns) as u64,
+                ((held % planes) / columns) as u64,
+                (held / planes) as u64,
+            ];
+            let origin = [
+                (coords[0] * chunk[x]) as u32,
+                (coords[1] * chunk[y]) as u32,
+                (coords[2] * depth) as u32,
+            ];
+            let length = [
+                chunk[x].min(u64::from(spatial[0] - origin[0])) as u32,
+                chunk[y].min(u64::from(spatial[1] - origin[1])) as u32,
+                depth.min(u64::from(depth_extent - origin[2])) as u32,
+            ];
+            let voxels = (length[0] as usize) * (length[1] as usize) * (length[2] as usize);
+            let mut region = vec![0u16; voxels];
+            fill(level, frame, origin, length, &mut region)?;
+            let mut data = vec![0u16; block.voxels()];
+            block.stage(length, &region, &mut data);
+            let indices = kinds
+                .iter()
+                .enumerate()
+                .map(|(index, kind)| match kind {
+                    Kind::Time => u64::from(frame),
+                    Kind::Channel | Kind::Other => 0,
+                    Kind::Space if index == x => coords[0],
+                    Kind::Space if index == y => coords[1],
+                    Kind::Space => coords[2],
+                })
+                .collect::<Vec<_>>();
+            array
+                .store_chunk(&indices, data)
+                .map_err(|error| error.to_string())?;
+            Ok((block.voxels() * 2) as u64)
+        },
+    )?;
     Ok(())
 }
 

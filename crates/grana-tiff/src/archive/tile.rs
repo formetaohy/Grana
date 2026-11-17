@@ -2,7 +2,7 @@ use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use grana_archive::Fill;
+use grana_archive::Filler;
 use grana_volume::Level;
 
 pub(crate) const SIDE: u32 = 256;
@@ -88,7 +88,7 @@ impl Tile {
         info: LevelInfo,
         column: u32,
         row: u32,
-        fill: &mut Fill<'_>,
+        fill: &Filler<'_>,
     ) -> Result<u64, String> {
         let origin = [column * SIDE, row * SIDE, request.z];
         let length = [

@@ -8,8 +8,28 @@ pub struct Channel<'a> {
     pub range: Intensity,
 }
 
-pub type Fill<'a> =
-    dyn FnMut(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String> + 'a;
+pub type Filler<'a> = dyn Fn(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String>
+    + Send
+    + Sync
+    + 'a;
+
+#[derive(Clone, Copy)]
+pub enum Fill<'a> {
+    EveryLevel(&'a Filler<'a>),
+    FinestLevel(&'a Filler<'a>),
+}
+
+impl<'a> Fill<'a> {
+    pub fn filler(self) -> &'a Filler<'a> {
+        match self {
+            Self::EveryLevel(filler) | Self::FinestLevel(filler) => filler,
+        }
+    }
+
+    pub fn derived(self) -> bool {
+        matches!(self, Self::FinestLevel(_))
+    }
+}
 
 pub struct ImageSpec<'a> {
     pub name: &'a str,
@@ -18,7 +38,7 @@ pub struct ImageSpec<'a> {
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
-    pub fill: &'a mut Fill<'a>,
+    pub fill: Fill<'a>,
     pub progress: &'a mut dyn FnMut(usize, usize),
 }
 

@@ -8,7 +8,7 @@ use grana_analysis::{
     SpotScan, SurfaceBuilder, TrackLinker, coloc_sampling, drift_shift,
     local::{BlockField, BlockLevels},
 };
-use grana_archive::{Channel as WriteChannel, ImageSpec};
+use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
@@ -1621,12 +1621,12 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
         tint: [0.2, 0.4, 1.0],
         range: Intensity::new(0.0, 50_000.0),
     }];
-    let mut fill = |_level: usize,
-                    _frame: u32,
-                    _channel: usize,
-                    origin: [u32; 3],
-                    length: [u32; 3],
-                    data: &mut [f32]|
+    let fill = |_level: usize,
+                _frame: u32,
+                _channel: usize,
+                origin: [u32; 3],
+                length: [u32; 3],
+                data: &mut [f32]|
      -> Result<(), String> {
         for z in 0..length[2] {
             for y in 0..length[1] {
@@ -1661,7 +1661,7 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
             placement: [0.0; 3],
             frames: 1,
             interval: 1.0,
-            fill: &mut fill,
+            fill: Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )

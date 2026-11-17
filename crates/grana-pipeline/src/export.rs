@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
-use grana_archive::{Channel as WriteChannel, Format, ImageSpec};
+use grana_archive::{Channel as WriteChannel, Fill, Format, ImageSpec};
 use grana_scene::ObjectSet;
 use grana_volume::{Extent, Intensity, Level, Region};
 use grana_warp::Warps;
@@ -115,7 +115,7 @@ impl LabelLayer {
     }
 
     pub fn fill(
-        &mut self,
+        &self,
         level: usize,
         time: u32,
         origin: [u32; 3],
@@ -232,12 +232,12 @@ pub fn write_dataset(
             range: layer.range,
         })
         .collect::<Vec<_>>();
-    let mut fill = |level: usize,
-                    time: u32,
-                    channel: usize,
-                    origin: [u32; 3],
-                    extent: [u32; 3],
-                    data: &mut [f32]| {
+    let fill = |level: usize,
+                time: u32,
+                channel: usize,
+                origin: [u32; 3],
+                extent: [u32; 3],
+                data: &mut [f32]| {
         if cancel.load(Ordering::Relaxed) {
             return Err("the dataset export was cancelled".to_string());
         }
@@ -285,7 +285,7 @@ pub fn write_dataset(
         placement,
         frames,
         interval,
-        fill: &mut fill,
+        fill: Fill::EveryLevel(&fill),
         progress: &mut image_progress,
     };
     match format {
@@ -299,14 +299,14 @@ pub fn write_dataset(
     let mut base = image_total;
     let mut written = 0usize;
     if format == Format::Zarr {
-        for mut layer in labels {
+        for layer in labels {
             let name = layer.name().to_string();
             let frames = layer.frames().to_vec();
             let count = layer.labels();
             let color = layer.color();
             let opacity = layer.opacity();
             let properties = layer.properties();
-            let mut fill =
+            let fill =
                 |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
                     if cancel.load(Ordering::Relaxed) {
                         return Err("the dataset export was cancelled".to_string());
@@ -328,7 +328,7 @@ pub fn write_dataset(
                     color,
                     opacity,
                     properties: &properties,
-                    fill: &mut fill,
+                    fill: &fill,
                     progress: &mut label_progress,
                 },
             )

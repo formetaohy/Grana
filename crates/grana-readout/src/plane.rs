@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use grana_volume::{VoxelData, VoxelFormat};
 use openreadout_core::{PixelType, Plane};
@@ -18,17 +18,36 @@ pub(crate) struct View {
     pub(crate) format: VoxelFormat,
 }
 
+enum Held {
+    Loading {
+        used: u64,
+    },
+    Ready {
+        plane: Arc<Plane>,
+        bytes: usize,
+        used: u64,
+    },
+}
+
+impl Held {
+    fn used(&self) -> u64 {
+        match self {
+            Self::Loading { used } | Self::Ready { used, .. } => *used,
+        }
+    }
+}
+
+enum Claim {
+    Ready(Arc<Plane>),
+    Loading,
+    Wait,
+}
+
 pub(crate) struct Cache {
     budget: usize,
     held: usize,
     tick: u64,
     planes: HashMap<Key, Held>,
-}
-
-struct Held {
-    plane: Arc<Plane>,
-    bytes: usize,
-    used: u64,
 }
 
 impl Cache {
@@ -43,73 +62,169 @@ impl Cache {
     }
 
     pub(crate) fn get(&mut self, key: &Key) -> Option<Arc<Plane>> {
-        self.tick += 1;
-        let tick = self.tick;
-        self.planes.get_mut(key).map(|held| {
-            held.used = tick;
-            Arc::clone(&held.plane)
-        })
+        let used = self.advance();
+        let held = self.planes.get_mut(key)?;
+        let Held::Ready {
+            plane, used: stamp, ..
+        } = held
+        else {
+            return None;
+        };
+        *stamp = used;
+        Some(Arc::clone(plane))
     }
 
-    pub(crate) fn put(&mut self, key: Key, plane: Arc<Plane>, bytes: usize) {
-        self.tick += 1;
-        if let Some(held) = self.planes.insert(
-            key,
-            Held {
-                plane,
-                bytes,
-                used: self.tick,
-            },
-        ) {
-            self.held -= held.bytes;
+    pub(crate) fn put(&mut self, key: Key, plane: Arc<Plane>) {
+        self.settle(&key, plane);
+    }
+
+    fn claim(&mut self, key: &Key) -> Claim {
+        let used = self.advance();
+        match self.planes.get_mut(key) {
+            Some(Held::Ready { plane, used, .. }) => {
+                let plane = Arc::clone(plane);
+                *used = self.tick;
+                Claim::Ready(plane)
+            }
+            Some(Held::Loading { .. }) => Claim::Wait,
+            None => {
+                self.planes.insert(*key, Held::Loading { used });
+                Claim::Loading
+            }
+        }
+    }
+
+    fn settle(&mut self, key: &Key, plane: Arc<Plane>) {
+        let used = self.advance();
+        let bytes = plane.data.len();
+        if let Some(Held::Ready { bytes, .. }) =
+            self.planes.insert(*key, Held::Ready { plane, bytes, used })
+        {
+            self.held -= bytes;
         }
         self.held += bytes;
         while self.held > self.budget && self.planes.len() > 1 {
             let Some(oldest) = self
                 .planes
                 .iter()
-                .min_by_key(|(_, held)| held.used)
+                .filter(|(_, held)| matches!(held, Held::Ready { .. }))
+                .min_by_key(|(_, held)| held.used())
                 .map(|(key, _)| *key)
             else {
                 break;
             };
-            if let Some(held) = self.planes.remove(&oldest) {
-                self.held -= held.bytes;
+            if let Some(Held::Ready { bytes, .. }) = self.planes.remove(&oldest) {
+                self.held -= bytes;
             }
         }
+    }
+
+    fn abandon(&mut self, key: &Key) {
+        self.planes.remove(key);
+    }
+
+    fn advance(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+}
+
+struct Shard {
+    cache: Mutex<Cache>,
+    ready: Condvar,
+}
+
+impl Shard {
+    fn lock(&self) -> MutexGuard<'_, Cache> {
+        self.cache.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn wait<'a>(&self, cache: MutexGuard<'a, Cache>) -> MutexGuard<'a, Cache> {
+        self.ready
+            .wait(cache)
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn wake(&self) {
+        self.ready.notify_all();
     }
 }
 
 pub(crate) struct Shards {
-    shards: Vec<Mutex<Cache>>,
+    shards: Vec<Shard>,
 }
 
 impl Shards {
     pub(crate) fn new(budget: usize) -> Self {
         let each = (budget / SHARDS).max(1);
         Self {
-            shards: (0..SHARDS).map(|_| Mutex::new(Cache::new(each))).collect(),
+            shards: (0..SHARDS)
+                .map(|_| Shard {
+                    cache: Mutex::new(Cache::new(each)),
+                    ready: Condvar::new(),
+                })
+                .collect(),
         }
     }
 
-    pub(crate) fn get(&self, key: &Key) -> Option<Arc<Plane>> {
-        self.shard(key)
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(key)
+    pub(crate) fn fetch<E>(
+        &self,
+        key: &Key,
+        load: impl FnOnce() -> Result<Arc<Plane>, E>,
+    ) -> Result<Arc<Plane>, E> {
+        let shard = self.shard(key);
+        {
+            let mut cache = shard.lock();
+            loop {
+                match cache.claim(key) {
+                    Claim::Ready(plane) => return Ok(plane),
+                    Claim::Wait => cache = shard.wait(cache),
+                    Claim::Loading => break,
+                }
+            }
+        }
+        let pending = Pending {
+            shard,
+            key: *key,
+            armed: true,
+        };
+        let plane = load()?;
+        Ok(pending.settle(plane))
     }
 
-    pub(crate) fn put(&self, key: Key, plane: Arc<Plane>, bytes: usize) {
-        self.shard(&key)
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .put(key, plane, bytes);
-    }
-
-    fn shard(&self, key: &Key) -> &Mutex<Cache> {
+    fn shard(&self, key: &Key) -> &Shard {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         &self.shards[(hasher.finish() as usize) % self.shards.len()]
+    }
+}
+
+struct Pending<'a> {
+    shard: &'a Shard,
+    key: Key,
+    armed: bool,
+}
+
+impl Pending<'_> {
+    fn settle(mut self, plane: Arc<Plane>) -> Arc<Plane> {
+        let mut cache = self.shard.lock();
+        cache.settle(&self.key, Arc::clone(&plane));
+        drop(cache);
+        self.armed = false;
+        self.shard.wake();
+        plane
+    }
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut cache = self.shard.lock();
+        cache.abandon(&self.key);
+        drop(cache);
+        self.shard.wake();
     }
 }
 

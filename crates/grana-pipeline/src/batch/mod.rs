@@ -50,8 +50,6 @@ const PAGES: &str = "pages.json";
 
 const TREND: &str = "comparison_trend.csv";
 
-const PARTIAL: &str = "partial";
-
 const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_archive::{Channel as WriteChannel, ImageSpec};
+use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::{Format, Image, Source};
 use grana_interop::{Detection, Edge, Lineage, geff};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
@@ -38,23 +38,21 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         tint: [0.2, 0.7, 1.0],
         range: Intensity::new(0.0, 4096.0),
     }];
-    let mut fill =
-        |level, _frame, _channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
-            let scale = 1u32 << level;
-            for z in 0..extent[2] {
-                for y in 0..extent[1] {
-                    for x in 0..extent[0] {
-                        let index = x as usize
-                            + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
-                        data[index] = ((origin[0] + x) * scale
-                            + 1000 * (origin[1] + y) * scale
-                            + 1000000 * (origin[2] + z))
-                            as f32;
-                    }
+    let fill = |level, _frame, _channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
+        let scale = 1u32 << level;
+        for z in 0..extent[2] {
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    let index = x as usize
+                        + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
+                    data[index] = ((origin[0] + x) * scale
+                        + 1000 * (origin[1] + y) * scale
+                        + 1000000 * (origin[2] + z)) as f32;
                 }
             }
-            Ok(())
-        };
+        }
+        Ok(())
+    };
     let mut progress = |_, _| {};
     let path = temp.path().join("pyramid.ome.tif");
     let written = grana_tiff::write_archive(
@@ -66,7 +64,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: [1.5, -2.0, 3.0],
             frames: 2,
             interval: 0.5,
-            fill: &mut fill,
+            fill: Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )
@@ -433,7 +431,7 @@ fn write_zarr(root: &std::path::Path) {
             range: Intensity::new(0.0, 1024.0),
         },
     ];
-    let mut fill = |level, frame, channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
+    let fill = |level, frame, channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
         let scale = 1u32 << level;
         for z in 0..extent[2] {
             for y in 0..extent[1] {
@@ -461,7 +459,7 @@ fn write_zarr(root: &std::path::Path) {
             placement: [1.5, -2.0, 3.0],
             frames: 2,
             interval: 1.5,
-            fill: &mut fill,
+            fill: Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )
@@ -650,12 +648,12 @@ fn round_trips_a_rotated_placement() {
         tint: [0.0, 0.0, 1.0],
         range: Intensity::new(0.0, 255.0),
     }];
-    let mut fill = |_level: usize,
-                    _frame: u32,
-                    _channel: usize,
-                    _origin: [u32; 3],
-                    _extent: [u32; 3],
-                    data: &mut [f32]|
+    let fill = |_level: usize,
+                _frame: u32,
+                _channel: usize,
+                _origin: [u32; 3],
+                _extent: [u32; 3],
+                data: &mut [f32]|
      -> Result<(), String> {
         data.fill(200.0);
         Ok(())
@@ -670,7 +668,7 @@ fn round_trips_a_rotated_placement() {
             placement: [0.0; 3],
             frames: 1,
             interval: 1.0,
-            fill: &mut fill,
+            fill: Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )
@@ -697,12 +695,12 @@ fn round_trips_a_rotated_placement() {
         Extent::new(8, 8, 4),
         Basis::new([[0.5, 0.0, 0.0], [0.25, 0.5, 0.0], [0.0, 0.0, 1.0]]),
     );
-    let mut fill = |_: usize,
-                    _: u32,
-                    _: usize,
-                    _: [u32; 3],
-                    _: [u32; 3],
-                    _: &mut [f32]|
+    let fill = |_: usize,
+                _: u32,
+                _: usize,
+                _: [u32; 3],
+                _: [u32; 3],
+                _: &mut [f32]|
      -> Result<(), String> { Ok(()) };
     let mut progress = |_, _| {};
     let sheared_path = temp.path().join("sheared.ome.zarr");
@@ -715,7 +713,7 @@ fn round_trips_a_rotated_placement() {
             placement: [1.5, -2.0, 3.0],
             frames: 1,
             interval: 1.0,
-            fill: &mut fill,
+            fill: Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )
@@ -859,11 +857,10 @@ fn writes_and_reads_a_label_image() {
         tint: [0.0, 0.0, 1.0],
         range: Intensity::new(0.0, 1.0),
     }];
-    let mut image_fill =
-        |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
-            data.fill(0.0);
-            Ok(())
-        };
+    let image_fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
+        data.fill(0.0);
+        Ok(())
+    };
     let mut progress = |_, _| {};
     write_image(
         &path,
@@ -874,17 +871,17 @@ fn writes_and_reads_a_label_image() {
             placement: [0.0; 3],
             frames: 2,
             interval: 1.0,
-            fill: &mut image_fill,
+            fill: Fill::EveryLevel(&image_fill),
             progress: &mut progress,
         },
     )
     .expect("the wide image writes");
     let label_of = |x: u32, y: u32, z: u32| 1 + (x + 3 * y + 5 * z) % 7;
-    let mut label_fill = |_: usize,
-                          _: u32,
-                          origin: [u32; 3],
-                          length: [u32; 3],
-                          data: &mut [u16]|
+    let label_fill = |_: usize,
+                      _: u32,
+                      origin: [u32; 3],
+                      length: [u32; 3],
+                      data: &mut [u16]|
      -> Result<(), String> {
         for z in 0..length[2] {
             for y in 0..length[1] {
@@ -907,7 +904,7 @@ fn writes_and_reads_a_label_image() {
             color: [1.0, 0.0, 0.0],
             opacity: 1.0,
             properties: &[],
-            fill: &mut label_fill,
+            fill: &label_fill,
             progress: &mut progress,
         },
     )
@@ -990,11 +987,11 @@ fn writes_labels_over_a_rotated_custom_axis_image() {
     support::rotated_field_with_axis(&path);
     let image = grana_zarr::Image::open(&path).expect("the angled image opens");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 2));
-    let mut fill = |_level: usize,
-                    _frame: u32,
-                    _origin: [u32; 3],
-                    _extent: [u32; 3],
-                    data: &mut [u16]|
+    let fill = |_level: usize,
+                _frame: u32,
+                _origin: [u32; 3],
+                _extent: [u32; 3],
+                data: &mut [u16]|
      -> Result<(), String> {
         data.fill(7);
         Ok(())
@@ -1010,7 +1007,7 @@ fn writes_labels_over_a_rotated_custom_axis_image() {
             color: [0.0, 1.0, 0.0],
             opacity: 1.0,
             properties: &[],
-            fill: &mut fill,
+            fill: &fill,
             progress: &mut progress,
         },
     )
@@ -1036,11 +1033,11 @@ fn writes_labels_over_a_rotated_plane() {
     support::rotated_plane_with_axis(&path);
     let image = grana_zarr::Image::open(&path).expect("the angled plane opens");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 1));
-    let mut fill = |_level: usize,
-                    _frame: u32,
-                    _origin: [u32; 3],
-                    _extent: [u32; 3],
-                    data: &mut [u16]|
+    let fill = |_level: usize,
+                _frame: u32,
+                _origin: [u32; 3],
+                _extent: [u32; 3],
+                data: &mut [u16]|
      -> Result<(), String> {
         data.fill(5);
         Ok(())
@@ -1056,7 +1053,7 @@ fn writes_labels_over_a_rotated_plane() {
             color: [1.0, 0.0, 0.0],
             opacity: 1.0,
             properties: &[],
-            fill: &mut fill,
+            fill: &fill,
             progress: &mut progress,
         },
     )

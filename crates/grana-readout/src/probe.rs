@@ -45,7 +45,7 @@ pub(crate) fn intensities(
                     ));
                 }
                 let plane = Arc::new(plane);
-                cache.put(key, Arc::clone(&plane), plane.data.len());
+                cache.put(key, Arc::clone(&plane));
                 plane
             }
         };

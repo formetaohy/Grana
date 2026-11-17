@@ -475,12 +475,12 @@ pub fn localization_dataset(path: &Path, frames: u32) {
         Extent::new(32, 32, 2),
         Spacing::new(0.1, 0.1, 0.1),
     )];
-    let mut fill = |_: usize,
-                    _: u32,
-                    _: usize,
-                    _: [u32; 3],
-                    _: [u32; 3],
-                    data: &mut [f32]|
+    let fill = |_: usize,
+                _: u32,
+                _: usize,
+                _: [u32; 3],
+                _: [u32; 3],
+                data: &mut [f32]|
      -> Result<(), String> {
         data.fill(64.0);
         Ok(())
@@ -495,7 +495,7 @@ pub fn localization_dataset(path: &Path, frames: u32) {
             placement: [0.0; 3],
             frames,
             interval: 1.0,
-            fill: &mut fill,
+            fill: grana_archive::Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )
@@ -872,12 +872,12 @@ fn field(path: &Path, extent: Extent) {
         extent,
         Spacing::new(1.0, 1.0, 1.0),
     )];
-    let mut fill = |_: usize,
-                    _: u32,
-                    _: usize,
-                    _: [u32; 3],
-                    _: [u32; 3],
-                    data: &mut [f32]|
+    let fill = |_: usize,
+                _: u32,
+                _: usize,
+                _: [u32; 3],
+                _: [u32; 3],
+                data: &mut [f32]|
      -> Result<(), String> {
         data.fill(64.0);
         Ok(())
@@ -892,7 +892,7 @@ fn field(path: &Path, extent: Extent) {
             placement: [0.0; 3],
             frames: 1,
             interval: 1.0,
-            fill: &mut fill,
+            fill: grana_archive::Fill::EveryLevel(&fill),
             progress: &mut progress,
         },
     )

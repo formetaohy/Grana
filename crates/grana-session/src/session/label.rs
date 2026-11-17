@@ -44,9 +44,9 @@ impl Labels {
             title,
         } = request;
         let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
-            let mut labeling = Labeling::new(objects, labels, levels, title);
+            let labeling = Labeling::new(objects, labels, levels, title);
             let properties = labeling.properties();
-            let mut fill =
+            let fill =
                 |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
                     if cancel.load(Ordering::Relaxed) {
                         return Err("the label export was cancelled".to_string());
@@ -63,7 +63,7 @@ impl Labels {
                     color,
                     opacity,
                     properties: &properties,
-                    fill: &mut fill,
+                    fill: &fill,
                     progress,
                 },
             )

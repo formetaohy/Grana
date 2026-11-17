@@ -24,7 +24,7 @@ use grana_protocol::{Protocol, ProtocolError, SnapshotSpec, SourceSpec, Step, Vi
 use super::channel;
 use super::profile;
 use super::resume::{Record, build};
-use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, Task};
+use super::{DatasetEntry, Event, Progress, RESULT, Task};
 
 pub(super) struct Report {
     pub(super) objects: usize,
@@ -39,77 +39,19 @@ pub(super) fn analyse(
     output: &Path,
 ) -> Result<Report, String> {
     let folder = output.join(dataset.folder());
-    let partial = output.join(format!(".{PARTIAL}-{}", dataset.key()));
-    let previous = output.join(format!(".{PARTIAL}-{}-previous", dataset.key()));
-    if !folder.exists() && previous.exists() {
-        std::fs::rename(&previous, &folder).map_err(|error| {
-            format!(
-                "failed to restore {} over {}: {error}",
-                previous.display(),
-                folder.display()
-            )
-        })?;
-    }
-    clear(&partial)?;
-    std::fs::create_dir_all(&partial)
-        .map_err(|error| format!("failed to create {}: {error}", partial.display()))?;
-    let outcome = write_dataset(task, dataset, &partial);
-    let report = match outcome {
+    let atomic = grana_file::Atomic::directory(&folder)
+        .map_err(|error| format!("failed to prepare {}: {error}", folder.display()))?;
+    let report = match write_dataset(task, dataset, atomic.staging()) {
         Ok(report) => report,
         Err(detail) => {
-            let _ = std::fs::remove_dir_all(&partial);
+            drop(atomic);
             return Err(detail);
         }
     };
-    if let Some(parent) = folder.parent()
-        && let Err(error) = std::fs::create_dir_all(parent)
-    {
-        let _ = std::fs::remove_dir_all(&partial);
-        return Err(format!("failed to create {}: {error}", parent.display()));
-    }
-    install(&partial, &folder, &previous, dataset)?;
+    atomic
+        .commit()
+        .map_err(|error| format!("failed to write {}: {error}", folder.display()))?;
     Ok(report)
-}
-
-fn install(
-    partial: &Path,
-    folder: &Path,
-    previous: &Path,
-    dataset: &DatasetEntry,
-) -> Result<(), String> {
-    if !folder.exists() {
-        return std::fs::rename(partial, folder).map_err(|error| {
-            let _ = std::fs::remove_dir_all(partial);
-            format!("failed to write {}: {error}", folder.display())
-        });
-    }
-    clear(previous)?;
-    std::fs::rename(folder, previous).map_err(|error| {
-        let _ = std::fs::remove_dir_all(partial);
-        format!(
-            "failed to set aside {} for {}: {error}",
-            folder.display(),
-            dataset.title()
-        )
-    })?;
-    match std::fs::rename(partial, folder) {
-        Ok(()) => {
-            let _ = std::fs::remove_dir_all(previous);
-            Ok(())
-        }
-        Err(error) => {
-            let restored = std::fs::rename(previous, folder);
-            let _ = std::fs::remove_dir_all(partial);
-            match restored {
-                Ok(()) => Err(format!("failed to write {}: {error}", folder.display())),
-                Err(detail) => Err(format!(
-                    "failed to write {}: {error}; the previous results stay at {} ({detail})",
-                    folder.display(),
-                    previous.display()
-                )),
-            }
-        }
-    }
 }
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
@@ -1230,10 +1172,10 @@ impl Run<'_, '_> {
         if levels.is_empty() {
             return Err("the dataset holds no stored resolution level".to_string());
         }
-        let mut labeling = Labeling::new(shapes, labels, levels, name.clone());
+        let labeling = Labeling::new(shapes, labels, levels, name.clone());
         let properties = labeling.properties();
         let cancel = task.cancel;
-        let mut fill =
+        let fill =
             |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("cancelled".to_string());
@@ -1256,7 +1198,7 @@ impl Run<'_, '_> {
                 color: object.color(),
                 opacity: object.opacity(),
                 properties: &properties,
-                fill: &mut fill,
+                fill: &fill,
                 progress: &mut progress,
             },
         )
@@ -1629,14 +1571,6 @@ fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
             }
         }
     }
-}
-
-fn clear(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-    std::fs::remove_dir_all(path)
-        .map_err(|error| format!("failed to clear {}: {error}", path.display()))
 }
 
 pub(super) fn language() -> grana_i18n::Language {

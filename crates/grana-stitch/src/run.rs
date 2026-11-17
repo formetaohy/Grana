@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use grana_archive::{Channel as WriteChannel, ImageSpec};
+use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_exec::Cancel;
 use grana_image::{Image, Source};
 use grana_volume::{Extent, Intensity, Level, Spacing};
@@ -13,7 +13,6 @@ const CANCELLED: &str = "the stitch was cancelled";
 const REGISTRATION_SIDE: u32 = 1024;
 const FEATHER: f32 = 32.0;
 const WEIGHT_FLOOR: f32 = 1.0e-3;
-const BLOCK: u32 = 64;
 const LEVEL_LIMIT: usize = 6;
 const LEVEL_FLOOR: u32 = 32;
 
@@ -110,16 +109,17 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
     );
     let levels = mosaic.levels();
     let channels = mosaic.channels();
-    let mut fill = |level: usize,
-                    time: u32,
-                    channel: usize,
-                    origin: [u32; 3],
-                    length: [u32; 3],
-                    out: &mut [f32]| {
+    let fill = |level: usize,
+                time: u32,
+                channel: usize,
+                origin: [u32; 3],
+                length: [u32; 3],
+                out: &mut [f32]| {
+        assert_eq!(level, 0, "a stitched mosaic fills its finest level");
         if cancel.cancelled() {
             return Err(CANCELLED.to_string());
         }
-        mosaic.fill(level, time, channel, origin, length, out)
+        mosaic.fill(time, channel, origin, length, out)
     };
     let mut progress = |_: usize, _: usize| {};
     let mut image = ImageSpec {
@@ -129,7 +129,7 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
         placement: mosaic.placement,
         frames: mosaic.frames,
         interval: mosaic.interval,
-        fill: &mut fill,
+        fill: Fill::FinestLevel(&fill),
         progress: &mut progress,
     };
     let written = grana_zarr::write_image(&request.output, &mut image)
@@ -355,81 +355,13 @@ impl Mosaic {
 
     fn fill(
         &self,
-        level: usize,
         time: u32,
         channel: usize,
         origin: [u32; 3],
         length: [u32; 3],
         out: &mut [f32],
     ) -> Result<(), String> {
-        let voxels = (length[0] * length[1] * length[2]) as usize;
-        if out.len() != voxels {
-            return Err("the stitched chunk does not cover its region".to_string());
-        }
-        if level == 0 {
-            return self.fill_base(time, channel, origin, length, out);
-        }
-        let factor = 1u32
-            .checked_shl(level as u32)
-            .ok_or_else(|| "the stitched level lies beyond the pyramid".to_string())?;
-        let base = [0, 1, 2].map(|axis| {
-            let limit = match axis {
-                0 => self.extent.x(),
-                1 => self.extent.y(),
-                _ => self.extent.z(),
-            };
-            (
-                (origin[axis] * factor).min(limit),
-                ((origin[axis] + length[axis]) * factor).min(limit),
-            )
-        });
-        out.fill(0.0);
-        let mut counts = vec![0u32; out.len()];
-        let step = BLOCK - BLOCK % factor;
-        let mut scratch = vec![0.0f32; (step * step * step) as usize];
-        let mut z = base[2].0;
-        while z < base[2].1 {
-            let depth = step.min(base[2].1 - z);
-            let mut y = base[1].0;
-            while y < base[1].1 {
-                let rows = step.min(base[1].1 - y);
-                let mut x = base[0].0;
-                while x < base[0].1 {
-                    let columns = step.min(base[0].1 - x);
-                    let span = [columns, rows, depth];
-                    let held = (columns * rows * depth) as usize;
-                    self.fill_base(time, channel, [x, y, z], span, &mut scratch[..held])?;
-                    for window in 0..depth {
-                        for row in 0..rows {
-                            for column in 0..columns {
-                                let source = (column + columns * (row + rows * window)) as usize;
-                                let target = [
-                                    ((x + column) / factor - origin[0]) as usize,
-                                    ((y + row) / factor - origin[1]) as usize,
-                                    ((z + window) / factor - origin[2]) as usize,
-                                ];
-                                let slot = target[0]
-                                    + length[0] as usize
-                                        * (target[1] + length[1] as usize * target[2]);
-                                out[slot] += scratch[source];
-                                counts[slot] += 1;
-                            }
-                        }
-                    }
-                    x += step;
-                }
-                y += step;
-            }
-            z += step;
-        }
-        for (value, count) in out.iter_mut().zip(&counts) {
-            *value = if *count > 0 {
-                *value / *count as f32
-            } else {
-                0.0
-            };
-        }
-        Ok(())
+        self.fill_base(time, channel, origin, length, out)
     }
 
     fn fill_base(

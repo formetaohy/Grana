@@ -622,9 +622,11 @@ impl Residence {
         self.missing.begin(demand.key.time);
         for (band, entries) in demand.bands.iter().enumerate() {
             let grid = BrickGrid::new(pyramid.level(entries.info.level).extent());
+            for index in &entries.indices {
+                self.missing.demands(entries.info.level, *index);
+            }
             for (request, bucket) in entries.requests.iter().zip(&entries.buckets) {
                 let index = grid.index(request.coord);
-                self.missing.demands(request.level, index as u32);
                 if atlas.slot(request.time, request.level, index).is_some()
                     || atlas.is_hollow(request.time, request.level, index)
                 {

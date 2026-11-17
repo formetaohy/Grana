@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use grana_archive::{Fill, ImageSpec, Written};
+use grana_archive::{Fill, Filler, ImageSpec, Written};
 
 use crate::Error;
 use tile::{LevelInfo, Request, Tile};
@@ -17,6 +17,12 @@ const ALIGNMENT: f32 = 1.0e-5;
 pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, crate::Error> {
     spec.check();
     validate(path, spec)?;
+    let Fill::EveryLevel(fill) = spec.fill else {
+        return Err(Error::write(
+            path,
+            "an OME-TIFF archive stores every resolution level".to_string(),
+        ));
+    };
     let levels = spec
         .levels
         .iter()
@@ -67,7 +73,7 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                     channel,
                     z,
                 };
-                let (offsets, counts) = sink.tiles(&request, base, spec.fill, spec.progress)?;
+                let (offsets, counts) = sink.tiles(&request, base, fill, spec.progress)?;
                 sink.patch(spots.offsets, &offsets)?;
                 sink.patch(spots.counts, &counts)?;
                 let mut sub_ifds = Vec::with_capacity(levels.len() - 1);
@@ -83,8 +89,7 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                         channel,
                         z,
                     };
-                    let (offsets, counts) =
-                        sink.tiles(&request, *level, spec.fill, spec.progress)?;
+                    let (offsets, counts) = sink.tiles(&request, *level, fill, spec.progress)?;
                     sink.patch(spots.offsets, &offsets)?;
                     sink.patch(spots.counts, &counts)?;
                     sub_ifds.push(at);
@@ -225,7 +230,7 @@ impl Sink {
         &mut self,
         request: &Request,
         info: LevelInfo,
-        fill: &mut Fill<'_>,
+        fill: &Filler<'_>,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let mut offsets = Vec::with_capacity(info.tiles());

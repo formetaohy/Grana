@@ -1,20 +1,23 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use grana_archive::{ImageSpec, Written};
+use grana_archive::{Fill, Filler, ImageSpec, Written};
 use grana_volume::Level;
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
-use zarrs::array::{Array, ArrayBuilder, data_type};
+use zarrs::array::{Array, ArrayBuilder, ArraySubset, data_type};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
 use crate::chunk::Chunk;
 use crate::error::Error;
+use crate::parallel;
+use crate::plan::{Located, Plan};
 
 const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
+const SLAB_Z: u32 = 4;
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
 pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Error> {
@@ -29,9 +32,13 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
         path: path.display().to_string(),
         detail: error.to_string(),
     })?;
-    let bytes = build(atomic.staging(), spec).map_err(|detail| Error::Write {
+    build(atomic.staging(), spec).map_err(|detail| Error::Write {
         path: path.display().to_string(),
         detail,
+    })?;
+    let bytes = grana_file::bytes(atomic.staging()).map_err(|error| Error::Write {
+        path: path.display().to_string(),
+        detail: format!("failed to measure the written dataset: {error}"),
     })?;
     atomic.commit().map_err(|error| Error::Write {
         path: path.display().to_string(),
@@ -47,7 +54,7 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
     ))
 }
 
-fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<u64, String> {
+fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     let store = Arc::new(
         FilesystemStore::new(path).map_err(|error| format!("failed to open the store: {error}"))?,
     );
@@ -59,135 +66,246 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<u64, String> {
     group
         .store_metadata()
         .map_err(|error| format!("failed to write the root metadata: {error}"))?;
-    let total = (0..spec.levels.len())
-        .map(|level| chunks(spec.levels[level]) as usize * spec.frames as usize)
-        .sum::<usize>();
-    let mut stats = Stats {
-        done: 0,
-        total,
-        bytes: 0,
-    };
-    for level in 0..spec.levels.len() {
-        let shape = shape(spec.levels[level], spec);
-        let chunk = chunk_shape(spec.levels[level], spec.channels.len());
-        let array = ArrayBuilder::new(shape, chunk.clone(), data_type::float32(), 0.0f32)
-            .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
-            .dimension_names(Some(
-                AXIS_NAMES
-                    .iter()
-                    .map(|name| (*name).to_string())
-                    .collect::<Vec<_>>(),
-            ))
-            .build(store.clone(), &format!("/{level}"))
-            .map_err(|error| format!("failed to build level {level}: {error}"))?;
+    let frames = spec.frames;
+    let channels = spec.channels.len();
+    let fill = spec.fill;
+    let plans = spec
+        .levels
+        .iter()
+        .enumerate()
+        .map(|(level, held)| Plan::new(level, extent(*held), block(*held), frames, channels))
+        .collect::<Vec<_>>();
+    let total = plans.iter().map(Plan::count).sum::<usize>();
+    let progress: &mut dyn FnMut(usize, usize) = &mut *spec.progress;
+    let mut base = 0;
+    let mut previous: Option<Array<FilesystemStore>> = None;
+    for (level, plan) in plans.iter().enumerate() {
+        let array = ArrayBuilder::new(
+            shape(spec.levels[level], frames, channels),
+            chunk_shape(plan).to_vec(),
+            data_type::float32(),
+            0.0f32,
+        )
+        .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
+        .dimension_names(Some(
+            AXIS_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<Vec<_>>(),
+        ))
+        .build(store.clone(), &format!("/{level}"))
+        .map_err(|error| format!("failed to build level {level}: {error}"))?;
         array
             .store_metadata()
             .map_err(|error| format!("failed to write the metadata of level {level}: {error}"))?;
-        write_level(&array, spec, level, &chunk, &mut stats)?;
-    }
-    Ok(stats.bytes)
-}
-
-struct Stats {
-    done: usize,
-    total: usize,
-    bytes: u64,
-}
-
-fn write_level<S>(
-    array: &Array<S>,
-    spec: &mut ImageSpec<'_>,
-    level: usize,
-    chunk: &[u64],
-    stats: &mut Stats,
-) -> Result<(), String>
-where
-    S: ?Sized + zarrs::storage::WritableStorageTraits + 'static,
-{
-    let extent = spec.levels[level].extent();
-    let spatial = [extent.x(), extent.y(), extent.z()];
-    let counts = [
-        u64::from(spatial[0]).div_ceil(chunk[4]),
-        u64::from(spatial[1]).div_ceil(chunk[3]),
-        u64::from(spatial[2]).div_ceil(chunk[2]),
-    ];
-    let channels = spec.channels.len();
-    let block = Chunk::new([chunk[4] as u32, chunk[3] as u32, chunk[2] as u32]);
-    let chunk_voxels = block.voxels();
-    let mut indices = vec![0u64; AXIS_NAMES.len()];
-    for frame in 0..spec.frames {
-        for cz in 0..counts[2] {
-            for cy in 0..counts[1] {
-                for cx in 0..counts[0] {
-                    let origin = [
-                        (cx * chunk[4]) as u32,
-                        (cy * chunk[3]) as u32,
-                        (cz * chunk[2]) as u32,
-                    ];
-                    let length = [
-                        chunk[4].min(u64::from(spatial[0] - origin[0])) as u32,
-                        chunk[3].min(u64::from(spatial[1] - origin[1])) as u32,
-                        chunk[2].min(u64::from(spatial[2] - origin[2])) as u32,
-                    ];
-                    let mut data = vec![0.0f32; chunk_voxels * channels];
-                    let full = length == block.shape();
-                    let mut region =
-                        vec![
-                            0.0f32;
-                            (length[0] as usize) * (length[1] as usize) * (length[2] as usize)
-                        ];
-                    for channel in 0..channels {
-                        let base = channel * chunk_voxels;
-                        let target = &mut data[base..base + chunk_voxels];
-                        if full {
-                            (spec.fill)(level, frame, channel, origin, length, target)?;
-                            continue;
-                        }
-                        (spec.fill)(level, frame, channel, origin, length, &mut region)?;
-                        block.stage(length, &region, target);
-                    }
-                    indices[0] = u64::from(frame);
-                    indices[1] = 0;
-                    indices[2] = cz;
-                    indices[3] = cy;
-                    indices[4] = cx;
-                    array
-                        .store_chunk(&indices, data)
-                        .map_err(|error| format!("failed to write a chunk: {error}"))?;
-                    stats.bytes += (chunk_voxels * channels * size_of::<f32>()) as u64;
-                    stats.done += 1;
-                    (spec.progress)(stats.done, stats.total);
-                }
+        match (fill, level) {
+            (Fill::EveryLevel(filler), _) | (Fill::FinestLevel(filler), 0) => {
+                fill_level(&array, plan, filler, base, total, progress)?;
+            }
+            (Fill::FinestLevel(_), _) => {
+                let child = previous
+                    .as_ref()
+                    .expect("a derived level follows its written child");
+                derive_level(
+                    &array,
+                    plan,
+                    child,
+                    &plans[level - 1],
+                    base,
+                    total,
+                    progress,
+                )?;
             }
         }
+        base += plan.count();
+        previous = Some(array);
     }
     Ok(())
 }
 
-fn chunks(level: Level) -> u64 {
-    let extent = level.extent();
-    let chunk = chunk_shape(level, 1);
-    u64::from(extent.x()).div_ceil(chunk[4])
-        * u64::from(extent.y()).div_ceil(chunk[3])
-        * u64::from(extent.z()).div_ceil(chunk[2])
+fn fill_level(
+    array: &Array<FilesystemStore>,
+    plan: &Plan,
+    fill: &Filler<'_>,
+    base: usize,
+    total: usize,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<(), String> {
+    let block = plan.block();
+    let voxels = block.voxels();
+    let shape = block.shape();
+    let channels = plan.channels();
+    parallel::write_each(
+        plan.count(),
+        &mut |done, _| progress(base + done, total),
+        |index| {
+            let located = plan.locate(index);
+            let full = located.length == shape;
+            let mut data = vec![0.0f32; voxels * channels];
+            for channel in 0..channels {
+                let target = &mut data[channel * voxels..(channel + 1) * voxels];
+                if full {
+                    fill(
+                        plan.level(),
+                        located.frame,
+                        channel,
+                        located.origin,
+                        located.length,
+                        target,
+                    )?;
+                    continue;
+                }
+                let length = located.length;
+                let mut region =
+                    vec![0.0f32; length[0] as usize * length[1] as usize * length[2] as usize];
+                fill(
+                    plan.level(),
+                    located.frame,
+                    channel,
+                    located.origin,
+                    length,
+                    &mut region,
+                )?;
+                block.stage(length, &region, target);
+            }
+            array
+                .store_chunk(&plan.indices(&located), data)
+                .map_err(|error| format!("failed to write a chunk: {error}"))?;
+            Ok((voxels * channels * size_of::<f32>()) as u64)
+        },
+    )?;
+    Ok(())
 }
 
-fn chunk_shape(level: Level, channels: usize) -> Vec<u64> {
+fn derive_level(
+    array: &Array<FilesystemStore>,
+    plan: &Plan,
+    child: &Array<FilesystemStore>,
+    source: &Plan,
+    base: usize,
+    total: usize,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<(), String> {
+    let block = plan.block();
+    let voxels = block.voxels();
+    let channels = plan.channels();
+    parallel::write_each(
+        plan.count(),
+        &mut |done, _| progress(base + done, total),
+        |index| {
+            let located = plan.locate(index);
+            let mut data = vec![0.0f32; voxels * channels];
+            for channel in 0..channels {
+                let target = &mut data[channel * voxels..(channel + 1) * voxels];
+                let region = reduce(child, source, &located, channel)?;
+                block.stage(located.length, &region, target);
+            }
+            array
+                .store_chunk(&plan.indices(&located), data)
+                .map_err(|error| format!("failed to write a chunk: {error}"))?;
+            Ok((voxels * channels * size_of::<f32>()) as u64)
+        },
+    )?;
+    Ok(())
+}
+
+fn reduce(
+    child: &Array<FilesystemStore>,
+    source: &Plan,
+    located: &Located,
+    channel: usize,
+) -> Result<Vec<f32>, String> {
+    let extent = source.extent();
+    let width = located.length[0] as usize;
+    let line = located.length[1] as usize;
+    let mut region = vec![0.0f32; width * line * located.length[2] as usize];
+    let origin = [
+        2 * located.origin[0],
+        2 * located.origin[1],
+        2 * located.origin[2],
+    ];
+    let end = [
+        (2 * (located.origin[0] + located.length[0])).min(extent[0]),
+        (2 * (located.origin[1] + located.length[1])).min(extent[1]),
+        (2 * (located.origin[2] + located.length[2])).min(extent[2]),
+    ];
+    let covered = [end[0] - origin[0], end[1] - origin[1], end[2] - origin[2]];
+    let plane = covered[0] as usize * covered[1] as usize;
+    let mut z = 0u32;
+    while z < located.length[2] {
+        let depth = SLAB_Z.min(located.length[2] - z);
+        let low = origin[2] + 2 * z;
+        let high = (low + 2 * depth).min(end[2]);
+        let ranges = [
+            u64::from(located.frame)..u64::from(located.frame) + 1,
+            channel as u64..channel as u64 + 1,
+            u64::from(low)..u64::from(high),
+            u64::from(origin[1])..u64::from(end[1]),
+            u64::from(origin[0])..u64::from(end[0]),
+        ];
+        let held = child
+            .retrieve_array_subset::<Vec<f32>>(&ArraySubset::new_with_ranges(&ranges))
+            .map_err(|error| format!("failed to read the finer level back: {error}"))?;
+        let slab = (high - low) as usize;
+        for slice in 0..depth {
+            for y in 0..located.length[1] {
+                let rows = (2 * y)..(2 * y + 2).min(covered[1]);
+                for x in 0..located.length[0] {
+                    let columns = (2 * x)..(2 * x + 2).min(covered[0]);
+                    let mut sum = 0.0f64;
+                    let mut count = 0.0f64;
+                    for dz in (2 * slice)..((2 * slice + 2).min(slab as u32)) {
+                        for row in rows.clone() {
+                            for column in columns.clone() {
+                                let at = column as usize
+                                    + covered[0] as usize * (row as usize)
+                                    + plane * dz as usize;
+                                sum += f64::from(held[at]);
+                                count += 1.0;
+                            }
+                        }
+                    }
+                    debug_assert!(count > 0.0, "a derived voxel averages its children");
+                    region[x as usize + width * (y as usize + line * (z + slice) as usize)] =
+                        (sum / count) as f32;
+                }
+            }
+        }
+        z += depth;
+    }
+    Ok(region)
+}
+
+fn extent(level: Level) -> [u32; 3] {
     let extent = level.extent();
-    vec![
+    [extent.x(), extent.y(), extent.z()]
+}
+
+fn block(level: Level) -> Chunk {
+    let extent = level.extent();
+    Chunk::new([
+        extent.x().min(CHUNK_X),
+        extent.y().min(CHUNK_Y),
+        extent.z().min(CHUNK_Z),
+    ])
+}
+
+fn chunk_shape(plan: &Plan) -> [u64; 5] {
+    let shape = plan.block().shape();
+    [
         1,
-        channels as u64,
-        u64::from(extent.z().min(CHUNK_Z)),
-        u64::from(extent.y().min(CHUNK_Y)),
-        u64::from(extent.x().min(CHUNK_X)),
+        plan.channels() as u64,
+        u64::from(shape[2]),
+        u64::from(shape[1]),
+        u64::from(shape[0]),
     ]
 }
 
-fn shape(level: Level, spec: &ImageSpec<'_>) -> Vec<u64> {
+fn shape(level: Level, frames: u32, channels: usize) -> Vec<u64> {
     let extent = level.extent();
     vec![
-        u64::from(spec.frames),
-        spec.channels.len() as u64,
+        u64::from(frames),
+        channels as u64,
         u64::from(extent.z()),
         u64::from(extent.y()),
         u64::from(extent.x()),
