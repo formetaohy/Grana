@@ -286,6 +286,7 @@ pub fn write_dataset(
         frames,
         interval,
         fill: Fill::EveryLevel(&fill),
+        cancel,
         progress: &mut image_progress,
     };
     match format {
@@ -329,6 +330,7 @@ pub fn write_dataset(
                     opacity,
                     properties: &properties,
                     fill: &fill,
+                    cancel,
                     progress: &mut label_progress,
                 },
             )

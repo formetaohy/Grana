@@ -47,7 +47,7 @@ impl Offline {
     }
 
     pub fn headless() -> Result<Self, String> {
-        let headless = Headless::new()?;
+        let headless = Headless::shared()?;
         let pipelines = headless.pipelines().clone();
         Ok(Self::new(
             headless.device,

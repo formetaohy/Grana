@@ -1200,6 +1200,7 @@ impl Run<'_, '_> {
                 opacity: object.opacity(),
                 properties: &properties,
                 fill: &fill,
+                cancel,
                 progress: &mut progress,
             },
         )

@@ -107,6 +107,7 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
         frames: mosaic.frames,
         interval: mosaic.interval,
         fill: Fill::FinestLevel(&fill),
+        cancel,
         progress: &mut progress,
     };
     let written = grana_zarr::write_image(&request.output, &mut image)

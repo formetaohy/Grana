@@ -34,7 +34,7 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn new() -> Result<Self, String> {
-        let headless = grana_gpu::Headless::new()?;
+        let headless = grana_gpu::Headless::shared()?;
         let pipelines = Pipelines::new(&headless.device);
         Ok(Self {
             device: headless.device,

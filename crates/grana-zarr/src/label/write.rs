@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
@@ -17,6 +18,7 @@ const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
 const LABEL_LIMIT: usize = u16::MAX as usize;
+const CANCELLED: &str = "the write was cancelled";
 
 pub type ChunkFill<'a> =
     dyn Fn(usize, u32, [u32; 3], [u32; 3], &mut [u16]) -> Result<(), String> + Send + Sync + 'a;
@@ -29,7 +31,14 @@ pub struct LabelSpec<'a> {
     pub opacity: f32,
     pub properties: &'a [(u32, String)],
     pub fill: &'a ChunkFill<'a>,
+    pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),
+}
+
+impl LabelSpec<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 pub struct Written {
@@ -293,6 +302,9 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     let total = per_level.iter().sum::<usize>() * spec.frames.len();
     let mut base = 0;
     for (level, chunks) in per_level.iter().enumerate() {
+        if spec.cancelled() {
+            return Err(fail(CANCELLED.to_string()));
+        }
         let extent = image.pyramid().level(level).extent();
         let chunk = chunk_shape(extent, &kinds, x, y, z);
         let shape = shape(extent, image.pyramid().frame_count(), &kinds);
@@ -335,6 +347,9 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     }
     let bytes = grana_file::bytes(atomic.staging())
         .map_err(|error| fail(format!("failed to measure the written labels: {error}")))?;
+    if spec.cancelled() {
+        return Err(fail(CANCELLED.to_string()));
+    }
     let published = atomic
         .commit_held()
         .map_err(|error| fail(error.to_string()))?;

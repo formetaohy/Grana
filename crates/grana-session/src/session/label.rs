@@ -64,6 +64,7 @@ impl Labels {
                     opacity,
                     properties: &properties,
                     fill: &fill,
+                    cancel,
                     progress,
                 },
             )

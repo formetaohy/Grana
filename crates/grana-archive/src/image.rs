@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_volume::{Intensity, Level};
 
@@ -39,10 +40,15 @@ pub struct ImageSpec<'a> {
     pub frames: u32,
     pub interval: f32,
     pub fill: Fill<'a>,
+    pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
 impl ImageSpec<'_> {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
     pub fn check(&self) {
         assert!(
             !self.name.trim().is_empty(),

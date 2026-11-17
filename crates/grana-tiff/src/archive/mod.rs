@@ -13,6 +13,7 @@ use tile::{LevelInfo, Request, Tile};
 const ALIGN: u64 = 8;
 const ZEROS: [u8; 8] = [0; 8];
 const ALIGNMENT: f32 = 1.0e-5;
+const CANCELLED: &str = "the write was cancelled";
 
 pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, crate::Error> {
     spec.check();
@@ -52,6 +53,9 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
     for frame in 0..spec.frames {
         for channel in 0..spec.channels.len() {
             for z in 0..base.depth() {
+                if spec.cancelled() {
+                    return Err(Error::write(path, CANCELLED.to_string()));
+                }
                 let at = align(sink.cursor);
                 sink.pad(at)?;
                 if let Some(held) = pointer {
@@ -111,6 +115,9 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
         }
     }
     let bytes = sink.finish()?;
+    if spec.cancelled() {
+        return Err(Error::write(path, CANCELLED.to_string()));
+    }
     atomic
         .commit()
         .map_err(|error| Error::write(path, error.to_string()))?;

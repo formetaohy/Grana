@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_archive::{Fill, Filler, ImageSpec, Written};
 use grana_volume::Level;
@@ -18,6 +19,7 @@ const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
 const SLAB_Z: u32 = 4;
+const CANCELLED: &str = "the write was cancelled";
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
 pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Error> {
@@ -40,6 +42,12 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
         path: path.display().to_string(),
         detail: format!("failed to measure the written dataset: {error}"),
     })?;
+    if spec.cancelled() {
+        return Err(Error::Write {
+            path: path.display().to_string(),
+            detail: CANCELLED.to_string(),
+        });
+    }
     atomic.commit().map_err(|error| Error::Write {
         path: path.display().to_string(),
         detail: format!("failed to move the dataset into place: {error}"),
@@ -69,6 +77,7 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     let frames = spec.frames;
     let channels = spec.channels.len();
     let fill = spec.fill;
+    let cancel = spec.cancel;
     let plans = spec
         .levels
         .iter()
@@ -80,6 +89,9 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     let mut base = 0;
     let mut previous: Option<Array<FilesystemStore>> = None;
     for (level, plan) in plans.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED.to_string());
+        }
         let array = ArrayBuilder::new(
             shape(spec.levels[level], frames, channels),
             chunk_shape(plan).to_vec(),
@@ -100,7 +112,17 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
             .map_err(|error| format!("failed to write the metadata of level {level}: {error}"))?;
         match (fill, level) {
             (Fill::EveryLevel(filler), _) | (Fill::FinestLevel(filler), 0) => {
-                fill_level(&array, plan, filler, base, total, progress)?;
+                fill_level(
+                    &array,
+                    plan,
+                    filler,
+                    &mut LevelProgress {
+                        base,
+                        total,
+                        cancel,
+                        progress,
+                    },
+                )?;
             }
             (Fill::FinestLevel(_), _) => {
                 let child = previous
@@ -111,9 +133,12 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
                     plan,
                     child,
                     &plans[level - 1],
-                    base,
-                    total,
-                    progress,
+                    &mut LevelProgress {
+                        base,
+                        total,
+                        cancel,
+                        progress,
+                    },
                 )?;
             }
         }
@@ -123,21 +148,28 @@ fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     Ok(())
 }
 
+struct LevelProgress<'a> {
+    base: usize,
+    total: usize,
+    cancel: &'a AtomicBool,
+    progress: &'a mut dyn FnMut(usize, usize),
+}
+
 fn fill_level(
     array: &Array<FilesystemStore>,
     plan: &Plan,
     fill: &Filler<'_>,
-    base: usize,
-    total: usize,
-    progress: &mut dyn FnMut(usize, usize),
+    progress: &mut LevelProgress<'_>,
 ) -> Result<(), String> {
     let block = plan.block();
     let voxels = block.voxels();
     let shape = block.shape();
     let channels = plan.channels();
+    let report = progress.base;
+    let total = progress.total;
     parallel::write_each(
         plan.count(),
-        &mut |done, _| progress(base + done, total),
+        &mut |done, _| (progress.progress)(report + done, total),
         |index| {
             let located = plan.locate(index);
             let full = located.length == shape;
@@ -182,17 +214,21 @@ fn derive_level(
     plan: &Plan,
     child: &Array<FilesystemStore>,
     source: &Plan,
-    base: usize,
-    total: usize,
-    progress: &mut dyn FnMut(usize, usize),
+    progress: &mut LevelProgress<'_>,
 ) -> Result<(), String> {
     let block = plan.block();
     let voxels = block.voxels();
     let channels = plan.channels();
+    let report = progress.base;
+    let total = progress.total;
+    let cancel = progress.cancel;
     parallel::write_each(
         plan.count(),
-        &mut |done, _| progress(base + done, total),
+        &mut |done, _| (progress.progress)(report + done, total),
         |index| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(CANCELLED.to_string());
+            }
             let located = plan.locate(index);
             let mut data = vec![0.0f32; voxels * channels];
             for channel in 0..channels {

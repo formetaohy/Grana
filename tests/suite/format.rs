@@ -65,6 +65,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             frames: 2,
             interval: 0.5,
             fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -460,6 +461,7 @@ fn write_zarr(root: &std::path::Path) {
             frames: 2,
             interval: 1.5,
             fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -669,6 +671,7 @@ fn round_trips_a_rotated_placement() {
             frames: 1,
             interval: 1.0,
             fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -714,6 +717,7 @@ fn round_trips_a_rotated_placement() {
             frames: 1,
             interval: 1.0,
             fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -922,6 +926,7 @@ fn writes_and_reads_a_label_image() {
             frames: 2,
             interval: 1.0,
             fill: Fill::EveryLevel(&image_fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -955,6 +960,7 @@ fn writes_and_reads_a_label_image() {
             opacity: 1.0,
             properties: &[],
             fill: &label_fill,
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -994,6 +1000,7 @@ fn writes_and_reads_a_label_image() {
             opacity: 1.0,
             properties: &[],
             fill: &label_fill,
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -1141,6 +1148,7 @@ fn writes_labels_over_a_rotated_custom_axis_image() {
             opacity: 1.0,
             properties: &[],
             fill: &fill,
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -1187,6 +1195,7 @@ fn writes_labels_over_a_rotated_plane() {
             opacity: 1.0,
             properties: &[],
             fill: &fill,
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )

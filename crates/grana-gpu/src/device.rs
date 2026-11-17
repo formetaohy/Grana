@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use wgpu::{
     Adapter, Backends, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures,
     Instance, InstanceDescriptor, MemoryHints, PowerPreference, PresentMode, Queue,
@@ -65,6 +67,19 @@ impl Headless {
             "no graphics adapter can render grana ({})",
             failures.join("; ")
         ))
+    }
+
+    pub fn shared() -> Result<Self, String> {
+        static SHARED: OnceLock<Result<Headless, String>> = OnceLock::new();
+        SHARED
+            .get_or_init(Self::new)
+            .as_ref()
+            .map(|headless| Self {
+                device: headless.device.clone(),
+                queue: headless.queue.clone(),
+                pipelines: headless.pipelines.clone(),
+            })
+            .map_err(Clone::clone)
     }
 
     pub fn format(&self) -> TextureFormat {

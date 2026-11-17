@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
@@ -71,25 +71,19 @@ pub fn splat(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> gran
 }
 
 pub fn gpu() -> Option<Gpu> {
-    static SHARED: OnceLock<Option<(wgpu::Device, wgpu::Queue, grana_gpu::Pipelines)>> =
-        OnceLock::new();
     static SERIAL: Mutex<()> = Mutex::new(());
     let serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
-    let (device, queue, pipelines) = SHARED
-        .get_or_init(|| match grana_gpu::Headless::new() {
-            Ok(headless) => {
-                let pipelines = headless.pipelines().clone();
-                Some((headless.device, headless.queue, pipelines))
-            }
-            Err(detail) => {
-                println!("{detail}, skipping");
-                None
-            }
-        })
-        .clone()?;
+    let headless = match grana_gpu::Headless::shared() {
+        Ok(headless) => headless,
+        Err(detail) => {
+            println!("{detail}, skipping");
+            return None;
+        }
+    };
+    let pipelines = headless.pipelines().clone();
     Some(Gpu {
-        device,
-        queue,
+        device: headless.device,
+        queue: headless.queue,
         pipelines,
         _serial: serial,
     })
@@ -496,6 +490,7 @@ pub fn localization_dataset(path: &Path, frames: u32) {
             frames,
             interval: 1.0,
             fill: grana_archive::Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
@@ -893,6 +888,7 @@ fn field(path: &Path, extent: Extent) {
             frames: 1,
             interval: 1.0,
             fill: grana_archive::Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
         },
     )
