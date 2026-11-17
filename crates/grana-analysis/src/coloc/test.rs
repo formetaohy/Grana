@@ -33,16 +33,19 @@ pub(super) fn permutation(
     let block = input.block;
     let blocks = usize::try_from(input.blocks).expect("a colocalization block count fits usize");
     let base = input.seed;
+    let workers = schedule::workers(input.workers);
+    let total = randomizations as usize;
     let mut count = 0u64;
+    let mut done = 0usize;
     let completed = schedule::ordered(
         schedule::Run {
-            total: randomizations as usize,
-            workers: schedule::workers(input.workers),
+            total,
+            workers,
             cancel: input.cancel,
-            progress,
         },
+        workers,
         || TestWorker::new(blocks, frames.first().map_or(0, |frame| frame.a.len())),
-        |worker, index| {
+        |worker, index, _| {
             let randomization =
                 u32::try_from(index).expect("a colocalization randomization fits the u32 range");
             Ok(worker.randomize(
@@ -53,11 +56,16 @@ pub(super) fn permutation(
                 randomization_seed(base, randomization),
             ))
         },
-        |_, significant| {
-            if significant {
-                count += 1;
+        |delivery| match delivery {
+            schedule::Delivery::Progress { .. } => Ok(()),
+            schedule::Delivery::Unit { value, .. } => {
+                if value {
+                    count += 1;
+                }
+                done += 1;
+                progress(done, total);
+                Ok(())
             }
-            Ok(())
         },
         |_| {},
     )

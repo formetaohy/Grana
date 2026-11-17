@@ -2,6 +2,7 @@ mod access;
 mod command;
 mod document;
 mod history;
+mod input;
 mod job;
 mod loader;
 mod recent;

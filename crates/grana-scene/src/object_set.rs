@@ -836,6 +836,14 @@ impl ObjectSet {
         true
     }
 
+    fn recount_hidden(&mut self) {
+        self.hidden_total = self
+            .hidden
+            .iter()
+            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
+            .sum();
+    }
+
     pub(crate) fn restore_hidden(&mut self, hidden: Arc<Vec<Vec<bool>>>) {
         if hidden.is_empty() {
             self.hidden = hidden;
@@ -854,11 +862,8 @@ impl ObjectSet {
                 "the hidden objects cover every object of a frame"
             );
         }
-        self.hidden_total = hidden
-            .iter()
-            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
-            .sum();
         self.hidden = hidden;
+        self.recount_hidden();
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -1973,6 +1978,7 @@ impl ObjectSet {
         if let Some(mask) = hidden.get_mut(time as usize) {
             *mask = retained(mask, objects);
         }
+        self.recount_hidden();
         if let Some((thickness, pruned)) = self.track_thickness().zip(pruned_tracks.flatten()) {
             self.tracks = (!pruned.is_empty()).then(|| TrackLayer::new(pruned, thickness, stamp));
             visibility = Visibility::All;

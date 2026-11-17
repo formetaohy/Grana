@@ -453,13 +453,16 @@ impl Session {
     ) {
         match outcome {
             Ok(intensity) => {
-                if self
-                    .source
-                    .as_ref()
-                    .and_then(Loader::channels)
-                    .is_some_and(|current| Arc::ptr_eq(&current, pending.channels()))
-                {
-                    self.install_channel(pending, intensity);
+                let current = self.source.as_ref().and_then(Loader::channels);
+                match current {
+                    Some(current) if current.layout() == pending.channels().layout() => {
+                        self.install_channel(pending, intensity);
+                    }
+                    _ => {
+                        self.message = Some(Message::info(
+                            "the derived channel finished after the channels it measured changed, so its range was discarded",
+                        ));
+                    }
                 }
             }
             Err(detail) => self.message = Some(Message::error(detail)),

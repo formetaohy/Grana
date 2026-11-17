@@ -35,7 +35,7 @@ pub use localization_drift::{
 pub use object_coloc::{LabelRead, ObjectColocScan, object_coloc_level};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
-pub use schedule::{parallel, receive, workers};
+pub use schedule::{Delivery, Run, ordered, parallel, unit_window, workers};
 pub use surface::{SeedPolicy, Sources, SurfaceBuilder, apply, merge, recut, split, surface_level};
 pub use track::TrackLinker;
 pub use work::FIELD_PEAK_BYTES;

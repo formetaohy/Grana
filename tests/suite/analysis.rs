@@ -296,6 +296,7 @@ fn places_measured_surfaces_through_the_placement_basis() {
         &volume,
         level,
         SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        None,
     );
     assert_eq!(set.object_count(), 2, "each ball is one object");
     let expected = centres.map(|centre| level.voxel_center(centre));
@@ -311,11 +312,37 @@ fn places_measured_surfaces_through_the_placement_basis() {
     }
 }
 
+#[test]
+fn keeps_surface_objects_of_a_partial_analysis_mask() {
+    let extent = Extent::new(80, 64, 48);
+    let spacing = Spacing::new(0.2, 0.2, 0.2);
+    let level = Level::new(extent, spacing);
+    let volume = support::spheres(extent, spacing, &[([40.0, 32.0, 24.0], 8.0)], HIGH);
+    let region = Region::new(
+        glam::Vec3::ZERO,
+        [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
+        glam::Vec3::new(4.8, 3.2, 1.6),
+    );
+    let roi = grana_object::Mask::boxed(region, level);
+    let set = extract_surfaces_at(
+        &volume,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        Some(&roi),
+    );
+    assert_eq!(
+        set.object_count(),
+        1,
+        "an analysis mask that covers the ball keeps its surface"
+    );
+}
+
 fn extract_surfaces(volume: &grana_volume::Volume, params: SurfaceParams) -> SurfaceSet {
     extract_surfaces_at(
         volume,
         Level::new(volume.extent(), volume.spacing()),
         params,
+        None,
     )
 }
 
@@ -323,6 +350,7 @@ fn extract_surfaces_at(
     volume: &grana_volume::Volume,
     level: Level,
     params: SurfaceParams,
+    roi: Option<&grana_object::Mask>,
 ) -> SurfaceSet {
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
@@ -332,7 +360,7 @@ fn extract_surfaces_at(
         .scan(
             4,
             &cancel,
-            None,
+            roi,
             &mut |_done, _total| {},
             Sources::new(
                 &|ranges| {

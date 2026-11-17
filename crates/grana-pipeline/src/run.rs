@@ -60,20 +60,23 @@ pub use self::segment::{SegmentRequest, segment};
 
 pub type EditedFrame = (u32, Option<Arc<ObjectFrame>>);
 
-const FRAME_WORKERS: usize = 4;
-
 const MINIMUM_AGREEMENT: f32 = 0.1;
 
 const FILAMENT_BYTES: u64 = 512 << 20;
 
 const FILAMENT_VOXEL_BYTES: u64 = 12;
 
-fn frame_window(totals: u32, workers: usize, per_frame: usize) -> usize {
-    (workers / per_frame.max(1)).max(1).min(totals as usize)
+fn share(workers: usize, window: usize) -> usize {
+    (workers / workers.min(window)).max(1)
 }
 
-fn held_frames(peak: u64, frame: u64) -> usize {
-    (peak / frame.max(1)).max(1) as usize
+fn voxel_count(level: grana_volume::Level, region: grana_volume::Region) -> u64 {
+    region.voxel_range(level).map_or(0, |ranges| {
+        ranges
+            .iter()
+            .map(|range| u64::from(range.end - range.start))
+            .product()
+    })
 }
 
 fn install(sink: &mut dyn FnMut(Event)) -> impl FnMut(Notice<ObjectFrame>) + '_ {
@@ -437,11 +440,12 @@ pub fn object_coloc(
     });
     let info = pyramid.level(level_index);
     let workers = grana_analysis::workers(workers);
-    let window = frame_window(totals, workers, FRAME_WORKERS);
-    let share = (workers / window).max(1);
+    let window = workers;
+    let share = share(workers, window);
     let mut collected: Vec<Option<Vec<ObjectColocValue>>> = vec![None; totals as usize];
     let completed = pipeline(
         totals,
+        workers,
         window,
         cancel,
         || (),
@@ -546,11 +550,11 @@ fn spots(
     );
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, FRAME_WORKERS)
-        .min(held_frames(FIELD_PEAK_BYTES, field_bytes(level, region)));
-    let share = (workers / window).max(1);
+    let window = grana_analysis::unit_window(FIELD_PEAK_BYTES, field_bytes(level, region));
+    let share = share(workers, window);
     let completed = pipeline(
         totals,
+        workers,
         window,
         cancel,
         || (),
@@ -613,11 +617,14 @@ fn surfaces(
     let level = pyramid.level(level_index);
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, FRAME_WORKERS)
-        .min(held_frames(FIELD_PEAK_BYTES, field_bytes(level, region)));
-    let share = (workers / window).max(1);
+    let window = grana_analysis::unit_window(
+        FIELD_PEAK_BYTES,
+        field_bytes(level, region).max(voxel_count(level, region) * 4),
+    );
+    let share = share(workers, window);
     let completed = pipeline(
         totals,
+        workers,
         window,
         cancel,
         || (),
@@ -714,11 +721,11 @@ fn filaments(
     let extent = info.extent();
     let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());
     let totals = pyramid.frame_count();
-    let window = frame_window(totals, workers, 1)
-        .min(held_frames(FILAMENT_BYTES, voxels * FILAMENT_VOXEL_BYTES));
+    let window = grana_analysis::unit_window(FILAMENT_BYTES, voxels * FILAMENT_VOXEL_BYTES);
     let intensity = pyramid.channels()[channel].intensity();
     let completed = pipeline(
         totals,
+        workers,
         window,
         cancel,
         || FilamentScan::new(level, info, params, channels, channel, region, intensity),

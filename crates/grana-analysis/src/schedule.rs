@@ -1,13 +1,14 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
-use rayon::{ThreadPool, ThreadPoolBuilder, Yield};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 
 pub(crate) const WORKER_LIMIT: usize = 16;
 
-const BUDGET_POLL: Duration = Duration::from_millis(20);
+const POLL: Duration = Duration::from_millis(20);
 
 fn pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
@@ -24,70 +25,6 @@ pub fn parallel<'scope, R>(body: impl FnOnce(&rayon::Scope<'scope>) -> R) -> R {
     pool().in_place_scope(body)
 }
 
-pub fn receive<T>(receiver: &mpsc::Receiver<T>) -> Option<T> {
-    if rayon::current_thread_index().is_none() {
-        return receiver.recv().ok();
-    }
-    loop {
-        match receiver.try_recv() {
-            Ok(value) => return Some(value),
-            Err(mpsc::TryRecvError::Empty) => match rayon::yield_now() {
-                Some(Yield::Executed) => {}
-                Some(Yield::Idle) | None => std::thread::yield_now(),
-            },
-            Err(mpsc::TryRecvError::Disconnected) => return None,
-        }
-    }
-}
-
-pub(crate) struct Budget {
-    limit: u64,
-    used: Mutex<u64>,
-    released: Condvar,
-}
-
-impl Budget {
-    pub(crate) fn new(limit: u64) -> Self {
-        assert!(limit > 0, "a budget covers at least one byte");
-        Self {
-            limit,
-            used: Mutex::new(0),
-            released: Condvar::new(),
-        }
-    }
-
-    pub(crate) fn acquire(&self, bytes: u64, halted: impl Fn() -> bool) -> bool {
-        assert!(
-            bytes <= self.limit,
-            "a unit of work fits the shared array budget"
-        );
-        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
-        while *used + bytes > self.limit {
-            if halted() {
-                return false;
-            }
-            let (guard, _) = self
-                .released
-                .wait_timeout(used, BUDGET_POLL)
-                .unwrap_or_else(|error| error.into_inner());
-            used = guard;
-        }
-        *used += bytes;
-        true
-    }
-
-    pub(crate) fn release(&self, bytes: u64) {
-        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
-        assert!(
-            *used >= bytes,
-            "a released reservation was acquired beforehand"
-        );
-        *used -= bytes;
-        drop(used);
-        self.released.notify_all();
-    }
-}
-
 pub fn workers(requested: usize) -> usize {
     match requested {
         0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
@@ -96,20 +33,81 @@ pub fn workers(requested: usize) -> usize {
     .clamp(1, WORKER_LIMIT)
 }
 
-pub(crate) struct Run<'a> {
+pub fn unit_window(bytes: u64, unit: u64) -> usize {
+    (bytes / unit.max(1)).max(1) as usize
+}
+
+pub enum Delivery<T> {
+    Progress {
+        unit: usize,
+        done: usize,
+        total: usize,
+    },
+    Unit {
+        index: usize,
+        value: T,
+    },
+}
+
+pub struct Run<'a> {
     pub total: usize,
     pub workers: usize,
     pub cancel: &'a AtomicBool,
-    pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
-const HELD_PER_WORKER: usize = 4;
+enum Message<T> {
+    Unit { index: usize, value: T },
+    Failed(String),
+}
 
-pub(crate) fn ordered<L, T>(
+struct Held {
+    slots: Mutex<usize>,
+    ready: Condvar,
+}
+
+impl Held {
+    fn new(slots: usize) -> Self {
+        assert!(slots > 0, "an assembly holds at least one unit");
+        Self {
+            slots: Mutex::new(slots),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn take(&self, stopped: &dyn Fn() -> bool) -> bool {
+        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        while *slots == 0 {
+            if stopped() {
+                return false;
+            }
+            let (guard, _) = self
+                .ready
+                .wait_timeout(slots, POLL)
+                .unwrap_or_else(|error| error.into_inner());
+            slots = guard;
+        }
+        *slots -= 1;
+        !stopped()
+    }
+
+    fn put(&self) {
+        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        *slots += 1;
+        drop(slots);
+        self.ready.notify_all();
+    }
+
+    fn wake(&self) {
+        self.ready.notify_all();
+    }
+}
+
+pub fn ordered<L, T>(
     run: Run<'_>,
+    window: usize,
     local: impl Fn() -> L + Sync,
-    work: impl Fn(&mut L, usize) -> Result<T, String> + Sync,
-    mut sink: impl FnMut(usize, T) -> Result<(), String>,
+    work: impl Fn(&mut L, usize, &mut dyn FnMut(usize, usize)) -> Result<T, String> + Sync,
+    mut deliver: impl FnMut(Delivery<T>) -> Result<(), String>,
     mut finish: impl FnMut(L),
 ) -> Result<bool, String>
 where
@@ -120,85 +118,107 @@ where
         total,
         workers,
         cancel,
-        progress,
     } = run;
     if total == 0 {
         return Ok(true);
     }
-    let workers = workers.max(1).min(total);
-    let window = workers.saturating_mul(HELD_PER_WORKER).min(total);
-    let mut states = (0..workers).map(|_| local()).collect::<Vec<_>>();
-    let mut done = 0usize;
-    let mut base = 0usize;
-    let mut failure = None;
-    while base < total {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let end = (base + window).min(total);
-        let next = AtomicUsize::new(base);
-        let slots = Mutex::new((0..end - base).map(|_| None).collect::<Vec<Option<T>>>());
-        let error = Mutex::new(None::<String>);
-        parallel(|scope| {
-            for state in states.iter_mut() {
-                let next = &next;
-                let slots = &slots;
-                let error = &error;
-                let work = &work;
-                scope.spawn(move |_| {
-                    loop {
-                        if cancel.load(Ordering::Relaxed) || error_is_some(error) {
-                            break;
-                        }
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        if index >= end {
-                            break;
-                        }
-                        match work(state, index) {
-                            Ok(value) => {
-                                slots.lock().unwrap_or_else(|error| error.into_inner())
-                                    [index - base] = Some(value);
-                            }
-                            Err(detail) => {
-                                *error.lock().unwrap_or_else(|error| error.into_inner()) =
-                                    Some(detail);
-                                break;
-                            }
-                        }
+    let window = window.clamp(1, total);
+    let running = workers.clamp(1, total).min(window);
+    let next = AtomicUsize::new(0);
+    let halted = AtomicBool::new(false);
+    let held = Held::new(window);
+    let (results, received) = mpsc::sync_channel::<Message<T>>(window);
+    let (reports, reported) = mpsc::channel::<(usize, usize, usize)>();
+    let mut states = (0..running).map(|_| local()).collect::<Vec<_>>();
+    let (installed, failure, denied) = parallel(|scope| {
+        let work = &work;
+        let held = &held;
+        for state in states.iter_mut() {
+            let results = results.clone();
+            let reports = reports.clone();
+            let next = &next;
+            let halted = &halted;
+            scope.spawn(move |_| {
+                let stop = || cancel.load(Ordering::Relaxed) || halted.load(Ordering::Relaxed);
+                loop {
+                    if !held.take(&stop) {
+                        return;
                     }
-                });
+                    if stop() {
+                        return;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        return;
+                    }
+                    let mut notify = |done: usize, units: usize| {
+                        let _ = reports.send((index, done, units));
+                    };
+                    let message = match work(state, index, &mut notify) {
+                        Ok(value) => Message::Unit { index, value },
+                        Err(detail) => Message::Failed(detail),
+                    };
+                    if results.send(message).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(results);
+        drop(reports);
+        let mut pending = BTreeMap::new();
+        let mut installed = 0usize;
+        let mut failure = None;
+        let mut denied = None;
+        'assembly: while installed < total {
+            while let Ok((unit, done, units)) = reported.try_recv() {
+                if let Err(detail) = deliver(Delivery::Progress {
+                    unit,
+                    done,
+                    total: units,
+                }) {
+                    denied = Some(detail);
+                    break 'assembly;
+                }
             }
-        });
-        let collected =
-            std::mem::take(&mut *slots.lock().unwrap_or_else(|error| error.into_inner()));
-        let mut missing = false;
-        for (offset, value) in collected.into_iter().enumerate() {
-            let Some(value) = value else {
-                missing = true;
-                break;
-            };
-            if let Err(detail) = sink(base + offset, value) {
-                failure = Some(detail);
+            if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            done += 1;
-            progress(done, total);
+            match received.recv_timeout(POLL) {
+                Ok(Message::Unit { index, value }) => {
+                    pending.insert(index, value);
+                    while let Some(value) = pending.remove(&installed) {
+                        if let Err(detail) = deliver(Delivery::Unit {
+                            index: installed,
+                            value,
+                        }) {
+                            denied = Some(detail);
+                            break 'assembly;
+                        }
+                        installed += 1;
+                        held.put();
+                    }
+                }
+                Ok(Message::Failed(detail)) => {
+                    failure = Some(detail);
+                    break;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
         }
-        if failure.is_none() {
-            failure = error
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take();
-        }
-        if missing || failure.is_some() {
-            break;
-        }
-        base = end;
-    }
+        halted.store(true, Ordering::Relaxed);
+        held.wake();
+        while received.recv_timeout(POLL).is_ok() {}
+        (installed, failure, denied)
+    });
     for state in states {
         finish(state);
     }
-    if done == total {
+    if let Some(detail) = denied {
+        return Err(detail);
+    }
+    if installed == total {
         return Ok(true);
     }
     if let Some(detail) = failure {
@@ -208,13 +228,6 @@ where
         return Ok(false);
     }
     Err("a worker stopped before its unit of work was completed".to_string())
-}
-
-fn error_is_some(error: &Mutex<Option<String>>) -> bool {
-    error
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .is_some()
 }
 
 pub(crate) fn map<T, R>(items: &[T], workers: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R>

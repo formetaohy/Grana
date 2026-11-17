@@ -7,6 +7,7 @@ mod execute;
 mod export;
 mod field;
 mod import;
+mod input;
 mod intensity;
 mod interop;
 mod label;
@@ -46,12 +47,13 @@ use grana_scene::{
 };
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{BrickRequest, Damage, Fingerprint, PackedBrick, Region};
+use grana_volume::{BrickRequest, Damage, Fingerprint, PackedBrick};
 
 use crate::access::Access;
 use crate::command::{Edit, Export};
 use crate::document::{self, Document};
 use crate::history::{History, Snapshot, Undo};
+use crate::input::Input;
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;

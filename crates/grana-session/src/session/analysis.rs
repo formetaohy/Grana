@@ -99,7 +99,7 @@ impl Session {
             },
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
-            Coloc(Box<grana_measure::ColocSeries>, Region),
+            Coloc(Box<grana_measure::ColocSeries>),
             ObjectColoc(Box<grana_measure::ObjectColoc>),
             LocalizationReport {
                 set: ObjectSetId,
@@ -170,8 +170,8 @@ impl Session {
                     Poll::Event(Event::Relation { time, frame }) => {
                         updates.push((index, job, Update::Relation(time, frame)));
                     }
-                    Poll::Event(Event::Coloc { series, region }) => {
-                        updates.push((index, job, Update::Coloc(series, region)));
+                    Poll::Event(Event::Coloc { series, .. }) => {
+                        updates.push((index, job, Update::Coloc(series)));
                     }
                     Poll::Event(Event::ObjectColoc { coloc }) => {
                         updates.push((index, job, Update::ObjectColoc(coloc)));
@@ -273,6 +273,13 @@ impl Session {
         let mut imported = Vec::new();
         let mut recutted = Vec::new();
         let mut finished = Vec::new();
+        let mut restarted = Vec::new();
+        let mut retracked = Vec::new();
+        let inputs = self
+            .analysis
+            .iter()
+            .map(|analysis| analysis.input().cloned())
+            .collect::<Vec<_>>();
         for (index, job, update) in updates {
             repaint = true;
             match update {
@@ -305,9 +312,17 @@ impl Session {
                     }
                 }
                 Update::Tracks(tracks) => {
-                    if let (Job::Track(set) | Job::Import(set), Some(scene)) =
-                        (job, self.scene.as_mut())
+                    let set = match job {
+                        Job::Track(set) | Job::Import(set) => set,
+                        _ => continue,
+                    };
+                    if matches!(job, Job::Track(_))
+                        && self.track_input(set).as_ref() != inputs[index].as_ref()
                     {
+                        retracked.push(set);
+                        continue;
+                    }
+                    if let Some(scene) = self.scene.as_mut() {
                         scene.install_tracks(set, tracks);
                     }
                 }
@@ -324,13 +339,13 @@ impl Session {
                         scene.install_relation(source, target, shift, time, frame);
                     }
                 }
-                Update::Coloc(series, region) => {
+                Update::Coloc(series) => {
                     let pair = series.pair();
-                    if let Some(scene) = self.scene.as_mut()
-                        && scene.coloc.pair() == Some(pair)
-                        && scene.region == region
-                        && series.mask() == scene.mask.map(|set| set.raw())
-                    {
+                    if self.coloc_input().as_ref() != inputs[index].as_ref() {
+                        self.message = Some(Message::info(
+                            "the colocalization finished after the channels, drift, pair or mask it measured changed, so its result was discarded",
+                        ));
+                    } else if let Some(scene) = self.scene.as_mut() {
                         scene.coloc.install(*series);
                         if let Some((current, thresholds)) = self.coloc_thresholds
                             && current == pair
@@ -340,7 +355,14 @@ impl Session {
                     }
                 }
                 Update::ObjectColoc(coloc) => {
-                    if let (Job::ObjectColoc(set), Some(scene)) = (job, self.scene.as_mut()) {
+                    let Job::ObjectColoc(set) = job else {
+                        continue;
+                    };
+                    if self.object_coloc_input(set).as_ref() != inputs[index].as_ref() {
+                        self.message = Some(Message::info(
+                            "the object colocalization finished after the objects or channels it measured changed, so its result was discarded",
+                        ));
+                    } else if let Some(scene) = self.scene.as_mut() {
                         scene.install_object_coloc(set, *coloc);
                     }
                 }
@@ -442,7 +464,15 @@ impl Session {
                     removed.push(index);
                     finished.push(job);
                     match job {
-                        Job::Detect(set) => detected.push(set),
+                        Job::Detect(set) => {
+                            if self.recipe.is_none()
+                                && self.detect_input(set).as_ref() != inputs[index].as_ref()
+                            {
+                                restarted.push(set);
+                            } else {
+                                detected.push(set);
+                            }
+                        }
                         Job::Import(set) => imported.push(set),
                         Job::Recut(set) => recutted.push(set),
                         Job::Track(_)
@@ -525,6 +555,12 @@ impl Session {
             if self.recipe.is_none() {
                 self.refresh_dependents(set);
             }
+        }
+        for set in restarted {
+            self.start_detect(set);
+        }
+        for set in retracked {
+            self.start_tracks(set);
         }
         for job in finished {
             self.advance_recipe(job);
@@ -753,6 +789,7 @@ impl Session {
         if !scene.move_relation(source, target, from, to) {
             return;
         }
+        self.resume.retain(|pair| *pair != (source, target, from));
         self.cancel(Job::Relation {
             source,
             target,
@@ -767,6 +804,7 @@ impl Session {
             target,
             shift,
         });
+        self.resume.retain(|pair| *pair != (source, target, shift));
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_relation(source, target, shift);
         }
@@ -940,7 +978,10 @@ impl Session {
         {
             scene.clear_object(set);
         }
-        self.analysis.push(plan.into_analysis(set));
+        let Some(input) = self.detect_input(set) else {
+            return;
+        };
+        self.analysis.push(plan.into_analysis(set).keyed(input));
     }
 
     fn detect_plan(&mut self, set: ObjectSetId) -> Option<DetectPlan> {
@@ -1244,12 +1285,11 @@ impl Session {
         let frame_interval = scene.dataset.frame_interval();
         self.message = None;
         self.record_progress(Job::Track(set), 0, 0, detections.len());
-        self.analysis.push(crate::track(
-            Job::Track(set),
-            detections,
-            params,
-            frame_interval,
-        ));
+        let Some(input) = self.track_input(set) else {
+            return;
+        };
+        self.analysis
+            .push(crate::track(Job::Track(set), detections, params, frame_interval).keyed(input));
     }
 
     pub(super) fn start_coloc(&mut self) {
@@ -1324,19 +1364,25 @@ impl Session {
         };
         self.message = None;
         self.record_progress(Job::Coloc, 0, 0, 0);
-        self.analysis.push(crate::coloc(
-            Job::Coloc,
-            channels,
-            grana_pipeline::ColocRequest::new(
-                pair,
-                region,
-                roi,
-                mask.map(|set| set.raw()),
-                settings,
-                drifts,
-                0,
-            ),
-        ));
+        let Some(input) = self.coloc_input() else {
+            return;
+        };
+        self.analysis.push(
+            crate::coloc(
+                Job::Coloc,
+                channels,
+                grana_pipeline::ColocRequest::new(
+                    pair,
+                    region,
+                    roi,
+                    mask.map(|set| set.raw()),
+                    settings,
+                    drifts,
+                    0,
+                ),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn start_object_coloc(&mut self, set: ObjectSetId) {
@@ -1373,6 +1419,14 @@ impl Session {
             ));
             return;
         };
+        let measured = object.measured_channels();
+        if pair.a() >= measured || pair.b() >= measured {
+            self.message = Some(Message::error(format!(
+                "{} measured {measured} channels and the pair names channels beyond them",
+                object.name()
+            )));
+            return;
+        }
         if [pair.a(), pair.b()]
             .iter()
             .any(|channel| scene.dataset.channels()[*channel].intensity().span() <= 0.0)
@@ -1391,11 +1445,17 @@ impl Session {
         let drifts = scene.drifts().clone();
         self.message = None;
         self.record_progress(Job::ObjectColoc(set), 0, 0, 0);
-        self.analysis.push(crate::object_coloc(
-            Job::ObjectColoc(set),
-            channels,
-            grana_pipeline::run::ObjectColocRequest::new(pair, region, source, drifts, 0),
-        ));
+        let Some(input) = self.object_coloc_input(set) else {
+            return;
+        };
+        self.analysis.push(
+            crate::object_coloc(
+                Job::ObjectColoc(set),
+                channels,
+                grana_pipeline::run::ObjectColocRequest::new(pair, region, source, drifts, 0),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn start_drift(&mut self) {

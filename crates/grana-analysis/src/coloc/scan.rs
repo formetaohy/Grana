@@ -140,15 +140,17 @@ impl ColocScan {
         let frames = &mut self.frames;
         let joints = &mut self.joints;
         let sample = &mut self.sample;
+        let workers = schedule::workers(workers);
+        let mut done = 0usize;
         let completed = schedule::ordered(
             schedule::Run {
                 total,
-                workers: schedule::workers(workers),
+                workers,
                 cancel,
-                progress,
             },
+            workers,
             ColocWorker::new,
-            |worker, index| {
+            |worker, index, _| {
                 let time = index / tiles;
                 let time = u32::try_from(time).expect("a colocalization frame fits the u32 range");
                 if worker
@@ -174,12 +176,18 @@ impl ColocScan {
                     },
                 ))
             },
-            |index, tile| {
-                assert_eq!(
-                    index / tiles,
-                    tile.time as usize,
-                    "a colocalization tile lands on its frame"
-                );
+            |delivery| {
+                let tile = match delivery {
+                    schedule::Delivery::Progress { .. } => return Ok(()),
+                    schedule::Delivery::Unit { index, value } => {
+                        assert_eq!(
+                            index / tiles,
+                            value.time as usize,
+                            "a colocalization tile lands on its frame"
+                        );
+                        value
+                    }
+                };
                 let slot = tile.time as usize;
                 frames[slot].merge(&tile.frame);
                 let cells = &mut joints[slot];
@@ -193,6 +201,8 @@ impl ColocScan {
                     sample.b[compact] = tile.b[position];
                 }
                 sample.included.extend_from_slice(&tile.included);
+                done += 1;
+                progress(done, total);
                 Ok(())
             },
             |_| {},

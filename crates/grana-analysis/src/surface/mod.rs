@@ -14,8 +14,7 @@ mod tile;
 
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::Geometry;
 use grana_object::SurfaceSet;
@@ -34,7 +33,7 @@ pub use edit::{apply, merge, split};
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 
-use crate::schedule::Budget;
+use crate::schedule::Delivery;
 use crate::work;
 
 const TILE_SIDE: u32 = 96;
@@ -309,20 +308,52 @@ impl SurfaceBuilder {
         [0; 3].map(|_| align(self.morph_radius + 1))
     }
 
-    pub(super) fn coverage(&self, roi: Option<&Mask>) -> [Range<u32>; 3] {
-        let bounds = roi.and_then(|roi| (!roi.is_empty()).then(|| roi.bounds()));
-        [0, 1, 2].map(|axis| {
-            let (mut start, mut end) = (self.region[axis].start, self.region[axis].end);
-            if let Some(bounds) = &bounds {
-                start = start.max(bounds[axis].start.clamp(0, i64::from(self.extent[axis])) as u32);
-                end = end.min(bounds[axis].end.clamp(0, i64::from(self.extent[axis])) as u32);
-            }
+    fn restrict(&mut self, roi: Option<&Mask>) -> bool {
+        let Some(roi) = roi else {
+            return true;
+        };
+        if roi.is_empty() {
+            return false;
+        }
+        let bounds = roi.bounds();
+        let mut region = self.region.clone();
+        for axis in 0..3 {
+            let limit = i64::from(self.extent[axis]);
+            let start = bounds[axis]
+                .start
+                .clamp(0, limit)
+                .max(i64::from(self.region[axis].start));
+            let end = bounds[axis]
+                .end
+                .clamp(0, limit)
+                .min(i64::from(self.region[axis].end));
             if end <= start {
-                start = self.region[axis].start;
-                end = self.region[axis].end;
+                return false;
             }
+            region[axis] = start as u32..end as u32;
+        }
+        self.region = region;
+        self.anchor = [
+            self.region[0].start as i64,
+            self.region[1].start as i64,
+            self.region[2].start as i64,
+        ];
+        self.tiles = [0, 1, 2].map(|axis| {
+            let count = self.region[axis].end - self.region[axis].start;
+            count.div_ceil(self.tile[axis])
+        });
+        self.tile_count = self.tiles[0] as usize * self.tiles[1] as usize * self.tiles[2] as usize;
+        true
+    }
+
+    pub(super) fn coverage(&self) -> [Range<u32>; 3] {
+        [0, 1, 2].map(|axis| {
             let reach = radius(self, axis);
-            start.saturating_sub(reach)..end.saturating_add(reach).min(self.extent[axis])
+            self.region[axis].start.saturating_sub(reach)
+                ..self.region[axis]
+                    .end
+                    .saturating_add(reach)
+                    .min(self.extent[axis])
         })
     }
 
@@ -417,18 +448,21 @@ impl SurfaceBuilder {
     }
 
     pub fn scan(
-        self,
+        mut self,
         workers: usize,
         cancel: &AtomicBool,
         roi: Option<&Mask>,
         progress: &mut dyn FnMut(usize, usize),
         sources: Sources<'_>,
     ) -> Result<Option<SurfaceSet>, String> {
+        if !self.restrict(roi) {
+            return Ok(None);
+        }
         let desired = crate::schedule::workers(workers);
         let store = sources.store;
         let total = self.tile_count;
         let step = total * 2 + 1;
-        let cover = self.coverage(roi);
+        let cover = self.coverage();
         let build = {
             let mut report = band(progress, step, 0, 35);
             DetectionStore::build(
@@ -467,7 +501,8 @@ impl SurfaceBuilder {
             .saturating_add(margin)
             .clamp(base, ceiling);
         let pass = Pass::new(&self, limit, seeds, &distance);
-        let budget = Budget::new(work::SURFACE_FRAME_BYTES);
+        let window =
+            crate::schedule::unit_window(work::SURFACE_FRAME_BYTES, work::SURFACE_WORKER_BYTES);
         let workers = desired.min(pass.total().max(1));
         let topology = {
             let mut report = band(progress, step, 78, 100);
@@ -480,7 +515,7 @@ impl SurfaceBuilder {
                 field: mask.field,
                 roi,
             };
-            match run_pass(&pass, workers, &budget, &mut inputs)? {
+            match run_pass(&pass, workers, window, &mut inputs)? {
                 PassOutcome::Cancelled => return Ok(None),
                 PassOutcome::Done(topology) => *topology,
             }
@@ -580,10 +615,6 @@ impl<'a> Pass<'a> {
             reach = reach.saturating_sub(PAD_ALIGN);
         }
     }
-
-    fn array_bytes(&self, index: usize) -> u64 {
-        array_bytes(self.plan, index, self.pad(index))
-    }
 }
 
 fn radius(plan: &SurfaceBuilder, axis: usize) -> u32 {
@@ -622,7 +653,7 @@ struct Inputs<'a> {
 fn run_pass(
     pass: &Pass<'_>,
     workers: usize,
-    budget: &Budget,
+    window: usize,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
     let total = pass.total();
@@ -645,93 +676,43 @@ fn run_pass(
             core.end.saturating_add(FIELD_REACH).min(cover[2].end),
         ];
         let Some(detection) = inputs.source.slab(z[0]..z[1])? else {
-            stop.store(true, Ordering::Relaxed);
             return Ok(PassOutcome::Cancelled);
         };
-        if halted(cancel, &stop) {
-            return Ok(PassOutcome::Cancelled);
-        }
-        let detection = &detection;
         let count = row_end - row_start;
-        let (sender, receiver) = mpsc::channel::<(usize, TileResult)>();
-        let next = AtomicUsize::new(0);
-        let outcome = crate::schedule::parallel(|scope| {
-            let next = &next;
-            let stop = &stop;
-            let gate = &gate;
-            for _ in 0..workers.min(count.max(1)) {
-                let sender = sender.clone();
-                scope.spawn(move |_| {
-                    let mut tile = Tile::new(pass, solid, field, detection, gate);
-                    loop {
-                        if halted(cancel, stop) {
-                            break;
-                        }
-                        let local = next.fetch_add(1, Ordering::Relaxed);
-                        if local >= count {
-                            break;
-                        }
-                        let index = row_start + local;
-                        let bytes = pass.array_bytes(index);
-                        if !budget.acquire(bytes, || halted(cancel, stop)) {
-                            break;
-                        }
-                        let result = tile.run(index, cancel, stop, measure);
-                        budget.release(bytes);
-                        if sender.send((index, result)).is_err() {
-                            break;
-                        }
+        let mut refused = false;
+        let completed = crate::schedule::ordered(
+            crate::schedule::Run {
+                total: count,
+                workers,
+                cancel,
+            },
+            window,
+            || Tile::new(pass, solid, field, &detection, &gate),
+            |tile, local, _| {
+                Ok::<TileResult, String>(tile.run(row_start + local, cancel, &stop, measure))
+            },
+            |delivery| match delivery {
+                Delivery::Progress { .. } => Ok(()),
+                Delivery::Unit { index, value } => match value {
+                    TileResult::Cancelled => {
+                        stop.store(true, Ordering::Relaxed);
+                        refused = true;
+                        Ok(())
                     }
-                });
-            }
-            drop(sender);
-            let mut pending: Vec<Option<TileResult>> = (0..count).map(|_| None).collect();
-            let mut next_row = row_start;
-            while next_row < row_end {
-                if cancel.load(Ordering::Relaxed) {
-                    stop.store(true, Ordering::Relaxed);
-                    return Ok::<bool, String>(false);
-                }
-                let (index, result) = match crate::schedule::receive(&receiver) {
-                    Some(value) => value,
-                    None => {
-                        if cancel.load(Ordering::Relaxed) {
-                            return Ok(false);
+                    TileResult::Failed(detail) => Err(detail),
+                    TileResult::Finished(output) => {
+                        assembler.push(index, *output)?;
+                        assembled += 1;
+                        if (assembled - 1).is_multiple_of(4) || assembled == total {
+                            (inputs.progress)(total + assembled, total * 2 + 1);
                         }
-                        return Err(
-                            "the surface workers stopped before every tile was assembled"
-                                .to_string(),
-                        );
+                        Ok(())
                     }
-                };
-                pending[index - row_start] = Some(result);
-                while next_row < row_end {
-                    let Some(result) = pending[next_row - row_start].take() else {
-                        break;
-                    };
-                    match result {
-                        TileResult::Cancelled => {
-                            stop.store(true, Ordering::Relaxed);
-                            return Ok(false);
-                        }
-                        TileResult::Failed(detail) => {
-                            stop.store(true, Ordering::Relaxed);
-                            return Err(detail);
-                        }
-                        TileResult::Finished(output) => {
-                            assembler.push(next_row, *output)?;
-                            next_row += 1;
-                            assembled += 1;
-                            if (assembled - 1).is_multiple_of(4) || assembled == total {
-                                (inputs.progress)(total + assembled, total * 2 + 1);
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(true)
-        })?;
-        if !outcome {
+                },
+            },
+            |_| {},
+        )?;
+        if !completed || refused {
             return Ok(PassOutcome::Cancelled);
         }
     }

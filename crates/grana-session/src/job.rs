@@ -6,6 +6,7 @@ use grana_pipeline::Channels;
 use grana_scene::{Job, ObjectFrame, ObjectSource};
 use grana_store::SpillStore;
 
+use crate::input::Input;
 use crate::task::{Poll, Task};
 use grana_pipeline::Event;
 use grana_pipeline::run::{
@@ -16,12 +17,24 @@ use grana_pipeline::run::{
 
 pub struct Analysis {
     job: Job,
+    input: Option<Input>,
     task: Task<Event>,
 }
 
 impl Analysis {
     pub fn job(&self) -> Job {
         self.job
+    }
+
+    pub fn input(&self) -> Option<&Input> {
+        self.input.as_ref()
+    }
+
+    pub fn keyed(self, input: Input) -> Self {
+        Self {
+            input: Some(input),
+            ..self
+        }
     }
 
     pub fn poll(&self) -> Poll<Event> {
@@ -226,5 +239,9 @@ fn analyse(
             sink(Event::Failed(detail));
         }
     });
-    Analysis { job, task }
+    Analysis {
+        job,
+        input: None,
+        task,
+    }
 }

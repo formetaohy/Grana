@@ -258,6 +258,10 @@ impl Coloc {
         self.clear();
     }
 
+    pub fn mask(&self) -> Option<MaskKey> {
+        self.mask
+    }
+
     pub fn state(&self) -> ColocState {
         ColocState {
             pair: self.pair,

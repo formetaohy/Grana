@@ -112,6 +112,19 @@ struct RestoreChannel {
     tiles: Mutex<Vec<Arc<RestoredTile>>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    stored: usize,
+    derived: usize,
+    registration: u64,
+}
+
+impl Layout {
+    pub fn channels(&self) -> usize {
+        self.stored + self.derived
+    }
+}
+
 pub struct Channels {
     reader: Arc<Image>,
     derived: Vec<Node>,
@@ -171,6 +184,14 @@ impl Channels {
 
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
+    }
+
+    pub fn layout(&self) -> Layout {
+        Layout {
+            stored: self.stored_channels(),
+            derived: self.derived.len(),
+            registration: self.registration.digest(),
+        }
     }
 
     pub fn name(&self) -> &str {

@@ -15,7 +15,7 @@ pub use batch::{
     interaction_table, read_run, record_correction, significance_table,
 };
 pub use capture::{Capture, CaptureFactory, CaptureRequest, Kind as CaptureKind};
-pub use channels::{Channels, ChannelsError};
+pub use channels::{Channels, ChannelsError, Layout};
 pub use event::Event;
 pub use export::{ChannelLayer, DatasetSpec, LabelLayer, Summary as ExportSummary, write_dataset};
 pub use grana_analysis::SeedPolicy;

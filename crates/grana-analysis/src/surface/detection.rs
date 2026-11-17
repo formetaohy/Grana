@@ -141,12 +141,9 @@ impl DetectionStore {
             workers: workers.max(1),
         };
         production.radius = production.kernel.len() / 2;
-        let (sender, receiver) = mpsc::sync_channel::<Result<Band, String>>(1);
-        let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<f32>>();
-        let mut window = Window::new(plane);
-        let mut available = first;
-        let mut output = first;
         let completed = std::thread::scope(|scope| -> Result<bool, String> {
+            let (sender, receiver) = mpsc::sync_channel::<Result<Band, String>>(1);
+            let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<f32>>();
             {
                 let read = &*read;
                 let cancel = &*cancel;
@@ -177,12 +174,14 @@ impl DetectionStore {
                     }
                 });
             }
+            let mut window = Window::new(plane);
+            let mut output = first;
             while let Ok(message) = receiver.recv() {
                 let (z, mut raw) = message?;
                 let planes = (raw.len() / plane) as u32;
                 blur(&mut raw, plan, dims, plane, production.workers);
                 window.push(z, raw);
-                available = z + planes;
+                let available = z + planes;
                 let radius = production.radius;
                 let ready = if available > last {
                     cover[2].end

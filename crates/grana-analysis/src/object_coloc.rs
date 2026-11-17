@@ -89,15 +89,17 @@ impl ObjectColocScan {
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Option<Vec<ObjectColocValue>>, String> {
         let mut totals = vec![0.0f64; self.objects * OBJECT_COLOC_FIELDS];
+        let workers = schedule::workers(workers);
+        let mut done = 0usize;
         let completed = schedule::ordered(
             schedule::Run {
                 total: self.tiles.len(),
-                workers: schedule::workers(workers),
+                workers,
                 cancel,
-                progress,
             },
+            workers,
             Tile::new,
-            |tile, index| {
+            |tile, index, _| {
                 tile.accumulate(
                     &self.tiles[index],
                     &TileContext {
@@ -110,9 +112,14 @@ impl ObjectColocScan {
                     },
                 )
             },
-            |_, values| {
-                merge(&mut totals, &values);
-                Ok(())
+            |delivery| match delivery {
+                schedule::Delivery::Progress { .. } => Ok(()),
+                schedule::Delivery::Unit { value, .. } => {
+                    merge(&mut totals, &value);
+                    done += 1;
+                    progress(done, self.tiles.len());
+                    Ok(())
+                }
             },
             |_| {},
         )?;

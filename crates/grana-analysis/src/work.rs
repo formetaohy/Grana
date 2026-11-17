@@ -4,7 +4,7 @@ pub(crate) const SURFACE_TILE_BYTES: u64 = 256 << 20;
 
 pub(crate) const SURFACE_PLANE_BYTES_PER_VOXEL: u64 = 8;
 
-pub(crate) const SURFACE_ARRAY_BYTES_PER_VOXEL: u64 = 9;
+pub(crate) const SURFACE_ARRAY_BYTES_PER_VOXEL: u64 = 17;
 
 pub(crate) const SURFACE_FIELD_BYTES_PER_VOXEL: u64 = 4;
 

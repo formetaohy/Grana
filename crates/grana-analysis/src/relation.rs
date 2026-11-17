@@ -5,6 +5,8 @@ use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
 use grana_object::{RelationFrame, RelationPair, Shape};
 
+use crate::schedule::Delivery;
+
 pub struct Reference {
     bvh: Bvh,
     centers: Vec<Vec3>,
@@ -311,16 +313,18 @@ pub fn relate_frames(
         progress,
     } = run;
     let total = counts.len();
+    let workers = crate::schedule::workers(workers);
     let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
+    let mut done = 0usize;
     let completed = crate::schedule::ordered(
         crate::schedule::Run {
             total,
-            workers: crate::schedule::workers(workers),
+            workers,
             cancel,
-            progress,
         },
+        workers,
         || (),
-        |(), time| {
+        |(), time, _| {
             let Some(index) = shifted(time, shift, total) else {
                 return Ok(None);
             };
@@ -333,9 +337,14 @@ pub fn relate_frames(
             let same = same && shift == 0;
             Ok(shape.map(|shape| reference.relate(&shape, gate, same)))
         },
-        |time, frame| {
-            frames[time] = frame;
-            Ok(())
+        |delivery| match delivery {
+            Delivery::Progress { .. } => Ok(()),
+            Delivery::Unit { index, value } => {
+                frames[index] = value;
+                done += 1;
+                progress(done, total);
+                Ok(())
+            }
         },
         |()| {},
     )?;

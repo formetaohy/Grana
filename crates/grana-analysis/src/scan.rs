@@ -7,6 +7,7 @@ use grana_volume::{Intensity, Level, Pyramid, Region as VolumeRegion, VoxelData}
 use grana_object::{Mask, SpotParams};
 
 use crate::local::{BlockField, BlockLevels};
+use crate::schedule::Delivery;
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;
@@ -112,7 +113,7 @@ impl SpotScanner {
                 IntensityTable::new(channels, Vec::new()),
             )));
         }
-        let bytes = self.peak_read_voxels() * 4;
+        let bytes = self.peak_read_voxels() * 4 * 3;
         let workers = crate::schedule::workers(workers)
             .min((crate::work::SPOT_WORKER_BYTES / bytes.max(1)).max(1) as usize);
         let Some(field) = self.template.field(detection, workers, cancel, read)? else {
@@ -120,23 +121,27 @@ impl SpotScanner {
         };
         let mut spots = Vec::new();
         let mut accumulators = Vec::new();
+        let mut done = 0usize;
         let completed = crate::schedule::ordered(
             crate::schedule::Run {
                 total,
                 workers,
                 cancel,
-                progress: &mut |done, total| {
+            },
+            workers,
+            || SpotWorker::new(&self.template),
+            |worker, index, _| worker.run(index, channels, detection, &field, read, roi),
+            |delivery| match delivery {
+                Delivery::Progress { .. } => Ok(()),
+                Delivery::Unit { value: block, .. } => {
+                    spots.extend(block.spots);
+                    accumulators.extend(block.accumulators);
+                    done += 1;
                     if done.is_multiple_of(PROGRESS_STRIDE) || done == total {
                         progress(done, total);
                     }
-                },
-            },
-            || SpotWorker::new(&self.template),
-            |worker, index| worker.run(index, channels, detection, &field, read, roi),
-            |_, block| {
-                spots.extend(block.spots);
-                accumulators.extend(block.accumulators);
-                Ok(())
+                    Ok(())
+                }
             },
             |_| {},
         )?;

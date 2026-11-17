@@ -82,15 +82,16 @@ pub(super) fn build<'a>(
         };
         let count = per_row.min(plan.tile_count - start);
         let mut report = band(progress, step, 35, 78);
+        let mut done = 0usize;
         let completed = crate::schedule::ordered(
             crate::schedule::Run {
                 total: count,
                 workers: source.workers(),
                 cancel: source.cancel(),
-                progress: &mut report,
             },
+            source.workers(),
             || (),
-            |(), local| {
+            |(), local, _| {
                 Ok(MaskWorker::run(
                     plan,
                     &gate,
@@ -99,14 +100,23 @@ pub(super) fn build<'a>(
                     start + local,
                 ))
             },
-            |local, chunk| {
-                let mut sink = MaskSink {
-                    foreground: &mut foreground,
-                    raised: &mut raised,
-                    admitted: admitted.as_mut(),
-                    occupied: &mut occupied,
-                };
-                write_chunk(plan, start + local, chunk, &mut sink)
+            |delivery| match delivery {
+                crate::schedule::Delivery::Progress { .. } => Ok(()),
+                crate::schedule::Delivery::Unit {
+                    index,
+                    value: chunk,
+                } => {
+                    let mut sink = MaskSink {
+                        foreground: &mut foreground,
+                        raised: &mut raised,
+                        admitted: admitted.as_mut(),
+                        occupied: &mut occupied,
+                    };
+                    write_chunk(plan, start + index, chunk, &mut sink)?;
+                    done += 1;
+                    report(done, count);
+                    Ok(())
+                }
             },
             |()| {},
         )?;
@@ -319,16 +329,23 @@ fn morph(
     let total = plan.tile_count();
     let pad = plan.pad_morph();
     let mut solid = Bits::new(dims);
+    let mut done = 0usize;
     let completed = crate::schedule::ordered(
         crate::schedule::Run {
             total,
             workers,
             cancel,
-            progress,
         },
+        workers,
         || (),
-        |(), index| MorphWorker::run(plan, index, pad, foreground, admitted, grid),
-        |index, chunk| {
+        |(), index, _| MorphWorker::run(plan, index, pad, foreground, admitted, grid),
+        |delivery| {
+            let (index, chunk) = match delivery {
+                crate::schedule::Delivery::Progress { .. } => return Ok(()),
+                crate::schedule::Delivery::Unit { index, value } => (index, value),
+            };
+            done += 1;
+            progress(done, total);
             let core = plan.core_range(index);
             let dims = dims_of(&core);
             let origin = [

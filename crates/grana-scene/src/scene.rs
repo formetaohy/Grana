@@ -405,7 +405,10 @@ impl Scene {
         denominator: usize,
         intensity: Intensity,
     ) -> Result<bool, String> {
-        if denominator >= self.channels.len() || denominator == self.derived_source(channel)? {
+        if denominator >= self.channels.len()
+            || denominator >= channel
+            || denominator == self.derived_source(channel)?
+        {
             return Err("a ratio channel divides two distinct channels of the dataset".to_string());
         }
         let operation = Operation::Ratio(crate::derived::RatioSpec::new(denominator));
@@ -1195,6 +1198,7 @@ impl Scene {
     fn realigned(&mut self) {
         self.objects
             .realign_localizations(&self.drifts, &self.registration);
+        self.coloc.clear();
         self.clear_object_coloc_all();
     }
 
@@ -1952,7 +1956,7 @@ impl Scene {
         })
     }
 
-    fn mask_key(&self) -> Option<MaskKey> {
+    pub fn mask_key(&self) -> Option<MaskKey> {
         let set = self.objects.get(self.mask?)?;
         Some(MaskKey::new(
             set.id(),
