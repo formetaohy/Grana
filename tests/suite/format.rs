@@ -771,6 +771,56 @@ fn opens_a_plane_tiff_through_the_image_layer() {
 }
 
 #[test]
+fn inverts_a_minis_white_tiff() {
+    let temp = Temp::new("suite-miniswhite");
+    let path = temp.path().join("miniswhite.tif");
+    std::fs::write(&path, minis_white_tiff(&[0, 200])).expect("the page writes");
+    let image = Image::open(&Source::file(path)).expect("the page opens");
+    let data = image
+        .read_region(0, 0, 0, &[0..2, 0..1, 0..1], &grana_warp::Warp::IDENTITY)
+        .expect("the page reads");
+    let VoxelData::U8(values) = data else {
+        panic!("the page stores bytes");
+    };
+    assert_eq!(
+        values,
+        [255, 55],
+        "a white-is-zero page is inverted to black-is-zero"
+    );
+}
+
+fn minis_white_tiff(values: &[u8]) -> Vec<u8> {
+    let width = values.len() as u32;
+    let entries: [(u16, u16, u32, u32); 9] = [
+        (256, 4, 1, width),
+        (257, 4, 1, 1),
+        (258, 3, 1, 8),
+        (259, 3, 1, 1),
+        (262, 3, 1, 0),
+        (273, 4, 1, 0),
+        (277, 3, 1, 1),
+        (278, 4, 1, 1),
+        (279, 4, 1, values.len() as u32),
+    ];
+    let strip = 8 + 2 + entries.len() as u32 * 12 + 4;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        let value = if tag == 273 { strip } else { value };
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(values);
+    bytes
+}
+
+#[test]
 fn reads_ome_tiff_metadata_and_voxels() {
     let image = grana_tiff::Image::open(&fixture("ome.tif")).expect("the ome tiff opens");
     let pyramid = image.pyramid();

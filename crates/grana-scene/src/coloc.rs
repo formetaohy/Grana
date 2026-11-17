@@ -160,7 +160,7 @@ impl Coloc {
             return;
         }
         self.pair = Some(pair);
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn results(&self) -> &[ColocResult] {
@@ -188,7 +188,7 @@ impl Coloc {
             return;
         }
         result.set_thresholds(thresholds);
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn series_statistics(&self) -> Option<ColocStatistics> {
@@ -209,14 +209,14 @@ impl Coloc {
         }
         self.settings = settings;
         self.results.clear();
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn remove_result(&mut self, pair: ColocPair) {
         let length = self.results.len();
         self.results.retain(|result| result.pair() != pair);
         if self.results.len() != length {
-            self.revision = self.revision.next();
+            self.revision = Revision::mint();
         }
     }
 
@@ -225,7 +225,7 @@ impl Coloc {
             return;
         }
         self.results.clear();
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn install(&mut self, series: ColocSeries) {
@@ -247,7 +247,7 @@ impl Coloc {
             Some(existing) => *existing = result,
             None => self.results.push(result),
         }
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn set_mask(&mut self, mask: Option<MaskKey>) {
@@ -328,7 +328,7 @@ impl Coloc {
     pub fn grow_channel(&mut self, channels: usize) {
         if self.pair.is_none() && channels >= 2 {
             self.pair = Some(ColocPair::new(0, 1));
-            self.revision = self.revision.next();
+            self.revision = Revision::mint();
         }
     }
 
@@ -338,7 +338,7 @@ impl Coloc {
             .filter(|pair| pair.a() < channels && pair.b() < channels);
         self.pair = pair.or_else(|| (channels >= 2).then(|| ColocPair::new(0, 1)));
         self.results.clear();
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     pub fn remove_channel(&mut self, index: usize) {
@@ -360,7 +360,7 @@ impl Coloc {
                 Some(ColocPair::new(a, b))
             }
         };
-        self.revision = self.revision.next();
+        self.revision = Revision::mint();
     }
 
     fn result_mut(&mut self) -> Option<&mut ColocResult> {

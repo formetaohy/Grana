@@ -204,6 +204,7 @@ pub struct Renderer {
     sliced: bool,
     overlay: Overlays,
     viewport: Option<[u32; 4]>,
+    present_region: Option<[u32; 4]>,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
@@ -278,6 +279,7 @@ impl Renderer {
             sliced: false,
             overlay,
             viewport: None,
+            present_region: None,
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
@@ -413,6 +415,7 @@ impl Renderer {
         self.sliced = false;
         self.targets.clear();
         self.viewport = None;
+        self.present_region = None;
         if let Some(convergence) = self.convergence.as_mut() {
             convergence.forget();
         }
@@ -698,6 +701,46 @@ impl Renderer {
                 .poll(device, drawn)
                 .map(|estimate| (estimate.samples(), estimate.error()))
         })
+    }
+
+    pub fn present_only(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        surface: &TextureView,
+        exposure: f32,
+        transparent: bool,
+    ) -> bool {
+        assert!(
+            exposure.is_finite() && exposure > 0.0,
+            "an exposure scales radiance by a positive factor"
+        );
+        let Some(viewport) = self.viewport else {
+            return false;
+        };
+        let Some(region) = self.present_region else {
+            return false;
+        };
+        let Some(target) = self.targets.current() else {
+            return false;
+        };
+        if target.samples == 0 {
+            return false;
+        }
+        self.present.write(
+            queue,
+            exposure,
+            transparent,
+            None,
+            resolve::coverage(region, target.size),
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.present.only"),
+        });
+        self.present
+            .present(&mut encoder, surface, &target.present_group, viewport);
+        queue.submit([encoder.finish()]);
+        true
     }
 
     pub fn present_picture(

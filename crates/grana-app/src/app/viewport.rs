@@ -437,11 +437,14 @@ impl App {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
+        let region = self.stage.region();
         let scale = surface.window.scale_factor() as f32;
-        let point = [
-            (point.x * scale).max(0.0).round() as u32,
-            (point.y * scale).max(0.0).round() as u32,
-        ];
+        let x = point.x * scale - region[0] as f32;
+        let y = point.y * scale - region[1] as f32;
+        if x < 0.0 || y < 0.0 || x >= region[2] as f32 || y >= region[3] as f32 {
+            return;
+        }
+        let point = [x.round() as u32, y.round() as u32];
         if engine.request_pick(&surface.gpu.device, &surface.gpu.queue, point) {
             self.pick_toggle = Some(toggle);
         }

@@ -199,7 +199,13 @@ pub fn grow(
             for channel in 0..channels {
                 data.push(
                     reader
-                        .read_region(time, level, channel, &extent, warp)
+                        .read_region(
+                            time,
+                            level,
+                            channel,
+                            &extent,
+                            request.drifts.warp(channel, time),
+                        )
                         .map_err(|error| error.to_string())?,
                 );
             }

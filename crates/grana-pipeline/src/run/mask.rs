@@ -372,7 +372,7 @@ fn rebuild(
                         level,
                         channel,
                         &ranges,
-                        request.drifts.warp(request.channel, frame),
+                        request.drifts.warp(channel, frame),
                     )
                     .map_err(|error| error.to_string())?,
             );
@@ -395,7 +395,12 @@ fn labels(mask: &Mask, origin: [u32; 3], extent: [u32; 3], start: u32) -> Vec<u3
     let height = extent[1] as usize;
     let mut labels = vec![0u32; width * height * extent[2] as usize];
     for cell in mask.cells() {
-        let z = cell[2] - origin[2] - start;
+        let Some(z) = cell[2]
+            .checked_sub(origin[2])
+            .and_then(|value| value.checked_sub(start))
+        else {
+            continue;
+        };
         if z >= extent[2] {
             continue;
         }

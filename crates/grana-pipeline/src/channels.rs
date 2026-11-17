@@ -116,6 +116,7 @@ struct RestoreChannel {
 pub struct Layout {
     stored: usize,
     derived: usize,
+    specs: u64,
     registration: u64,
 }
 
@@ -123,6 +124,32 @@ impl Layout {
     pub fn channels(&self) -> usize {
         self.stored + self.derived
     }
+}
+
+fn spec_digest(nodes: &[Node]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for node in nodes {
+        let spec = &node.spec;
+        spec.source().hash(&mut hasher);
+        spec.name().hash(&mut hasher);
+        spec.tint().map(f32::to_bits).hash(&mut hasher);
+        spec.intensity().min().to_bits().hash(&mut hasher);
+        spec.intensity().max().to_bits().hash(&mut hasher);
+        match spec.operation() {
+            Operation::Mask { set } => set.raw().hash(&mut hasher),
+            Operation::Restore(restore) => {
+                restore.psf().digest().hash(&mut hasher);
+                restore.iterations().hash(&mut hasher);
+            }
+            Operation::Smooth(smooth) => smooth.sigma().to_bits().hash(&mut hasher),
+            Operation::Background(background) => background.radius().to_bits().hash(&mut hasher),
+            Operation::Ratio(ratio) => ratio.denominator().hash(&mut hasher),
+            Operation::Bleach => 0u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
 }
 
 pub struct Channels {
@@ -190,6 +217,7 @@ impl Channels {
         Layout {
             stored: self.stored_channels(),
             derived: self.derived.len(),
+            specs: spec_digest(&self.derived),
             registration: self.registration.digest(),
         }
     }

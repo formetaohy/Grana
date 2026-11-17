@@ -295,6 +295,15 @@ impl SurfaceSet {
         self.objects.is_empty()
     }
 
+    pub fn empty(level: usize, channels: usize) -> Self {
+        Self::new(
+            level,
+            Mesh::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            IntensityTable::empty(channels),
+        )
+    }
+
     pub fn without(&self, object: usize) -> Result<Option<Self>, grana_geometry::Error> {
         if object >= self.objects.len() {
             return Ok(None);

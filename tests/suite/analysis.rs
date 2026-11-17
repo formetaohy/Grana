@@ -337,6 +337,26 @@ fn keeps_surface_objects_of_a_partial_analysis_mask() {
     );
 }
 
+#[test]
+fn empties_surface_objects_of_an_empty_analysis_mask() {
+    let extent = Extent::new(80, 64, 48);
+    let spacing = Spacing::new(0.2, 0.2, 0.2);
+    let level = Level::new(extent, spacing);
+    let volume = support::spheres(extent, spacing, &[([40.0, 32.0, 24.0], 8.0)], HIGH);
+    let roi = grana_object::Mask::empty(level);
+    let set = extract_surfaces_at(
+        &volume,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        Some(&roi),
+    );
+    assert_eq!(
+        set.object_count(),
+        0,
+        "an analysis mask that covers no voxel clears the surface frame"
+    );
+}
+
 fn extract_surfaces(volume: &grana_volume::Volume, params: SurfaceParams) -> SurfaceSet {
     extract_surfaces_at(
         volume,
@@ -356,7 +376,7 @@ fn extract_surfaces_at(
     let channels = volume.channel_count();
     let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity);
     let cancel = AtomicBool::new(false);
-    builder
+    let scan = builder
         .scan(
             4,
             &cancel,
@@ -382,8 +402,14 @@ fn extract_surfaces_at(
                 &SpillStore::memory(),
             ),
         )
-        .expect("a surface frame is detected")
-        .expect("surface detection completes")
+        .expect("a surface frame is detected");
+    match scan {
+        grana_analysis::SurfaceScan::Set(set) => set,
+        grana_analysis::SurfaceScan::Empty => SurfaceSet::empty(0, channels),
+        grana_analysis::SurfaceScan::Cancelled => {
+            panic!("a scan without a cancelled flag completes")
+        }
+    }
 }
 
 #[test]

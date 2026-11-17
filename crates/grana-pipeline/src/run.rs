@@ -6,11 +6,11 @@ use crate::channels::Channels;
 use grana_analysis::local::field_bytes;
 use grana_analysis::{
     ColocScan, ColocScanConfig, FIELD_PEAK_BYTES, FilamentScan, ObjectColocScan, RelationRun,
-    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, coloc_sampling, filament_level,
+    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, SurfaceScan, coloc_sampling, filament_level,
     relate_frames, spot_level, surface_level,
 };
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
-use grana_object::{LabelRaster, Roi};
+use grana_object::{LabelRaster, Roi, SurfaceSet};
 use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams, ObjectSource};
 use grana_store::SpillStore;
 use grana_volume::VoxelData;
@@ -66,8 +66,9 @@ const FILAMENT_BYTES: u64 = 512 << 20;
 
 const FILAMENT_VOXEL_BYTES: u64 = 12;
 
-fn share(workers: usize, window: usize) -> usize {
-    (workers / workers.min(window)).max(1)
+fn share(workers: usize, window: usize, total: u32) -> usize {
+    let concurrent = workers.min(window).min(total.max(1) as usize);
+    (workers / concurrent).max(1)
 }
 
 fn voxel_count(level: grana_volume::Level, region: grana_volume::Region) -> u64 {
@@ -441,7 +442,7 @@ pub fn object_coloc(
     let info = pyramid.level(level_index);
     let workers = grana_analysis::workers(workers);
     let window = workers;
-    let share = share(workers, window);
+    let share = share(workers, window, totals);
     let mut collected: Vec<Option<Vec<ObjectColocValue>>> = vec![None; totals as usize];
     let completed = pipeline(
         totals,
@@ -551,7 +552,7 @@ fn spots(
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
     let window = grana_analysis::unit_window(FIELD_PEAK_BYTES, field_bytes(level, region));
-    let share = share(workers, window);
+    let share = share(workers, window, totals);
     let completed = pipeline(
         totals,
         workers,
@@ -621,7 +622,7 @@ fn surfaces(
         FIELD_PEAK_BYTES,
         field_bytes(level, region).max(voxel_count(level, region) * 4),
     );
-    let share = share(workers, window);
+    let share = share(workers, window, totals);
     let completed = pipeline(
         totals,
         workers,
@@ -676,7 +677,12 @@ fn surfaces(
                     &store,
                 ),
             )?;
-            Ok(set.map(ObjectFrame::Surfaces))
+            let set = match set {
+                SurfaceScan::Cancelled => return Ok(None),
+                SurfaceScan::Empty => SurfaceSet::empty(level_index, pyramid.channel_count()),
+                SurfaceScan::Set(set) => set,
+            };
+            Ok(Some(ObjectFrame::Surfaces(set)))
         },
         &mut install(sink),
     )?;

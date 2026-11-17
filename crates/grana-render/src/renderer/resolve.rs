@@ -191,7 +191,7 @@ pub(super) fn present(encoder: &mut CommandEncoder, presenting: Presenting<'_>) 
     }
 }
 
-fn coverage(region: [u32; 4], size: [u32; 2]) -> [f32; 4] {
+pub(super) fn coverage(region: [u32; 4], size: [u32; 2]) -> [f32; 4] {
     let width = size[0].max(1) as f32;
     let height = size[1].max(1) as f32;
     [

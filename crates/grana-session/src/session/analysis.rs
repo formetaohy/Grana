@@ -289,10 +289,12 @@ impl Session {
                     self.record_progress(job, time, done, total);
                 }
                 Update::Frame(time, frame) => {
-                    if let (Job::Detect(set) | Job::Import(set) | Job::Recut(set), Some(scene)) =
-                        (job, self.scene.as_mut())
-                    {
-                        scene.install(set, time, frame);
+                    if let Job::Detect(set) | Job::Import(set) | Job::Recut(set) = job {
+                        let stale = matches!(job, Job::Detect(_))
+                            && self.detect_input(set).as_ref() != inputs[index].as_ref();
+                        if !stale && let Some(scene) = self.scene.as_mut() {
+                            scene.install(set, time, frame);
+                        }
                     }
                 }
                 Update::Localization {
@@ -1195,14 +1197,22 @@ impl Session {
         let restore = previous;
         let (ObjectParams::Surfaces(previous), ObjectParams::Surfaces(params)) = (previous, params)
         else {
+            self.message = Some(Message::info(
+                "detect the object set to apply the new detection settings",
+            ));
             return;
         };
-        if previous == params
-            || previous.threshold() != params.threshold()
+        if previous == params {
+            return;
+        }
+        if previous.threshold() != params.threshold()
             || previous.grain() != params.grain()
             || previous.opening() != params.opening()
             || previous.closing() != params.closing()
         {
+            self.message = Some(Message::info(
+                "detect the object set to apply the new surface settings",
+            ));
             return;
         }
         let cut = params.cut();

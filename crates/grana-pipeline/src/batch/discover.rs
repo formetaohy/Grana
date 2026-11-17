@@ -226,12 +226,22 @@ impl DatasetEntry {
         }
     }
 
-    pub(super) fn folder(&self) -> PathBuf {
+    pub fn folder(&self) -> PathBuf {
         let mut folder = PathBuf::new();
         for group in self.group.split('/').filter(|group| !group.is_empty()) {
-            folder.push(slug(group).to_ascii_lowercase());
+            folder.push(component(group, group));
         }
-        folder.push(slug(&self.title()).to_ascii_lowercase());
+        let identity = format!("{}\u{1}{}", self.path.to_string_lossy(), self.scene);
+        let leaf = if self.scenes > 1 || self.well.is_some() {
+            format!(
+                "{}-{:08x}",
+                slug(&self.title()).to_ascii_lowercase(),
+                digest(&identity) as u32
+            )
+        } else {
+            component(&self.title(), &identity)
+        };
+        folder.push(leaf);
         folder
     }
 
@@ -242,6 +252,25 @@ impl DatasetEntry {
             .collect::<Vec<_>>()
             .join("-")
     }
+}
+
+fn component(name: &str, identity: &str) -> String {
+    let slug = slug(name);
+    let lowered = slug.to_ascii_lowercase();
+    if slug == name && lowered == name {
+        slug
+    } else {
+        format!("{lowered}-{:08x}", digest(identity) as u32)
+    }
+}
+
+fn digest(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 pub fn default_jobs() -> usize {

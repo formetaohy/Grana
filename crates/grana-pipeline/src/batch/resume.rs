@@ -23,6 +23,8 @@ pub(super) struct Record {
     pub(super) objects: usize,
     pub(super) detail: String,
     pub(super) quality: Vec<Quality>,
+    #[serde(default)]
+    pub(super) modified: Option<u64>,
 }
 
 pub(super) fn completed(
@@ -31,12 +33,14 @@ pub(super) fn completed(
     build: &str,
     content: u64,
     artifacts: &[String],
+    modified: Option<u64>,
 ) -> Option<Record> {
     let text = std::fs::read_to_string(folder.join(RESULT)).ok()?;
     let record = serde_json::from_str::<Record>(&text).ok()?;
     (record.protocol == digest
         && record.build == build
         && record.content == content
+        && record.modified.is_none_or(|held| modified == Some(held))
         && artifacts.iter().all(|name| record.artifacts.contains(name))
         && record
             .artifacts

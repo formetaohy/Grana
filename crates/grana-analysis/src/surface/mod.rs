@@ -56,6 +56,12 @@ pub enum SeedPolicy {
     Sourced,
 }
 
+pub enum SurfaceScan {
+    Cancelled,
+    Empty,
+    Set(SurfaceSet),
+}
+
 pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
 pub(crate) const REMOVED: f32 = 1.0e-3;
@@ -454,9 +460,9 @@ impl SurfaceBuilder {
         roi: Option<&Mask>,
         progress: &mut dyn FnMut(usize, usize),
         sources: Sources<'_>,
-    ) -> Result<Option<SurfaceSet>, String> {
+    ) -> Result<SurfaceScan, String> {
         if !self.restrict(roi) {
-            return Ok(None);
+            return Ok(SurfaceScan::Empty);
         }
         let desired = crate::schedule::workers(workers);
         let store = sources.store;
@@ -482,14 +488,21 @@ impl SurfaceBuilder {
             field,
         }) = build
         else {
-            return Ok(None);
+            return Ok(if cancel.load(Ordering::Relaxed) {
+                SurfaceScan::Cancelled
+            } else {
+                SurfaceScan::Empty
+            });
         };
         let source = DetectionSource::new(&self, &cover, desired, cancel, &detection);
         let Some(mask) = mask::build(&source, roi, progress, step, &field)? else {
-            return Ok(None);
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(SurfaceScan::Cancelled);
+            }
+            return Err("the surface detection lost the volume it had just detected".to_string());
         };
         let Some(seeds) = self.seeds(&mask.solid)? else {
-            return Ok(None);
+            return Ok(SurfaceScan::Empty);
         };
         let seeds = &seeds[..];
         let base = (DISTANCE_LIMIT * self.widest()).min(DISTANCE_LIMIT_MAX);
@@ -515,7 +528,7 @@ impl SurfaceBuilder {
                 roi,
             };
             match run_pass(&pass, workers, window, &mut inputs)? {
-                PassOutcome::Cancelled => return Ok(None),
+                PassOutcome::Cancelled => return Ok(SurfaceScan::Cancelled),
                 PassOutcome::Done(topology) => *topology,
             }
         };
@@ -530,10 +543,10 @@ impl SurfaceBuilder {
             Some(cancel),
         )?
         else {
-            return Ok(None);
+            return Ok(SurfaceScan::Empty);
         };
         progress(step, step);
-        Ok(Some(
+        Ok(SurfaceScan::Set(
             set.with_topology(topology)
                 .map_err(|error| error.to_string())?,
         ))

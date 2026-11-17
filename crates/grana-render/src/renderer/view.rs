@@ -24,7 +24,6 @@ impl View {
         camera: &Camera,
         clip: Region,
         time: u32,
-        exposure: f32,
     ) -> Self {
         assert!(inside(pixel, surface), "the view lies on the surface");
         let region = scaled(pixel, surface, resolution);
@@ -40,7 +39,7 @@ impl View {
             height,
             display_height: pixel[3].max(1),
             aspect: width as f32 / height as f32,
-            motion: motion(camera, region, clip, time, exposure),
+            motion: motion(camera, region, clip, time),
         }
     }
 }
@@ -70,14 +69,13 @@ fn scaled(region: [u32; 4], surface: [u32; 2], resolution: [u32; 2]) -> [u32; 4]
     [x, y, width, height]
 }
 
-fn motion(camera: &Camera, region: [u32; 4], clip: Region, time: u32, exposure: f32) -> u64 {
+fn motion(camera: &Camera, region: [u32; 4], clip: Region, time: u32) -> u64 {
     let mut hasher = DefaultHasher::new();
     hash_camera(camera.state(), &mut hasher);
     let aspect = region[2].max(1) as f32 / region[3].max(1) as f32;
     aspect.to_bits().hash(&mut hasher);
     region.hash(&mut hasher);
     time.hash(&mut hasher);
-    exposure.to_bits().hash(&mut hasher);
     clip.enabled().hash(&mut hasher);
     clip.center().to_array().map(f32::to_bits).hash(&mut hasher);
     clip.half().to_array().map(f32::to_bits).hash(&mut hasher);

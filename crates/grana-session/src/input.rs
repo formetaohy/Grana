@@ -1,4 +1,5 @@
 use grana_measure::{ColocPair, ColocSettings};
+use grana_object::TrackParams;
 use grana_pipeline::Layout;
 use grana_scene::{MaskKey, ObjectParams, ObjectSetId, Revision};
 use grana_volume::Region;
@@ -55,6 +56,7 @@ impl Input {
         params: ObjectParams,
         region: Region,
         mask: Option<MaskKey>,
+        seeds: u64,
     ) -> Self {
         Self::Detect(DetectInput {
             layout,
@@ -63,11 +65,12 @@ impl Input {
             params,
             region,
             mask,
+            seeds,
         })
     }
 
-    pub fn track(frames: Vec<Option<Revision>>) -> Self {
-        Self::Track(TrackInput { frames })
+    pub fn track(frames: Vec<Option<Revision>>, params: TrackParams) -> Self {
+        Self::Track(TrackInput { frames, params })
     }
 }
 
@@ -99,9 +102,11 @@ pub struct DetectInput {
     pub params: ObjectParams,
     pub region: Region,
     pub mask: Option<MaskKey>,
+    pub seeds: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackInput {
     pub frames: Vec<Option<Revision>>,
+    pub params: TrackParams,
 }

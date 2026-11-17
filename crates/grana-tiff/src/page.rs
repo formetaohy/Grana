@@ -30,6 +30,7 @@ pub(crate) struct Page {
     compression: u16,
     predictor: u16,
     big_endian: bool,
+    min_is_white: bool,
     layout: Layout,
 }
 
@@ -71,11 +72,17 @@ struct Block {
 
 pub(crate) trait Sample: Copy {
     fn load(bytes: &[u8], index: usize) -> Self;
+
+    fn inverted(self) -> Self;
 }
 
 impl Sample for u8 {
     fn load(bytes: &[u8], index: usize) -> Self {
         bytes[index]
+    }
+
+    fn inverted(self) -> Self {
+        !self
     }
 }
 
@@ -88,6 +95,10 @@ impl Sample for u16 {
                 .expect("two bytes are read"),
         )
     }
+
+    fn inverted(self) -> Self {
+        !self
+    }
 }
 
 impl Sample for f32 {
@@ -98,6 +109,10 @@ impl Sample for f32 {
                 .try_into()
                 .expect("four bytes are read"),
         )
+    }
+
+    fn inverted(self) -> Self {
+        1.0 - self
     }
 }
 
@@ -195,6 +210,7 @@ impl Page {
             compression,
             predictor: predictor as u16,
             big_endian,
+            min_is_white: photometric == 0,
             layout,
         })
     }
@@ -269,6 +285,11 @@ impl Page {
                     let data = self.block(source, level, page_index, &block)?;
                     copy_rows(&data, &block, samples, sample, region, out);
                 }
+            }
+        }
+        if self.min_is_white {
+            for value in out.iter_mut() {
+                *value = value.inverted();
             }
         }
         Ok(())

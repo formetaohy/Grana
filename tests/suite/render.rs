@@ -316,19 +316,17 @@ fn measures_the_convergence_of_a_volume() {
         let mut drawn = frame(&view);
         drawn.sampling = Sampling::new(1, 12, 1.0);
         drawn.exposure = 1.8;
-        renderer
+        let info = renderer
             .draw(gpu.device(), gpu.queue(), drawn)
             .expect("the frame draws");
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
-        if let Some((samples, _)) = renderer.convergence(&gpu) {
-            restarted = Some(samples);
-        }
+        restarted = Some(info.samples);
     }
     assert!(
-        restarted.is_some_and(|samples| samples <= 4),
-        "a changed exposure keeps the samples of the previous frame: {restarted:?}"
+        restarted.is_some_and(|samples| samples > 4),
+        "a changed exposure presents the accumulated samples instead of sampling again: {restarted:?}"
     );
 }
 

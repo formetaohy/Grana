@@ -198,4 +198,12 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
         "a still view samples until it converges, reached {} samples",
         engine.info().samples
     );
+    let samples = engine.info().samples;
+    session.execute(grana_session::Command::SetExposure(0.5));
+    draw(&mut engine, &mut session, Display::Still);
+    assert_eq!(
+        engine.info().samples,
+        samples,
+        "an exposure change presents the converged samples instead of sampling again"
+    );
 }

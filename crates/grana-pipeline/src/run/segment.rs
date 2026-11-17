@@ -158,9 +158,15 @@ pub fn segment(
         if volume.count() == 0 {
             continue;
         }
-        if let Some(set) =
-            labelled::surfaces(reader, time, 0, info, &ranges, volume.labels(), warp)?
-        {
+        if let Some(set) = labelled::surfaces(
+            reader,
+            time,
+            0,
+            info,
+            &ranges,
+            volume.labels(),
+            &request.drifts,
+        )? {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Surfaces(set),

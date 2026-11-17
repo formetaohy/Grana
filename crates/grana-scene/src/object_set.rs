@@ -225,7 +225,7 @@ impl ObjectSet {
             return false;
         }
         self.key = key;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -244,7 +244,7 @@ impl ObjectSet {
             return false;
         }
         self.name = name.to_string();
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -274,7 +274,7 @@ impl ObjectSet {
         }
         self.version = provenance.algorithm().version();
         self.provenance = provenance;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub(crate) fn recipe(&self) -> Recipe {
@@ -301,7 +301,7 @@ impl ObjectSet {
             return false;
         }
         self.seeds = Seeds::Source(to);
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -324,7 +324,7 @@ impl ObjectSet {
             return false;
         }
         self.seeds = seeds;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -347,7 +347,7 @@ impl ObjectSet {
             return;
         }
         self.color = color;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn opacity(&self) -> f32 {
@@ -363,7 +363,7 @@ impl ObjectSet {
             return;
         }
         self.material = material;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
     pub fn set_opacity(&mut self, opacity: f32) {
         let opacity = opacity.clamp(0.0, 1.0);
@@ -371,7 +371,7 @@ impl ObjectSet {
             return;
         }
         self.opacity = opacity;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn classifier(&self) -> Option<&Classifier> {
@@ -408,7 +408,7 @@ impl ObjectSet {
         }
         self.localization = Some(source);
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -426,7 +426,7 @@ impl ObjectSet {
         }
         self.localization = Some(next);
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -439,7 +439,7 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(next);
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -452,7 +452,7 @@ impl ObjectSet {
             return false;
         }
         self.localization = Some(next);
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -466,7 +466,7 @@ impl ObjectSet {
         }
         self.localization = Some(next);
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -484,7 +484,7 @@ impl ObjectSet {
         }
         self.localization = Some(next);
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -493,7 +493,7 @@ impl ObjectSet {
             return false;
         }
         self.label_export = export;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -523,7 +523,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -548,7 +548,7 @@ impl ObjectSet {
             return false;
         }
         self.clear_coloc_metrics();
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -570,7 +570,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -601,7 +601,7 @@ impl ObjectSet {
             return false;
         }
         self.object_coloring = coloring;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -660,7 +660,7 @@ impl ObjectSet {
             return false;
         }
         self.track_coloring = coloring;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -726,7 +726,7 @@ impl ObjectSet {
             return;
         }
         self.labels = labels;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub(crate) fn set_label_metric(&mut self, metric: Option<ObjectColor>) -> bool {
@@ -734,7 +734,7 @@ impl ObjectSet {
             return false;
         }
         self.label = metric;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -798,7 +798,7 @@ impl ObjectSet {
         self.hidden_total = self.hidden_total.saturating_add_signed(delta);
         if changed {
             self.shape = stamp;
-            self.document = self.document.next();
+            self.document = Revision::mint();
         }
         changed
     }
@@ -832,7 +832,7 @@ impl ObjectSet {
         self.hidden_total = 0;
         Arc::make_mut(&mut self.curation).clear_hidden();
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -871,7 +871,7 @@ impl ObjectSet {
             return;
         }
         self.visible = visible;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn params(&self) -> ObjectParams {
@@ -886,7 +886,7 @@ impl ObjectSet {
             return false;
         }
         *held = params;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -900,7 +900,7 @@ impl ObjectSet {
             return;
         }
         self.params = params;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn paged(&self) -> bool {
@@ -1003,7 +1003,7 @@ impl ObjectSet {
         ));
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1058,7 +1058,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1089,7 +1089,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1108,7 +1108,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1132,7 +1132,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub(crate) fn clear_relations(&mut self, stamp: Revision) {
@@ -1158,7 +1158,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn detected(&self) -> usize {
@@ -1491,7 +1491,7 @@ impl ObjectSet {
         }
         self.visibility = visibility;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn filtered(&self) -> bool {
@@ -1589,7 +1589,7 @@ impl ObjectSet {
         };
         seeds.push(position);
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1605,7 +1605,7 @@ impl ObjectSet {
         }
         seeds.remove(index);
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1621,7 +1621,7 @@ impl ObjectSet {
         }
         seeds.clear();
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1651,7 +1651,7 @@ impl ObjectSet {
         }
         self.seeds = Seeds::Points(seeds);
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1702,7 +1702,7 @@ impl ObjectSet {
             return false;
         }
         self.curation = Arc::new(curation);
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -1773,7 +1773,7 @@ impl ObjectSet {
         }
         if self.tracks.is_none() {
             let dropped = Arc::make_mut(&mut self.curation).forget_edits();
-            self.document = self.document.next();
+            self.document = Revision::mint();
             return dropped;
         }
         let Some(thickness) = self.track_thickness() else {
@@ -1844,7 +1844,7 @@ impl ObjectSet {
         }
         if applied > 0 || self.curation.dropped() > 0 {
             self.shape = stamp;
-            self.document = self.document.next();
+            self.document = Revision::mint();
         }
         applied
     }
@@ -1944,7 +1944,7 @@ impl ObjectSet {
         curation.record_edit(edit);
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         true
     }
@@ -1994,7 +1994,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = visibility;
     }
 
@@ -2216,7 +2216,7 @@ impl ObjectSet {
             track_bounds: Mutex::new(None),
             revision: stamp,
             shape: stamp,
-            document: self.document.next(),
+            document: Revision::mint(),
             visibility: Visibility::All,
             seeds,
             tracks,
@@ -2282,7 +2282,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -2302,7 +2302,7 @@ impl ObjectSet {
         }
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -2338,7 +2338,7 @@ impl ObjectSet {
             slot.stamp = stamp;
             self.revision = stamp;
             self.shape = stamp;
-            self.document = self.document.next();
+            self.document = Revision::mint();
             changed = true;
         }
         changed
@@ -2395,7 +2395,7 @@ impl ObjectSet {
             slot.stamp = stamp;
             self.revision = stamp;
             self.shape = stamp;
-            self.document = self.document.next();
+            self.document = Revision::mint();
             changed = true;
         }
         if !changed {
@@ -2448,7 +2448,7 @@ impl ObjectSet {
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;
@@ -2477,7 +2477,7 @@ impl ObjectSet {
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;
@@ -2533,7 +2533,7 @@ impl ObjectSet {
         slot.frame = Some(frame);
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     fn spill(&mut self, store: &Arc<SpillStore>) {
@@ -2553,7 +2553,7 @@ impl ObjectSet {
         self.hidden_total = 0;
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         self.tracks = None;
     }
@@ -2581,7 +2581,7 @@ impl ObjectSet {
             && style.params() != params
         {
             self.track_style = Some(Self::styled(params, style.thickness(), style.visible()));
-            self.document = self.document.next();
+            self.document = Revision::mint();
         }
     }
 
@@ -2607,7 +2607,7 @@ impl ObjectSet {
             layer.set_thickness(next.thickness(), stamp);
         }
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         true
     }
 
@@ -2618,7 +2618,7 @@ impl ObjectSet {
         self.tracks = Some(TrackLayer::new(set, thickness, stamp));
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         self.apply_edits(stamp);
     }
@@ -2626,7 +2626,7 @@ impl ObjectSet {
     pub(crate) fn clear_tracks(&mut self, stamp: Revision) {
         self.revision = stamp;
         self.shape = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
         self.visibility = Visibility::All;
         self.tracks = None;
     }
@@ -2791,7 +2791,7 @@ impl ObjectSet {
             layer.set_thickness(next.thickness(), stamp);
         }
         self.revision = stamp;
-        self.document = self.document.next();
+        self.document = Revision::mint();
     }
 
     pub fn track_visible(&self) -> bool {
@@ -2805,7 +2805,7 @@ impl ObjectSet {
         let previous = style.visible();
         style.set_visible(visible);
         if style.visible() != previous {
-            self.document = self.document.next();
+            self.document = Revision::mint();
         }
     }
 

@@ -28,6 +28,19 @@ struct Content {
     generation: u64,
 }
 
+impl Content {
+    fn same_structure(&self, other: &Self) -> bool {
+        self.scene == other.scene
+            && self.overlays == other.overlays
+            && self.camera == other.camera
+            && self.region == other.region
+            && self.clip == other.clip
+            && self.size == other.size
+            && self.level_cap == other.level_cap
+            && self.generation == other.generation
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picked {
     Hit(Selection),
@@ -155,6 +168,14 @@ impl Engine {
         if self.content == Some(content) && self.resolved(view.display) {
             return Ok(());
         }
+        if let Some(previous) = self.content
+            && previous.exposure != content.exposure
+            && previous.same_structure(&content)
+            && self.represent(device, queue, view.scene.exposure)
+        {
+            self.content = Some(content);
+            return Ok(());
+        }
         if let Some(failure) = self.failure.as_ref().filter(|held| held.content == content) {
             return Err(failure.detail.clone());
         }
@@ -200,7 +221,6 @@ impl Engine {
                 || previous.size != content.size
                 || previous.region != content.region
                 || previous.clip != content.clip
-                || previous.exposure != content.exposure
                 || previous.scene != content.scene
                 || previous.overlays != content.overlays
         });
@@ -297,6 +317,20 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    fn represent(&mut self, device: &Device, queue: &Queue, exposure: f32) -> bool {
+        let Some(image) = self.image.as_ref() else {
+            return false;
+        };
+        if !self
+            .renderer
+            .present_only(device, queue, &image.view, exposure, false)
+        {
+            return false;
+        }
+        self.image_revision = self.image_revision.wrapping_add(1);
+        true
     }
 
     pub fn view(&self) -> Option<&TextureView> {

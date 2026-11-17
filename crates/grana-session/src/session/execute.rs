@@ -934,6 +934,16 @@ impl Session {
                 Action::Detect => {
                     self.cancel(Job::Detect(set));
                     self.cancel(Job::Track(set));
+                    self.cancel(Job::Recut(set));
+                    if self.recut.is_some_and(|(pending, _)| pending == set) {
+                        self.recut = None;
+                    }
+                }
+                Action::ObjectParameters => {
+                    self.cancel(Job::Recut(set));
+                    if self.recut.is_some_and(|(pending, _)| pending == set) {
+                        self.recut = None;
+                    }
                 }
                 Action::Track => {
                     self.cancel(Job::Track(set));

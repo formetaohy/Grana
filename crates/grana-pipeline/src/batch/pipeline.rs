@@ -453,6 +453,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         objects: report.objects,
         detail: report.detail.clone(),
         quality: report.quality.clone(),
+        modified: task.evidence.modified,
     })
     .map_err(|error| format!("failed to record the dataset: {error}"))?;
     write(&folder.join(RESULT), &record)?;

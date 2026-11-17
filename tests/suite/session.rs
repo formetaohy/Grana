@@ -2385,6 +2385,96 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
 }
 
 #[test]
+fn keeps_a_recoloured_set_unsaved_after_an_undo() {
+    let temp = Temp::new("suite-unsaved-undo");
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ome.tif");
+    let dataset = temp.path().join("sample.ome.tif");
+    std::fs::copy(&fixture, &dataset).expect("the fixture copies");
+    let mut session = Session::new();
+    session.begin_load(dataset);
+    wait_for_scene(&mut session, 1);
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    let set = session
+        .scene()
+        .expect("the fixture opens")
+        .objects
+        .iter()
+        .last()
+        .expect("the added set exists")
+        .id();
+    session.execute(Command::SetObjectColor {
+        set,
+        color: [0.2, 0.4, 0.6],
+    });
+    let project = temp.path().join("sample.grana");
+    session.save_project(project, view_state());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.transferring() {
+        assert!(Instant::now() < deadline, "the project never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        session.project().is_some(),
+        "the project saves: {}",
+        session
+            .message()
+            .map(|message| message.text().to_string())
+            .unwrap_or_default()
+    );
+    assert!(!session.dirty(), "a saved document carries no unsaved work");
+    session.execute(Command::Undo);
+    assert!(
+        session.dirty(),
+        "undoing the colour of the saved document leaves unsaved work"
+    );
+    session.execute(Command::SetObjectColor {
+        set,
+        color: [0.6, 0.1, 0.1],
+    });
+    assert!(
+        session.dirty(),
+        "a colour newer than the saved one is unsaved work"
+    );
+}
+
+#[test]
+fn gives_chinese_datasets_distinct_output_folders() {
+    let first = grana_pipeline::DatasetEntry::new(
+        std::path::PathBuf::from("plate/图像甲.ome.tif"),
+        "对照".to_string(),
+    );
+    let second = grana_pipeline::DatasetEntry::new(
+        std::path::PathBuf::from("plate/图像乙.ome.tif"),
+        "对照".to_string(),
+    );
+    assert_ne!(
+        first.folder(),
+        second.folder(),
+        "two Chinese datasets keep their own output folders"
+    );
+    let upper = grana_pipeline::DatasetEntry::new(
+        std::path::PathBuf::from("plate/Well-A1.ome.tif"),
+        String::new(),
+    );
+    let lower = grana_pipeline::DatasetEntry::new(
+        std::path::PathBuf::from("plate/well-a1.ome.tif"),
+        String::new(),
+    );
+    assert_ne!(
+        upper.folder(),
+        lower.folder(),
+        "two stems that differ only by case keep their own output folders"
+    );
+    assert_eq!(
+        lower.folder(),
+        std::path::PathBuf::from("well-a1"),
+        "a plain name keeps its readable output folder"
+    );
+}
+
+#[test]
 fn refuses_a_project_written_by_another_schema() {
     let temp = Temp::new("grana-project-schema");
     let mut session = Session::new();

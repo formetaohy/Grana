@@ -46,15 +46,49 @@ impl Session {
             object.params(),
             scene.region,
             (!filter_target).then(|| scene.mask_key()).flatten(),
+            seed_digest(scene, object),
         ))
     }
 
     pub(super) fn track_input(&self, set: ObjectSetId) -> Option<Input> {
         let object = self.scene.as_ref()?.objects.get(set)?;
+        let params = object.track_style()?.params();
         Some(Input::track(
             (0..object.frame_count())
                 .map(|time| object.frame_stamp(time))
                 .collect(),
+            params,
         ))
     }
+}
+
+fn seed_digest(scene: &grana_scene::Scene, object: &grana_scene::ObjectSet) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    match object.seed_source() {
+        Some(source) => {
+            source.raw().hash(&mut hasher);
+            let frames = scene
+                .objects
+                .get(source)
+                .map_or(0, grana_scene::ObjectSet::frame_count);
+            frames.hash(&mut hasher);
+            for time in 0..frames {
+                scene
+                    .objects
+                    .get(source)
+                    .and_then(|held| held.frame_stamp(time))
+                    .map(grana_scene::Revision::raw)
+                    .hash(&mut hasher);
+            }
+        }
+        None => {
+            object.frame_count().hash(&mut hasher);
+            for time in 0..object.frame_count() {
+                object.seeds(time).len().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
 }

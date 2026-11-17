@@ -232,22 +232,16 @@ impl Mosaic {
         let placement = base.placement();
         let interval = base.frame_interval();
         let mut solved = Vec::with_capacity(frames as usize);
-        let mut failure = None;
         for time in 0..frames {
             if cancel.cancelled() {
                 return Err(Error::new(CANCELLED));
             }
-            match frame_positions(&images, request, time, registration, scale) {
-                Ok(positions) => solved.push(Some(positions)),
-                Err(error) => {
-                    if failure.is_none() {
-                        failure = Some(error);
-                    }
-                    solved.push(None);
-                }
-            }
+            solved.push(
+                frame_positions(&images, request, time, registration, scale)
+                    .map_err(|error| Error::new(format!("frame {}: {error}", time + 1)))?,
+            );
         }
-        let positions = propagate(solved, failure)?;
+        let positions = propagate(solved)?;
         let mut min = Offset::new(i64::MAX, i64::MAX);
         let mut max = Offset::new(i64::MIN, i64::MIN);
         for positions in &positions {
@@ -449,18 +443,23 @@ fn plane(image: &Image, time: u32, level: usize, channel: usize) -> Result<Plane
     Ok(Plane::new(extent.x() as usize, extent.y() as usize, values))
 }
 
+enum FrameSolution {
+    Blank,
+    Solved(Vec<Offset>),
+}
+
 fn frame_positions(
     images: &[Image],
     request: &Request,
     time: u32,
     registration: usize,
     scale: [f64; 2],
-) -> Result<Vec<Offset>, Error> {
+) -> Result<FrameSolution, Error> {
     let planes = (0..images.len())
         .map(|index| plane(&images[index], time, registration, request.channel))
         .collect::<Result<Vec<_>, Error>>()?;
     if planes.iter().all(flat) {
-        return Err(Error::new("the frame carries no signal to register"));
+        return Ok(FrameSolution::Blank);
     }
     let mut edges = Vec::new();
     for row in 0..request.rows {
@@ -495,15 +494,17 @@ fn frame_positions(
         }
     }
     let solved = mosaic::solve(images.len(), &edges)?;
-    Ok(solved
-        .iter()
-        .map(|offset| {
-            Offset::new(
-                (offset.x as f64 * scale[0]).round() as i64,
-                (offset.y as f64 * scale[1]).round() as i64,
-            )
-        })
-        .collect())
+    Ok(FrameSolution::Solved(
+        solved
+            .iter()
+            .map(|offset| {
+                Offset::new(
+                    (offset.x as f64 * scale[0]).round() as i64,
+                    (offset.y as f64 * scale[1]).round() as i64,
+                )
+            })
+            .collect(),
+    ))
 }
 
 fn flat(plane: &Plane) -> bool {
@@ -516,29 +517,33 @@ fn flat(plane: &Plane) -> bool {
     !(high.is_finite() && low.is_finite() && high > low)
 }
 
-fn propagate(
-    solved: Vec<Option<Vec<Offset>>>,
-    failure: Option<Error>,
-) -> Result<Vec<Vec<Offset>>, Error> {
-    let Some(seed) = solved.iter().position(Option::is_some) else {
-        return Err(failure.unwrap_or_else(|| Error::new("the tiles do not register")));
+fn propagate(solved: Vec<FrameSolution>) -> Result<Vec<Vec<Offset>>, Error> {
+    let Some(seed) = solved
+        .iter()
+        .position(|frame| matches!(frame, FrameSolution::Solved(_)))
+    else {
+        return Err(Error::new("every frame carries no signal to register"));
     };
-    let mut last = solved[seed]
-        .clone()
-        .expect("the seed frame carries offsets");
+    let mut last = match &solved[seed] {
+        FrameSolution::Solved(offsets) => offsets.clone(),
+        FrameSolution::Blank => unreachable!("the seed frame carries solved offsets"),
+    };
     let mut positions = solved;
     for slot in positions.iter_mut().take(seed) {
-        *slot = Some(last.clone());
+        *slot = FrameSolution::Solved(last.clone());
     }
     for slot in positions.iter_mut().skip(seed) {
         match slot {
-            Some(held) => last = held.clone(),
-            None => *slot = Some(last.clone()),
+            FrameSolution::Solved(held) => last = held.clone(),
+            FrameSolution::Blank => *slot = FrameSolution::Solved(last.clone()),
         }
     }
     Ok(positions
         .into_iter()
-        .map(|slot| slot.expect("every frame carries offsets"))
+        .map(|slot| match slot {
+            FrameSolution::Solved(offsets) => offsets,
+            FrameSolution::Blank => unreachable!("every blank frame inherits offsets"),
+        })
         .collect())
 }
 

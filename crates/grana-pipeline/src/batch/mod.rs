@@ -515,6 +515,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
         &build(),
         task.evidence.content,
         &artifacts,
+        task.evidence.modified,
     ) {
         let detail = marked(record.detail.clone(), task.corrected);
         let _ = task.events.send(Event::Dataset {

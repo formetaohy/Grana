@@ -33,7 +33,6 @@ impl Shot {
                 frame.camera,
                 frame.region,
                 frame.time,
-                frame.exposure,
             ),
             awaits: frame.display.awaits(),
             assured: frame.display.assures(),
@@ -130,6 +129,7 @@ impl Renderer {
         self.time = frame.time;
         self.prefetch = frame.display.prefetches();
         self.viewport = Some(frame.viewport);
+        self.present_region = Some(view.region);
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = Some(view.motion);
@@ -303,7 +303,6 @@ impl Renderer {
             content: residence.content(),
             generation: residence.generation(),
             time: frame.time,
-            exposure: frame.exposure,
             epoch: residence.epoch(),
             size: target.size,
             overlay: crate::schema::overlay_digest(scene.overlays),

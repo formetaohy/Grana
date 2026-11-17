@@ -13,7 +13,6 @@ pub(super) struct Signature<'a> {
     pub(super) content: u32,
     pub(super) generation: u64,
     pub(super) time: u32,
-    pub(super) exposure: f32,
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
     pub(super) overlay: u64,
@@ -31,7 +30,6 @@ impl Signature<'_> {
             content,
             generation,
             time,
-            exposure,
             epoch,
             size,
             overlay,
@@ -47,7 +45,6 @@ impl Signature<'_> {
         levels.ladder.base.hash(&mut hasher);
         levels.ladder.count.hash(&mut hasher);
         levels.capacity.hash(&mut hasher);
-        exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
@@ -68,7 +65,6 @@ impl Signature<'_> {
             versions,
             channels,
             content,
-            exposure,
             epoch,
             size,
             overlay,
@@ -83,7 +79,6 @@ impl Signature<'_> {
         for axis in data.region_axis {
             axis.map(f32::to_bits).hash(&mut hasher);
         }
-        exposure.to_bits().hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
         versions.data().hash(&mut hasher);
@@ -104,7 +99,6 @@ impl Signature<'_> {
             channels,
             content,
             time,
-            exposure,
             epoch,
             size,
             overlay,
@@ -124,7 +118,6 @@ impl Signature<'_> {
         data.clip.map(f32::to_bits).hash(&mut hasher);
         data.tag.hash(&mut hasher);
         region.hash(&mut hasher);
-        exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         size.hash(&mut hasher);
@@ -142,6 +135,7 @@ pub(super) fn hash_camera(camera: CameraState, hasher: &mut DefaultHasher) {
     camera.pivot.map(f32::to_bits).hash(hasher);
     camera.yaw.to_bits().hash(hasher);
     camera.pitch.to_bits().hash(hasher);
+    camera.distance.to_bits().hash(hasher);
     camera.fov_y.to_bits().hash(hasher);
     camera.projection.index().hash(hasher);
     camera.aperture.to_bits().hash(hasher);
