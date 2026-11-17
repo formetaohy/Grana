@@ -534,6 +534,11 @@ impl Objects {
                     .to_string(),
             );
         }
+        if self.sets[target_index].seed_source() == Some(source) {
+            return Err(
+                "an object set seeded by the merged object set cannot absorb it".to_string(),
+            );
+        }
         let stamp = self.revisions.mint();
         let mut merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
         let mut parts = match merged.provenance() {
@@ -564,6 +569,7 @@ impl Objects {
         self.sets[position] = merged;
         for set in &mut self.sets {
             set.forget_copies(&[source]);
+            set.redirect_seeds(source, target);
         }
         self.clear_relations(source);
         Ok(())

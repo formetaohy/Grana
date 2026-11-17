@@ -254,7 +254,7 @@ impl ColocScan {
             .collect::<Vec<_>>();
         let joint = ColocJoint::new(bins, cells);
         let cost = ColocCost::new(voxels, randomizations, self.sampling.blocks());
-        let coverage = (voxels as f64 / self.region_voxels as f64).clamp(0.0, 1.0) as f32;
+        let coverage = self.coverage(voxels);
         let info = ColocSeriesInfo::new(
             self.sampling.level(),
             self.sampling.stride(),
@@ -262,6 +262,14 @@ impl ColocScan {
             coverage,
         );
         ColocSeries::from_parts(self.pair, info, bins, frames, joint, significance, cost)
+    }
+
+    fn coverage(&self, voxels: u64) -> f32 {
+        let stride = u64::from(self.sampling.stride());
+        let sampled = u128::from(voxels) * u128::from(stride * stride * stride);
+        let region = u128::from(self.region_voxels) * self.frames.len().max(1) as u128;
+        let coverage = sampled as f64 / region as f64;
+        coverage.clamp(0.0, 1.0) as f32
     }
 }
 

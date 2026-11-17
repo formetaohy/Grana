@@ -1008,16 +1008,16 @@ impl Scene {
         true
     }
 
-    fn prune_mask_filter(&mut self) {
-        let Some(filter) = self.mask_filter else {
-            return;
-        };
-        let valid = self.mask.is_some_and(|mask| {
-            self.objects.get(mask).is_some() && self.objects.get(filter.target()).is_some()
-        });
-        if !valid {
-            self.mask_filter = None;
-        }
+    pub fn mask_filter_held(&self) -> Option<MaskFilter> {
+        let filter = self.mask_filter?;
+        let set = self.objects.get(self.mask?)?;
+        (self.objects.get(filter.target()).is_some()
+            && set.relation(filter.target(), filter.shift()).is_some())
+        .then_some(filter)
+    }
+
+    pub(crate) fn prune_mask_filter(&mut self) {
+        self.mask_filter = self.mask_filter_held();
     }
 
     pub fn set_mask_radius(&mut self, radius: f32) -> bool {
@@ -1562,6 +1562,7 @@ impl Scene {
         self.objects.clear(id);
         self.objects.clear_relations(id);
         self.selections.retain(|selection| selection.set != id);
+        self.prune_mask_filter();
         self.sync_coloc_mask();
     }
 

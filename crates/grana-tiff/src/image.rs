@@ -132,7 +132,12 @@ impl Image {
         let chunky = !page.planar && page.samples > 1;
         let format = page.format;
         let samples = page.samples;
-        let sizes = counts(&ome, samples, chunky, path)?;
+        let stacked = first
+            .pages
+            .iter()
+            .take_while(|held| held.width == page.width && held.height == page.height)
+            .count();
+        let sizes = counts(&ome, stacked, samples, chunky, path)?;
         let order = ome
             .as_ref()
             .and_then(|ome| ome.dimension_order.clone())
@@ -467,9 +472,17 @@ fn gather(
     })
 }
 
-fn counts(ome: &Option<Ome>, samples: u32, chunky: bool, path: &Path) -> Result<[u32; 3], Error> {
+fn counts(
+    ome: &Option<Ome>,
+    pages: usize,
+    samples: u32,
+    chunky: bool,
+    path: &Path,
+) -> Result<[u32; 3], Error> {
     let Some(ome) = ome else {
-        return Ok([1, if chunky { samples } else { 1 }, 1]);
+        let depth = u32::try_from(pages)
+            .map_err(|_| Error::metadata(path, "the TIFF stacks more pages than a volume holds"))?;
+        return Ok([1, if chunky { samples } else { 1 }, depth.max(1)]);
     };
     let size_c = ome.size_c.unwrap_or(1);
     let size_t = ome.size_t.unwrap_or(1);

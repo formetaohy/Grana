@@ -296,6 +296,15 @@ impl ObjectSet {
         &self.seeds
     }
 
+    pub(crate) fn redirect_seeds(&mut self, from: ObjectSetId, to: ObjectSetId) -> bool {
+        if self.seeds.source() != Some(from) {
+            return false;
+        }
+        self.seeds = Seeds::Source(to);
+        self.document = self.document.next();
+        true
+    }
+
     pub(crate) fn set_seed_source(&mut self, source: Option<ObjectSetId>, frames: usize) -> bool {
         assert!(
             matches!(self.kind, ObjectKind::Surfaces | ObjectKind::Cells),

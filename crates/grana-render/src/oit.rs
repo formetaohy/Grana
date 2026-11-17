@@ -217,28 +217,10 @@ impl Oit {
         if epoch == 1 {
             encoder.clear_buffer(&self.keys, 0, None);
             encoder.clear_buffer(&self.counts, 0, None);
-            clear(encoder, &self.residual_color);
-            clear(encoder, &self.residual_moment);
         }
         self.epoch = epoch;
         epoch
     }
-}
-
-fn clear(encoder: &mut CommandEncoder, view: &TextureView) {
-    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("grana.oit.residual.clear"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        ..Default::default()
-    });
 }
 
 fn allocation(capacity: u64, residual: u64, budget: u64) -> u64 {

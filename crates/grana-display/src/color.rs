@@ -73,6 +73,20 @@ impl<M> Coloring<M> {
         true
     }
 
+    pub fn set_minimum(&mut self, minimum: f32) -> bool {
+        match self.manual {
+            Some((_, maximum)) => self.set_manual(Some((minimum.min(maximum), maximum))),
+            None => false,
+        }
+    }
+
+    pub fn set_maximum(&mut self, maximum: f32) -> bool {
+        match self.manual {
+            Some((minimum, _)) => self.set_manual(Some((minimum, maximum.max(minimum)))),
+            None => false,
+        }
+    }
+
     pub fn color(&self, extent: Extent, value: f32) -> [f32; 3] {
         let (minimum, maximum) = extent;
         let position = if value.is_finite() && maximum > minimum {

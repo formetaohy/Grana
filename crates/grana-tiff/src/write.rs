@@ -72,6 +72,8 @@ pub struct Stack<'a> {
 
 pub type RowWriter<'a> = &'a mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>;
 
+pub type Row16Writer<'a> = &'a mut dyn FnMut(u32, &mut [u16]) -> Result<(), String>;
+
 pub type LayerWriter<'a> = &'a mut dyn FnMut(u32, u32, &mut [u8]) -> Result<(), String>;
 
 pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
@@ -95,22 +97,15 @@ pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
             ),
         ));
     }
-    write16(path, &stream, &mut |line, bytes| {
+    write16(path, &stream, &mut |line, samples| {
         let start = line as usize * picture.size[0] as usize * usize::from(picture.samples);
-        let end = start + picture.size[0] as usize * usize::from(picture.samples);
-        for (slot, sample) in bytes
-            .as_chunks_mut::<2>()
-            .0
-            .iter_mut()
-            .zip(&picture.pixels[start..end])
-        {
-            slot.copy_from_slice(&sample.to_le_bytes());
-        }
+        let end = start + samples.len();
+        samples.copy_from_slice(&picture.pixels[start..end]);
         Ok(())
     })
 }
 
-pub fn write16(path: &Path, stream: &Stream16<'_>, row: RowWriter<'_>) -> Result<(), Error> {
+pub fn write16(path: &Path, stream: &Stream16<'_>, row: Row16Writer<'_>) -> Result<(), Error> {
     let sheet = Sheet::new(
         stream.size,
         usize::from(stream.samples),
@@ -121,7 +116,14 @@ pub fn write16(path: &Path, stream: &Stream16<'_>, row: RowWriter<'_>) -> Result
         stream.interval,
     )
     .map_err(|detail| Error::write(path, detail))?;
-    write_sheet(path, &sheet, &mut |_, line, bytes| row(line, bytes))
+    let mut samples = vec![0u16; stream.size[0] as usize * usize::from(stream.samples)];
+    write_sheet(path, &sheet, &mut |_, line, bytes| {
+        row(line, &mut samples)?;
+        for (slot, sample) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(&samples) {
+            slot.copy_from_slice(&sample.to_le_bytes());
+        }
+        Ok(())
+    })
 }
 
 pub fn write_stream(path: &Path, stream: &Stream<'_>, row: RowWriter<'_>) -> Result<(), Error> {

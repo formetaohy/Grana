@@ -137,7 +137,7 @@ impl Scene {
             drifts: self.drifts().clone(),
             registration: self.registration().clone(),
             mask: self.mask.map(|set| set.raw()),
-            mask_filter: self.mask_filter,
+            mask_filter: self.mask_filter_held(),
             mask_radius: self.mask_radius,
             annotations: self.annotations.state(),
             time: self.time(),
@@ -209,14 +209,8 @@ impl Scene {
             .mask
             .and_then(ObjectSetId::from_raw)
             .filter(|set| self.objects.get(*set).is_some());
-        self.mask_filter = state.mask_filter.filter(|filter| {
-            self.objects.get(filter.target()).is_some()
-                && self.mask.is_some_and(|mask| {
-                    self.objects
-                        .get(mask)
-                        .is_some_and(|set| set.relation(filter.target(), filter.shift()).is_some())
-                })
-        });
+        self.mask_filter = state.mask_filter;
+        self.prune_mask_filter();
         self.mask_radius = state.mask_radius;
         self.annotations.restore(state.annotations);
         let mask = self.mask.and_then(|set| self.objects.get(set)).map(|set| {

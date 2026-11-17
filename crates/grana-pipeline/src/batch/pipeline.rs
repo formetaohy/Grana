@@ -1431,7 +1431,7 @@ fn capture_view(
             render,
             scene,
             &film,
-            &folder.join(format!("movie{stem}.mp4")),
+            &folder.join(movie_name(stem, spec.transparent)),
         )?;
     }
     if spec.sequences() {
@@ -1449,6 +1449,11 @@ fn capture_view(
         )?;
     }
     Ok(())
+}
+
+fn movie_name(stem: &str, transparent: bool) -> String {
+    let format = grana_video::Format::of(transparent);
+    format!("movie{stem}.{}", format.extension())
 }
 
 fn capture_stems(protocol: &Protocol) -> Vec<String> {
@@ -1526,7 +1531,8 @@ pub(super) fn artifacts(
     if let Some(snapshot) = protocol.snapshot() {
         artifacts.extend(capture_files(protocol, "snapshot", Some("png")));
         if snapshot.movies() {
-            artifacts.extend(capture_files(protocol, "movie", Some("mp4")));
+            let format = grana_video::Format::of(snapshot.transparent);
+            artifacts.extend(capture_files(protocol, "movie", Some(format.extension())));
         }
         if snapshot.sequences() {
             artifacts.extend(capture_files(protocol, "sequence", None));

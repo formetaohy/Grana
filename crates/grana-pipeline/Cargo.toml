@@ -39,6 +39,7 @@ grana-segment = { workspace = true }
 grana-stitch = { workspace = true }
 grana-text = { workspace = true }
 grana-tiff = { workspace = true }
+grana-video = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 grana-weight = { workspace = true }

@@ -374,7 +374,7 @@ fn compose(placement: Placement<'_>) -> Result<Dataset, Error> {
             let Some(input) = source_axes[axis] else {
                 continue;
             };
-            columns[axis][component] = total.linear(row, input) * factor * source[input].factor();
+            columns[axis][component] = total.linear(row, input) * factor;
         }
     }
     if stored == 2 {

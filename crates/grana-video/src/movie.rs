@@ -3,6 +3,7 @@ use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
+use crate::format::Format;
 
 const MOVIE_TIMESCALE: u32 = 1000;
 const MATRIX: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
@@ -20,6 +21,15 @@ pub(crate) enum Codec {
     Png,
 }
 
+impl Codec {
+    fn format(&self) -> Format {
+        match self {
+            Self::H264 { .. } => Format::H264,
+            Self::Png => Format::Png,
+        }
+    }
+}
+
 pub(crate) struct Movie {
     path: PathBuf,
     atomic: Option<grana_file::Atomic>,
@@ -30,7 +40,7 @@ pub(crate) struct Movie {
     keys: Vec<u32>,
     chunks: Vec<Chunk>,
     media: Option<MediaBox>,
-    alpha: bool,
+    format: Format,
 }
 
 struct Chunk {
@@ -55,7 +65,7 @@ impl MediaBox {
 }
 
 impl Movie {
-    pub fn create(path: &Path, size: [u32; 2], fps: u32, alpha: bool) -> Result<Self, Error> {
+    pub fn create(path: &Path, size: [u32; 2], fps: u32, format: Format) -> Result<Self, Error> {
         let atomic = grana_file::Atomic::file(path).map_err(|error| Error::Write {
             path: path.to_path_buf(),
             detail: error.to_string(),
@@ -66,7 +76,7 @@ impl Movie {
             detail: error.to_string(),
         })?;
         let mut sink = BufWriter::new(file);
-        write(&mut sink, &temporary, &ftyp(alpha))?;
+        write(&mut sink, &temporary, &ftyp(format))?;
         Ok(Self {
             path: path.to_path_buf(),
             atomic: Some(atomic),
@@ -77,7 +87,7 @@ impl Movie {
             keys: Vec::new(),
             chunks: Vec::new(),
             media: None,
-            alpha,
+            format,
         })
     }
 
@@ -107,6 +117,11 @@ impl Movie {
     }
 
     pub fn finish(mut self, codec: Codec) -> Result<(), Error> {
+        assert_eq!(
+            codec.format(),
+            self.format,
+            "a movie carries the container of its codec"
+        );
         self.close_media()?;
         let moov = self.moov(&codec);
         let temporary = self.staging();
@@ -193,14 +208,8 @@ impl Movie {
 
     fn stbl(&self, codec: &Codec) -> Vec<u8> {
         let entry = match codec {
-            Codec::H264 { sps, pps } => {
-                assert!(!self.alpha, "an h264 movie carries no alpha channel");
-                video_entry(*b"avc1", AVC_DEPTH, self.size, avcc(sps, pps))
-            }
-            Codec::Png => {
-                assert!(self.alpha, "a png movie carries its alpha channel");
-                video_entry(*b"png ", PNG_DEPTH, self.size, Vec::new())
-            }
+            Codec::H264 { sps, pps } => video_entry(*b"avc1", AVC_DEPTH, self.size, avcc(sps, pps)),
+            Codec::Png => video_entry(*b"png ", PNG_DEPTH, self.size, Vec::new()),
         };
         let mut stsd = Vec::new();
         push_u32(&mut stsd, 1);
@@ -419,18 +428,21 @@ fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
     boxed(*b"avcC", payload)
 }
 
-fn ftyp(alpha: bool) -> Vec<u8> {
+fn ftyp(format: Format) -> Vec<u8> {
     let mut payload = Vec::new();
-    if alpha {
-        payload.extend_from_slice(&QUICKTIME);
-        push_u32(&mut payload, 512);
-        payload.extend_from_slice(&QUICKTIME);
-        return boxed(*b"ftyp", payload);
-    }
-    payload.extend_from_slice(b"isom");
-    push_u32(&mut payload, 512);
-    for brand in [b"isom", b"iso2", b"avc1", b"mp41"] {
-        payload.extend_from_slice(brand);
+    match format {
+        Format::Png => {
+            payload.extend_from_slice(&QUICKTIME);
+            push_u32(&mut payload, 512);
+            payload.extend_from_slice(&QUICKTIME);
+        }
+        Format::H264 => {
+            payload.extend_from_slice(b"isom");
+            push_u32(&mut payload, 512);
+            for brand in [b"isom", b"iso2", b"avc1", b"mp41"] {
+                payload.extend_from_slice(brand);
+            }
+        }
     }
     boxed(*b"ftyp", payload)
 }

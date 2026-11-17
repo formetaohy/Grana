@@ -554,7 +554,7 @@ impl LayoutEngine<'_> {
                     } else if layout.wrap {
                         inner_min.y + line + (line_height.max(size.y) - size.y) * align
                     } else {
-                        inner_min.y + line + (cross_base - line_height.max(size.y)) * align
+                        inner_min.y + line + (cross_base - size.y) * align
                     };
                     let x = inner_min.x + cursor.x + main_space * justify;
                     self.place(

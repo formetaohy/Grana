@@ -83,6 +83,9 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
             return Err(grana_page::Format::error(path, "a statistics chart"));
         }
     }
+    if let Destination::Movie { path } = &plan.destination {
+        grana_video::Format::required(path, plan.transparent).map_err(|error| error.to_string())?;
+    }
     let wide = match &plan.destination {
         Destination::Image { path } => still(path)? == Still::Tiff,
         Destination::Figure { .. } => true,

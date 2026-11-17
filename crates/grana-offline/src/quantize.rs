@@ -57,20 +57,72 @@ impl Quantizer {
     }
 
     pub(crate) fn stride(&self) -> usize {
-        self.size[0] as usize * self.samples * self.step()
+        self.size[0] as usize * self.samples
+    }
+
+    pub(crate) fn row16(&mut self, _line: u32, source: &[u8], out: &mut [u16]) {
+        assert!(
+            self.depth == Depth::Sixteen,
+            "a sixteen bit row quantises sixteen bit samples"
+        );
+        self.quantise(source);
+        assert_eq!(
+            out.len(),
+            self.stride(),
+            "a quantised row holds every sample of its line"
+        );
+        for (slot, pixel) in out
+            .chunks_mut(self.samples)
+            .zip(self.pixels.as_chunks::<4>().0)
+        {
+            let alpha = if self.transparent { pixel[3] } else { u16::MAX };
+            let wanted = [pixel[0], pixel[1], pixel[2], alpha];
+            slot.copy_from_slice(&wanted[..self.samples]);
+        }
     }
 
     pub(crate) fn row(&mut self, line: u32, source: &[u8], out: &mut [u8]) {
+        assert!(
+            self.depth == Depth::Eight,
+            "an eight bit row quantises eight bit samples"
+        );
+        self.quantise(source);
+        assert_eq!(
+            out.len(),
+            self.stride(),
+            "a quantised row holds every sample of its line"
+        );
+        let threshold = if self.grained {
+            BAYER[line as usize % 8].map(|value| f32::from(value) / 64.0 - 0.5)
+        } else {
+            [0.0; 8]
+        };
+        for (x, (slot, pixel)) in out
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(self.pixels.as_chunks::<4>().0)
+            .enumerate()
+        {
+            let grain = threshold[x % 8];
+            let [red, green, blue, alpha] = *pixel;
+            slot[0] = scaled(red, grain);
+            slot[1] = scaled(green, grain);
+            slot[2] = scaled(blue, grain);
+            slot[3] = if self.transparent {
+                (u32::from(alpha) * 255 / 65535) as u8
+            } else {
+                255
+            };
+        }
+    }
+
+    fn quantise(&mut self, source: &[u8]) {
         let source = source.as_chunks::<16>().0;
         assert_eq!(
             source.len(),
             self.size[0] as usize,
             "a quantised row covers one line of the picture"
-        );
-        assert_eq!(
-            out.len(),
-            self.stride(),
-            "a quantised row holds every sample of its line"
         );
         self.pixels.clear();
         self.pixels.extend(source.iter().flat_map(|pixel| {
@@ -81,53 +133,6 @@ impl Quantizer {
                 (value.clamp(0.0, 1.0) * 65535.0).round() as u16
             })
         }));
-        match self.depth {
-            Depth::Sixteen => {
-                let mut slots = out.as_chunks_mut::<2>().0.iter_mut();
-                for pixel in self.pixels.as_chunks::<4>().0 {
-                    let alpha = if self.transparent { pixel[3] } else { u16::MAX };
-                    let wanted = [pixel[0], pixel[1], pixel[2], alpha];
-                    for value in wanted.into_iter().take(self.samples) {
-                        slots
-                            .next()
-                            .expect("a quantised row holds every sample of its line")
-                            .copy_from_slice(&value.to_be_bytes());
-                    }
-                }
-            }
-            Depth::Eight => {
-                let threshold = if self.grained {
-                    BAYER[line as usize % 8].map(|value| f32::from(value) / 64.0 - 0.5)
-                } else {
-                    [0.0; 8]
-                };
-                for (x, (slot, pixel)) in out
-                    .as_chunks_mut::<4>()
-                    .0
-                    .iter_mut()
-                    .zip(self.pixels.as_chunks::<4>().0)
-                    .enumerate()
-                {
-                    let grain = threshold[x % 8];
-                    let [red, green, blue, alpha] = *pixel;
-                    slot[0] = scaled(red, grain);
-                    slot[1] = scaled(green, grain);
-                    slot[2] = scaled(blue, grain);
-                    slot[3] = if self.transparent {
-                        (u32::from(alpha) * 255 / 65535) as u8
-                    } else {
-                        255
-                    };
-                }
-            }
-        }
-    }
-
-    fn step(&self) -> usize {
-        match self.depth {
-            Depth::Eight => 1,
-            Depth::Sixteen => 2,
-        }
     }
 }
 

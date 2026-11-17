@@ -4,6 +4,12 @@ use std::path::PathBuf;
 pub enum Error {
     #[error("the movie needs an even frame size, not {size:?}")]
     Size { size: [u32; 2] },
+    #[error("a movie is saved as `.mp4` or `.mov`, not `{name}`")]
+    Extension { name: String },
+    #[error("a transparent movie is saved as `.mov`, not `{name}`")]
+    Transparent { name: String },
+    #[error("a movie is saved as `.mp4`, not `{name}`")]
+    Opaque { name: String },
     #[error("the movie encoder failed: {0}")]
     Encode(String),
     #[error("failed to write {}: {detail}", path.display())]

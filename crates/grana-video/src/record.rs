@@ -7,6 +7,7 @@ use grana_exec::{Pipe, Sender};
 
 use crate::encoder::Encoder;
 use crate::error::Error;
+use crate::format::Format;
 use crate::movie::{Codec, Movie};
 
 const CAPACITY: usize = 8;
@@ -62,17 +63,19 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(path: &Path, size: [u32; 2], fps: u32, alpha: bool) -> Result<Self, Error> {
-        let compressor = if alpha {
-            if size[0] == 0 || size[1] == 0 {
-                return Err(Error::Size { size });
+    pub fn start(path: &Path, size: [u32; 2], fps: u32, transparent: bool) -> Result<Self, Error> {
+        let format = Format::required(path, transparent)?;
+        let compressor = match format {
+            Format::Png => {
+                if size[0] == 0 || size[1] == 0 {
+                    return Err(Error::Size { size });
+                }
+                Compressor::Lossless
             }
-            Compressor::Lossless
-        } else {
-            Compressor::Lossy(Box::new(Encoder::new(size, fps)?))
+            Format::H264 => Compressor::Lossy(Box::new(Encoder::new(size, fps)?)),
         };
         let clip = Clip {
-            movie: Movie::create(path, size, fps, alpha)?,
+            movie: Movie::create(path, size, fps, format)?,
             compressor,
         };
         let aborted = Arc::new(AtomicBool::new(false));

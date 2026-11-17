@@ -1401,7 +1401,7 @@ fn appearance<'a>(
                             .key(Key::new(format!("tracks.{}.low", id.raw())))
                             .on_drag_value(speed, move |value| {
                                 let mut next = coloring_low.clone();
-                                if next.set_manual(Some((value, maximum))) {
+                                if next.set_minimum(value) {
                                     Message::Command(Command::SetTrackColoring {
                                         set: id,
                                         coloring: next,
@@ -1414,7 +1414,7 @@ fn appearance<'a>(
                             .key(Key::new(format!("tracks.{}.high", id.raw())))
                             .on_drag_value(speed, move |value| {
                                 let mut next = coloring_high.clone();
-                                if next.set_manual(Some((minimum, value))) {
+                                if next.set_maximum(value) {
                                     Message::Command(Command::SetTrackColoring {
                                         set: id,
                                         coloring: next,

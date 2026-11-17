@@ -26,7 +26,10 @@ impl<A: Clone> Ui<A> {
             return;
         }
         let pointer = self.pointer;
-        let hover = hit::resolve(&self.hits, pointer).map(|hit| hit.node);
+        let hover = self
+            .inside
+            .then(|| hit::resolve(&self.hits, pointer).map(|hit| hit.node))
+            .flatten();
         if hover != self.hover {
             if let Some(previous) = self.hover
                 && self.tree.nodes.contains_key(previous)
@@ -208,7 +211,11 @@ impl<A: Clone> Ui<A> {
 
     fn hover_scrollbars(&mut self) {
         let pointer = self.pointer;
-        let hovered = self.bar_at(pointer).map(|(id, _, _)| id);
+        let hovered = self
+            .inside
+            .then(|| self.bar_at(pointer))
+            .flatten()
+            .map(|(id, _, _)| id);
         let mut wake = Vec::new();
         for id in &self.tree.scrolls {
             let Some(node) = self.tree.nodes.get_mut(*id) else {

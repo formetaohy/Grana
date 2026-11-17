@@ -51,8 +51,8 @@ pub(super) fn encode(stage: Stage<'_>) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.oit.pass"),
             color_attachments: &[
-                Some(load(oit.residual_color())),
-                Some(load(oit.residual_moment())),
+                Some(cleared(oit.residual_color())),
+                Some(cleared(oit.residual_moment())),
             ],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                 view: target.scene.depth(),
@@ -108,13 +108,13 @@ pub(super) fn encode(stage: Stage<'_>) {
     }
 }
 
-fn load(view: &TextureView) -> RenderPassColorAttachment<'_> {
+fn cleared(view: &TextureView) -> RenderPassColorAttachment<'_> {
     RenderPassColorAttachment {
         view,
         depth_slice: None,
         resolve_target: None,
         ops: Operations {
-            load: LoadOp::Load,
+            load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
             store: StoreOp::Store,
         },
     }

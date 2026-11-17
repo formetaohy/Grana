@@ -3791,6 +3791,7 @@ dependencies = [
  "grana-store",
  "grana-text",
  "grana-tiff",
+ "grana-video",
  "grana-volume",
  "grana-warp",
  "grana-weight",

@@ -33,8 +33,8 @@ impl Sink {
                     transparent,
                     false,
                 );
-                grana_raster::write16_stream(path, size, quantizer.samples(), &mut |line, bytes| {
-                    quantizer.row(line, picture.row(line), bytes);
+                grana_raster::write16_stream(path, size, quantizer.samples(), &mut |line, row| {
+                    quantizer.row16(line, picture.row(line), row);
                     Ok(())
                 })
                 .map_err(String::from)
@@ -56,8 +56,8 @@ impl Sink {
                     physical: Some([physical, physical]),
                     interval: Some(scene.dataset.frame_interval()),
                 };
-                grana_tiff::write16(path, &stream, &mut |line, bytes| {
-                    quantizer.row(line, picture.row(line), bytes);
+                grana_tiff::write16(path, &stream, &mut |line, row| {
+                    quantizer.row16(line, picture.row(line), row);
                     Ok(())
                 })
                 .map_err(|error| error.to_string())
@@ -83,8 +83,8 @@ impl Sink {
                     false,
                 );
                 let png =
-                    grana_raster::encode16_stream(size, quantizer.samples(), &mut |line, bytes| {
-                        quantizer.row(line, picture.row(line), bytes);
+                    grana_raster::encode16_stream(size, quantizer.samples(), &mut |line, row| {
+                        quantizer.row16(line, picture.row(line), row);
                         Ok(())
                     })
                     .map_err(String::from)?;

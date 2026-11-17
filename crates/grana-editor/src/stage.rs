@@ -178,7 +178,7 @@ impl Stage {
                 }
                 Drag::Pan => {
                     if self.press.is_some() && moving {
-                        camera.pan(delta, self.viewport.height() / ui.scale());
+                        camera.pan(delta, self.viewport.height());
                         interaction.camera = true;
                     }
                 }

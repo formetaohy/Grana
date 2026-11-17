@@ -140,7 +140,7 @@ fn range<'a>(
                     let base = base.clone();
                     move |value| {
                         let mut next = base.clone();
-                        next.set_manual(Some((value, maximum)));
+                        next.set_minimum(value);
                         apply(set, next)
                     }
                 });
@@ -150,7 +150,7 @@ fn range<'a>(
                     let base = base.clone();
                     move |value| {
                         let mut next = base.clone();
-                        next.set_manual(Some((value, minimum)));
+                        next.set_maximum(value);
                         apply(set, next)
                     }
                 });

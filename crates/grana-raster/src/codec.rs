@@ -70,6 +70,8 @@ pub fn write(path: &Path, raster: &Raster) -> Result<(), Error> {
 
 type StreamRow<'a> = &'a mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>;
 
+type Stream16Row<'a> = &'a mut dyn FnMut(u32, &mut [u16]) -> Result<(), String>;
+
 pub fn write_stream(path: &Path, size: [u32; 2], row: StreamRow<'_>) -> Result<(), Error> {
     assert!(
         size[0] > 0 && size[1] > 0,
@@ -108,17 +110,10 @@ pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8
         size[0] as usize * size[1] as usize * samples,
         "the samples fill every pixel of a sixteen bit image"
     );
-    encode16_stream(size, samples, &mut |line, bytes| {
+    encode16_stream(size, samples, &mut |line, row| {
         let start = line as usize * size[0] as usize * samples;
-        let end = start + size[0] as usize * samples;
-        for (slot, sample) in bytes
-            .as_chunks_mut::<2>()
-            .0
-            .iter_mut()
-            .zip(&pixels[start..end])
-        {
-            slot.copy_from_slice(&sample.to_be_bytes());
-        }
+        let end = start + row.len();
+        row.copy_from_slice(&pixels[start..end]);
         Ok(())
     })
 }
@@ -126,7 +121,7 @@ pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8
 pub fn encode16_stream(
     size: [u32; 2],
     samples: usize,
-    row: StreamRow<'_>,
+    row: Stream16Row<'_>,
 ) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
     encode16_into(&mut buffer, size, samples, row)?;
@@ -145,7 +140,7 @@ pub fn write16_stream(
     path: &Path,
     size: [u32; 2],
     samples: usize,
-    row: StreamRow<'_>,
+    row: Stream16Row<'_>,
 ) -> Result<(), Error> {
     let write = |detail: String| Error::Write {
         path: path.to_path_buf(),
@@ -162,7 +157,7 @@ fn encode16_into(
     sink: impl Write,
     size: [u32; 2],
     samples: usize,
-    row: StreamRow<'_>,
+    row: Stream16Row<'_>,
 ) -> Result<(), Error> {
     assert!(
         size[0] > 0 && size[1] > 0,
@@ -187,9 +182,13 @@ fn encode16_into(
     let mut stream = writer
         .stream_writer()
         .map_err(|error| fault(error.to_string()))?;
-    let mut buffer = vec![0u8; size[0] as usize * samples * 2];
+    let mut samples_row = vec![0u16; size[0] as usize * samples];
+    let mut buffer = vec![0u8; samples_row.len() * 2];
     for line in 0..size[1] {
-        row(line, &mut buffer).map_err(|detail| Error::Encode { detail })?;
+        row(line, &mut samples_row).map_err(|detail| Error::Encode { detail })?;
+        for (slot, sample) in buffer.as_chunks_mut::<2>().0.iter_mut().zip(&samples_row) {
+            slot.copy_from_slice(&sample.to_be_bytes());
+        }
         stream
             .write_all(&buffer)
             .map_err(|error| fault(error.to_string()))?;
