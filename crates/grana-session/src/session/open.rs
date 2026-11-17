@@ -562,11 +562,12 @@ impl Session {
                 LoaderEvent::Brick {
                     generation,
                     request,
+                    bytes,
                     data,
                 } => {
                     if !self.stale(generation) {
                         self.in_flight.remove(&request);
-                        self.transfer.record(data.bytes(), Instant::now());
+                        self.transfer.record(bytes, Instant::now());
                         self.bricks.push((request, data));
                     }
                 }

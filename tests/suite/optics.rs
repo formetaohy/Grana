@@ -1,9 +1,7 @@
 use glam::Vec3;
 use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeStyle};
 use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, SplatChunk, Splats};
-use grana_volume::{
-    BrickData, BrickGrid, BrickRequest, Clip, Extent, Pyramid, Region, Spacing, Volume,
-};
+use grana_volume::{BrickGrid, Clip, Extent, PackedBrick, Pyramid, Region, Spacing, Volume};
 
 use crate::support::{Gpu, gpu, read_pixels, spheres, splat, versions};
 
@@ -189,11 +187,15 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
         }
         if let Some(requests) = demand(gpu, renderer) {
             let grid = BrickGrid::new(volume.extent());
+            let pyramid = volume.pyramid();
             let bricks = requests
                 .volume
                 .iter()
-                .map(|request| (*request, volume.brick(&grid, request.coord)))
-                .collect::<Vec<(BrickRequest, BrickData)>>();
+                .map(|request| {
+                    let data = volume.brick(&grid, request.coord);
+                    (*request, PackedBrick::of(&data, &pyramid, request.channels))
+                })
+                .collect::<Vec<_>>();
             renderer.upload(&bricks);
         }
     }

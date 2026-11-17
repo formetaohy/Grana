@@ -4,7 +4,7 @@ use grana_display::CameraState;
 use grana_gpu::Pipelines;
 use grana_render::{FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
-use grana_volume::{BrickData, BrickRequest, Clip, Damage, Pyramid, Region};
+use grana_volume::{BrickRequest, Clip, Damage, PackedBrick, Pyramid, Region};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::display::{Display, View};
@@ -33,6 +33,7 @@ pub enum Picked {
     Hit(Selection),
     Seed,
     Miss,
+    Abandoned,
 }
 
 #[derive(Clone, Default)]
@@ -139,7 +140,7 @@ impl Engine {
         Some(requests)
     }
 
-    pub fn upload(&mut self, bricks: &[(BrickRequest, BrickData)]) {
+    pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {
         self.renderer.upload(bricks);
         self.generation = self.renderer.generation();
     }
@@ -364,6 +365,7 @@ impl Engine {
         let identities = self.pending_pick.take().expect("the pick was pending");
         let picked = match pick {
             PickId::None => Picked::Miss,
+            PickId::Expired => Picked::Abandoned,
             PickId::Style(index) => match identities.styles.get(index as usize).copied() {
                 Some(selection) => Picked::Hit(selection),
                 None => Picked::Miss,

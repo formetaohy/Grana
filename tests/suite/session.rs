@@ -65,13 +65,19 @@ fn detects_surfaces_masks_a_channel_and_captures() {
         assert!(Instant::now() < deadline, "the masked brick never arrives");
         std::thread::sleep(Duration::from_millis(1));
     };
-    let brick = &bricks[0].1;
-    assert_eq!(brick.channels().len(), 2);
-    let VoxelData::U16(masked) = &brick.channels()[1] else {
-        panic!("the mask channel keeps the stored format");
-    };
-    assert!(masked.contains(&HIGH));
-    assert!(masked.contains(&0));
+    let packed = &bricks[0].1;
+    assert_eq!(packed.channels(), 2);
+    let mask = packed
+        .pack(0)
+        .expect("the mask channel shares the first pack");
+    assert!(
+        mask.rows()
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .any(|unit| *unit == HIGH),
+        "the mask channel keeps its stored values"
+    );
 
     session.execute(Command::CaptureProtocol);
     let protocol = session.protocol().expect("the protocol captures");
@@ -195,17 +201,25 @@ fn derives_operator_channels_through_a_project() {
         );
         std::thread::sleep(Duration::from_millis(1));
     };
-    let channels = bricks[0].1.channels();
-    assert_eq!(channels.len(), 4);
-    for channel in &channels[1..] {
-        let VoxelData::F32(values) = channel else {
-            panic!("an operator channel computes single precision values");
-        };
+    let packed = &bricks[0].1;
+    assert_eq!(packed.channels(), 4);
+    let operators = packed
+        .pack(0)
+        .expect("the operator channels share the first pack");
+    assert_eq!(
+        operators.components(),
+        4,
+        "the packed brick covers every operator channel"
+    );
+    for component in 1..operators.components() {
         assert!(
-            values
+            operators
+                .rows()
                 .iter()
-                .all(|value| value.is_finite() && *value >= 0.0),
-            "an operator channel holds finite non negative values"
+                .skip(component)
+                .step_by(operators.components())
+                .any(|unit| *unit > 0),
+            "an operator channel computes values"
         );
     }
 

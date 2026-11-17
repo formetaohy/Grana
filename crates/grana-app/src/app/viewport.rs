@@ -463,7 +463,7 @@ impl App {
         let toggle = self.pick_toggle.take().unwrap_or(false);
         let selection = match picked {
             Picked::Hit(selection) => Some(selection),
-            Picked::Seed => return,
+            Picked::Seed | Picked::Abandoned => return,
             Picked::Miss => None,
         };
         match (selection, toggle) {

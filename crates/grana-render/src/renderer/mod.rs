@@ -31,7 +31,7 @@ use wgpu::{
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
-use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
+use crate::atlas::Atlas;
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
 use crate::converge::{Convergence, Estimate, Sampling};
@@ -56,7 +56,7 @@ use crate::splat::SplatPasses;
 use crate::target::{self, SceneTarget};
 use crate::temporal::{FrameView, Temporal, TemporalPass};
 use crate::volume::VolumePass;
-use grana_volume::CHANNEL_LIMIT;
+use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
 
@@ -65,6 +65,8 @@ const FRAGMENT_BUDGET_DIVISOR: u64 = 2;
 const RECORD_SHARE: u64 = 8;
 
 const FADE_DRAWS: f32 = 10.0;
+
+const PICK_LIFETIME: u64 = 2;
 
 const UNIT: f32 = 65535.0;
 
@@ -175,7 +177,6 @@ pub struct Renderer {
     bake: Option<Bake>,
     baked: BakeQueue,
     upload: crate::upload::Upload,
-    scratch: upload::UploadScratch,
     arena: Option<BrickArena>,
     level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
@@ -215,6 +216,7 @@ pub struct Renderer {
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
+    pick_issued: u64,
     sequence: u64,
     info: FrameInfo,
     pipelines: Pipelines,
@@ -262,7 +264,6 @@ impl Renderer {
             bake: None,
             baked: BakeQueue::new(),
             upload: crate::upload::Upload::new(),
-            scratch: upload::UploadScratch::new(),
             arena: None,
             level_group: None,
             bricks: Vec::new(),
@@ -303,6 +304,7 @@ impl Renderer {
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
+            pick_issued: 0,
             sequence: 0,
             info: FrameInfo::default(),
             pipelines: pipelines.clone(),
@@ -425,10 +427,10 @@ impl Renderer {
             .iter()
             .map(|level| BrickGrid::new(level.extent()).count() as u64)
             .sum::<u64>();
-        let texels = (0..channels.div_ceil(PACK))
-            .map(|pack| pack_texels(pack_components(channels, pack)))
+        let packed = (0..pack_count(channels))
+            .map(|pack| texels(components(channels, pack)))
             .sum::<usize>();
-        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
+        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * packed as u64;
         let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
         let requested = (self.budget / slot_bytes).max(1).min(holdable);
         let atlas = Atlas::new(
@@ -597,6 +599,8 @@ impl Renderer {
             pick_target,
             pick_readback,
             pick_pending,
+            pick_issued,
+            sequence,
             sliced,
             ..
         } = self;
@@ -717,6 +721,7 @@ impl Renderer {
         queue.submit([encoder.finish()]);
         readback.register();
         *pick_pending = true;
+        *pick_issued = *sequence;
         true
     }
 
@@ -724,10 +729,15 @@ impl Renderer {
         if !self.pick_pending {
             return None;
         }
+        if self.sequence.wrapping_sub(self.pick_issued) > PICK_LIFETIME {
+            self.pick_pending = false;
+            self.pick_readback = None;
+            return Some(PickId::Expired);
+        }
         let readback = self.pick_readback.as_mut()?;
-        let (_, bytes) = readback.take(device)?;
+        let raw = readback.take_with(device, |_, bytes| pick::decode(bytes))?;
         self.pick_pending = false;
-        Some(match pick::decode(&bytes) {
+        Some(match raw {
             pick::Raw::None => PickId::None,
             pick::Raw::Style(index) => PickId::Style(index),
             pick::Raw::Splat(index) => match self

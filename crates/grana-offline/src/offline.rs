@@ -7,6 +7,7 @@ use grana_gpu::{Headless, Pipelines};
 use grana_render::{EXPORT_CEILING, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
+use grana_volume::PackedBrick;
 use wgpu::{Device, Queue, TextureFormat};
 
 use crate::compose::Composer;
@@ -193,10 +194,11 @@ impl Offline {
         if requests.time != scene.time() {
             return Ok(());
         }
+        let pyramid = scene.dataset.pyramid();
         let mut uploaded = Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
         for request in requests.volume.iter().chain(&requests.prefetch) {
             let data = bricks.read(*request, &scene.drift_warps(request.time))?;
-            uploaded.push((*request, data));
+            uploaded.push((*request, PackedBrick::of(&data, pyramid, request.channels)));
         }
         self.renderer.upload(&uploaded);
         Ok(())

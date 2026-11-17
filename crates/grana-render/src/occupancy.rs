@@ -1,8 +1,7 @@
 use bytemuck::cast_slice;
-use grana_volume::CELL_COUNT;
+use grana_volume::{CELL_COUNT, PACK_LIMIT};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device};
 
-use crate::atlas::PACK_LIMIT;
 use crate::upload::Upload;
 
 pub(crate) const CELL_WORDS: usize = 1 + CELL_COUNT;

@@ -1,6 +1,4 @@
-use grana_volume::{BrickCoord, BrickGrid, BrickRequest, ChannelSet, Damage};
-
-use crate::atlas::PACK;
+use grana_volume::{BrickCoord, BrickGrid, BrickRequest, ChannelSet, Damage, PACK};
 
 use super::Renderer;
 

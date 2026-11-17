@@ -6,7 +6,7 @@ use grana_exec::{Cancel, Executor, Pipe, Poll, Role, Sender};
 use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drifts;
-use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid, VolumeSeries};
+use grana_volume::{BrickRequest, CHANNEL_LIMIT, Fingerprint, PackedBrick, Pyramid, VolumeSeries};
 
 const ATTEMPTS: u32 = 3;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
@@ -33,7 +33,8 @@ pub enum Event {
     Brick {
         generation: u64,
         request: BrickRequest,
-        data: BrickData,
+        bytes: u64,
+        data: PackedBrick,
     },
     ReadFailed {
         generation: u64,
@@ -331,11 +332,14 @@ fn read(
             request.channels,
         ) {
             Ok(data) => {
+                let bytes = data.bytes();
+                let packed = PackedBrick::of(&data, channels.pyramid(), request.channels);
                 events.send_until(
                     Event::Brick {
                         generation,
                         request,
-                        data,
+                        bytes,
+                        data: packed,
                     },
                     stopped,
                 );

@@ -315,23 +315,31 @@ fn dispatch(pass: &mut ComputePass<'_>, pipeline: &ComputePipeline, plan: &Plan)
 }
 
 pub(crate) fn decode_plan(
-    words: &[u32],
+    bytes: &[u8],
     capacity: usize,
     time: u32,
     level: usize,
     pyramid: &Pyramid,
 ) -> Option<Demand> {
-    if words.len() < DEMAND_BASE {
+    if bytes.len() < DEMAND_BASE * size_of::<u32>() {
         return None;
     }
-    let visible = words[0] as usize;
-    let demand = (words[1] as usize)
+    let word = |index: usize| {
+        let start = index * size_of::<u32>();
+        u32::from_ne_bytes(
+            bytes[start..start + size_of::<u32>()]
+                .try_into()
+                .expect("a plan word holds four bytes"),
+        )
+    };
+    let visible = word(0) as usize;
+    let demand = (word(1) as usize)
         .min(capacity)
-        .min(words.len().saturating_sub(DEMAND_BASE));
+        .min(bytes.len() / size_of::<u32>() - DEMAND_BASE);
     let mut bucket_of = vec![0u32; demand];
     for bucket in 0..BUCKET_COUNT {
-        let base = words[BASE_BASE + bucket];
-        let fill = words[FILL_BASE + bucket] as usize;
+        let base = word(BASE_BASE + bucket);
+        let fill = word(FILL_BASE + bucket) as usize;
         if base == EXCLUDED || fill == 0 {
             continue;
         }
@@ -345,11 +353,12 @@ pub(crate) fn decode_plan(
     let mut requests = Vec::new();
     let mut buckets = Vec::new();
     let mut indices = Vec::with_capacity(demand);
-    for (position, entry) in words[DEMAND_BASE..DEMAND_BASE + demand].iter().enumerate() {
+    for (position, bucket) in bucket_of.iter().enumerate() {
+        let entry = word(DEMAND_BASE + position);
         let index = entry & !MISSING;
         indices.push(index);
         if entry & MISSING != 0 {
-            buckets.push(bucket_of[position]);
+            buckets.push(*bucket);
             requests.push(BrickRequest::new(time, level, grid.coord(index as usize)));
         }
     }

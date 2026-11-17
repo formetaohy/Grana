@@ -11,6 +11,7 @@ pub(crate) const PICK_ROW: u64 = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickId {
     None,
+    Expired,
     Style(u32),
     Splat { key: u64, level: u8, index: u32 },
 }

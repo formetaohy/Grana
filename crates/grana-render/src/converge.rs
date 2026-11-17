@@ -289,20 +289,22 @@ impl Convergence {
 
     pub(crate) fn poll(&mut self, device: &Device, drawn: u32) -> Option<Estimate> {
         let mut fresh = None;
-        while let Some((_, bytes)) = self.readback.take(device) {
+        while let Some((deviation, weight)) = self
+            .readback
+            .take_with(device, |_, bytes| (sample(bytes, 0), sample(bytes, 1)))
+        {
             let Some((generation, samples)) = self.queued.pop_front() else {
                 continue;
             };
             if generation != self.generation {
                 continue;
             }
-            let weight = sample(&bytes, 1);
             if weight <= WEIGHT_FLOOR {
                 continue;
             }
             self.observations.push_back(Observation {
                 samples: samples as f32,
-                deviation: sample(&bytes, 0) / weight,
+                deviation: deviation / weight,
             });
             if self.observations.len() > WINDOW {
                 self.observations.pop_front();

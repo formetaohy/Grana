@@ -10,7 +10,8 @@ use grana_render::{
 };
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{
-    Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
+    Basis, BrickGrid, BrickRequest, Channel, Clip, Extent, Level, PackedBrick, Pyramid, Region,
+    Spacing, Volume, VoxelData,
 };
 
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, splat, versions};
@@ -129,6 +130,18 @@ fn quad(half: f32) -> Mesh {
     Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
 }
 
+fn pack(volume: &Volume, requests: &[BrickRequest]) -> Vec<(BrickRequest, PackedBrick)> {
+    let grid = BrickGrid::new(volume.extent());
+    let pyramid = volume.pyramid();
+    requests
+        .iter()
+        .map(|request| {
+            let data = volume.brick(&grid, request.coord);
+            (*request, PackedBrick::of(&data, &pyramid, request.channels))
+        })
+        .collect()
+}
+
 fn settle(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume) -> Requests {
     settle_with(gpu, renderer, || frame(view), volume)
 }
@@ -153,12 +166,7 @@ fn settle_with<'a, 'b: 'a>(
             return latest;
         }
         if let Some(requests) = next_demand(gpu, renderer) {
-            let grid = BrickGrid::new(volume.extent());
-            let bricks = requests
-                .volume
-                .iter()
-                .map(|request| (*request, volume.brick(&grid, request.coord)))
-                .collect::<Vec<_>>();
+            let bricks = pack(volume, &requests.volume);
             renderer.upload(&bricks);
             latest = requests;
         }
@@ -794,7 +802,6 @@ fn assure(
     renderer: &mut Renderer,
     view: &View<'_>,
     volume: &Volume,
-    grid: &BrickGrid,
 ) -> grana_render::FrameInfo {
     let mut info = renderer
         .draw(gpu.device(), gpu.queue(), frame(view))
@@ -808,11 +815,7 @@ fn assure(
             return info;
         }
         if let Some(requests) = next_demand(gpu, renderer) {
-            let bricks = requests
-                .volume
-                .iter()
-                .map(|request| (*request, volume.brick(grid, request.coord)))
-                .collect::<Vec<_>>();
+            let bricks = pack(volume, &requests.volume);
             renderer.upload(&bricks);
         }
         info = renderer
@@ -859,8 +862,7 @@ fn assured_pixels(
             "an assured frame consumed samples before its bricks arrived"
         );
     }
-    let grid = BrickGrid::new(volume.extent());
-    let info = assure(gpu, &mut renderer, &view, volume, &grid);
+    let info = assure(gpu, &mut renderer, &view, volume);
     assert_eq!(info.samples, SAMPLES, "the assured frame stopped short");
     read_pixels(gpu, &target, [SIDE, SIDE])
 }
@@ -1143,7 +1145,11 @@ fn stream_levels(
                 .map(|request| {
                     let volume = &volumes[request.level];
                     let grid = BrickGrid::new(volume.extent());
-                    (*request, volume.brick(&grid, request.coord))
+                    let data = volume.brick(&grid, request.coord);
+                    (
+                        *request,
+                        PackedBrick::of(&data, &volume.pyramid(), request.channels),
+                    )
                 })
                 .collect::<Vec<_>>();
             renderer.upload(&bricks);
@@ -1393,12 +1399,7 @@ fn take(
             .expect("the frame draws");
         if renderer.requests_pending() {
             if let Some(requests) = next_demand(gpu, renderer) {
-                let grid = BrickGrid::new(volume.extent());
-                let bricks = requests
-                    .volume
-                    .iter()
-                    .map(|request| (*request, volume.brick(&grid, request.coord)))
-                    .collect::<Vec<_>>();
+                let bricks = pack(volume, &requests.volume);
                 renderer.upload(&bricks);
             }
             continue;
@@ -1920,12 +1921,7 @@ fn invalidates_the_streamed_content_and_restreams_it() {
         requests.view.resident, 0,
         "the invalidated content still counts as resident"
     );
-    let grid = BrickGrid::new(volume.extent());
-    let bricks = requests
-        .volume
-        .iter()
-        .map(|request| (*request, volume.brick(&grid, request.coord)))
-        .collect::<Vec<_>>();
+    let bricks = pack(&volume, &requests.volume);
     renderer.upload(&bricks);
     settle(&gpu, &mut renderer, &view, &volume);
     let after = read_pixels(&gpu, &target, [SIDE, SIDE]);

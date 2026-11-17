@@ -7,7 +7,7 @@ use wgpu::{
     StorageTextureAccess, TextureFormat, TextureSampleType, TextureViewDimension,
 };
 
-use crate::atlas::PACK_LIMIT;
+use grana_volume::PACK_LIMIT;
 
 pub(crate) struct Layouts {
     pub scene: BindGroupLayout,

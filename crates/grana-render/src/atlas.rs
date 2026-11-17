@@ -9,36 +9,11 @@ use wgpu::{
 
 use grana_volume::CHANNEL_LIMIT;
 
-pub(crate) const PACK: usize = 4;
-pub(crate) const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
+use grana_volume::{PACK_LIMIT, components};
 
 pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 4;
-
-const _: () = assert!(
-    PACK_LIMIT == 4,
-    "the volume shaders bind four channel packs"
-);
-
-pub(crate) fn pack_components(channels: usize, pack: usize) -> usize {
-    assert!(pack * PACK < channels, "a pack holds at least one channel");
-    (channels - pack * PACK).min(PACK)
-}
-
-pub(crate) fn pack_texels(components: usize) -> usize {
-    match components {
-        1 => 1,
-        2 => 2,
-        3 | 4 => 4,
-        _ => unreachable!("a channel pack holds one to four channels"),
-    }
-}
-
-pub(crate) fn row_pitch(components: usize) -> u32 {
-    let row = PADDED_SIDE * pack_bytes(pack_texels(components)) as u32;
-    row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
-}
 
 fn pack_format(components: usize) -> TextureFormat {
     match components {
@@ -47,10 +22,6 @@ fn pack_format(components: usize) -> TextureFormat {
         3 | 4 => TextureFormat::Rgba16Unorm,
         _ => unreachable!("a channel pack holds one to four channels"),
     }
-}
-
-fn pack_bytes(texels: usize) -> u64 {
-    texels as u64 * size_of::<u16>() as u64
 }
 
 #[derive(Clone, Copy)]
@@ -141,13 +112,13 @@ impl Atlas {
         let slot_grid = [span as u32, span as u32, depth as u32];
         let capacity = span * span * depth;
         let dims = slot_grid.map(|count| count * slot_side);
-        let packs = channel_count.div_ceil(PACK);
-        let components = (0..packs)
-            .map(|pack| pack_components(channel_count, pack))
+        let packs = grana_volume::pack_count(channel_count);
+        let widths = (0..packs)
+            .map(|pack| components(channel_count, pack))
             .collect::<Vec<_>>();
-        let textures = components
+        let textures = widths
             .iter()
-            .map(|components| {
+            .map(|width| {
                 device.create_texture(&TextureDescriptor {
                     label: Some("grana.atlas"),
                     size: wgpu::Extent3d {
@@ -158,7 +129,7 @@ impl Atlas {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D3,
-                    format: pack_format(*components),
+                    format: pack_format(*width),
                     usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                     view_formats: &[],
                 })

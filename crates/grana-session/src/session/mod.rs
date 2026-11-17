@@ -44,7 +44,7 @@ use grana_scene::{
 };
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{BrickData, BrickRequest, Damage, Fingerprint, Region};
+use grana_volume::{BrickRequest, Damage, Fingerprint, PackedBrick, Region};
 
 use crate::access::Access;
 use crate::command::{Edit, Export};
@@ -115,7 +115,7 @@ pub struct Session {
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
     failed: HashSet<BrickRequest>,
-    bricks: Vec<(BrickRequest, BrickData)>,
+    bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
     loading: Option<String>,
     message: Option<Message>,
@@ -548,7 +548,7 @@ impl Session {
             ordinal += 1;
         }
     }
-    pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
+    pub fn take_bricks(&mut self) -> Vec<(BrickRequest, PackedBrick)> {
         std::mem::take(&mut self.bricks)
     }
     pub fn take_damage(&mut self) -> Vec<Damage> {

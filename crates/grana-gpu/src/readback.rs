@@ -125,7 +125,11 @@ impl Readback {
         }
     }
 
-    pub fn take(&mut self, device: &Device) -> Option<(usize, Vec<u8>)> {
+    pub fn take_with<R>(
+        &mut self,
+        device: &Device,
+        read: impl FnOnce(usize, &[u8]) -> R,
+    ) -> Option<R> {
         let slot = *self.pending.front()?;
         device
             .poll(PollType::Poll)
@@ -140,15 +144,16 @@ impl Readback {
             Err(TryRecvError::Disconnected) => panic!("the readback callback fires once"),
         }
         let slice = self.slots[slot].buffer.slice(..);
-        let mapped = slice
-            .get_mapped_range()
-            .expect("the mapped readback staging buffer stays mapped");
-        let bytes = mapped.to_vec();
-        drop(mapped);
+        let value = {
+            let mapped = slice
+                .get_mapped_range()
+                .expect("the mapped readback staging buffer stays mapped");
+            read(slot, &mapped)
+        };
         self.slots[slot].buffer.unmap();
         self.slots[slot].mapping = None;
         self.slots[slot].reserved = false;
         self.pending.pop_front();
-        Some((slot, bytes))
+        Some(value)
     }
 }

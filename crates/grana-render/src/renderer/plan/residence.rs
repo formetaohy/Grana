@@ -389,35 +389,36 @@ impl Residence {
         time: u32,
         prefetch: bool,
     ) -> Option<Requests> {
-        while let Some((slot, bytes)) = self.take(device) {
-            let Some(key) = self.frames[slot].take() else {
-                continue;
-            };
-            self.accept(key, &bytes, pyramid, planner, atlas);
+        while let Some((key, bands)) = self.decode(device, pyramid, planner) {
+            self.accept(key, bands, pyramid, atlas);
         }
         self.emit(pyramid, atlas, time, prefetch)
     }
 
-    fn take(&mut self, device: &Device) -> Option<(usize, Vec<u8>)> {
-        self.feedback
-            .as_mut()
-            .and_then(|feedback| feedback.take(device))
-    }
-
-    fn accept(
+    fn decode(
         &mut self,
-        key: ViewKey,
-        bytes: &[u8],
+        device: &Device,
         pyramid: &Pyramid,
         planner: &Planner,
-        atlas: &mut Atlas,
-    ) {
+    ) -> Option<(ViewKey, Vec<Demand>)> {
+        let Self {
+            feedback,
+            frames,
+            words,
+            ..
+        } = self;
+        let words = *words;
+        feedback.as_mut()?.take_with(device, |slot, bytes| {
+            let key = frames[slot].take()?;
+            let bands = parse_bands(bytes, words, key.levels.ladder, key.time, pyramid, planner)?;
+            Some((key, bands))
+        })?
+    }
+
+    fn accept(&mut self, key: ViewKey, bands: Vec<Demand>, pyramid: &Pyramid, atlas: &mut Atlas) {
         if key.epoch != self.epoch {
             return;
         }
-        let Some(bands) = self.parse(&key, bytes, pyramid, planner) else {
-            return;
-        };
         self.pin += 1;
         let pin = self.pin;
         atlas.clear_holds();
@@ -433,32 +434,6 @@ impl Residence {
             .all(|band| demands_complete(band, key.assured))
             .then_some(key);
         self.demand = Some(ResidencyDemand { key, bands });
-    }
-
-    fn parse(
-        &self,
-        key: &ViewKey,
-        bytes: &[u8],
-        pyramid: &Pyramid,
-        planner: &Planner,
-    ) -> Option<Vec<Demand>> {
-        let words = feedback_words(bytes);
-        if words.len() < BAND * self.words {
-            return None;
-        }
-        let ladder = key.levels.ladder;
-        let mut bands = Vec::with_capacity(ladder.count);
-        for band in 0..ladder.count {
-            let slice = &words[band * self.words..(band + 1) * self.words];
-            bands.push(decode_plan(
-                slice,
-                planner.view.bands[band].capacity(),
-                key.time,
-                ladder.level(band),
-                pyramid,
-            )?);
-        }
-        Some(bands)
     }
 
     fn observe(&mut self, key: &ViewKey, bands: &[Demand], pyramid: &Pyramid) {
@@ -669,7 +644,28 @@ fn carry(
     }
 }
 
-fn feedback_words(bytes: &[u8]) -> Vec<u32> {
-    let (words, _) = bytes.as_chunks::<4>();
-    words.iter().map(|word| u32::from_ne_bytes(*word)).collect()
+fn parse_bands(
+    bytes: &[u8],
+    words: usize,
+    ladder: Ladder,
+    time: u32,
+    pyramid: &Pyramid,
+    planner: &Planner,
+) -> Option<Vec<Demand>> {
+    let width = words * size_of::<u32>();
+    if bytes.len() < BAND * width {
+        return None;
+    }
+    let mut bands = Vec::with_capacity(ladder.count);
+    for band in 0..ladder.count {
+        let slice = &bytes[band * width..(band + 1) * width];
+        bands.push(decode_plan(
+            slice,
+            planner.view.bands[band].capacity(),
+            time,
+            ladder.level(band),
+            pyramid,
+        )?);
+    }
+    Some(bands)
 }
