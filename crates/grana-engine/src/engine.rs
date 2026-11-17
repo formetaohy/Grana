@@ -83,7 +83,6 @@ pub struct Engine {
     image: Option<ViewportImage>,
     content: Option<Content>,
     failure: Option<Failure>,
-    resolution: [u32; 2],
     generation: u64,
     image_revision: u64,
     info: FrameInfo,
@@ -105,7 +104,6 @@ impl Engine {
             image: None,
             content: None,
             failure: None,
-            resolution: [0, 0],
             generation: 0,
             image_revision: 0,
             info: FrameInfo::default(),
@@ -216,19 +214,6 @@ impl Engine {
         content: Content,
     ) -> Result<(), String> {
         let keys = view::key(view.scene);
-        let moving = self.content.is_some_and(|previous| {
-            previous.camera != content.camera
-                || previous.size != content.size
-                || previous.region != content.region
-                || previous.clip != content.clip
-                || previous.scene != content.scene
-                || previous.overlays != content.overlays
-        });
-        let resolution = if view.display == Display::Interactive && moving {
-            view.display.resolution(view.size)
-        } else {
-            view.size
-        };
         let size = view.size;
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
@@ -294,7 +279,6 @@ impl Engine {
                     camera: view.camera,
                     viewport: [0, 0, size[0], size[1]],
                     size,
-                    resolution,
                     sampling: view.display.sampling(),
                     budget: view.budget,
                     display: view.display.render(),
@@ -306,15 +290,8 @@ impl Engine {
         };
         self.info = info;
         self.content = Some(content);
-        self.resolution = resolution;
         if info.samples != 0 {
             self.image_revision = self.image_revision.wrapping_add(1);
-        }
-        if view.display == Display::Still && self.resolved(view.display) {
-            let interactive = Display::Interactive.resolution(size);
-            if interactive != size {
-                self.renderer.reserve_target(device, interactive);
-            }
         }
         Ok(())
     }
@@ -351,17 +328,16 @@ impl Engine {
 
     fn resolved(&self, display: Display) -> bool {
         let info = self.info;
+        if self.image.is_none() {
+            return false;
+        }
         if display == Display::Interactive {
             return info.samples != 0;
         }
         if display.awaits() {
             return info.samples != 0 && !info.fading;
         }
-        let detailed = self
-            .image
-            .as_ref()
-            .is_some_and(|image| image.size == self.resolution);
-        detailed && info.converged && !info.fading && info.view.resident >= info.view.demand
+        info.converged && !info.fading && info.view.resident >= info.view.demand
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {

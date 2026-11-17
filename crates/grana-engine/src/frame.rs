@@ -15,7 +15,6 @@ pub(crate) struct View<'a> {
     pub camera: &'a Camera,
     pub viewport: [u32; 4],
     pub size: [u32; 2],
-    pub resolution: [u32; 2],
     pub display: Display,
     pub sampling: Sampling,
     pub budget: Option<Duration>,
@@ -38,7 +37,6 @@ pub(crate) fn draw(
         Frame {
             target: frame.target,
             size: frame.size,
-            resolution: frame.resolution,
             camera: frame.camera,
             viewport: frame.viewport,
             time: frame.scene.time(),

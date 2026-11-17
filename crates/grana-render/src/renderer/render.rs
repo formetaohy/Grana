@@ -29,7 +29,6 @@ impl Shot {
             view: View::new(
                 frame.viewport,
                 frame.size,
-                frame.resolution,
                 frame.camera,
                 frame.region,
                 frame.time,
@@ -646,7 +645,7 @@ impl Renderer {
                     present,
                     target,
                     surface: frame.target,
-                    viewport: prepared.shot.view.surface,
+                    viewport: prepared.shot.view.region,
                     region: prepared.shot.view.region,
                     exposure: frame.exposure,
                     transparent: *transparent,

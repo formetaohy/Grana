@@ -20,10 +20,6 @@ impl Display {
         self == Self::Playback
     }
 
-    pub fn resolution(self, size: [u32; 2]) -> [u32; 2] {
-        self.render().resolution(size)
-    }
-
     pub(crate) fn sampling(self) -> Sampling {
         match self {
             Self::Still => Sampling::new(STILL_FLOOR, SAMPLE_CEILING, STILL_ERROR),

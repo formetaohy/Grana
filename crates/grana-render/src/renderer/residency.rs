@@ -131,27 +131,6 @@ impl TargetCache {
     pub(super) fn put(&mut self, target: FrameTarget) {
         self.slots[self.current] = Some(target);
     }
-
-    pub(super) fn reserve(
-        &mut self,
-        device: &Device,
-        layouts: &Layouts,
-        present: &Present,
-        size: [u32; 2],
-    ) {
-        if self
-            .slots
-            .iter()
-            .flatten()
-            .any(|target| target.size == size)
-        {
-            return;
-        }
-        let slot = (0..self.slots.len())
-            .find(|index| *index != self.current)
-            .unwrap_or(0);
-        self.slots[slot] = Some(FrameTarget::new(device, layouts, present, size));
-    }
 }
 
 pub(super) struct FrameTarget {

@@ -75,7 +75,6 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         let frame = Frame {
             target: &view,
             size: [SIDE, SIDE],
-            resolution: [SIDE, SIDE],
             camera,
             viewport: WHOLE,
             time: 0,
@@ -206,7 +205,6 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
     Frame {
         target: frame.target,
         size: frame.size,
-        resolution: frame.resolution,
         camera: frame.camera,
         viewport: frame.viewport,
         time: frame.time,
