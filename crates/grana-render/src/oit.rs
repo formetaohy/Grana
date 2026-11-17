@@ -11,16 +11,16 @@ const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
 const COLOR_BYTES: u64 = 8;
 const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES;
-const RESIDUAL_BYTES: u64 = 12;
+const RESIDUAL_BYTES: u64 = 16;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
 const PIXEL_STEP: u64 = 1 << 17;
 const EPOCH_LIMIT: u32 = 255;
 
 pub(crate) const RESIDUAL_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-pub(crate) const RESIDUAL_MOMENT_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+pub(crate) const RESIDUAL_MOMENT_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-const RESIDUAL_BLEND: BlendState = BlendState {
+const RESIDUAL_ADD: BlendState = BlendState {
     color: BlendComponent {
         src_factor: BlendFactor::One,
         dst_factor: BlendFactor::One,
@@ -33,16 +33,29 @@ const RESIDUAL_BLEND: BlendState = BlendState {
     },
 };
 
+const RESIDUAL_MARK: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Max,
+    },
+};
+
 pub(crate) fn residual_targets() -> [Option<ColorTargetState>; 2] {
     [
         Some(ColorTargetState {
             format: RESIDUAL_COLOR_FORMAT,
-            blend: Some(RESIDUAL_BLEND),
+            blend: Some(RESIDUAL_ADD),
             write_mask: ColorWrites::ALL,
         }),
         Some(ColorTargetState {
             format: RESIDUAL_MOMENT_FORMAT,
-            blend: Some(RESIDUAL_BLEND),
+            blend: Some(RESIDUAL_MARK),
             write_mask: ColorWrites::ALL,
         }),
     ]
@@ -204,10 +217,28 @@ impl Oit {
         if epoch == 1 {
             encoder.clear_buffer(&self.keys, 0, None);
             encoder.clear_buffer(&self.counts, 0, None);
+            clear(encoder, &self.residual_color);
+            clear(encoder, &self.residual_moment);
         }
         self.epoch = epoch;
         epoch
     }
+}
+
+fn clear(encoder: &mut CommandEncoder, view: &TextureView) {
+    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("grana.oit.residual.clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
 }
 
 fn allocation(capacity: u64, residual: u64, budget: u64) -> u64 {

@@ -1,5 +1,4 @@
 use grana_volume::{BrickCoord, BrickGrid, BrickRequest, ChannelSet, Damage};
-use wgpu::Queue;
 
 use crate::atlas::PACK;
 
@@ -8,7 +7,7 @@ use super::Renderer;
 const APRON: u32 = 1;
 
 impl Renderer {
-    pub fn damage(&mut self, queue: &Queue, damages: &[Damage]) {
+    pub fn damage(&mut self, damages: &[Damage]) {
         let mut scopes = Vec::with_capacity(damages.len());
         for damage in damages {
             let channels = self.scope(damage.channels());
@@ -29,6 +28,7 @@ impl Renderer {
             atlas,
             bricks,
             residence,
+            upload,
             time,
             ..
         } = self;
@@ -86,7 +86,7 @@ impl Renderer {
             }
         }
         for table in bricks.iter_mut().flatten() {
-            table.flush(queue, arena);
+            table.flush(upload, arena);
         }
     }
 

@@ -4,11 +4,11 @@ use grana_volume::{
     PADDED_SIDE, Pyramid, UNIT_MAXIMUM,
 };
 use rayon::prelude::*;
-use wgpu::Queue;
 
 use crate::atlas::{PACK, PACK_LIMIT, ResidentBrick, pack_components, pack_texels, row_pitch};
 use crate::brick::BrickRecord;
 use crate::occupancy::{CELL_WORDS, Occupancy};
+use crate::upload::Upload;
 
 use super::Renderer;
 
@@ -69,7 +69,7 @@ impl Layout {
 }
 
 impl Renderer {
-    pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) {
+    pub fn upload(&mut self, bricks: &[(BrickRequest, BrickData)]) {
         let Self {
             bricks: tables,
             atlas,
@@ -78,7 +78,7 @@ impl Renderer {
             channels,
             time: now,
             residence,
-            staging,
+            upload,
             scratch,
             occupancy,
             ..
@@ -140,11 +140,11 @@ impl Renderer {
                         let summary = &mut summaries[pack * CELL_COUNT..(pack + 1) * CELL_COUNT];
                         let maximum =
                             stage(&mut units[..span], summary, pyramid, total, data, pack);
-                        staging.push(pack, slot, layout.row[pack], cast_slice(&units[..span]));
+                        push_texels(upload, atlas, pack, slot, layout.row[pack], &units[..span]);
                         occupy(values, occupancy.as_mut(), slot, pack, maximum, summary);
                     }
                     if let Some(occupancy) = occupancy.as_mut() {
-                        occupancy.flush(queue, slot);
+                        occupancy.flush(upload, slot);
                     }
                     atlas.written(slot);
                     if time == *now {
@@ -204,11 +204,13 @@ impl Renderer {
             for pack in 0..layout.count {
                 let first = layout.first[pack];
                 let span = layout.span[pack];
-                staging.push(
+                push_texels(
+                    upload,
+                    atlas,
                     pack,
                     slot,
                     layout.row[pack],
-                    cast_slice(&units[first..first + span]),
+                    &units[first..first + span],
                 );
                 occupy(
                     values,
@@ -220,7 +222,7 @@ impl Renderer {
                 );
             }
             if let Some(occupancy) = occupancy.as_mut() {
-                occupancy.flush(queue, slot);
+                occupancy.flush(upload, slot);
             }
             atlas.assign(slot, ResidentBrick { time, level, index }, pin, demand);
             if publish && let Some(table) = tables[level].as_mut() {
@@ -233,7 +235,7 @@ impl Renderer {
         }
         residence.set_generation(generation);
         for table in tables.iter_mut().flatten() {
-            table.flush(queue, arena);
+            table.flush(upload, arena);
         }
     }
 }
@@ -326,6 +328,25 @@ fn occupy(
         *value = cell / UNIT_MAXIMUM;
     }
     occupancy.stage(slot, pack, values);
+}
+
+fn push_texels(
+    upload: &mut Upload,
+    atlas: &crate::atlas::Atlas,
+    pack: usize,
+    slot: u32,
+    row: u32,
+    units: &[u16],
+) {
+    let origin = atlas.origin(slot);
+    upload.texture(
+        atlas.texture(pack),
+        [origin.x, origin.y, origin.z],
+        [PADDED_SIDE, PADDED_SIDE, PADDED_SIDE],
+        row,
+        PADDED_SIDE,
+        cast_slice(units),
+    );
 }
 
 fn pack_mask(channels: grana_volume::ChannelSet, count: usize) -> u64 {

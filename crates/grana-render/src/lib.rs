@@ -23,11 +23,11 @@ mod schema;
 mod section;
 mod shadow;
 mod splat;
-mod staging;
 mod surface;
 mod table;
 mod target;
 mod temporal;
+mod upload;
 mod volume;
 
 pub use converge::{Estimate, Sampling};

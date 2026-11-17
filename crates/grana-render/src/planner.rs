@@ -482,6 +482,7 @@ pub(crate) struct VolumeFit {
     pub(crate) capacity: [usize; BAND],
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FitView<'a> {
     pub(crate) pyramid: &'a Pyramid,
     pub(crate) camera: &'a Camera,
@@ -497,7 +498,7 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
     let FitView {
         pyramid,
         camera,
-        region,
+        region: _,
         aspect,
         height,
         limits,
@@ -514,15 +515,16 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         current,
         limits,
     });
+    let mut counts = Counts::new(view, desired.base);
     let mut fallback: Option<VolumeFit> = None;
     for base in desired.base..levels {
         let count = ladder_count(camera.projection(), levels, base);
-        let counts = volume_counts(pyramid, base, count, camera, aspect, height as f32, region);
-        let demand = counts[..count].iter().sum::<usize>();
+        let wanted = counts.volume(base, count);
+        let demand = wanted[..count].iter().sum::<usize>();
         if demand <= capacity {
             return VolumeFit {
                 ladder: Ladder { base, count },
-                capacity: counts,
+                capacity: wanted,
             };
         }
         let closer = fallback
@@ -531,11 +533,67 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         if closer {
             fallback = Some(VolumeFit {
                 ladder: Ladder { base, count },
-                capacity: capacities(capacity, &counts, count),
+                capacity: capacities(capacity, &wanted, count),
             });
         }
     }
     fallback.expect("the coarsest level holds a ladder")
+}
+
+pub(crate) struct Counts<'a> {
+    frustum: crate::culling::Frustum,
+    pyramid: &'a Pyramid,
+    scale: f32,
+    first: usize,
+    bands: Vec<crate::culling::Counts>,
+}
+
+impl<'a> Counts<'a> {
+    pub(crate) fn new(view: FitView<'a>, first: usize) -> Self {
+        let FitView {
+            pyramid,
+            camera,
+            region,
+            aspect,
+            height,
+            ..
+        } = view;
+        let scale = camera.pixels_per_world_at(height as f32);
+        let radius = 0.5 * Vec3::from(pyramid.level(first).world_extent()).length();
+        let planes = crate::frame::planes(camera.view_projection(aspect, radius));
+        Self {
+            frustum: crate::culling::Frustum::new(planes, camera.eye(), region),
+            pyramid,
+            scale,
+            first,
+            bands: Vec::new(),
+        }
+    }
+
+    pub(crate) fn volume(&mut self, base: usize, count: usize) -> [usize; BAND] {
+        while self.first + self.bands.len() < base + count {
+            let level = self.first + self.bands.len();
+            self.bands.push(self.band(level));
+        }
+        let mut wanted = [0usize; BAND];
+        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
+            let level = self.bands.get(base + band - self.first);
+            *slot = level.map_or(0, |counts| counts.band(band, count));
+        }
+        wanted
+    }
+
+    fn band(&self, level: usize) -> crate::culling::Counts {
+        let source = self.pyramid.level(level);
+        let lower = BAND_FLOOR * Vec3::from(source.voxel()).min_element() * self.scale;
+        let upper = match level + 1 {
+            next if next < self.pyramid.level_count() => {
+                BAND_CEIL * Vec3::from(self.pyramid.level(next).voxel()).min_element() * self.scale
+            }
+            _ => f32::INFINITY,
+        };
+        self.frustum.counts(source, lower, upper)
+    }
 }
 
 fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usize {
@@ -619,37 +677,6 @@ fn measured_demand(measure: &[Option<usize>], base: usize, count: usize) -> Opti
         total = total.checked_add(measure.get(base + band).copied().flatten()?)?;
     }
     Some(total)
-}
-
-pub(crate) fn volume_counts(
-    pyramid: &Pyramid,
-    base: usize,
-    count: usize,
-    camera: &Camera,
-    aspect: f32,
-    height: f32,
-    region: Region,
-) -> [usize; BAND] {
-    let scale = camera.pixels_per_world_at(height);
-    let radius = 0.5 * Vec3::from(pyramid.level(base).world_extent()).length();
-    let planes = crate::frame::planes(camera.view_projection(aspect, radius));
-    let frustum = crate::culling::Frustum::new(planes, camera.eye(), region);
-    let mut counts = [0usize; BAND];
-    for (band, slot) in counts.iter_mut().enumerate().take(count) {
-        let level = pyramid.level(base + band);
-        let lower = if band == 0 || band + 1 == count {
-            0.0
-        } else {
-            BAND_FLOOR * Vec3::from(level.voxel()).min_element() * scale
-        };
-        let upper = if band + 1 < count {
-            BAND_CEIL * Vec3::from(pyramid.level(base + band + 1).voxel()).min_element() * scale
-        } else {
-            f32::INFINITY
-        };
-        *slot = frustum.count(level, lower, upper);
-    }
-    counts
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

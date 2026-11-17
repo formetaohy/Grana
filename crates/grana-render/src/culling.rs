@@ -1,6 +1,41 @@
 use glam::Vec3;
 use grana_volume::{BRICK_SIDE, BrickGrid, Level, Region};
 
+const WHOLE: usize = 0;
+const FIRST: usize = 1;
+const MIDDLE: usize = 2;
+const KINDS: usize = 3;
+const ALL: u8 = (1 << KINDS) - 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Counts([usize; KINDS]);
+
+impl Counts {
+    pub(crate) fn band(&self, band: usize, count: usize) -> usize {
+        if count == 1 || band + 1 == count {
+            self.0[WHOLE]
+        } else if band == 0 {
+            self.0[FIRST]
+        } else {
+            self.0[MIDDLE]
+        }
+    }
+}
+
+struct Bands {
+    lower: [f32; KINDS],
+    upper: [f32; KINDS],
+}
+
+impl Bands {
+    fn new(lower: f32, upper: f32) -> Self {
+        Self {
+            lower: [f32::NEG_INFINITY, f32::NEG_INFINITY, lower],
+            upper: [f32::INFINITY, upper, upper],
+        }
+    }
+}
+
 pub(crate) struct Frustum {
     planes: [[f32; 4]; 6],
     eye: Vec3,
@@ -16,22 +51,23 @@ impl Frustum {
         }
     }
 
-    pub(crate) fn count(&self, level: Level, lower: f32, upper: f32) -> usize {
+    pub(crate) fn counts(&self, level: Level, lower: f32, upper: f32) -> Counts {
         let counts = BrickGrid::new(level.extent()).counts();
         if counts.contains(&0) {
-            return 0;
+            return Counts::default();
         }
-        self.count_node(level, [0; 3], counts, lower, upper)
+        let bands = Bands::new(lower, upper);
+        Counts(self.visit(level, [0; 3], counts, &bands, ALL).0)
     }
 
-    fn count_node(
+    fn visit(
         &self,
         level: Level,
         low: [u32; 3],
         high: [u32; 3],
-        lower: f32,
-        upper: f32,
-    ) -> usize {
+        bands: &Bands,
+        open: u8,
+    ) -> Counts {
         let extent = level.extent();
         let limits = [extent.x(), extent.y(), extent.z()];
         let first = low.map(|value| value * BRICK_SIDE);
@@ -41,35 +77,57 @@ impl Frustum {
         let high_world = Vec3::from(high_world);
         if self.beyond_frustum(low_world, high_world) || self.outside_region(low_world, high_world)
         {
-            return 0;
+            return Counts::default();
         }
         let (near, far) = self.reach(low_world, high_world);
-        if far < lower || near >= upper {
-            return 0;
-        }
         let bricks = (0..3)
             .map(|axis| (high[axis] - low[axis]) as usize)
-            .product();
-        if bricks == 1 {
-            return 1;
+            .product::<usize>();
+        let contained =
+            self.within_frustum(low_world, high_world) && self.within_region(low_world, high_world);
+        let mut counts = [0usize; KINDS];
+        let mut descend = 0u8;
+        for (kind, slot) in counts.iter_mut().enumerate() {
+            if open & (1 << kind) == 0 {
+                continue;
+            }
+            let lower = bands.lower[kind];
+            let upper = bands.upper[kind];
+            if far < lower || near >= upper {
+                continue;
+            }
+            if contained && near >= lower && far < upper {
+                *slot += bricks;
+                continue;
+            }
+            descend |= 1 << kind;
         }
-        if near >= lower
-            && far < upper
-            && self.within_frustum(low_world, high_world)
-            && self.within_region(low_world, high_world)
-        {
-            return bricks;
+        if descend == 0 {
+            return Counts(counts);
+        }
+        if bricks == 1 {
+            for (kind, slot) in counts.iter_mut().enumerate() {
+                if descend & (1 << kind) != 0 {
+                    *slot += 1;
+                }
+            }
+            return Counts(counts);
         }
         let axis = (0..3)
             .max_by_key(|axis| high[*axis] - low[*axis])
             .expect("a node spans three axes");
         let middle = low[axis] + (high[axis] - low[axis]).div_ceil(2);
-        let mut left_high = high;
-        left_high[axis] = middle;
-        let mut right_low = low;
-        right_low[axis] = middle;
-        self.count_node(level, low, left_high, lower, upper)
-            + self.count_node(level, right_low, high, lower, upper)
+        let mut left = high;
+        left[axis] = middle;
+        let mut right = low;
+        right[axis] = middle;
+        for (low, high) in [(low, left), (right, high)] {
+            let part = self.visit(level, low, high, bands, descend);
+            for (count, other) in counts.iter_mut().zip(part.0) {
+                *count += other;
+            }
+        }
+        Counts(counts)
     }
 
     fn beyond_frustum(&self, low: Vec3, high: Vec3) -> bool {

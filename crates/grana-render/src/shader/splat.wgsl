@@ -191,7 +191,7 @@ fn fs_slice(input: SplatVertex) -> SliceFragment {
 
 @fragment
 fn fs_oit(input: SplatVertex) -> Residual {
-    var output = oit_residual(0.0, vec3<f32>(0.0), 0.0);
+    var output = oit_residual(frame.oit.z, 0.0, vec3<f32>(0.0), 0.0);
     let ray = splat_ray(input.world);
     let alpha = splat_alpha(input, ray.origin, ray.direction);
     if (alpha <= 0.0) {
@@ -208,7 +208,7 @@ fn fs_oit(input: SplatVertex) -> Residual {
     if (oit_insert(u32(index), frame.oit.y, frame.oit.z, input.depth, premultiplied)) {
         return output;
     }
-    return oit_residual(alpha, input.color, input.depth);
+    return oit_residual(frame.oit.z, alpha, input.color, input.depth);
 }
 
 @fragment

@@ -64,11 +64,14 @@ fn residual_proxy(clip_position: vec4<f32>) -> Proxy {
         return proxy;
     }
     let accumulation = textureLoad(oit_residual_color, pixel, 0);
+    let moment = textureLoad(oit_residual_moment, pixel, 0);
+    if (u32(moment.w) != frame.oit.z) {
+        return proxy;
+    }
     let tau = accumulation.a;
     if (tau <= 0.0) {
         return proxy;
     }
-    let moment = textureLoad(oit_residual_moment, pixel, 0);
     proxy.alpha = 1.0 - exp(-tau);
     proxy.depth = clamp(moment.x / tau, 0.0, 1.0);
     proxy.color = accumulation.rgb / tau;

@@ -1,0 +1,60 @@
+use super::super::signature::ShadowKeys;
+use super::super::*;
+use super::Features;
+use crate::table::SceneTable;
+
+pub(super) struct Stage<'a> {
+    pub(super) encoder: &'a mut CommandEncoder,
+    pub(super) queue: &'a Queue,
+    pub(super) scene: &'a SceneFrame<'a>,
+    pub(super) table: &'a SceneTable,
+    pub(super) keys: ShadowKeys,
+    pub(super) shadow: Option<&'a mut Shadow>,
+    pub(super) meshes: Option<&'a MeshPasses>,
+    pub(super) level: &'a BindGroup,
+    pub(super) atlas: &'a BindGroup,
+    pub(super) occupancy: &'a BindGroup,
+    pub(super) data: &'a FrameData,
+    pub(super) features: Features,
+}
+
+pub(super) fn encode(stage: Stage<'_>) {
+    let Stage {
+        encoder,
+        queue,
+        scene,
+        table,
+        keys,
+        shadow,
+        meshes,
+        level,
+        atlas,
+        occupancy,
+        data,
+        features,
+    } = stage;
+    let Some(shadow) =
+        shadow.filter(|_| !features.slice && scene.shading.shadows > 0.0 && features.volume)
+    else {
+        return;
+    };
+    let groups = ShadowGroups {
+        scene: table.shadow_group(),
+        level,
+        atlas,
+        occupancy,
+    };
+    let object = keys.objects();
+    if shadow.object_key() != Some(object) {
+        shadow.set_object_key(object);
+        shadow.clear_objects(encoder);
+        if let Some(meshes) = meshes {
+            meshes.draw_shadow(encoder, shadow.objects());
+        }
+    }
+    let key = keys.volume();
+    if shadow.stale(key) {
+        table.write_shadow_frame(queue, *data);
+    }
+    shadow.encode_tau(encoder, groups, key);
+}

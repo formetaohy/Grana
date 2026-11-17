@@ -15,7 +15,6 @@ const SIDE: u32 = 3;
 pub(crate) struct Clear {
     scene: RenderPipeline,
     depth: RenderPipeline,
-    residual: RenderPipeline,
     accumulation: RenderPipeline,
 }
 
@@ -79,15 +78,6 @@ impl Clear {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let residual = pair(
-            device,
-            &module,
-            &layout,
-            "grana.clear.residual",
-            crate::oit::RESIDUAL_COLOR_FORMAT,
-            crate::oit::RESIDUAL_MOMENT_FORMAT,
-            pipelines,
-        );
         let accumulation = pair(
             device,
             &module,
@@ -100,7 +90,6 @@ impl Clear {
         Self {
             scene,
             depth,
-            residual,
             accumulation,
         }
     }
@@ -133,22 +122,6 @@ impl Clear {
         crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.depth);
         pass.draw(0..SIDE, 0..1);
-    }
-
-    pub fn residual(
-        &self,
-        encoder: &mut CommandEncoder,
-        color: &TextureView,
-        moment: &TextureView,
-        region: [u32; 4],
-    ) {
-        self.pair_pass(
-            encoder,
-            "grana.clear.residual.pass",
-            &self.residual,
-            [color, moment],
-            region,
-        );
     }
 
     pub fn accumulation(

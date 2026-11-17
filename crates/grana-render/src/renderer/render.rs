@@ -1,5 +1,5 @@
 use super::allocate::{self, Needed};
-use super::draw::{self, Draw};
+use super::draw;
 use super::plan::{self, Adapt};
 use super::resolve;
 use super::signature::{ShadowKeys, channel_style};
@@ -98,18 +98,13 @@ impl Renderer {
                 return Ok(self.info);
             }
             Err(Halt::Hold(info)) => {
-                self.staging.finish(&encoder);
                 queue.submit([encoder.finish()]);
                 return Ok(info);
             }
-            Err(Halt::Fail(detail)) => {
-                self.staging.discard();
-                return Err(detail);
-            }
+            Err(Halt::Fail(detail)) => return Err(detail),
         };
         self.record(device, queue, &mut encoder, target, &frame, &mut prepared);
         self.resolve(device, queue, &mut encoder, target, &frame, &prepared);
-        self.staging.finish(&encoder);
         queue.submit([encoder.finish()]);
         self.register();
         Ok(self.info)
@@ -160,7 +155,7 @@ impl Renderer {
             exporting,
             info,
             residence,
-            staging,
+            upload,
             dummy_normal,
             dummy_volume,
             budget,
@@ -173,10 +168,9 @@ impl Renderer {
             arena.as_ref(),
             atlas.as_mut(),
         ) else {
-            staging.discard();
+            upload.discard();
             return Err(Halt::Blank);
         };
-        staging.encode(encoder, atlas);
         let scene = frame.scene;
         assert_eq!(
             scene.channels.len(),
@@ -216,7 +210,7 @@ impl Renderer {
         });
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {
-            scene_table.publish(device, queue, pyramid, scene.channels);
+            scene_table.publish(device, queue, upload, pyramid, scene.channels);
             residence.set_style(channel);
         }
         let stale = residence.passes_outdated(scene.versions);
@@ -230,10 +224,11 @@ impl Renderer {
             levels: outlook.levels,
             atlas,
             arena,
-            queue,
+            upload,
             time: frame.time,
             content: residence.content(),
         });
+        upload.encode(device, queue, encoder);
         let tables = plan::tables(bricks, outlook.levels);
         let (step, ray_bounds) =
             match plan::ray(frame.camera, tables[0], scene.step_scale, view.height) {
@@ -438,7 +433,6 @@ impl Renderer {
             shadow,
             convergence,
             temporal: temporal_pass,
-            object_key,
             info,
             occupancy_group,
             bake,
@@ -547,46 +541,44 @@ impl Renderer {
                 passes.write_uniforms(queue, data, scene.shading);
             }
             let occupancy = occupancy_group.as_ref().expect("the occupancy is ready");
-            {
-                let draw = Draw {
-                    encoder,
-                    device,
-                    queue,
-                    layouts,
-                    pipelines,
-                    target,
-                    scene,
-                    table: scene_table,
-                    shadow_scene: scene_table.shadow_group(),
-                    level_group,
-                    atlas_group: atlas.group(),
+            draw::encode(draw::Stage {
+                device,
+                queue,
+                layouts,
+                encoder,
+                target,
+                scene,
+                table: scene_table,
+                groups: draw::Groups {
+                    level: level_group,
+                    atlas: atlas.group(),
                     occupancy,
-                    shadow: shadow.as_mut(),
-                    shadow_keys: prepared.shadow,
-                    volume,
-                    clear,
-                    surface: surface_pass,
-                    oit_resolve,
-                    meshes: meshes.as_mut(),
-                    splats: splats.as_mut(),
-                    sections,
-                    overlay,
-                    data,
-                    view,
+                },
+                shadow: shadow.as_mut(),
+                keys: prepared.shadow,
+                volume_pass: volume,
+                clear,
+                surface: surface_pass,
+                oit_resolve,
+                meshes: meshes.as_ref(),
+                splats: splats.as_ref(),
+                sections,
+                overlay,
+                data,
+                features: draw::Features {
+                    region: view.region,
                     slice: prepared.shot.slice,
                     translucent: prepared.shot.translucent,
-                    volume_visible: prepared.shot.volume,
+                    volume: prepared.shot.volume,
                     surfaces: prepared.shot.surfaces,
-                    sample: started.sample,
-                    dummy_ao,
-                    dummy_oit,
-                    dummy_normal,
-                    dummy_volume,
-                    object_key,
                     ambient: started.reset,
-                };
-                draw::encode(draw);
-            }
+                },
+                sample: started.sample,
+                dummy_ao,
+                dummy_oit,
+                dummy_normal,
+                dummy_volume,
+            });
             if frame.sampling.measuring() && target.samples > 1 {
                 resolve::measure(
                     encoder,

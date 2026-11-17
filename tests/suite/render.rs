@@ -159,7 +159,7 @@ fn settle_with<'a, 'b: 'a>(
                 .iter()
                 .map(|request| (*request, volume.brick(&grid, request.coord)))
                 .collect::<Vec<_>>();
-            renderer.upload(gpu.queue(), &bricks);
+            renderer.upload(&bricks);
             latest = requests;
         }
     }
@@ -813,7 +813,7 @@ fn assure(
                 .iter()
                 .map(|request| (*request, volume.brick(grid, request.coord)))
                 .collect::<Vec<_>>();
-            renderer.upload(gpu.queue(), &bricks);
+            renderer.upload(&bricks);
         }
         info = renderer
             .draw(gpu.device(), gpu.queue(), frame(view))
@@ -1146,7 +1146,7 @@ fn stream_levels(
                     (*request, volume.brick(&grid, request.coord))
                 })
                 .collect::<Vec<_>>();
-            renderer.upload(gpu.queue(), &bricks);
+            renderer.upload(&bricks);
         }
     }
     panic!("the stream never settled");
@@ -1399,7 +1399,7 @@ fn take(
                     .iter()
                     .map(|request| (*request, volume.brick(&grid, request.coord)))
                     .collect::<Vec<_>>();
-                renderer.upload(gpu.queue(), &bricks);
+                renderer.upload(&bricks);
             }
             continue;
         }
@@ -1926,7 +1926,7 @@ fn invalidates_the_streamed_content_and_restreams_it() {
         .iter()
         .map(|request| (*request, volume.brick(&grid, request.coord)))
         .collect::<Vec<_>>();
-    renderer.upload(gpu.queue(), &bricks);
+    renderer.upload(&bricks);
     settle(&gpu, &mut renderer, &view, &volume);
     let after = read_pixels(&gpu, &target, [SIDE, SIDE]);
     assert!(

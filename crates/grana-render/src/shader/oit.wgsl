@@ -58,19 +58,19 @@ fn oit_insert(index: u32, layers: u32, epoch: u32, depth: f32, premultiplied: ve
 
 struct Residual {
     @location(0) color: vec4<f32>,
-    @location(1) moment: vec2<f32>,
+    @location(1) moment: vec4<f32>,
 }
 
-fn oit_residual(alpha: f32, color: vec3<f32>, depth: f32) -> Residual {
+fn oit_residual(epoch: u32, alpha: f32, color: vec3<f32>, depth: f32) -> Residual {
     var output: Residual;
     output.color = vec4<f32>(0.0);
-    output.moment = vec2<f32>(0.0);
+    output.moment = vec4<f32>(0.0, 0.0, 0.0, f32(epoch));
     if (alpha <= OIT_ALPHA_FLOOR) {
         return output;
     }
     let tau = -log(max(1.0 - alpha, OIT_ALPHA_FLOOR));
     output.color = vec4<f32>(color * tau, tau);
-    output.moment = vec2<f32>(clamp(depth, 0.0, 1.0) * tau, 0.0);
+    output.moment = vec4<f32>(clamp(depth, 0.0, 1.0) * tau, 0.0, 0.0, f32(epoch));
     return output;
 }
 

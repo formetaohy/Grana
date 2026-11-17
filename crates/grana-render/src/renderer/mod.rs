@@ -174,7 +174,7 @@ pub struct Renderer {
     occupancy_group: Option<BindGroup>,
     bake: Option<Bake>,
     baked: BakeQueue,
-    staging: crate::staging::Staging,
+    upload: crate::upload::Upload,
     scratch: upload::UploadScratch,
     arena: Option<BrickArena>,
     level_group: Option<BindGroup>,
@@ -184,7 +184,7 @@ pub struct Renderer {
     volume: VolumePass,
     clear: crate::clear::Clear,
     surface: crate::surface::Pipeline,
-    oit_resolve: Option<OitResolve>,
+    oit_resolve: OitResolve,
     gtao: crate::ao::AoPipeline,
     meshes: Option<MeshPasses>,
     splats: Option<SplatPasses>,
@@ -208,7 +208,6 @@ pub struct Renderer {
     convergence: Option<Convergence>,
     temporal: TemporalPass,
     fade: Option<Fade>,
-    object_key: Option<u64>,
     sections: Sections,
     sliced: bool,
     overlay: Overlays,
@@ -262,7 +261,7 @@ impl Renderer {
             occupancy_group: None,
             bake: None,
             baked: BakeQueue::new(),
-            staging: crate::staging::Staging::new(device),
+            upload: crate::upload::Upload::new(),
             scratch: upload::UploadScratch::new(),
             arena: None,
             level_group: None,
@@ -272,7 +271,7 @@ impl Renderer {
             volume,
             clear,
             surface,
-            oit_resolve: None,
+            oit_resolve: OitResolve::new(device, &layouts, pipelines),
             gtao: crate::ao::AoPipeline::new(device, &layouts, pipelines),
             meshes: None,
             splats: None,
@@ -297,7 +296,6 @@ impl Renderer {
             convergence: None,
             temporal,
             fade: None,
-            object_key: None,
             sections,
             sliced: false,
             overlay,
@@ -383,7 +381,7 @@ impl Renderer {
             "an invalidated dataset keeps the resident layout"
         );
         self.pyramid = Some(pyramid.clone());
-        self.staging.discard();
+        self.upload.discard();
         self.residence.invalidate();
         if let Some(atlas) = self.atlas.as_mut() {
             atlas.reset();
@@ -413,7 +411,7 @@ impl Renderer {
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
         let channels = pyramid.channel_count();
-        self.staging.discard();
+        self.upload.discard();
         assert!(
             (1..=CHANNEL_LIMIT).contains(&channels),
             "a dataset holds one to {CHANNEL_LIMIT} channels"
@@ -479,7 +477,6 @@ impl Renderer {
         planner.bind_arena(device, &self.layouts, &arena);
         self.planner = Some(planner);
         self.shadow = Some(Shadow::new(device, &self.layouts, &self.pipelines));
-        self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,

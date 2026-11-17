@@ -101,7 +101,7 @@ pub(super) struct Tables<'a> {
     pub(super) levels: Levels,
     pub(super) atlas: &'a Atlas,
     pub(super) arena: &'a BrickArena,
-    pub(super) queue: &'a Queue,
+    pub(super) upload: &'a mut crate::upload::Upload,
     pub(super) time: u32,
     pub(super) content: u32,
 }
@@ -113,7 +113,7 @@ pub(super) fn prepare(tables: Tables<'_>) {
         levels,
         atlas,
         arena,
-        queue,
+        upload,
         time,
         content,
     } = tables;
@@ -129,7 +129,7 @@ pub(super) fn prepare(tables: Tables<'_>) {
         ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
         let table = bricks[level].as_mut().expect("the brick table exists");
         if table.time() != Some(time) {
-            table.rebase(queue, time, content, atlas, arena);
+            table.rebase(upload, time, content, atlas, arena);
         }
     }
 }

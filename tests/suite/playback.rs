@@ -57,7 +57,7 @@ fn play(display: Display, seconds: f64, advancing: bool) -> (u32, usize) {
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {
-            engine.upload(gpu.queue(), &bricks);
+            engine.upload(&bricks);
         }
         if advancing
             && engine.info().samples > 0
@@ -145,7 +145,7 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {
-            engine.upload(gpu.queue(), &bricks);
+            engine.upload(&bricks);
         }
         engine
             .draw(

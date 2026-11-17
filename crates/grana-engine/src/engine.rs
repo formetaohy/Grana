@@ -123,8 +123,8 @@ impl Engine {
         self.info = FrameInfo::default();
     }
 
-    pub fn damage(&mut self, queue: &Queue, damages: &[Damage]) {
-        self.renderer.damage(queue, damages);
+    pub fn damage(&mut self, damages: &[Damage]) {
+        self.renderer.damage(damages);
     }
 
     pub fn requests_pending(&self) -> bool {
@@ -139,8 +139,8 @@ impl Engine {
         Some(requests)
     }
 
-    pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) {
-        self.renderer.upload(queue, bricks);
+    pub fn upload(&mut self, bricks: &[(BrickRequest, BrickData)]) {
+        self.renderer.upload(bricks);
         self.generation = self.renderer.generation();
     }
 

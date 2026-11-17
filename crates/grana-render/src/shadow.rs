@@ -170,6 +170,7 @@ pub(crate) struct Shadow {
     compare: wgpu::Sampler,
     dims: [u32; 3],
     tau_key: Option<u64>,
+    object_key: Option<u64>,
 }
 
 impl Shadow {
@@ -205,7 +206,16 @@ impl Shadow {
             compare,
             dims,
             tau_key: None,
+            object_key: None,
         }
+    }
+
+    pub fn object_key(&self) -> Option<u64> {
+        self.object_key
+    }
+
+    pub fn set_object_key(&mut self, key: u64) {
+        self.object_key = Some(key);
     }
 
     pub fn resize(&mut self, device: &Device, layouts: &Layouts, dims: [u32; 3]) {

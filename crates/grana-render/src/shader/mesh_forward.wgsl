@@ -33,7 +33,7 @@ fn vs_shadow(input: VertexInput) -> ShadowOutput {
 
 @fragment
 fn fs_oit(input: VertexOutput) -> Residual {
-    var output = oit_residual(0.0, vec3<f32>(0.0), 0.0);
+    var output = oit_residual(mesh.oit.z, 0.0, vec3<f32>(0.0), 0.0);
     if (is_outside(input)) {
         return output;
     }
@@ -55,7 +55,7 @@ fn fs_oit(input: VertexOutput) -> Residual {
     if (oit_insert(u32(index), mesh.oit.y, mesh.oit.z, depth, premultiplied)) {
         return output;
     }
-    return oit_residual(sample.a, sample.rgb, depth);
+    return oit_residual(mesh.oit.z, sample.a, sample.rgb, depth);
 }
 
 @fragment

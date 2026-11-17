@@ -4,15 +4,15 @@ use grana_volume::{Intensity, Pyramid};
 use half::f16;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferUsages, Device,
-    Queue, Sampler, SamplerDescriptor, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
-    TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    TextureViewDescriptor, util::DeviceExt,
+    Queue, Sampler, SamplerDescriptor, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages, TextureView, TextureViewDescriptor, util::DeviceExt,
 };
 
 use crate::atlas::{PACK, PACK_LIMIT};
 use crate::frame::FrameData;
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
+use crate::upload::Upload;
 use grana_display::{TransferFunction, VolumeMode};
 use grana_volume::CHANNEL_LIMIT;
 
@@ -143,6 +143,7 @@ impl SceneTable {
         &mut self,
         device: &Device,
         queue: &Queue,
+        upload: &mut Upload,
         pyramid: &Pyramid,
         rows: &[ChannelRow],
     ) {
@@ -153,7 +154,7 @@ impl SceneTable {
         );
         for (index, row) in rows.iter().enumerate() {
             if self.transfers[index].as_ref() != Some(&row.transfer) {
-                self.write_transfer(queue, index, &row.transfer);
+                self.write_transfer(upload, index, &row.transfer);
                 self.transfers[index] = Some(row.transfer.clone());
             }
         }
@@ -180,7 +181,7 @@ impl SceneTable {
         queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(&frame));
     }
 
-    fn write_transfer(&mut self, queue: &Queue, row: usize, transfer: &TransferFunction) {
+    fn write_transfer(&mut self, upload: &mut Upload, row: usize, transfer: &TransferFunction) {
         let lut = transfer.lut(LUT_SIZE);
         let mut extinction = Vec::with_capacity(lut.len() * 4);
         for [red, green, blue, alpha] in lut.iter() {
@@ -189,7 +190,14 @@ impl SceneTable {
                 extinction.push(f16::from_f32(channel).to_bits());
             }
         }
-        write_row(queue, &self.lut, row, &extinction);
+        upload.texture(
+            &self.lut,
+            [0, row as u32, 0],
+            [LUT_SIZE as u32, 1, 1],
+            (LUT_SIZE as u32) * 8,
+            1,
+            cast_slice(&extinction),
+        );
         self.thresholds[row] = lut
             .iter()
             .position(|stop| stop[3] > MINIMUM_ALPHA)
@@ -328,32 +336,6 @@ fn transfer_texture(device: &Device, label: &str, channels: usize) -> Texture {
         usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         view_formats: &[],
     })
-}
-
-fn write_row(queue: &Queue, texture: &Texture, row: usize, quantized: &[u16]) {
-    queue.write_texture(
-        TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d {
-                x: 0,
-                y: row as u32,
-                z: 0,
-            },
-            aspect: TextureAspect::All,
-        },
-        cast_slice(quantized),
-        TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(LUT_SIZE as u32 * 8),
-            rows_per_image: Some(1),
-        },
-        wgpu::Extent3d {
-            width: LUT_SIZE as u32,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-    );
 }
 
 fn unit_at(start: f32, inverse: f32, position: f32) -> f32 {

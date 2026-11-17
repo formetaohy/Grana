@@ -2,9 +2,10 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_volume::{BrickGrid, Level, Pyramid};
 use std::ops::Range;
-use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
+use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device};
 
 use crate::atlas::Atlas;
+use crate::upload::Upload;
 
 pub(crate) const HOLLOW_FLAG: u32 = 2;
 
@@ -134,7 +135,7 @@ pub(crate) struct BrickTable {
     base: u32,
     time: Option<u32>,
     records: Vec<BrickRecord>,
-    dirty: Option<Range<usize>>,
+    dirty: Vec<Range<usize>>,
     revision: u64,
 }
 
@@ -167,7 +168,7 @@ impl BrickTable {
             base,
             time: None,
             records: vec![BrickRecord::MISSING; grid.count()],
-            dirty: None,
+            dirty: Vec::new(),
             revision: 0,
         }
     }
@@ -182,7 +183,7 @@ impl BrickTable {
 
     pub fn rebase(
         &mut self,
-        queue: &Queue,
+        upload: &mut Upload,
         time: u32,
         content: u32,
         atlas: &Atlas,
@@ -198,31 +199,39 @@ impl BrickTable {
                 self.mark(resident.index);
             }
         }
-        self.flush(queue, arena);
+        self.flush(upload, arena);
         self.time = Some(time);
     }
 
     fn mark(&mut self, index: usize) {
-        self.dirty = Some(match self.dirty.take() {
-            Some(range) => range.start.min(index)..range.end.max(index + 1),
-            None => index..index + 1,
-        });
+        self.dirty.push(index..index + 1);
     }
 
-    pub fn flush(&mut self, queue: &Queue, arena: &BrickArena) {
-        let Some(range) = self.dirty.take() else {
+    pub fn flush(&mut self, upload: &mut Upload, arena: &BrickArena) {
+        if self.dirty.is_empty() {
             return;
-        };
+        }
+        self.dirty.sort_unstable_by_key(|range| range.start);
+        let mut runs: Vec<Range<usize>> = Vec::new();
+        for range in self.dirty.drain(..) {
+            match runs.last_mut() {
+                Some(held) if range.start <= held.end => held.end = held.end.max(range.end),
+                _ => runs.push(range),
+            }
+        }
         assert!(
-            !range.is_empty() && self.base as usize + range.end <= arena.records(),
+            runs.iter()
+                .all(|run| !run.is_empty() && self.base as usize + run.end <= arena.records()),
             "a brick record run lies inside the arena"
         );
         self.revision += 1;
-        queue.write_buffer(
-            arena.buffer(),
-            (self.base as u64 + range.start as u64) * RECORD_BYTES,
-            bytemuck::cast_slice(&self.records[range]),
-        );
+        for run in runs {
+            upload.buffer(
+                arena.buffer(),
+                (self.base as u64 + run.start as u64) * RECORD_BYTES,
+                bytemuck::cast_slice(&self.records[run]),
+            );
+        }
     }
 
     pub fn set_record(&mut self, arena: &BrickArena, index: usize, record: BrickRecord) {

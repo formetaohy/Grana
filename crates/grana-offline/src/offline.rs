@@ -198,7 +198,7 @@ impl Offline {
             let data = bricks.read(*request, &scene.drift_warps(request.time))?;
             uploaded.push((*request, data));
         }
-        self.renderer.upload(&self.queue, &uploaded);
+        self.renderer.upload(&uploaded);
         Ok(())
     }
 }

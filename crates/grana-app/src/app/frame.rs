@@ -39,7 +39,7 @@ impl App {
         };
         let damages = session.take_damage();
         if !damages.is_empty() {
-            engine.damage(&surface.gpu.queue, &damages);
+            engine.damage(&damages);
         }
         let time = session.scene().map_or(0, |scene| scene.time());
         if let Some(requests) = engine.poll_requests(&surface.gpu.device, time) {
@@ -56,7 +56,7 @@ impl App {
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {
-            engine.upload(&surface.gpu.queue, &bricks);
+            engine.upload(&bricks);
         }
         let view = session.take_view();
         if let Some(view) = view {

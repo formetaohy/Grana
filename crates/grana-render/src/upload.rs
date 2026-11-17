@@ -1,0 +1,165 @@
+use wgpu::{
+    Buffer, BufferDescriptor, BufferUsages, CommandEncoder, Device, Extent3d, Queue,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
+};
+
+const ALIGNMENT: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
+
+const CAPACITY_FLOOR: u64 = 1 << 20;
+
+enum Copy {
+    Texture {
+        texture: Texture,
+        origin: [u32; 3],
+        extent: [u32; 3],
+        rows: u32,
+        row_bytes: u32,
+        offset: u64,
+    },
+    Buffer {
+        target: Buffer,
+        target_offset: u64,
+        offset: u64,
+        size: u64,
+    },
+}
+
+pub(crate) struct Upload {
+    buffer: Option<Buffer>,
+    capacity: u64,
+    bytes: Vec<u8>,
+    copies: Vec<Copy>,
+}
+
+impl Upload {
+    pub fn new() -> Self {
+        Self {
+            buffer: None,
+            capacity: 0,
+            bytes: Vec::new(),
+            copies: Vec::new(),
+        }
+    }
+
+    pub fn texture(
+        &mut self,
+        texture: &Texture,
+        origin: [u32; 3],
+        extent: [u32; 3],
+        row_bytes: u32,
+        rows: u32,
+        bytes: &[u8],
+    ) {
+        assert!(
+            row_bytes.is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+            "an uploaded image row keeps the copy row alignment"
+        );
+        assert_eq!(
+            bytes.len() as u64,
+            u64::from(row_bytes) * u64::from(rows) * u64::from(extent[2].max(1)),
+            "an uploaded image covers its rows"
+        );
+        let offset = self.reserve(bytes, ALIGNMENT);
+        self.copies.push(Copy::Texture {
+            texture: texture.clone(),
+            origin,
+            extent,
+            rows,
+            row_bytes,
+            offset,
+        });
+    }
+
+    pub fn buffer(&mut self, target: &Buffer, target_offset: u64, bytes: &[u8]) {
+        assert!(
+            target_offset.is_multiple_of(4) && bytes.len().is_multiple_of(4),
+            "an uploaded buffer run keeps the copy alignment"
+        );
+        if bytes.is_empty() {
+            return;
+        }
+        let offset = self.reserve(bytes, 4);
+        self.copies.push(Copy::Buffer {
+            target: target.clone(),
+            target_offset,
+            offset,
+            size: bytes.len() as u64,
+        });
+    }
+
+    pub fn encode(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder) {
+        if self.copies.is_empty() {
+            self.bytes.clear();
+            return;
+        }
+        let size = (self.bytes.len() as u64).next_multiple_of(4);
+        let capacity = size.max(CAPACITY_FLOOR).next_power_of_two();
+        if self.capacity < capacity {
+            self.buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("grana.upload.staging"),
+                size: capacity,
+                usage: BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.capacity = capacity;
+        }
+        self.bytes.resize(size as usize, 0);
+        let buffer = self.buffer.as_ref().expect("the upload staging is sized");
+        queue.write_buffer(buffer, 0, &self.bytes);
+        for copy in self.copies.drain(..) {
+            match copy {
+                Copy::Texture {
+                    texture,
+                    origin,
+                    extent,
+                    rows,
+                    row_bytes,
+                    offset,
+                } => encoder.copy_buffer_to_texture(
+                    TexelCopyBufferInfo {
+                        buffer,
+                        layout: TexelCopyBufferLayout {
+                            offset,
+                            bytes_per_row: Some(row_bytes),
+                            rows_per_image: Some(rows),
+                        },
+                    },
+                    TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: origin[0],
+                            y: origin[1],
+                            z: origin[2],
+                        },
+                        aspect: TextureAspect::All,
+                    },
+                    Extent3d {
+                        width: extent[0],
+                        height: extent[1],
+                        depth_or_array_layers: extent[2],
+                    },
+                ),
+                Copy::Buffer {
+                    target,
+                    target_offset,
+                    offset,
+                    size,
+                } => encoder.copy_buffer_to_buffer(buffer, offset, &target, target_offset, size),
+            }
+        }
+        self.bytes.clear();
+    }
+
+    pub fn discard(&mut self) {
+        self.bytes.clear();
+        self.copies.clear();
+    }
+
+    fn reserve(&mut self, bytes: &[u8], alignment: u64) -> u64 {
+        let offset = (self.bytes.len() as u64).next_multiple_of(alignment);
+        self.bytes.resize(offset as usize, 0);
+        self.bytes.extend_from_slice(bytes);
+        offset
+    }
+}

@@ -1,8 +1,9 @@
 use bytemuck::cast_slice;
 use grana_volume::CELL_COUNT;
-use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
+use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device};
 
 use crate::atlas::PACK_LIMIT;
+use crate::upload::Upload;
 
 pub(crate) const CELL_WORDS: usize = 1 + CELL_COUNT;
 
@@ -74,7 +75,7 @@ impl Occupancy {
         }
     }
 
-    pub fn flush(&mut self, queue: &Queue, slot: u32) {
+    pub fn flush(&mut self, upload: &mut Upload, slot: u32) {
         assert!(
             (slot as usize) < self.slots,
             "an occupancy slot lies inside the table"
@@ -92,7 +93,7 @@ impl Occupancy {
             }
             *occupied = u32::from(value) | (packs << MASK_SHIFT);
         }
-        queue.write_buffer(
+        upload.buffer(
             &self.buffer,
             (slot as usize * STRIDE_WORDS * size_of::<u32>()) as u64,
             cast_slice(&self.words),

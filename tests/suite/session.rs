@@ -3540,7 +3540,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                 }
                 let bricks = session.take_bricks();
                 if !bricks.is_empty() {
-                    engine.upload(gpu.queue(), &bricks);
+                    engine.upload(&bricks);
                 }
                 engine
                     .draw(
@@ -3589,7 +3589,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         "a mask radius rebuilt the engine dataset"
     );
     let revision = engine.image_revision();
-    engine.damage(gpu.queue(), &damages);
+    engine.damage(&damages);
     streamed = 0;
     settle_engine(&mut engine, &mut session, &mut streamed, Some(revision));
     assert!(

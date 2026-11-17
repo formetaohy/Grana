@@ -194,7 +194,7 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Vo
                 .iter()
                 .map(|request| (*request, volume.brick(&grid, request.coord)))
                 .collect::<Vec<(BrickRequest, BrickData)>>();
-            renderer.upload(gpu.queue(), &bricks);
+            renderer.upload(&bricks);
         }
     }
     panic!("the optics view never settled");

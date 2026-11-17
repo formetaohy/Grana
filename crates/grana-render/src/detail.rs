@@ -1,7 +1,7 @@
 use grana_display::Camera;
 use grana_volume::{PADDED_SIDE, Pyramid, Region};
 
-use crate::planner::{LadderView, Limits, volume_counts, volume_ladder};
+use crate::planner::{Counts, FitView, LadderView, Limits, volume_ladder};
 
 pub const EXPORT_CEILING: u64 = 4 << 30;
 
@@ -34,16 +34,21 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, height: u32, region: Region
         current: None,
         limits,
     });
-    let counts = volume_counts(
-        pyramid,
+    let mut counts = Counts::new(
+        FitView {
+            pyramid,
+            camera,
+            region,
+            aspect: 1.0,
+            height,
+            limits,
+            capacity: 1,
+            current: None,
+        },
         ladder.base,
-        ladder.count,
-        camera,
-        1.0,
-        height as f32,
-        region,
     );
-    let bricks = counts[..ladder.count].iter().sum();
+    let bands = counts.volume(ladder.base, ladder.count);
+    let bricks = bands[..ladder.count].iter().sum();
     Residency {
         detail: Detail {
             level: ladder.base,
