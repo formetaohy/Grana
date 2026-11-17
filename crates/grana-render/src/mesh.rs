@@ -17,7 +17,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{GBUFFER_ID_FORMAT, NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -26,17 +26,23 @@ const CULL_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh_cull.wgsl")
 );
-const GBUFFER_SHADER: &str = concat!(
-    include_str!("shader/scene.wgsl"),
+const NORMAL_SHADER: &str = concat!(
+    include_str!("shader/mesh_binding.wgsl"),
+    "\n",
+    include_str!("shader/mesh_binding_objects.wgsl"),
     "\n",
     include_str!("shader/octahedral.wgsl"),
     "\n",
-    include_str!("shader/mesh_gbuffer.wgsl")
+    include_str!("shader/mesh_common.wgsl"),
+    "\n",
+    include_str!("shader/mesh_vertex.wgsl"),
+    "\n",
+    include_str!("shader/mesh_normal.wgsl")
 );
 const FORWARD_SHADER: &str = concat!(
     include_str!("shader/mesh_binding.wgsl"),
     "\n",
-    include_str!("shader/mesh_binding_forward.wgsl"),
+    include_str!("shader/mesh_binding_objects.wgsl"),
     "\n",
     include_str!("shader/octahedral.wgsl"),
     "\n",
@@ -54,26 +60,11 @@ const FORWARD_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh_shade.wgsl"),
     "\n",
+    include_str!("shader/mesh_vertex.wgsl"),
+    "\n",
+    include_str!("shader/mesh_shadow.wgsl"),
+    "\n",
     include_str!("shader/mesh_forward.wgsl")
-);
-const DEFERRED_SHADER: &str = concat!(
-    include_str!("shader/mesh_binding.wgsl"),
-    "\n",
-    include_str!("shader/mesh_binding_deferred.wgsl"),
-    "\n",
-    include_str!("shader/octahedral.wgsl"),
-    "\n",
-    include_str!("shader/brdf.wgsl"),
-    "\n",
-    include_str!("shader/tau_codec.wgsl"),
-    "\n",
-    include_str!("shader/shadow_sample.wgsl"),
-    "\n",
-    include_str!("shader/mesh_common.wgsl"),
-    "\n",
-    include_str!("shader/mesh_shade.wgsl"),
-    "\n",
-    include_str!("shader/mesh_deferred.wgsl")
 );
 const OPAQUE_NARROW: usize = 0;
 const OPAQUE_WIDE: usize = 1;
@@ -152,16 +143,13 @@ pub(crate) struct MeshPasses {
     resident: u64,
     cull: ComputePipeline,
     shadow_cull: ComputePipeline,
+    normal_pipeline: RenderPipeline,
+    opaque_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
-    gbuffer_pipeline: RenderPipeline,
-    deferred_pipeline: RenderPipeline,
     uniforms: Buffer,
     uniform_group: BindGroup,
-    styles: Table<StyleData>,
-    style_group: BindGroup,
-    cached_styles: Vec<StyleData>,
 }
 
 impl MeshPasses {
@@ -193,11 +181,16 @@ impl MeshPasses {
             ],
             immediate_size: 0,
         });
-        let deferred_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.mesh.deferred.pipeline_layout"),
+        let normal_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.normal.pipeline_layout"),
+            bind_group_layouts: &[Some(&uniform_layout), Some(&layouts.objects)],
+            immediate_size: 0,
+        });
+        let opaque_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.opaque.pipeline_layout"),
             bind_group_layouts: &[
                 Some(&uniform_layout),
-                Some(&layouts.gbuffer),
+                Some(&layouts.objects),
                 Some(&layouts.styles),
                 Some(&layouts.shadow),
                 None,
@@ -248,24 +241,20 @@ impl MeshPasses {
             compilation_options: Default::default(),
             cache: pipelines.cache(),
         });
-        let gbuffer_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.gbuffer"),
-            source: ShaderSource::Wgsl(GBUFFER_SHADER.into()),
+        let normal_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.mesh.normal"),
+            source: ShaderSource::Wgsl(NORMAL_SHADER.into()),
         });
         let forward_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.mesh.forward"),
             source: ShaderSource::Wgsl(FORWARD_SHADER.into()),
         });
-        let deferred_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.deferred"),
-            source: ShaderSource::Wgsl(DEFERRED_SHADER.into()),
-        });
-        let gbuffer_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.gbuffer"),
-            layout: Some(&layouts.gbuffer_pipeline),
+        let normal_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.normal"),
+            layout: Some(&normal_layout),
             vertex: VertexState {
-                module: &gbuffer_module,
-                entry_point: Some("vs_gbuffer"),
+                module: &normal_module,
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(vertex_layout())],
             },
@@ -273,40 +262,33 @@ impl MeshPasses {
             depth_stencil: Some(depth_state(true, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &gbuffer_module,
-                entry_point: Some("fs_gbuffer"),
+                module: &normal_module,
+                entry_point: Some("fs_normal"),
                 compilation_options: Default::default(),
-                targets: &[
-                    Some(ColorTargetState {
-                        format: NORMAL_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    }),
-                    Some(ColorTargetState {
-                        format: GBUFFER_ID_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    }),
-                ],
+                targets: &[Some(ColorTargetState {
+                    format: NORMAL_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let deferred_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.deferred"),
-            layout: Some(&deferred_layout),
+        let opaque_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.opaque"),
+            layout: Some(&opaque_layout),
             vertex: VertexState {
-                module: &deferred_module,
-                entry_point: Some("vs_fullscreen"),
+                module: &forward_module,
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[],
+                buffers: &[Some(vertex_layout())],
             },
             primitive: PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(depth_state(false, CompareFunction::LessEqual)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &deferred_module,
-                entry_point: Some("fs_deferred"),
+                module: &forward_module,
+                entry_point: Some("fs_opaque"),
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
                     format: SCENE_FORMAT,
@@ -393,8 +375,6 @@ impl MeshPasses {
                 resource: uniforms.as_entire_binding(),
             }],
         });
-        let styles = Table::new(device, "grana.mesh.styles");
-        let style_group = bind_group(device, &layouts.styles, styles.buffer());
         Self {
             slots: HashMap::new(),
             active: Vec::new(),
@@ -403,16 +383,13 @@ impl MeshPasses {
             resident: 0,
             cull,
             shadow_cull,
+            normal_pipeline,
+            opaque_pipeline,
             oit_pipeline,
             pick_pipeline,
             shadow_pipeline,
-            gbuffer_pipeline,
-            deferred_pipeline,
             uniforms,
             uniform_group,
-            styles,
-            style_group,
-            cached_styles: Vec::new(),
         }
     }
 
@@ -458,7 +435,6 @@ impl MeshPasses {
                 .get_mut(&layer.key)
                 .expect("the mesh slot exists");
             slot.touch(order);
-            slot.style_start = layer.style_start as u32;
             slot.write_styles(
                 queue,
                 &scene.styles[layer.style_start..layer.style_start + layer.style_count],
@@ -466,33 +442,7 @@ impl MeshPasses {
             slot.write_pick(device, queue, layer.style_start);
             self.active.push(layer.key);
         }
-        self.write_styles(device, queue, layouts, scene.styles);
         self.evict();
-    }
-
-    fn write_styles(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        layouts: &Layouts,
-        styles: &[Style],
-    ) {
-        assert!(
-            styles.len() <= usize::from(u16::MAX),
-            "a scene addresses its styles through the 16 bit rows of a geometry buffer"
-        );
-        let data = styles
-            .iter()
-            .map(|style| style_data(*style))
-            .collect::<Vec<_>>();
-        if data == self.cached_styles {
-            return;
-        }
-        let grown = self.styles.write(device, queue, &data);
-        if grown {
-            self.style_group = bind_group(device, &layouts.styles, self.styles.buffer());
-        }
-        self.cached_styles = data;
     }
 
     fn evict(&mut self) {
@@ -570,72 +520,57 @@ impl MeshPasses {
         }
     }
 
-    pub fn draw_gbuffer(
+    pub fn draw_normal(
         &self,
         encoder: &mut CommandEncoder,
         region: [u32; 4],
-        gbuffer: &crate::target::Gbuffer,
+        normal: &crate::target::NormalTarget,
         depth: &TextureView,
-        scene: &BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.mesh.gbuffer.pass"),
-            color_attachments: &[Some(load(gbuffer.normal())), Some(load(gbuffer.id()))],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
+            label: Some("grana.mesh.normal.pass"),
+            color_attachments: &[Some(load(normal.view()))],
+            depth_stencil_attachment: Some(depth_attachment(depth)),
             ..Default::default()
         });
         crate::target::viewport(&mut pass, region);
-        pass.set_pipeline(&self.gbuffer_pipeline);
-        pass.set_bind_group(0, scene, &[]);
+        pass.set_pipeline(&self.normal_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
         for key in &self.active {
-            self.slots[key].draw_gbuffer(&mut pass);
+            self.slots[key].draw_normal(&mut pass);
         }
     }
 
-    pub fn draw_deferred(
+    pub fn draw_opaque(
         &self,
         encoder: &mut CommandEncoder,
         region: [u32; 4],
         color: &TextureView,
-        gbuffer: &BindGroup,
+        depth: &TextureView,
         shadow: &BindGroup,
         ao: &BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.mesh.deferred.pass"),
+            label: Some("grana.mesh.opaque.pass"),
             color_attachments: &[Some(load(color))],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(depth_attachment(depth)),
             ..Default::default()
         });
         crate::target::viewport(&mut pass, region);
-        pass.set_pipeline(&self.deferred_pipeline);
+        pass.set_pipeline(&self.opaque_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
-        pass.set_bind_group(1, gbuffer, &[]);
-        pass.set_bind_group(2, &self.style_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(7, ao, &[]);
-        pass.draw(0..3, 0..1);
+        for key in &self.active {
+            self.slots[key].draw(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
+        }
     }
 
     pub fn draw_shadow(&self, encoder: &mut CommandEncoder, target: &TextureView) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.mesh.shadow.pass"),
             color_attachments: &[],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: target,
-                depth_ops: Some(Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
+            depth_stencil_attachment: Some(depth_attachment(target)),
             ..Default::default()
         });
         pass.set_pipeline(&self.shadow_pipeline);
@@ -689,7 +624,6 @@ struct MeshSlot {
     commands: IndexedCommands,
     command_group: BindGroup,
     object_count: u32,
-    style_start: u32,
     cached_styles: Vec<StyleData>,
     pick_base: Option<usize>,
     bytes: u64,
@@ -794,7 +728,6 @@ impl MeshSlot {
             commands,
             command_group,
             object_count,
-            style_start: 0,
             cached_styles: Vec::new(),
             pick_base: None,
             bytes,
@@ -835,57 +768,25 @@ impl MeshSlot {
         self.pick_base = Some(style_start);
     }
 
-    fn draw_gbuffer<'a>(&'a self, pass: &mut RenderPass<'a>) {
+    fn draw_normal<'a>(&'a self, pass: &mut RenderPass<'a>) {
         pass.set_bind_group(1, &self.object_group, &[]);
-        pass.set_bind_group(5, &self.pick_group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
-        if let Some(indices) = &self.narrow {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
-            pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(OPAQUE_NARROW),
-                self.object_count,
-            );
-        }
-        if let Some(indices) = &self.wide {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-            pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(OPAQUE_WIDE),
-                self.object_count,
-            );
-        }
+        self.draw_regions(pass, OPAQUE_NARROW, OPAQUE_WIDE);
     }
 
     fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_bind_group(5, &self.pick_group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
-        if let Some(indices) = &self.narrow {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
-            for region in [OPAQUE_NARROW, LAYER_NARROW] {
-                pass.multi_draw_indexed_indirect(
-                    self.commands.buffer(),
-                    self.commands.offset(region),
-                    self.object_count,
-                );
-            }
-        }
-        if let Some(indices) = &self.wide {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-            for region in [OPAQUE_WIDE, LAYER_WIDE] {
-                pass.multi_draw_indexed_indirect(
-                    self.commands.buffer(),
-                    self.commands.offset(region),
-                    self.object_count,
-                );
-            }
-        }
+        self.draw_regions(pass, OPAQUE_NARROW, OPAQUE_WIDE);
+        self.draw_regions(pass, LAYER_NARROW, LAYER_WIDE);
     }
 
     fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
         pass.set_bind_group(1, &self.object_group, &[]);
         pass.set_bind_group(2, &self.style_group, &[]);
+        self.draw_regions(pass, narrow, wide);
+    }
+
+    fn draw_regions<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         if let Some(indices) = &self.narrow {
             pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
@@ -940,6 +841,17 @@ fn load(view: &TextureView) -> RenderPassColorAttachment<'_> {
             load: LoadOp::Load,
             store: StoreOp::Store,
         },
+    }
+}
+
+fn depth_attachment(view: &TextureView) -> RenderPassDepthStencilAttachment<'_> {
+    RenderPassDepthStencilAttachment {
+        view,
+        depth_ops: Some(Operations {
+            load: LoadOp::Load,
+            store: StoreOp::Store,
+        }),
+        stencil_ops: None,
     }
 }
 

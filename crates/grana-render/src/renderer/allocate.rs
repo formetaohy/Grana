@@ -19,12 +19,10 @@ pub(super) fn targets(
     needed: Needed,
 ) -> Result<FragmentInfo, String> {
     let size = target.size;
-    if needed.surfaces && !needed.slice && target.gbuffer.is_none() {
-        let gbuffer =
-            crate::target::Gbuffer::new(device, &layouts.gbuffer, target.scene.depth(), size);
+    if needed.surfaces && !needed.slice && target.normal.is_none() {
+        target.normal = Some(crate::target::NormalTarget::new(device, size));
         target.ao = Some(crate::ao::Ao::new(device, layouts, gtao, size));
         target.surface = Some(crate::surface::Target::new(device, layouts, size));
-        target.gbuffer = Some(gbuffer);
     }
     if needed.volume && !needed.slice && target.volume.is_none() {
         let volume = crate::target::Volume::new(device, &layouts.volume_read, size);

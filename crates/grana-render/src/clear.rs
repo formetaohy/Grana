@@ -14,7 +14,6 @@ const SIDE: u32 = 3;
 
 pub(crate) struct Clear {
     scene: RenderPipeline,
-    depth: RenderPipeline,
 }
 
 impl Clear {
@@ -55,29 +54,7 @@ impl Clear {
             multiview_mask: None,
             cache: pipelines.cache(),
         });
-        let depth = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.clear.depth"),
-            layout: Some(&layout),
-            vertex: VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(CompareFunction::Always),
-                stencil: StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: MultisampleState::default(),
-            fragment: None,
-            multiview_mask: None,
-            cache: pipelines.cache(),
-        });
-        Self { scene, depth }
+        Self { scene }
     }
 
     pub fn scene(
@@ -95,18 +72,6 @@ impl Clear {
         });
         crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.scene);
-        pass.draw(0..SIDE, 0..1);
-    }
-
-    pub fn depth(&self, encoder: &mut CommandEncoder, depth: &TextureView, region: [u32; 4]) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.clear.depth.pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(depth_attachment(depth)),
-            ..Default::default()
-        });
-        crate::target::viewport(&mut pass, region);
-        pass.set_pipeline(&self.depth);
         pass.draw(0..SIDE, 0..1);
     }
 }

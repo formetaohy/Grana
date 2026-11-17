@@ -1,34 +1,16 @@
-fn object_position(input: VertexInput) -> vec3<f32> {
-    let object = objects[input.object];
-    return object.minimum.xyz + input.position.xyz * object.extent.xyz;
-}
+@group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
 
-@vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
-    let position = object_position(input);
-    let clip = mesh.view_projection * vec4<f32>(position, 1.0);
-    var output: VertexOutput;
-    output.clip_position = vec4<f32>(
-        clip.xy + mesh.jitter.xy * clip.w + lens_shift(clip.w),
-        clip.zw,
+@fragment
+fn fs_opaque(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (is_outside(input)) {
+        discard;
+    }
+    return shade(
+        styles[input.object],
+        input.normal,
+        input.position,
+        ambient_occlusion(input.clip_position.xy),
     );
-    output.normal = octahedral_decode(input.normal * 2.0 - vec2<f32>(1.0));
-    output.position = position;
-    output.object = input.object;
-    return output;
-}
-
-@vertex
-fn vs_shadow(input: VertexInput) -> ShadowOutput {
-    let coordinate = shadow_coordinate(mesh.light_view, object_position(input));
-    var output: ShadowOutput;
-    output.clip_position = vec4<f32>(
-        coordinate.x * 2.0 - 1.0,
-        1.0 - coordinate.y * 2.0,
-        coordinate.z,
-        1.0,
-    );
-    return output;
 }
 
 @fragment

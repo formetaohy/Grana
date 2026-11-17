@@ -6,7 +6,6 @@ use wgpu::{
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const WIDE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rg16Float;
-pub(crate) const GBUFFER_ID_FORMAT: TextureFormat = TextureFormat::R16Uint;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
 pub(crate) const VOLUME_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -67,68 +66,28 @@ impl SceneTarget {
     }
 }
 
-pub(crate) struct Gbuffer {
-    normal: TextureView,
-    id: TextureView,
-    group: BindGroup,
+pub(crate) struct NormalTarget {
+    view: TextureView,
 }
 
-impl Gbuffer {
-    pub fn new(
-        device: &Device,
-        layout: &BindGroupLayout,
-        depth: &TextureView,
-        size: [u32; 2],
-    ) -> Self {
+impl NormalTarget {
+    pub fn new(device: &Device, size: [u32; 2]) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0,
-            "a geometry buffer covers a positive surface"
+            "a normal target covers a positive surface"
         );
-        let normal = attachment(
+        let view = attachment(
             device,
-            "grana.gbuffer.normal",
+            "grana.scene.normal",
             size,
             NORMAL_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
-        let id = attachment(
-            device,
-            "grana.gbuffer.id",
-            size,
-            GBUFFER_ID_FORMAT,
-            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        );
-        let group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.gbuffer.group"),
-            layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&normal),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&id),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(depth),
-                },
-            ],
-        });
-        Self { normal, id, group }
+        Self { view }
     }
 
-    pub fn normal(&self) -> &TextureView {
-        &self.normal
-    }
-
-    pub fn id(&self) -> &TextureView {
-        &self.id
-    }
-
-    pub fn group(&self) -> &BindGroup {
-        &self.group
+    pub fn view(&self) -> &TextureView {
+        &self.view
     }
 }
 

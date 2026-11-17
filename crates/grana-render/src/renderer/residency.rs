@@ -142,7 +142,7 @@ pub(super) struct FrameTarget {
     pub(super) oit: Option<Oit>,
     pub(super) geometry: Option<(GeometryKey, BindGroup)>,
     pub(super) objects: Option<BindGroup>,
-    pub(super) gbuffer: Option<crate::target::Gbuffer>,
+    pub(super) normal: Option<crate::target::NormalTarget>,
     pub(super) ao: Option<crate::ao::Ao>,
     pub(super) surface: Option<crate::surface::Target>,
     pub(super) volume: Option<crate::target::Volume>,
@@ -185,7 +185,7 @@ impl FrameTarget {
             oit: None,
             geometry: None,
             objects: None,
-            gbuffer: None,
+            normal: None,
             ao: None,
             surface: None,
             volume: None,
@@ -209,15 +209,15 @@ impl FrameTarget {
         volume: bool,
     ) -> BindGroup {
         let key = GeometryKey {
-            object: self.gbuffer.is_some(),
+            object: self.normal.is_some(),
             volume,
         };
         let stale = self.geometry.as_ref().is_none_or(|(held, _)| *held != key);
         if stale {
             let normal = self
-                .gbuffer
+                .normal
                 .as_ref()
-                .map_or(dummy_normal, crate::target::Gbuffer::normal);
+                .map_or(dummy_normal, crate::target::NormalTarget::view);
             let (surface, volume_normal) = match self.volume.as_ref().filter(|_| volume) {
                 Some(volume) => (volume.surface(), volume.normal()),
                 None => (dummy_volume.surface(), dummy_volume.normal()),
@@ -257,10 +257,10 @@ impl FrameTarget {
         let stale = self.objects.is_none();
         if stale {
             let normal = self
-                .gbuffer
+                .normal
                 .as_ref()
-                .expect("the object surface reads a geometry buffer")
-                .normal();
+                .expect("the object surface reads the normal target")
+                .view();
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("grana.object.surface.group"),
                 layout: &layouts.object_surface,

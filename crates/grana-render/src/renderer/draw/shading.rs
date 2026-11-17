@@ -32,7 +32,6 @@ pub(super) fn encode(stage: Stage<'_>) {
         dummy_oit,
     } = stage;
     let region = features.region;
-    let deferred = features.surfaces && !features.slice && target.gbuffer.is_some();
     if features.translucent {
         let epoch = target
             .oit
@@ -47,6 +46,19 @@ pub(super) fn encode(stage: Stage<'_>) {
     let ao = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
     let oit = target.oit.as_ref().filter(|_| features.translucent);
     let oit_group = oit.map_or(dummy_oit.read_group(), Oit::read_group);
+    if features.surfaces
+        && !features.slice
+        && let Some(meshes) = meshes
+    {
+        meshes.draw_opaque(
+            encoder,
+            region,
+            target.scene.color(),
+            target.scene.depth(),
+            shadow.expect("the shadow is ready"),
+            ao,
+        );
+    }
     if let Some(oit) = oit {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.oit.pass"),
@@ -76,19 +88,6 @@ pub(super) fn encode(stage: Stage<'_>) {
         if let Some(splats) = splats {
             splats.draw_oit(&mut pass, table.group(), oit.write_group());
         }
-    }
-    if deferred
-        && let Some(gbuffer) = target.gbuffer.as_ref()
-        && let Some(meshes) = meshes
-    {
-        meshes.draw_deferred(
-            encoder,
-            region,
-            target.scene.color(),
-            gbuffer.group(),
-            shadow.expect("the shadow is ready"),
-            ao,
-        );
     }
     if features.volume
         && !features.slice

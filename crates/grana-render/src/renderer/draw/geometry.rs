@@ -51,23 +51,15 @@ pub(super) fn encode(stage: Stage<'_>) {
         dummy_volume,
     } = stage;
     let region = features.region;
-    let deferred = features.surfaces && !features.slice && target.gbuffer.is_some();
-    if deferred {
-        clear.depth(encoder, target.scene.depth(), region);
-        if let Some(meshes) = meshes {
-            meshes.draw_gbuffer(
-                encoder,
-                region,
-                target
-                    .gbuffer
-                    .as_ref()
-                    .expect("the geometry buffer is ready"),
-                target.scene.depth(),
-                table.group(),
-            );
-        }
-    } else {
-        clear.scene(encoder, target.scene.color(), target.scene.depth(), region);
+    let surfacing = features.surfaces && !features.slice && target.normal.is_some();
+    clear.scene(encoder, target.scene.color(), target.scene.depth(), region);
+    if surfacing && let Some(meshes) = meshes {
+        meshes.draw_normal(
+            encoder,
+            region,
+            target.normal.as_ref().expect("the normal target is ready"),
+            target.scene.depth(),
+        );
     }
     if features.volume
         && !features.slice
@@ -89,7 +81,7 @@ pub(super) fn encode(stage: Stage<'_>) {
             },
         );
     }
-    if deferred && target.ao.is_some() && target.surface.is_some() {
+    if surfacing && target.ao.is_some() && target.surface.is_some() {
         let resolution = target.size;
         let merged = if features.volume {
             Some(target.geometry(device, layouts, dummy_normal, dummy_volume, true))

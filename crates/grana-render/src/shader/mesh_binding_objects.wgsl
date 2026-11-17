@@ -10,4 +10,3 @@ struct ObjectData {
 }
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
-@group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
