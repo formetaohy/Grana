@@ -166,7 +166,6 @@ impl App {
             }
             _ => return,
         }
-        self.interacting = true;
         self.activity = Some(std::time::Instant::now());
         self.request_redraw();
     }

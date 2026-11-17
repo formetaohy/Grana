@@ -7,7 +7,7 @@ use glam::Vec2;
 
 use grana_display::Camera;
 use grana_editor::{Frame, Stage, Workspace};
-use grana_engine::{Display, Engine};
+use grana_engine::Engine;
 use grana_gpu::Gpu;
 use grana_i18n::Language;
 use grana_scene::Revision;
@@ -106,7 +106,6 @@ pub struct App {
     changed_at: Option<Instant>,
     revision: Revision,
     language: Language,
-    interacting: bool,
     camera_touched: bool,
     activity: Option<Instant>,
     animating: bool,
@@ -169,7 +168,6 @@ impl App {
             changed_at: None,
             revision: Revision::ZERO,
             language,
-            interacting: false,
             camera_touched: false,
             activity: None,
             animating: false,
@@ -287,7 +285,6 @@ impl App {
         self.advance_playback();
         self.advance_animation();
         let display = self.display_mode(animating);
-        self.interacting = false;
         self.fit_view();
         let mut delay = self.render(display).unwrap_or(Duration::MAX);
         if let Some(wait) = wait {
@@ -297,10 +294,7 @@ impl App {
             delay = delay.min(self.playback_delay());
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if display != Display::Interactive
-            && self.session.scene().is_some()
-            && self.converging()
-        {
+        } else if self.session.scene().is_some() && self.converging() {
             delay = Duration::ZERO;
         }
         if let Some(active) = self.activity_wait() {

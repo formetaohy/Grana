@@ -21,15 +21,7 @@ impl App {
     }
 
     pub(super) fn display_mode(&self, animating: bool) -> Display {
-        if animating
-            || self.interacting
-            || self.workspace.playback.previewing
-            || self
-                .activity
-                .is_some_and(|at| at.elapsed() < super::INTERACTION_HOLD)
-        {
-            Display::Interactive
-        } else if self.workspace.playback.playing {
+        if !animating && !self.workspace.playback.previewing && self.workspace.playback.playing {
             Display::Playback
         } else {
             Display::Still

@@ -10,7 +10,6 @@ const STILL_ERROR: f32 = 0.01;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Display {
-    Interactive,
     Playback,
     Still,
 }
@@ -23,13 +22,12 @@ impl Display {
     pub(crate) fn sampling(self) -> Sampling {
         match self {
             Self::Still => Sampling::new(STILL_FLOOR, SAMPLE_CEILING, STILL_ERROR),
-            Self::Interactive | Self::Playback => Sampling::single(),
+            Self::Playback => Sampling::single(),
         }
     }
 
     pub(crate) fn render(self) -> grana_render::Display {
         match self {
-            Self::Interactive => grana_render::Display::Interactive,
             Self::Playback => grana_render::Display::Playback,
             Self::Still => grana_render::Display::Still,
         }

@@ -105,7 +105,7 @@ fn a_still_resolves_the_frame_it_shows() {
 }
 
 #[test]
-fn an_interactive_frame_lands_at_the_full_viewport() {
+fn a_frame_lands_at_the_full_viewport() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -159,29 +159,19 @@ fn an_interactive_frame_lands_at_the_full_viewport() {
             )
             .expect("the viewport draws");
     };
-    draw(&mut engine, &mut session, Display::Interactive);
-    assert_eq!(
-        engine.info().samples,
-        1,
-        "an interactive frame renders one sample"
-    );
+    draw(&mut engine, &mut session, Display::Still);
+    assert!(engine.info().samples > 0, "a still frame starts sampling");
     let revision = engine.image_revision();
-    draw(&mut engine, &mut session, Display::Interactive);
-    assert_eq!(
-        engine.image_revision(),
-        revision,
-        "an unchanged interactive request renders nothing"
-    );
     session.execute(grana_session::Command::SetExposure(2.0));
-    draw(&mut engine, &mut session, Display::Interactive);
+    draw(&mut engine, &mut session, Display::Still);
     assert_ne!(
         engine.image_revision(),
         revision,
-        "an interactive exposure change renders the new exposure"
+        "an exposure change presents the accumulated samples"
     );
     assert!(
         engine.request_pick(gpu.device(), gpu.queue(), [size[0] - 20, size[1] - 20]),
-        "an interactive frame covers the whole viewport"
+        "a frame covers the whole viewport"
     );
     while engine.pick_pending() {
         engine.poll_pick(gpu.device());

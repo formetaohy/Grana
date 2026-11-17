@@ -122,7 +122,6 @@ pub(crate) struct SliceTargets<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Display {
-    Interactive,
     Playback,
     Still,
     Export,

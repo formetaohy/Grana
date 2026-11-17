@@ -331,9 +331,6 @@ impl Engine {
         if self.image.is_none() {
             return false;
         }
-        if display == Display::Interactive {
-            return info.samples != 0;
-        }
         if display.awaits() {
             return info.samples != 0 && !info.fading;
         }
