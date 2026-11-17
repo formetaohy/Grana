@@ -235,7 +235,7 @@ impl Export {
                 sampling: self.sampling(),
                 budget: None,
                 scene: &frame,
-                display: grana_render::Display::Export,
+                delivery: grana_render::Delivery::Assured,
                 level_cap: usize::MAX,
                 temporal: self.temporal,
             },

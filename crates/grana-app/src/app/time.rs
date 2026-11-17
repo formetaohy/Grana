@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_animation::Keyframe;
-use grana_engine::Display;
+use grana_engine::Presentation;
 
 use super::{App, PLAYBACK_INTERVAL, STREAM_POLL};
 
@@ -20,11 +20,11 @@ impl App {
         }
     }
 
-    pub(super) fn display_mode(&self, animating: bool) -> Display {
+    pub(super) fn presentation(&self, animating: bool) -> Presentation {
         if !animating && !self.workspace.playback.previewing && self.workspace.playback.playing {
-            Display::Playback
+            Presentation::Playback
         } else {
-            Display::Still
+            Presentation::Converge
         }
     }
 

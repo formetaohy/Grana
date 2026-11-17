@@ -33,8 +33,8 @@ impl Shot {
                 frame.region,
                 frame.time,
             ),
-            awaits: frame.display.awaits(),
-            assured: frame.display.assures(),
+            awaits: frame.delivery.awaits(),
+            assured: frame.delivery.assures(),
             slice,
             translucent: !slice
                 && (frame
@@ -126,7 +126,7 @@ impl Renderer {
     ) -> Result<Prepared, Halt> {
         let view = shot.view;
         self.time = frame.time;
-        self.prefetch = frame.display.prefetches();
+        self.prefetch = frame.delivery.prefetches();
         self.viewport = Some(frame.viewport);
         self.present_region = Some(view.region);
         let sequence = self.sequence;
@@ -194,7 +194,7 @@ impl Renderer {
             versions: scene.versions,
             awaits: shot.awaits,
             assured: shot.assured,
-            prefetch: frame.display.prefetches(),
+            prefetch: frame.delivery.prefetches(),
             overflow: info.view.visible > info.view.demand,
         });
         let channel = channel_style(scene.channels);

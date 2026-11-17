@@ -84,7 +84,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             sampling: grana_render::Sampling::new(1, SAMPLES, 1.0),
             budget: None,
             scene: &scene,
-            display: grana_render::Display::Export,
+            delivery: grana_render::Delivery::Assured,
             level_cap: usize::MAX,
             temporal: None,
         };
@@ -214,7 +214,7 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
         sampling: frame.sampling,
         budget: None,
         scene: frame.scene,
-        display: frame.display,
+        delivery: frame.delivery,
         level_cap: frame.level_cap,
         temporal: frame.temporal,
     }

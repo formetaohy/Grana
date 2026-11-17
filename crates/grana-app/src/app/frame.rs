@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use grana_engine::{Display, Viewport};
+use grana_engine::{Presentation, Viewport};
 use grana_render::FrameInfo;
 
 use super::{App, CONVERGENCE_BUDGET, RETRY_INTERVAL, STREAM_POLL};
@@ -110,7 +110,7 @@ impl App {
         Viewport::screen(scale, size, self.stage.region())
     }
 
-    pub(super) fn render(&mut self, display: Display) -> Option<Duration> {
+    pub(super) fn render(&mut self, presentation: Presentation) -> Option<Duration> {
         let viewport = self.viewport();
         let cap = self.level_cap();
         let budget = self.capture.is_none().then_some(CONVERGENCE_BUDGET);
@@ -131,7 +131,7 @@ impl App {
                         scene,
                         camera,
                         size: [viewport.region[2], viewport.region[3]],
-                        display,
+                        presentation,
                         budget,
                         level_cap: cap,
                         overlays: &overlays,

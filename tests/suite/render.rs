@@ -28,7 +28,7 @@ struct View<'a> {
     region: Region,
     scene: &'a SceneFrame<'a>,
     viewport: [u32; 4],
-    display: grana_render::Display,
+    delivery: grana_render::Delivery,
 }
 
 fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
@@ -44,7 +44,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         sampling: Sampling::new(1, SAMPLES, 1.0),
         budget: None,
         scene: view.scene,
-        display: view.display,
+        delivery: view.delivery,
         level_cap: usize::MAX,
         temporal: None,
     }
@@ -222,7 +222,7 @@ fn background(
         region: view.region,
         scene: &scene,
         viewport: view.viewport,
-        display: view.display,
+        delivery: view.delivery,
     };
     settle(gpu, renderer, &blank, volume);
     read_pixels(gpu, texture, [SIDE, SIDE])
@@ -271,7 +271,7 @@ fn measures_the_convergence_of_a_volume() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Export,
+        delivery: grana_render::Delivery::Assured,
     };
     settle(&gpu, &mut renderer, &view, &volume);
     renderer.set_exporting(true);
@@ -363,7 +363,7 @@ fn streams_and_shades_two_channels() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(requests.view.visible > 0, "the view sees no brick");
@@ -448,7 +448,7 @@ fn renders_a_rotated_placement() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
@@ -470,7 +470,7 @@ fn renders_a_rotated_placement() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let aligned_shot = snapshot(
         &gpu,
@@ -533,7 +533,7 @@ fn composites_a_mesh_layer() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
@@ -582,7 +582,7 @@ fn tints_a_localization_overlay() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     settle(&gpu, &mut renderer, &view, &volume);
     let plain = read_pixels(&gpu, &target, [SIDE, SIDE]);
@@ -612,7 +612,7 @@ fn tints_a_localization_overlay() {
         region: Region::none(),
         scene: &painted,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     settle(&gpu, &mut renderer, &view, &volume);
     let lit = read_pixels(&gpu, &target, [SIDE, SIDE]);
@@ -666,7 +666,7 @@ fn keeps_a_translucent_layer() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     let painted = shot.painted(WHOLE);
@@ -703,7 +703,7 @@ fn keeps_a_translucent_layer() {
         region: Region::none(),
         scene: &hidden,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let hidden_shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
@@ -762,7 +762,7 @@ fn clips_an_oriented_region() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let shot = snapshot(&gpu, &mut renderer, &open, &target, &volume);
     assert!(
@@ -848,7 +848,7 @@ fn assured_pixels(
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Export,
+        delivery: grana_render::Delivery::Assured,
     };
     for _ in 0..4 {
         let info = renderer
@@ -999,7 +999,7 @@ fn render_volume(
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     settle(gpu, &mut renderer, &view, volume);
     read_pixels(gpu, &target, [SIDE, SIDE])
@@ -1166,7 +1166,7 @@ fn ladder_view<'a>(
         region: Region::none(),
         scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     }
 }
 
@@ -1324,7 +1324,7 @@ fn sizes_the_export_residency_to_the_finest_level() {
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let mut view = ladder_view(&view_texture, &camera, &scene);
-    view.display = grana_render::Display::Export;
+    view.delivery = grana_render::Delivery::Assured;
     let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
     assert_eq!(info.samples, SAMPLES, "the sized export never resolved");
     assert_eq!(info.view.level, 0, "the sized export coarsens its level");
@@ -1426,7 +1426,7 @@ fn take(
         sampling: view.sampling,
         budget: None,
         scene: view.scene,
-        display: grana_render::Display::Export,
+        delivery: grana_render::Delivery::Assured,
         level_cap: usize::MAX,
         temporal: view.history.map(grana_render::Temporal::new),
     };
@@ -1752,7 +1752,7 @@ fn drawn<'a, 'b>(
         sampling: Sampling::new(1, 8, 1.0),
         budget: None,
         scene,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
         level_cap: usize::MAX,
         temporal: None,
     }
@@ -1867,7 +1867,7 @@ fn volume_view<'a>(
         region: Region::none(),
         scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     }
 }
 
@@ -2061,7 +2061,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
             region: Region::none(),
             scene: &scene,
             viewport: WHOLE,
-            display: grana_render::Display::Export,
+            delivery: grana_render::Delivery::Assured,
         },
         &target,
         &volume,
@@ -2092,7 +2092,7 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
             region: Region::none(),
             scene: &scene,
             viewport: WHOLE,
-            display: grana_render::Display::Export,
+            delivery: grana_render::Delivery::Assured,
         },
         &target,
         &volume,
@@ -2182,7 +2182,7 @@ fn cuts_the_object_surfaces_of_a_slice() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     let painted = shot.painted(WHOLE);
@@ -2242,7 +2242,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     settle(&gpu, &mut renderer, &view, &volume);
     let on_plane = project(&camera, [0.0, 0.0, 0.1]);
@@ -2317,7 +2317,7 @@ fn composites_soft_splats_through_the_depth_layers() {
         region: Region::none(),
         scene: &solid_scene,
         viewport: WHOLE,
-        display: grana_render::Display::Export,
+        delivery: grana_render::Delivery::Assured,
     };
     let faint_view = View {
         target: &view_texture,
@@ -2325,7 +2325,7 @@ fn composites_soft_splats_through_the_depth_layers() {
         region: Region::none(),
         scene: &faint_scene,
         viewport: WHOLE,
-        display: grana_render::Display::Export,
+        delivery: grana_render::Delivery::Assured,
     };
     let solid = snapshot(&gpu, &mut renderer, &solid_view, &target, &volume);
     let faint = snapshot(&gpu, &mut renderer, &faint_view, &target, &volume);
@@ -2477,7 +2477,7 @@ fn converges_the_brightness_of_overlapping_splats() {
             region: Region::none(),
             scene: &scene,
             viewport: WHOLE,
-            display: grana_render::Display::Export,
+            delivery: grana_render::Delivery::Assured,
         };
         snapshot(&gpu, &mut renderer, &view, &target, &volume).contrast(core)
     };
@@ -2618,7 +2618,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
         region: Region::none(),
         scene: &proxied_frame,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let proxied_painted =
         snapshot(&gpu, &mut renderer, &proxied_view, &target, &volume).painted(WHOLE);
@@ -2647,7 +2647,7 @@ fn aggregates_subpixel_spots_into_addressable_proxies() {
         region: Region::none(),
         scene: &detail_frame,
         viewport: WHOLE,
-        display: grana_render::Display::Still,
+        delivery: grana_render::Delivery::Immediate,
     };
     let detail_painted =
         snapshot(&gpu, &mut renderer, &detail_view, &target, &volume).painted(WHOLE);

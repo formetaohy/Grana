@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{Camera, CameraState};
-use grana_engine::{Display, Engine};
+use grana_engine::{Engine, Presentation};
 use grana_measure::MeasureView;
 use grana_object::{
     CellParams, IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
@@ -3792,7 +3792,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                             scene: session.scene().expect("the series opens"),
                             camera: &camera,
                             size,
-                            display: Display::Still,
+                            presentation: Presentation::Converge,
                             budget: None,
                             level_cap: 99,
                             overlays: &[],

@@ -284,9 +284,9 @@ impl App {
         self.autosave();
         self.advance_playback();
         self.advance_animation();
-        let display = self.display_mode(animating);
+        let presentation = self.presentation(animating);
         self.fit_view();
-        let mut delay = self.render(display).unwrap_or(Duration::MAX);
+        let mut delay = self.render(presentation).unwrap_or(Duration::MAX);
         if let Some(wait) = wait {
             delay = delay.min(wait);
         }

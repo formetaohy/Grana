@@ -7,9 +7,9 @@ use grana_scene::{Item, Selection};
 use grana_volume::{BrickRequest, Clip, Damage, PackedBrick, Pyramid, Region};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
 
-use crate::display::{Display, View};
 use crate::frame;
 use crate::image::ViewportImage;
+use crate::presentation::{Presentation, View};
 use crate::splat::{SplatCache, SplatMembers};
 use crate::view::{self, RenderedScene};
 
@@ -163,7 +163,7 @@ impl Engine {
         );
         self.renderer.set_exporting(false);
         let content = self.content_of(&view);
-        if self.content == Some(content) && self.resolved(view.display) {
+        if self.content == Some(content) && self.resolved(view.presentation) {
             return Ok(());
         }
         if let Some(previous) = self.content
@@ -279,9 +279,9 @@ impl Engine {
                     camera: view.camera,
                     viewport: [0, 0, size[0], size[1]],
                     size,
-                    sampling: view.display.sampling(),
+                    sampling: view.presentation.sampling(),
                     budget: view.budget,
-                    display: view.display.render(),
+                    presentation: view.presentation,
                     level_cap: view.level_cap,
                     overlays: view.overlays,
                 },
@@ -326,12 +326,12 @@ impl Engine {
         self.failure.as_ref().map(|failure| failure.detail.as_str())
     }
 
-    fn resolved(&self, display: Display) -> bool {
+    fn resolved(&self, presentation: Presentation) -> bool {
         let info = self.info;
         if self.image.is_none() {
             return false;
         }
-        if display.awaits() {
+        if presentation.awaits() {
             return info.samples != 0 && !info.fading;
         }
         info.converged && !info.fading && info.view.resident >= info.view.demand

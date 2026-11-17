@@ -121,23 +121,23 @@ pub(crate) struct SliceTargets<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Display {
-    Playback,
-    Still,
-    Export,
+pub enum Delivery {
+    Immediate,
+    Awaited,
+    Assured,
 }
 
-impl Display {
+impl Delivery {
     pub fn awaits(self) -> bool {
-        self == Self::Playback
+        self == Self::Awaited
     }
 
     pub fn assures(self) -> bool {
-        self == Self::Export
+        self == Self::Assured
     }
 
     pub fn prefetches(self) -> bool {
-        self == Self::Playback
+        self == Self::Awaited
     }
 }
 
@@ -153,7 +153,7 @@ pub struct Frame<'a, 'b> {
     pub sampling: Sampling,
     pub budget: Option<Duration>,
     pub scene: &'a SceneFrame<'b>,
-    pub display: Display,
+    pub delivery: Delivery,
     pub level_cap: usize,
     pub temporal: Option<Temporal>,
 }
