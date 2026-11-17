@@ -8,6 +8,7 @@ use grana_measure::{
 use grana_volume::Region;
 
 use crate::object_set::{ObjectSetId, Visibility};
+use crate::provenance::{FilterRange, LassoPath};
 use crate::row::{RowSpec, Rows, RowsRequest};
 use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
@@ -19,13 +20,13 @@ pub struct MeasureState {
     pub group: Group,
     pub aggregate: Aggregate,
     pub scope: Scope,
-    pub filters: Vec<Filter>,
-    pub lasso: Option<Lasso>,
-    pub sort: Option<(usize, bool)>,
-    pub columns: Vec<bool>,
+    pub filters: Vec<FilterRange>,
+    pub lasso: Option<LassoPath>,
+    pub sort: Option<(String, bool)>,
+    pub columns: Vec<(String, bool)>,
     pub visibility: bool,
     pub view: MeasureView,
-    pub axes: [usize; 2],
+    pub axes: Option<[String; 2]>,
 }
 
 pub struct Measure {
@@ -672,33 +673,55 @@ impl Measure {
             && self
                 .set
                 .is_some_and(|id| TableRequest::available(scene, id, self.group));
+        let table = self.table.as_deref().filter(|_| measured);
+        let key = |column: usize| {
+            table
+                .and_then(|table| table.columns().get(column))
+                .map(|column| column.key().to_string())
+        };
         MeasureState {
             set,
             group: self.group,
             aggregate: self.aggregate,
             scope: self.scope,
             filters: match measured {
-                true => self.filters.clone(),
+                true => self
+                    .filters
+                    .iter()
+                    .filter_map(|filter| {
+                        Some(FilterRange::new(
+                            &key(filter.column())?,
+                            filter.minimum(),
+                            filter.maximum(),
+                        ))
+                    })
+                    .collect(),
                 false => Vec::new(),
             },
             lasso: match measured {
-                true => self.table.as_ref().and(self.lasso.clone()),
+                true => self.lasso.as_ref().and_then(|lasso| {
+                    LassoPath::new(&key(lasso.x())?, &key(lasso.y())?, lasso.points().to_vec())
+                }),
                 false => None,
             },
             sort: match measured {
-                true => self.sort,
+                true => self
+                    .sort
+                    .and_then(|(column, descending)| Some((key(column)?, descending))),
                 false => None,
             },
-            columns: match measured {
-                true => self.visible.clone(),
-                false => Vec::new(),
+            columns: match table {
+                Some(table) => table
+                    .columns()
+                    .iter()
+                    .zip(&self.visible)
+                    .map(|(column, visible)| (column.key().to_string(), *visible))
+                    .collect(),
+                None => Vec::new(),
             },
             visibility: self.visibility,
             view: self.view,
-            axes: match measured {
-                true => self.axes,
-                false => [0; 2],
-            },
+            axes: table.and_then(|_| Some([key(self.axes[0])?, key(self.axes[1])?])),
         }
     }
 
@@ -729,54 +752,48 @@ impl Measure {
         self.sort = None;
         self.visibility = visibility;
         self.view = view;
-        self.axes = axes;
+        self.axes = [0; 2];
         self.clear_plot();
         self.origin = None;
         self.dirty = true;
         let Some(set) = set else {
-            assert!(
-                columns.is_empty()
-                    && filters.is_empty()
-                    && lasso.is_none()
-                    && sort.is_none()
-                    && axes == [0; 2],
-                "a measure state without an object set carries no table state"
-            );
             return;
         };
         self.set = Some(ObjectSetId::new(set));
         self.retained = None;
         self.rebuild(scene);
-        let count = self.table.as_ref().map_or(0, |table| table.columns().len());
-        assert!(
-            columns.is_empty() || columns.len() == count,
-            "a measure state covers every column of its table"
-        );
-        assert!(
-            filters.iter().all(|filter| filter.column() < count)
-                && sort.is_none_or(|(column, _)| column < count),
-            "a measure state names columns inside its table"
-        );
-        assert!(
-            axes.iter().all(|axis| *axis < count) || (count == 0 && axes == [0; 2]),
-            "a measure state names plot axes inside its table"
-        );
-        assert!(
-            lasso
-                .as_ref()
-                .is_none_or(|lasso| lasso.x() < count && lasso.y() < count),
-            "a measure state names lasso axes inside its table"
-        );
-        self.visible = match self.table.as_ref() {
-            Some(table) if columns.is_empty() => default_visibility(table),
-            _ => columns,
+        let Some(table) = self.table.as_deref() else {
+            return;
         };
-        self.filters = filters;
-        self.lasso = lasso;
-        self.sort = sort;
-        self.axes = match self.table.as_ref() {
-            Some(table) => readable_axes(table, axes),
-            None => axes,
+        self.visible = default_visibility(table);
+        for (key, visible) in &columns {
+            if let Some(column) = table.column(key) {
+                self.visible[column] = *visible;
+            }
+        }
+        self.filters = filters
+            .iter()
+            .filter_map(|filter| {
+                Some(Filter::new(
+                    table.column(filter.key())?,
+                    filter.minimum(),
+                    filter.maximum(),
+                ))
+            })
+            .collect();
+        self.sort = sort
+            .and_then(|(key, descending)| table.column(&key).map(|column| (column, descending)));
+        self.lasso = lasso.and_then(|lasso| {
+            let x = table.column(lasso.x())?;
+            let y = table.column(lasso.y())?;
+            Lasso::new(x, y, lasso.points().to_vec())
+        });
+        self.axes = match axes {
+            Some([x, y]) => match (table.column(&x), table.column(&y)) {
+                (Some(x), Some(y)) => [x, y],
+                _ => preferred_axes(table),
+            },
+            None => preferred_axes(table),
         };
         self.pin();
         self.refresh_nearest();

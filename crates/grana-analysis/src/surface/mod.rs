@@ -39,8 +39,6 @@ use crate::work;
 
 const TILE_SIDE: u32 = 96;
 const TILE_Z_FLOOR: u32 = 8;
-const SLAB_BUDGET: u64 = 256 << 20;
-const DETECTION_CACHE: u64 = 768 << 20;
 const DISTANCE_LIMIT: u32 = 12;
 pub(super) const METRIC_SCALE: u32 = 64;
 
@@ -49,12 +47,7 @@ const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
-const ARRAY_BYTES_PER_VOXEL: u64 = 9;
-const FIELD_BYTES_PER_VOXEL: u64 = 4;
 const FIELD_REACH: u32 = 2;
-const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
-const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
-const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const SEED_SNAP: i64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,7 +213,8 @@ impl SurfaceBuilder {
             region[2].start as i64,
         ];
         let plane = u64::from(extent[0]) * u64::from(extent[1]);
-        let slab = (SLAB_BUDGET / (8 * plane.max(1))).max(1) as u32;
+        let slab = (work::SURFACE_TILE_BYTES / (work::SURFACE_PLANE_BYTES_PER_VOXEL * plane.max(1)))
+            .max(1) as u32;
         let tile_z = slab.clamp(TILE_Z_FLOOR, TILE_SIDE).div_ceil(TILE_Z_FLOOR) * TILE_Z_FLOOR;
         let tile = [TILE_SIDE, TILE_SIDE, tile_z];
         let tiles = [0, 1, 2].map(|axis| {
@@ -446,7 +440,7 @@ impl SurfaceBuilder {
                 },
                 cancel,
                 sources.read,
-                DETECTION_CACHE,
+                work::SURFACE_DETECTION_BYTES,
                 &mut report,
             )?
         };
@@ -473,7 +467,7 @@ impl SurfaceBuilder {
             .saturating_add(margin)
             .clamp(base, ceiling);
         let pass = Pass::new(&self, limit, seeds, &distance);
-        let budget = Budget::new(FRAME_ARRAY_LIMIT);
+        let budget = Budget::new(work::SURFACE_FRAME_BYTES);
         let workers = desired.min(pass.total().max(1));
         let topology = {
             let mut report = band(progress, step, 78, 100);
@@ -571,7 +565,7 @@ impl<'a> Pass<'a> {
         let mut reach = bound;
         loop {
             let pad = [0, 1, 2].map(|axis| align(reach + radius(plan, axis) + 1));
-            if array_bytes(plan, index, pad) <= WORKER_ARRAY_LIMIT {
+            if array_bytes(plan, index, pad) <= work::SURFACE_WORKER_BYTES {
                 return pad;
             }
             assert!(
@@ -601,8 +595,8 @@ fn array_bytes(plan: &SurfaceBuilder, index: usize, pad: [u32; 3]) -> u64 {
     let field = plan
         .field_range(&core)
         .map(|range| u64::from(range.end - range.start));
-    array.iter().product::<u64>() * ARRAY_BYTES_PER_VOXEL
-        + field.iter().product::<u64>() * FIELD_BYTES_PER_VOXEL
+    array.iter().product::<u64>() * work::SURFACE_ARRAY_BYTES_PER_VOXEL
+        + field.iter().product::<u64>() * work::SURFACE_FIELD_BYTES_PER_VOXEL
 }
 
 enum PassOutcome {

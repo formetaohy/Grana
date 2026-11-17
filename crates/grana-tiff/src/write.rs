@@ -53,6 +53,14 @@ pub struct Stream<'a> {
     pub interval: Option<f32>,
 }
 
+pub struct Stream16<'a> {
+    pub size: [u32; 2],
+    pub samples: u8,
+    pub name: &'a str,
+    pub physical: Option<[f32; 2]>,
+    pub interval: Option<f32>,
+}
+
 pub struct Stack<'a> {
     pub size: [u32; 2],
     pub samples: u8,
@@ -67,32 +75,29 @@ pub type RowWriter<'a> = &'a mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>
 pub type LayerWriter<'a> = &'a mut dyn FnMut(u32, u32, &mut [u8]) -> Result<(), String>;
 
 pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
-    let sheet = Sheet::new(
-        picture.size,
-        usize::from(picture.samples),
-        16,
-        1,
-        picture.name,
-        picture.physical.map(|[x, y]| [x, y, 0.0]),
-        picture.interval,
-    )
-    .map_err(|detail| Error::write(path, detail))?;
-    let texels = sheet.width as usize * sheet.height as usize * sheet.samples;
+    let stream = Stream16 {
+        size: picture.size,
+        samples: picture.samples,
+        name: picture.name,
+        physical: picture.physical,
+        interval: picture.interval,
+    };
+    let texels = picture.size[0] as usize * picture.size[1] as usize * usize::from(picture.samples);
     if picture.pixels.len() != texels {
         return Err(Error::write(
             path,
             format!(
                 "a sixteen bit picture of {} by {} with {} samples holds {texels} texels and was given {}",
-                sheet.width,
-                sheet.height,
-                sheet.samples,
+                picture.size[0],
+                picture.size[1],
+                picture.samples,
                 picture.pixels.len()
             ),
         ));
     }
-    write_sheet(path, &sheet, &mut |_, row, bytes| {
-        let start = row as usize * sheet.width as usize * sheet.samples;
-        let end = start + sheet.width as usize * sheet.samples;
+    write16(path, &stream, &mut |line, bytes| {
+        let start = line as usize * picture.size[0] as usize * usize::from(picture.samples);
+        let end = start + picture.size[0] as usize * usize::from(picture.samples);
         for (slot, sample) in bytes
             .as_chunks_mut::<2>()
             .0
@@ -103,6 +108,20 @@ pub fn write(path: &Path, picture: &Picture<'_>) -> Result<(), Error> {
         }
         Ok(())
     })
+}
+
+pub fn write16(path: &Path, stream: &Stream16<'_>, row: RowWriter<'_>) -> Result<(), Error> {
+    let sheet = Sheet::new(
+        stream.size,
+        usize::from(stream.samples),
+        16,
+        1,
+        stream.name,
+        stream.physical.map(|[x, y]| [x, y, 0.0]),
+        stream.interval,
+    )
+    .map_err(|detail| Error::write(path, detail))?;
+    write_sheet(path, &sheet, &mut |_, line, bytes| row(line, bytes))
 }
 
 pub fn write_stream(path: &Path, stream: &Stream<'_>, row: RowWriter<'_>) -> Result<(), Error> {

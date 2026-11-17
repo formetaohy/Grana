@@ -103,44 +103,33 @@ pub fn write_stream(path: &Path, size: [u32; 2], row: StreamRow<'_>) -> Result<(
 }
 
 pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8>, Error> {
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "a sixteen bit image covers at least one pixel"
-    );
-    assert!(
-        samples == 3 || samples == 4,
-        "a sixteen bit image carries three or four samples per pixel"
-    );
     assert_eq!(
         pixels.len(),
         size[0] as usize * size[1] as usize * samples,
         "the samples fill every pixel of a sixteen bit image"
     );
-    let mut bytes = Vec::with_capacity(pixels.len() * 2);
-    for pixel in pixels.chunks_exact(samples) {
-        for sample in &pixel[..samples] {
-            bytes.extend_from_slice(&sample.to_be_bytes());
+    encode16_stream(size, samples, &mut |line, bytes| {
+        let start = line as usize * size[0] as usize * samples;
+        let end = start + size[0] as usize * samples;
+        for (slot, sample) in bytes
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(&pixels[start..end])
+        {
+            slot.copy_from_slice(&sample.to_be_bytes());
         }
-    }
+        Ok(())
+    })
+}
+
+pub fn encode16_stream(
+    size: [u32; 2],
+    samples: usize,
+    row: StreamRow<'_>,
+) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
-    let fault = |detail: String| Error::Encode { detail };
-    {
-        let mut encoder = png::Encoder::new(&mut buffer, size[0], size[1]);
-        encoder.set_color(if samples == 4 {
-            png::ColorType::Rgba
-        } else {
-            png::ColorType::Rgb
-        });
-        encoder.set_depth(png::BitDepth::Sixteen);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder
-            .write_header()
-            .map_err(|error| fault(error.to_string()))?;
-        writer
-            .write_image_data(&bytes)
-            .map_err(|error| fault(error.to_string()))?;
-        writer.finish().map_err(|error| fault(error.to_string()))?;
-    }
+    encode16_into(&mut buffer, size, samples, row)?;
     Ok(buffer)
 }
 
@@ -150,6 +139,62 @@ pub fn write16(path: &Path, size: [u32; 2], samples: usize, pixels: &[u16]) -> R
         path: path.to_path_buf(),
         detail: error.to_string(),
     })
+}
+
+pub fn write16_stream(
+    path: &Path,
+    size: [u32; 2],
+    samples: usize,
+    row: StreamRow<'_>,
+) -> Result<(), Error> {
+    let write = |detail: String| Error::Write {
+        path: path.to_path_buf(),
+        detail,
+    };
+    let atomic = grana_file::Atomic::file(path).map_err(|error| write(error.to_string()))?;
+    let file = std::fs::File::create(atomic.staging()).map_err(|error| write(error.to_string()))?;
+    encode16_into(BufWriter::new(file), size, samples, row)
+        .map_err(|error| write(error.to_string()))?;
+    atomic.commit().map_err(|error| write(error.to_string()))
+}
+
+fn encode16_into(
+    sink: impl Write,
+    size: [u32; 2],
+    samples: usize,
+    row: StreamRow<'_>,
+) -> Result<(), Error> {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a sixteen bit image covers at least one pixel"
+    );
+    assert!(
+        samples == 3 || samples == 4,
+        "a sixteen bit image carries three or four samples per pixel"
+    );
+    let fault = |detail: String| Error::Encode { detail };
+    let mut encoder = png::Encoder::new(sink, size[0], size[1]);
+    encoder.set_color(if samples == 4 {
+        png::ColorType::Rgba
+    } else {
+        png::ColorType::Rgb
+    });
+    encoder.set_depth(png::BitDepth::Sixteen);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|error| fault(error.to_string()))?;
+    let mut stream = writer
+        .stream_writer()
+        .map_err(|error| fault(error.to_string()))?;
+    let mut buffer = vec![0u8; size[0] as usize * samples * 2];
+    for line in 0..size[1] {
+        row(line, &mut buffer).map_err(|detail| Error::Encode { detail })?;
+        stream
+            .write_all(&buffer)
+            .map_err(|error| fault(error.to_string()))?;
+    }
+    stream.finish().map_err(|error| fault(error.to_string()))
 }
 
 fn expand(bytes: &[u8], color: png::ColorType, path: &Path) -> Result<Vec<u8>, Error> {

@@ -7,8 +7,8 @@ use grana_display::{
 };
 use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
-    Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, Lasso, MeasureView,
-    Measurement, RelationField, Scope, Statistic, TrackMeasurement,
+    Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, MeasureView, Measurement,
+    RelationField, Scope, Statistic, TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCell, ColocCost,
@@ -1842,33 +1842,29 @@ impl Decode for MeasureState {
         let group = group(reader.u8()?)?;
         let aggregate = aggregate(reader.u8()?)?;
         let scope = Scope::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
-        let filters = Vec::<Filter>::decode(reader)?;
+        let filters = Vec::<FilterRange>::decode(reader)?;
         let lasso = match reader.u8()? {
             0 => None,
-            1 => {
-                let x = reader.count(1)?;
-                let y = reader.count(1)?;
-                let count = reader.count(8)?;
-                let mut points = Vec::with_capacity(count.min(1 << 16));
-                for _ in 0..count {
-                    let first = finite(reader.f32()?)?;
-                    let second = finite(reader.f32()?)?;
-                    points.push([first, second]);
-                }
-                Some(Lasso::new(x, y, points).ok_or(FAULT_VALUE)?)
-            }
+            1 => Some(LassoPath::decode(reader)?),
             _ => return Err(FAULT_SHAPE),
         };
         let sort = match reader.u8()? {
             0 => None,
-            1 => Some((reader.count(1)?, reader.bool()?)),
+            1 => Some((key(reader)?, reader.bool()?)),
             _ => return Err(FAULT_SHAPE),
         };
-        let columns = Vec::<bool>::decode(reader)?;
+        let count = reader.count(1)?;
+        let mut columns = Vec::with_capacity(count.min(1 << 16));
+        for _ in 0..count {
+            columns.push((key(reader)?, reader.bool()?));
+        }
         let visibility = reader.bool()?;
         let view = MeasureView::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
-        let x = reader.count(0)?;
-        let y = reader.count(0)?;
+        let axes = match reader.u8()? {
+            0 => None,
+            1 => Some([key(reader)?, key(reader)?]),
+            _ => return Err(FAULT_SHAPE),
+        };
         Ok(Self {
             set,
             group,
@@ -1880,7 +1876,7 @@ impl Decode for MeasureState {
             columns,
             visibility,
             view,
-            axes: [x, y],
+            axes,
         })
     }
 }
@@ -2294,6 +2290,14 @@ fn decode_mask_filter(reader: &mut Reader<'_>) -> Result<Option<MaskFilter>, &'s
     Ok(Some(MaskFilter::new(
         target, shift, field, minimum, maximum,
     )))
+}
+
+fn key(reader: &mut Reader<'_>) -> Result<String, &'static str> {
+    let key = reader.string()?;
+    if key.trim().is_empty() {
+        return Err(FAULT_VALUE);
+    }
+    Ok(key)
 }
 
 fn finite(value: f32) -> Result<f32, &'static str> {

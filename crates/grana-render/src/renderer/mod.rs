@@ -721,13 +721,14 @@ impl Renderer {
         queue.submit([encoder.finish()]);
     }
 
-    pub fn picture(
+    pub fn picture<R>(
         &mut self,
         device: &Device,
         queue: &Queue,
         exposure: f32,
         transparent: bool,
-    ) -> crate::image::Image16 {
+        read: impl FnOnce(crate::Pixels<'_>) -> R,
+    ) -> R {
         let size = self
             .targets
             .current()
@@ -736,7 +737,7 @@ impl Renderer {
         let texture = crate::image::target(device, size);
         let view = texture.create_view(&TextureViewDescriptor::default());
         self.present_picture(device, queue, &view, size, exposure, transparent);
-        crate::image::read16(device, queue, &texture, size)
+        crate::image::read(device, queue, &texture, size, read)
     }
 }
 

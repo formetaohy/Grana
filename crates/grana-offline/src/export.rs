@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use grana_display::Camera;
 use grana_gpu::Readback;
-use grana_render::{FrameInfo, Image16, Renderer, Sampling};
+use grana_render::{FrameInfo, Renderer, Sampling};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -12,7 +12,7 @@ use crate::capture;
 use crate::compose::Composer;
 use crate::figure::{self, Figure};
 use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
-use crate::sink::{self, Sink};
+use crate::sink::Sink;
 use grana_page::Format;
 
 const IMAGE_SAMPLING: Sampling = Sampling::new(16, 64, 0.0035);
@@ -292,32 +292,20 @@ impl Export {
     fn harvest(&mut self, device: &Device, scene: &Scene, wait: bool) -> Option<Step> {
         let size = *self.staged.front()?;
         let stride = self.stride as usize;
-        let readback = &mut self.readback;
-        let image = if wait {
-            readback.take_wait(device, |_, bytes| Image16::decode(bytes, size, stride))
-        } else {
-            readback.take_with(device, |_, bytes| Image16::decode(bytes, size, stride))
-        }?;
-        self.staged.pop_front();
+        if !self.readback.ready(device, wait) {
+            return Some(Step::Running);
+        }
         let pose = self.poses[self.written.min(self.poses.len() - 1)];
+        let camera = camera(&pose.camera);
+        let physical = camera.world_per_point(self.viewport.size[1] as f32, camera.distance());
+        let transparent = self.transparent;
         let mut sink = self.sink.take().expect("the export is alive");
-        let written = match &sink {
-            Sink::Tiff { path } => {
-                let camera = camera(&pose.camera);
-                let physical =
-                    camera.world_per_point(self.viewport.size[1] as f32, camera.distance());
-                sink::write_picture(
-                    path,
-                    image.size(),
-                    image.pixels(),
-                    scene,
-                    pose.time,
-                    physical,
-                    self.transparent,
-                )
-            }
-            _ => sink.push(pose.time, image.size(), &image, self.transparent),
-        };
+        let readback = &mut self.readback;
+        let written = readback.take_ready(|_, bytes| {
+            let picture = grana_render::Pixels::new(bytes, size, stride);
+            sink.push(pose.time, picture, scene, physical, transparent)
+        });
+        self.staged.pop_front();
         if let Err(detail) = written {
             sink.discard();
             return Some(Step::Failed(detail));
@@ -448,23 +436,21 @@ impl Export {
             backdrop: !self.transparent,
         };
         let marks = figure::marks(ui, figure);
+        let transparent = self.transparent;
         let image = drawn.renderer.picture(
             drawn.device,
             drawn.queue,
             drawn.scene.exposure,
-            self.transparent,
+            transparent,
+            |pixels| crate::quantize::rgba8(pixels, transparent),
         );
-        let size = image.size();
-        assert_eq!(size, self.viewport.size, "the picture covers the export");
+        let size = self.viewport.size;
         let sink = self.sink.take().expect("the export is alive");
         let Sink::Figure { path } = sink else {
             unreachable!("a vector figure writes a figure sink")
         };
         let mut page = grana_vector::Page::new(size[0] as f32, size[1] as f32);
-        page.set_background(grana_vector::Image::new(
-            size,
-            sink::rgba8(size, image.pixels(), self.transparent),
-        ));
+        page.set_background(grana_vector::Image::new(size, image));
         grana_page::push(&mut page, &marks)?;
         grana_page::write_document(&path, format, &grana_vector::Document::of(page))?;
         self.frame += 1;

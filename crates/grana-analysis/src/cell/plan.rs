@@ -6,9 +6,6 @@ use grana_volume::{Level, Pyramid, Region};
 use super::ridge;
 use crate::work;
 
-const BAND_BYTES: u64 = 512 << 20;
-const VOXEL_BYTES: u64 = 16;
-
 pub(crate) fn pad(level: Level, reach: f32) -> u32 {
     let step = level.voxel()[2];
     assert!(
@@ -40,7 +37,8 @@ pub(crate) fn preferred(
     );
     let plane = u64::from(width) * u64::from(height);
     let overhead = 2 * (pad(level, reach).saturating_add(halo(level, params.grain())));
-    let planes = (BAND_BYTES / plane.saturating_mul(VOXEL_BYTES)).max(1) as u32;
+    let planes =
+        (work::CELL_BAND_BYTES / plane.saturating_mul(work::CELL_VOXEL_BYTES)).max(1) as u32;
     let mut band = planes
         .saturating_sub(overhead)
         .max(pad(level, reach).saturating_add(halo(level, params.grain())))

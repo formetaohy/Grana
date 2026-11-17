@@ -13,8 +13,6 @@ use super::{Gate, Read, SurfaceBuilder};
 use crate::local::BlockLevels;
 
 const BAND: u32 = 32;
-const BAND_BYTES: u64 = 64 << 20;
-const SCRATCH_MARGIN: u64 = 64 << 20;
 const SCRATCH_STALE: Duration = Duration::from_secs(6 * 60 * 60);
 const RETRY_LIMIT: u32 = 8;
 const SPILL_PREFIX: &str = "grana-detection-";
@@ -512,7 +510,7 @@ fn spill(bytes: u64) -> Result<Storage, String> {
         let mut reserved = RESERVED
             .lock()
             .expect("the detection spill budget is never poisoned");
-        if available < *reserved + bytes + SCRATCH_MARGIN {
+        if available < *reserved + bytes + crate::work::SURFACE_SPILL_MARGIN_BYTES {
             return Err(format!(
                 "the detection volume spills {:.2} GiB to {} and the drive holds {:.2} GiB available with {:.2} GiB already spilled",
                 gib(bytes),
@@ -609,7 +607,7 @@ fn gib(bytes: u64) -> f64 {
 
 fn band_planes(plane: usize) -> u32 {
     let bytes = (plane as u64 * size_of::<f32>() as u64).max(1);
-    (BAND_BYTES / bytes).clamp(1, u64::from(BAND)) as u32
+    (crate::work::SURFACE_BAND_BYTES / bytes).clamp(1, u64::from(BAND)) as u32
 }
 
 fn planes(

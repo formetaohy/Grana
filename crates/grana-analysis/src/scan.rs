@@ -20,9 +20,7 @@ const CORE_MIN: u32 = 64;
 const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
 const CORE_VOXELS_PER_SIGMA: f32 = 8.0;
-const MAX_READ_VOXELS: u64 = 16_777_216;
 const PROGRESS_STRIDE: usize = 4;
-const WORKER_BYTES_LIMIT: u64 = 512 << 20;
 const LEVEL_PLANES: u32 = 64;
 
 pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
@@ -112,7 +110,7 @@ impl SpotScanner {
         }
         let bytes = self.peak_read_voxels() * 4;
         let workers = crate::schedule::workers(workers)
-            .min((WORKER_BYTES_LIMIT / bytes.max(1)).max(1) as usize);
+            .min((crate::work::SPOT_WORKER_BYTES / bytes.max(1)).max(1) as usize);
         let Some(field) = self.template.field(detection, workers, cancel, read)? else {
             return Ok(None);
         };
@@ -286,8 +284,9 @@ impl SpotScan {
                 .map(|axis| u64::from(extent[axis].min(core_side) + 2 * halo[axis]))
                 .product::<u64>();
             assert!(
-                maximum_read <= MAX_READ_VOXELS,
-                "the spot diameter needs more than {MAX_READ_VOXELS} voxels per block"
+                maximum_read <= crate::work::SPOT_READ_VOXELS,
+                "the spot diameter needs more than {} voxels per block",
+                crate::work::SPOT_READ_VOXELS
             );
         }
         let kernels = [0, 1, 2].map(|axis| gaussian(sigma[axis], truncate[axis]));

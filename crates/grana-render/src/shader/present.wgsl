@@ -49,6 +49,10 @@ fn fs_accumulate(input: VertexOutput) -> Accumulated {
     return Accumulated(textureLoad(source, vec2<i32>(input.clip_position.xy), 0), 1.0);
 }
 
+fn grained(screen: ScreenUniforms, pixel: vec2<f32>, coverage: f32) -> f32 {
+    return select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0 || screen.flags.w < 0.5);
+}
+
 @fragment
 fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = input.clip_position.xy;
@@ -66,8 +70,7 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
             straight = mix(straight_old, straight_new, weight);
             coverage = clamp(mix(stale, fresh, weight).a, 0.0, 1.0);
         }
-        let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
-        let encoded = clamp(straight + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
+        let encoded = clamp(straight + vec3<f32>(grained(screen, pixel, coverage)), vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), coverage);
     }
     var accumulated = fresh;
@@ -75,9 +78,8 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
         accumulated = mix(earlier(uv), fresh, weight);
     }
     let coverage = clamp(accumulated.a, 0.0, 1.0);
-    let noise = select((dither(pixel) - 0.5) / 255.0, 0.0, coverage <= 0.0);
     let straight = accumulated.rgb / max(accumulated.a, 1.0e-4);
     let mapped = aces(straight * screen.flags.y) * coverage;
-    let encoded = clamp(srgb_encode(mapped) + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
+    let encoded = clamp(srgb_encode(mapped) + vec3<f32>(grained(screen, pixel, coverage)), vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), 1.0);
 }

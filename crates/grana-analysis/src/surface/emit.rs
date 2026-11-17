@@ -60,10 +60,10 @@ impl Tile<'_> {
                     }
                 }
             }
-            if self.fragment_bytes() > super::TILE_FRAGMENT_LIMIT {
+            if self.fragment_bytes() > crate::work::SURFACE_FRAGMENT_BYTES {
                 return Err(format!(
                     "a surface tile exceeds the {} byte fragment limit",
-                    super::TILE_FRAGMENT_LIMIT
+                    crate::work::SURFACE_FRAGMENT_BYTES
                 ));
             }
         }

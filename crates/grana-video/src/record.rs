@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use grana_exec::{Pipe, Sender};
@@ -55,6 +57,8 @@ pub struct Recorder {
     size: [u32; 2],
     sender: Option<Sender<Message>>,
     worker: Option<JoinHandle<Result<(), Error>>>,
+    aborted: Arc<AtomicBool>,
+    fault: Arc<Mutex<Option<String>>>,
 }
 
 impl Recorder {
@@ -71,15 +75,23 @@ impl Recorder {
             movie: Movie::create(path, size, fps, alpha)?,
             compressor,
         };
+        let aborted = Arc::new(AtomicBool::new(false));
+        let fault = Arc::new(Mutex::new(None));
         let (sender, frames) = Pipe::new(CAPACITY);
-        let worker = thread::Builder::new()
-            .name("grana.movie".to_string())
-            .spawn(move || encode(clip, &frames))
-            .map_err(|error| Error::Encode(error.to_string()))?;
+        let worker = {
+            let aborted = Arc::clone(&aborted);
+            let fault = Arc::clone(&fault);
+            thread::Builder::new()
+                .name("grana.movie".to_string())
+                .spawn(move || encode(clip, &frames, &aborted, &fault))
+                .map_err(|error| Error::Encode(error.to_string()))?
+        };
         Ok(Self {
             size,
             sender: Some(sender),
             worker: Some(worker),
+            aborted,
+            fault,
         })
     }
 
@@ -89,6 +101,9 @@ impl Recorder {
             (self.size[0] * self.size[1] * 4) as usize,
             "a movie frame covers its size"
         );
+        if let Some(detail) = self.fault() {
+            return Err(Error::Encode(detail));
+        }
         let Some(sender) = self.sender.as_ref() else {
             return Err(Error::Stopped);
         };
@@ -100,7 +115,24 @@ impl Recorder {
 
     pub fn finish(mut self) -> Result<(), Error> {
         self.stop()?;
-        self.join()
+        let result = self.join();
+        result.and_then(|()| match self.fault() {
+            Some(detail) => Err(Error::Encode(detail)),
+            None => Ok(()),
+        })
+    }
+
+    pub fn abort(mut self) {
+        self.aborted.store(true, Ordering::Relaxed);
+        self.sender.take();
+        let _ = self.join();
+    }
+
+    fn fault(&self) -> Option<String> {
+        self.fault
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     fn stop(&mut self) -> Result<(), Error> {
@@ -123,28 +155,31 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.aborted.store(true, Ordering::Relaxed);
+        self.sender.take();
         let _ = self.join();
     }
 }
 
-fn encode(mut clip: Clip, frames: &Pipe<Message>) -> Result<(), Error> {
-    let mut failure = None;
+fn encode(
+    mut clip: Clip,
+    frames: &Pipe<Message>,
+    aborted: &AtomicBool,
+    fault: &Mutex<Option<String>>,
+) -> Result<(), Error> {
     while let Some(message) = frames.receive() {
+        if aborted.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         match message {
             Message::Frame(rgba) => {
-                if failure.is_none()
-                    && let Err(error) = clip.push(&rgba)
-                {
-                    failure = Some(error);
+                if let Err(error) = clip.push(&rgba) {
+                    *fault.lock().unwrap_or_else(|error| error.into_inner()) =
+                        Some(error.to_string());
+                    return Err(error);
                 }
             }
-            Message::Finish => {
-                return match failure {
-                    Some(error) => Err(error),
-                    None => clip.finish(),
-                };
-            }
+            Message::Finish => return clip.finish(),
         }
     }
     Ok(())

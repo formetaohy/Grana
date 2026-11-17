@@ -38,8 +38,6 @@ pub use survey::LocalizationSurvey;
 
 const PREVIEW: u32 = 2048;
 
-const PREVIEW_BYTES: u64 = 256 << 20;
-
 const FRC_LIMIT: usize = 2048;
 
 const FRC_MINIMUM: usize = 64;
@@ -286,7 +284,7 @@ fn preview_geometry(
     blur: f32,
     depth: LocalizationDepth,
 ) -> Result<Preview, String> {
-    let budget = PREVIEW_BYTES / 4;
+    let budget = crate::work::LOCALIZATION_PREVIEW_BYTES / 4;
     let mut scale = ((span[0].max(span[1]) / pixel).ceil() / PREVIEW as f32)
         .ceil()
         .max(1.0);

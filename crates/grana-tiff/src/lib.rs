@@ -12,7 +12,7 @@ mod write;
 pub use archive::write_archive;
 pub use error::Error;
 pub use image::{Image, dataset_name};
-pub use write::{Picture, Stack, Stream, write, write_stack, write_stream};
+pub use write::{Picture, Stack, Stream, Stream16, write, write_stack, write_stream, write16};
 
 pub(crate) type Cache = grana_store::LruCache<(usize, usize, usize, usize), Vec<u8>>;
 

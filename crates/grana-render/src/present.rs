@@ -40,6 +40,12 @@ struct Uniforms {
     source: [f32; 4],
 }
 
+#[derive(Clone, Copy)]
+struct Tone {
+    encode: bool,
+    grained: bool,
+}
+
 pub(crate) struct Present {
     accumulate: RenderPipeline,
     present: RenderPipeline,
@@ -184,17 +190,25 @@ impl Present {
         fade: Option<f32>,
         source: [f32; 4],
     ) {
-        self.write_with(queue, self.encode, exposure, transparent, fade, source);
+        let tone = Tone {
+            encode: self.encode,
+            grained: true,
+        };
+        self.write_with(queue, tone, exposure, transparent, fade, source);
     }
 
     pub fn write_wide(&self, queue: &Queue, exposure: f32, transparent: bool) {
-        self.write_with(queue, true, exposure, transparent, None, WHOLE);
+        let tone = Tone {
+            encode: true,
+            grained: false,
+        };
+        self.write_with(queue, tone, exposure, transparent, None, WHOLE);
     }
 
     fn write_with(
         &self,
         queue: &Queue,
-        encode: bool,
+        tone: Tone,
         exposure: f32,
         transparent: bool,
         fade: Option<f32>,
@@ -211,10 +225,10 @@ impl Present {
         );
         let uniforms = Uniforms {
             flags: [
-                if encode { 1.0 } else { 0.0 },
+                if tone.encode { 1.0 } else { 0.0 },
                 exposure,
                 if transparent { 1.0 } else { 0.0 },
-                0.0,
+                if tone.grained { 1.0 } else { 0.0 },
             ],
             fade: [weight, 0.0, 0.0, 0.0],
             source,

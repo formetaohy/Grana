@@ -1251,29 +1251,33 @@ impl Encode for MeasureState {
         match &self.lasso {
             Some(lasso) => {
                 writer.u8(1);
-                writer.count(lasso.x());
-                writer.count(lasso.y());
-                writer.count(lasso.points().len());
-                for point in lasso.points() {
-                    writer.f32(point[0]);
-                    writer.f32(point[1]);
-                }
+                lasso.encode(writer);
             }
             None => writer.u8(0),
         }
-        match self.sort {
+        match &self.sort {
             Some((column, descending)) => {
                 writer.u8(1);
-                writer.count(column);
-                writer.bool(descending);
+                writer.string(column);
+                writer.bool(*descending);
             }
             None => writer.u8(0),
         }
-        self.columns.encode(writer);
+        writer.count(self.columns.len());
+        for (column, visible) in &self.columns {
+            writer.string(column);
+            writer.bool(*visible);
+        }
         writer.bool(self.visibility);
         writer.u8(self.view.index());
-        writer.count(self.axes[0]);
-        writer.count(self.axes[1]);
+        match &self.axes {
+            Some([x, y]) => {
+                writer.u8(1);
+                writer.string(x);
+                writer.string(y);
+            }
+            None => writer.u8(0),
+        }
     }
 }
 

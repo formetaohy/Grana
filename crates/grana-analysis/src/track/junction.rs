@@ -158,7 +158,8 @@ pub(super) fn attach(
             );
         }
         candidates.sort_unstable_by_key(|event| event.rank());
-        for index in select(&candidates) {
+        let chosen = select(&candidates, cancel)?;
+        for index in chosen {
             if let Some(tail) = candidates[index].apply(chains) {
                 active.push(tail);
             }
@@ -622,9 +623,9 @@ fn overlap_of(detections: &Detections, first: usize, second: usize) -> f32 {
         / reach
 }
 
-fn select(events: &[Event]) -> Vec<usize> {
+fn select(events: &[Event], cancel: &AtomicBool) -> Option<Vec<usize>> {
     if events.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let mut owners: HashMap<usize, Vec<usize>> = HashMap::new();
     for (index, event) in events.iter().enumerate() {
@@ -661,10 +662,13 @@ fn select(events: &[Event]) -> Vec<usize> {
     groups.sort_unstable_by_key(|group| group[0]);
     let mut chosen = Vec::new();
     for members in groups {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         chosen.append(&mut component(events, &adjacency, &members));
     }
     chosen.sort_unstable();
-    chosen
+    Some(chosen)
 }
 
 fn root(roots: &mut [usize], index: usize) -> usize {
@@ -722,54 +726,115 @@ fn component(events: &[Event], adjacency: &[Vec<usize>], members: &[usize]) -> V
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    let exhaustive = neighbours.len() <= EXHAUSTIVE_LIMIT;
     let mut search = Search {
         scores: &scores,
-        neighbours: &neighbours,
-        best: 0.0,
-        picked: Vec::new(),
-        chosen: Vec::new(),
+        best: f64::NEG_INFINITY,
+        chosen: 0,
+        picked: 0,
+        visited: 0,
+        exhausted: false,
     };
-    search.branch(&(0..members.len()).collect::<Vec<_>>(), 0.0);
-    search
-        .chosen
+    if exhaustive {
+        let conflict = neighbours
+            .iter()
+            .map(|list| list.iter().fold(0u64, |mask, &other| mask | 1 << other))
+            .collect::<Vec<_>>();
+        search.branch(available(neighbours.len()), 0.0, &conflict);
+    }
+    let chosen = match search.exhausted || !exhaustive {
+        true => {
+            let (greedy, score) = greedy(&scores, &neighbours);
+            match score > search.best + EPSILON {
+                true => greedy,
+                false => set(search.chosen),
+            }
+        }
+        false => set(search.chosen),
+    };
+    chosen
         .into_iter()
         .map(|position| members[order[position]])
         .collect()
 }
 
+const SEARCH_LIMIT: usize = 1 << 16;
+const EXHAUSTIVE_LIMIT: usize = u64::BITS as usize;
+
+fn available(count: usize) -> u64 {
+    if count >= EXHAUSTIVE_LIMIT {
+        u64::MAX
+    } else {
+        (1u64 << count) - 1
+    }
+}
+
+fn set(mask: u64) -> Vec<usize> {
+    (0..u64::BITS)
+        .filter(|position| mask & (1 << position) != 0)
+        .map(|position| position as usize)
+        .collect()
+}
+
+fn greedy(scores: &[f64], neighbours: &[Vec<usize>]) -> (Vec<usize>, f64) {
+    let mut blocked = vec![false; scores.len()];
+    let mut chosen = Vec::new();
+    let mut score = 0.0;
+    for (index, value) in scores.iter().enumerate() {
+        if blocked[index] || *value <= 0.0 {
+            continue;
+        }
+        chosen.push(index);
+        score += *value;
+        for &other in &neighbours[index] {
+            blocked[other] = true;
+        }
+    }
+    (chosen, score)
+}
+
 struct Search<'a> {
     scores: &'a [f64],
-    neighbours: &'a [Vec<usize>],
     best: f64,
-    picked: Vec<usize>,
-    chosen: Vec<usize>,
+    chosen: u64,
+    picked: u64,
+    visited: usize,
+    exhausted: bool,
 }
 
 impl Search<'_> {
-    fn branch(&mut self, candidates: &[usize], score: f64) {
-        if candidates.is_empty() {
+    fn branch(&mut self, open: u64, score: f64, conflict: &[u64]) {
+        if open == 0 {
             if score > self.best + EPSILON {
                 self.best = score;
-                self.chosen.clone_from(&self.picked);
+                self.chosen = self.picked;
             }
             return;
         }
-        let remaining = candidates
-            .iter()
-            .map(|&candidate| self.scores[candidate])
-            .sum::<f64>();
+        if self.visited >= SEARCH_LIMIT {
+            self.exhausted = true;
+            return;
+        }
+        self.visited += 1;
+        let mut remaining = 0.0;
+        let mut mask = open;
+        while mask != 0 {
+            let index = mask.trailing_zeros() as usize;
+            remaining += self.scores[index].max(0.0);
+            mask &= mask - 1;
+        }
         if score + remaining <= self.best + EPSILON {
             return;
         }
-        let first = candidates[0];
-        self.picked.push(first);
-        let rest = candidates[1..]
-            .iter()
-            .copied()
-            .filter(|candidate| !self.neighbours[first].contains(candidate))
-            .collect::<Vec<_>>();
-        self.branch(&rest, score + self.scores[first]);
-        self.picked.pop();
-        self.branch(&candidates[1..], score);
+        let first = open.trailing_zeros() as usize;
+        let slot = 1u64 << first;
+        self.picked |= slot;
+        self.branch(
+            open & !slot & !conflict[first],
+            score + self.scores[first],
+            conflict,
+        );
+        self.picked &= !slot;
+        self.branch(open & !slot, score, conflict);
     }
 }

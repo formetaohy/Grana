@@ -12,49 +12,41 @@ const PICTURE_FORMAT: TextureFormat = crate::target::WIDE_FORMAT;
 
 const PICTURE_BYTES: u32 = 16;
 
-pub struct Image16 {
+pub struct Pixels<'a> {
+    bytes: &'a [u8],
     size: [u32; 2],
-    pixels: Vec<u16>,
+    stride: usize,
 }
 
-impl Image16 {
+impl<'a> Pixels<'a> {
+    pub fn new(bytes: &'a [u8], size: [u32; 2], stride: usize) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a displayed picture covers at least one pixel"
+        );
+        let row = size[0] as usize * PICTURE_BYTES as usize;
+        assert!(
+            stride >= row && bytes.len() >= stride * size[1] as usize,
+            "a displayed picture covers every pixel of its rows"
+        );
+        Self {
+            bytes,
+            size,
+            stride,
+        }
+    }
+
     pub fn size(&self) -> [u32; 2] {
         self.size
     }
 
-    pub fn pixels(&self) -> &[u16] {
-        &self.pixels
-    }
-
-    pub fn decode(bytes: &[u8], size: [u32; 2], stride: usize) -> Self {
+    pub fn row(&self, line: u32) -> &'a [u8] {
         assert!(
-            size[0] > 0 && size[1] > 0,
-            "a decoded image covers at least one pixel"
+            line < self.size[1],
+            "a displayed picture row lies inside the picture"
         );
-        let width = size[0] as usize;
-        let height = size[1] as usize;
-        let row = width * PICTURE_BYTES as usize;
-        assert!(
-            stride >= row && bytes.len() >= stride * height,
-            "a decoded image covers every pixel of its rows"
-        );
-        let mut pixels = Vec::with_capacity(width * height * 4);
-        if stride == row {
-            sample(&mut pixels, &bytes[..row * height]);
-        } else {
-            for line in 0..height {
-                let start = line * stride;
-                sample(&mut pixels, &bytes[start..start + row]);
-            }
-        }
-        Self { size, pixels }
-    }
-}
-
-fn sample(pixels: &mut Vec<u16>, bytes: &[u8]) {
-    for value in bytes.as_chunks::<4>().0 {
-        let value = f32::from_le_bytes(*value);
-        pixels.push((value.clamp(0.0, 1.0) * 65535.0).round() as u16);
+        let start = line as usize * self.stride;
+        &self.bytes[start..start + self.size[0] as usize * PICTURE_BYTES as usize]
     }
 }
 
@@ -87,7 +79,13 @@ pub fn target(device: &Device, size: [u32; 2]) -> Texture {
     })
 }
 
-pub fn read16(device: &Device, queue: &Queue, texture: &Texture, size: [u32; 2]) -> Image16 {
+pub fn read<R>(
+    device: &Device,
+    queue: &Queue,
+    texture: &Texture,
+    size: [u32; 2],
+    read: impl FnOnce(Pixels<'_>) -> R,
+) -> R {
     let stride = stride(size[0]);
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("grana.image"),
@@ -112,14 +110,14 @@ pub fn read16(device: &Device, queue: &Queue, texture: &Texture, size: [u32; 2])
         .recv()
         .expect("the image mapping callback runs once")
         .expect("the image staging buffer is mappable");
-    let image = {
+    let value = {
         let mapped = slice
             .get_mapped_range()
             .expect("the mapped image buffer stays mapped");
-        Image16::decode(&mapped, size, stride as usize)
+        read(Pixels::new(&mapped, size, stride as usize))
     };
     buffer.unmap();
-    image
+    value
 }
 
 pub(crate) fn stage(
@@ -140,7 +138,7 @@ pub(crate) fn stage(
             buffer,
             layout: TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(u32::try_from(stride).expect("a captured row fits u32")),
+                bytes_per_row: Some(u32::try_from(stride).expect("a displayed row fits u32")),
                 rows_per_image: Some(size[1]),
             },
         },

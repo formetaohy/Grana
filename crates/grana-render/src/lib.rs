@@ -32,9 +32,7 @@ mod volume;
 
 pub use converge::{Estimate, Sampling};
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
-pub use image::{
-    Image16, read16 as read_image16, stride as picture_stride, target as picture_target,
-};
+pub use image::{Pixels, stride as picture_stride, target as picture_target};
 pub use pick::PickId;
 pub use renderer::{Display, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{

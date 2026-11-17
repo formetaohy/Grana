@@ -11,6 +11,7 @@ const COPY_ALIGNMENT: u64 = 4;
 struct Slot {
     buffer: Buffer,
     mapping: Option<Receiver<Result<(), BufferAsyncError>>>,
+    ready: bool,
     reserved: bool,
 }
 
@@ -35,6 +36,7 @@ impl Readback {
                     mapped_at_creation: false,
                 }),
                 mapping: None,
+                ready: false,
                 reserved: false,
             })
             .collect();
@@ -166,7 +168,7 @@ impl Readback {
         device: &Device,
         read: impl FnOnce(usize, &[u8]) -> R,
     ) -> Option<R> {
-        self.poll(device, false, read)
+        self.ready(device, false).then(|| self.take_ready(read))
     }
 
     pub fn take_wait<R>(
@@ -174,16 +176,16 @@ impl Readback {
         device: &Device,
         read: impl FnOnce(usize, &[u8]) -> R,
     ) -> Option<R> {
-        self.poll(device, true, read)
+        self.ready(device, true).then(|| self.take_ready(read))
     }
 
-    fn poll<R>(
-        &mut self,
-        device: &Device,
-        wait: bool,
-        read: impl FnOnce(usize, &[u8]) -> R,
-    ) -> Option<R> {
-        let slot = *self.pending.front()?;
+    pub fn ready(&mut self, device: &Device, wait: bool) -> bool {
+        let Some(&slot) = self.pending.front() else {
+            return false;
+        };
+        if self.slots[slot].ready {
+            return true;
+        }
         match device.poll(if wait {
             PollType::wait_indefinitely()
         } else {
@@ -197,10 +199,25 @@ impl Readback {
             .as_ref()
             .expect("a pending readback slot is registered before it is taken");
         match receiver.try_recv() {
-            Ok(result) => result.expect("the readback staging buffer is mappable"),
-            Err(TryRecvError::Empty) => return None,
+            Ok(result) => {
+                result.expect("the readback staging buffer is mappable");
+                self.slots[slot].ready = true;
+                true
+            }
+            Err(TryRecvError::Empty) => false,
             Err(TryRecvError::Disconnected) => panic!("the readback callback fires once"),
         }
+    }
+
+    pub fn take_ready<R>(&mut self, read: impl FnOnce(usize, &[u8]) -> R) -> R {
+        let slot = *self
+            .pending
+            .front()
+            .expect("a ready readback slot is pending");
+        assert!(
+            self.slots[slot].ready,
+            "a readback slot is taken once its mapping completed"
+        );
         let slice = self.slots[slot].buffer.slice(..);
         let value = {
             let mapped = slice
@@ -210,8 +227,9 @@ impl Readback {
         };
         self.slots[slot].buffer.unmap();
         self.slots[slot].mapping = None;
+        self.slots[slot].ready = false;
         self.slots[slot].reserved = false;
         self.pending.pop_front();
-        Some(value)
+        value
     }
 }

@@ -6,6 +6,7 @@ mod lineage;
 mod offline;
 mod page;
 mod plan;
+mod quantize;
 mod sink;
 mod surface;
 mod task;

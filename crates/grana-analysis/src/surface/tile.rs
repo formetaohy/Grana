@@ -182,10 +182,10 @@ impl<'a> Tile<'a> {
             }
             let nodes_bytes = self.nodes.len() as u64 * std::mem::size_of::<Node>() as u64
                 + self.accumulators.len() as u64 * std::mem::size_of::<SampleAccumulator>() as u64;
-            if nodes_bytes > super::TILE_FRAGMENT_LIMIT {
+            if nodes_bytes > crate::work::SURFACE_FRAGMENT_BYTES {
                 return TileResult::Failed(format!(
                     "the surface tile {index} exceeds the {} byte fragment limit",
-                    super::TILE_FRAGMENT_LIMIT
+                    crate::work::SURFACE_FRAGMENT_BYTES
                 ));
             }
             if let Err(detail) = self.accumulate(&core, &array, measure) {
@@ -222,7 +222,7 @@ impl<'a> Tile<'a> {
             cache,
         };
         let bytes = output_bytes(&output);
-        if bytes > super::TILE_FRAGMENT_LIMIT {
+        if bytes > crate::work::SURFACE_FRAGMENT_BYTES {
             return TileResult::Failed(format!(
                 "the surface tile {index} exceeds the {bytes} byte fragment limit"
             ));
