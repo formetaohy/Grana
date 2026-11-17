@@ -1,5 +1,6 @@
 use super::*;
 
+use super::localization::still_current;
 use grana_calibration::Settings;
 use grana_pipeline::run::{GrowRequest, SegmentRequest};
 
@@ -269,6 +270,7 @@ impl Session {
         }
         let mut removed = Vec::new();
         let mut failed = Vec::new();
+        let mut rolled_back = Vec::new();
         let mut detected = Vec::new();
         let mut imported = Vec::new();
         let mut recutted = Vec::new();
@@ -371,15 +373,17 @@ impl Session {
                     revision,
                     report,
                 } => {
-                    let current = self
-                        .scene
-                        .as_ref()
-                        .and_then(|scene| scene.objects.get(set))
-                        .map(|object| object.revision());
-                    if let (Job::Localizations(held), Some(current)) = (job, current)
-                        && held == set
-                        && revision == current
-                    {
+                    let placed = match (job, self.scene.as_ref()) {
+                        (Job::Localizations(held), Some(scene)) if held == set => {
+                            still_current(scene, set, revision, &report)
+                        }
+                        _ => false,
+                    };
+                    if !placed {
+                        self.message = Some(Message::info(
+                            "the super-resolution image finished after the localizations, parameters or region it rendered changed, so it was discarded",
+                        ));
+                    } else {
                         self.localization.install(set, revision, *report);
                     }
                 }
@@ -499,7 +503,16 @@ impl Session {
                     if let Job::Import(set) = job {
                         failed.push(set);
                     }
-                    self.message = Some(Message::error(detail));
+                    if matches!(job, Job::Detect(_) | Job::Recut(_))
+                        && let Some(state) = self.analysis[index].take_fallback()
+                    {
+                        rolled_back.push(state);
+                        self.message = Some(Message::error(format!(
+                            "{detail}; the object set kept the geometry, curation and tracks it held before the analysis"
+                        )));
+                    } else {
+                        self.message = Some(Message::error(detail));
+                    }
                 }
             }
         }
@@ -510,6 +523,9 @@ impl Session {
         }
         for set in failed {
             self.remove_object(set);
+        }
+        for state in rolled_back {
+            self.rollback(state);
         }
         if let Some((set, cut)) = self.recut.take()
             && !self
@@ -647,7 +663,12 @@ impl Session {
         }
     }
 
-    pub(super) fn cancel(&mut self, job: Job) {
+    pub(super) fn cancel(&mut self, job: Job) -> bool {
+        let fallback = self.halt(job);
+        fallback.is_some_and(|state| self.rollback(state))
+    }
+
+    pub(super) fn halt(&mut self, job: Job) -> Option<grana_scene::SetState> {
         if self
             .recipe
             .as_ref()
@@ -655,8 +676,29 @@ impl Session {
         {
             self.abort_recipe();
         }
+        let fallback = self
+            .analysis
+            .iter_mut()
+            .find(|analysis| analysis.job() == job)
+            .and_then(Analysis::take_fallback);
         self.analysis.retain(|analysis| analysis.job() != job);
         self.progress.retain(|progress| progress.job != job);
+        fallback
+    }
+
+    fn rollback(&mut self, state: grana_scene::SetState) -> bool {
+        let Some(set) = ObjectSetId::from_raw(state.id) else {
+            return false;
+        };
+        if !self
+            .scene
+            .as_mut()
+            .is_some_and(|scene| scene.restore_object(state))
+        {
+            return false;
+        }
+        self.resume_relations(set);
+        true
     }
 
     pub(super) fn defer_relations(&mut self, set: ObjectSetId) {
@@ -959,11 +1001,15 @@ impl Session {
         let Some(plan) = self.detect_plan(set) else {
             return;
         };
-        self.cancel(Job::Recut(set));
+        let fallback = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.object_state(set));
+        let _ = self.halt(Job::Recut(set));
         if self.recut.is_some_and(|(pending, _)| pending == set) {
             self.recut = None;
         }
-        self.cancel(Job::Track(set));
+        let _ = self.halt(Job::Track(set));
         if self.recipe.is_none() {
             self.defer_relations(set);
             self.clear_relations(set);
@@ -981,7 +1027,8 @@ impl Session {
         let Some(input) = self.detect_input(set) else {
             return;
         };
-        self.analysis.push(plan.into_analysis(set).keyed(input));
+        self.analysis
+            .push(plan.into_analysis(set).keyed(input).with_fallback(fallback));
     }
 
     fn detect_plan(&mut self, set: ObjectSetId) -> Option<DetectPlan> {
@@ -1235,10 +1282,12 @@ impl Session {
         if source.counts().iter().all(Option::is_none) {
             return;
         }
+        let fallback = scene.object_state(set);
         self.message = None;
         self.record_progress(Job::Recut(set), 0, 0, source.frames() as usize);
-        self.analysis
-            .push(crate::recut(Job::Recut(set), source, cut, 0, self.store()));
+        self.analysis.push(
+            crate::recut(Job::Recut(set), source, cut, 0, self.store()).with_fallback(fallback),
+        );
     }
 
     pub(super) fn store(&self) -> Arc<SpillStore> {

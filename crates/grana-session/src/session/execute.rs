@@ -250,10 +250,15 @@ impl Session {
                     self.remove_object(set);
                     self.message = None;
                 } else {
-                    self.cancel(Job::Detect(set));
-                    self.cancel(Job::Recut(set));
+                    let kept = self.cancel(Job::Detect(set));
+                    let kept = self.cancel(Job::Recut(set)) || kept;
                     if self.recut.is_some_and(|(pending, _)| pending == set) {
                         self.recut = None;
+                    }
+                    if kept {
+                        self.message = Some(Message::info(
+                            "the analysis stopped and the object set kept the geometry, curation and tracks it held before it",
+                        ));
                     }
                 }
             }
@@ -306,7 +311,9 @@ impl Session {
                 shift,
             } => self.remove_relation(source, target, shift),
             Command::Track(set) => self.start_tracks(set),
-            Command::CancelTrack(set) => self.cancel(Job::Track(set)),
+            Command::CancelTrack(set) => {
+                self.cancel(Job::Track(set));
+            }
             Command::ClearTracks(set) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_tracks(set);
@@ -682,9 +689,13 @@ impl Session {
                 }
             }
             Command::ComputeColoc => self.start_coloc(),
-            Command::CancelColoc => self.cancel(Job::Coloc),
+            Command::CancelColoc => {
+                self.cancel(Job::Coloc);
+            }
             Command::ComputeObjectColoc(set) => self.start_object_coloc(set),
-            Command::CancelObjectColoc(set) => self.cancel(Job::ObjectColoc(set)),
+            Command::CancelObjectColoc(set) => {
+                self.cancel(Job::ObjectColoc(set));
+            }
             Command::ClearObjectColoc(set) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_object_coloc(set);
@@ -716,14 +727,18 @@ impl Session {
             }
             Command::ClusterLocalizations(set) => self.start_clusters(set),
             Command::EstimateLocalizationClusters(set) => self.estimate_clusters(set),
-            Command::CancelClusters(set) => self.cancel(Job::Clusters(set)),
+            Command::CancelClusters(set) => {
+                self.cancel(Job::Clusters(set));
+            }
             Command::CancelLocalizations(set) => self.cancel_localizations(set),
             Command::ClearLocalizations(set) => self.clear_localizations(set),
             Command::ExportLocalizationImage(set) => self.export_localization_image(set),
             Command::ExportLocalizationComposite => self.export_localization_composite(),
             Command::ComputeDrift => self.start_drift(),
             Command::ComputeLocalizationDrift(set) => self.start_localization_drift(set),
-            Command::CancelDrift => self.cancel(Job::Drift),
+            Command::CancelDrift => {
+                self.cancel(Job::Drift);
+            }
             Command::ClearDrift => self.clear_drift(),
             Command::SetDriftReference(reference) => self.set_drift_reference(reference),
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
@@ -731,7 +746,9 @@ impl Session {
             Command::RegisterFromLocalizations(reference) => {
                 self.start_fiducial_registration(reference)
             }
-            Command::CancelRegistration => self.cancel(Job::Register),
+            Command::CancelRegistration => {
+                self.cancel(Job::Register);
+            }
             Command::ClearRegistration => self.clear_registration(),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
@@ -918,9 +935,15 @@ impl Session {
                     self.cancel(Job::Detect(set));
                     self.cancel(Job::Track(set));
                 }
-                Action::Track => self.cancel(Job::Track(set)),
-                Action::Cluster => self.cancel(Job::Clusters(set)),
-                Action::ObjectColoc => self.cancel(Job::ObjectColoc(set)),
+                Action::Track => {
+                    self.cancel(Job::Track(set));
+                }
+                Action::Cluster => {
+                    self.cancel(Job::Clusters(set));
+                }
+                Action::ObjectColoc => {
+                    self.cancel(Job::ObjectColoc(set));
+                }
                 Action::Relation => {
                     self.analysis.retain(|analysis| {
                             !matches!(analysis.job(), Job::Relation { target, .. } if target == set)

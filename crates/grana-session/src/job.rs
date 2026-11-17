@@ -18,6 +18,7 @@ use grana_pipeline::run::{
 pub struct Analysis {
     job: Job,
     input: Option<Input>,
+    fallback: Option<grana_scene::SetState>,
     task: Task<Event>,
 }
 
@@ -35,6 +36,14 @@ impl Analysis {
             input: Some(input),
             ..self
         }
+    }
+
+    pub fn with_fallback(self, fallback: Option<grana_scene::SetState>) -> Self {
+        Self { fallback, ..self }
+    }
+
+    pub fn take_fallback(&mut self) -> Option<grana_scene::SetState> {
+        self.fallback.take()
     }
 
     pub fn poll(&self) -> Poll<Event> {
@@ -242,6 +251,7 @@ fn analyse(
     Analysis {
         job,
         input: None,
+        fallback: None,
         task,
     }
 }

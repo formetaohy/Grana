@@ -29,7 +29,7 @@ use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
 use crate::registration::Registration;
 use crate::segment::SegmentParams;
-use crate::state::{HASH_OFFSET, mix};
+use crate::state::{HASH_OFFSET, SetState, mix};
 use crate::table_request::TableRequest;
 
 pub type MaskExtent = ([f32; 3], [f32; 3]);
@@ -662,6 +662,21 @@ impl Scene {
     pub fn import_localizations(&mut self, file: &str) -> ObjectSetId {
         self.objects
             .import_localizations(file, self.selected, &self.dataset)
+    }
+
+    pub fn object_state(&self, id: ObjectSetId) -> Option<SetState> {
+        self.objects.set_state(id)
+    }
+
+    pub fn restore_object(&mut self, state: SetState) -> bool {
+        if !self.objects.restore_set(state, &self.dataset) {
+            return false;
+        }
+        self.prune_mask_filter();
+        self.sync_masks();
+        self.sync_coloc_mask();
+        self.validate_selections();
+        true
     }
 
     pub fn remove_object(&mut self, id: ObjectSetId) {

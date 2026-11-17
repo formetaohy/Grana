@@ -130,7 +130,7 @@ where
     let (results, received) = mpsc::sync_channel::<Message<T>>(window);
     let (reports, reported) = mpsc::channel::<(usize, usize, usize)>();
     let mut states = (0..running).map(|_| local()).collect::<Vec<_>>();
-    let (installed, failure, denied) = parallel(|scope| {
+    let (installed, failure, denied) = std::thread::scope(|scope| {
         let work = &work;
         let held = &held;
         for state in states.iter_mut() {
@@ -138,7 +138,7 @@ where
             let reports = reports.clone();
             let next = &next;
             let halted = &halted;
-            scope.spawn(move |_| {
+            scope.spawn(move || {
                 let stop = || cancel.load(Ordering::Relaxed) || halted.load(Ordering::Relaxed);
                 loop {
                     if !held.take(&stop) {

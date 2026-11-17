@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::mem::size_of;
 use std::ops::Range;
 
-use grana_volume::{Intensity, Level, Pyramid, Region};
+use grana_volume::{Intensity, Level, Region};
 
 use crate::work;
 
@@ -119,29 +119,58 @@ impl Row<'_> {
     }
 }
 
-pub(crate) fn block_levels(bucket: &mut [f32]) -> Option<(f32, f32)> {
-    if bucket.is_empty() {
-        return None;
-    }
-    let total = bucket.len();
-    let background = *bucket.select_nth_unstable_by(total / 2, f32::total_cmp).1;
-    let rank = ((total as f64 * SIGNAL_QUANTILE) as usize).min(total - 1);
-    let signal = *bucket.select_nth_unstable_by(rank, f32::total_cmp).1;
-    Some((background, signal))
-}
-
-pub(crate) struct LocalField(Grid);
-
 const BUCKET: usize = (BLOCK * BLOCK * BLOCK) as usize;
+
+const MINIMUM_SAMPLES: usize = BUCKET / 8;
 
 const _: () = {
     assert!(BUCKET as u64 == work::FIELD_BLOCK_VOXELS);
-    assert!(BUCKET as u64 * size_of::<f32>() as u64 == work::FIELD_BUCKET_BYTES);
+    assert!(size_of::<u16>() as u64 == work::FIELD_BIN_BYTES);
     assert!(size_of::<u32>() as u64 == work::FIELD_COUNT_BYTES);
     assert!(size_of::<Option<(f32, f32)>>() as u64 == work::FIELD_LEVEL_BYTES);
     assert!(size_of::<f32>() as u64 == work::FIELD_BACKGROUND_BYTES);
     assert!(size_of::<f32>() as u64 == work::FIELD_SIGNAL_BYTES);
 };
+
+fn bins(columns: usize) -> usize {
+    let each = work::FIELD_HISTOGRAM_BYTES / (columns.max(1) as u64 * work::FIELD_BIN_BYTES);
+    each.clamp(work::FIELD_BIN_MIN, work::FIELD_BIN_MAX) as usize
+}
+
+fn bin(value: f32, intensity: Intensity, scale: f32, last: usize) -> usize {
+    (((value - intensity.min()) * scale) as usize).min(last)
+}
+
+fn quantiles(histogram: &[u16], count: u32, intensity: Intensity) -> Option<(f32, f32)> {
+    let total = count as usize;
+    if total < MINIMUM_SAMPLES {
+        return None;
+    }
+    let median = total / 2;
+    let peak = ((total as f64 * SIGNAL_QUANTILE) as usize).min(total - 1);
+    let width = intensity.span() / histogram.len() as f32;
+    let mut seen = 0usize;
+    let mut background = INVALID;
+    let mut signal = INVALID;
+    for (index, hits) in histogram.iter().copied().enumerate() {
+        let hits = hits as usize;
+        if hits == 0 {
+            continue;
+        }
+        let base = seen;
+        seen += hits;
+        for (target, level) in [(median, &mut background), (peak, &mut signal)] {
+            if level.is_nan() && target < seen {
+                let offset = (target - base) as f32 + 0.5;
+                *level = intensity.min() + width * (index as f32 + offset / hits as f32);
+            }
+        }
+        if !background.is_nan() && !signal.is_nan() {
+            break;
+        }
+    }
+    Some((background, signal))
+}
 
 fn block_counts(region: &[Range<u32>; 3]) -> [usize; 3] {
     [0, 1, 2].map(|axis| (region[axis].end - region[axis].start).div_ceil(BLOCK as u32) as usize)
@@ -153,7 +182,8 @@ fn column_count(blocks: [usize; 3]) -> usize {
 
 pub(crate) fn footprint(blocks: [usize; 3]) -> u64 {
     let columns = column_count(blocks) as u64;
-    columns * (work::FIELD_BUCKET_BYTES + work::FIELD_COUNT_BYTES + work::FIELD_LEVEL_BYTES)
+    let bins = bins(column_count(blocks)) as u64;
+    columns * (bins * work::FIELD_BIN_BYTES + work::FIELD_COUNT_BYTES + work::FIELD_LEVEL_BYTES)
         + columns * blocks[2] as u64 * (work::FIELD_BACKGROUND_BYTES + work::FIELD_SIGNAL_BYTES)
 }
 
@@ -161,24 +191,6 @@ pub fn field_bytes(level: Level, region: Region) -> u64 {
     region
         .voxel_range(level)
         .map_or(0, |ranges| footprint(block_counts(&ranges)))
-}
-
-pub(crate) fn bounded_level(
-    pyramid: &Pyramid,
-    region: Region,
-    candidate: usize,
-) -> Result<usize, String> {
-    let coarsest = pyramid.level_count() - 1;
-    (candidate..=coarsest)
-        .find(|level| field_bytes(pyramid.level(*level), region) <= work::FIELD_FRAME_BYTES)
-        .ok_or_else(|| {
-            format!(
-                "the block field of the detection region needs {} MiB per frame at the coarsest level {} and the field budget holds {} MiB; crop the region to a smaller plane",
-                field_bytes(pyramid.level(coarsest), region) >> 20,
-                coarsest,
-                work::FIELD_FRAME_BYTES >> 20,
-            )
-        })
 }
 
 pub struct BlockLevels {
@@ -190,11 +202,13 @@ pub struct BlockLevels {
     blocks: [usize; 3],
     intensity: Intensity,
     workers: usize,
-    background: Vec<f32>,
-    signal: Vec<f32>,
-    buckets: Vec<f32>,
+    bins: usize,
+    scale: f32,
+    histograms: Vec<u16>,
     counts: Vec<u32>,
     levels: Vec<Option<(f32, f32)>>,
+    background: Vec<f32>,
+    signal: Vec<f32>,
     row: i64,
 }
 
@@ -210,10 +224,15 @@ impl BlockLevels {
             region.iter().all(|range| !range.is_empty()),
             "a block field covers a non empty region"
         );
+        assert!(
+            intensity.span() > 0.0,
+            "a block field spans a positive intensity range"
+        );
         let blocks = block_counts(&region);
         let columns = column_count(blocks);
         let width = (cover[0].end - cover[0].start) as usize;
         let height = (cover[1].end - cover[1].start) as usize;
+        let bins = bins(columns);
         Self {
             anchor,
             region,
@@ -223,22 +242,18 @@ impl BlockLevels {
             blocks,
             intensity,
             workers: workers.max(1),
-            background: vec![f32::NAN; columns * blocks[2]],
-            signal: vec![f32::NAN; columns * blocks[2]],
-            buckets: vec![0.0; columns * BUCKET],
+            bins,
+            scale: bins as f32 / intensity.span(),
+            histograms: vec![0; columns * bins],
             counts: vec![0; columns],
             levels: vec![None; columns],
+            background: vec![INVALID; columns * blocks[2]],
+            signal: vec![INVALID; columns * blocks[2]],
             row: i64::MIN,
         }
     }
 
-    pub fn push(
-        &mut self,
-        admits: &(dyn Fn([i64; 3]) -> bool + Sync),
-        start: u32,
-        values: &[f32],
-        planes: usize,
-    ) {
+    pub fn push(&mut self, start: u32, values: &[f32], planes: usize) {
         let plane = self.width * self.height;
         assert!(
             !values.is_empty() && values.len() == plane * planes,
@@ -256,39 +271,35 @@ impl BlockLevels {
                 self.flush();
                 self.row = row;
             }
-            self.push_rows(admits, start, z, row_end, values);
+            self.push_rows(start, z, row_end, values);
             z = row_end;
         }
     }
 
-    fn push_rows(
-        &mut self,
-        admits: &(dyn Fn([i64; 3]) -> bool + Sync),
-        start: u32,
-        low: u32,
-        high: u32,
-        values: &[f32],
-    ) {
+    fn push_rows(&mut self, start: u32, low: u32, high: u32, values: &[f32]) {
         let blocks = self.blocks;
         let region = &self.region;
         let cover = &self.cover;
         let width = self.width;
         let plane = self.width * self.height;
         let anchor = self.anchor;
+        let bins = self.bins;
+        let scale = self.scale;
+        let intensity = self.intensity;
         let chunk = blocks[1].div_ceil(self.workers).max(1);
         let counts = &mut self.counts[..];
-        let buckets = &mut self.buckets[..];
+        let histograms = &mut self.histograms[..];
         crate::schedule::parallel(|scope| {
-            for (group, (counts, buckets)) in counts
+            for (group, (counts, histograms)) in counts
                 .chunks_mut(blocks[0] * chunk)
-                .zip(buckets.chunks_mut(blocks[0] * chunk * BUCKET))
+                .zip(histograms.chunks_mut(blocks[0] * chunk * bins))
                 .enumerate()
             {
                 let first = group * chunk;
                 scope.spawn(move |_| {
-                    for (offset, (counts, buckets)) in counts
+                    for (offset, (counts, histograms)) in counts
                         .chunks_mut(blocks[0])
-                        .zip(buckets.chunks_mut(blocks[0] * BUCKET))
+                        .zip(histograms.chunks_mut(blocks[0] * bins))
                         .enumerate()
                     {
                         let by = first + offset;
@@ -303,7 +314,7 @@ impl BlockLevels {
                             .min(i64::from(region[1].end))
                             .min(i64::from(cover[1].end));
                         if y1 <= y0 {
-                            continue;
+                            break;
                         }
                         let mut spans = Vec::with_capacity(blocks[0]);
                         for bx in 0..blocks[0] {
@@ -318,31 +329,31 @@ impl BlockLevels {
                         }
                         for z in low..high {
                             let base = (z - start) as usize * plane;
-                            for (bx, (count, bucket)) in counts
+                            for (bx, (count, histogram)) in counts
                                 .iter_mut()
-                                .zip(buckets.chunks_mut(BUCKET))
+                                .zip(histograms.chunks_mut(bins))
                                 .enumerate()
                             {
                                 let (x0, x1) = spans[bx];
                                 if x1 <= x0 {
                                     continue;
                                 }
+                                let last = bins - 1;
                                 let mut stored = *count as usize;
                                 for y in y0..y1 {
                                     let origin = (y - i64::from(cover[1].start)) as usize * width;
                                     for x in x0..x1 {
-                                        if !admits([x, y, i64::from(z)]) {
-                                            continue;
-                                        }
                                         let slot =
                                             origin + (x - i64::from(cover[0].start)) as usize;
-                                        bucket[stored] = values[base + slot];
+                                        let target =
+                                            bin(values[base + slot], intensity, scale, last);
+                                        histogram[target] += 1;
                                         stored += 1;
                                     }
                                 }
                                 assert!(
                                     stored <= BUCKET,
-                                    "an eight voxel block fills its bucket once"
+                                    "an eight voxel block records its voxels once"
                                 );
                                 *count = stored as u32;
                             }
@@ -370,24 +381,28 @@ impl BlockLevels {
             return;
         }
         let blocks = self.blocks;
+        let bins = self.bins;
+        let intensity = self.intensity;
         let columns = blocks[0] * blocks[1];
         let chunk = columns.div_ceil(self.workers).max(1);
         {
-            let buckets = &mut self.buckets[..];
+            let histograms = &mut self.histograms[..];
             let counts = &self.counts[..];
             let levels = &mut self.levels[..];
             crate::schedule::parallel(|scope| {
-                for ((bucket, counts), levels) in buckets
-                    .chunks_mut(chunk * BUCKET)
+                for ((histograms, counts), levels) in histograms
+                    .chunks_mut(chunk * bins)
                     .zip(counts.chunks(chunk))
                     .zip(levels.chunks_mut(chunk))
                 {
                     scope.spawn(move |_| {
-                        for (bucket, (count, level)) in bucket
-                            .chunks_mut(BUCKET)
+                        for (histogram, count, level) in histograms
+                            .chunks_mut(bins)
                             .zip(counts.iter().zip(levels.iter_mut()))
+                            .map(|(histogram, (count, level))| (histogram, count, level))
                         {
-                            *level = block_levels(&mut bucket[..*count as usize]);
+                            *level = quantiles(histogram, *count, intensity);
+                            histogram.fill(0);
                         }
                     });
                 }
@@ -404,10 +419,11 @@ impl BlockLevels {
             self.background[slot] = *background;
             self.signal[slot] = *signal;
         }
-        self.levels.fill(None);
         self.counts.fill(0);
     }
 }
+
+pub(crate) struct LocalField(Grid);
 
 impl LocalField {
     pub(crate) fn new(
@@ -417,11 +433,14 @@ impl LocalField {
         intensity: Intensity,
         workers: usize,
         value: impl Fn(usize) -> f32,
-        admits: impl Fn([i64; 3]) -> bool,
     ) -> Self {
         assert!(
             dims.iter().all(|axis| *axis > 0),
             "a local field covers a non empty array"
+        );
+        assert!(
+            intensity.span() > 0.0,
+            "a local field spans a positive intensity range"
         );
         let mut origin = [0i64; 3];
         let mut blocks = [0usize; 3];
@@ -434,7 +453,9 @@ impl LocalField {
         let count = blocks[0] * blocks[1] * blocks[2];
         let mut background = vec![INVALID; count];
         let mut signal = vec![INVALID; count];
-        let mut bucket = Vec::with_capacity((BLOCK * BLOCK * BLOCK) as usize);
+        let bins = bins(column_count(blocks));
+        let scale = bins as f32 / intensity.span();
+        let mut histogram = vec![0u16; bins];
         for block_z in 0..blocks[2] {
             for block_y in 0..blocks[1] {
                 for block_x in 0..blocks[0] {
@@ -446,27 +467,25 @@ impl LocalField {
                         low[axis] = first.max(0) as usize;
                         high[axis] = (first + BLOCK).min(dims[axis] as i64) as usize;
                     }
-                    bucket.clear();
+                    let mut stored = 0u32;
                     for z in low[2]..high[2] {
                         for y in low[1]..high[1] {
                             let base = dims[0] * (y + dims[1] * z);
                             for x in low[0]..high[0] {
-                                let voxel = [
-                                    start[0] + x as i64,
-                                    start[1] + y as i64,
-                                    start[2] + z as i64,
-                                ];
-                                if admits(voxel) {
-                                    bucket.push(value(base + x));
-                                }
+                                let target = bin(value(base + x), intensity, scale, bins - 1);
+                                histogram[target] += 1;
+                                stored += 1;
                             }
                         }
                     }
                     let index = block_x + blocks[0] * (block_y + blocks[1] * block_z);
-                    if let Some((background_level, signal_level)) = block_levels(&mut bucket) {
+                    if let Some((background_level, signal_level)) =
+                        quantiles(&histogram, stored, intensity)
+                    {
                         background[index] = background_level;
                         signal[index] = signal_level;
                     }
+                    histogram.fill(0);
                 }
             }
         }

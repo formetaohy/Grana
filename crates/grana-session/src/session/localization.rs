@@ -52,6 +52,12 @@ impl Localizations {
         self.entries.get(&set).map(|entry| entry.report.as_ref())
     }
 
+    pub fn current(&self, scene: &Scene, set: ObjectSetId) -> Option<&LocalizationReport> {
+        let entry = self.entries.get(&set)?;
+        still_current(scene, set, entry.revision, entry.report.as_ref())
+            .then_some(entry.report.as_ref())
+    }
+
     pub fn bitmap(&self, set: ObjectSetId) -> Option<&Bitmap> {
         self.entries
             .get(&set)
@@ -125,14 +131,27 @@ impl Localizations {
 
     pub(super) fn retain(&mut self, scene: &Scene) -> bool {
         let held = self.entries.len();
-        self.entries.retain(|set, entry| {
-            scene
-                .objects
-                .get(*set)
-                .is_some_and(|object| object.revision() == entry.revision)
-        });
+        self.entries
+            .retain(|set, entry| still_current(scene, *set, entry.revision, entry.report.as_ref()));
         held != self.entries.len()
     }
+}
+
+pub(super) fn still_current(
+    scene: &Scene,
+    set: ObjectSetId,
+    revision: Revision,
+    report: &LocalizationReport,
+) -> bool {
+    let Some(object) = scene.objects.get(set) else {
+        return false;
+    };
+    let Some(source) = object.localization() else {
+        return false;
+    };
+    object.revision() == revision
+        && report.spec() == source.spec().fitted(scene.frame_count())
+        && report.region() == scene.region_scope()
 }
 
 impl Session {
@@ -403,13 +422,17 @@ impl Session {
     }
 
     pub(super) fn estimate_clusters(&mut self, set: ObjectSetId) {
-        let Some(report) = self.localization.report(set) else {
+        let suggested = self
+            .scene
+            .as_ref()
+            .and_then(|scene| self.localization.current(scene, set))
+            .map(LocalizationReport::suggested_clusters);
+        let Some(suggested) = suggested else {
             self.message = Some(Message::error(
-                "render a super-resolution image before estimating the cluster parameters",
+                "render a super-resolution image of the current parameters before estimating the cluster parameters",
             ));
             return;
         };
-        let suggested = report.suggested_clusters();
         let Some(scene) = self.scene.as_mut() else {
             return;
         };

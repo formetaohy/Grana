@@ -172,7 +172,6 @@ impl FilamentScan {
             self.intensity,
             1,
             |index| detection.value(index),
-            |_| true,
         );
         volume::mask(
             detection,

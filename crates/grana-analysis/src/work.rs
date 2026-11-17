@@ -28,7 +28,13 @@ pub(crate) const SPOT_READ_VOXELS: u64 = 1 << 24;
 
 pub(crate) const FIELD_BLOCK_VOXELS: u64 = 512;
 
-pub(crate) const FIELD_BUCKET_BYTES: u64 = 2048;
+pub(crate) const FIELD_BIN_BYTES: u64 = 2;
+
+pub(crate) const FIELD_BIN_MIN: u64 = 16;
+
+pub(crate) const FIELD_BIN_MAX: u64 = 128;
+
+pub(crate) const FIELD_HISTOGRAM_BYTES: u64 = 256 << 20;
 
 pub(crate) const FIELD_COUNT_BYTES: u64 = 4;
 
@@ -37,8 +43,6 @@ pub(crate) const FIELD_LEVEL_BYTES: u64 = 12;
 pub(crate) const FIELD_BACKGROUND_BYTES: u64 = 4;
 
 pub(crate) const FIELD_SIGNAL_BYTES: u64 = 4;
-
-pub(crate) const FIELD_FRAME_BYTES: u64 = 1 << 30;
 
 pub const FIELD_PEAK_BYTES: u64 = 2 << 30;
 

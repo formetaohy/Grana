@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, mpsc};
 use std::time::{Duration, SystemTime};
 
-use super::{Gate, Read, SurfaceBuilder};
+use super::{Read, SurfaceBuilder};
 use crate::local::BlockLevels;
 
 const BAND: u32 = 32;
@@ -74,12 +74,10 @@ impl Drop for DetectionStore {
 pub(super) struct DetectionInput<'a> {
     pub(super) plan: &'a SurfaceBuilder,
     pub(super) cover: &'a [Range<u32>; 3],
-    pub(super) roi: Option<&'a grana_object::Mask>,
     pub(super) workers: usize,
 }
 
 struct Production<'a> {
-    gate: Gate<'a>,
     levels: BlockLevels,
     kernel: &'a [f32],
     radius: usize,
@@ -97,7 +95,6 @@ impl DetectionStore {
         let DetectionInput {
             plan,
             cover,
-            roi,
             workers,
         } = input;
         let dims = super::dims_of(cover);
@@ -128,7 +125,6 @@ impl DetectionStore {
         let bands = (cover[2].end - cover[2].start).div_ceil(band) as usize;
         let mut done = 0usize;
         let mut production = Production {
-            gate: plan.gate(roi),
             levels: BlockLevels::new(
                 plan.anchor,
                 plan.region.clone(),
@@ -231,8 +227,6 @@ impl DetectionStore {
         let radius = production.radius;
         let kernel = production.kernel;
         let workers = production.workers;
-        let gate = &production.gate;
-        let admits = |voxel: [i64; 3]| gate.admits(voxel);
         let levels = &mut production.levels;
         let target = |values: &mut [f32]| {
             depth(window, start, radius, kernel, workers, plane, values);
@@ -242,7 +236,7 @@ impl DetectionStore {
                 let offset = (start - low) as usize * plane;
                 let values = &mut store[offset..offset + planes * plane];
                 target(values);
-                levels.push(&admits, start, values, planes);
+                levels.push(start, values, planes);
             }
             Storage::Spill { file, .. } => {
                 let mut values = vec![0.0f32; planes * plane];
@@ -255,7 +249,7 @@ impl DetectionStore {
                     .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
                 file.write_all(bytemuck::cast_slice(&values))
                     .map_err(|error| format!("failed to write the detection spill: {error}"))?;
-                levels.push(&admits, start, &values, planes);
+                levels.push(start, &values, planes);
             }
         }
         Ok(())

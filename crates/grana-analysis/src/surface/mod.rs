@@ -469,7 +469,6 @@ impl SurfaceBuilder {
                 DetectionInput {
                     plan: &self,
                     cover: &cover,
-                    roi,
                     workers: desired,
                 },
                 cancel,
@@ -542,12 +541,11 @@ impl SurfaceBuilder {
 }
 
 pub fn surface_level(pyramid: &Pyramid, region: Region) -> Result<usize, String> {
-    let candidate = pyramid
+    pyramid
         .fit_level(region, work::SURFACE_VOXELS)
         .ok_or_else(|| {
             "the dataset is too large to detect surfaces at any resolution level".to_string()
-        })?;
-    crate::local::bounded_level(pyramid, region, candidate)
+        })
 }
 
 pub fn recut(

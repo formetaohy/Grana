@@ -203,7 +203,7 @@ fn spot_field(data: &VoxelData, level: Level) -> BlockField {
         plane.clear();
         plane.resize(region.voxel_count(), 0.0);
         region.write_values(&mut plane);
-        levels.push(&|_| true, z, &plane, 1);
+        levels.push(z, &plane, 1);
     }
     levels.finish()
 }
@@ -387,7 +387,7 @@ fn extract_surfaces_at(
 }
 
 #[test]
-fn coarsens_the_surface_level_to_bound_the_block_field() {
+fn keeps_the_surface_level_of_a_wide_plane() {
     let finest = Level::new(Extent::new(8192, 8192, 8), Spacing::new(0.1, 0.1, 0.1));
     let channel = ChannelInfo::new(
         "detection",
@@ -403,9 +403,13 @@ fn coarsens_the_surface_level_to_bound_the_block_field() {
         1,
         1.0,
     );
-    assert_eq!(surface_level(&coarsened, Region::none()), Ok(1));
+    assert!(
+        grana_analysis::local::field_bytes(finest, Region::none()) <= 512 << 20,
+        "the block field of a wide plane stays inside the histogram budget"
+    );
+    assert_eq!(surface_level(&coarsened, Region::none()), Ok(0));
     let alone = Pyramid::new(vec![finest], 1, vec![channel], 1, 1.0);
-    assert!(surface_level(&alone, Region::none()).is_err());
+    assert_eq!(surface_level(&alone, Region::none()), Ok(0));
 }
 
 #[test]

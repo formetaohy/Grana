@@ -21,7 +21,6 @@ labels! {
     neighbours => "Neighbours" / "最近邻";
     correlation => "Fourier ring correlation" / "傅里叶环相关";
     resolution_missing => "No ring reaches the 1/7 threshold" / "没有环达到 1/7 阈值";
-    stale => "The parameters changed since the last render" / "参数已不同于上次渲染";
     curve_data => "Measured" / "实测";
     curve_fit => "Fit" / "拟合";
     curve_smooth => "Smoothed" / "平滑";

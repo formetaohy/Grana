@@ -22,7 +22,6 @@ const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
 const CORE_VOXELS_PER_SIGMA: f32 = 8.0;
 const PROGRESS_STRIDE: usize = 4;
-const LEVEL_PLANES: u32 = 64;
 
 pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
@@ -46,7 +45,7 @@ pub fn spot_level(
     let affordable = pyramid
         .fit_level(region, crate::work::SPOT_VOXELS)
         .unwrap_or(pyramid.level_count() - 1);
-    crate::local::bounded_level(pyramid, region, affordable.min(resolvable))
+    Ok(affordable.min(resolvable))
 }
 
 pub struct SpotScanner {
@@ -339,10 +338,6 @@ impl SpotScan {
             i64::from(ranges[1].start),
             i64::from(ranges[2].start),
         ];
-        let depth = ranges[2].end - ranges[2].start;
-        let stride = depth
-            .div_ceil(LEVEL_PLANES)
-            .clamp(1, crate::local::BLOCK as u32);
         let mut levels = BlockLevels::new(
             anchor,
             ranges.clone(),
@@ -350,10 +345,8 @@ impl SpotScan {
             self.intensity,
             workers,
         );
-        let admits = |_: [i64; 3]| true;
         let mut plane = Vec::new();
-        let mut z = ranges[2].start;
-        while z < ranges[2].end {
+        for z in ranges[2].start..ranges[2].end {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return Ok(None);
             }
@@ -362,8 +355,7 @@ impl SpotScan {
             plane.clear();
             plane.resize(data.voxel_count(), 0.0);
             data.write_values(&mut plane);
-            levels.push(&admits, z, &plane, 1);
-            z += stride;
+            levels.push(z, &plane, 1);
         }
         Ok(Some(levels.finish()))
     }

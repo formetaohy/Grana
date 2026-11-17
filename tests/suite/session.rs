@@ -3811,3 +3811,44 @@ fn drops_volume_reads_that_predate_a_content_change() {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+
+#[test]
+fn detects_spots_across_more_frames_than_the_workers() {
+    let volume = support::spheres(
+        Extent::new(48, 32, 32),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[([24.0, 16.0, 16.0], 4.0), ([10.0, 20.0, 12.0], 2.5)],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series("beads", VolumeSeries::new(vec![volume; 36], 1.0));
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    let set = session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .iter()
+        .filter(|set| set.kind() == ObjectKind::Spots)
+        .map(|set| set.id())
+        .last()
+        .expect("the object set is staged");
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Spots(SpotParams::new(0.5, 0.2)),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    let found = session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .get(set)
+        .map(|set| {
+            set.frames()
+                .map(|(_, frame)| frame.object_count() as u64)
+                .sum::<u64>()
+        })
+        .unwrap_or(0);
+    assert!(found > 0, "every frame holds its beads");
+}

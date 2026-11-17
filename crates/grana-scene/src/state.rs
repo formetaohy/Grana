@@ -353,7 +353,7 @@ impl Scene {
         hash
     }
 
-    fn validate_selections(&mut self) {
+    pub(crate) fn validate_selections(&mut self) {
         let time = self.time();
         let objects = &self.objects;
         self.selections.retain(|selection| {

@@ -122,12 +122,6 @@ pub(super) fn card<'a>(
             grana_i18n::localization::resolution(language),
             &resolution,
         ));
-        if report.spec() != spec || report.region() != state.scene.region_scope() {
-            children.push(view::caption(
-                ctx,
-                grana_i18n::localization::stale(language),
-            ));
-        }
     } else if let Some(progress) = running {
         children.push(view::caption(
             ctx,

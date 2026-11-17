@@ -1008,6 +1008,22 @@ impl Objects {
             .is_some_and(|set| set.set_track_style(params, thickness, stamp))
     }
 
+    pub(crate) fn set_state(&self, id: ObjectSetId) -> Option<SetState> {
+        self.sets
+            .iter()
+            .find(|set| set.id() == id)
+            .map(ObjectSet::state)
+    }
+
+    pub(crate) fn restore_set(&mut self, state: SetState, dataset: &Dataset) -> bool {
+        let Some(index) = self.sets.iter().position(|set| set.id().raw() == state.id) else {
+            return false;
+        };
+        self.forget_caches();
+        self.sets[index] = ObjectSet::restore(state, dataset, &mut self.revisions);
+        true
+    }
+
     pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {
         self.sets.clear();
         self.next_id = 1;

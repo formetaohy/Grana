@@ -823,10 +823,10 @@ impl Session {
     }
 
     pub(super) fn remove_object(&mut self, set: ObjectSetId) {
-        self.cancel(Job::Detect(set));
-        self.cancel(Job::Import(set));
-        self.cancel(Job::Recut(set));
-        self.cancel(Job::Track(set));
+        let _ = self.halt(Job::Detect(set));
+        let _ = self.halt(Job::Import(set));
+        let _ = self.halt(Job::Recut(set));
+        let _ = self.halt(Job::Track(set));
         if self.recut.is_some_and(|(pending, _)| pending == set) {
             self.recut = None;
         }
