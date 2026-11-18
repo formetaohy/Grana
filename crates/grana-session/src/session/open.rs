@@ -564,6 +564,9 @@ impl Session {
                     if let Some(detail) = opened.labels_error {
                         self.message = Some(Message::error(detail));
                     }
+                    if let Some(detail) = opened.imports_error {
+                        self.message = Some(Message::error(detail));
+                    }
                     if imported {
                         self.baseline = self.document_hash();
                     }

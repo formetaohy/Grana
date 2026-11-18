@@ -160,6 +160,10 @@ impl Blocks {
     }
 
     fn insert(&mut self, key: String, block: Arc<Vec<u8>>) {
+        if let Some(held) = self.entries.get(&key) {
+            self.bytes -= held.len() as u64;
+            self.order.retain(|held| held != &key);
+        }
         self.bytes += block.len() as u64;
         self.order.push_back(key.clone());
         self.entries.insert(key, block);

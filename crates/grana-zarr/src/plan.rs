@@ -3,6 +3,7 @@ use crate::chunk::Chunk;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Located {
     pub(crate) frame: u32,
+    pub(crate) channel: u32,
     pub(crate) coords: [u32; 3],
     pub(crate) origin: [u32; 3],
     pub(crate) length: [u32; 3],
@@ -55,25 +56,24 @@ impl Plan {
         self.block
     }
 
-    pub(crate) fn channels(&self) -> usize {
-        self.channels
-    }
-
     pub(crate) fn count(&self) -> usize {
         let spatial = self.counts[0] as usize * self.counts[1] as usize * self.counts[2] as usize;
-        self.frames as usize * spatial
+        self.frames as usize * self.channels * spatial
     }
 
     pub(crate) fn locate(&self, index: usize) -> Located {
         let columns = self.counts[0] as usize;
         let planes = columns * self.counts[1] as usize;
-        let per_frame = planes * self.counts[2] as usize;
+        let per_channel = planes * self.counts[2] as usize;
+        let per_frame = per_channel * self.channels;
         let frame = index / per_frame;
         let held = index % per_frame;
+        let channel = held / per_channel;
+        let voxel = held % per_channel;
         let coords = [
-            (held % columns) as u32,
-            ((held % planes) / columns) as u32,
-            (held / planes) as u32,
+            (voxel % columns) as u32,
+            ((voxel % planes) / columns) as u32,
+            (voxel / planes) as u32,
         ];
         let shape = self.block.shape();
         let origin = [
@@ -84,6 +84,7 @@ impl Plan {
         let length = std::array::from_fn(|axis| shape[axis].min(self.extent[axis] - origin[axis]));
         Located {
             frame: frame as u32,
+            channel: channel as u32,
             coords,
             origin,
             length,
@@ -93,7 +94,7 @@ impl Plan {
     pub(crate) fn indices(&self, located: &Located) -> [u64; 5] {
         [
             u64::from(located.frame),
-            0,
+            u64::from(located.channel),
             u64::from(located.coords[2]),
             u64::from(located.coords[1]),
             u64::from(located.coords[0]),

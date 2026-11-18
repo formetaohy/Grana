@@ -18,11 +18,11 @@
 
 ## What is Grana
 
-Grana is a next-generation microscopy platform for 3D and 4D imaging, written in Rust. **Look at your sample from any angle and at any time point, find the structures inside, measure them, and export the result as figures, movies or tables.**
+Grana is a next-generation microscopy platform for 3D and 4D imaging, written in Rust. Look at your sample from any angle and at any time point, find the structures inside, measure them, and export the result as figures, movies or tables.
 
 ## Features
 
-- **Broad Format Support** — Open OME-TIFF, OME-Zarr (local or HTTP), Zeiss CZI, Leica LIF/LOF/XLIF, Nikon ND2 and Imaris IMS volumes, plus Picasso HDF5 and CSV localization tables.
+- **Broad Format Support** — Load major microscopy formats (OME-TIFF, OME-Zarr via local/HTTP, CZI, LIF/LOF/XLIF, ND2, IMS) and localization tables (Picasso HDF5, CSV).
 - **3D Visualization** — Explore whole volumes, slices, and projections seamlessly.
 - **Detection & Tracking** — Segment and track nuclei, cells, spots, surfaces, and filaments over time.
 - **Batch & Quantitative Analysis** — Measure statistics and colocalization, and automate workflows across folders as reusable protocols.

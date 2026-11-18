@@ -20,7 +20,7 @@ fn planned(levels: &[Level], frames: u64, channels: u64, bytes_per_voxel: u64) -
     for level in levels {
         let extent = shape::extent(*level);
         raw += shape::voxels(extent) * frames * channels * bytes_per_voxel;
-        shards += shape::count(extent) * frames;
+        shards += shape::count(extent) * frames * channels;
     }
     raw + raw / COMPRESSED_EXPANSION + shards * SHARD_OVERHEAD + METADATA
 }

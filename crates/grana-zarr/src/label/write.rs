@@ -351,12 +351,7 @@ fn build(
         .iter()
         .map(|(label, name)| json!({ "label-value": label, "name": name }))
         .collect::<Vec<_>>();
-    let depth = image_group
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .count();
-    let source = "../".repeat(depth + 2);
+    let source = "../../";
     let image_label = json!({
         "colors": colors,
         "properties": properties,

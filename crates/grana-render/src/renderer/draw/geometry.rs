@@ -18,7 +18,6 @@ pub(super) struct Stage<'a> {
     pub(super) occupancy: &'a BindGroup,
     pub(super) shadow: Option<&'a BindGroup>,
     pub(super) volume_pass: &'a VolumePass,
-    pub(super) clear: &'a crate::clear::Clear,
     pub(super) surface: &'a crate::surface::Pipeline,
     pub(super) meshes: Option<&'a MeshPasses>,
     pub(super) data: &'a FrameData,
@@ -41,7 +40,6 @@ pub(super) fn encode(stage: Stage<'_>) {
         occupancy,
         shadow,
         volume_pass,
-        clear,
         surface,
         meshes,
         data,
@@ -52,7 +50,7 @@ pub(super) fn encode(stage: Stage<'_>) {
     } = stage;
     let region = features.region;
     let surfacing = features.surfaces && !features.slice && target.normal.is_some();
-    clear.scene(encoder, target.scene.color(), target.scene.depth(), region);
+    crate::clear::scene(encoder, target.scene.color(), target.scene.depth());
     if surfacing && let Some(meshes) = meshes {
         meshes.draw_normal(
             encoder,

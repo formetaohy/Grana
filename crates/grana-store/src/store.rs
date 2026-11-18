@@ -1,20 +1,14 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::error::Error;
 use crate::page::{Decode, Payload, StoreId};
+use crate::scratch::Scratch;
 
 pub const DEFAULT_BUDGET: u64 = 768 << 20;
 
-const PREFIX: &str = "grana-store";
-const SUFFIX: &str = "spill";
 const RECLAIM_FACTOR: u64 = 4;
-const STALE_AGE: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StoreStats {
@@ -43,8 +37,7 @@ pub struct SpillStore {
 }
 
 struct Inner {
-    file: Option<File>,
-    path: Option<PathBuf>,
+    scratch: Option<Scratch>,
     length: u64,
     resident: u64,
     spilled: u64,
@@ -90,72 +83,47 @@ impl Slot {
 }
 
 impl Inner {
-    fn spill_error(&self, error: std::io::Error) -> Error {
-        Error::Spill {
-            path: self.path.clone().unwrap_or_default(),
-            detail: error.to_string(),
-        }
-    }
-
     fn format(&self) -> Error {
-        Error::Format {
-            path: self.path.clone().unwrap_or_default(),
-        }
+        Error::Format { path: self.path() }
     }
 
-    fn file(&self) -> &File {
-        self.file
+    fn path(&self) -> PathBuf {
+        self.scratch
             .as_ref()
-            .expect("the spill file exists whenever it is read")
+            .map_or_else(PathBuf::new, |scratch| scratch.path().to_path_buf())
+    }
+
+    fn scratch(&mut self) -> Result<&mut Scratch, Error> {
+        if self.scratch.is_none() {
+            self.scratch = Some(Scratch::acquire(0)?);
+        }
+        Ok(self.scratch.as_mut().expect("an inner holds its scratch"))
+    }
+
+    fn bytes(&self, offset: u64, length: u64) -> Result<&[u8], Error> {
+        let start = usize::try_from(offset).map_err(|_| self.format())?;
+        let end = usize::try_from(offset + length).map_err(|_| self.format())?;
+        self.scratch
+            .as_ref()
+            .and_then(Scratch::bytes)
+            .and_then(|bytes| bytes.get(start..end))
+            .ok_or_else(|| self.format())
     }
 }
 
 impl SpillStore {
     pub fn temporary(budget: u64) -> Result<Arc<Self>, Error> {
         assert!(budget > 0, "a spill store holds at least one byte");
-        sweep();
-        let path = temporary_path();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| Error::Create {
-                path: path.clone(),
-                detail: error.to_string(),
-            })?;
-        file.lock().map_err(|error| Error::Create {
-            path: path.clone(),
-            detail: error.to_string(),
-        })?;
         Ok(Arc::new(Self {
             budget,
-            inner: Mutex::new(Inner {
-                file: Some(file),
-                path: Some(path),
-                length: 0,
-                resident: 0,
-                spilled: 0,
-                stamp: 0,
-                next: 0,
-                entries: HashMap::new(),
-            }),
+            inner: Mutex::new(Inner::empty()),
         }))
     }
 
     pub fn memory() -> Arc<Self> {
         Arc::new(Self {
             budget: u64::MAX,
-            inner: Mutex::new(Inner {
-                file: None,
-                path: None,
-                length: 0,
-                resident: 0,
-                spilled: 0,
-                stamp: 0,
-                next: 0,
-                entries: HashMap::new(),
-            }),
+            inner: Mutex::new(Inner::empty()),
         })
     }
 
@@ -184,7 +152,6 @@ impl SpillStore {
         let mut inner = self.inner();
         inner.stamp += 1;
         let stamp = inner.stamp;
-        let path = inner.path.clone().unwrap_or_default();
         let span = match inner.entries.get_mut(&id.raw()) {
             None => return Err(Error::Unknown),
             Some(Slot::Resident {
@@ -197,7 +164,7 @@ impl SpillStore {
                 return payload
                     .into_any()
                     .downcast::<T>()
-                    .map_err(|_| Error::Format { path });
+                    .map_err(|_| inner.format());
             }
             Some(Slot::Spilled {
                 offset,
@@ -208,14 +175,8 @@ impl SpillStore {
                 (*offset, *length)
             }
         };
-        let length = usize::try_from(span.1).map_err(|_| inner.format())?;
-        let mut bytes = vec![0u8; length];
-        inner
-            .file()
-            .seek(SeekFrom::Start(span.0))
-            .and_then(|_| inner.file().read_exact(&mut bytes))
-            .map_err(|error| inner.spill_error(error))?;
-        let payload = Arc::new(T::decode(&bytes).ok_or_else(|| inner.format())?);
+        let payload =
+            Arc::new(T::decode(inner.bytes(span.0, span.1)?).ok_or_else(|| inner.format())?);
         if let Some(slot) = inner.entries.get_mut(&id.raw())
             && matches!(slot, Slot::Spilled { .. })
         {
@@ -274,10 +235,6 @@ impl SpillStore {
             let Some(id) = victim else {
                 return Ok(());
             };
-            assert!(
-                inner.file.is_some(),
-                "a spill store without a spill file never evicts"
-            );
             let payload = match inner.entries.get(&id) {
                 Some(Slot::Resident { payload, .. }) => Arc::clone(payload),
                 _ => continue,
@@ -285,11 +242,19 @@ impl SpillStore {
             let encoded = payload.encode();
             let length = encoded.len() as u64;
             let offset = inner.length;
-            inner
-                .file()
-                .seek(SeekFrom::Start(offset))
-                .and_then(|_| inner.file().write_all(&encoded))
-                .map_err(|error| inner.spill_error(error))?;
+            let start = usize::try_from(offset).map_err(|_| inner.format())?;
+            let end = usize::try_from(offset + length).map_err(|_| inner.format())?;
+            let scratch = inner.scratch()?;
+            scratch.reserve(offset + length)?;
+            let path = scratch.path().to_path_buf();
+            scratch
+                .bytes_mut()?
+                .get_mut(start..end)
+                .ok_or_else(|| Error::Spill {
+                    path,
+                    detail: "the spill file outgrew its mapping".to_string(),
+                })?
+                .copy_from_slice(&encoded);
             inner.length += length;
             if let Some(slot) = inner.entries.get_mut(&id)
                 && matches!(slot, Slot::Resident { .. })
@@ -313,7 +278,7 @@ impl SpillStore {
     }
 
     fn reclaim(&self, inner: &mut Inner) -> Result<(), Error> {
-        if inner.file.is_none() {
+        if inner.scratch.is_none() {
             return Ok(());
         }
         let occupied = inner.spilled;
@@ -331,25 +296,18 @@ impl SpillStore {
         plan.sort_unstable_by_key(|(_, offset, _)| *offset);
         let mut cursor = 0u64;
         let mut moved = Vec::with_capacity(plan.len());
-        let mut buffer = Vec::new();
         for (id, offset, length) in plan {
             if offset != cursor {
-                buffer.resize(length as usize, 0);
-                inner
-                    .file()
-                    .seek(SeekFrom::Start(offset))
-                    .and_then(|_| inner.file().read_exact(&mut buffer))
-                    .and_then(|_| inner.file().seek(SeekFrom::Start(cursor)))
-                    .and_then(|_| inner.file().write_all(&buffer))
-                    .map_err(|error| inner.spill_error(error))?;
+                let start = usize::try_from(offset).map_err(|_| inner.format())?;
+                let end = usize::try_from(offset + length).map_err(|_| inner.format())?;
+                let target = usize::try_from(cursor).map_err(|_| inner.format())?;
+                let scratch = inner.scratch()?;
+                scratch.bytes_mut()?.copy_within(start..end, target);
             }
             moved.push((id, offset, cursor));
             cursor += length;
         }
-        inner
-            .file()
-            .set_len(cursor)
-            .map_err(|error| inner.spill_error(error))?;
+        inner.scratch()?.shrink(cursor)?;
         inner.length = cursor;
         for (id, was, now) in moved {
             if let Some(Slot::Spilled { offset, .. }) = inner.entries.get_mut(&id)
@@ -366,59 +324,16 @@ impl SpillStore {
     }
 }
 
-impl Drop for SpillStore {
-    fn drop(&mut self) {
-        let inner = self
-            .inner
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(path) = &inner.path {
-            remove(path);
+impl Inner {
+    fn empty() -> Self {
+        Self {
+            scratch: None,
+            length: 0,
+            resident: 0,
+            spilled: 0,
+            stamp: 0,
+            next: 0,
+            entries: HashMap::new(),
         }
     }
-}
-
-fn remove(path: &Path) {
-    let _ = std::fs::remove_file(path);
-}
-
-fn temporary_path() -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{PREFIX}-{}-{count}.{SUFFIX}", std::process::id()))
-}
-
-fn sweep() {
-    static SWEPT: OnceLock<()> = OnceLock::new();
-    SWEPT.get_or_init(|| {
-        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-            return;
-        };
-        let suffix = format!(".{SUFFIX}");
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !name.starts_with(PREFIX) || !name.ends_with(&suffix) {
-                continue;
-            }
-            let fresh = entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|age| age < STALE_AGE);
-            if fresh {
-                continue;
-            }
-            let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
-                continue;
-            };
-            if file.try_lock().is_err() {
-                continue;
-            }
-            remove(&path);
-        }
-    });
 }

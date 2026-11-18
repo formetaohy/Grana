@@ -23,6 +23,7 @@ pub struct Opened {
     pub plate: Option<Plate>,
     pub field: usize,
     pub imports: grana_readout::Imported,
+    pub imports_error: Option<String>,
 }
 
 pub enum Event {
@@ -77,6 +78,7 @@ impl Loader {
             plate: None,
             field: 0,
             imports: grana_readout::Imported::default(),
+            imports_error: None,
         };
         let channels = Arc::new(Channels::stored(Arc::new(image)));
         let (sender, events) = Pipe::new(CAPACITY);
@@ -283,9 +285,18 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
         Ok(labels) => (labels.names().map(str::to_string).collect(), None),
         Err(detail) => (Vec::new(), Some(detail.to_string())),
     };
-    let imports = match (format, source.path()) {
-        (Format::Imaris, Some(path)) => grana_readout::imported(path).unwrap_or_default(),
-        _ => grana_readout::Imported::default(),
+    let (imports, imports_error) = match (format, source.path()) {
+        (Format::Imaris, Some(path)) => match grana_readout::imported(path) {
+            Ok(imported) => (imported, None),
+            Err(detail) => (
+                grana_readout::Imported::default(),
+                Some(format!(
+                    "the objects of {} could not be read: {detail}",
+                    path.display()
+                )),
+            ),
+        },
+        _ => (grana_readout::Imported::default(), None),
     };
     let opened = Event::Opened(Box::new(Opened {
         name: reader.name().to_string(),
@@ -300,6 +311,7 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
         plate,
         field,
         imports,
+        imports_error,
     }));
     if cancel.cancelled() || shared.closed.load(AtomicOrdering::Relaxed) {
         return;

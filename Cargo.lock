@@ -3422,7 +3422,6 @@ name = "grana-analysis"
 version = "0.2.0"
 dependencies = [
  "bytemuck",
- "fs4",
  "glam",
  "grana-display",
  "grana-geometry",
@@ -3431,7 +3430,6 @@ dependencies = [
  "grana-store",
  "grana-volume",
  "grana-warp",
- "memmap2",
  "rayon",
 ]
 
@@ -4020,6 +4018,8 @@ dependencies = [
 name = "grana-store"
 version = "0.2.0"
 dependencies = [
+ "fs4",
+ "memmap2",
  "thiserror 2.0.21",
 ]
 

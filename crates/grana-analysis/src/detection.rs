@@ -2,7 +2,6 @@ mod spill;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::io::{Seek as _, SeekFrom, Write as _};
 use std::mem::size_of;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +9,7 @@ use std::sync::mpsc;
 
 use grana_volume::{Intensity, VoxelData};
 
-use self::spill::{Storage, spill};
+use self::spill::Storage;
 use crate::budget::Budget;
 use crate::local::{BlockField, BlockLevels};
 
@@ -95,7 +94,7 @@ impl Plan<'_> {
         let storage = if bytes <= budget.detection_bytes() {
             Storage::Memory(vec![0.0; total])
         } else {
-            spill(bytes, budget)?
+            spill::acquire(bytes)?
         };
         let mut image = DetectionImage {
             storage,
@@ -221,15 +220,11 @@ impl DetectionImage {
                 target(values);
                 levels.push(start, values, planes);
             }
-            Storage::Spill(spill) => {
+            Storage::Spill(scratch) => {
                 let mut values = vec![0.0f32; planes * plane];
                 target(&mut values);
-                let offset = (start - low) as u64 * plane as u64 * size_of::<f32>() as u64;
-                let file = spill.file_mut();
-                file.seek(SeekFrom::Start(offset))
-                    .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
-                file.write_all(bytemuck::cast_slice(&values))
-                    .map_err(|error| format!("failed to write the detection spill: {error}"))?;
+                let offset = (start - low) as usize * plane;
+                spill::write(scratch, offset, &values)?;
                 levels.push(start, &values, planes);
             }
         }

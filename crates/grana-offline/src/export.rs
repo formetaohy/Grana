@@ -112,10 +112,21 @@ impl Export {
         let picture = grana_render::picture_target(device, viewport.size);
         let picture_view = picture.create_view(&TextureViewDescriptor::default());
         let stride = grana_render::picture_stride(viewport.size[0]);
+        let readback_bytes = stride * u64::from(viewport.size[1]);
+        let buffers = device.limits().max_buffer_size;
+        if readback_bytes > buffers {
+            return Err(format!(
+                "a {} × {} export reads {} MiB back at a time and this device holds at most {} MiB per buffer; lower the export size",
+                viewport.size[0],
+                viewport.size[1],
+                readback_bytes >> 20,
+                buffers >> 20
+            ));
+        }
         let readback = Readback::new(
             device,
             "grana.export.readback",
-            stride * u64::from(viewport.size[1]),
+            readback_bytes,
             READBACK_SLOTS,
         );
         let sink = match destination {

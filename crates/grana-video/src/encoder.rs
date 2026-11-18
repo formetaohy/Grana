@@ -5,12 +5,10 @@ use openh264::encoder::{
 };
 use openh264::formats::YUVSlices;
 
+use crate::bitrate;
 use crate::error::Error;
 use crate::yuv::{self, Planes};
 
-const BITS_PER_PIXEL: u64 = 4;
-const MIN_BITRATE: u64 = 4_000_000;
-const MAX_BITRATE: u64 = 80_000_000;
 const KEYFRAME_SECONDS: u32 = 2;
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;
@@ -36,11 +34,9 @@ impl Encoder {
         {
             return Err(Error::Size { size });
         }
-        let pixels = u64::from(size[0]) * u64::from(size[1]);
-        let bitrate =
-            (pixels * u64::from(fps) / BITS_PER_PIXEL).clamp(MIN_BITRATE, MAX_BITRATE) as u32;
+        let rate = bitrate::bits_per_second(size, fps);
         let config = EncoderConfig::new()
-            .bitrate(BitRate::from_bps(bitrate))
+            .bitrate(BitRate::from_bps(rate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))
             .rate_control_mode(RateControlMode::Bitrate)
             .skip_frames(false)

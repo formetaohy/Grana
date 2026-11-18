@@ -346,6 +346,15 @@ impl Image {
     }
 }
 
+fn named(path: &Path, file: &str) -> bool {
+    let held = path.file_name().and_then(|held| held.to_str());
+    if held == Some(file) {
+        return true;
+    }
+    let bare = Path::new(file).file_name().and_then(|name| name.to_str());
+    held.is_some() && held == bare
+}
+
 fn assign(
     file: usize,
     volume: &File,
@@ -363,7 +372,7 @@ fn assign(
     let mut raster: Vec<(usize, usize)> = Vec::new();
     for block in blocks {
         if let Some(name) = block.file.as_deref()
-            && path.file_name().and_then(|held| held.to_str()) != Some(name)
+            && !named(path, name)
         {
             if !requested.iter().any(|held| held == name) {
                 requested.push(name.to_string());

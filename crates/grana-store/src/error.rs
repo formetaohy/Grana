@@ -6,6 +6,8 @@ use thiserror::Error;
 pub enum Error {
     #[error("failed to create the spill file `{path}`: {detail}")]
     Create { path: PathBuf, detail: String },
+    #[error("the spill file `{path}` cannot hold the data: {detail}")]
+    Space { path: PathBuf, detail: String },
     #[error("failed to read or write the spill file `{path}`: {detail}")]
     Spill { path: PathBuf, detail: String },
     #[error("the spill file `{path}` does not hold the payload it claims")]

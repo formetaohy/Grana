@@ -17,7 +17,6 @@ use crate::parallel;
 use crate::plan::{Located, Plan};
 use crate::shape;
 
-const SLAB_Z: u32 = 4;
 pub(crate) const CANCELLED: &str = "the write was cancelled";
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
@@ -139,8 +138,6 @@ fn fill_level(
 ) -> Result<(), String> {
     let block = plan.block();
     let voxels = block.voxels();
-    let shape = block.shape();
-    let channels = plan.channels();
     let report = progress.base;
     let total = progress.total;
     parallel::write_each(
@@ -148,38 +145,20 @@ fn fill_level(
         &mut |done, _| (progress.progress)(report + done, total),
         |index| {
             let located = plan.locate(index);
-            let full = located.length == shape;
-            let mut data = vec![0.0f32; voxels * channels];
-            for channel in 0..channels {
-                let target = &mut data[channel * voxels..(channel + 1) * voxels];
-                if full {
-                    fill(
-                        plan.level(),
-                        located.frame,
-                        channel,
-                        located.origin,
-                        located.length,
-                        target,
-                    )?;
-                    continue;
-                }
-                let length = located.length;
-                let mut region =
-                    vec![0.0f32; length[0] as usize * length[1] as usize * length[2] as usize];
+            let data = staged(block, &located, voxels, |target| {
                 fill(
                     plan.level(),
                     located.frame,
-                    channel,
+                    located.channel as usize,
                     located.origin,
-                    length,
-                    &mut region,
-                )?;
-                block.stage(length, &region, target);
-            }
+                    located.length,
+                    target,
+                )
+            })?;
             array
                 .store_chunk(&plan.indices(&located), data)
                 .map_err(|error| format!("failed to write a chunk: {error}"))?;
-            Ok((voxels * channels * size_of::<f32>()) as u64)
+            Ok((voxels * size_of::<f32>()) as u64)
         },
     )?;
     Ok(())
@@ -194,7 +173,6 @@ fn derive_level(
 ) -> Result<(), String> {
     let block = plan.block();
     let voxels = block.voxels();
-    let channels = plan.channels();
     let report = progress.base;
     let total = progress.total;
     let cancel = progress.cancel;
@@ -206,31 +184,46 @@ fn derive_level(
                 return Err(CANCELLED.to_string());
             }
             let located = plan.locate(index);
-            let mut data = vec![0.0f32; voxels * channels];
-            for channel in 0..channels {
-                let target = &mut data[channel * voxels..(channel + 1) * voxels];
-                let region = reduce(child, source, &located, channel)?;
-                block.stage(located.length, &region, target);
-            }
+            let data = staged(block, &located, voxels, |target| {
+                reduce(child, source, &located, target)
+            })?;
             array
                 .store_chunk(&plan.indices(&located), data)
                 .map_err(|error| format!("failed to write a chunk: {error}"))?;
-            Ok((voxels * channels * size_of::<f32>()) as u64)
+            Ok((voxels * size_of::<f32>()) as u64)
         },
     )?;
     Ok(())
+}
+
+fn staged(
+    block: Chunk,
+    located: &Located,
+    voxels: usize,
+    write: impl FnOnce(&mut [f32]) -> Result<(), String>,
+) -> Result<Vec<f32>, String> {
+    let shape = block.shape();
+    let mut data = vec![0.0f32; voxels];
+    if (0..3).all(|axis| located.length[axis] == shape[axis]) {
+        write(&mut data)?;
+        return Ok(data);
+    }
+    let length = located.length;
+    let mut region = vec![0.0f32; length[0] as usize * length[1] as usize * length[2] as usize];
+    write(&mut region)?;
+    block.stage(length, &region, &mut data);
+    Ok(data)
 }
 
 fn reduce(
     child: &Array<FilesystemStore>,
     source: &Plan,
     located: &Located,
-    channel: usize,
-) -> Result<Vec<f32>, String> {
+    region: &mut [f32],
+) -> Result<(), String> {
     let extent = source.extent();
     let width = located.length[0] as usize;
     let line = located.length[1] as usize;
-    let mut region = vec![0.0f32; width * line * located.length[2] as usize];
     let origin = [
         2 * located.origin[0],
         2 * located.origin[1],
@@ -243,36 +236,37 @@ fn reduce(
     ];
     let covered = [end[0] - origin[0], end[1] - origin[1], end[2] - origin[2]];
     let plane = covered[0] as usize * covered[1] as usize;
+    let depth = slab(source.extent());
     let mut z = 0u32;
     while z < located.length[2] {
-        let depth = SLAB_Z.min(located.length[2] - z);
+        let held = depth.min(located.length[2] - z);
         let low = origin[2] + 2 * z;
-        let high = (low + 2 * depth).min(end[2]);
+        let high = (low + 2 * held).min(end[2]);
         let ranges = [
             u64::from(located.frame)..u64::from(located.frame) + 1,
-            channel as u64..channel as u64 + 1,
+            u64::from(located.channel)..u64::from(located.channel) + 1,
             u64::from(low)..u64::from(high),
             u64::from(origin[1])..u64::from(end[1]),
             u64::from(origin[0])..u64::from(end[0]),
         ];
-        let held = child
+        let read = child
             .retrieve_array_subset::<Vec<f32>>(&ArraySubset::new_with_ranges(&ranges))
             .map_err(|error| format!("failed to read the finer level back: {error}"))?;
-        let slab = (high - low) as usize;
-        for slice in 0..depth {
+        let depth_z = (high - low) as usize;
+        for slice in 0..held {
             for y in 0..located.length[1] {
                 let rows = (2 * y)..(2 * y + 2).min(covered[1]);
                 for x in 0..located.length[0] {
                     let columns = (2 * x)..(2 * x + 2).min(covered[0]);
                     let mut sum = 0.0f64;
                     let mut count = 0.0f64;
-                    for dz in (2 * slice)..((2 * slice + 2).min(slab as u32)) {
+                    for dz in (2 * slice)..((2 * slice + 2).min(depth_z as u32)) {
                         for row in rows.clone() {
                             for column in columns.clone() {
                                 let at = column as usize
                                     + covered[0] as usize * (row as usize)
                                     + plane * dz as usize;
-                                sum += f64::from(held[at]);
+                                sum += f64::from(read[at]);
                                 count += 1.0;
                             }
                         }
@@ -283,9 +277,18 @@ fn reduce(
                 }
             }
         }
-        z += depth;
+        z += held;
     }
-    Ok(region)
+    Ok(())
+}
+
+fn slab(extent: [u32; 3]) -> u32 {
+    let inner = shape::inner(extent)[2];
+    if inner.is_multiple_of(2) {
+        inner / 2
+    } else {
+        inner
+    }
 }
 
 fn extent(level: Level) -> [u32; 3] {
@@ -300,7 +303,7 @@ fn chunk_shape(plan: &Plan) -> [u64; 5] {
     let shape = plan.block().shape();
     [
         1,
-        plan.channels() as u64,
+        1,
         u64::from(shape[2]),
         u64::from(shape[1]),
         u64::from(shape[0]),

@@ -10,6 +10,12 @@ pub(crate) trait Encode {
     fn encode(&self, writer: &mut Encoder<'_>);
 }
 
+const RESERVE: usize = 1 << 16;
+
+pub(crate) fn reserve(count: usize) -> usize {
+    count.min(RESERVE)
+}
+
 pub(crate) trait Decode: Sized {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, Fault>;
 }

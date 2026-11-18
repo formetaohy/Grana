@@ -34,7 +34,7 @@ use grana_scene::{
 use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
 
-use crate::codec::{Decode, Reader};
+use crate::codec::{Decode, Reader, reserve};
 use crate::encode::{TAG_CELLS, TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
 use crate::project::{Export, NamedView, Project, Shape, Source, ViewState};
 
@@ -170,7 +170,7 @@ fn psf(reader: &mut Reader<'_>) -> Result<Psf, &'static str> {
             if count == 0 || count > 1 << 22 {
                 return Err(FAULT_VALUE);
             }
-            let mut kernels = Vec::with_capacity(layers as usize);
+            let mut kernels = Vec::with_capacity(reserve(layers as usize));
             for _ in 0..layers {
                 let mut values = vec![0.0f32; count];
                 let mut total = 0.0f32;
@@ -431,7 +431,7 @@ fn decode_profile(reader: &mut Reader<'_>, kind: AnnotationKind) -> Result<Profi
     if names == 0 {
         return Err(FAULT_VALUE);
     }
-    let mut channels = Vec::with_capacity(names);
+    let mut channels = Vec::with_capacity(reserve(names));
     for _ in 0..names {
         let name = reader.string()?;
         if name.trim().is_empty() {
@@ -443,7 +443,7 @@ fn decode_profile(reader: &mut Reader<'_>, kind: AnnotationKind) -> Result<Profi
     if count == 0 {
         return Err(FAULT_VALUE);
     }
-    let mut samples = Vec::with_capacity(count);
+    let mut samples = Vec::with_capacity(reserve(count));
     let mut previous = 0.0f32;
     for _ in 0..count {
         let offset = finite(reader.f32()?)?;
@@ -712,17 +712,17 @@ impl Decode for Provenance {
 impl Decode for Curation {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let removed_frames = reader.count(8)?;
-        let mut removed = Vec::with_capacity(removed_frames);
+        let mut removed = Vec::with_capacity(reserve(removed_frames));
         for _ in 0..removed_frames {
             removed.push(decode_anchors(reader)?);
         }
         let hidden_frames = reader.count(8)?;
-        let mut hidden = Vec::with_capacity(hidden_frames);
+        let mut hidden = Vec::with_capacity(reserve(hidden_frames));
         for _ in 0..hidden_frames {
             hidden.push(decode_anchors(reader)?);
         }
         let edits = reader.count(9)?;
-        let mut edits_vec = Vec::with_capacity(edits);
+        let mut edits_vec = Vec::with_capacity(reserve(edits));
         for _ in 0..edits {
             edits_vec.push(TrackEdit::decode(reader)?);
         }
@@ -732,7 +732,7 @@ impl Decode for Curation {
 
 fn decode_anchors(reader: &mut Reader<'_>) -> Result<Vec<ObjectAnchor>, &'static str> {
     let objects = reader.count(8)?;
-    let mut frame = Vec::with_capacity(objects);
+    let mut frame = Vec::with_capacity(reserve(objects));
     for _ in 0..objects {
         let position = [
             finite(reader.f32()?)?,
@@ -816,7 +816,7 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
         7 => {
             let source = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
             let count = reader.count(9)?;
-            let mut edits = Vec::with_capacity(count);
+            let mut edits = Vec::with_capacity(reserve(count));
             for _ in 0..count {
                 let frame = reader.u32()?;
                 let kind = SurfaceEditKind::parse(reader.u8()? as usize).ok_or(FAULT_TAG)?;
@@ -831,7 +831,7 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
         8 => {
             let source = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
             let count = reader.count(22)?;
-            let mut strokes = Vec::with_capacity(count);
+            let mut strokes = Vec::with_capacity(reserve(count));
             for _ in 0..count {
                 let frame = reader.u32()?;
                 let anchors = decode_anchors(reader)?;
@@ -843,7 +843,7 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
                 let radius = finite(reader.f32()?)?;
                 let tolerance = finite(reader.f32()?)?;
                 let points = reader.count(12)?;
-                let mut path = Vec::with_capacity(points);
+                let mut path = Vec::with_capacity(reserve(points));
                 for _ in 0..points {
                     path.push([
                         finite(reader.f32()?)?,
@@ -1001,7 +1001,7 @@ impl Decode for LassoPath {
             return Err(FAULT_VALUE);
         }
         let count = reader.count(3)?;
-        let mut points = Vec::with_capacity(count);
+        let mut points = Vec::with_capacity(reserve(count));
         for _ in 0..count {
             let mut point = [0.0f32; 2];
             for value in &mut point {
@@ -1472,7 +1472,7 @@ impl Decode for ObjectColoc {
                 if objects > usize::from(u16::MAX) {
                     return Err(FAULT_SHAPE);
                 }
-                let mut frame = Vec::with_capacity(objects);
+                let mut frame = Vec::with_capacity(reserve(objects));
                 for _ in 0..objects {
                     frame.push(ObjectColocValue::decode(reader)?);
                 }
@@ -1644,10 +1644,10 @@ impl Decode for SurfaceSet {
                 if groups != set.objects().len() {
                     return Err(FAULT_SHAPE);
                 }
-                let mut leaves = Vec::with_capacity(groups);
+                let mut leaves = Vec::with_capacity(reserve(groups));
                 for _ in 0..groups {
                     let count = reader.count(size_of::<u32>())?;
-                    let mut held = Vec::with_capacity(count);
+                    let mut held = Vec::with_capacity(reserve(count));
                     for _ in 0..count {
                         let basin = reader.u32()?;
                         if basin >= basins {
@@ -1658,7 +1658,7 @@ impl Decode for SurfaceSet {
                     leaves.push(held);
                 }
                 let removed = reader.count(size_of::<u32>())?;
-                let mut pruned = Vec::with_capacity(removed);
+                let mut pruned = Vec::with_capacity(reserve(removed));
                 for _ in 0..removed {
                     let basin = reader.u32()?;
                     if basin >= basins || pruned.last().is_some_and(|last| *last >= basin) {
@@ -2004,7 +2004,7 @@ impl Decode for Warp {
                 if count == 0 || count > u64::from(u32::MAX) || reader.count(12)? as u64 != count {
                     return Err(FAULT_VALUE);
                 }
-                let mut values = Vec::with_capacity(count as usize);
+                let mut values = Vec::with_capacity(reserve(count as usize));
                 for _ in 0..count {
                     let mut value = [0f32; 3];
                     for component in &mut value {

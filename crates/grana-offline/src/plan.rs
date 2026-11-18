@@ -86,7 +86,7 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     if let Destination::Movie { path } = &plan.destination {
         let format = grana_video::Format::required(path, plan.transparent)
             .map_err(|error| error.to_string())?;
-        let expected = format.planned_bytes(plan.size.to_array(), plan.poses.len());
+        let expected = format.planned_bytes(plan.size.to_array(), plan.fps, plan.poses.len());
         grana_file::require(path, expected).map_err(|error| error.to_string())?;
     }
     let wide = match &plan.destination {

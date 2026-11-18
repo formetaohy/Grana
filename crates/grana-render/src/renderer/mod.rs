@@ -157,7 +157,6 @@ pub struct Renderer {
     targets: TargetCache,
     resources: Option<Resources>,
     volume: VolumePass,
-    clear: crate::clear::Clear,
     surface: crate::surface::Pipeline,
     oit_resolve: OitResolve,
     gtao: crate::ao::AoPipeline,
@@ -221,7 +220,6 @@ impl Renderer {
         let sections = Sections::new(device, &layouts, pipelines);
         let present = Present::new(device, format, pipelines);
         let volume = VolumePass::new(device, &layouts, pipelines);
-        let clear = crate::clear::Clear::new(device, pipelines);
         let surface = crate::surface::Pipeline::new(device, &layouts, pipelines);
         let taa = taa::Resolve::new(device, &layouts, pipelines);
         let overlay = Overlays::new(device, pipelines);
@@ -230,7 +228,6 @@ impl Renderer {
             targets: TargetCache::new(),
             resources: None,
             volume,
-            clear,
             surface,
             oit_resolve: OitResolve::new(device, &layouts, pipelines),
             gtao: crate::ao::AoPipeline::new(device, &layouts, pipelines),

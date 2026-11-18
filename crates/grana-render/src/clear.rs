@@ -1,79 +1,15 @@
-use grana_gpu::Pipelines;
 use wgpu::{
-    ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, DepthStencilState, Device,
-    FragmentState, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StencilState,
-    StoreOp, TextureView, VertexState,
+    CommandEncoder, LoadOp, Operations, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, StoreOp, TextureView,
 };
 
-use crate::target::{DEPTH_FORMAT, SCENE_FORMAT};
-
-const SHADER: &str = include_str!("shader/clear.wgsl");
-const SIDE: u32 = 3;
-
-pub(crate) struct Clear {
-    scene: RenderPipeline,
-}
-
-impl Clear {
-    pub fn new(device: &Device, pipelines: &Pipelines) -> Self {
-        let module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.clear"),
-            source: ShaderSource::Wgsl(SHADER.into()),
-        });
-        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.clear.layout"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
-        let scene = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.clear.scene"),
-            layout: Some(&layout),
-            vertex: VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(CompareFunction::Always),
-                stencil: StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &module,
-                entry_point: Some("fs_color"),
-                compilation_options: Default::default(),
-                targets: &[Some(opaque(SCENE_FORMAT))],
-            }),
-            multiview_mask: None,
-            cache: pipelines.cache(),
-        });
-        Self { scene }
-    }
-
-    pub fn scene(
-        &self,
-        encoder: &mut CommandEncoder,
-        color: &TextureView,
-        depth: &TextureView,
-        region: [u32; 4],
-    ) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.clear.scene.pass"),
-            color_attachments: &[Some(attachment(color))],
-            depth_stencil_attachment: Some(depth_attachment(depth)),
-            ..Default::default()
-        });
-        crate::target::viewport(&mut pass, region);
-        pass.set_pipeline(&self.scene);
-        pass.draw(0..SIDE, 0..1);
-    }
+pub(crate) fn scene(encoder: &mut CommandEncoder, color: &TextureView, depth: &TextureView) {
+    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("grana.scene.clear.pass"),
+        color_attachments: &[Some(cleared(color, wgpu::Color::TRANSPARENT))],
+        depth_stencil_attachment: Some(depth_cleared(depth, 1.0)),
+        ..Default::default()
+    });
 }
 
 pub(crate) fn volume(
@@ -114,31 +50,11 @@ fn cleared(view: &TextureView, color: wgpu::Color) -> RenderPassColorAttachment<
     }
 }
 
-fn opaque(format: wgpu::TextureFormat) -> ColorTargetState {
-    ColorTargetState {
-        format,
-        blend: None,
-        write_mask: ColorWrites::ALL,
-    }
-}
-
-fn attachment(view: &TextureView) -> RenderPassColorAttachment<'_> {
-    RenderPassColorAttachment {
-        view,
-        depth_slice: None,
-        resolve_target: None,
-        ops: Operations {
-            load: LoadOp::Load,
-            store: StoreOp::Store,
-        },
-    }
-}
-
-fn depth_attachment(view: &TextureView) -> RenderPassDepthStencilAttachment<'_> {
+fn depth_cleared(view: &TextureView, depth: f32) -> RenderPassDepthStencilAttachment<'_> {
     RenderPassDepthStencilAttachment {
         view,
         depth_ops: Some(Operations {
-            load: LoadOp::Load,
+            load: LoadOp::Clear(depth),
             store: StoreOp::Store,
         }),
         stencil_ops: None,

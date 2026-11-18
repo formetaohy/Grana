@@ -1,7 +1,11 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
+use crate::bitrate;
 use crate::error::Error;
+
+const FRAME_OVERHEAD: u64 = 1 << 12;
+const CONTAINER_OVERHEAD: u64 = 1 << 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -28,13 +32,17 @@ impl Format {
         }
     }
 
-    pub fn planned_bytes(self, size: [u32; 2], frames: usize) -> u64 {
-        let pixels = u64::from(size[0]) * u64::from(size[1]);
-        let sample = match self {
-            Self::H264 => pixels * 3 / 2,
-            Self::Png => pixels * 4,
+    pub fn planned_bytes(self, size: [u32; 2], fps: u32, frames: usize) -> u64 {
+        let frame = match self {
+            Self::H264 => bitrate::frame_bytes(size, fps),
+            Self::Png => {
+                let raw = (u64::from(size[0]) * 4 + 1) * u64::from(size[1]);
+                raw + raw / 8192 + FRAME_OVERHEAD
+            }
         };
-        sample.saturating_mul(frames as u64)
+        frame
+            .saturating_mul(frames as u64)
+            .saturating_add(CONTAINER_OVERHEAD)
     }
 
     pub fn required(path: &Path, transparent: bool) -> Result<Self, Error> {

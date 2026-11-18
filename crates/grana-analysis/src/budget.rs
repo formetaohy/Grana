@@ -65,10 +65,6 @@ impl Budget {
         self.bytes / 8
     }
 
-    pub fn spill_margin_bytes(&self) -> u64 {
-        self.bytes / 32
-    }
-
     pub fn read_voxels(&self) -> u64 {
         self.bytes / 128
     }

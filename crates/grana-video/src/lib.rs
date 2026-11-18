@@ -1,3 +1,4 @@
+mod bitrate;
 mod encoder;
 mod error;
 mod format;
