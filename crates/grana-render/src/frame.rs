@@ -271,7 +271,7 @@ pub(super) fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) 
     (voxel_world * step_scale.max(1.0e-3)).max(1.0e-7)
 }
 
-pub(super) const SAMPLE_CEILING: u32 = 4096;
+pub(super) const SAMPLE_CEILING: u32 = 8192;
 
 pub(super) fn sample_bounds(
     camera: &Camera,
@@ -280,7 +280,8 @@ pub(super) fn sample_bounds(
     step_scale: f32,
     height: u32,
 ) -> Result<[u32; 4], String> {
-    let diagonal = table.world.length();
+    let reach = camera.forward().abs();
+    let chord = table.world.x * reach.x + table.world.y * reach.y + table.world.z * reach.z;
     let focal = camera.pixels_per_world(height).max(1.0e-6);
     let nearest = if camera.projection().orthographic() {
         0.0
@@ -293,7 +294,7 @@ pub(super) fn sample_bounds(
     };
     let pixel = 0.5 * step_scale.max(1.0e-3) * nearest / focal;
     let minimum = step.max(pixel);
-    let samples = (diagonal / minimum).ceil() as u32 + 2;
+    let samples = (chord / minimum).ceil() as u32 + 2;
     if samples > SAMPLE_CEILING {
         return Err(format!(
             "a ray crosses {samples} samples at this step, above the {SAMPLE_CEILING} sample ceiling; raise the step scale or zoom out"

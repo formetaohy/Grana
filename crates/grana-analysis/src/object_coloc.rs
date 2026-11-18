@@ -9,7 +9,7 @@ use crate::coloc::{ColocRead, scale, unit};
 use crate::schedule;
 use crate::work;
 
-pub type LabelRead<'a> = dyn Fn(&[Range<u32>; 3]) -> Result<Vec<u16>, String> + Sync + 'a;
+pub type LabelRead<'a> = dyn Fn(&[Range<u32>; 3]) -> Result<Vec<u32>, String> + Sync + 'a;
 
 pub const OBJECT_COLOC_FIELDS: usize = 6;
 
@@ -209,7 +209,7 @@ struct TileContext<'a> {
 
 struct Tile {
     sums: Vec<f64>,
-    touched: Vec<u16>,
+    touched: Vec<u32>,
 }
 
 impl Tile {
@@ -224,7 +224,7 @@ impl Tile {
         &mut self,
         ranges: &[Range<u32>; 3],
         context: &TileContext<'_>,
-    ) -> Result<Vec<(u16, [f64; OBJECT_COLOC_FIELDS])>, String> {
+    ) -> Result<Vec<(u32, [f64; OBJECT_COLOC_FIELDS])>, String> {
         let TileContext {
             labels,
             read,
@@ -284,7 +284,7 @@ impl Tile {
         Ok(self.take())
     }
 
-    fn take(&mut self) -> Vec<(u16, [f64; OBJECT_COLOC_FIELDS])> {
+    fn take(&mut self) -> Vec<(u32, [f64; OBJECT_COLOC_FIELDS])> {
         self.touched.sort_unstable();
         let mut drained = Vec::with_capacity(self.touched.len());
         for label in self.touched.drain(..) {
@@ -298,7 +298,7 @@ impl Tile {
     }
 }
 
-fn merge(totals: &mut [f64], values: &[(u16, [f64; OBJECT_COLOC_FIELDS])]) {
+fn merge(totals: &mut [f64], values: &[(u32, [f64; OBJECT_COLOC_FIELDS])]) {
     for (label, sums) in values {
         let base = (*label as usize - 1) * OBJECT_COLOC_FIELDS;
         for (target, value) in totals[base..base + OBJECT_COLOC_FIELDS]

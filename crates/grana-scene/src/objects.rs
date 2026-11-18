@@ -1031,7 +1031,6 @@ impl Objects {
 
     pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {
         self.sets.clear();
-        self.next_id = 1;
         self.ordinals = [0; ObjectKind::COUNT];
         self.forget_caches();
         for state in states {

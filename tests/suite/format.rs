@@ -726,6 +726,58 @@ fn reads_ome_tiff_metadata_and_voxels() {
 }
 
 #[test]
+fn reads_a_tiff_stack_past_the_page_limit() {
+    let temp = Temp::new("suite-tiff-page-chain");
+    let path = temp.path().join("stack.tif");
+    let pages = 4097u32;
+    let entries = 11u32;
+    let ifd = 2 + entries * 12 + 4;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    let mut origin = 8u32;
+    for page in 0..pages {
+        let next = if page + 1 == pages {
+            0
+        } else {
+            origin + ifd + 1
+        };
+        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
+        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(256, 4, 1, 1);
+        entry(257, 4, 1, 1);
+        entry(258, 3, 1, 8);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, 1);
+        entry(273, 4, 1, origin + ifd);
+        entry(277, 3, 1, 1);
+        entry(278, 4, 1, 1);
+        entry(279, 4, 1, 1);
+        entry(284, 3, 1, 1);
+        entry(339, 3, 1, 1);
+        bytes.extend_from_slice(&next.to_le_bytes());
+        bytes.push((page % 256) as u8);
+        origin = next;
+    }
+    std::fs::write(&path, &bytes).expect("the stacked tiff writes");
+    let image = grana_tiff::Image::open(&path).expect("the stacked tiff opens");
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(1, 1, pages));
+    let last = image
+        .read_region(0, 0, 0, 0..1, 0..1, pages - 1..pages)
+        .expect("the last plane reads");
+    let VoxelData::U8(values) = last else {
+        panic!("the stacked tiff stores bytes");
+    };
+    assert_eq!(values, vec![((pages - 1) % 256) as u8]);
+}
+
+#[test]
 fn browses_an_ome_zarr_plate() {
     let temp = Temp::new("suite-plate");
     let root = temp.path().join("assay.ome.zarr");
@@ -807,14 +859,14 @@ fn writes_and_reads_a_label_image() {
                       _: u32,
                       origin: [u32; 3],
                       length: [u32; 3],
-                      data: &mut [u16]|
+                      data: &mut [u32]|
      -> Result<(), String> {
         for z in 0..length[2] {
             for y in 0..length[1] {
                 for x in 0..length[0] {
                     let index = x as usize
                         + length[0] as usize * (y as usize + length[1] as usize * z as usize);
-                    data[index] = label_of(origin[0] + x, origin[1] + y, origin[2] + z) as u16;
+                    data[index] = label_of(origin[0] + x, origin[1] + y, origin[2] + z);
                 }
             }
         }
@@ -1063,7 +1115,7 @@ fn refuses_a_dataset_that_cannot_fit_beside_the_previous_one() {
         "the planned image covers every stored float voxel"
     );
     assert!(
-        grana_zarr::label_space(&levels, 2) >= voxels * 2 * 2,
+        grana_zarr::label_space(&levels, 2, 7) >= voxels * 2 * 2,
         "the planned label image covers every stored sixteen bit voxel"
     );
     let error = grana_zarr::Archive::create(&path, u64::MAX / 4)

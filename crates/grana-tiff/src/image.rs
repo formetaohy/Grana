@@ -11,7 +11,7 @@ use grana_volume::{
 use crate::Cache;
 use crate::error::Error;
 use crate::ome::{self, Ome, TiffData};
-use crate::page::{Page, Region, Source as PageSource};
+use crate::page::{Layout, Page, Plane, Region, Source as PageSource};
 use crate::planes::Planes;
 use crate::store::Store;
 use crate::tag::{
@@ -19,7 +19,11 @@ use crate::tag::{
 };
 
 const CACHE_BYTES: u64 = 128 << 20;
-const PAGE_LIMIT: usize = 4096;
+const LAYOUT_BYTES: u64 = 32 << 20;
+const PAGE_BYTES: u64 = 8 << 20;
+
+type PageCache = grana_store::LruCache<(usize, usize), Page>;
+type LayoutCache = grana_store::LruCache<(usize, usize), Layout>;
 
 pub struct Image {
     path: PathBuf,
@@ -34,15 +38,17 @@ struct File {
     path: PathBuf,
     store: Store,
     header: tag::Header,
-    directories: Vec<Directory>,
-    pages: Vec<Page>,
+    ifds: Vec<u64>,
+    pages: Vec<Arc<Page>>,
+    reduced: PageCache,
+    layouts: LayoutCache,
 }
 
 struct LevelPages {
     extent: Extent,
     planes: Planes,
     slots: Vec<Slot>,
-    pages: Vec<Arc<Page>>,
+    format: VoxelFormat,
 }
 
 #[derive(Clone, Copy)]
@@ -64,21 +70,33 @@ impl File {
     fn open(path: &Path) -> Result<Self, Error> {
         let store = Store::open(path)?;
         let header = tag::header(&store, path)?;
-        let directories = chain(&store, &header, path)?;
-        let pages = directories
-            .iter()
-            .map(|directory| Page::new(directory, &store, header.big_endian, path))
-            .collect::<Result<Vec<_>, Error>>()?;
+        let ifds = Directory::chain(&store, &header, path)?;
+        let mut pages = Vec::with_capacity(ifds.len());
+        for offset in &ifds {
+            pages.push(Arc::new(Self::page_at(&store, &header, *offset, path)?));
+        }
         Ok(Self {
             path: path.to_path_buf(),
             store,
             header,
-            directories,
+            ifds,
             pages,
+            reduced: PageCache::new(PAGE_BYTES, Page::bytes),
+            layouts: LayoutCache::new(LAYOUT_BYTES, Layout::bytes),
         })
     }
 
-    fn sub(&self, page: usize, level: usize) -> Result<Page, Error> {
+    fn page_at(
+        store: &Store,
+        header: &tag::Header,
+        offset: u64,
+        path: &Path,
+    ) -> Result<Page, Error> {
+        let directory = Directory::read(store, header, offset, path)?;
+        Page::new(&directory, store, header.big_endian, path)
+    }
+
+    fn page(&self, page: usize, level: usize) -> Result<Arc<Page>, Error> {
         if level == 0 {
             return self
                 .pages
@@ -86,19 +104,67 @@ impl File {
                 .cloned()
                 .ok_or_else(|| Error::read(&self.path, "the TIFF page is missing"));
         }
-        let offset = self
-            .pages
+        if let Some(held) = self.reduced.fetch((page, level)) {
+            return Ok(held);
+        }
+        let offset = self.offset(page, level)?;
+        let held = Arc::new(Self::page_at(
+            &self.store,
+            &self.header,
+            offset,
+            &self.path,
+        )?);
+        self.reduced.insert((page, level), Arc::clone(&held));
+        Ok(held)
+    }
+
+    fn layout(&self, page: usize, level: usize) -> Result<Arc<Layout>, Error> {
+        if let Some(held) = self.layouts.fetch((page, level)) {
+            return Ok(held);
+        }
+        let held = Arc::new(self.read_layout(page, level)?);
+        self.layouts.insert((page, level), Arc::clone(&held));
+        Ok(held)
+    }
+
+    fn read_layout(&self, page: usize, level: usize) -> Result<Layout, Error> {
+        let held = self.page(page, level)?;
+        let offset = self.offset(page, level)?;
+        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
+        Layout::new(&directory, &self.store, held.width, held.height, &self.path)
+    }
+
+    fn offset(&self, page: usize, level: usize) -> Result<u64, Error> {
+        if level == 0 {
+            return self
+                .ifds
+                .get(page)
+                .copied()
+                .ok_or_else(|| Error::read(&self.path, "the TIFF page is missing"));
+        }
+        self.pages
             .get(page)
-            .and_then(|page| page.sub_ifds.get(level - 1))
+            .and_then(|held| held.sub_ifds.get(level - 1))
             .copied()
             .ok_or_else(|| {
                 Error::metadata(
                     &self.path,
                     "a TIFF page carries no reduced resolution image",
                 )
-            })?;
-        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
-        Page::new(&directory, &self.store, self.header.big_endian, &self.path)
+            })
+    }
+
+    fn directory(&self) -> Result<Directory, Error> {
+        let offset = self
+            .ifds
+            .first()
+            .copied()
+            .ok_or_else(|| Error::metadata(&self.path, "the file holds no TIFF directory"))?;
+        Directory::read(&self.store, &self.header, offset, &self.path)
+    }
+
+    fn page_count(&self) -> usize {
+        self.pages.len()
     }
 
     fn depth(&self) -> usize {
@@ -113,9 +179,11 @@ impl File {
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let first = File::open(path)?;
-        let description = first.directories[0].ascii(&first.store, TAG_IMAGE_DESCRIPTION, path)?;
+        let description = first
+            .directory()?
+            .ascii(&first.store, TAG_IMAGE_DESCRIPTION, path)?;
         let ome = parse_metadata(description.as_deref(), path)?;
-        let page = &first.pages[0];
+        let page = first.page(0, 0)?;
         let chunky = !page.planar && page.samples > 1;
         let format = page.format;
         let samples = page.samples;
@@ -364,13 +432,17 @@ fn assign(
         place(block, planes, &mut raster, path)?;
     }
     if blocks.is_empty() {
-        let limit = volume.pages.len().min(planes.count() as usize);
+        let limit = volume.page_count().min(planes.count() as usize);
         raster.extend((0..limit).map(|page| (page, page)));
     }
     for (index, page) in raster {
-        let held = volume.pages.get(page).ok_or_else(|| {
-            Error::metadata(path, "the OME-TIFF metadata names a missing TIFF page")
-        })?;
+        if page >= volume.page_count() {
+            return Err(Error::metadata(
+                path,
+                "the OME-TIFF metadata names a missing TIFF page",
+            ));
+        }
+        let held = volume.page(page, 0)?;
         if held.format != format {
             return Err(Error::unsupported(
                 path,
@@ -394,28 +466,22 @@ fn place(
     raster: &mut Vec<(usize, usize)>,
     path: &Path,
 ) -> Result<(), Error> {
-    let mut coordinate = [block.z, block.c, block.t];
+    if block.z >= planes.depth() || block.c >= planes.channels() || block.t >= planes.frames() {
+        return Err(Error::metadata(
+            path,
+            "the OME-TIFF TiffData starts outside the declared pixels",
+        ));
+    }
+    let start = planes.index(block.t, block.c, block.z);
     for offset in 0..block.planes {
-        if coordinate[0] >= planes.depth()
-            || coordinate[1] >= planes.channels()
-            || coordinate[2] >= planes.frames()
-        {
+        let index = start + offset as usize;
+        if index >= planes.count() as usize {
             return Err(Error::metadata(
                 path,
                 "the OME-TIFF TiffData runs past the declared pixels",
             ));
         }
-        let index = planes.index(coordinate[2], coordinate[1], coordinate[0]);
         raster.push((index, block.ifd as usize + offset as usize));
-        coordinate[0] += 1;
-        if coordinate[0] == planes.depth() {
-            coordinate[0] = 0;
-            coordinate[1] += 1;
-            if coordinate[1] == planes.channels() {
-                coordinate[1] = 0;
-                coordinate[2] += 1;
-            }
-        }
     }
     Ok(())
 }
@@ -431,10 +497,9 @@ fn gather(
     let mut ordered = placed.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|(index, _)| **index);
     let mut slots = Vec::with_capacity(ordered.len());
-    let mut pages = Vec::with_capacity(ordered.len());
     let mut extent: Option<Extent> = None;
     for (_, slot) in ordered {
-        let page = files[slot.file].sub(slot.page, level)?;
+        let page = files[slot.file].page(slot.page, level)?;
         if page.format != format {
             return Err(Error::unsupported(
                 path,
@@ -443,14 +508,15 @@ fn gather(
         }
         extent = Some(match extent {
             None => Extent::new(page.width, page.height, planes.depth()),
-            Some(held) => Extent::new(
-                held.x().max(page.width),
-                held.y().max(page.height),
-                held.z(),
-            ),
+            Some(held) if held.x() == page.width && held.y() == page.height => held,
+            Some(_) => {
+                return Err(Error::metadata(
+                    path,
+                    "the pages of one resolution level disagree on their size",
+                ));
+            }
         });
         slots.push(*slot);
-        pages.push(Arc::new(page));
     }
     let Some(extent) = extent else {
         return Err(Error::metadata(path, "the OME-TIFF series holds no planes"));
@@ -459,7 +525,7 @@ fn gather(
         extent,
         planes: planes.clone(),
         slots,
-        pages,
+        format,
     })
 }
 
@@ -551,10 +617,7 @@ fn placement(
 }
 
 fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
-    let directory = volume
-        .directories
-        .first()
-        .ok_or_else(|| Error::metadata(path, "the file holds no TIFF directory"))?;
+    let directory = volume.directory()?;
     let Some(value) = directory
         .rational(&volume.store, tag, path)?
         .filter(|value| *value > 0.0)
@@ -570,26 +633,6 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
         _ => return Ok(None),
     };
     Ok(Some((micrometres / value) as f32))
-}
-
-fn chain(store: &Store, header: &tag::Header, path: &Path) -> Result<Vec<Directory>, Error> {
-    let mut directories = Vec::new();
-    let mut offset = header.first;
-    while offset != 0 {
-        if directories.len() >= PAGE_LIMIT {
-            return Err(Error::unsupported(
-                path,
-                "the image holds more TIFF pages than grana reads",
-            ));
-        }
-        let directory = Directory::read(store, header, offset, path)?;
-        offset = directory.next;
-        directories.push(directory);
-    }
-    if directories.is_empty() {
-        return Err(Error::unsupported(path, "the file holds no TIFF page"));
-    }
-    Ok(directories)
 }
 
 fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Option<Ome>, Error> {
@@ -647,21 +690,15 @@ fn region(
         path: PathBuf::new(),
         detail: "the region holds more voxels than this platform addresses".to_string(),
     })?;
-    let plane =
+    let stride =
         usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| Error::Region {
             path: PathBuf::new(),
             detail: "the plane holds more voxels than this platform addresses".to_string(),
         })?;
-    let mut data = match level.pages.first().map(|page| page.format) {
-        Some(VoxelFormat::U8) => VoxelData::U8(vec![0; count]),
-        Some(VoxelFormat::U16) => VoxelData::U16(vec![0; count]),
-        Some(VoxelFormat::F32) => VoxelData::F32(vec![0.0; count]),
-        None => {
-            return Err(Error::Region {
-                path: PathBuf::new(),
-                detail: "the series holds no plane".to_string(),
-            });
-        }
+    let mut data = match level.format {
+        VoxelFormat::U8 => VoxelData::U8(vec![0; count]),
+        VoxelFormat::U16 => VoxelData::U16(vec![0; count]),
+        VoxelFormat::F32 => VoxelData::F32(vec![0.0; count]),
     };
     let region = Region {
         x: &request.x,
@@ -674,47 +711,37 @@ fn region(
             detail: "the series holds no such plane".to_string(),
         })?;
         let volume = &files[slot.file];
-        let page = level.pages.get(raster).ok_or_else(|| Error::Region {
-            path: PathBuf::new(),
-            detail: "the series holds no such plane".to_string(),
-        })?;
-        let sample = if page.planar {
-            0
-        } else {
-            request.channel.min(page.samples.saturating_sub(1))
-        };
+        let page = volume.page(slot.page, request.level)?;
+        let layout = volume.layout(slot.page, request.level)?;
         let source = PageSource {
             store: &volume.store,
             cache,
             path: &volume.path,
             file: slot.file,
         };
-        let offset = ((z - request.z.start) as usize) * plane;
+        let plane = Plane {
+            layout: &layout,
+            source: &source,
+            level: request.level,
+            page: slot.page,
+            sample: if page.planar {
+                0
+            } else {
+                request.channel.min(page.samples.saturating_sub(1))
+            },
+            region: &region,
+        };
+        let offset = ((z - request.z.start) as usize) * stride;
         match &mut data {
-            VoxelData::U8(values) => page.read_plane(
-                &source,
-                request.level,
-                slot.page,
-                sample,
-                &region,
-                &mut values[offset..offset + plane],
-            )?,
-            VoxelData::U16(values) => page.read_plane(
-                &source,
-                request.level,
-                slot.page,
-                sample,
-                &region,
-                &mut values[offset..offset + plane],
-            )?,
-            VoxelData::F32(values) => page.read_plane(
-                &source,
-                request.level,
-                slot.page,
-                sample,
-                &region,
-                &mut values[offset..offset + plane],
-            )?,
+            VoxelData::U8(values) => {
+                page.read_plane(&plane, &mut values[offset..offset + stride])?
+            }
+            VoxelData::U16(values) => {
+                page.read_plane(&plane, &mut values[offset..offset + stride])?
+            }
+            VoxelData::F32(values) => {
+                page.read_plane(&plane, &mut values[offset..offset + stride])?
+            }
         }
     }
     Ok(data)

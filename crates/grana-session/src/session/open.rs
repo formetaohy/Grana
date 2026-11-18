@@ -634,6 +634,7 @@ impl Session {
                     self.message = Some(Message::error(detail));
                     self.analysis.clear();
                     self.progress.clear();
+                    self.scene = None;
                     self.source = None;
                     self.channels = None;
                     self.in_flight.clear();

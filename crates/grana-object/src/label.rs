@@ -7,7 +7,6 @@ use crate::Shape;
 
 const NUDGE: [f32; 2] = [1.0e-4, 3.7e-4];
 const PARALLEL: f32 = 1.0e-12;
-const LABEL_LIMIT: usize = u16::MAX as usize;
 const UNIT: f32 = 65535.0;
 
 pub struct LabelRaster<'a> {
@@ -22,8 +21,9 @@ impl<'a> LabelRaster<'a> {
     pub fn new(shape: &'a Shape, level: Level) -> Self {
         let objects = shape.objects();
         assert!(
-            objects <= LABEL_LIMIT,
-            "a label image addresses at most {LABEL_LIMIT} objects"
+            u32::try_from(objects).is_ok(),
+            "a label raster numbers at most {} objects",
+            u32::MAX
         );
         let extent = level.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
@@ -69,7 +69,7 @@ impl<'a> LabelRaster<'a> {
         self.bounds.len()
     }
 
-    pub fn render(&self, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Vec<u16> {
+    pub fn render(&self, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Vec<u32> {
         self.render_visible(None, x, y, z)
     }
 
@@ -79,7 +79,7 @@ impl<'a> LabelRaster<'a> {
         x: Range<u32>,
         y: Range<u32>,
         z: Range<u32>,
-    ) -> Vec<u16> {
+    ) -> Vec<u32> {
         let origin = [x.start, y.start, z.start];
         let ranges = [x, y, z];
         assert!(
@@ -90,7 +90,7 @@ impl<'a> LabelRaster<'a> {
         );
         let extent = [0, 1, 2].map(|axis| ranges[axis].end - ranges[axis].start);
         let mut labels =
-            vec![0u16; (extent[0] as usize) * (extent[1] as usize) * (extent[2] as usize)];
+            vec![0u32; (extent[0] as usize) * (extent[1] as usize) * (extent[2] as usize)];
         let area = Area {
             origin,
             extent,
@@ -106,7 +106,8 @@ impl<'a> LabelRaster<'a> {
             if (0..3).any(|axis| overlap[axis].start >= overlap[axis].end) {
                 continue;
             }
-            let label = (object + 1) as u16;
+            let label = u32::try_from(object + 1)
+                .expect("a label raster numbers the objects its constructor counted");
             match self.shape {
                 Shape::Spots(spots) => area.sphere(
                     spots[object].center(),
@@ -126,8 +127,8 @@ impl<'a> LabelRaster<'a> {
         object: usize,
         overlap: [Range<u32>; 3],
         area: &Area,
-        label: u16,
-        labels: &mut [u16],
+        label: u32,
+        labels: &mut [u32],
     ) {
         let group = mesh.groups()[object];
         let count = group.index_count() as usize / 3;
@@ -270,7 +271,7 @@ impl Area {
         self.level.voxel_of(point)
     }
 
-    fn sphere(&self, center: [f32; 3], radius: f32, label: u16, labels: &mut [u16]) {
+    fn sphere(&self, center: [f32; 3], radius: f32, label: u32, labels: &mut [u32]) {
         if !(radius.is_finite() && radius > 0.0) {
             return;
         }
@@ -308,7 +309,7 @@ impl Area {
         }
     }
 
-    fn set(&self, cell: [i64; 3], label: u16, labels: &mut [u16]) {
+    fn set(&self, cell: [i64; 3], label: u32, labels: &mut [u32]) {
         let mut local = [0usize; 3];
         for axis in 0..3 {
             let value = cell[axis] - i64::from(self.origin[axis]);

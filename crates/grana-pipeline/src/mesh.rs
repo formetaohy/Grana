@@ -28,34 +28,29 @@ pub fn write(
         .ok_or_else(|| format!("{name} holds no frame {time}"))?;
     let geometry = match frame.geometry().map_err(|error| error.to_string())? {
         Some(geometry) if geometry.object_count() > 0 => geometry,
-        _ => {
-            clear(format, target)?;
-            return Ok(Export::Empty);
-        }
+        _ => return Ok(Export::Empty),
     };
     let key = object.key().as_str().to_string();
     match format {
-        Format::Obj => {
-            let file = create(target)?;
+        Format::Obj => atomic(target, |file| {
             grana_mesh::write_obj(BufWriter::new(file), &geometry, &key)
-                .map_err(|error| failed(target, error))?;
-        }
+        })?,
         Format::Glb => {
-            let file = create(target)?;
             let materials = materials(scene, object, geometry.object_count());
-            grana_mesh::write_glb(BufWriter::new(file), &geometry, &key, &materials)
-                .map_err(|error| failed(target, error))?;
+            atomic(target, |file| {
+                grana_mesh::write_glb(BufWriter::new(file), &geometry, &key, &materials)
+            })?
         }
         Format::Stl => {
-            clear(format, target)?;
-            std::fs::create_dir_all(target)
-                .map_err(|error| format!("failed to create {}: {error}", target.display()))?;
+            let atomic =
+                grana_file::Atomic::directory(target).map_err(|error| failed(target, error))?;
             for index in 0..geometry.object_count() {
-                let path = target.join(format!("{index:06}.stl"));
-                let file = create(&path)?;
+                let path = atomic.staging().join(format!("{index:06}.stl"));
+                let file = File::create(&path).map_err(|error| failed(&path, error))?;
                 grana_mesh::write_stl(BufWriter::new(file), &geometry, index)
-                    .map_err(|error| failed(&path, error))?;
+                    .map_err(|error| failed(&path, mesh_error(error)))?;
             }
+            atomic.commit().map_err(|error| failed(target, error))?;
         }
     }
     Ok(Export::Written)
@@ -78,23 +73,20 @@ pub fn materials(scene: &Scene, object: &ObjectSet, objects: usize) -> Vec<Mater
         .collect()
 }
 
-fn create(path: &Path) -> Result<File, String> {
-    File::create(path).map_err(|error| format!("failed to create {}: {error}", path.display()))
+fn atomic(
+    target: &Path,
+    write: impl FnOnce(File) -> Result<(), grana_mesh::Error>,
+) -> Result<(), String> {
+    let atomic = grana_file::Atomic::file(target).map_err(|error| failed(target, error))?;
+    let file = File::create(atomic.staging()).map_err(|error| failed(target, error))?;
+    write(file).map_err(|error| failed(target, mesh_error(error)))?;
+    atomic.commit().map_err(|error| failed(target, error))
 }
 
-fn clear(format: Format, target: &Path) -> Result<(), String> {
-    if !target.exists() {
-        return Ok(());
-    }
-    let removed = match format {
-        Format::Stl if target.is_dir() => std::fs::remove_dir_all(target),
-        Format::Stl => return Ok(()),
-        _ if target.is_file() => std::fs::remove_file(target),
-        _ => return Ok(()),
-    };
-    removed.map_err(|error| format!("failed to clear {}: {error}", target.display()))
+fn mesh_error(error: grana_mesh::Error) -> std::io::Error {
+    std::io::Error::other(error.to_string())
 }
 
-fn failed(path: &Path, error: grana_mesh::Error) -> String {
+fn failed(path: &Path, error: std::io::Error) -> String {
     format!("failed to write {}: {error}", path.display())
 }

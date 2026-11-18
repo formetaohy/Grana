@@ -59,17 +59,16 @@ fn neighbourhood(at: vec2<i32>, low: vec2<i32>, high: vec2<i32>) -> Range {
     for (var y = -1; y <= 1; y += 1) {
         for (var x = -1; x <= 1; x += 1) {
             let value = textureLoad(current, clamp(at + vec2<i32>(x, y), low, high), 0);
-            range.low = min(range.low, value);
-            range.high = max(range.high, value);
+            let chroma = to_ycocg(value.rgb);
+            range.low = min(range.low, vec4<f32>(chroma, value.a));
+            range.high = max(range.high, vec4<f32>(chroma, value.a));
         }
     }
     return range;
 }
 
 fn clamp_history(stored: vec4<f32>, range: Range) -> vec4<f32> {
-    let low = to_ycocg(range.low.rgb);
-    let high = to_ycocg(range.high.rgb);
-    let chroma = clamp(to_ycocg(stored.rgb), low, high);
+    let chroma = clamp(to_ycocg(stored.rgb), range.low.rgb, range.high.rgb);
     return vec4<f32>(from_ycocg(chroma), clamp(stored.a, range.low.a, range.high.a));
 }
 

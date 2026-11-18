@@ -9,7 +9,7 @@ use grana_warp::Warps;
 
 use crate::channels::Channels;
 
-const LABEL_LIMIT: usize = u16::MAX as usize;
+const LABEL_LIMIT: usize = u32::MAX as usize;
 
 pub struct Crop {
     pub levels: Vec<Level>,
@@ -72,7 +72,7 @@ impl LabelLayer {
         }
         if labels > LABEL_LIMIT {
             return Err(format!(
-                "a uint16 label image addresses at most {LABEL_LIMIT} objects, and {} holds {labels}",
+                "a label image addresses at most {LABEL_LIMIT} objects, and {} holds {labels}",
                 set.name()
             ));
         }
@@ -125,7 +125,7 @@ impl LabelLayer {
         time: u32,
         origin: [u32; 3],
         extent: [u32; 3],
-        data: &mut [u16],
+        data: &mut [u32],
     ) -> Result<(), String> {
         self.labeling.fill(level, time, origin, extent, data)
     }
@@ -301,7 +301,9 @@ pub fn write_dataset(
             let expected = grana_zarr::image_space(&levels, frames, layers.len())
                 + labels
                     .iter()
-                    .map(|layer| grana_zarr::label_space(&levels, layer.frames().len()))
+                    .map(|layer| {
+                        grana_zarr::label_space(&levels, layer.frames().len(), layer.labels())
+                    })
                     .sum::<u64>();
             let mut archive =
                 grana_zarr::Archive::create(&path, expected).map_err(|error| error.to_string())?;
@@ -320,7 +322,7 @@ pub fn write_dataset(
                             time: u32,
                             origin: [u32; 3],
                             extent: [u32; 3],
-                            data: &mut [u16]| {
+                            data: &mut [u32]| {
                     if cancel.load(Ordering::Relaxed) {
                         return Err("the dataset export was cancelled".to_string());
                     }

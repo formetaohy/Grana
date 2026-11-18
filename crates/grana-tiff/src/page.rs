@@ -19,7 +19,6 @@ const COMPRESSION_NONE: u16 = 1;
 const PREDICTOR_NONE: u16 = 1;
 const PREDICTOR_HORIZONTAL: u16 = 2;
 
-#[derive(Clone)]
 pub(crate) struct Page {
     pub width: u32,
     pub height: u32,
@@ -31,11 +30,9 @@ pub(crate) struct Page {
     predictor: u16,
     big_endian: bool,
     min_is_white: bool,
-    layout: Layout,
 }
 
-#[derive(Clone)]
-enum Layout {
+pub(crate) enum Layout {
     Tiles {
         width: u32,
         height: u32,
@@ -59,6 +56,16 @@ pub(crate) struct Source<'a> {
     pub cache: &'a Cache,
     pub path: &'a Path,
     pub file: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Plane<'a> {
+    pub layout: &'a Layout,
+    pub source: &'a Source<'a>,
+    pub level: usize,
+    pub page: usize,
+    pub sample: u32,
+    pub region: &'a Region<'a>,
 }
 
 struct Block {
@@ -198,7 +205,6 @@ impl Page {
             .ok()
             .filter(|samples| *samples > 0)
             .ok_or_else(|| Error::unsupported(path, "the TIFF sample count is out of range"))?;
-        let layout = layout(directory, store, width, height, path)?;
         let sub_ifds = directory.integers(store, TAG_SUB_IFDS, path)?;
         Ok(Self {
             width,
@@ -211,11 +217,14 @@ impl Page {
             predictor: predictor as u16,
             big_endian,
             min_is_white: photometric == 0,
-            layout,
         })
     }
 
-    pub(crate) fn bytes_per_sample(&self) -> usize {
+    pub(crate) fn bytes(&self) -> u64 {
+        (std::mem::size_of::<Self>() + self.sub_ifds.capacity() * std::mem::size_of::<u64>()) as u64
+    }
+
+    fn bytes_per_sample(&self) -> usize {
         match self.format {
             VoxelFormat::U8 => 1,
             VoxelFormat::U16 => 2,
@@ -225,13 +234,17 @@ impl Page {
 
     pub(crate) fn read_plane<T: Sample>(
         &self,
-        source: &Source<'_>,
-        level: usize,
-        page_index: usize,
-        sample: u32,
-        region: &Region<'_>,
+        plane: &Plane<'_>,
         out: &mut [T],
     ) -> Result<(), Error> {
+        let Plane {
+            layout,
+            source,
+            level,
+            page,
+            sample,
+            region,
+        } = *plane;
         let Region { x, y } = region;
         let columns = (x.end - x.start) as usize;
         let rows = (y.end - y.start) as usize;
@@ -241,7 +254,7 @@ impl Page {
             "the plane buffer matches the region"
         );
         let samples = self.samples as usize;
-        match &self.layout {
+        match layout {
             Layout::Tiles {
                 width,
                 height,
@@ -261,7 +274,7 @@ impl Page {
                             offset: offsets[index],
                             count: counts[index],
                         };
-                        let data = self.block(source, level, page_index, &block)?;
+                        let data = self.block(source, level, page, &block)?;
                         copy_rows(&data, &block, samples, sample, region, out);
                     }
                 }
@@ -282,7 +295,7 @@ impl Page {
                         offset: offsets[index],
                         count: counts[index],
                     };
-                    let data = self.block(source, level, page_index, &block)?;
+                    let data = self.block(source, level, page, &block)?;
                     copy_rows(&data, &block, samples, sample, region, out);
                 }
             }
@@ -343,6 +356,95 @@ impl Page {
     }
 }
 
+impl Layout {
+    pub(crate) fn new(
+        directory: &Directory,
+        store: &Store,
+        width: u32,
+        height: u32,
+        path: &Path,
+    ) -> Result<Self, Error> {
+        let tile_width = directory.integer(store, TAG_TILE_WIDTH, path)?;
+        let tile_length = directory.integer(store, TAG_TILE_LENGTH, path)?;
+        if tile_width.is_some() || tile_length.is_some() {
+            let tile_width = u32::try_from(tile_width.ok_or_else(|| {
+                Error::unsupported(path, "the TIFF page declares tiles without a tile width")
+            })?)
+            .ok()
+            .filter(|width| *width > 0)
+            .ok_or_else(|| Error::unsupported(path, "the TIFF tile width is out of range"))?;
+            let tile_length = u32::try_from(tile_length.ok_or_else(|| {
+                Error::unsupported(path, "the TIFF page declares tiles without a tile length")
+            })?)
+            .ok()
+            .filter(|length| *length > 0)
+            .ok_or_else(|| Error::unsupported(path, "the TIFF tile length is out of range"))?;
+            let offsets = directory.integers(store, TAG_TILE_OFFSETS, path)?;
+            let counts = directory.integers(store, TAG_TILE_BYTE_COUNTS, path)?;
+            let expected =
+                width.div_ceil(tile_width) as usize * height.div_ceil(tile_length) as usize;
+            if offsets.len() != expected || counts.len() != expected {
+                return Err(Error::read(
+                    path,
+                    format!(
+                        "the TIFF page declares {expected} tiles but lists {} offsets and {} byte counts",
+                        offsets.len(),
+                        counts.len()
+                    ),
+                ));
+            }
+            return Ok(Self::Tiles {
+                width: tile_width,
+                height: tile_length,
+                offsets,
+                counts,
+            });
+        }
+        let rows = directory
+            .integer(store, TAG_ROWS_PER_STRIP, path)?
+            .map(|rows| {
+                u32::try_from(rows)
+                    .ok()
+                    .filter(|rows| *rows > 0)
+                    .ok_or_else(|| {
+                        Error::unsupported(path, "the TIFF rows per strip is out of range")
+                    })
+            })
+            .transpose()?
+            .unwrap_or(height);
+        let offsets = directory.integers(store, TAG_STRIP_OFFSETS, path)?;
+        let counts = directory.integers(store, TAG_STRIP_BYTE_COUNTS, path)?;
+        let expected = height.div_ceil(rows) as usize;
+        if offsets.len() != expected || counts.len() != expected {
+            return Err(Error::read(
+                path,
+                format!(
+                    "the TIFF page declares {expected} strips but lists {} offsets and {} byte counts",
+                    offsets.len(),
+                    counts.len()
+                ),
+            ));
+        }
+        Ok(Self::Strips {
+            rows,
+            offsets,
+            counts,
+        })
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        let (offsets, counts) = match self {
+            Self::Tiles {
+                offsets, counts, ..
+            }
+            | Self::Strips {
+                offsets, counts, ..
+            } => (offsets.capacity(), counts.capacity()),
+        };
+        (std::mem::size_of::<Self>() + (offsets + counts) * std::mem::size_of::<u64>()) as u64
+    }
+}
+
 fn copy_rows<T: Sample>(
     data: &[u8],
     block: &Block,
@@ -395,76 +497,4 @@ fn format(bits: u64, sample_format: u64, path: &Path) -> Result<VoxelFormat, Err
             ),
         )),
     }
-}
-
-fn layout(
-    directory: &Directory,
-    store: &Store,
-    width: u32,
-    height: u32,
-    path: &Path,
-) -> Result<Layout, Error> {
-    let tile_width = directory.integer(store, TAG_TILE_WIDTH, path)?;
-    let tile_length = directory.integer(store, TAG_TILE_LENGTH, path)?;
-    if tile_width.is_some() || tile_length.is_some() {
-        let tile_width = u32::try_from(tile_width.ok_or_else(|| {
-            Error::unsupported(path, "the TIFF page declares tiles without a tile width")
-        })?)
-        .ok()
-        .filter(|width| *width > 0)
-        .ok_or_else(|| Error::unsupported(path, "the TIFF tile width is out of range"))?;
-        let tile_length = u32::try_from(tile_length.ok_or_else(|| {
-            Error::unsupported(path, "the TIFF page declares tiles without a tile length")
-        })?)
-        .ok()
-        .filter(|length| *length > 0)
-        .ok_or_else(|| Error::unsupported(path, "the TIFF tile length is out of range"))?;
-        let offsets = directory.integers(store, TAG_TILE_OFFSETS, path)?;
-        let counts = directory.integers(store, TAG_TILE_BYTE_COUNTS, path)?;
-        let expected = width.div_ceil(tile_width) as usize * height.div_ceil(tile_length) as usize;
-        if offsets.len() != expected || counts.len() != expected {
-            return Err(Error::read(
-                path,
-                format!(
-                    "the TIFF page declares {expected} tiles but lists {} offsets and {} byte counts",
-                    offsets.len(),
-                    counts.len()
-                ),
-            ));
-        }
-        return Ok(Layout::Tiles {
-            width: tile_width,
-            height: tile_length,
-            offsets,
-            counts,
-        });
-    }
-    let rows = directory
-        .integer(store, TAG_ROWS_PER_STRIP, path)?
-        .map(|rows| {
-            u32::try_from(rows)
-                .ok()
-                .filter(|rows| *rows > 0)
-                .ok_or_else(|| Error::unsupported(path, "the TIFF rows per strip is out of range"))
-        })
-        .transpose()?
-        .unwrap_or(height);
-    let offsets = directory.integers(store, TAG_STRIP_OFFSETS, path)?;
-    let counts = directory.integers(store, TAG_STRIP_BYTE_COUNTS, path)?;
-    let expected = height.div_ceil(rows) as usize;
-    if offsets.len() != expected || counts.len() != expected {
-        return Err(Error::read(
-            path,
-            format!(
-                "the TIFF page declares {expected} strips but lists {} offsets and {} byte counts",
-                offsets.len(),
-                counts.len()
-            ),
-        ));
-    }
-    Ok(Layout::Strips {
-        rows,
-        offsets,
-        counts,
-    })
 }

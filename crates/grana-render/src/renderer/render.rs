@@ -564,6 +564,7 @@ impl Renderer {
             phase: prepared.started.phase,
             reset: prepared.started.reset,
             moved: prepared.started.moved,
+            previous: prepared.started.previous,
             dummy_normal,
             dummy_volume,
         });

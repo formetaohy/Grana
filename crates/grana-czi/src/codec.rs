@@ -17,7 +17,7 @@ pub(crate) fn decompress(
     let planes = size[0] as usize * size[1] as usize * pixel.bytes();
     let expected = planes * depth as usize;
     match compression {
-        Compression::None => Ok(fit(input.to_vec(), expected)),
+        Compression::None => fit(input.to_vec(), expected, "raw"),
         Compression::JpegXr => {
             if depth != 1 {
                 return Err(
@@ -73,7 +73,7 @@ fn zstd(input: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     if data.is_empty() {
         return Err("the CZI zstd subblock decodes to nothing".to_string());
     }
-    Ok(fit(data, expected))
+    fit(data, expected, "zstd")
 }
 
 fn zstd1(input: &[u8], expected: usize) -> Result<Vec<u8>, String> {
@@ -112,9 +112,15 @@ fn unpack_hi_lo(data: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     Ok(samples)
 }
 
-fn fit(mut data: Vec<u8>, expected: usize) -> Vec<u8> {
-    data.resize(expected, 0);
-    data
+fn fit(mut data: Vec<u8>, expected: usize, kind: &str) -> Result<Vec<u8>, String> {
+    if data.len() < expected {
+        return Err(format!(
+            "the CZI {kind} subblock holds {} bytes and its geometry needs {expected}",
+            data.len()
+        ));
+    }
+    data.truncate(expected);
+    Ok(data)
 }
 
 fn place(source: &[u8], from: [u32; 2], to: [u32; 2], sample: usize) -> Vec<u8> {

@@ -16,7 +16,7 @@ use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
 const MAGIC: &[u8; 9] = b"granaproj";
-const VERSION: u32 = 77;
+const VERSION: u32 = 78;
 const VERSION_BYTES: usize = size_of::<u32>();
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
@@ -396,6 +396,11 @@ impl Project {
             );
             writer.len()
         };
+        if raw as u64 > RAW_LIMIT {
+            return Err(write(format!(
+                "the project payload holds {raw} bytes, and this build reads at most {RAW_LIMIT}"
+            )));
+        }
         let mut file = encoder.finish().map_err(|error| write(error.to_string()))?;
         file.seek(SeekFrom::Start((MAGIC.len() + VERSION_BYTES) as u64))
             .map_err(|error| write(error.to_string()))?;

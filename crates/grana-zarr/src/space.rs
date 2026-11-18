@@ -10,8 +10,13 @@ pub fn image_space(levels: &[Level], frames: u32, channels: usize) -> u64 {
     planned(levels, u64::from(frames), channels as u64, 4)
 }
 
-pub fn label_space(levels: &[Level], frames: usize) -> u64 {
-    planned(levels, frames as u64, 1, 2)
+pub fn label_space(levels: &[Level], frames: usize, labels: usize) -> u64 {
+    planned(
+        levels,
+        frames as u64,
+        1,
+        crate::label::Dtype::of(labels).bytes(),
+    )
 }
 
 fn planned(levels: &[Level], frames: u64, channels: u64, bytes_per_voxel: u64) -> u64 {

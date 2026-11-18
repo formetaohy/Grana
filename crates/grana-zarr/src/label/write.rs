@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
-use zarrs::array::{Array, ArrayBuilder, data_type};
+use zarrs::array::{Array, ArrayBuilder, DataType, Element, FillValue, data_type};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
@@ -15,11 +15,69 @@ use crate::metadata::{Axis, AxisKind};
 use crate::parallel;
 use crate::shape;
 
-const LABEL_LIMIT: usize = u16::MAX as usize;
+const LABEL_LIMIT: usize = u32::MAX as usize;
 const CANCELLED: &str = "the write was cancelled";
 
 pub type ChunkFill<'a> =
-    dyn Fn(usize, u32, [u32; 3], [u32; 3], &mut [u16]) -> Result<(), String> + Send + Sync + 'a;
+    dyn Fn(usize, u32, [u32; 3], [u32; 3], &mut [u32]) -> Result<(), String> + Send + Sync + 'a;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dtype {
+    U16,
+    U32,
+}
+
+impl Dtype {
+    pub(crate) fn of(labels: usize) -> Self {
+        if labels <= usize::from(u16::MAX) {
+            Self::U16
+        } else {
+            Self::U32
+        }
+    }
+
+    pub(crate) fn bytes(self) -> u64 {
+        match self {
+            Self::U16 => 2,
+            Self::U32 => 4,
+        }
+    }
+
+    fn data_type(self) -> DataType {
+        match self {
+            Self::U16 => data_type::uint16(),
+            Self::U32 => data_type::uint32(),
+        }
+    }
+
+    fn fill(self) -> FillValue {
+        match self {
+            Self::U16 => FillValue::from(0u16),
+            Self::U32 => FillValue::from(0u32),
+        }
+    }
+}
+
+trait Sample: Element + Copy + Default {
+    fn of(value: u32) -> Result<Self, String>;
+
+    fn bytes() -> usize {
+        size_of::<Self>()
+    }
+}
+
+impl Sample for u16 {
+    fn of(value: u32) -> Result<Self, String> {
+        u16::try_from(value)
+            .map_err(|_| format!("a uint16 label image cannot hold the label {value}"))
+    }
+}
+
+impl Sample for u32 {
+    fn of(value: u32) -> Result<Self, String> {
+        Ok(value)
+    }
+}
 
 pub struct LabelSpec<'a> {
     pub name: &'a str,
@@ -74,23 +132,24 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
 }
 
 pub fn write_group(path: &Path, group: &str, mut spec: LabelSpec<'_>) -> Result<Written, Error> {
-    identity(&spec);
     let directory = path.join(group.trim_start_matches('/'));
+    let fail = |detail: String| Error::Write {
+        path: directory.display().to_string(),
+        detail,
+    };
+    identity(&spec).map_err(&fail)?;
     if !directory.join("zarr.json").is_file() {
         return Err(Error::Unsupported {
             path: directory.display().to_string(),
             detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
         });
     }
-    let fail = |detail: String| Error::Write {
-        path: directory.display().to_string(),
-        detail,
-    };
     let image = Image::open_group(path, group).map_err(|error| fail(error.to_string()))?;
     let layout = layout(&image, &spec).map_err(&fail)?;
     label_index(&directory, image.version()).map_err(&fail)?;
     let root = directory.join("labels").join(spec.name);
-    let expected = crate::space::label_space(image.pyramid().levels(), spec.frames.len());
+    let expected =
+        crate::space::label_space(image.pyramid().levels(), spec.frames.len(), spec.labels);
     grana_file::require(&root, expected).map_err(|error| fail(error.to_string()))?;
     let atomic = grana_file::Atomic::directory(&root).map_err(|error| fail(error.to_string()))?;
     let temporary = atomic
@@ -141,7 +200,7 @@ pub(crate) fn write_inside(
     group: &str,
     mut spec: LabelSpec<'_>,
 ) -> Result<String, String> {
-    identity(&spec);
+    identity(&spec)?;
     assert!(
         root.join("zarr.json").is_file(),
         "a dataset holds its image before it holds its labels"
@@ -182,15 +241,20 @@ pub(crate) fn write_index(
     })
 }
 
-fn identity(spec: &LabelSpec<'_>) {
+fn identity(spec: &LabelSpec<'_>) -> Result<(), String> {
     assert!(
         !spec.name.is_empty() && !spec.name.contains('/') && !spec.name.contains('\\'),
         "a label image name is a path segment"
     );
-    assert!(
-        (1..=LABEL_LIMIT).contains(&spec.labels),
-        "a label image holds one to {LABEL_LIMIT} labels"
-    );
+    if spec.labels == 0 {
+        return Err("a label image holds at least one label".to_string());
+    }
+    if spec.labels > LABEL_LIMIT {
+        return Err(format!(
+            "a label image addresses at most {LABEL_LIMIT} labels, and {} were named",
+            spec.labels
+        ));
+    }
     assert!(
         spec.color.iter().all(|value| (0.0..=1.0).contains(value)),
         "a label color is a unit rgb triple"
@@ -199,6 +263,7 @@ fn identity(spec: &LabelSpec<'_>) {
         (0.0..=1.0).contains(&spec.opacity),
         "a label color is a unit opacity"
     );
+    Ok(())
 }
 
 struct Layout {
@@ -381,6 +446,7 @@ fn build(
         })
         .collect::<Vec<_>>();
     let total = per_level.iter().sum::<usize>() * spec.frames.len();
+    let dtype = Dtype::of(spec.labels);
     let mut base = 0;
     for (level, chunks) in per_level.iter().enumerate() {
         if spec.cancelled() {
@@ -394,7 +460,7 @@ fn build(
             .iter()
             .map(|axis| axis.name().to_string())
             .collect::<Vec<_>>();
-        let array = ArrayBuilder::new(array_shape, chunk.clone(), data_type::uint16(), 0u16)
+        let array = ArrayBuilder::new(array_shape, chunk.clone(), dtype.data_type(), dtype.fill())
             .subchunk_shape(subchunk_shape(spatial, kinds, x, y, z))
             .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
             .dimension_names(Some(names))
@@ -404,36 +470,51 @@ fn build(
             )
             .map_err(|error| error.to_string())?;
         array.store_metadata().map_err(|error| error.to_string())?;
-        write_level(
-            &array,
-            Slice {
-                image,
-                level,
-                frames: spec.frames,
-            },
-            Geometry {
-                kinds,
-                x,
-                y,
-                z,
-                chunk: &chunk,
-            },
-            base,
-            total,
-            spec.fill,
-            &mut *spec.progress,
-        )?;
+        let slice = Slice {
+            image,
+            level,
+            frames: spec.frames,
+        };
+        let geometry = Geometry {
+            kinds,
+            x,
+            y,
+            z,
+            chunk: &chunk,
+        };
+        match dtype {
+            Dtype::U16 => write_level::<_, u16>(
+                &array,
+                slice,
+                geometry,
+                base,
+                total,
+                spec.fill,
+                &mut *spec.progress,
+            )?,
+            Dtype::U32 => write_level::<_, u32>(
+                &array,
+                slice,
+                geometry,
+                base,
+                total,
+                spec.fill,
+                &mut *spec.progress,
+            )?,
+        }
         base += chunks * spec.frames.len();
     }
     Ok(())
 }
 
+#[derive(Clone, Copy)]
 struct Slice<'a> {
     image: &'a Image,
     level: usize,
     frames: &'a [u32],
 }
 
+#[derive(Clone, Copy)]
 struct Geometry<'a> {
     kinds: &'a [Kind],
     x: usize,
@@ -442,7 +523,7 @@ struct Geometry<'a> {
     chunk: &'a [u64],
 }
 
-fn write_level<S>(
+fn write_level<S, T>(
     array: &Array<S>,
     slice: Slice<'_>,
     geometry: Geometry<'_>,
@@ -453,6 +534,7 @@ fn write_level<S>(
 ) -> Result<(), String>
 where
     S: ?Sized + zarrs::storage::WritableStorageTraits + Sync + 'static,
+    T: Sample,
 {
     let Slice {
         image,
@@ -505,10 +587,14 @@ where
                 depth.min(u64::from(depth_extent - origin[2])) as u32,
             ];
             let voxels = (length[0] as usize) * (length[1] as usize) * (length[2] as usize);
-            let mut region = vec![0u16; voxels];
+            let mut region = vec![0u32; voxels];
             fill(level, frame, origin, length, &mut region)?;
-            let mut data = vec![0u16; block.voxels()];
-            block.stage(length, &region, &mut data);
+            let mut staged = Vec::with_capacity(voxels);
+            for value in region {
+                staged.push(T::of(value)?);
+            }
+            let mut data = vec![T::default(); block.voxels()];
+            block.stage(length, &staged, &mut data);
             let indices = kinds
                 .iter()
                 .enumerate()
@@ -523,7 +609,7 @@ where
             array
                 .store_chunk(&indices, data)
                 .map_err(|error| error.to_string())?;
-            Ok((block.voxels() * 2) as u64)
+            Ok((block.voxels() * T::bytes()) as u64)
         },
     )?;
     Ok(())

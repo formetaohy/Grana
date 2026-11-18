@@ -25,6 +25,7 @@ pub(super) struct Stage<'a> {
     pub(super) phase: u32,
     pub(super) reset: bool,
     pub(super) moved: bool,
+    pub(super) previous: Option<Mat4>,
     pub(super) dummy_normal: &'a TextureView,
     pub(super) dummy_volume: &'a crate::target::Unreached,
 }
@@ -51,6 +52,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         phase,
         reset,
         moved,
+        previous,
         dummy_normal,
         dummy_volume,
     } = stage;
@@ -59,7 +61,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
     let intact = target.taa.intact() && !reset;
     taa.write(
         queue,
-        target.camera.unwrap_or(current),
+        previous.unwrap_or(current),
         [offset, target.jitter],
         intact,
         moved,
@@ -74,7 +76,6 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         region,
     );
     target.taa.advance();
-    target.camera = Some(current);
     target.jitter = offset;
     overlay.prepare(device, queue, overlays, current);
     overlay.draw(encoder, target.resolved(), region);

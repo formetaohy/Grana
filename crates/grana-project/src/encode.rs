@@ -831,6 +831,7 @@ impl Encode for TrackStyle {
         writer.f32(params.merge_range());
         writer.f32(params.merge_overlap());
         writer.f32(self.thickness());
+        writer.bool(self.visible());
     }
 }
 

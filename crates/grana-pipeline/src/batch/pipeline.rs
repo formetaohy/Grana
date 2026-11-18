@@ -1161,10 +1161,10 @@ impl Run<'_, '_> {
         if labels == 0 {
             return Err(format!("{name} holds no objects to label"));
         }
-        if labels > u16::MAX as usize {
+        if labels > u32::MAX as usize {
             return Err(format!(
-                "a uint16 label image addresses at most {} objects",
-                u16::MAX
+                "a label image addresses at most {} objects",
+                u32::MAX
             ));
         }
         let shapes = object.source();
@@ -1177,7 +1177,7 @@ impl Run<'_, '_> {
         let properties = labeling.properties();
         let cancel = task.cancel;
         let fill =
-            |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
+            |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u32]| {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("cancelled".to_string());
                 }

@@ -877,12 +877,6 @@ impl ObjectColoc {
             !frames.is_empty(),
             "an object colocalization covers at least one frame"
         );
-        assert!(
-            frames
-                .iter()
-                .all(|values| values.len() <= usize::from(u16::MAX)),
-            "an object colocalization addresses its objects as labels"
-        );
         Self {
             pair,
             level,

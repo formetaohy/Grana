@@ -1014,10 +1014,33 @@ impl Session {
         if let Some(source) = &self.source {
             source.set_time(scene.time());
         }
+        let existing = scene.objects.iter().map(|set| set.id()).collect::<Vec<_>>();
+        self.mask_extents = scene.mask_extents(scene.time());
+        self.in_flight
+            .retain(|request| request.time >= scene.time());
+        self.failed
+            .retain(|request, _| request.time >= scene.time());
         self.realign();
         self.message = None;
         if derived {
             self.relayout_channels();
+        }
+        let stale = self
+            .analysis
+            .iter()
+            .map(|analysis| analysis.job())
+            .filter(|job| !job.present(|set| existing.contains(&set)))
+            .collect::<Vec<_>>();
+        for job in stale {
+            self.halt(job);
+        }
+        self.resume
+            .retain(|(source, target, _)| existing.contains(source) && existing.contains(target));
+        if self
+            .recut
+            .is_some_and(|(pending, _)| !existing.contains(&pending))
+        {
+            self.recut = None;
         }
     }
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::Error;
@@ -47,7 +48,6 @@ pub(crate) struct Directory {
     big_endian: bool,
     big: bool,
     entries: Vec<Entry>,
-    pub next: u64,
 }
 
 struct Entry {
@@ -108,35 +108,46 @@ pub(crate) fn header(store: &Store, path: &Path) -> Result<Header, Error> {
 }
 
 impl Directory {
+    pub(crate) fn chain(store: &Store, header: &Header, path: &Path) -> Result<Vec<u64>, Error> {
+        let (count_size, entry_size, next_size) = fields(header.big);
+        let mut offsets = Vec::new();
+        let mut seen = HashSet::new();
+        let mut offset = header.first;
+        while offset != 0 {
+            if !seen.insert(offset) {
+                return Err(Error::open(path, "the TIFF directories form a cycle"));
+            }
+            let count = directory_count(store, header, offset, path)?;
+            let next = offset
+                .checked_add(count_size as u64)
+                .and_then(|start| start.checked_add(count * entry_size as u64))
+                .ok_or_else(|| Error::open(path, "the TIFF directory offset overflows"))?;
+            let raw = store.read(next, next_size)?;
+            offsets.push(offset);
+            offset = if header.big {
+                u64_at(&raw, header.big_endian)
+            } else {
+                u64::from(u32_at(&raw, header.big_endian))
+            };
+        }
+        if offsets.is_empty() {
+            return Err(Error::unsupported(path, "the file holds no TIFF page"));
+        }
+        Ok(offsets)
+    }
+
     pub(crate) fn read(
         store: &Store,
         header: &Header,
         offset: u64,
         path: &Path,
     ) -> Result<Self, Error> {
-        let (count_size, entry_size, next_size) = if header.big {
-            (8usize, 20usize, 8usize)
-        } else {
-            (2usize, 12usize, 4usize)
-        };
-        let count = {
-            let raw = store.read(offset, count_size)?;
-            if header.big {
-                u64_at(&raw, header.big_endian)
-            } else {
-                u64::from(u16_at(&raw, header.big_endian))
-            }
-        };
-        if count == 0 || count > ENTRY_LIMIT {
-            return Err(Error::open(
-                path,
-                format!("the TIFF directory holds {count} entries"),
-            ));
-        }
+        let (count_size, entry_size, _) = fields(header.big);
+        let count = directory_count(store, header, offset, path)?;
         let body_offset = offset
             .checked_add(count_size as u64)
             .ok_or_else(|| Error::open(path, "the TIFF directory offset overflows"))?;
-        let body = store.read(body_offset, count as usize * entry_size + next_size)?;
+        let body = store.read(body_offset, count as usize * entry_size)?;
         let mut entries = Vec::with_capacity(count as usize);
         for index in 0..count as usize {
             let start = index * entry_size;
@@ -158,20 +169,10 @@ impl Directory {
                 value,
             });
         }
-        let next = {
-            let start = count as usize * entry_size;
-            let raw = &body[start..start + next_size];
-            if header.big {
-                u64_at(raw, header.big_endian)
-            } else {
-                u64::from(u32_at(raw, header.big_endian))
-            }
-        };
         Ok(Self {
             big_endian: header.big_endian,
             big: header.big,
             entries,
-            next,
         })
     }
 
@@ -305,6 +306,27 @@ fn kind_size(kind: u16) -> Option<u64> {
         KIND_LONG8 | KIND_IFD8 => Some(8),
         _ => None,
     }
+}
+
+fn fields(big: bool) -> (usize, usize, usize) {
+    if big { (8, 20, 8) } else { (2, 12, 4) }
+}
+
+fn directory_count(store: &Store, header: &Header, offset: u64, path: &Path) -> Result<u64, Error> {
+    let (count_size, _, _) = fields(header.big);
+    let raw = store.read(offset, count_size)?;
+    let count = if header.big {
+        u64_at(&raw, header.big_endian)
+    } else {
+        u64::from(u16_at(&raw, header.big_endian))
+    };
+    if count == 0 || count > ENTRY_LIMIT {
+        return Err(Error::open(
+            path,
+            format!("the TIFF directory holds {count} entries"),
+        ));
+    }
+    Ok(count)
 }
 
 pub(crate) fn u16_at(bytes: &[u8], big_endian: bool) -> u16 {

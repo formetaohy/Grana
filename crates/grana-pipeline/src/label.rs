@@ -23,6 +23,11 @@ impl Labeling {
     pub fn new(source: ObjectSource, labels: usize, levels: Vec<Level>, title: String) -> Self {
         assert!(labels > 0, "a label raster holds at least one label");
         assert!(
+            u32::try_from(labels).is_ok(),
+            "a label raster numbers at most {} labels",
+            u32::MAX
+        );
+        assert!(
             !levels.is_empty(),
             "a label raster names a stored resolution level"
         );
@@ -41,7 +46,11 @@ impl Labeling {
 
     pub fn properties(&self) -> Vec<(u32, String)> {
         (1..=self.labels)
-            .map(|label| (label as u32, format!("{} {label}", self.title)))
+            .map(|label| {
+                let number =
+                    u32::try_from(label).expect("a label raster numbers its labels within a u32");
+                (number, format!("{} {label}", self.title))
+            })
             .collect()
     }
 
@@ -51,7 +60,7 @@ impl Labeling {
         time: u32,
         origin: [u32; 3],
         extent: [u32; 3],
-        data: &mut [u16],
+        data: &mut [u32],
     ) -> Result<(), String> {
         let held = self.frame(time)?;
         let level =

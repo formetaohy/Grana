@@ -641,276 +641,363 @@ impl Edit {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Nature {
+    Document,
+    DocumentAuthored,
+    View(Option<Edit>),
+    Authored,
+    Edit(Edit),
+}
+
 impl Command {
+    pub(crate) fn nature(&self) -> Nature {
+        match self {
+            Self::OpenDataset => Nature::Document,
+            Self::OpenImage => Nature::Document,
+            Self::OpenTiles => Nature::Document,
+            Self::OpenPath(..) => Nature::Document,
+            Self::OpenRemote(..) => Nature::Document,
+            Self::OpenRecent(..) => Nature::Document,
+            Self::OpenProject => Nature::Document,
+            Self::RecoverAnalysis => Nature::DocumentAuthored,
+            Self::OpenPackage => Nature::DocumentAuthored,
+            Self::RenameObject { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::RenameObject, set.raw()))
+            }
+            Self::ReorderObject { .. } => Nature::Edit(Edit::new(Action::ReorderObject)),
+            Self::DeleteObject { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::DeleteObject, set.raw()))
+            }
+            Self::DeleteFiltered => Nature::Edit(Edit::new(Action::DeleteFiltered)),
+            Self::ExtractFiltered => Nature::Edit(Edit::new(Action::ExtractFiltered)),
+            Self::DuplicateObject(_) => Nature::Edit(Edit::new(Action::DuplicateObject)),
+            Self::MergeObjects { target, .. } => {
+                Nature::Edit(Edit::targeted(Action::MergeObjects, target.raw()))
+            }
+            Self::MergeSurfaces { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::EditObjects, set.raw()))
+            }
+            Self::SplitSurface { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::EditObjects, set.raw()))
+            }
+            Self::PaintMask { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::MaskEdit, set.raw()))
+            }
+            Self::ClearMask(set) => Nature::Edit(Edit::targeted(Action::ClearMask, set.raw())),
+            Self::AddObject(_) => Nature::Edit(Edit::new(Action::AddObject)),
+            Self::AddSegment => Nature::Edit(Edit::new(Action::AddObject)),
+            Self::SetSegment { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::ObjectParameters, set.raw()))
+            }
+            Self::AddMaskChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::AddRestoreChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::AddSmoothChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::AddBackgroundChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::AddRatioChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::AddBleachChannel { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::SetSmoothChannel { channel, .. } => {
+                Nature::Edit(Edit::targeted(Action::Derived, *channel as u64))
+            }
+            Self::SetBackgroundChannel { channel, .. } => {
+                Nature::Edit(Edit::targeted(Action::Derived, *channel as u64))
+            }
+            Self::SetRatioChannel { channel, .. } => {
+                Nature::Edit(Edit::targeted(Action::Derived, *channel as u64))
+            }
+            Self::CalibratePsf { .. } => Nature::Edit(Edit::new(Action::Derived)),
+            Self::SetRestore { channel, .. } => {
+                Nature::Edit(Edit::targeted(Action::Derived, *channel as u64))
+            }
+            Self::RemoveDerivedChannel { channel } => {
+                Nature::Edit(Edit::targeted(Action::Derived, *channel as u64))
+            }
+            Self::ImportLabels { .. } => Nature::Edit(Edit::new(Action::AddObject)),
+            Self::ImportTracks => Nature::Edit(Edit::new(Action::AddObject)),
+            Self::ImportLocalizations => Nature::Edit(Edit::new(Action::AddObject)),
+            Self::RemoveObject(_) => Nature::Edit(Edit::new(Action::RemoveObject)),
+            Self::AddSeed { set, .. } => Nature::Edit(Edit::targeted(Action::Seed, set.raw())),
+            Self::RemoveSeed { set, .. } => Nature::Edit(Edit::targeted(Action::Seed, set.raw())),
+            Self::ClearSeeds(set) => Nature::Edit(Edit::targeted(Action::Seed, set.raw())),
+            Self::SetSeedSource { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::SeedSource, set.raw()))
+            }
+            Self::Detect(set) => Nature::Edit(Edit::targeted(Action::Detect, set.raw())),
+            Self::ClearObject(_) => Nature::Edit(Edit::new(Action::ClearObject)),
+            Self::AddRelation { target, .. } => {
+                Nature::Edit(Edit::targeted(Action::Relation, target.raw()))
+            }
+            Self::MoveRelation { target, .. } => {
+                Nature::Edit(Edit::targeted(Action::Relation, target.raw()))
+            }
+            Self::RemoveRelation { target, .. } => {
+                Nature::Edit(Edit::targeted(Action::Relation, target.raw()))
+            }
+            Self::Track(set) => Nature::Edit(Edit::targeted(Action::Track, set.raw())),
+            Self::ClearTracks(_) => Nature::Edit(Edit::new(Action::ClearTracks)),
+            Self::SetObjectHidden { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::ObjectHidden, set.raw()))
+            }
+            Self::ClearHidden(set) => Nature::Edit(Edit::targeted(Action::ObjectHidden, set.raw())),
+            Self::SetObjectParams { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::ObjectParameters, set.raw()))
+            }
+            Self::SetMask(_) => Nature::Edit(Edit::new(Action::Mask)),
+            Self::SetMaskRadius(_) => Nature::Edit(Edit::new(Action::Mask)),
+            Self::SetMaskFilter(_) => Nature::Edit(Edit::new(Action::Mask)),
+            Self::AddPoint { .. } => Nature::Edit(Edit::new(Action::Annotation)),
+            Self::AddDistance { .. } => Nature::Edit(Edit::new(Action::Annotation)),
+            Self::SetAnnotationKind { index, .. } => {
+                Nature::Edit(Edit::targeted(Action::Annotation, *index as u64))
+            }
+            Self::SetAnnotationFrame { index, .. } => {
+                Nature::Edit(Edit::targeted(Action::Annotation, *index as u64))
+            }
+            Self::SampleProfile { index } => {
+                Nature::Edit(Edit::targeted(Action::Annotation, *index as u64))
+            }
+            Self::RemoveAnnotation(_) => Nature::Edit(Edit::new(Action::Annotation)),
+            Self::ClearAnnotations => Nature::Edit(Edit::new(Action::Annotation)),
+            Self::SetTrackParams { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::TrackParameters, set.raw()))
+            }
+            Self::CutTrack { .. } => Nature::Edit(Edit::new(Action::CutTrack)),
+            Self::JoinTracks { .. } => Nature::Edit(Edit::new(Action::JoinTracks)),
+            Self::DivideTracks { .. } => Nature::Edit(Edit::new(Action::DivideTracks)),
+            Self::MergeTracks { .. } => Nature::Edit(Edit::new(Action::MergeTracks)),
+            Self::ReparentTrack { .. } => Nature::Edit(Edit::new(Action::ReparentTrack)),
+            Self::DetachTrack { .. } => Nature::Edit(Edit::new(Action::DetachTrack)),
+            Self::TrainClassifier { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::Classifier, set.raw()))
+            }
+            Self::ClearClassifier(set) => {
+                Nature::Edit(Edit::targeted(Action::Classifier, set.raw()))
+            }
+            Self::SetColocPair(_) => Nature::Edit(Edit::new(Action::ColocPair)),
+            Self::SetColocThresholds(_) => Nature::Edit(Edit::new(Action::ColocThresholds)),
+            Self::SetColocSettings(_) => Nature::Edit(Edit::new(Action::ColocSettings)),
+            Self::RemoveColocResult(_) => Nature::Edit(Edit::new(Action::ColocResult)),
+            Self::ComputeColoc => Nature::Edit(Edit::new(Action::ComputeColoc)),
+            Self::ComputeObjectColoc(set) => {
+                Nature::Edit(Edit::targeted(Action::ObjectColoc, set.raw()))
+            }
+            Self::ClearObjectColoc(set) => {
+                Nature::Edit(Edit::targeted(Action::ObjectColoc, set.raw()))
+            }
+            Self::ClusterLocalizations(set) => {
+                Nature::Edit(Edit::targeted(Action::Cluster, set.raw()))
+            }
+            Self::EstimateLocalizationClusters(set) => {
+                Nature::Edit(Edit::targeted(Action::Localization, set.raw()))
+            }
+            Self::ClearDrift => Nature::Edit(Edit::new(Action::Drift)),
+            Self::SetDriftReference(_) => Nature::Edit(Edit::new(Action::Drift)),
+            Self::SetDriftOffset { .. } => Nature::Edit(Edit::new(Action::Drift)),
+            Self::ClearRegistration => Nature::Edit(Edit::new(Action::Registration)),
+            Self::ApplyProtocol => Nature::Edit(Edit::new(Action::ApplyProtocol)),
+            Self::SaveView => Nature::Edit(Edit::new(Action::NamedView)),
+            Self::RemoveView(_) => Nature::Edit(Edit::new(Action::NamedView)),
+            Self::ClearKeyframes => Nature::Edit(Edit::new(Action::Keyframe)),
+            Self::DeleteKeyframe(_) => Nature::Edit(Edit::new(Action::Keyframe)),
+            Self::SetTimelineFps(_) => Nature::Edit(Edit::new(Action::TimelineFps)),
+            Self::SetTimelineDuration(_) => Nature::Edit(Edit::new(Action::TimelineDuration)),
+            Self::SetChannelEnabled { channel, .. } => Nature::View(Some(Edit::targeted(
+                Action::ChannelEnabled,
+                *channel as u64,
+            ))),
+            Self::SetChannelOpacity { channel, .. } => Nature::View(Some(Edit::targeted(
+                Action::ChannelOpacity,
+                *channel as u64,
+            ))),
+            Self::SetWindow { channel, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Window, *channel as u64)))
+            }
+            Self::ResetWindow(channel) => {
+                Nature::View(Some(Edit::targeted(Action::ResetWindow, *channel as u64)))
+            }
+            Self::SetTransfer { channel, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Transfer, *channel as u64)))
+            }
+            Self::SetVolumeMode { channel, .. } => {
+                Nature::View(Some(Edit::targeted(Action::VolumeMode, *channel as u64)))
+            }
+            Self::SetIsovalue { channel, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Isovalue, *channel as u64)))
+            }
+            Self::SetObjectVisible { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectVisible, set.raw())))
+            }
+            Self::SetObjectLabels { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectLabels, set.raw())))
+            }
+            Self::SetLabelMetric { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectLabels, set.raw())))
+            }
+            Self::SetObjectColor { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectColor, set.raw())))
+            }
+            Self::SetObjectOpacity { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectOpacity, set.raw())))
+            }
+            Self::SetObjectMaterial { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectMaterial, set.raw())))
+            }
+            Self::SetObjectColoring { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::ObjectColoring, set.raw())))
+            }
+            Self::SetAnnotationVisible { .. } => Nature::View(Some(Edit::new(Action::Annotation))),
+            Self::SetTrackVisible { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::TrackVisible, set.raw())))
+            }
+            Self::SetTrackThickness { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::TrackThickness, set.raw())))
+            }
+            Self::SetTrackColoring { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::TrackColoring, set.raw())))
+            }
+            Self::SetRegion(_) => Nature::View(Some(Edit::new(Action::Region))),
+            Self::SetClip(_) => Nature::View(Some(Edit::new(Action::Clip))),
+            Self::SetExposure(_) => Nature::View(Some(Edit::new(Action::Exposure))),
+            Self::SetStepScale(_) => Nature::View(Some(Edit::new(Action::StepScale))),
+            Self::SetShading(_) => Nature::View(Some(Edit::new(Action::Shading))),
+            Self::ResetRendering => Nature::View(Some(Edit::new(Action::ResetRendering))),
+            Self::SetMeasureSet(_) => Nature::View(Some(Edit::new(Action::MeasureSet))),
+            Self::SetMeasureGroup(_) => Nature::View(Some(Edit::new(Action::MeasureGroup))),
+            Self::SetMeasureAggregate(_) => Nature::View(Some(Edit::new(Action::MeasureAggregate))),
+            Self::SetMeasureScope(_) => Nature::View(Some(Edit::new(Action::MeasureScope))),
+            Self::AddFilter => Nature::View(Some(Edit::new(Action::AddFilter))),
+            Self::RemoveFilter(_) => Nature::View(Some(Edit::new(Action::RemoveFilter))),
+            Self::SetFilter { index, .. } => {
+                Nature::View(Some(Edit::targeted(Action::MeasureFilter, *index as u64)))
+            }
+            Self::RetargetFilter { index, .. } => {
+                Nature::View(Some(Edit::targeted(Action::MeasureFilter, *index as u64)))
+            }
+            Self::SetLasso(_) => Nature::View(Some(Edit::new(Action::MeasureLasso))),
+            Self::SetColumnVisible { index, .. } => {
+                Nature::View(Some(Edit::targeted(Action::MeasureColumns, *index as u64)))
+            }
+            Self::ShowAllColumns => Nature::View(Some(Edit::new(Action::MeasureColumns))),
+            Self::SetMeasureVisibility(_) => {
+                Nature::View(Some(Edit::new(Action::MeasureVisibility)))
+            }
+            Self::SetMeasureView(_) => Nature::View(Some(Edit::new(Action::MeasureView))),
+            Self::SetPlotAxis { column, .. } => {
+                Nature::View(Some(Edit::targeted(Action::MeasureAxes, *column as u64)))
+            }
+            Self::SetGate { column, .. } => {
+                Nature::View(Some(Edit::targeted(Action::MeasureFilter, *column as u64)))
+            }
+            Self::ToggleSort(column) => {
+                Nature::View(Some(Edit::targeted(Action::MeasureSort, *column as u64)))
+            }
+            Self::SetLocalizationSpec { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Localization, set.raw())))
+            }
+            Self::SetLocalizationGroupColored { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Localization, set.raw())))
+            }
+            Self::SetLocalizationProjected { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Localization, set.raw())))
+            }
+            Self::SetLocalizationClusters { set, .. } => {
+                Nature::View(Some(Edit::targeted(Action::Localization, set.raw())))
+            }
+            Self::ApplyView(_) => Nature::View(Some(Edit::new(Action::NamedView))),
+            Self::SetExport(_) => Nature::View(Some(Edit::new(Action::Export))),
+            Self::SaveSnapshot => Nature::View(None),
+            Self::SaveFigure => Nature::View(None),
+            Self::SaveLineage => Nature::View(None),
+            Self::SaveChart => Nature::View(None),
+            Self::SaveComparison => Nature::View(None),
+            Self::SetTime(..) => Nature::View(None),
+            Self::SelectSeries(..) => Nature::View(None),
+            Self::SelectField(..) => Nature::View(None),
+            Self::Select(..) => Nature::View(None),
+            Self::ToggleSelect(..) => Nature::View(None),
+            Self::ExportGeff(..) => Nature::View(None),
+            Self::ExportLocalizations(..) => Nature::View(None),
+            Self::CancelDetect(..) => Nature::View(None),
+            Self::CancelTrack(..) => Nature::View(None),
+            Self::SelectChannel(..) => Nature::View(None),
+            Self::SelectAnnotation(..) => Nature::View(None),
+            Self::SelectTrack { .. } => Nature::View(None),
+            Self::CancelColoc => Nature::View(None),
+            Self::CancelObjectColoc(..) => Nature::View(None),
+            Self::SetLocalizationLayer { .. } => Nature::View(None),
+            Self::CancelClusters(..) => Nature::View(None),
+            Self::ExportLocalizationComposite => Nature::View(None),
+            Self::CancelDrift => Nature::View(None),
+            Self::CancelRegistration => Nature::View(None),
+            Self::ExportColoc => Nature::View(None),
+            Self::ExportMeasure => Nature::View(None),
+            Self::ExportProvenance => Nature::View(None),
+            Self::ExportPackage => Nature::View(None),
+            Self::ExportRelation { .. } => Nature::View(None),
+            Self::ExportMesh { .. } => Nature::View(None),
+            Self::ExportLabels(..) => Nature::View(None),
+            Self::ExportAllLabels => Nature::View(None),
+            Self::ExportDataset => Nature::View(None),
+            Self::ExportPlate => Nature::View(None),
+            Self::CancelStitch => Nature::View(None),
+            Self::ExportMovie { .. } => Nature::View(None),
+            Self::ExportSequence => Nature::View(None),
+            Self::CancelExport => Nature::View(None),
+            Self::DiscardAnalysis => Nature::Authored,
+            Self::SaveProject => Nature::Authored,
+            Self::SaveProjectAs => Nature::Authored,
+            Self::AnalyzeLocalizations(..) => Nature::Authored,
+            Self::CancelLocalizations(..) => Nature::Authored,
+            Self::ClearLocalizations(..) => Nature::Authored,
+            Self::ExportLocalizationImage(..) => Nature::Authored,
+            Self::ComputeDrift => Nature::Authored,
+            Self::ComputeLocalizationDrift(..) => Nature::Authored,
+            Self::RegisterChannels(..) => Nature::Authored,
+            Self::RegisterFromLocalizations(..) => Nature::Authored,
+            Self::CaptureProtocol => Nature::Authored,
+            Self::LoadProtocol => Nature::Authored,
+            Self::SaveProtocol => Nature::Authored,
+            Self::AddBatchDatasets => Nature::Authored,
+            Self::ClearBatchDatasets => Nature::Authored,
+            Self::ChooseBatchOutput => Nature::Authored,
+            Self::OpenBatchRun => Nature::Authored,
+            Self::ReviewBatchDataset(..) => Nature::DocumentAuthored,
+            Self::RecordBatchCorrection => Nature::Authored,
+            Self::ClearBatchCorrection => Nature::Authored,
+            Self::SetBatchJobs(..) => Nature::Authored,
+            Self::SetBatchProject(..) => Nature::Authored,
+            Self::SetBatchChannels(..) => Nature::Authored,
+            Self::SetStitchGrid { .. } => Nature::Authored,
+            Self::SetStitchChannel(..) => Nature::Authored,
+            Self::SetStitchSeries(..) => Nature::Authored,
+            Self::ConfirmStitch => Nature::Authored,
+            Self::RunBatch => Nature::Authored,
+            Self::PauseBatch => Nature::Authored,
+            Self::ResumeBatch => Nature::Authored,
+            Self::CancelBatch => Nature::Authored,
+            Self::SetKeyframe => Nature::Authored,
+            Self::Undo => Nature::Authored,
+            Self::Redo => Nature::Authored,
+        }
+    }
+
     pub fn replaces_document(&self) -> bool {
-        matches!(
-            self,
-            Self::OpenDataset
-                | Self::OpenImage
-                | Self::OpenTiles
-                | Self::OpenPath(_)
-                | Self::OpenRemote(_)
-                | Self::OpenRecent(_)
-                | Self::OpenProject
-                | Self::OpenPackage
-                | Self::RecoverAnalysis
-        )
+        matches!(self.nature(), Nature::Document | Nature::DocumentAuthored)
     }
 
     pub fn authors(&self) -> bool {
-        !matches!(
-            self,
-            Self::OpenDataset
-                | Self::OpenImage
-                | Self::OpenTiles
-                | Self::OpenPath(_)
-                | Self::OpenRemote(_)
-                | Self::OpenRecent(_)
-                | Self::OpenProject
-                | Self::SaveSnapshot
-                | Self::SaveFigure
-                | Self::SaveLineage
-                | Self::SaveChart
-                | Self::SaveComparison
-                | Self::SetTime(_)
-                | Self::SelectSeries(_)
-                | Self::SelectField(_)
-                | Self::Select(_)
-                | Self::ToggleSelect(_)
-                | Self::SelectChannel(_)
-                | Self::SetChannelEnabled { .. }
-                | Self::SetChannelOpacity { .. }
-                | Self::SetWindow { .. }
-                | Self::ResetWindow(_)
-                | Self::SetTransfer { .. }
-                | Self::SetVolumeMode { .. }
-                | Self::SetIsovalue { .. }
-                | Self::SetObjectVisible { .. }
-                | Self::SetObjectLabels { .. }
-                | Self::SetLabelMetric { .. }
-                | Self::SetObjectColor { .. }
-                | Self::SetObjectOpacity { .. }
-                | Self::SetObjectMaterial { .. }
-                | Self::SetObjectColoring { .. }
-                | Self::SelectTrack { .. }
-                | Self::SelectAnnotation(_)
-                | Self::SetAnnotationVisible { .. }
-                | Self::SetTrackVisible { .. }
-                | Self::SetTrackThickness { .. }
-                | Self::SetTrackColoring { .. }
-                | Self::SetLocalizationSpec { .. }
-                | Self::SetLocalizationGroupColored { .. }
-                | Self::SetLocalizationProjected { .. }
-                | Self::SetLocalizationClusters { .. }
-                | Self::SetLocalizationLayer { .. }
-                | Self::SetRegion(_)
-                | Self::SetClip(_)
-                | Self::SetExposure(_)
-                | Self::SetStepScale(_)
-                | Self::SetShading(_)
-                | Self::ResetRendering
-                | Self::SetMeasureSet(_)
-                | Self::SetMeasureGroup(_)
-                | Self::SetMeasureAggregate(_)
-                | Self::SetMeasureScope(_)
-                | Self::SetColumnVisible { .. }
-                | Self::ShowAllColumns
-                | Self::SetMeasureVisibility(_)
-                | Self::SetMeasureView(_)
-                | Self::SetPlotAxis { .. }
-                | Self::ToggleSort(_)
-                | Self::SetLasso(_)
-                | Self::AddFilter
-                | Self::RemoveFilter(_)
-                | Self::SetFilter { .. }
-                | Self::RetargetFilter { .. }
-                | Self::SetGate { .. }
-                | Self::SetExport(_)
-                | Self::ExportGeff(_)
-                | Self::ExportLocalizations(_)
-                | Self::ExportLocalizationComposite
-                | Self::ExportColoc
-                | Self::ExportMeasure
-                | Self::ExportProvenance
-                | Self::ExportPackage
-                | Self::ExportRelation { .. }
-                | Self::ExportMesh { .. }
-                | Self::ExportLabels(_)
-                | Self::ExportAllLabels
-                | Self::ExportDataset
-                | Self::ExportPlate
-                | Self::ExportMovie { .. }
-                | Self::ExportSequence
-                | Self::CancelExport
-                | Self::ApplyView(_)
-                | Self::CancelDetect(_)
-                | Self::CancelTrack(_)
-                | Self::CancelClusters(_)
-                | Self::CancelColoc
-                | Self::CancelObjectColoc(_)
-                | Self::CancelDrift
-                | Self::CancelRegistration
-                | Self::CancelStitch
+        matches!(
+            self.nature(),
+            Nature::DocumentAuthored | Nature::Authored | Nature::Edit(_)
         )
     }
 
     pub(crate) fn edit(&self) -> Option<Edit> {
-        let edit = match self {
-            Self::AddObject(_) | Self::AddSegment => Edit::new(Action::AddObject),
-            Self::SetSegment { set, .. } => Edit::targeted(Action::ObjectParameters, set.raw()),
-            Self::ImportLabels { .. } | Self::ImportTracks | Self::ImportLocalizations => {
-                Edit::new(Action::AddObject)
+        match self.nature() {
+            Nature::Edit(edit) | Nature::View(Some(edit)) => Some(edit),
+            Nature::Document | Nature::DocumentAuthored | Nature::View(None) | Nature::Authored => {
+                None
             }
-            Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
-            Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
-            Self::ReorderObject { .. } => Edit::new(Action::ReorderObject),
-            Self::DeleteObject { set, .. } => Edit::targeted(Action::DeleteObject, set.raw()),
-            Self::DeleteFiltered => Edit::new(Action::DeleteFiltered),
-            Self::ExtractFiltered => Edit::new(Action::ExtractFiltered),
-            Self::DuplicateObject(_) => Edit::new(Action::DuplicateObject),
-            Self::MergeObjects { target, .. } => Edit::targeted(Action::MergeObjects, target.raw()),
-            Self::MergeSurfaces { set, .. } | Self::SplitSurface { set, .. } => {
-                Edit::targeted(Action::EditObjects, set.raw())
-            }
-            Self::PaintMask { set, .. } => Edit::targeted(Action::MaskEdit, set.raw()),
-            Self::ClearMask(set) => Edit::targeted(Action::ClearMask, set.raw()),
-            Self::ClearObject(_) => Edit::new(Action::ClearObject),
-            Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
-                Edit::targeted(Action::Seed, set.raw())
-            }
-            Self::SetSeedSource { set, .. } => Edit::targeted(Action::SeedSource, set.raw()),
-            Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
-            Self::AddRelation { target, .. }
-            | Self::MoveRelation { target, .. }
-            | Self::RemoveRelation { target, .. } => Edit::targeted(Action::Relation, target.raw()),
-            Self::Track(set) => Edit::targeted(Action::Track, set.raw()),
-            Self::ClearTracks(_) => Edit::new(Action::ClearTracks),
-            Self::CutTrack { .. } => Edit::new(Action::CutTrack),
-            Self::JoinTracks { .. } => Edit::new(Action::JoinTracks),
-            Self::DivideTracks { .. } => Edit::new(Action::DivideTracks),
-            Self::MergeTracks { .. } => Edit::new(Action::MergeTracks),
-            Self::ReparentTrack { .. } => Edit::new(Action::ReparentTrack),
-            Self::DetachTrack { .. } => Edit::new(Action::DetachTrack),
-            Self::SetChannelEnabled { channel, .. } => {
-                Edit::targeted(Action::ChannelEnabled, *channel as u64)
-            }
-            Self::SetChannelOpacity { channel, .. } => {
-                Edit::targeted(Action::ChannelOpacity, *channel as u64)
-            }
-            Self::SetWindow { channel, .. } => Edit::targeted(Action::Window, *channel as u64),
-            Self::ResetWindow(channel) => Edit::targeted(Action::ResetWindow, *channel as u64),
-            Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
-            Self::SetVolumeMode { channel, .. } => {
-                Edit::targeted(Action::VolumeMode, *channel as u64)
-            }
-            Self::SetIsovalue { channel, .. } => Edit::targeted(Action::Isovalue, *channel as u64),
-            Self::AddMaskChannel { .. }
-            | Self::AddRestoreChannel { .. }
-            | Self::AddSmoothChannel { .. }
-            | Self::AddBackgroundChannel { .. }
-            | Self::AddRatioChannel { .. }
-            | Self::AddBleachChannel { .. }
-            | Self::CalibratePsf { .. } => Edit::new(Action::Derived),
-            Self::SetSmoothChannel { channel, .. }
-            | Self::SetBackgroundChannel { channel, .. }
-            | Self::SetRatioChannel { channel, .. }
-            | Self::SetRestore { channel, .. }
-            | Self::RemoveDerivedChannel { channel } => {
-                Edit::targeted(Action::Derived, *channel as u64)
-            }
-            Self::SetObjectVisible { set, .. } => Edit::targeted(Action::ObjectVisible, set.raw()),
-            Self::SetObjectLabels { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
-            Self::SetLabelMetric { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
-            Self::SetObjectHidden { set, .. } | Self::ClearHidden(set) => {
-                Edit::targeted(Action::ObjectHidden, set.raw())
-            }
-            Self::SetObjectColor { set, .. } => Edit::targeted(Action::ObjectColor, set.raw()),
-            Self::SetObjectOpacity { set, .. } => Edit::targeted(Action::ObjectOpacity, set.raw()),
-            Self::SetObjectMaterial { set, .. } => {
-                Edit::targeted(Action::ObjectMaterial, set.raw())
-            }
-            Self::SetObjectParams { set, .. } => {
-                Edit::targeted(Action::ObjectParameters, set.raw())
-            }
-            Self::SetObjectColoring { set, .. } => {
-                Edit::targeted(Action::ObjectColoring, set.raw())
-            }
-            Self::SetMask(_) | Self::SetMaskRadius(_) | Self::SetMaskFilter(_) => {
-                Edit::new(Action::Mask)
-            }
-            Self::AddPoint { .. }
-            | Self::AddDistance { .. }
-            | Self::SetAnnotationVisible { .. }
-            | Self::RemoveAnnotation(_)
-            | Self::ClearAnnotations => Edit::new(Action::Annotation),
-            Self::SetAnnotationKind { index, .. } | Self::SetAnnotationFrame { index, .. } => {
-                Edit::targeted(Action::Annotation, *index as u64)
-            }
-            Self::SampleProfile { index } => Edit::targeted(Action::Annotation, *index as u64),
-            Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
-            Self::SetTrackThickness { set, .. } => {
-                Edit::targeted(Action::TrackThickness, set.raw())
-            }
-            Self::SetTrackColoring { set, .. } => Edit::targeted(Action::TrackColoring, set.raw()),
-            Self::SetTrackParams { set, .. } => Edit::targeted(Action::TrackParameters, set.raw()),
-            Self::SetLocalizationSpec { set, .. }
-            | Self::SetLocalizationGroupColored { set, .. }
-            | Self::SetLocalizationProjected { set, .. }
-            | Self::SetLocalizationClusters { set, .. }
-            | Self::EstimateLocalizationClusters(set) => {
-                Edit::targeted(Action::Localization, set.raw())
-            }
-            Self::ClusterLocalizations(set) => Edit::targeted(Action::Cluster, set.raw()),
-            Self::SetRegion(_) => Edit::new(Action::Region),
-            Self::SetClip(_) => Edit::new(Action::Clip),
-            Self::SetExposure(_) => Edit::new(Action::Exposure),
-            Self::SetStepScale(_) => Edit::new(Action::StepScale),
-            Self::SetShading(_) => Edit::new(Action::Shading),
-            Self::ResetRendering => Edit::new(Action::ResetRendering),
-            Self::TrainClassifier { set, .. } | Self::ClearClassifier(set) => {
-                Edit::targeted(Action::Classifier, set.raw())
-            }
-            Self::SetMeasureGroup(_) => Edit::new(Action::MeasureGroup),
-            Self::SetMeasureAggregate(_) => Edit::new(Action::MeasureAggregate),
-            Self::SetMeasureScope(_) => Edit::new(Action::MeasureScope),
-            Self::SetMeasureSet(_) => Edit::new(Action::MeasureSet),
-            Self::SetColumnVisible { index, .. } => {
-                Edit::targeted(Action::MeasureColumns, *index as u64)
-            }
-            Self::ShowAllColumns => Edit::new(Action::MeasureColumns),
-            Self::SetMeasureView(_) => Edit::new(Action::MeasureView),
-            Self::SetPlotAxis { column, .. } => Edit::targeted(Action::MeasureAxes, *column as u64),
-            Self::ToggleSort(column) => Edit::targeted(Action::MeasureSort, *column as u64),
-            Self::SetLasso(_) => Edit::new(Action::MeasureLasso),
-            Self::AddFilter => Edit::new(Action::AddFilter),
-            Self::RemoveFilter(_) => Edit::new(Action::RemoveFilter),
-            Self::SetFilter { index, .. } | Self::RetargetFilter { index, .. } => {
-                Edit::targeted(Action::MeasureFilter, *index as u64)
-            }
-            Self::SetGate { column, .. } => Edit::targeted(Action::MeasureFilter, *column as u64),
-            Self::SetMeasureVisibility(_) => Edit::new(Action::MeasureVisibility),
-            Self::SetColocPair(_) => Edit::new(Action::ColocPair),
-            Self::SetColocThresholds(_) => Edit::new(Action::ColocThresholds),
-            Self::SetColocSettings(_) => Edit::new(Action::ColocSettings),
-            Self::RemoveColocResult(_) => Edit::new(Action::ColocResult),
-            Self::ComputeColoc => Edit::new(Action::ComputeColoc),
-            Self::ComputeObjectColoc(set) | Self::ClearObjectColoc(set) => {
-                Edit::targeted(Action::ObjectColoc, set.raw())
-            }
-            Self::ClearDrift | Self::SetDriftReference(_) | Self::SetDriftOffset { .. } => {
-                Edit::new(Action::Drift)
-            }
-            Self::ClearRegistration => Edit::new(Action::Registration),
-            Self::ApplyProtocol => Edit::new(Action::ApplyProtocol),
-            Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
-            Self::SaveView | Self::ApplyView(_) | Self::RemoveView(_) => {
-                Edit::new(Action::NamedView)
-            }
-            Self::SetExport(_) => Edit::new(Action::Export),
-            Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),
-            Self::SetTimelineDuration(_) => Edit::new(Action::TimelineDuration),
-            _ => return None,
-        };
-        Some(edit)
+        }
     }
 }

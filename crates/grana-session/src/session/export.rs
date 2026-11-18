@@ -394,17 +394,25 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some(written) = mesh(scene, set, format) else {
+        let Some((target, written)) = mesh(scene, set, format) else {
             return;
         };
         self.message = match written {
-            Ok(()) => None,
+            Ok(()) => Some(Message::info(format!(
+                "wrote the {} mesh to {}",
+                format.label(),
+                target.display()
+            ))),
             Err(detail) => Some(Message::error(detail)),
         };
     }
 }
 
-fn mesh(scene: &Scene, set: ObjectSetId, format: MeshFormat) -> Option<Result<(), String>> {
+fn mesh(
+    scene: &Scene,
+    set: ObjectSetId,
+    format: MeshFormat,
+) -> Option<(PathBuf, Result<(), String>)> {
     let object = scene.objects.get(set)?;
     let name = object.name().to_string();
     let key = object.key().as_str().to_string();
@@ -417,21 +425,21 @@ fn mesh(scene: &Scene, set: ObjectSetId, format: MeshFormat) -> Option<Result<()
     let title = format!("Export {name} mesh");
     let target = match format {
         MeshFormat::Stl => rfd::FileDialog::new()
-            .set_title(format!("{title} into a folder"))
-            .pick_folder(),
+            .set_title(format!("{title} into a folder named {stem}"))
+            .pick_folder()
+            .map(|folder| folder.join(&stem))?,
         format => rfd::FileDialog::new()
             .set_title(&title)
             .set_file_name(format!("{stem}.{}", format.extension()))
             .add_filter(format.label(), &[format.extension()])
-            .save_file(),
-    }?;
-    Some(
-        match grana_pipeline::mesh::write(scene, set, time, format, &target) {
-            Ok(grana_pipeline::mesh::Export::Written) => Ok(()),
-            Ok(grana_pipeline::mesh::Export::Empty) => {
-                Err(format!("{name} holds no mesh at frame {time}"))
-            }
-            Err(detail) => Err(detail),
-        },
-    )
+            .save_file()?,
+    };
+    let written = match grana_pipeline::mesh::write(scene, set, time, format, &target) {
+        Ok(grana_pipeline::mesh::Export::Written) => Ok(()),
+        Ok(grana_pipeline::mesh::Export::Empty) => {
+            Err(format!("{name} holds no mesh at frame {time}"))
+        }
+        Err(detail) => Err(detail),
+    };
+    Some((target, written))
 }

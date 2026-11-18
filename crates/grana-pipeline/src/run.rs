@@ -462,7 +462,7 @@ pub fn object_coloc(
             );
             let shape = frame.shape().map_err(|error| error.to_string())?;
             let raster = LabelRaster::new(&shape, info);
-            let labels = |ranges: &[std::ops::Range<u32>; 3]| -> Result<Vec<u16>, String> {
+            let labels = |ranges: &[std::ops::Range<u32>; 3]| -> Result<Vec<u32>, String> {
                 Ok(raster.render(ranges[0].clone(), ranges[1].clone(), ranges[2].clone()))
             };
             let read = |time: u32, channel: usize, ranges: &[std::ops::Range<u32>; 3]| {

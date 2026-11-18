@@ -65,6 +65,20 @@ impl Job {
             Self::Coloc | Self::Drift | Self::Register | Self::Calibrate => false,
         }
     }
+
+    pub fn present(self, exists: impl Fn(ObjectSetId) -> bool) -> bool {
+        match self {
+            Self::Detect(id)
+            | Self::Import(id)
+            | Self::Recut(id)
+            | Self::Track(id)
+            | Self::ObjectColoc(id)
+            | Self::Localizations(id)
+            | Self::Clusters(id) => exists(id),
+            Self::Relation { source, target, .. } => exists(source) && exists(target),
+            Self::Coloc | Self::Drift | Self::Register | Self::Calibrate => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

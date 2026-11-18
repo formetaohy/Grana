@@ -1258,10 +1258,11 @@ impl Decode for TrackStyle {
         let merge_range = positive(reader.f32()?)?;
         let merge_overlap = reader.f32()?;
         let thickness = positive(reader.f32()?)?;
+        let visible = reader.bool()?;
         if (division && division_range < max_step) || !(0.0..=1.0).contains(&merge_overlap) {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::new(
+        let mut style = Self::new(
             grana_object::TrackParams::new(
                 max_step,
                 max_gap,
@@ -1274,7 +1275,9 @@ impl Decode for TrackStyle {
                 ),
             ),
             thickness,
-        ))
+        );
+        style.set_visible(visible);
+        Ok(style)
     }
 }
 
@@ -1469,9 +1472,6 @@ impl Decode for ObjectColoc {
             let mut values = Vec::with_capacity(frames.min(4096));
             for _ in 0..frames {
                 let objects = reader.count(48)?;
-                if objects > usize::from(u16::MAX) {
-                    return Err(FAULT_SHAPE);
-                }
                 let mut frame = Vec::with_capacity(reserve(objects));
                 for _ in 0..objects {
                     frame.push(ObjectColocValue::decode(reader)?);

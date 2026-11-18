@@ -19,6 +19,7 @@ pub(super) struct Started {
     pub(super) changed: bool,
     pub(super) snapshot: bool,
     pub(super) phase: u32,
+    pub(super) previous: Option<Mat4>,
 }
 
 pub(super) fn begin(begin: Begin<'_>) -> Started {
@@ -32,7 +33,8 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         assured,
         fade,
     } = begin;
-    let moved = target.camera.is_some_and(|held| held != camera);
+    let previous = target.camera;
+    let moved = previous.is_some_and(|held| held != camera);
     let changed = target.view != Some(view);
     if moved || changed {
         *fade = None;
@@ -57,6 +59,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         changed,
         snapshot,
         phase: target.phase,
+        previous,
     }
 }
 

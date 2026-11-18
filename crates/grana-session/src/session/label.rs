@@ -8,7 +8,7 @@ use grana_zarr::Written;
 
 use crate::task::{Poll, Progress};
 
-const LABEL_LIMIT: usize = u16::MAX as usize;
+const LABEL_LIMIT: usize = u32::MAX as usize;
 const LABEL: &str = "Exporting labels";
 
 pub(super) struct Labels {
@@ -47,7 +47,7 @@ impl Labels {
             let labeling = Labeling::new(objects, labels, levels, title);
             let properties = labeling.properties();
             let fill =
-                |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
+                |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u32]| {
                     if cancel.load(Ordering::Relaxed) {
                         return Err("the label export was cancelled".to_string());
                     }
@@ -202,7 +202,7 @@ impl super::Session {
         }
         if labels > LABEL_LIMIT {
             return Err(format!(
-                "a uint16 label image addresses at most {LABEL_LIMIT} objects"
+                "a label image addresses at most {LABEL_LIMIT} objects"
             ));
         }
         let visible = (0..scene.frame_count()).any(|time| {
@@ -250,6 +250,11 @@ impl super::Session {
                             written.labels() as u32,
                         )),
                     );
+                }
+                let name = written.name().to_string();
+                if !self.label_images.contains(&name) {
+                    self.label_images.push(name);
+                    self.label_images.sort();
                 }
                 success = true;
                 self.message = Some(crate::Message::info(format!(
