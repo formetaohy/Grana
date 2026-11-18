@@ -104,15 +104,15 @@ impl StyleCache {
 fn digest(scene: &Scene, set: &ObjectSet, part: u32, count: usize) -> u64 {
     let mut digest = Digest::new();
     let material = set.material();
+    let time = scene.time();
     digest.mix(set.id().raw());
     digest.mix(u64::from(part));
-    digest.mix(u64::from(scene.time()));
     digest.mix(count as u64);
     digest.mix(set.document().raw());
     digest.mix(set.revision().raw());
     digest.mix(
-        set.frame_stamp(scene.time())
-            .map_or(u64::MAX, |stamp| stamp.raw()),
+        set.frame_appearance(time)
+            .map_or(u64::MAX, |held| held.raw()),
     );
     digest.mix(
         set.tracks()

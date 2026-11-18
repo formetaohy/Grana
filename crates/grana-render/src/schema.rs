@@ -9,13 +9,13 @@ use grana_volume::Intensity;
 pub struct LayerKey {
     owner: u64,
     part: u32,
-    frame: Option<u32>,
+    frame: Option<u64>,
     revision: u64,
     detail: u16,
 }
 
 impl LayerKey {
-    pub fn at_frame(owner: u64, part: u32, frame: u32, revision: u64, detail: u16) -> Self {
+    pub fn at_frame(owner: u64, part: u32, frame: u64, revision: u64, detail: u16) -> Self {
         Self {
             owner,
             part,
@@ -35,11 +35,23 @@ impl LayerKey {
         }
     }
 
+    pub fn owner(self) -> u64 {
+        self.owner
+    }
+
+    pub fn part(self) -> u32 {
+        self.part
+    }
+
+    pub fn detail(self) -> u16 {
+        self.detail
+    }
+
     pub fn digest(self) -> u64 {
         let mut key = Digest::new();
         key.mix(self.owner);
         key.mix(u64::from(self.part));
-        key.mix(self.frame.map_or(u64::MAX, u64::from));
+        key.mix(self.frame.unwrap_or(u64::MAX));
         key.mix(self.revision);
         key.mix(u64::from(self.detail));
         key.finish()
@@ -189,13 +201,20 @@ pub struct ChannelRow {
 #[derive(Clone)]
 pub struct Layer {
     pub key: LayerKey,
+    pub geometry: u64,
     pub mesh: Arc<PackedMesh>,
     pub styles: Arc<[Style]>,
     pub pick_base: u32,
 }
 
 impl Layer {
-    pub fn new(key: LayerKey, mesh: Arc<PackedMesh>, styles: Arc<[Style]>, pick_base: u32) -> Self {
+    pub fn new(
+        key: LayerKey,
+        geometry: u64,
+        mesh: Arc<PackedMesh>,
+        styles: Arc<[Style]>,
+        pick_base: u32,
+    ) -> Self {
         assert_eq!(
             styles.len(),
             mesh.object_count(),
@@ -207,6 +226,7 @@ impl Layer {
         );
         Self {
             key,
+            geometry,
             mesh,
             styles,
             pick_base,

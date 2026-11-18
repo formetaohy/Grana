@@ -27,6 +27,27 @@ impl Revision {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GeometryId(u64);
+
+impl GeometryId {
+    pub const NONE: Self = Self(0);
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn mint() -> Self {
+        Self(geometry_counter().fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+fn geometry_counter() -> &'static AtomicU64 {
+    static COUNTER: OnceLock<AtomicU64> = OnceLock::new();
+    COUNTER.get_or_init(|| AtomicU64::new(seed()))
+}
+
 fn counter() -> &'static AtomicU64 {
     static COUNTER: OnceLock<AtomicU64> = OnceLock::new();
     COUNTER.get_or_init(|| AtomicU64::new(seed()))

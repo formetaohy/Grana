@@ -51,7 +51,7 @@ pub use self::localization_cluster::{LocalizationClusterRequest, localization_cl
 pub use self::localization_drift::{LocalizationDriftRequest, localization_drift};
 pub use self::localization_image::{
     CompositionSource, LocalizationCompositionRequest, LocalizationImageRequest,
-    localization_composition, localization_image,
+    localization_composition, localization_image, localization_overlay, localization_stack,
 };
 pub use self::localization_report::{LocalizationReportRequest, localization_report};
 pub use self::localization_window::LocalizationWindow;

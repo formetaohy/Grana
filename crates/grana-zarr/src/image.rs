@@ -199,6 +199,60 @@ impl Image {
         self.root.revision()
     }
 
+    pub fn identity(&self) -> Option<u64> {
+        let root = self.root.path()?;
+        let directory = root.join(self.group.trim_start_matches('/'));
+        let levels = self
+            .levels
+            .iter()
+            .map(|level| {
+                let metadata = serde_json::to_vec(level.cache.array().metadata()).ok()?;
+                Some((level.path.clone(), metadata))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        crate::identity::dataset(&directory, &levels)
+    }
+
+    pub fn stamps(
+        &self,
+        level: usize,
+        time: u32,
+        channel: usize,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Result<Option<u64>, Error> {
+        let Some(root) = self.root.path() else {
+            return Ok(None);
+        };
+        let Some(level) = self.levels.get(level) else {
+            return Err(Error::Region {
+                array: self.root.tag(&self.group),
+                detail: "the requested resolution level does not exist".to_string(),
+            });
+        };
+        let ranges = level.layout.ranges(
+            u64::from(time),
+            channel as u64,
+            x.clone(),
+            y.clone(),
+            z.clone(),
+        );
+        let subset = ArraySubset::new_with_ranges(&ranges);
+        let array = level.cache.array();
+        let Some(chunks) = array
+            .chunks_in_array_subset(&subset)
+            .map_err(|error| Error::Read {
+                array: level.path.clone(),
+                detail: error.to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let keys = chunk_keys(&array, chunks.start(), chunks.shape());
+        Ok(crate::identity::chunks(root, keys.into_iter()))
+    }
+
     pub fn labels(&self) -> Result<crate::Labels, Error> {
         let layouts = self
             .levels
@@ -336,6 +390,38 @@ impl Image {
             });
         }
         Ok(data)
+    }
+}
+
+fn chunk_keys(
+    array: &Array<dyn ReadableStorageTraits>,
+    start: &[u64],
+    shape: &[u64],
+) -> Vec<String> {
+    if shape.contains(&0) {
+        return Vec::new();
+    }
+    let mut keys = Vec::new();
+    let mut cursor = vec![0u64; start.len()];
+    loop {
+        let indices = start
+            .iter()
+            .zip(&cursor)
+            .map(|(start, step)| start + step)
+            .collect::<Vec<_>>();
+        keys.push(array.chunk_key(&indices).as_str().to_string());
+        let mut carried = true;
+        for axis in (0..cursor.len()).rev() {
+            cursor[axis] += 1;
+            if cursor[axis] < shape[axis] {
+                carried = false;
+                break;
+            }
+            cursor[axis] = 0;
+        }
+        if carried {
+            return keys;
+        }
     }
 }
 

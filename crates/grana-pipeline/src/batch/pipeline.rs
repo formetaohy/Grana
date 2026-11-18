@@ -784,7 +784,7 @@ impl Run<'_, '_> {
     }
 
     fn superres(
-        &self,
+        &mut self,
         id: ObjectSetId,
         molecules: &grana_protocol::MoleculesSpec,
     ) -> Result<(), String> {
@@ -802,12 +802,15 @@ impl Run<'_, '_> {
         let key = object.key().as_str().to_string();
         let window = run::LocalizationWindow::of(object, spec.frames());
         let pixel = source.pixel() * 0.001;
+        let tint = object.color();
+        let opacity = object.opacity();
         let path = self.folder.join(format!("{key}-superres.ome.tif"));
         let _ = self.task.events.send(Event::Step {
             index: self.task.index,
             label: format!("rendering the super-resolution image of {name}"),
         });
-        let request = run::LocalizationImageRequest::new(window, spec, pixel, &name, 0, &path)?;
+        let request =
+            run::LocalizationImageRequest::new(window.clone(), spec, pixel, &name, 0, &path)?;
         let progress = &self.progress;
         run::localization_image(request, self.task.cancel, &mut |event| {
             if let RunEvent::Progress { done, total, .. } = event
@@ -819,7 +822,23 @@ impl Run<'_, '_> {
                     total,
                 });
             }
-        })
+        })?;
+        if self.task.protocol.snapshot().is_none() && !self.task.project {
+            return Ok(());
+        }
+        let stack = run::localization_stack(window, spec, pixel, self.task.cancel, &mut |_| {})?;
+        if let Some(stack) = stack {
+            let layer = stack.count() / 2;
+            let bitmap = stack
+                .layer(layer)
+                .map(|image| grana_raster::Bitmap::new(image.size(), image.shared()));
+            if let Some(overlay) = bitmap
+                .and_then(|bitmap| run::localization_overlay(&stack, layer, bitmap, tint, opacity))
+            {
+                self.scene.overlays.set(id, overlay);
+            }
+        }
+        Ok(())
     }
 
     fn compose(

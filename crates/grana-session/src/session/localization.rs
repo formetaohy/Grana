@@ -11,7 +11,6 @@ use grana_pipeline::run::{
     CompositionSource, LocalizationClusterRequest, LocalizationCompositionRequest,
     LocalizationImageRequest, LocalizationReportRequest, LocalizationWindow,
 };
-use grana_raster::{Bitmap, Overlay};
 use grana_scene::{Job, ObjectSetId, Revision, Scene};
 use grana_volume::Region;
 
@@ -43,7 +42,7 @@ pub struct Localizations {
 struct Entry {
     revision: Revision,
     report: Arc<LocalizationReport>,
-    bitmaps: Vec<Bitmap>,
+    bitmaps: Vec<grana_raster::Bitmap>,
     layer: usize,
 }
 
@@ -58,7 +57,7 @@ impl Localizations {
             .then_some(entry.report.as_ref())
     }
 
-    pub fn bitmap(&self, set: ObjectSetId) -> Option<&Bitmap> {
+    pub fn bitmap(&self, set: ObjectSetId) -> Option<&grana_raster::Bitmap> {
         self.entries
             .get(&set)
             .and_then(|entry| entry.bitmaps.get(entry.layer))
@@ -110,7 +109,7 @@ impl Localizations {
             .stack()
             .layers()
             .iter()
-            .map(|image| Bitmap::new(image.size(), image.shared()))
+            .map(|image| grana_raster::Bitmap::new(image.size(), image.shared()))
             .collect::<Vec<_>>();
         let layer = bitmaps.len() / 2;
         self.entries.insert(
@@ -155,31 +154,15 @@ impl Localizations {
 }
 
 impl Entry {
-    fn overlay(&self, tint: [f32; 3], opacity: f32) -> Option<Overlay> {
-        let geometry = self.report.stack().geometry();
-        let depth = self.report.stack().depth();
+    fn overlay(&self, tint: [f32; 3], opacity: f32) -> Option<grana_raster::Overlay> {
         let bitmap = self.bitmaps.get(self.layer)?.clone();
-        let [width, height] = geometry.size();
-        let pixel = geometry.pixel();
-        let origin = geometry.origin();
-        let layer = self.layer as u32;
-        let z = 0.5 * (depth.lower(layer) + depth.upper(layer));
-        let corners = [
-            [origin[0], origin[1], z],
-            [origin[0] + width as f32 * pixel, origin[1], z],
-            [
-                origin[0] + width as f32 * pixel,
-                origin[1] + height as f32 * pixel,
-                z,
-            ],
-            [origin[0], origin[1] + height as f32 * pixel, z],
-        ];
-        Some(Overlay::new(
+        grana_pipeline::run::localization_overlay(
+            self.report.stack(),
+            self.layer,
             bitmap,
-            corners,
-            grana_display::srgb_to_linear(tint),
+            tint,
             opacity,
-        ))
+        )
     }
 }
 

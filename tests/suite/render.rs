@@ -321,6 +321,7 @@ fn composites_a_mesh_layer() {
     let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 1.0)]);
     let layers = [Layer::new(
         LayerKey::stable(1, 0, 1),
+        1,
         Arc::new(mesh),
         Arc::clone(&styles),
         0,
@@ -377,6 +378,7 @@ fn keeps_a_translucent_layer() {
     let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 0.5)]);
     let layers = [Layer::new(
         LayerKey::stable(1, 0, 1),
+        1,
         Arc::new(mesh),
         Arc::clone(&styles),
         0,

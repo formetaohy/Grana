@@ -85,50 +85,14 @@ pub fn localization_report(
         return Err("the frame range holds no visible localization".to_string());
     };
     let survey = layout.survey();
-    let low = layout.low();
-    let span = layout.span();
-    let blur = layout.blur();
     let depth = layout.depth();
     let geometry = layout.geometry();
-    let weight = layout.weight();
-    let preview = preview_geometry(low, span, spec.pixel() * 0.001, blur, depth)?;
-    let preview_geometry = LocalizationGeometry::new(
-        preview.origin(),
-        preview.pixel(),
-        preview.size(),
-        blur,
-        margin_pixels(blur, preview.pixel()),
-    );
+    let preview = preview_of(&layout, spec)?;
     ticker
         .borrow_mut()
         .retotal(total_steps(source.len(), depth, preview.size()));
-    let (density, stack) = {
-        let mut renderer = LocalizationRenderer::new(
-            source,
-            filter,
-            preview_geometry,
-            depth,
-            layout.groups().clone(),
-            weight,
-            &tick,
-        )?;
-        let density = renderer.survey()?;
-        let size = preview.size();
-        let mut layers = Vec::with_capacity(depth.layers() as usize);
-        for layer in 0..depth.layers() {
-            renderer.begin(layer)?;
-            let mut pixels = vec![0u8; size[0] as usize * size[1] as usize * 4];
-            let stride = size[0] as usize * 4;
-            for row in 0..size[1] as usize {
-                renderer.row(&mut pixels[row * stride..(row + 1) * stride])?;
-            }
-            layers.push(LocalizationImage::new(size, pixels));
-        }
-        (
-            density,
-            LocalizationStack::new(preview_geometry, depth, layers),
-        )
-    };
+    let (density, stack) = paint(source, spec, &layout, preview, &tick)?;
+
     let nena = if source.len() > 1 {
         let mut progress = |_: usize, _: usize| ticker.borrow_mut().tick();
         match nena::measure(
@@ -178,6 +142,85 @@ pub fn localization_report(
         groups: layout.groups().clone(),
         stack,
     }))
+}
+
+pub fn localization_stack(
+    source: &dyn LocalizationSource,
+    spec: LocalizationSpec,
+    camera_pixel: f32,
+    report: &mut dyn FnMut(usize, usize) -> bool,
+) -> Result<Option<LocalizationStack>, String> {
+    assert!(
+        camera_pixel.is_finite() && camera_pixel > 0.0,
+        "a localization stack knows its camera pixel"
+    );
+    if source.is_empty() {
+        return Err("the frame range holds no frame".to_string());
+    }
+    let ticker = RefCell::new(Ticker::new(frame_steps(source.len()), report));
+    let tick = |_: usize, _: usize| ticker.borrow_mut().tick();
+    let Some(layout) = LocalizationLayout::new(source, spec, camera_pixel, &tick)? else {
+        if ticker.borrow().cancelled() {
+            return Ok(None);
+        }
+        return Err("the frame range holds no visible localization".to_string());
+    };
+    let preview = preview_of(&layout, spec)?;
+    let (_, stack) = paint(source, spec, &layout, preview, &tick)?;
+    if ticker.borrow().cancelled() {
+        return Ok(None);
+    }
+    Ok(Some(stack))
+}
+
+fn preview_of(layout: &LocalizationLayout, spec: LocalizationSpec) -> Result<Preview, String> {
+    preview_geometry(
+        layout.low(),
+        layout.span(),
+        spec.pixel() * 0.001,
+        layout.blur(),
+        layout.depth(),
+    )
+}
+
+fn paint(
+    source: &dyn LocalizationSource,
+    spec: LocalizationSpec,
+    layout: &LocalizationLayout,
+    preview: Preview,
+    tick: &dyn Fn(usize, usize) -> bool,
+) -> Result<(f32, LocalizationStack), String> {
+    let depth = layout.depth();
+    let blur = layout.blur();
+    let geometry = LocalizationGeometry::new(
+        preview.origin(),
+        preview.pixel(),
+        preview.size(),
+        blur,
+        margin_pixels(blur, preview.pixel()),
+    );
+    let mut renderer = LocalizationRenderer::new(
+        source,
+        spec.filter(),
+        geometry,
+        depth,
+        layout.groups().clone(),
+        layout.weight(),
+        tick,
+    )?;
+    let density = renderer.survey()?;
+    let size = preview.size();
+    let mut layers = Vec::with_capacity(depth.layers() as usize);
+    for layer in 0..depth.layers() {
+        renderer.begin(layer)?;
+        let mut pixels = vec![0u8; size[0] as usize * size[1] as usize * 4];
+        let stride = size[0] as usize * 4;
+        for row in 0..size[1] as usize {
+            renderer.row(&mut pixels[row * stride..(row + 1) * stride])?;
+        }
+        layers.push(LocalizationImage::new(size, pixels));
+    }
+    Ok((density, LocalizationStack::new(geometry, depth, layers)))
 }
 
 struct Ticker<'a> {

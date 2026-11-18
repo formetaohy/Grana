@@ -4,6 +4,7 @@ use grana_analysis::localization::{LocalizationFrame, LocalizationSource};
 use grana_object::{LocalizationFilter, Spot};
 use grana_scene::{Frame, ObjectSet};
 
+#[derive(Clone)]
 pub struct LocalizationWindow {
     frames: Vec<Option<Frame>>,
     visible: Vec<Option<Arc<Vec<bool>>>>,

@@ -16,7 +16,7 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::schema::{LayerKey, SceneFrame, Style};
+use crate::schema::{Layer, LayerKey, SceneFrame, Style};
 use crate::target::{NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
@@ -135,9 +135,29 @@ const _: () = {
     assert!(size_of::<MeshUniforms>() == 448);
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GeometryKey {
+    owner: u64,
+    part: u32,
+    geometry: u64,
+    detail: u16,
+}
+
+impl GeometryKey {
+    fn of(layer: &Layer) -> Self {
+        Self {
+            owner: layer.key.owner(),
+            part: layer.key.part(),
+            geometry: layer.geometry,
+            detail: layer.key.detail(),
+        }
+    }
+}
+
 pub(crate) struct MeshPasses {
-    slots: HashMap<LayerKey, MeshSlot>,
-    active: Vec<LayerKey>,
+    geometries: HashMap<GeometryKey, MeshGeometry>,
+    rows: HashMap<LayerKey, MeshRows>,
+    active: Vec<(GeometryKey, LayerKey)>,
     order: u64,
     budget: u64,
     resident: u64,
@@ -376,7 +396,8 @@ impl MeshPasses {
             }],
         });
         Self {
-            slots: HashMap::new(),
+            geometries: HashMap::new(),
+            rows: HashMap::new(),
             active: Vec::new(),
             order: 0,
             budget,
@@ -394,7 +415,8 @@ impl MeshPasses {
     }
 
     pub fn clear(&mut self) {
-        self.slots.clear();
+        self.geometries.clear();
+        self.rows.clear();
         self.active.clear();
         self.resident = 0;
     }
@@ -421,36 +443,65 @@ impl MeshPasses {
                 "every mesh object carries one style"
             );
             assert!(keys.insert(layer.key), "a scene names each mesh layer once");
-            if !self.slots.contains_key(&layer.key) {
-                let slot = MeshSlot::new(device, queue, layouts, &layer.mesh);
-                self.resident += slot.bytes;
-                self.slots.insert(layer.key, slot);
+            let geometry_key = GeometryKey::of(layer);
+            let resident = self
+                .geometries
+                .get(&geometry_key)
+                .is_some_and(|geometry| geometry.holds(&layer.mesh));
+            if !resident {
+                let geometry = MeshGeometry::new(device, queue, layouts, &layer.mesh);
+                self.resident += geometry.bytes;
+                if let Some(held) = self.geometries.insert(geometry_key, geometry) {
+                    self.resident = self.resident.saturating_sub(held.bytes);
+                }
             }
-            let slot = self
-                .slots
+            let geometry = self
+                .geometries
+                .get_mut(&geometry_key)
+                .expect("the mesh geometry is resident");
+            geometry.touch(order);
+            if !self.rows.contains_key(&layer.key) {
+                let rows = MeshRows::new(device, layouts, layer.objects());
+                self.resident += rows.bytes;
+                self.rows.insert(layer.key, rows);
+            }
+            let rows = self
+                .rows
                 .get_mut(&layer.key)
-                .expect("the mesh slot exists");
-            slot.touch(order);
-            slot.write_styles(queue, &layer.styles);
-            slot.write_pick(device, queue, layer.pick_base);
-            self.active.push(layer.key);
+                .expect("the mesh rows are resident");
+            rows.touch(order);
+            rows.write_styles(queue, &layer.styles);
+            rows.write_pick(device, queue, layer.pick_base);
+            self.active.push((geometry_key, layer.key));
         }
         self.evict();
     }
 
     fn evict(&mut self) {
         while self.resident > self.budget {
-            let evicted = self
-                .slots
+            let held = self
+                .geometries
                 .iter()
-                .filter(|(key, _)| !self.active.contains(key))
-                .min_by_key(|(_, slot)| slot.used)
+                .filter(|(key, _)| !self.active.iter().any(|active| active.0 == **key))
+                .min_by_key(|(_, geometry)| geometry.used)
                 .map(|(key, _)| *key);
-            let Some(key) = evicted else {
+            if let Some(key) = held {
+                if let Some(geometry) = self.geometries.remove(&key) {
+                    self.resident = self.resident.saturating_sub(geometry.bytes);
+                }
+                continue;
+            }
+            let held = self
+                .rows
+                .iter()
+                .filter(|(key, _)| !self.active.iter().any(|active| active.1 == **key))
+                .min_by_key(|(_, rows)| rows.used)
+                .map(|(key, _)| *key);
+            let Some(key) = held else {
                 break;
             };
-            if let Some(slot) = self.slots.remove(&key) {
-                self.resident = self.resident.saturating_sub(slot.bytes);
+            if let Some(rows) = self.rows.remove(&key) {
+                self.resident = self.resident.saturating_sub(rows.bytes);
             }
         }
     }
@@ -504,12 +555,13 @@ impl MeshPasses {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, scene, &[]);
-        for key in &self.active {
-            let slot = &self.slots[key];
-            pass.set_bind_group(1, &slot.object_group, &[]);
-            pass.set_bind_group(2, &slot.style_group, &[]);
-            pass.set_bind_group(3, &slot.command_group, &[]);
-            pass.dispatch_workgroups(slot.object_count.div_ceil(WORKGROUP), 1, 1);
+        for (geometry, rows) in &self.active {
+            let geometry = &self.geometries[geometry];
+            let rows = &self.rows[rows];
+            pass.set_bind_group(1, &geometry.object_group, &[]);
+            pass.set_bind_group(2, &rows.style_group, &[]);
+            pass.set_bind_group(3, &geometry.command_group, &[]);
+            pass.dispatch_workgroups(geometry.object_count.div_ceil(WORKGROUP), 1, 1);
         }
     }
 
@@ -529,8 +581,10 @@ impl MeshPasses {
         crate::target::viewport(&mut pass, region);
         pass.set_pipeline(&self.normal_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
-        for key in &self.active {
-            self.slots[key].draw_normal(&mut pass);
+        for (geometry, _) in &self.active {
+            let geometry = &self.geometries[geometry];
+            pass.set_bind_group(1, &geometry.object_group, &[]);
+            geometry.draw_regions(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
         }
     }
 
@@ -554,8 +608,8 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(7, ao, &[]);
-        for key in &self.active {
-            self.slots[key].draw(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
+        for (geometry, rows) in &self.active {
+            self.shade(&mut pass, geometry, rows, OPAQUE_NARROW, OPAQUE_WIDE);
         }
     }
 
@@ -568,8 +622,8 @@ impl MeshPasses {
         });
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
-        for key in &self.active {
-            self.slots[key].draw(&mut pass, SHADOW_NARROW, SHADOW_WIDE);
+        for (geometry, rows) in &self.active {
+            self.shade(&mut pass, geometry, rows, SHADOW_NARROW, SHADOW_WIDE);
         }
     }
 
@@ -588,8 +642,8 @@ impl MeshPasses {
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(7, ao, &[]);
-        for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+        for (geometry, rows) in &self.active {
+            self.shade(pass, geometry, rows, LAYER_NARROW, LAYER_WIDE);
         }
     }
 
@@ -599,31 +653,48 @@ impl MeshPasses {
         }
         pass.set_pipeline(&self.pick_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
-        for key in &self.active {
-            self.slots[key].draw_pick(pass);
+        for (geometry, rows) in &self.active {
+            let geometry = &self.geometries[geometry];
+            let rows = &self.rows[rows];
+            pass.set_bind_group(1, &geometry.object_group, &[]);
+            pass.set_bind_group(5, &rows.pick_group, &[]);
+            geometry.draw_regions(pass, OPAQUE_NARROW, OPAQUE_WIDE);
+            geometry.draw_regions(pass, LAYER_NARROW, LAYER_WIDE);
         }
+    }
+
+    fn shade<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        geometry: &'a GeometryKey,
+        rows: &'a LayerKey,
+        narrow: usize,
+        wide: usize,
+    ) {
+        let geometry = &self.geometries[geometry];
+        let rows = &self.rows[rows];
+        pass.set_bind_group(1, &geometry.object_group, &[]);
+        pass.set_bind_group(2, &rows.style_group, &[]);
+        geometry.draw_regions(pass, narrow, wide);
     }
 }
 
-struct MeshSlot {
+struct MeshGeometry {
     vertices: Buffer,
     narrow: Option<Buffer>,
     wide: Option<Buffer>,
     object_group: BindGroup,
-    styles: Table<StyleData>,
-    style_group: BindGroup,
-    pick: Table<u32>,
-    pick_group: BindGroup,
     commands: IndexedCommands,
     command_group: BindGroup,
     object_count: u32,
-    cached_styles: Vec<StyleData>,
-    pick_base: Option<u32>,
+    vertex_count: usize,
+    narrow_count: usize,
+    wide_count: usize,
     bytes: u64,
     used: u64,
 }
 
-impl MeshSlot {
+impl MeshGeometry {
     fn new(device: &Device, queue: &Queue, layouts: &Layouts, mesh: &PackedMesh) -> Self {
         let object_count = mesh.object_count();
         assert!(object_count > 0, "a mesh slot carries an object");
@@ -691,10 +762,6 @@ impl MeshSlot {
         let grown = object_table.write(device, queue, &objects);
         assert!(!grown, "the object table holds every mesh object");
         let object_group = bind_group(device, &layouts.objects, object_table.buffer());
-        let styles = Table::with_capacity(device, "grana.mesh.styles", object_count as usize);
-        let style_group = bind_group(device, &layouts.styles, styles.buffer());
-        let pick = Table::with_capacity(device, "grana.mesh.pick", object_count as usize);
-        let pick_group = bind_group(device, &layouts.pick, pick.buffer());
         let commands = IndexedCommands::new(
             device,
             "grana.mesh.commands",
@@ -705,22 +772,82 @@ impl MeshSlot {
         let bytes = (points.len() * size_of::<PointData>()
             + size_of_val(mesh.narrow())
             + size_of_val(mesh.wide())
-            + object_count as usize * size_of::<ObjectData>()
-            + object_count as usize * size_of::<StyleData>()
-            + object_count as usize * size_of::<u32>()) as u64
+            + object_count as usize * size_of::<ObjectData>()) as u64
             + commands.buffer().size();
         Self {
             vertices,
             narrow,
             wide,
             object_group,
+            commands,
+            command_group,
+            object_count,
+            vertex_count: mesh.vertex_count(),
+            narrow_count: mesh.narrow().len(),
+            wide_count: mesh.wide().len(),
+            bytes,
+            used: 0,
+        }
+    }
+
+    fn holds(&self, mesh: &PackedMesh) -> bool {
+        self.object_count as usize == mesh.object_count()
+            && self.vertex_count == mesh.vertex_count()
+            && self.narrow_count == mesh.narrow().len()
+            && self.wide_count == mesh.wide().len()
+    }
+
+    fn touch(&mut self, order: u64) {
+        self.used = order;
+    }
+
+    fn draw_regions<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        if let Some(indices) = &self.narrow {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
+            pass.multi_draw_indexed_indirect(
+                self.commands.buffer(),
+                self.commands.offset(narrow),
+                self.object_count,
+            );
+        }
+        if let Some(indices) = &self.wide {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+            pass.multi_draw_indexed_indirect(
+                self.commands.buffer(),
+                self.commands.offset(wide),
+                self.object_count,
+            );
+        }
+    }
+}
+
+struct MeshRows {
+    objects: usize,
+    styles: Table<StyleData>,
+    style_group: BindGroup,
+    pick: Table<u32>,
+    pick_group: BindGroup,
+    cached_styles: Vec<StyleData>,
+    pick_base: Option<u32>,
+    bytes: u64,
+    used: u64,
+}
+
+impl MeshRows {
+    fn new(device: &Device, layouts: &Layouts, objects: usize) -> Self {
+        assert!(objects > 0, "a mesh layer carries an object");
+        let styles = Table::with_capacity(device, "grana.mesh.styles", objects);
+        let style_group = bind_group(device, &layouts.styles, styles.buffer());
+        let pick = Table::with_capacity(device, "grana.mesh.pick", objects);
+        let pick_group = bind_group(device, &layouts.pick, pick.buffer());
+        let bytes = (objects * size_of::<StyleData>() + objects * size_of::<u32>()) as u64;
+        Self {
+            objects,
             styles,
             style_group,
             pick,
             pick_group,
-            commands,
-            command_group,
-            object_count,
             cached_styles: Vec::new(),
             pick_base: None,
             bytes,
@@ -735,7 +862,7 @@ impl MeshSlot {
     fn write_styles(&mut self, queue: &Queue, styles: &[Style]) {
         assert_eq!(
             styles.len(),
-            self.object_count as usize,
+            self.objects,
             "every mesh object carries one style"
         );
         if self.cached_styles.len() != styles.len() {
@@ -765,50 +892,12 @@ impl MeshSlot {
             return;
         }
         let first = pick_base.checked_add(1).expect("a style row fits u32");
-        let rows = (0..self.object_count)
-            .map(|index| first + index)
+        let rows = (0..self.objects)
+            .map(|index| first + index as u32)
             .collect::<Vec<_>>();
         let grown = self.pick.write(device, queue, &rows);
         assert!(!grown, "the pick table holds every mesh object");
         self.pick_base = Some(pick_base);
-    }
-
-    fn draw_normal<'a>(&'a self, pass: &mut RenderPass<'a>) {
-        pass.set_bind_group(1, &self.object_group, &[]);
-        self.draw_regions(pass, OPAQUE_NARROW, OPAQUE_WIDE);
-    }
-
-    fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
-        pass.set_bind_group(1, &self.object_group, &[]);
-        pass.set_bind_group(5, &self.pick_group, &[]);
-        self.draw_regions(pass, OPAQUE_NARROW, OPAQUE_WIDE);
-        self.draw_regions(pass, LAYER_NARROW, LAYER_WIDE);
-    }
-
-    fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
-        pass.set_bind_group(1, &self.object_group, &[]);
-        pass.set_bind_group(2, &self.style_group, &[]);
-        self.draw_regions(pass, narrow, wide);
-    }
-
-    fn draw_regions<'a>(&'a self, pass: &mut RenderPass<'a>, narrow: usize, wide: usize) {
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
-        if let Some(indices) = &self.narrow {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
-            pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(narrow),
-                self.object_count,
-            );
-        }
-        if let Some(indices) = &self.wide {
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-            pass.multi_draw_indexed_indirect(
-                self.commands.buffer(),
-                self.commands.offset(wide),
-                self.object_count,
-            );
-        }
     }
 }
 

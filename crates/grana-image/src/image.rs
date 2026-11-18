@@ -44,7 +44,7 @@ pub struct Image {
     pyramid: Pyramid,
     series: Vec<Series>,
     selected: usize,
-    identity: u64,
+    identity: Option<u64>,
     bricks: Cache,
     store: Option<Store>,
 }
@@ -82,10 +82,16 @@ impl Image {
             Inner::Zarr(image) => image.revision(),
             _ => None,
         };
-        let identity = cache::identity(source, &geometry(&pyramid), revision.as_deref());
-        let store = match source {
-            Source::Memory(_) => None,
-            Source::File { .. } | Source::Remote { .. } => cache.as_deref().and_then(Store::open),
+        let dataset = match &inner {
+            Inner::Zarr(image) => image.identity(),
+            _ => None,
+        };
+        let identity = cache::identity(source, &geometry(&pyramid), revision.as_deref(), dataset);
+        let store = match (source, identity) {
+            (Source::Memory(_), _) | (_, None) => None,
+            (Source::File { .. } | Source::Remote { .. }, Some(_)) => {
+                cache.as_deref().and_then(Store::open)
+            }
         };
         Ok(Self {
             inner,
@@ -233,21 +239,12 @@ impl Image {
         let spatial = grid.padded_range(coord);
         let covered = covered_extent(&spatial);
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
-        if let Some(data) = self.held(key, covered, format) {
+        let stamp = self.source_stamp(time, level, channel, &spatial);
+        if let Some(data) = self.held(key, covered, format, stamp) {
             return Ok(data);
         }
         let data = Arc::new(self.compose(time, level, channel, &spatial, format)?);
-        if let Some(store) = self.store.as_ref() {
-            store.save(
-                key,
-                Shape {
-                    extent: covered,
-                    format,
-                },
-                &data,
-            );
-        }
-        self.bricks.insert(key, Arc::clone(&data));
+        self.hold(key, covered, format, stamp, Arc::clone(&data));
         Ok(data)
     }
 
@@ -396,7 +393,10 @@ impl Image {
                         continue;
                     }
                     let key = self.key(time, level, channel, coord);
-                    if let Some(brick) = self.held(key, covered_extent(&covered), info.format()) {
+                    let stamp = self.source_stamp(time, level, channel, &covered);
+                    if let Some(brick) =
+                        self.held(key, covered_extent(&covered), info.format(), stamp)
+                    {
                         region::copy_intersection(&mut output, ranges, &brick, &covered);
                         continue;
                     }
@@ -408,7 +408,13 @@ impl Image {
                     } else {
                         let brick = self.compose(time, level, channel, &covered, info.format())?;
                         region::copy_intersection(&mut output, ranges, &brick, &covered);
-                        self.hold(key, covered_extent(&covered), info.format(), brick);
+                        self.hold(
+                            key,
+                            covered_extent(&covered),
+                            info.format(),
+                            stamp,
+                            Arc::new(brick),
+                        );
                     }
                 }
             }
@@ -416,34 +422,73 @@ impl Image {
         Ok(output)
     }
 
-    fn held(&self, key: Key, extent: Extent, format: VoxelFormat) -> Option<Arc<VoxelData>> {
+    fn held(
+        &self,
+        key: Key,
+        extent: Extent,
+        format: VoxelFormat,
+        stamp: Option<u64>,
+    ) -> Option<Arc<VoxelData>> {
         if let Some(data) = self.bricks.fetch(key) {
             return Some(data);
         }
-        let data = self
-            .store
-            .as_ref()
-            .and_then(|store| store.load(key, Shape { extent, format }))?;
+        let store = self.store.as_ref()?;
+        let data = store.load(key, Shape { extent, format }, stamp?)?;
         let data = Arc::new(data);
         self.bricks.insert(key, Arc::clone(&data));
         Some(data)
     }
 
-    fn hold(&self, key: Key, extent: Extent, format: VoxelFormat, data: VoxelData) {
-        let data = Arc::new(data);
-        if let Some(store) = self.store.as_ref() {
-            store.save(key, Shape { extent, format }, &data);
+    fn hold(
+        &self,
+        key: Key,
+        extent: Extent,
+        format: VoxelFormat,
+        stamp: Option<u64>,
+        data: Arc<VoxelData>,
+    ) {
+        if let (Some(store), Some(stamp)) = (self.store.as_ref(), stamp) {
+            store.save(key, Shape { extent, format }, stamp, &data);
         }
         self.bricks.insert(key, data);
     }
 
     fn key(&self, time: u32, level: usize, channel: usize, coord: [u32; 3]) -> Key {
         Key {
-            identity: self.identity,
+            identity: self.identity.unwrap_or(0),
             level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
             time,
             channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
             coord,
+        }
+    }
+
+    fn source_stamp(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+    ) -> Option<u64> {
+        let scale = Scale::of(&self.pyramid, level);
+        let source = scale.source_ranges(ranges);
+        if source.iter().any(|range| range.start >= range.end) {
+            return Some(0);
+        }
+        match &self.inner {
+            Inner::Zarr(image) => image
+                .stamps(
+                    scale.source(),
+                    time,
+                    channel,
+                    source[0].clone(),
+                    source[1].clone(),
+                    source[2].clone(),
+                )
+                .ok()
+                .flatten(),
+            Inner::Memory(_) => None,
+            Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => Some(0),
         }
     }
 

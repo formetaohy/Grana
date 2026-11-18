@@ -67,7 +67,7 @@ pub use overlay::Overlays;
 pub use provenance::{Criteria, FilterRange, IntensitySource, LassoPath, Provenance, Recipe};
 pub use registration::Registration;
 pub use relation::Relation;
-pub use revision::{Revision, Revisions};
+pub use revision::{GeometryId, Revision, Revisions};
 pub use row::{RowSpec, Rows, RowsRequest};
 pub use scene::{Item, MaskExtent, Scene, Selection};
 pub use seed::Seeds;

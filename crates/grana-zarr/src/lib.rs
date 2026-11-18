@@ -5,6 +5,7 @@ mod chunk;
 mod error;
 mod frame;
 mod hcs;
+mod identity;
 mod image;
 mod label;
 mod metadata;

@@ -368,8 +368,12 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 (frame.geometry().map_err(|error| error.to_string())?, 0)
             }
         };
-        if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(time))
-            && !mesh.is_empty()
+        if let (Some(mesh), Some(stamp), Some(geometry_id), Some(look_id)) = (
+            geometry,
+            set.frame_stamp(time),
+            set.frame_geometry(time),
+            set.frame_appearance(time),
+        ) && !mesh.is_empty()
         {
             let count = frame.object_count();
             let rows = cache
@@ -390,7 +394,14 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 });
             appearance.mix(rows.digest());
             let layer = Layer::new(
-                LayerKey::at_frame(set.id().raw(), OBJECT_PART, time, stamp.raw(), level as u16),
+                LayerKey::at_frame(
+                    set.id().raw(),
+                    OBJECT_PART,
+                    look_id.raw(),
+                    stamp.raw(),
+                    level as u16,
+                ),
+                geometry_id.raw(),
                 mesh,
                 rows.styles(),
                 base,
@@ -431,6 +442,7 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
             appearance.mix(rows.digest());
             let layer = Layer::new(
                 LayerKey::stable(set.id().raw(), TRACK_PART, tracks.revision().raw()),
+                tracks.revision().raw(),
                 tracks.mesh(),
                 rows.styles(),
                 base,

@@ -148,14 +148,12 @@ impl SplatCache {
             let count = object_frames[0].spots.len();
             let table = scene.table_revision(set.id());
             let revision = set.revision().raw();
-            let time = scene.time();
             let fresh = entry.color.as_ref().is_none_or(|held| {
                 held.state != state
                     || held.color != set.color()
                     || held.count != count
                     || held.table != table
                     || held.revision != revision
-                    || held.time != time
             });
             if fresh {
                 entry.seq += 1;
@@ -165,7 +163,6 @@ impl SplatCache {
                     count,
                     table,
                     revision,
-                    time,
                     stamp: stamp_of(&[set.id().raw(), entry.seq]),
                 });
             }
@@ -188,13 +185,14 @@ impl SplatCache {
         };
         let kind = spot::kind(&object_frames, rung_choice);
         let data = data_stamp(set, slot, range);
+        let appearance = appearance_stamp(set, range);
         let geometry = match kind {
-            spot::Kind::Cells => stamp_of(&[data, shape, colored]),
+            spot::Kind::Cells => stamp_of(&[data, shape, colored, appearance]),
             spot::Kind::Spots => stamp_of(&[data]),
         };
         let style = match kind {
             spot::Kind::Cells => stamp_of(&[geometry, opacity]),
-            spot::Kind::Spots => stamp_of(&[data, shape, colored, opacity]),
+            spot::Kind::Spots => stamp_of(&[data, shape, colored, appearance, opacity]),
         };
         if level
             .geometry
@@ -393,7 +391,6 @@ struct ColorSample {
     count: usize,
     table: Option<u64>,
     revision: u64,
-    time: u32,
     stamp: u64,
 }
 
@@ -414,11 +411,20 @@ fn data_stamp(set: &ObjectSet, level: u8, range: [u32; 2]) -> u64 {
     let mut digest = Digest::new();
     digest.mix(set.id().raw());
     for time in range[0]..=range[1] {
-        digest.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
+        digest.mix(set.frame_geometry(time).map_or(u64::MAX, |held| held.raw()));
     }
-    digest.mix(u64::from(range[0]));
-    digest.mix(u64::from(range[1]));
     digest.mix(u64::from(level));
+    digest.finish()
+}
+
+fn appearance_stamp(set: &ObjectSet, range: [u32; 2]) -> u64 {
+    let mut digest = Digest::new();
+    for time in range[0]..=range[1] {
+        digest.mix(
+            set.frame_appearance(time)
+                .map_or(u64::MAX, |held| held.raw()),
+        );
+    }
     digest.finish()
 }
 

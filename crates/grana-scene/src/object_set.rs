@@ -21,7 +21,7 @@ use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
-use crate::revision::{Revision, Revisions};
+use crate::revision::{GeometryId, Revision, Revisions};
 use crate::seed::Seeds;
 use crate::source::ObjectSource;
 use crate::state::{RelationState, SetState};
@@ -84,6 +84,8 @@ impl Visibility {
 
 struct FrameSlot {
     stamp: Revision,
+    geometry: GeometryId,
+    appearance: Revision,
     frame: Option<Frame>,
 }
 
@@ -91,6 +93,8 @@ impl FrameSlot {
     fn new() -> Self {
         Self {
             stamp: Revision::ZERO,
+            geometry: GeometryId::NONE,
+            appearance: Revision::ZERO,
             frame: None,
         }
     }
@@ -799,6 +803,9 @@ impl ObjectSet {
         if changed {
             self.shape = stamp;
             self.document = Revision::mint();
+            if let Some(slot) = self.frames.get_mut(time as usize) {
+                slot.appearance = Revision::mint();
+            }
         }
         changed
     }
@@ -833,6 +840,7 @@ impl ObjectSet {
         Arc::make_mut(&mut self.curation).clear_hidden();
         self.shape = stamp;
         self.document = Revision::mint();
+        self.refresh_appearance();
         true
     }
 
@@ -864,6 +872,13 @@ impl ObjectSet {
         }
         self.hidden = hidden;
         self.recount_hidden();
+        self.refresh_appearance();
+    }
+
+    fn refresh_appearance(&mut self) {
+        for slot in &mut self.frames {
+            slot.appearance = Revision::mint();
+        }
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -954,6 +969,20 @@ impl ObjectSet {
         self.frames
             .get(time as usize)
             .and_then(|slot| slot.frame.as_ref().map(|_| slot.stamp))
+    }
+
+    pub fn frame_geometry(&self, time: u32) -> Option<GeometryId> {
+        self.frames
+            .get(time as usize)
+            .filter(|slot| slot.frame.is_some())
+            .map(|slot| slot.geometry)
+    }
+
+    pub fn frame_appearance(&self, time: u32) -> Option<Revision> {
+        self.frames
+            .get(time as usize)
+            .filter(|slot| slot.frame.is_some())
+            .map(|slot| slot.appearance)
     }
 
     pub fn frames(&self) -> impl Iterator<Item = (u32, Arc<ObjectFrame>)> + '_ {
@@ -1996,6 +2025,8 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the pruned object lies inside the time series");
         slot.stamp = stamp;
+        slot.geometry = GeometryId::mint();
+        slot.appearance = Revision::mint();
         slot.frame = placed;
         let hidden = Arc::make_mut(&mut self.hidden);
         if let Some(mask) = hidden.get_mut(time as usize) {
@@ -2071,6 +2102,8 @@ impl ObjectSet {
                 .iter()
                 .map(|slot| FrameSlot {
                     stamp: Revision::ZERO,
+                    geometry: slot.geometry,
+                    appearance: slot.appearance,
                     frame: slot.frame.clone(),
                 })
                 .collect(),
@@ -2136,7 +2169,12 @@ impl ObjectSet {
                 (None, Some(_)) => right.frame.clone(),
                 (None, None) => None,
             };
-            frames.push(FrameSlot { stamp, frame });
+            frames.push(FrameSlot {
+                stamp,
+                geometry: GeometryId::mint(),
+                appearance: Revision::mint(),
+                frame,
+            });
         }
         let offsets = self
             .frames
@@ -2359,6 +2397,8 @@ impl ObjectSet {
                 Arc::new(ObjectFrame::Spots(Arc::new(spots.regrouped(held)))),
             ));
             slot.stamp = stamp;
+            slot.geometry = GeometryId::mint();
+            slot.appearance = Revision::mint();
             self.revision = stamp;
             self.shape = stamp;
             self.document = Revision::mint();
@@ -2416,6 +2456,8 @@ impl ObjectSet {
                 )))),
             ));
             slot.stamp = stamp;
+            slot.geometry = GeometryId::mint();
+            slot.appearance = Revision::mint();
             self.revision = stamp;
             self.shape = stamp;
             self.document = Revision::mint();
@@ -2465,17 +2507,19 @@ impl ObjectSet {
         );
         let placed = self.manage(frame);
         self.discard_object_coloc();
-        let slot = self
-            .frames
-            .get_mut(time as usize)
-            .expect("the object frame lies inside the time series");
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
         self.visibility = Visibility::All;
         Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;
+        self.refresh_appearance();
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the object frame lies inside the time series");
         slot.stamp = stamp;
+        slot.geometry = GeometryId::mint();
         slot.frame = Some(placed);
     }
 
@@ -2494,17 +2538,19 @@ impl ObjectSet {
             self.manage(frame)
         });
         self.discard_object_coloc();
-        let slot = self
-            .frames
-            .get_mut(time as usize)
-            .expect("the object frame lies inside the time series");
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
         self.visibility = Visibility::All;
         Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;
+        self.refresh_appearance();
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the object frame lies inside the time series");
         slot.stamp = stamp;
+        slot.geometry = GeometryId::mint();
         slot.frame = placed;
     }
 
@@ -2553,6 +2599,8 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the restored object frame lies inside the time series");
         slot.stamp = stamp;
+        slot.geometry = GeometryId::mint();
+        slot.appearance = Revision::mint();
         slot.frame = Some(frame);
         self.revision = stamp;
         self.shape = stamp;
@@ -2571,6 +2619,8 @@ impl ObjectSet {
         self.discard_object_coloc();
         for slot in &mut self.frames {
             slot.frame = None;
+            slot.geometry = GeometryId::NONE;
+            slot.appearance = Revision::ZERO;
         }
         Arc::make_mut(&mut self.hidden).clear();
         self.hidden_total = 0;

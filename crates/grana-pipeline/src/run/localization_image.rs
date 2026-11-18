@@ -3,10 +3,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::localization::{
     CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationLayout,
-    LocalizationRenderer,
+    LocalizationRenderer, LocalizationStack,
 };
 use grana_archive::{Channel, Fill, ImageSpec, Sample};
 use grana_object::LocalizationSpec;
+use grana_raster::{Bitmap, Overlay};
 use grana_volume::{Extent, Level, Spacing};
 
 use super::localization_window::LocalizationWindow;
@@ -153,6 +154,73 @@ pub fn localization_image(
     written?;
     sink(Event::Done);
     Ok(())
+}
+
+pub fn localization_stack(
+    window: LocalizationWindow,
+    spec: LocalizationSpec,
+    pixel: f32,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<Option<LocalizationStack>, String> {
+    assert!(
+        pixel.is_finite() && pixel > 0.0,
+        "a super-resolution stack knows its positive camera pixel"
+    );
+    sink(Event::Progress {
+        time: 0,
+        done: 0,
+        total: 0,
+    });
+    let mut stack = |done: usize, total: usize| {
+        sink(Event::Progress {
+            time: 0,
+            done,
+            total,
+        });
+        !cancel.load(Ordering::Relaxed)
+    };
+    let held = grana_analysis::localization::localization_stack(&window, spec, pixel, &mut stack)?;
+    sink(Event::Done);
+    Ok(held)
+}
+
+pub fn localization_overlay(
+    stack: &LocalizationStack,
+    layer: usize,
+    bitmap: Bitmap,
+    tint: [f32; 3],
+    opacity: f32,
+) -> Option<Overlay> {
+    let image = stack.layer(layer)?;
+    assert_eq!(
+        bitmap.size(),
+        image.size(),
+        "an overlay bitmap covers the slice it paints"
+    );
+    let geometry = stack.geometry();
+    let depth = stack.depth();
+    let [width, height] = geometry.size();
+    let pixel = geometry.pixel();
+    let origin = geometry.origin();
+    let layer = layer as u32;
+    let z = 0.5 * (depth.lower(layer) + depth.upper(layer));
+    let corners = [
+        [origin[0], origin[1], z],
+        [origin[0] + width as f32 * pixel, origin[1], z],
+        [
+            origin[0] + width as f32 * pixel,
+            origin[1] + height as f32 * pixel,
+            z,
+        ],
+        [origin[0], origin[1] + height as f32 * pixel, z],
+    ];
+    Some(Overlay::new(
+        bitmap,
+        corners,
+        grana_display::srgb_to_linear(tint),
+        opacity,
+    ))
 }
 
 fn write_stack(

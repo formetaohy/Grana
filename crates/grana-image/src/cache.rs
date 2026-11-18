@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const MAGIC: [u8; 8] = *b"GRANATIL";
-const VERSION: u32 = 3;
-const HEADER: usize = 72;
+const VERSION: u32 = 4;
+const HEADER: usize = 80;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "tile";
 const STAGING: &str = "staging";
@@ -70,7 +70,7 @@ impl Store {
         })
     }
 
-    pub(crate) fn load(&self, key: Key, shape: Shape) -> Option<VoxelData> {
+    pub(crate) fn load(&self, key: Key, shape: Shape, stamp: u64) -> Option<VoxelData> {
         let path = self.entry(key);
         let bytes = std::fs::read(&path).ok()?;
         if bytes.len() < HEADER + TRAILER {
@@ -78,7 +78,7 @@ impl Store {
         }
         let head = &bytes[..HEADER];
         let extent = shape.extent;
-        let length = read_u64(head, 64);
+        let length = read_u64(head, 72);
         let matches = head[0..8] == MAGIC
             && read_u32(head, 8) == VERSION
             && read_u64(head, 12) == key.identity
@@ -92,6 +92,7 @@ impl Store {
             && read_u32(head, 48) == extent.y()
             && read_u32(head, 52) == extent.z()
             && head[56] == tag(shape.format)
+            && read_u64(head, 64) == stamp
             && length == extent.voxel_count() * sample_bytes(shape.format);
         if !matches {
             return None;
@@ -108,7 +109,7 @@ impl Store {
         Some(decode(shape.format, payload))
     }
 
-    pub(crate) fn save(&self, key: Key, shape: Shape, data: &VoxelData) {
+    pub(crate) fn save(&self, key: Key, shape: Shape, stamp: u64, data: &VoxelData) {
         let path = self.entry(key);
         let Some(parent) = path.parent() else {
             return;
@@ -133,7 +134,8 @@ impl Store {
         write_u32(&mut head, 48, shape.extent.y());
         write_u32(&mut head, 52, shape.extent.z());
         head[56] = tag(shape.format);
-        write_u64(&mut head, 64, payload.len() as u64);
+        write_u64(&mut head, 64, stamp);
+        write_u64(&mut head, 72, payload.len() as u64);
         let stored = crc(update(update(CRC_SEED, &head), &payload));
         let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
         let staging = self
@@ -241,10 +243,15 @@ fn accounting(root: &Path) -> Accounting {
     Arc::clone(accounts.entry(root.to_path_buf()).or_default())
 }
 
-pub(crate) fn identity(source: &crate::Source, geometry: &[u8], revision: Option<&str>) -> u64 {
+pub(crate) fn identity(
+    source: &crate::Source,
+    geometry: &[u8],
+    revision: Option<&str>,
+    dataset: Option<u64>,
+) -> Option<u64> {
     let mut hash = mix(FNV_BASE, geometry);
     match source {
-        crate::Source::Memory(_) => {}
+        crate::Source::Memory(_) => None,
         crate::Source::File {
             path,
             series,
@@ -256,66 +263,25 @@ pub(crate) fn identity(source: &crate::Source, geometry: &[u8], revision: Option
             if let Some(group) = group {
                 hash = mix(hash, group.as_bytes());
             }
-            hash = contents(hash, path);
+            match dataset {
+                Some(digest) => Some(mix(hash, &digest.to_le_bytes())),
+                None => {
+                    let metadata = std::fs::metadata(path).ok()?;
+                    if metadata.is_dir() {
+                        return None;
+                    }
+                    Some(stamp(hash, &metadata))
+                }
+            }
         }
         crate::Source::Remote { url, series, group } => {
-            hash = mix(hash, url.as_bytes());
+            let mut hash = mix(hash, url.as_bytes());
             hash = mix(hash, &(*series as u64).to_le_bytes());
             if let Some(group) = group {
                 hash = mix(hash, group.as_bytes());
             }
-            if let Some(revision) = revision {
-                hash = mix(hash, revision.as_bytes());
-            }
+            Some(mix(hash, revision?.as_bytes()))
         }
-    }
-    hash
-}
-
-fn contents(hash: u64, path: &Path) -> u64 {
-    match std::fs::metadata(path) {
-        Err(_) => mix(hash, &u64::MAX.to_le_bytes()),
-        Ok(metadata) if metadata.is_dir() => listing(hash, path),
-        Ok(metadata) => stamp(hash, &metadata),
-    }
-}
-
-fn listing(hash: u64, root: &Path) -> u64 {
-    let mut entries = Vec::new();
-    collect(root, root, &mut entries);
-    entries.sort_unstable();
-    let mut hash = mix(hash, &(entries.len() as u64).to_le_bytes());
-    for (name, length, modified) in entries {
-        hash = mix(hash, name.as_bytes());
-        hash = mix(hash, &[0]);
-        hash = mix(hash, &length.to_le_bytes());
-        hash = mix(hash, &modified.to_le_bytes());
-    }
-    hash
-}
-
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64, u128)>) {
-    let Ok(listing) = std::fs::read_dir(folder) else {
-        return;
-    };
-    for entry in listing.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() {
-            continue;
-        }
-        if metadata.is_dir() {
-            collect(root, &path, entries);
-            continue;
-        }
-        let name = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        entries.push((name, metadata.len(), modified(&metadata)));
     }
 }
 

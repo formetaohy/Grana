@@ -567,6 +567,64 @@ fn writes_and_reads_a_tiny_ome_zarr() {
             }
         }
     }
+
+    let identity = image
+        .identity()
+        .expect("a local dataset names the metadata it was read from");
+    assert_eq!(
+        grana_zarr::Image::open(&path)
+            .expect("the written image reopens")
+            .identity(),
+        Some(identity),
+        "a stored dataset keeps its identity while its levels stay put"
+    );
+    let stamps = image
+        .stamps(0, 0, 0, 0..24, 0..16, 0..8)
+        .expect("the chunk stamps read");
+    assert!(stamps.is_some(), "a local dataset stamps its chunks");
+    let chunks = chunk_files(&path);
+    assert!(!chunks.is_empty(), "a written level stores its chunks");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    for chunk in &chunks {
+        std::fs::File::options()
+            .write(true)
+            .open(chunk)
+            .expect("the stored chunk opens for rewriting")
+            .set_modified(later)
+            .expect("the stored chunk restamps");
+    }
+    assert_eq!(
+        image.identity(),
+        Some(identity),
+        "the metadata digest cannot see a chunk rewritten in place"
+    );
+    assert_ne!(
+        image
+            .stamps(0, 0, 0, 0..24, 0..16, 0..8)
+            .expect("the chunk stamps reread"),
+        stamps,
+        "a rewritten chunk restamps every tile composed from it"
+    );
+}
+
+fn chunk_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut folders = vec![root.join("0")];
+    let mut chunks = Vec::new();
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).expect("a stored level lists") {
+            let entry = entry.expect("a stored entry reads");
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+                continue;
+            }
+            let name = entry.file_name();
+            if name != "zarr.json" && name != ".zarray" && name != ".zgroup" {
+                chunks.push(path);
+            }
+        }
+    }
+    chunks
 }
 
 #[test]
