@@ -28,7 +28,7 @@ impl SplatCache {
         self.sets.clear();
     }
 
-    pub(crate) fn retain(&mut self, present: &[u64]) {
+    pub(crate) fn retain(&mut self, present: &[ObjectSetId]) {
         self.sets.retain(|entry| present.contains(&entry.set));
     }
 
@@ -61,15 +61,11 @@ impl SplatCache {
     }
 
     fn entry(&mut self, set: &ObjectSet) -> usize {
-        match self
-            .sets
-            .iter()
-            .position(|entry| entry.set == set.id().raw())
-        {
+        match self.sets.iter().position(|entry| entry.set == set.id()) {
             Some(index) => index,
             None => {
                 self.sets.push(SetLevels {
-                    set: set.id().raw(),
+                    set: set.id(),
                     weight: None,
                     ladder: None,
                     levels: std::array::from_fn(|_| Level::default()),
@@ -383,7 +379,7 @@ impl SplatMembers {
 }
 
 struct SetLevels {
-    set: u64,
+    set: ObjectSetId,
     weight: Option<MeasuredWeight>,
     ladder: Option<LadderSample>,
     levels: [Level; LEVEL_COUNT as usize],

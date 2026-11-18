@@ -934,7 +934,7 @@ impl Scene {
         if let Some(set) = self.objects.get_mut(id) {
             set.set_params(params);
         }
-        self.objects.apply_curation(id);
+        self.apply_curation(id)?;
         Ok(true)
     }
 
@@ -1591,10 +1591,10 @@ impl Scene {
         }
     }
 
-    pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
-        let applied = self.objects.apply_curation(id);
+    pub fn apply_curation(&mut self, id: ObjectSetId) -> Result<usize, String> {
+        let applied = self.objects.apply_curation(id)?;
         self.sync_masks();
-        applied
+        Ok(applied)
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {

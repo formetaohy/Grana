@@ -1676,7 +1676,7 @@ impl ObjectSet {
             return Ok(false);
         }
         if !self.curation.is_empty() {
-            self.apply_curation(stamp);
+            self.apply_curation(stamp)?;
         }
         let curation = Arc::make_mut(&mut self.curation);
         curation.seed(self.frames.len());
@@ -1705,7 +1705,7 @@ impl ObjectSet {
         true
     }
 
-    pub(crate) fn apply_curation(&mut self, stamp: Revision) -> usize {
+    pub(crate) fn apply_curation(&mut self, stamp: Revision) -> Result<usize, String> {
         let mut keeps = Vec::new();
         let mut pending = 0;
         for time in 0..self.frames.len() {
@@ -1721,7 +1721,7 @@ impl ObjectSet {
                 }
             }
         }
-        let mut applied = 0usize;
+        let mut pruned = Vec::with_capacity(keeps.len());
         for (time, keep) in keeps {
             let Some(frame) = self.frames[time as usize].shared() else {
                 continue;
@@ -1732,11 +1732,15 @@ impl ObjectSet {
                 .filter(|(_, kept)| !**kept)
                 .map(|(object, _)| object)
                 .collect::<Vec<_>>();
+            let retained = frame.retain(&keep).map_err(|error| {
+                format!("the edits of frame {time} cannot drop the objects they hide: {error}")
+            })?;
+            pruned.push((time, retained, removed));
+        }
+        let mut applied = 0usize;
+        for (time, retained, removed) in pruned {
             applied += removed.len();
-            let Ok(pruned) = frame.retain(&keep) else {
-                continue;
-            };
-            self.install_retained(time, pruned, &removed, stamp);
+            self.install_retained(time, retained, &removed, stamp);
         }
         let curation = Arc::make_mut(&mut self.curation);
         for (time, frame) in self.frames.iter().enumerate() {
@@ -1744,7 +1748,7 @@ impl ObjectSet {
         }
         self.reapply_hidden(stamp);
         Arc::make_mut(&mut self.curation).set_pending(pending);
-        applied
+        Ok(applied)
     }
 
     pub(crate) fn reapply_hidden(&mut self, stamp: Revision) -> usize {

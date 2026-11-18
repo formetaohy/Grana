@@ -41,6 +41,7 @@ impl GroupStat {
 pub struct Groups {
     stats: Vec<GroupStat>,
     chromatic: bool,
+    total: usize,
 }
 
 impl Groups {
@@ -50,6 +51,14 @@ impl Groups {
 
     pub fn chromatic(&self) -> bool {
         self.chromatic
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    pub fn truncated(&self) -> bool {
+        self.total > self.stats.len()
     }
 
     pub(super) fn tint_slot(&self, group: Option<u32>) -> u8 {
@@ -70,7 +79,6 @@ pub(super) struct Tally {
     entries: Vec<Entry>,
     index: HashMap<Option<u32>, usize>,
     held: Option<(Option<u32>, usize)>,
-    overflow: bool,
 }
 
 struct Entry {
@@ -86,7 +94,6 @@ impl Tally {
             entries: Vec::new(),
             index: HashMap::new(),
             held: None,
-            overflow: false,
         }
     }
 
@@ -97,10 +104,6 @@ impl Tally {
                 let at = match self.index.get(&group) {
                     Some(at) => *at,
                     None => {
-                        if self.entries.len() >= TRACKED {
-                            self.overflow = true;
-                            return;
-                        }
                         let at = self.entries.len();
                         self.entries.push(Entry {
                             group,
@@ -123,11 +126,10 @@ impl Tally {
     }
 
     pub(super) fn finish(mut self) -> Groups {
-        if self.overflow {
-            return Groups::default();
-        }
+        let total = self.entries.len();
         self.entries
             .sort_by_key(|entry| std::cmp::Reverse(entry.localizations));
+        self.entries.truncate(TRACKED);
         let chromatic = (2..=CATEGORICAL.len()).contains(&self.entries.len());
         let stats = self
             .entries
@@ -141,6 +143,10 @@ impl Tally {
                 tint: srgb_to_linear(group_tint(entry.group)),
             })
             .collect();
-        Groups { stats, chromatic }
+        Groups {
+            stats,
+            chromatic,
+            total,
+        }
     }
 }

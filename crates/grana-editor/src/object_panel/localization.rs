@@ -222,7 +222,15 @@ pub(super) fn card<'a>(
     if let Some(report) = report {
         let groups = report.groups();
         if !groups.stats().is_empty() {
-            let held = grana_i18n::localization::group_count(language, groups.stats().len());
+            let held = if groups.truncated() {
+                grana_i18n::localization::groups_truncated(
+                    language,
+                    groups.stats().len(),
+                    groups.total(),
+                )
+            } else {
+                grana_i18n::localization::group_count(language, groups.stats().len())
+            };
             children.push(view::section_header(
                 ctx,
                 grana_i18n::localization::groups(language),

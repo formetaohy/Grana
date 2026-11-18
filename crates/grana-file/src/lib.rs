@@ -57,7 +57,7 @@ impl Atomic {
     }
 
     pub fn commit(self) -> io::Result<()> {
-        self.commit_held().map(Replaced::publish)
+        self.commit_held()?.publish()
     }
 
     pub fn commit_held(mut self) -> io::Result<Replaced> {
@@ -143,8 +143,16 @@ impl Drop for Atomic {
 }
 
 impl Replaced {
-    pub fn publish(self) {
-        let _ = remove_if_present(&self.backup);
+    pub fn publish(self) -> io::Result<()> {
+        remove_if_present(&self.backup).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "the written version is published, but the previous version at {} cannot be removed, so a later recovery would restore it: {error}",
+                    self.backup.display()
+                ),
+            )
+        })
     }
 
     pub fn rollback(self) -> io::Result<()> {

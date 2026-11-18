@@ -1,6 +1,7 @@
 use grana_display::{TransferFunction, VolumeStyle};
 use grana_volume::Intensity;
 
+#[derive(Clone)]
 pub struct Channel {
     pub enabled: bool,
     pub opacity: f32,

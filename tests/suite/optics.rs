@@ -66,7 +66,6 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::new(&chunks),
         overlays: &[],

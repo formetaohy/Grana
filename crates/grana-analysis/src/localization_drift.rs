@@ -176,7 +176,12 @@ pub fn localization_drift(
             return Ok(None);
         }
     }
-    let offsets = offsets(&drift, &segmentation, count);
+    let solved = drift.iter().flatten().count();
+    let Some(offsets) = interpolate(&drift, &segmentation, count) else {
+        return Err(format!(
+            "the drift is resolved on {solved} of {segments} segments, too few to interpolate across {count} frames"
+        ));
+    };
     if !report(total_steps, total_steps) {
         return Ok(None);
     }

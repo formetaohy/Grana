@@ -9,10 +9,12 @@ use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::frame::{self, View};
 use crate::image::ViewportImage;
-use crate::splat::{SplatCache, SplatMembers};
-use crate::view::{self, RenderedScene};
+use crate::splat::SplatMembers;
+use crate::view::{self, Cache, PickRows, RenderedScene};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
+
+const PLAN_BAND: f32 = 1.4;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Content {
@@ -50,7 +52,7 @@ pub enum Picked {
 
 #[derive(Clone, Default)]
 struct Identities {
-    styles: Vec<Selection>,
+    picks: Vec<PickRows>,
     members: Vec<SplatMembers>,
 }
 
@@ -64,8 +66,16 @@ struct Prepared {
 struct Plan {
     structure: u64,
     camera: CameraState,
-    height: u32,
+    scale: f32,
     targets: Arc<view::Targets>,
+}
+
+impl Plan {
+    fn accepts(&self, structure: u64, camera: CameraState, scale: f32, moving: bool) -> bool {
+        self.structure == structure
+            && (self.camera == camera
+                || (moving && (scale / self.scale).ln().abs() <= PLAN_BAND.ln()))
+    }
 }
 
 struct Failure {
@@ -78,7 +88,7 @@ pub struct Engine {
     pending_pick: Option<Identities>,
     prepared: Option<Prepared>,
     plan: Option<Plan>,
-    splats: SplatCache,
+    cache: Cache,
     image: Option<ViewportImage>,
     content: Option<Content>,
     failure: Option<Failure>,
@@ -99,7 +109,7 @@ impl Engine {
             pending_pick: None,
             prepared: None,
             plan: None,
-            splats: SplatCache::new(),
+            cache: Cache::new(),
             image: None,
             content: None,
             failure: None,
@@ -115,7 +125,7 @@ impl Engine {
         self.pending_pick = None;
         self.prepared = None;
         self.plan = None;
-        self.splats.clear();
+        self.cache.clear();
         self.content = None;
         self.failure = None;
         self.info = FrameInfo::default();
@@ -161,7 +171,8 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        let content = self.content_of(&view);
+        let keys = view::key(view.scene);
+        let content = self.content_of(&view, keys);
         if self.content == Some(content) && self.resolved(view.delivery) {
             return Ok(());
         }
@@ -176,7 +187,7 @@ impl Engine {
         if let Some(failure) = self.failure.as_ref().filter(|held| held.content == content) {
             return Err(failure.detail.clone());
         }
-        match self.render(device, queue, view, content) {
+        match self.render(device, queue, view, keys, content) {
             Ok(()) => {
                 self.failure = None;
                 Ok(())
@@ -191,9 +202,9 @@ impl Engine {
         }
     }
 
-    fn content_of(&self, view: &View<'_>) -> Content {
+    fn content_of(&self, view: &View<'_>, keys: view::Key) -> Content {
         Content {
-            scene: view::key(view.scene).digest(),
+            scene: keys.digest(),
             overlays: grana_render::overlay_digest(view.overlays),
             camera: view.camera.state(),
             region: view.scene.region,
@@ -210,19 +221,21 @@ impl Engine {
         device: &Device,
         queue: &Queue,
         view: View<'_>,
+        keys: view::Key,
         content: Content,
     ) -> Result<(), String> {
-        let keys = view::key(view.scene);
         let size = view.size;
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
+        let moving = self
+            .content
+            .is_some_and(|previous| previous.camera != content.camera);
+        let scale = view
+            .camera
+            .world_per_point(size[1] as f32, view.camera.distance());
         let detail = match &self.plan {
-            Some(plan)
-                if plan.structure == keys.structure()
-                    && plan.camera == content.camera
-                    && plan.height == size[1] =>
-            {
+            Some(plan) if plan.accepts(keys.structure(), content.camera, scale, moving) => {
                 Arc::clone(&plan.targets)
             }
             _ => {
@@ -232,12 +245,12 @@ impl Engine {
                         camera: view.camera,
                         height: size[1],
                     }),
-                    &mut self.splats,
+                    &mut self.cache,
                 ));
                 self.plan = Some(Plan {
                     structure: keys.structure(),
                     camera: content.camera,
-                    height: size[1],
+                    scale,
                     targets: Arc::clone(&targets),
                 });
                 targets
@@ -246,7 +259,7 @@ impl Engine {
         if self.prepared.as_ref().is_none_or(|prepared| {
             prepared.structure != keys.structure() || prepared.targets.as_ref() != detail.as_ref()
         }) {
-            let rendered = view::frame(view.scene, &detail, &mut self.splats)?;
+            let rendered = view::frame(view.scene, &detail, &mut self.cache)?;
             self.prepared = Some(Prepared {
                 structure: keys.structure(),
                 display: keys.display(),
@@ -358,7 +371,7 @@ impl Engine {
             return false;
         }
         *pending_pick = Some(Identities {
-            styles: prepared.rendered.style_ids.clone(),
+            picks: prepared.rendered.picks().to_vec(),
             members: prepared.rendered.members.clone(),
         });
         true
@@ -371,10 +384,11 @@ impl Engine {
         let picked = match pick {
             PickId::None => Picked::Miss,
             PickId::Expired => Picked::Abandoned,
-            PickId::Style(index) => match identities.styles.get(index as usize).copied() {
-                Some(selection) => Picked::Hit(selection),
-                None => Picked::Miss,
-            },
+            PickId::Style(index) => identities
+                .picks
+                .iter()
+                .find_map(|rows| rows.resolve(index))
+                .map_or(Picked::Miss, Picked::Hit),
             PickId::Splat { key, level, index } => {
                 let members = identities
                     .members

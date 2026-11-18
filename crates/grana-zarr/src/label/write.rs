@@ -122,7 +122,11 @@ pub fn write_group(path: &Path, group: &str, mut spec: LabelSpec<'_>) -> Result<
             .map_err(|error| fail(error.to_string()))?;
         return Err(fail(detail));
     }
-    published.publish();
+    published.publish().map_err(|error| {
+        fail(format!(
+            "the labels are published, but the version they replace cannot be dropped: {error}"
+        ))
+    })?;
     Ok(Written {
         path: root,
         name: spec.name.to_string(),

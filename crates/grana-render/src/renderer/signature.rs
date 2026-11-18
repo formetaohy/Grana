@@ -1,5 +1,5 @@
 use super::*;
-use crate::schema::{Digest, Layer, Style, Versions};
+use crate::schema::{Digest, Layer, Versions};
 use grana_display::CameraState;
 
 #[derive(Clone, Copy)]
@@ -135,10 +135,10 @@ impl ShadowKeys {
     }
 }
 
-pub(super) fn shadow_visibility(layers: &[Layer], styles: &[Style]) -> u64 {
+pub(super) fn shadow_visibility(layers: &[Layer]) -> u64 {
     let mut digest = Digest::new();
     for layer in layers {
-        for style in &styles[layer.style_start..layer.style_start + layer.style_count] {
+        for style in layer.styles.iter() {
             digest.flag(style.visible());
         }
     }
@@ -159,7 +159,7 @@ impl SceneSummary {
             objects: scene.versions.objects(),
             style: scene.versions.style(),
             bounds: surface_bounds(scene, world),
-            visibility: shadow_visibility(scene.layers, scene.styles),
+            visibility: shadow_visibility(scene.layers),
         }
     }
 
@@ -181,7 +181,7 @@ fn surface_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {
     let mut high = 0.5 * world;
     for layer in scene.layers {
         for (object, group) in layer.mesh.groups().iter().enumerate() {
-            if !scene.styles[layer.style_start + object].visible() {
+            if !layer.styles[object].visible() {
                 continue;
             }
             let object_low = Vec3::from(group.min());

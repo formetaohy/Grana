@@ -883,9 +883,10 @@ impl Objects {
         }
     }
 
-    pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
+    pub fn apply_curation(&mut self, id: ObjectSetId) -> Result<usize, String> {
         let stamp = self.revisions.mint();
-        self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
+        self.get_mut(id)
+            .map_or(Ok(0), |set| set.apply_curation(stamp))
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {

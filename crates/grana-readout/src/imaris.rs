@@ -8,6 +8,7 @@ use crate::error::Error;
 use crate::number;
 
 const CONTENT: [&str; 2] = ["Scene8/Content", "Scene/Content"];
+type Link = ([u32; 2], [u32; 2]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -222,7 +223,7 @@ pub struct Object {
     name: String,
     kind: Kind,
     frames: Vec<(u32, Frame)>,
-    links: Vec<([u32; 2], [u32; 2])>,
+    links: Vec<Link>,
 }
 
 impl Object {
@@ -238,7 +239,7 @@ impl Object {
         &self.frames
     }
 
-    pub fn links(&self) -> &[([u32; 2], [u32; 2])] {
+    pub fn links(&self) -> &[Link] {
         &self.links
     }
 }
@@ -284,7 +285,12 @@ pub fn imported(path: &Path) -> Result<Imported, Error> {
             statistics.get(&candidate.key),
             center,
         ) {
-            Ok(Some(object)) => objects.push(object),
+            Ok(Some(import)) => {
+                if let Some(detail) = import.links_failure {
+                    diagnostics.push(Diagnostic::new(&label, &detail));
+                }
+                objects.push(import.object);
+            }
             Ok(None) => diagnostics.push(Diagnostic::new(
                 &label,
                 "the object holds no readable geometry",
@@ -300,13 +306,18 @@ pub fn imported(path: &Path) -> Result<Imported, Error> {
     })
 }
 
+struct Import {
+    object: Object,
+    links_failure: Option<String>,
+}
+
 fn read(
     file: &File,
     path: &Path,
     candidate: &Group,
     statistics: Option<&Statistics>,
     center: [f32; 3],
-) -> Result<Option<Object>, String> {
+) -> Result<Option<Import>, String> {
     let Some(source) = geometry(file, path, candidate)? else {
         return Ok(None);
     };
@@ -329,12 +340,23 @@ fn read(
     if frames.is_empty() {
         return Err("the object holds no frame with geometry".to_string());
     }
-    let links = links(file, path, candidate, &frames);
-    Ok(Some(Object {
-        name: candidate.label(file),
-        kind,
-        frames,
-        links,
+    let (links, links_failure) = match links(file, path, candidate, &frames) {
+        Ok(links) => (links, None),
+        Err(detail) => (
+            Vec::new(),
+            Some(format!(
+                "the object is imported without its tracks: {detail}"
+            )),
+        ),
+    };
+    Ok(Some(Import {
+        object: Object {
+            name: candidate.label(file),
+            kind,
+            frames,
+            links,
+        },
+        links_failure,
     }))
 }
 
@@ -343,7 +365,7 @@ fn links(
     path: &Path,
     candidate: &Group,
     frames: &[(u32, Frame)],
-) -> Vec<([u32; 2], [u32; 2])> {
+) -> Result<Vec<Link>, String> {
     let mut slots = BTreeMap::new();
     for (time, frame) in frames {
         for (index, id) in frame_ids(frame).into_iter().enumerate() {
@@ -353,12 +375,12 @@ fn links(
         }
     }
     if slots.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut pairs = Vec::new();
     for group in &candidate.paths {
         let vertices = format!("{group}/GraphTracks/GraphVertex");
-        if let Ok(table) = read_table(file, path, &vertices, 4) {
+        if let Some(table) = table_if_present(file, path, &vertices, 4)? {
             for row in 0..table.rows {
                 let values = table.row(row);
                 pairs.push([values[0] as i64, values[2] as i64]);
@@ -366,21 +388,47 @@ fn links(
             continue;
         }
         let edges = format!("{group}/TrackEdge0");
-        if let Some(records) = records(file, &edges)
-            && let (Some(first), Some(second)) = (
-                column(&records, "ID_ObjectA"),
-                column(&records, "ID_ObjectB"),
-            )
-        {
-            for (first, second) in first.iter().zip(&second) {
-                pairs.push([*first as i64, *second as i64]);
-            }
+        let Some(records) = records_if_present(file, &edges)? else {
+            continue;
+        };
+        let (Some(first), Some(second)) = (
+            column(&records, "ID_ObjectA"),
+            column(&records, "ID_ObjectB"),
+        ) else {
+            return Err(format!(
+                "the Imaris track edge table `{edges}` names no linked objects"
+            ));
+        };
+        for (first, second) in first.iter().zip(&second) {
+            pairs.push([*first as i64, *second as i64]);
         }
     }
-    pairs
+    Ok(pairs
         .into_iter()
         .filter_map(|[source, target]| Some((*slots.get(&source)?, *slots.get(&target)?)))
-        .collect()
+        .collect())
+}
+
+fn table_if_present(
+    file: &File,
+    path: &Path,
+    dataset: &str,
+    columns: usize,
+) -> Result<Option<Table>, String> {
+    match file.dataset(dataset) {
+        Ok(_) => read_table(file, path, dataset, columns)
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        Err(hdf5_pure::Error::Format(hdf5_pure::FormatError::PathNotFound(_))) => Ok(None),
+        Err(error) => Err(format!(
+            "the Imaris track table `{dataset}` cannot be opened: {error}"
+        )),
+    }
+}
+
+fn records_if_present(file: &File, dataset: &str) -> Result<Option<Records>, String> {
+    ims_scene::read_records(file, dataset)
+        .map_err(|error| format!("the Imaris track edge table `{dataset}` cannot be read: {error}"))
 }
 
 fn frame_ids(frame: &Frame) -> Vec<Option<i64>> {

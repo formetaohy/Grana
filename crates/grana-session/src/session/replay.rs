@@ -55,11 +55,11 @@ impl Session {
         self.resume.clear();
         self.recut = None;
         let staged = {
-            let Some(scene) = self.scene.as_mut() else {
+            let Some(live) = self.scene.as_ref() else {
                 return;
             };
-            let base = scene.base_channels();
-            let infos = match protocol.derived_infos(&scene.dataset.channels()[..base]) {
+            let base = live.base_channels();
+            let infos = match protocol.derived_infos(&live.dataset.channels()[..base]) {
                 Ok(infos) => infos,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
@@ -74,32 +74,38 @@ impl Session {
                 )));
                 return;
             }
-            scene.clear_objects();
-            if let Err(detail) = scene.set_derived_layout(infos) {
+            let mut draft = Scene::new(live.dataset.clone());
+            draft.channels = live.channels.clone();
+            draft.selected = live.selected;
+            draft.shading = live.shading;
+            draft.step_scale = live.step_scale;
+            draft.exposure = live.exposure;
+            draft.region = live.region;
+            draft.clip = live.clip;
+            if let Err(detail) = draft.set_derived_layout(infos) {
                 self.message = Some(Message::error(detail));
                 return;
             }
-            if let Err(error) = protocol.validate(scene) {
-                self.message = Some(Message::error(error.to_string()));
-                return;
-            }
-            let staged = match protocol.stage(scene) {
+            let staged = match protocol.stage(&mut draft) {
                 Ok(staged) => staged,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
             };
-            let derived = match protocol.derived_specs(scene, &staged) {
-                Ok(masks) => masks,
+            let derived = match protocol.derived_specs(&draft, &staged) {
+                Ok(derived) => derived,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
             };
-            if let Err(detail) = scene.bind_derived(derived) {
+            if let Err(detail) = draft.bind_derived(derived) {
                 self.message = Some(Message::error(detail));
                 return;
+            }
+            if let Some(scene) = self.scene.as_mut() {
+                *scene = draft;
             }
             staged
         };

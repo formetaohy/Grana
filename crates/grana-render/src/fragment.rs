@@ -6,8 +6,10 @@ const COLOR_BYTES: u64 = 8;
 const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES;
 const RESIDUAL_BYTES: u64 = 16;
 const PIXEL_STEP: u64 = 1 << 17;
-const LAYER_FLOOR: u64 = 2;
 const LAYER_LIMIT: u64 = 8;
+
+pub const ASSURED_LAYERS: u64 = 2;
+pub const INTERACTIVE_LAYERS: u64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fragment {
@@ -58,17 +60,25 @@ impl Fragment {
     }
 }
 
-pub fn fit(size: [u32; 2], allowance: u64, limits: &Limits) -> Result<(Fragment, bool), String> {
-    match plan(size, allowance, limits, LAYER_FLOOR) {
-        Ok(fragment) => Ok((fragment, false)),
-        Err(_) => match plan(size, allowance, limits, 1) {
-            Ok(fragment) => Ok((fragment, true)),
-            Err(single) => Err(single),
-        },
-    }
+pub fn fit(
+    size: [u32; 2],
+    allowance: u64,
+    limits: &Limits,
+    required: u64,
+) -> Result<Fragment, String> {
+    plan(size, allowance, limits, required)
 }
 
-fn plan(size: [u32; 2], allowance: u64, limits: &Limits, floor: u64) -> Result<Fragment, String> {
+fn plan(
+    size: [u32; 2],
+    allowance: u64,
+    limits: &Limits,
+    required: u64,
+) -> Result<Fragment, String> {
+    assert!(
+        (1..=LAYER_LIMIT).contains(&required),
+        "a fragment store plans one to {LAYER_LIMIT} layers"
+    );
     assert!(
         size[0] > 0 && size[1] > 0,
         "a fragment store covers a non empty view"
@@ -90,21 +100,20 @@ fn plan(size: [u32; 2], allowance: u64, limits: &Limits, floor: u64) -> Result<F
         .min(limits.max_storage_buffer_binding_size)
         / (capacity * COLOR_BYTES);
     let layers = budgeted.min(addressable).min(LAYER_LIMIT);
-    if layers >= floor {
+    if layers >= required {
         return Ok(Fragment {
             size,
             capacity,
             layers,
         });
     }
-    let needed = fixed + floor * slot;
-    let layers = if floor == 1 { "one" } else { "two" };
-    if addressable < floor {
+    let needed = fixed + required * slot;
+    if addressable < required {
         Err(format!(
-            "a {} × {} transparent view needs {:.0} MiB per buffer for {layers} layers, above the {:.0} MiB buffer limit of this device",
+            "a {} × {} transparent view needs {:.0} MiB per buffer for {required} layers, above the {:.0} MiB buffer limit of this device",
             size[0],
             size[1],
-            (capacity * COLOR_BYTES * floor) as f64 / (1 << 20) as f64,
+            (capacity * COLOR_BYTES * required) as f64 / (1 << 20) as f64,
             limits
                 .max_buffer_size
                 .min(limits.max_storage_buffer_binding_size) as f64
@@ -112,7 +121,7 @@ fn plan(size: [u32; 2], allowance: u64, limits: &Limits, floor: u64) -> Result<F
         ))
     } else {
         Err(format!(
-            "a {} × {} transparent view needs {:.0} MiB for {layers} layers, above the {:.0} MiB fragment budget",
+            "a {} × {} transparent view needs {:.0} MiB for {required} layers, above the {:.0} MiB fragment budget",
             size[0],
             size[1],
             needed as f64 / (1 << 20) as f64,

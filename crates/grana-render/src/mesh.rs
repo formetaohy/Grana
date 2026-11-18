@@ -416,15 +416,11 @@ impl MeshPasses {
                 "a mesh layer carries packed geometry"
             );
             assert_eq!(
-                layer.style_count,
+                layer.objects(),
                 layer.mesh.object_count(),
                 "every mesh object carries one style"
             );
             assert!(keys.insert(layer.key), "a scene names each mesh layer once");
-            assert!(
-                layer.style_start + layer.style_count <= scene.styles.len(),
-                "a mesh layer names its style rows"
-            );
             if !self.slots.contains_key(&layer.key) {
                 let slot = MeshSlot::new(device, queue, layouts, &layer.mesh);
                 self.resident += slot.bytes;
@@ -435,11 +431,8 @@ impl MeshPasses {
                 .get_mut(&layer.key)
                 .expect("the mesh slot exists");
             slot.touch(order);
-            slot.write_styles(
-                queue,
-                &scene.styles[layer.style_start..layer.style_start + layer.style_count],
-            );
-            slot.write_pick(device, queue, layer.style_start);
+            slot.write_styles(queue, &layer.styles);
+            slot.write_pick(device, queue, layer.pick_base);
             self.active.push(layer.key);
         }
         self.evict();
@@ -625,7 +618,7 @@ struct MeshSlot {
     command_group: BindGroup,
     object_count: u32,
     cached_styles: Vec<StyleData>,
-    pick_base: Option<usize>,
+    pick_base: Option<u32>,
     bytes: u64,
     used: u64,
 }
@@ -767,17 +760,17 @@ impl MeshSlot {
         }
     }
 
-    fn write_pick(&mut self, device: &Device, queue: &Queue, style_start: usize) {
-        if self.pick_base == Some(style_start) {
+    fn write_pick(&mut self, device: &Device, queue: &Queue, pick_base: u32) {
+        if self.pick_base == Some(pick_base) {
             return;
         }
-        let base = u32::try_from(style_start + 1).expect("a style row fits u32");
+        let first = pick_base.checked_add(1).expect("a style row fits u32");
         let rows = (0..self.object_count)
-            .map(|index| base + index)
+            .map(|index| first + index)
             .collect::<Vec<_>>();
         let grown = self.pick.write(device, queue, &rows);
         assert!(!grown, "the pick table holds every mesh object");
-        self.pick_base = Some(style_start);
+        self.pick_base = Some(pick_base);
     }
 
     fn draw_normal<'a>(&'a self, pass: &mut RenderPass<'a>) {

@@ -13,7 +13,7 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::schema::{Digest, LayerKey, SceneFrame, Style};
+use crate::schema::{Digest, Layer, LayerKey, SceneFrame};
 use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = concat!(
@@ -318,8 +318,9 @@ impl Sections {
         if self.styles != Some(styles) {
             self.styles = Some(styles);
             let rows = scene
-                .styles
+                .layers
                 .iter()
+                .flat_map(|layer| layer.styles.iter())
                 .map(|style| {
                     let [red, green, blue] = srgb_to_linear(style.color());
                     SectionStyle {
@@ -336,7 +337,7 @@ impl Sections {
         let mut structure = Digest::new();
         for layer in scene.layers {
             structure.mix(layer.key.digest());
-            structure.mix(layer.style_start as u64);
+            structure.mix(u64::from(layer.pick_base));
         }
         let structure = structure.finish();
         let version = scene.versions.style();
@@ -348,7 +349,7 @@ impl Sections {
         }
         let mut digest = Digest::new();
         for layer in scene.layers {
-            for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
+            for style in layer.styles.iter() {
                 digest.flag(style.visible());
             }
         }
@@ -368,7 +369,7 @@ impl Sections {
         {
             return held;
         }
-        let held = (version, style_stamp(scene.styles));
+        let held = (version, style_stamp(scene.layers));
         self.styles = Some(held);
         held
     }
@@ -388,16 +389,16 @@ impl Sections {
                 })
                 .or_insert_with(|| Indices::new(&layer.mesh, plane.normal));
             for (object, index) in indices.objects.iter().enumerate() {
-                let style_index = layer.style_start + object;
-                if !scene.styles[style_index].visible() {
+                if !layer.styles[object].visible() {
                     continue;
                 }
+                let style_index = layer.pick_base + object as u32;
                 quads.clear();
                 self.cutter
                     .cut_indexed(&layer.mesh, object, &plane, index, &mut quads);
                 for quad in quads.as_chunks::<4>().0 {
                     self.corners.extend_from_slice(quad);
-                    self.quad_styles.push(style_index as u32);
+                    self.quad_styles.push(style_index);
                 }
             }
         }
@@ -507,14 +508,16 @@ fn geometry_stamp(plane: Option<PlaneKey>, visibility: Visibility) -> u64 {
     digest.finish()
 }
 
-fn style_stamp(styles: &[Style]) -> u64 {
+fn style_stamp(layers: &[Layer]) -> u64 {
     let mut digest = Digest::new();
-    for style in styles {
-        for value in style.color() {
-            digest.real(value);
+    for layer in layers {
+        for style in layer.styles.iter() {
+            for value in style.color() {
+                digest.real(value);
+            }
+            digest.real(style.opacity());
+            digest.flag(style.visible());
         }
-        digest.real(style.opacity());
-        digest.flag(style.visible());
     }
     digest.finish()
 }

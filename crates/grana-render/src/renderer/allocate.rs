@@ -6,7 +6,7 @@ pub(super) struct Needed {
     pub(super) surfaces: bool,
     pub(super) slice: bool,
     pub(super) volume: bool,
-    pub(super) translucent: bool,
+    pub(super) layers: Option<u64>,
     pub(super) fragments: u64,
 }
 
@@ -17,7 +17,7 @@ pub(super) fn targets(
     encoder: &mut CommandEncoder,
     target: &mut FrameTarget,
     needed: Needed,
-) -> Result<FragmentInfo, String> {
+) -> Result<(), String> {
     let size = target.size;
     if needed.surfaces && !needed.slice && target.normal.is_none() {
         target.normal = Some(crate::target::NormalTarget::new(device, size));
@@ -34,16 +34,11 @@ pub(super) fn targets(
         );
         target.volume = Some(volume);
     }
-    let mut fragment = FragmentInfo::default();
-    if needed.translucent {
-        let (plan, reduced) = fragment::fit(size, needed.fragments, &device.limits())?;
-        fragment = FragmentInfo {
-            layers: plan.layers(),
-            reduced,
-        };
+    if let Some(required) = needed.layers {
+        let plan = fragment::fit(size, needed.fragments, &device.limits(), required)?;
         if target.oit.as_ref().is_none_or(|oit| !oit.fits(plan)) {
             target.oit = Some(Oit::new(device, layouts, plan));
         }
     }
-    Ok(fragment)
+    Ok(())
 }

@@ -149,9 +149,12 @@ impl Image {
             let format = pixel.format();
             let intensity = intensity(format);
             let display = metadata.display.get(index);
-            let window = display
-                .and_then(|display| window(display.low, display.high, intensity))
-                .or_else(|| probe(&document.store, path, base, &cache, format, index as u32))
+            let measured =
+                match display.and_then(|display| window(display.low, display.high, intensity)) {
+                    Some(measured) => Some(measured),
+                    None => probe(&document.store, path, base, &cache, format, index as u32)?,
+                };
+            let window = measured
                 .filter(|window| window.span() > 0.0)
                 .unwrap_or(intensity);
             let source = metadata.channels.get(index);
@@ -470,7 +473,7 @@ fn probe(
     cache: &Cache,
     format: VoxelFormat,
     channel: u32,
-) -> Option<Intensity> {
+) -> Result<Option<Intensity>, Error> {
     let extent = level.extent;
     let side_x = extent.x().min(PROBE_SIDE);
     let side_y = extent.y().min(PROBE_SIDE);
@@ -488,7 +491,7 @@ fn probe(
         y: &y,
         z: &z,
     };
-    let bytes = region(store, path, &level.plans, cache, &request).ok()?;
+    let bytes = region(store, path, &level.plans, cache, &request)?;
     let sample = sample_bytes(format);
     let mut range = (f32::INFINITY, f32::NEG_INFINITY);
     for line in 0..side_y as usize {
@@ -496,7 +499,7 @@ fn probe(
         let (low, high) = samples_range(format, &bytes[start..start + side_x as usize * sample]);
         range = (range.0.min(low), range.1.max(high));
     }
-    (range.1 > range.0).then(|| Intensity::new(range.0, range.1))
+    Ok((range.1 > range.0).then(|| Intensity::new(range.0, range.1)))
 }
 
 fn samples_range(format: VoxelFormat, row: &[u8]) -> (f32, f32) {

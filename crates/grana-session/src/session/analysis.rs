@@ -555,10 +555,14 @@ impl Session {
                 self.defer_relations(set);
             }
             if let Some(scene) = self.scene.as_mut() {
-                if recut {
-                    scene.reapply_hidden(set);
+                let applied = if recut {
+                    Ok(scene.reapply_hidden(set))
                 } else {
-                    scene.apply_curation(set);
+                    scene.apply_curation(set)
+                };
+                if let Err(detail) = applied {
+                    self.message = Some(Message::error(detail));
+                    continue;
                 }
             }
             let carried_tracks = self

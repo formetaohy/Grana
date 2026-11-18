@@ -132,7 +132,7 @@ impl Offline {
         ui.resize(export.size());
         progress(0, export.progress().1);
         let mut prepared: Option<(u32, grana_engine::Targets, RenderedScene)> = None;
-        let mut splats = grana_engine::SplatCache::new();
+        let mut cache = grana_engine::Cache::new();
         loop {
             if cancel.load(Ordering::Relaxed) {
                 export.discard();
@@ -140,12 +140,12 @@ impl Offline {
             }
             let pose = export.pose();
             scene.set_time(pose.time);
-            let targets = grana_engine::plan_with(&scene, export.lens(), &mut splats);
+            let targets = grana_engine::plan_with(&scene, export.lens(), &mut cache);
             let stale = prepared
                 .as_ref()
                 .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);
             if stale {
-                match grana_engine::frame(&scene, &targets, &mut splats) {
+                match grana_engine::frame(&scene, &targets, &mut cache) {
                     Ok(rendered) => prepared = Some((pose.time, targets, rendered)),
                     Err(detail) => {
                         export.discard();

@@ -617,7 +617,7 @@ impl Run<'_, '_> {
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
-        self.scene.apply_curation(id);
+        self.scene.apply_curation(id)?;
         self.track(id)
     }
 
@@ -650,7 +650,7 @@ impl Run<'_, '_> {
                 return Err("the object set names no label image".to_string());
             }
         }
-        self.scene.apply_curation(id);
+        self.scene.apply_curation(id)?;
         let carried = self
             .scene
             .objects
@@ -952,13 +952,13 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, frame);
             }
         }
-        self.scene.apply_curation(id);
+        self.scene.apply_curation(id)?;
         Ok(())
     }
 
     fn merge(&mut self, id: ObjectSetId, part: ObjectSetId) -> Result<(), String> {
         self.scene.merge_objects(part, id)?;
-        self.scene.apply_curation(id);
+        self.scene.apply_curation(id)?;
         Ok(())
     }
 

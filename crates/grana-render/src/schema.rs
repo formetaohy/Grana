@@ -190,8 +190,32 @@ pub struct ChannelRow {
 pub struct Layer {
     pub key: LayerKey,
     pub mesh: Arc<PackedMesh>,
-    pub style_start: usize,
-    pub style_count: usize,
+    pub styles: Arc<[Style]>,
+    pub pick_base: u32,
+}
+
+impl Layer {
+    pub fn new(key: LayerKey, mesh: Arc<PackedMesh>, styles: Arc<[Style]>, pick_base: u32) -> Self {
+        assert_eq!(
+            styles.len(),
+            mesh.object_count(),
+            "every mesh object carries one style"
+        );
+        assert!(
+            u64::from(pick_base) + styles.len() as u64 <= u64::from(u32::MAX),
+            "a layer names its pick rows within u32"
+        );
+        Self {
+            key,
+            mesh,
+            styles,
+            pick_base,
+        }
+    }
+
+    pub fn objects(&self) -> usize {
+        self.styles.len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -299,7 +323,6 @@ pub struct SceneFrame<'a> {
     pub channels: &'a [ChannelRow],
     pub shading: Shading,
     pub step_scale: f32,
-    pub styles: &'a [Style],
     pub layers: &'a [Layer],
     pub splats: Splats<'a>,
     pub overlays: &'a [Overlay<'a>],

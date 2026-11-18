@@ -121,8 +121,9 @@ impl Renderer {
         }
         let translucent = frame
             .scene
-            .styles
+            .layers
             .iter()
+            .flat_map(|layer| layer.styles.iter())
             .any(|style| style.visible() && style.transparent());
         self.translucent = Some((version, translucent));
         translucent
@@ -244,7 +245,12 @@ impl Renderer {
             info.fading = false;
             return Err(Halt::Hold(*info));
         }
-        let fragment = match allocate::targets(
+        let layers = shot.translucent.then_some(if shot.assured {
+            crate::fragment::ASSURED_LAYERS
+        } else {
+            crate::fragment::INTERACTIVE_LAYERS
+        });
+        if let Err(detail) = allocate::targets(
             device,
             layouts,
             gtao,
@@ -254,14 +260,12 @@ impl Renderer {
                 surfaces: shot.surfaces,
                 slice: shot.slice,
                 volume: shot.volume,
-                translucent: shot.translucent,
+                layers,
                 fragments: *fragments,
             },
         ) {
-            Ok(fragment) => fragment,
-            Err(detail) => return Err(Halt::Fail(detail)),
-        };
-        info.fragment = fragment;
+            return Err(Halt::Fail(detail));
+        }
         let planned = plan::shadow(plan::ShadowFrame {
             scene,
             pyramid: &resources.pyramid,

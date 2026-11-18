@@ -1208,6 +1208,44 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
 }
 
 #[test]
+fn keeps_the_analysis_when_an_applied_protocol_does_not_fit() {
+    let mut session = Session::new();
+    session.open_series("protocol", series());
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    let scene = session.scene().expect("the series opens");
+    let channels = scene.channels.len();
+    let objects = scene.objects.iter().count();
+    let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
+        .expect("the scene captures");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&protocol.to_json().expect("the protocol serializes"))
+            .expect("the protocol is json");
+    let recorded = value["channels"]
+        .as_array_mut()
+        .expect("the protocol records its channels");
+    recorded[0]["name"] = serde_json::Value::String("Absent".to_string());
+    let broken = Protocol::from_json(&value.to_string()).expect("the protocol parses");
+    session.set_protocol(broken);
+    session.execute(Command::ApplyProtocol);
+    assert_eq!(
+        session.message().map(|message| message.kind()),
+        Some(grana_session::Kind::Error),
+        "a protocol that does not fit the dataset reports the mismatch"
+    );
+    let scene = session.scene().expect("the dataset stays open");
+    assert_eq!(
+        scene.channels.len(),
+        channels,
+        "a rejected protocol leaves no derived channel behind"
+    );
+    assert_eq!(
+        scene.objects.iter().count(),
+        objects,
+        "a rejected protocol keeps the analysis it cannot replay"
+    );
+}
+
+#[test]
 fn drops_volume_reads_that_predate_a_content_change() {
     let mut session = Session::new();
     session.open_series("stale bricks", series());

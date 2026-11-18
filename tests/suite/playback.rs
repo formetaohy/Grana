@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use grana_display::Camera;
-use grana_engine::{Engine, Lens, SplatCache};
+use grana_engine::{Cache, Engine, Lens};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::Delivery;
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
@@ -118,7 +118,7 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
     }
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::new(400.0, 400.0, 8.0), 1.0);
-    let mut cache = SplatCache::new();
+    let mut cache = Cache::new();
     for time in 0..2 {
         scene.set_time(time);
         let targets = grana_engine::plan_with(

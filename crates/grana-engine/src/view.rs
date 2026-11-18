@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use glam::Vec3;
 use grana_display::{Camera, Shading, srgb_to_linear};
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, SplatLevel, Splats, Style,
@@ -8,16 +7,18 @@ use grana_render::{
 };
 use grana_scene::{Item, ObjectFrame, ObjectSet, Scene, Selection};
 
+use crate::geometry::GeometryCache;
 use crate::splat::{SplatCache, SplatMembers};
 use crate::spot::{self, Choice};
+use crate::style::StyleCache;
 
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
 const SEED_PART: u64 = 0;
 const DETECTION_PART: u64 = 1;
 const HIGHLIGHT_PART: u64 = 2;
-const PIXEL_TRIANGLE_AREA: f32 = 4.0;
-const MINIMUM_TARGET: f32 = 512.0;
+pub(crate) const OBJECT_PART: u32 = 0;
+pub(crate) const TRACK_PART: u32 = 1;
 
 #[derive(Clone, Copy)]
 pub struct Lens<'a> {
@@ -31,16 +32,60 @@ pub struct Targets {
     splats: Vec<Choice>,
 }
 
+pub struct Cache {
+    splats: SplatCache,
+    geometry: GeometryCache,
+    styles: StyleCache,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Cache {
+    pub fn new() -> Self {
+        Self {
+            splats: SplatCache::new(),
+            geometry: GeometryCache::new(),
+            styles: StyleCache::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.splats.clear();
+        self.geometry.clear();
+        self.styles.clear();
+    }
+}
+
+#[derive(Clone)]
+pub struct PickRows {
+    base: u32,
+    ids: Arc<[Selection]>,
+}
+
+impl PickRows {
+    pub fn base(&self) -> u32 {
+        self.base
+    }
+
+    pub fn resolve(&self, index: u32) -> Option<Selection> {
+        let offset = index.checked_sub(self.base)?;
+        self.ids.get(offset as usize).copied()
+    }
+}
+
 pub struct RenderedScene {
     pub versions: Versions,
     pub channels: Vec<ChannelRow>,
-    pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
     pub splats: Vec<SplatChunk>,
     pub members: Vec<SplatMembers>,
-    pub style_ids: Vec<Selection>,
-    pub shading: Shading,
-    pub step_scale: f32,
+    shading: Shading,
+    step_scale: f32,
+    picks: Vec<PickRows>,
 }
 
 impl RenderedScene {
@@ -50,7 +95,6 @@ impl RenderedScene {
             channels: &self.channels,
             shading: self.shading,
             step_scale: self.step_scale,
-            styles: &self.styles,
             layers: &self.layers,
             splats: Splats::new(&self.splats),
             overlays,
@@ -70,6 +114,14 @@ impl RenderedScene {
             .iter()
             .find(|members| members.key() == key)?
             .members(level)
+    }
+
+    pub fn style(&self, index: u32) -> Option<Selection> {
+        self.picks.iter().find_map(|rows| rows.resolve(index))
+    }
+
+    pub fn picks(&self) -> &[PickRows] {
+        &self.picks
     }
 }
 
@@ -158,10 +210,10 @@ pub fn key(scene: &Scene) -> Key {
 }
 
 pub fn plan(scene: &Scene, lens: Option<Lens<'_>>) -> Targets {
-    plan_with(scene, lens, &mut SplatCache::new())
+    plan_with(scene, lens, &mut Cache::new())
 }
 
-pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, splats: &mut SplatCache) -> Targets {
+pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, cache: &mut Cache) -> Targets {
     let mut detail = Vec::new();
     let mut choices = Vec::new();
     for set in scene.objects.iter() {
@@ -172,10 +224,10 @@ pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, splats: &mut SplatCache)
         detail.push(match (frame, lens) {
             (Some(frame), Some(lens)) => match frame.as_ref() {
                 ObjectFrame::Surfaces(surfaces) => {
-                    surfaces.select_detail(triangle_target(surfaces, lens))
+                    cache.geometry.target(scene, set, surfaces, lens)
                 }
                 ObjectFrame::Cells(cells) => {
-                    cells.select_detail(triangle_target(cells.bodies(), lens))
+                    cache.geometry.target(scene, set, cells.bodies(), lens)
                 }
                 ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => 0,
             },
@@ -186,7 +238,7 @@ pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, splats: &mut SplatCache)
                 let pixels = lens
                     .camera
                     .world_per_point(lens.height as f32, lens.camera.distance());
-                splats.choose(scene, set, pixels)
+                cache.splats.choose(scene, set, pixels)
             }
             None => Choice::Full,
         });
@@ -197,25 +249,21 @@ pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, splats: &mut SplatCache)
     }
 }
 
-pub fn frame(
-    scene: &Scene,
-    targets: &Targets,
-    cache: &mut SplatCache,
-) -> Result<RenderedScene, String> {
+pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<RenderedScene, String> {
     assert_eq!(
         targets.detail.len(),
         targets.splats.len(),
         "a target names one detail level and one splat level per shown set"
     );
-    let mut styles = Vec::new();
     let mut layers = Vec::new();
+    let mut picks = Vec::new();
     let mut splats = Vec::new();
     let mut members = Vec::new();
-    let mut style_ids = Vec::new();
     let mut data = Digest::new();
     let mut objects = Digest::new();
     let mut appearance = Digest::new();
     let mut ordinal = 0usize;
+    let mut base = 0u32;
     let time = scene.time();
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
     data.mix(scene.channels.len() as u64);
@@ -260,7 +308,7 @@ pub fn frame(
                 .unwrap_or_else(|| set.color())
         };
         if frame.spots().is_some() {
-            let prepared = cache.prepare(
+            let prepared = cache.splats.prepare(
                 scene,
                 set,
                 splat_key(set.id().raw(), DETECTION_PART),
@@ -323,78 +371,76 @@ pub fn frame(
         if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(time))
             && !mesh.is_empty()
         {
-            let start = styles.len();
-            for index in 0..frame.object_count() {
-                let visible = set.visible_object(time, index);
-                let selected = scene.object_selected(set.id(), index);
-                let opacity = set.opacity();
-                let [red, green, blue] = color(index);
-                let material = set.material();
-                appearance.real(red);
-                appearance.real(green);
-                appearance.real(blue);
-                appearance.flag(visible);
-                appearance.flag(selected);
-                appearance.real(opacity);
-                appearance.real(material.roughness());
-                appearance.real(material.metallic());
-                styles.push(
-                    Style::new([red, green, blue], visible, selected, opacity)
-                        .with_material(material),
-                );
-                style_ids.push(Selection {
-                    set: set.id(),
-                    item: Item::Object(index),
+            let count = frame.object_count();
+            let rows = cache
+                .styles
+                .rows(scene, set, OBJECT_PART, count, |styles, ids| {
+                    for index in 0..count {
+                        let visible = set.visible_object(time, index);
+                        let selected = scene.object_selected(set.id(), index);
+                        styles.push(
+                            Style::new(color(index), visible, selected, set.opacity())
+                                .with_material(set.material()),
+                        );
+                        ids.push(Selection {
+                            set: set.id(),
+                            item: Item::Object(index),
+                        });
+                    }
                 });
-            }
-            let layer = Layer {
-                key: LayerKey::at_frame(set.id().raw(), 0, time, stamp.raw(), level as u16),
+            appearance.mix(rows.digest());
+            let layer = Layer::new(
+                LayerKey::at_frame(set.id().raw(), OBJECT_PART, time, stamp.raw(), level as u16),
                 mesh,
-                style_start: start,
-                style_count: frame.object_count(),
-            };
+                rows.styles(),
+                base,
+            );
             objects.mix(layer.key.digest());
+            base += count as u32;
+            picks.push(PickRows {
+                base: layer.pick_base,
+                ids: rows.ids(),
+            });
             layers.push(layer);
         }
         if let Some(tracks) = set.tracks()
             && !tracks.set().is_empty()
         {
             let visible = set.track_visible();
-            let opacity = set.opacity();
-            let material = set.material();
-            let start = styles.len();
-            for index in 0..tracks.set().len() {
-                let selected = scene.track_selected(set.id(), index);
-                let [red, green, blue] = set.track_color(index);
-                appearance.real(red);
-                appearance.real(green);
-                appearance.real(blue);
-                appearance.flag(visible && set.visible_track(index));
-                appearance.flag(selected);
-                appearance.real(opacity);
-                appearance.real(material.roughness());
-                appearance.real(material.metallic());
-                styles.push(
-                    Style::new(
-                        [red, green, blue],
-                        visible && set.visible_track(index),
-                        selected,
-                        opacity,
-                    )
-                    .with_material(material),
-                );
-                style_ids.push(Selection {
-                    set: set.id(),
-                    item: Item::Track(index),
+            let count = tracks.set().len();
+            let rows = cache
+                .styles
+                .rows(scene, set, TRACK_PART, count, |styles, ids| {
+                    for index in 0..count {
+                        let shown = visible && set.visible_track(index);
+                        styles.push(
+                            Style::new(
+                                set.track_color(index),
+                                shown,
+                                scene.track_selected(set.id(), index),
+                                set.opacity(),
+                            )
+                            .with_material(set.material()),
+                        );
+                        ids.push(Selection {
+                            set: set.id(),
+                            item: Item::Track(index),
+                        });
+                    }
                 });
-            }
-            let layer = Layer {
-                key: LayerKey::stable(set.id().raw(), 1, tracks.revision().raw()),
-                mesh: tracks.mesh(),
-                style_start: start,
-                style_count: tracks.set().len(),
-            };
+            appearance.mix(rows.digest());
+            let layer = Layer::new(
+                LayerKey::stable(set.id().raw(), TRACK_PART, tracks.revision().raw()),
+                tracks.mesh(),
+                rows.styles(),
+                base,
+            );
             objects.mix(layer.key.digest());
+            base += count as u32;
+            picks.push(PickRows {
+                base: layer.pick_base,
+                ids: rows.ids(),
+            });
             layers.push(layer);
         }
     }
@@ -414,22 +460,20 @@ pub fn frame(
         targets.detail.len(),
         "the targets cover every shown set"
     );
-    let present = scene
-        .objects
-        .iter()
-        .map(|set| set.id().raw())
-        .collect::<Vec<_>>();
-    cache.retain(&present);
+    assert_eq!(layers.len(), picks.len(), "every layer names its pick rows");
+    let present = scene.objects.iter().map(|set| set.id()).collect::<Vec<_>>();
+    cache.splats.retain(&present);
+    cache.geometry.retain(&present);
+    cache.styles.retain(&present);
     Ok(RenderedScene {
         versions: Versions::new(data.finish(), objects.finish(), appearance.finish()),
         channels,
-        styles,
         layers,
         splats,
         members,
-        style_ids,
         shading: scene.shading,
         step_scale: scene.step_scale,
+        picks,
     })
 }
 
@@ -481,25 +525,4 @@ fn splat_key(set: u64, part: u64) -> u64 {
     key.mix(set);
     key.mix(part);
     key.finish()
-}
-
-fn triangle_target(surfaces: &grana_object::SurfaceSet, lens: Lens<'_>) -> usize {
-    let focal = lens.camera.pixels_per_world(lens.height);
-    let eye = lens.camera.eye();
-    let orthographic = lens.camera.projection().orthographic();
-    let mut area = 0.0f64;
-    for object in surfaces.objects() {
-        let bounds = object.bounds();
-        let radius = 0.5 * Vec3::from(bounds.size()).length();
-        let center = Vec3::from(bounds.center());
-        let distance = if orthographic {
-            lens.camera.distance()
-        } else {
-            (eye - center).length().max(0.5 * radius)
-        }
-        .max(1.0e-6);
-        let pixels = f64::from(radius * focal / distance);
-        area += std::f64::consts::PI * pixels * pixels / f64::from(PIXEL_TRIANGLE_AREA);
-    }
-    area.max(f64::from(MINIMUM_TARGET)) as usize
 }

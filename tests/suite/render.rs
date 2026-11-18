@@ -208,7 +208,6 @@ fn background(
         channels: &rows,
         shading: view.scene.shading,
         step_scale: view.scene.step_scale,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -258,7 +257,6 @@ fn streams_and_shades_two_channels() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -320,19 +318,18 @@ fn composites_a_mesh_layer() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let mesh = PackedMesh::new(quad(8.0));
-    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
-    let layers = [Layer {
-        key: LayerKey::stable(1, 0, 1),
-        mesh: Arc::new(mesh),
-        style_start: 0,
-        style_count: 1,
-    }];
+    let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 1.0)]);
+    let layers = [Layer::new(
+        LayerKey::stable(1, 0, 1),
+        Arc::new(mesh),
+        Arc::clone(&styles),
+        0,
+    )];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
-        styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
         overlays: &[],
@@ -377,19 +374,18 @@ fn keeps_a_translucent_layer() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let mesh = PackedMesh::new(quad(8.0));
-    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 0.5)];
-    let layers = [Layer {
-        key: LayerKey::stable(1, 0, 1),
-        mesh: Arc::new(mesh),
-        style_start: 0,
-        style_count: 1,
-    }];
+    let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 0.5)]);
+    let layers = [Layer::new(
+        LayerKey::stable(1, 0, 1),
+        Arc::new(mesh),
+        Arc::clone(&styles),
+        0,
+    )];
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
-        styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
         overlays: &[],
@@ -429,7 +425,6 @@ fn keeps_a_translucent_layer() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
-        styles: &styles,
         layers: &layers,
         splats: Splats::empty(),
         overlays: &[],
@@ -485,7 +480,6 @@ fn clips_an_oriented_region() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -571,7 +565,6 @@ fn assured_pixels(
         channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -722,7 +715,6 @@ fn render_volume(
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -940,7 +932,6 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -986,7 +977,6 @@ fn sizes_the_export_residency_to_the_finest_level() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -1069,7 +1059,6 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::empty(),
         overlays: &[],
@@ -1167,7 +1156,6 @@ fn picks_only_the_objects_of_the_slice_plane() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::new(&chunks),
         overlays: &[],
@@ -1233,7 +1221,6 @@ fn composites_soft_splats_through_the_depth_layers() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::new(&solid_chunks),
         overlays: &[],
@@ -1243,7 +1230,6 @@ fn composites_soft_splats_through_the_depth_layers() {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 0.5,
-        styles: &[],
         layers: &[],
         splats: Splats::new(&faint_chunks),
         overlays: &[],
@@ -1326,7 +1312,6 @@ fn converges_the_brightness_of_overlapping_splats() {
             channels: &channels,
             shading: Shading::default(),
             step_scale: 0.5,
-            styles: &[],
             layers: &[],
             splats: Splats::new(&chunks),
             overlays: &[],
@@ -1372,5 +1357,20 @@ fn converges_the_brightness_of_overlapping_splats() {
     assert!(
         eight > single + 80.0,
         "overlapping splats keep the brightness of one: {eight} against {single}"
+    );
+}
+
+#[test]
+fn refuses_a_transparency_store_that_cannot_hold_the_layers_it_needs() {
+    let limits = wgpu::Limits::default();
+    let size = [128, 128];
+    let allowance = 3 << 20;
+    assert!(
+        grana_render::fragment_fit(size, allowance, &limits, 2).is_err(),
+        "a view that needs two transparent layers must not fall back to one"
+    );
+    assert!(
+        grana_render::fragment_fit(size, allowance, &limits, 1).is_ok(),
+        "the same view still fits a single transparent layer"
     );
 }

@@ -79,12 +79,6 @@ pub struct ViewInfo {
     pub resident: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FragmentInfo {
-    pub layers: u32,
-    pub reduced: bool,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameInfo {
     pub view: ViewInfo,
@@ -95,7 +89,6 @@ pub struct FrameInfo {
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
-    pub fragment: FragmentInfo,
 }
 
 #[derive(Default)]

@@ -47,6 +47,7 @@ messages! {
     localizations(count: u64) => "{count} localizations" / "{count} 个定位";
     molecule_count(count: usize) => "{count} molecules" / "{count} 个分子";
     group_count(count: usize) => "{count} groups" / "{count} 个分组";
+    groups_truncated(shown: usize, total: usize) => "top {shown} of {total} groups" / "{total} 个分组中最大的 {shown} 个";
     group(index: u32) => "Group {index}" / "分组 {index}";
     group_detail(count: u64, precision: f32) => "{count} locs · {precision:.1} nm" / "{count} 个定位 · {precision:.1} nm";
     slice_range(low: f32, high: f32) => "{low:.1}–{high:.1} nm" / "{low:.1}–{high:.1} nm";
