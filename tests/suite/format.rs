@@ -658,6 +658,28 @@ fn derived_values(image: &Image, ranges: &[std::ops::Range<u32>; 3]) -> Vec<f32>
 }
 
 #[test]
+fn refuses_a_range_that_the_server_answers_with_the_whole_object() {
+    let temp = Temp::new("suite-range");
+    let payload = vec![7u8; 4096];
+    std::fs::write(temp.path().join("data.bin"), &payload).expect("the payload writes");
+    let server = support::Server::serve(temp.path());
+    let url = format!("{}data.bin", server.url());
+    let client = grana_net::Client::new();
+    let error = client
+        .get(&url, Some(grana_net::Span::Between(16, 31)))
+        .expect_err("a whole response never passes for a byte range");
+    assert!(
+        matches!(error, grana_net::Error::Range { .. }),
+        "the client reports the unusable range: {error}"
+    );
+    let whole = client
+        .get(&url, None)
+        .expect("the whole object reads")
+        .expect("the object is present");
+    assert_eq!(whole, payload, "the whole read keeps every byte");
+}
+
+#[test]
 fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     let temp = Temp::new("suite-zarr-remote");
     let path = temp.path().join("remote.ome.zarr");

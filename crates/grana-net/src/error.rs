@@ -12,6 +12,8 @@ pub enum Error {
     Status { url: String, status: u16 },
     #[error("the response of `{url}` exceeds the size limit")]
     Size { url: String },
+    #[error("the byte range of `{url}` is unusable: {detail}")]
+    Range { url: String, detail: String },
 }
 
 impl From<Error> for String {

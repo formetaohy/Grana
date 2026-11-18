@@ -250,7 +250,10 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
     let fail = |detail: String| {
         sender.send_until(Event::Failed(detail), stopped);
     };
-    let plate = grana_image::plate(&source).ok().flatten();
+    let plate = match grana_image::plate(&source) {
+        Ok(plate) => plate,
+        Err(detail) => return fail(detail.to_string()),
+    };
     let source = match grana_image::resolve_series(&source) {
         Ok(source) => source,
         Err(detail) => return fail(detail.to_string()),

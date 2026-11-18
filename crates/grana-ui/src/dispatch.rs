@@ -7,6 +7,13 @@ use crate::input::{Button, Key as InputKey};
 use crate::node::NodeId;
 use crate::ui::Ui;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Finish {
+    Submit,
+    Write,
+    Cancel,
+}
+
 impl<A: Clone> Ui<A> {
     pub(crate) fn dispatch(&mut self) {
         if self.input.cancelled() {
@@ -634,8 +641,10 @@ impl<A: Clone> Ui<A> {
                 return;
             };
             let rect = self.tree.nodes[node].rect;
+            let preedit = self.preedit.clone();
             let caret = crate::widget::field::caret_at(
-                edit.text(),
+                &edit,
+                preedit.as_deref(),
                 field.style,
                 field.multiline,
                 rect,
@@ -662,11 +671,13 @@ impl<A: Clone> Ui<A> {
         let extend = self.input.modifiers().shift;
         let time = self.time;
         let pointer = at;
+        let preedit = self.preedit.clone();
         let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
             return;
         };
         let caret = crate::widget::field::caret_at(
-            edit.text(),
+            edit,
+            preedit.as_deref(),
             style,
             multiline,
             rect,
@@ -698,11 +709,13 @@ impl<A: Clone> Ui<A> {
         let (style, multiline) = (field.style, field.multiline);
         let rect = self.tree.nodes[node].rect;
         let time = self.time;
+        let preedit = self.preedit.clone();
         let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
             return;
         };
         let caret = crate::widget::field::caret_at(
-            edit.text(),
+            edit,
+            preedit.as_deref(),
             style,
             multiline,
             rect,
@@ -716,53 +729,73 @@ impl<A: Clone> Ui<A> {
         let Some(node) = self.edit else {
             return;
         };
-        let commit = {
+        let live = matches!(
+            &self.tree.nodes[node].interaction,
+            Interaction::Field {
+                commit: None,
+                submit: Some(_),
+                ..
+            }
+        );
+        let finish = {
             let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
                 self.edit = None;
                 return;
             };
             match edit.poll(&self.input, self.clipboard.as_mut(), self.time) {
-                Some(Outcome::Commit) => Some(true),
-                Some(Outcome::Cancel) => Some(false),
+                Some(Outcome::Commit) => Some(Finish::Submit),
+                Some(Outcome::Advance) => Some(Finish::Write),
+                Some(Outcome::Cancel) => Some(Finish::Cancel),
                 None => {
                     let primary = self.input.button(Button::Primary);
-                    if primary.pressed && !self.tree.nodes[node].rect.contains(self.pointer) {
-                        Some(true)
+                    if primary.pressed
+                        && !self.tree.nodes[node].rect.contains(self.pointer)
+                        && !live
+                    {
+                        Some(Finish::Write)
                     } else {
                         None
                     }
                 }
             }
         };
-        if let Some(commit) = commit {
-            let text = self.tree.nodes[node]
-                .runtime
-                .edit
-                .take()
-                .map_or_else(String::new, |edit| edit.text().to_string());
-            self.edit = None;
-            let action = match &self.tree.nodes[node].interaction {
-                Interaction::Field { commit: apply, .. } if commit => Some(apply(&text)),
-                Interaction::Field {
-                    cancel: Some(cancel),
-                    ..
-                } => Some((cancel)()),
-                _ => None,
-            };
-            if let Some(action) = action {
-                self.actions.push(action);
-            }
-            if commit
-                && self
-                    .input
-                    .keys()
-                    .iter()
-                    .any(|event| event.pressed && !event.repeat && event.key == Some(InputKey::Tab))
-            {
-                let forward = !self.input.modifiers().shift;
-                if self.advance_focus(forward) {
-                    self.focus_visible = true;
-                }
+        let Some(finish) = finish else {
+            return;
+        };
+        let text = self.tree.nodes[node]
+            .runtime
+            .edit
+            .take()
+            .map_or_else(String::new, |edit| edit.text().to_string());
+        self.edit = None;
+        let action = match &self.tree.nodes[node].interaction {
+            Interaction::Field {
+                commit,
+                submit,
+                cancel,
+            } => match finish {
+                Finish::Submit => submit
+                    .as_ref()
+                    .or(commit.as_ref())
+                    .map(|apply| apply(&text)),
+                Finish::Write => commit.as_ref().map(|apply| apply(&text)),
+                Finish::Cancel => cancel.as_ref().map(|apply| apply()),
+            },
+            _ => None,
+        };
+        if let Some(action) = action {
+            self.actions.push(action);
+        }
+        if finish == Finish::Write
+            && self
+                .input
+                .keys()
+                .iter()
+                .any(|event| event.pressed && !event.repeat && event.key == Some(InputKey::Tab))
+        {
+            let forward = !self.input.modifiers().shift;
+            if self.advance_focus(forward) {
+                self.focus_visible = true;
             }
         }
     }

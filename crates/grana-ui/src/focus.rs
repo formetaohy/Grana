@@ -4,10 +4,9 @@ use crate::ui::Ui;
 impl<A: Clone> Ui<A> {
     pub(crate) fn collect_focus(&mut self) {
         let root = self.tree.root;
-        let edit = self.edit;
         let mut focus = std::mem::take(&mut self.focus_order);
         focus.clear();
-        self.collect_focus_in(root, edit, &mut focus);
+        self.collect_focus_in(root, &mut focus);
         self.focus_order = focus;
         if self
             .focus
@@ -18,16 +17,16 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    fn collect_focus_in(&self, id: NodeId, edit: Option<NodeId>, out: &mut Vec<NodeId>) {
+    fn collect_focus_in(&self, id: NodeId, out: &mut Vec<NodeId>) {
         let node = &self.tree.nodes[id];
         if !node.visible || !node.enabled {
             return;
         }
-        if node.interaction.is_focusable() && edit != Some(id) {
+        if node.interaction.is_focusable() {
             out.push(id);
         }
         for child in &node.children {
-            self.collect_focus_in(*child, edit, out);
+            self.collect_focus_in(*child, out);
         }
     }
 

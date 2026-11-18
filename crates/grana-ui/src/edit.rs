@@ -11,6 +11,7 @@ const MULTI_CLICK_SLOP: f32 = 4.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Commit,
+    Advance,
     Cancel,
 }
 
@@ -398,8 +399,9 @@ impl Edit {
                 Key::End => self.end(modifiers.shift, time),
                 Key::Up if self.multiline => self.vertical(-1, modifiers.shift, time),
                 Key::Down if self.multiline => self.vertical(1, modifiers.shift, time),
+                Key::Tab => return Some(Outcome::Advance),
                 Key::Enter if self.multiline => self.insert("\n", time),
-                Key::Enter | Key::Tab => return Some(Outcome::Commit),
+                Key::Enter => return Some(Outcome::Commit),
                 Key::Escape => return Some(Outcome::Cancel),
                 Key::Space | Key::Up | Key::Down | Key::PageUp | Key::PageDown => {}
             }

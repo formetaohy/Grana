@@ -188,7 +188,7 @@ pub(crate) fn remote<'a>(
     )
     .named("remote.url")
     .editing(true)
-    .on_commit(|text: &str| Message::OpenRemote(text.to_string()))
+    .on_submit(|text: &str| Message::OpenRemote(text.to_string()))
     .on_cancel(|| Message::CancelRemote);
     let hint = crate::view::caption(ctx, grana_i18n::annotation::remote_hint(language));
     let surface = ctx

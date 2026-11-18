@@ -255,7 +255,7 @@ pub(crate) fn view<'a>(
     let field = grana_ui::widget::text_field("", field_style, width - 2.0 * PADDING - 38.0, false)
         .key(Key::new("palette.field"))
         .editing(true)
-        .on_commit(|_| Message::RunSelected)
+        .on_submit(|_| Message::RunSelected)
         .on_cancel(|| Message::ClosePalette);
     let search = grana_ui::canvas(Length::Fixed(26.0), 26.0).view_static(move |painter, info| {
         grana_ui::icon::paint(

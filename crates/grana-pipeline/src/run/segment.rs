@@ -144,7 +144,7 @@ pub fn segment(
                 keep_labels(&mut labels, mask, &ranges, z);
             }
             slices.push(labels);
-            let done = time as usize * depth as usize + offset + 1;
+            let done = (time as usize * depth as usize + offset + 1).min(total);
             sink(Event::Progress { time, done, total });
         }
         let volume = assemble(
@@ -176,6 +176,11 @@ pub fn segment(
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
     }
+    sink(Event::Progress {
+        time: frames.saturating_sub(1),
+        done: total,
+        total,
+    });
     sink(Event::Done);
     Ok(())
 }

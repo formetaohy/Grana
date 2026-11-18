@@ -206,9 +206,11 @@ impl<A: Clone> Ui<A> {
                 scroll.update(elapsed, motion);
                 (scroll.offset != before, scroll.settled())
             };
+            if moved {
+                self.tree.invalidate_arrange(id);
+            }
             if moved || !settled {
                 self.tree.nodes[id].paint_dirty = true;
-                self.tree.invalidate_arrange(id);
                 self.animating = true;
             }
             if !settled {

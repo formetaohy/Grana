@@ -274,9 +274,11 @@ impl Renderer {
             time: frame.time,
         });
         let shadow = &mut resources.shadow;
-        let voxel = resources.pyramid.level(planned.level).voxel();
-        let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
-        shadow.resize(device, layouts, shadow::extent(&planned.space, unit));
+        if scene.shading.shadows > 0.0 && !shot.slice {
+            let voxel = resources.pyramid.level(planned.level).voxel();
+            let unit = voxel.into_iter().fold(f32::INFINITY, f32::min);
+            shadow.resize(device, layouts, shadow::extent(&planned.space, unit));
+        }
         let data = plan::data(plan::Frame {
             camera: frame.camera,
             region: frame.region,

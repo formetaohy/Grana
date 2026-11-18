@@ -14,17 +14,6 @@ struct Sums {
 }
 
 impl Sums {
-    fn minus(self, other: Self) -> Self {
-        Self {
-            count: self.count - other.count,
-            a: self.a - other.a,
-            b: self.b - other.b,
-            aa: self.aa - other.aa,
-            bb: self.bb - other.bb,
-            ab: self.ab - other.ab,
-        }
-    }
-
     fn add_cell(&mut self, count: u64, a_bin: usize, b_bin: usize, bins: usize) {
         let count = count as f64;
         if count == 0.0 {
@@ -78,12 +67,6 @@ pub(super) fn costes(
     if total.pearson().is_none_or(|pearson| pearson <= ZERO) {
         return None;
     }
-    let mut totals = Sums::default();
-    for b_bin in 0..bins {
-        for a_bin in 0..bins {
-            totals.add_cell(joint[a_bin + bins * b_bin], a_bin, b_bin, bins);
-        }
-    }
     let along_a = slope < 1.0;
     let mut above = Sums::default();
     let (mut cut_a, mut cut_b) = (bins, bins);
@@ -108,7 +91,7 @@ pub(super) fn costes(
         }
         cut_a = next_a;
         cut_b = next_b;
-        let Some(pearson) = totals.minus(above).pearson() else {
+        let Some(pearson) = above.pearson() else {
             continue;
         };
         let thresholds = pair(bins, along_a, step, slope, intercept);

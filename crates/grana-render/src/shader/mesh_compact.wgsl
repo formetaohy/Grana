@@ -39,11 +39,14 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
-fn slot(visible: bool, inside: bool, opaque: bool) -> u32 {
+fn slot(visible: bool, inside: bool, opaque: bool, shadows: bool) -> u32 {
     if (!visible) {
         return HIDDEN;
     }
     if (!inside) {
+        if (!shadows) {
+            return HIDDEN;
+        }
         return SHADOW;
     }
     if (opaque) {
@@ -57,7 +60,12 @@ fn classify(index: u32) -> u32 {
     let style = styles[index];
     let inside = !outside_sphere(object.center_radius.xyz, object.center_radius.w)
         && !outside_region_sphere(object.center_radius.xyz, object.center_radius.w);
-    return slot(style.flags.x >= 0.5, inside, style.flags.z >= 0.5);
+    return slot(
+        style.flags.x >= 0.5,
+        inside,
+        style.flags.z >= 0.5,
+        frame.march.y > 0.0,
+    );
 }
 
 @compute @workgroup_size(64)

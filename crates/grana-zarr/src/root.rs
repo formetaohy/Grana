@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use grana_net::{Client, Probe, Span, Target};
+use grana_net::{Client, Presence, Span, Target};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::byte_range::{ByteRange, ByteRangeIterator};
 use zarrs::storage::{
@@ -52,14 +52,9 @@ impl Root {
             path: url.to_string(),
             detail: error.to_string(),
         })?;
-        let store = RemoteStore {
-            target: target.clone(),
-            client: Client::shared(),
-            blocks: Mutex::new(Blocks::default()),
-            probes: Mutex::new(HashMap::new()),
-        };
+        let store = shared(&target);
         Ok(Self {
-            store: Store::Remote(Arc::new(store)),
+            store: Store::Remote(store),
             origin: Origin::Remote { target },
         })
     }
@@ -173,12 +168,13 @@ impl Witness {
                         detail: error.to_string(),
                     })?;
                     match probed {
-                        Some(probe) => {
-                            let Some(size) = probe.size else {
-                                return Ok(None);
-                            };
-                            let Some(validator) =
-                                probe.etag.as_deref().or(probe.last_modified.as_deref())
+                        Presence::Missing => hash = witness::mix(hash, &[0]),
+                        Presence::Object {
+                            size: Some(size),
+                            etag,
+                            last_modified,
+                        } => {
+                            let Some(validator) = etag.as_deref().or(last_modified.as_deref())
                             else {
                                 return Ok(None);
                             };
@@ -186,7 +182,7 @@ impl Witness {
                             hash = witness::mix(hash, &size.to_le_bytes());
                             hash = witness::mix(hash, validator.as_bytes());
                         }
-                        None => hash = witness::mix(hash, &[0]),
+                        Presence::Object { size: None, .. } => return Ok(None),
                     }
                 }
                 Ok(Some(hash))
@@ -235,7 +231,27 @@ pub(crate) struct RemoteStore {
     target: Target,
     client: Arc<Client>,
     blocks: Mutex<Blocks>,
-    probes: Mutex<HashMap<String, Option<Probe>>>,
+    probes: Mutex<HashMap<String, Presence>>,
+}
+
+fn shared(target: &Target) -> Arc<RemoteStore> {
+    static STORES: OnceLock<Mutex<HashMap<String, Weak<RemoteStore>>>> = OnceLock::new();
+    let mut stores = STORES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    stores.retain(|_, held| held.strong_count() > 0);
+    if let Some(store) = stores.get(target.display()).and_then(Weak::upgrade) {
+        return store;
+    }
+    let store = Arc::new(RemoteStore {
+        target: target.clone(),
+        client: Client::shared(),
+        blocks: Mutex::new(Blocks::default()),
+        probes: Mutex::new(HashMap::new()),
+    });
+    stores.insert(target.display().to_string(), Arc::downgrade(&store));
+    store
 }
 
 impl RemoteStore {
@@ -249,7 +265,7 @@ impl RemoteStore {
             .map_err(|error| StorageError::Other(error.to_string()))
     }
 
-    fn probe(&self, key: &str) -> Result<Option<Probe>, StorageError> {
+    fn probe(&self, key: &str) -> Result<Presence, StorageError> {
         if let Some(probed) = self
             .probes
             .lock()
@@ -270,7 +286,7 @@ impl RemoteStore {
     }
 
     fn size(&self, key: &StoreKey) -> Result<Option<u64>, StorageError> {
-        Ok(self.probe(key.as_str())?.and_then(|probe| probe.size))
+        Ok(self.probe(key.as_str())?.size())
     }
 
     fn block(&self, key: &StoreKey) -> Result<Option<Block>, StorageError> {
@@ -283,25 +299,30 @@ impl RemoteStore {
         {
             return Ok(Some(Block::Ready(block)));
         }
-        let Some(size) = self.size(key)? else {
-            return Ok(None);
-        };
-        if size > BLOCK_LIMIT {
-            return Ok(Some(Block::Ranged));
+        match self.probe(&name)? {
+            Presence::Missing => Ok(None),
+            Presence::Object {
+                size: Some(size), ..
+            } if size > BLOCK_LIMIT => Ok(Some(Block::Ranged)),
+            Presence::Object { .. } => {
+                let Some(bytes) = self.fetch(key, None)? else {
+                    return Ok(None);
+                };
+                let block = Arc::new(bytes);
+                self.blocks
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(name, Arc::clone(&block));
+                Ok(Some(Block::Ready(block)))
+            }
         }
-        let Some(bytes) = self.fetch(key, None)? else {
-            return Ok(None);
-        };
-        let block = Arc::new(bytes);
-        self.blocks
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(name, Arc::clone(&block));
-        Ok(Some(Block::Ready(block)))
     }
 
     fn ranged(&self, key: &StoreKey, range: ByteRange) -> Result<MaybeBytes, StorageError> {
-        let size = self.size(key)?;
+        let size = match self.probe(key.as_str())? {
+            Presence::Missing => return Ok(None),
+            Presence::Object { size, .. } => size,
+        };
         let span = span(range, size)?;
         Ok(self.fetch(key, Some(span))?.map(Bytes::from))
     }
@@ -368,8 +389,11 @@ impl ListableStorageTraits for RemoteStore {
 }
 
 fn span(range: ByteRange, size: Option<u64>) -> Result<Span, StorageError> {
-    let required =
-        || StorageError::Other("the byte range reads a key that is not present".to_string());
+    let required = || {
+        StorageError::Other(
+            "the byte range counts from the end of a key whose size stays unknown".to_string(),
+        )
+    };
     match range {
         ByteRange::FromStart(offset, None) => Ok(Span::From(offset)),
         ByteRange::FromStart(_, Some(0)) => Err(empty()),

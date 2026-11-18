@@ -529,7 +529,17 @@ impl<'a, A> Element<'a, A> {
 
     pub fn on_commit(mut self, action: impl Fn(&str) -> A + 'static) -> Self {
         self.interaction = Interaction::Field {
-            commit: Box::new(action),
+            commit: Some(Box::new(action)),
+            submit: None,
+            cancel: None,
+        };
+        self
+    }
+
+    pub fn on_submit(mut self, action: impl Fn(&str) -> A + 'static) -> Self {
+        self.interaction = Interaction::Field {
+            commit: None,
+            submit: Some(Box::new(action)),
             cancel: None,
         };
         self
@@ -698,6 +708,8 @@ pub(crate) fn animates(content: &Content) -> bool {
     )
 }
 
+pub type TextAction<A> = Box<dyn Fn(&str) -> A>;
+
 pub enum Interaction<A> {
     None,
     Press(A),
@@ -718,7 +730,8 @@ pub enum Interaction<A> {
         action: Box<dyn Fn(f32) -> A>,
     },
     Field {
-        commit: Box<dyn Fn(&str) -> A>,
+        commit: Option<TextAction<A>>,
+        submit: Option<TextAction<A>>,
         cancel: Option<Box<dyn Fn() -> A>>,
     },
     Pointer {

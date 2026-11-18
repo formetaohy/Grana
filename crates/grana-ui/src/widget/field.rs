@@ -1,6 +1,7 @@
 use glam::Vec2;
 
 use crate::content::{Content, FieldContent};
+use crate::edit::Edit;
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::node::Runtime;
@@ -51,56 +52,105 @@ pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec
 }
 
 pub(crate) fn caret_at(
-    text: &str,
+    edit: &Edit,
+    preedit: Option<&str>,
     style: TextStyle,
     multiline: bool,
     rect: Rect,
     pointer: Vec2,
     layout: &mut crate::text::Text,
 ) -> usize {
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 4.0));
-    let x = pointer.x - inner.min.x;
+    let text = edit.text();
+    let caret = edit.caret();
+    let inner = inner(rect);
+    let preedit_width = preedit.map_or(0.0, |composed| width(composed, style, layout));
     if !multiline {
-        return column(text, x, style, layout);
+        let caret_x = width(prefix(text, caret), style, layout);
+        let shift = shift(caret_x, preedit_width, inner.width());
+        return column(text, pointer.x - inner.min.x + shift, style, layout);
     }
     let line_height = style.font.leading.max(style.font.size * 1.28);
     let row = ((pointer.y - inner.min.y) / line_height).floor().max(0.0) as usize;
-    let mut offset = 0usize;
-    for (index, line) in text.split('\n').enumerate() {
+    let chars = text.chars().collect::<Vec<_>>();
+    let spans = line_spans(&chars);
+    let (_, line_x) = caret_x_of(style, &chars, &spans, caret, layout);
+    let shift = shift(line_x, preedit_width, inner.width());
+    let x = pointer.x - inner.min.x + shift;
+    let mut base = 0usize;
+    for (index, (start, end)) in spans.iter().enumerate() {
         if index == row {
-            return offset + column(line, x, style, layout);
+            let line = chars[*start..*end].iter().collect::<String>();
+            return base + column(&line, x, style, layout);
         }
-        offset += line.chars().count() + 1;
+        base += end - start + 1;
     }
     text.chars().count()
 }
 
-fn column(line: &str, x: f32, style: TextStyle, text: &mut crate::text::Text) -> usize {
-    let mut best = 0usize;
-    let mut distance = f32::INFINITY;
-    for index in 0..=line.chars().count() {
-        let prefix = prefix(line, index);
-        let width = if prefix.is_empty() {
-            0.0
-        } else {
-            text.layout(
-                prefix,
-                style.font,
-                0.0,
-                false,
-                false,
-                crate::text::Align::Start,
-            )
-            .size
-            .x
-        };
-        let candidate = (width - x).abs();
-        if candidate < distance {
-            distance = candidate;
-            best = index;
+fn inner(rect: Rect) -> Rect {
+    rect.shrink2(Vec2::new(FIELD_PAD, 4.0))
+}
+
+fn shift(caret_x: f32, preedit_width: f32, width: f32) -> f32 {
+    (caret_x + preedit_width + 2.0 - width).max(0.0)
+}
+
+fn caret_x_of(
+    style: TextStyle,
+    chars: &[char],
+    spans: &[(usize, usize)],
+    caret: usize,
+    layout: &mut crate::text::Text,
+) -> (usize, f32) {
+    let caret = caret.min(chars.len());
+    let mut line = spans.len().saturating_sub(1);
+    for (index, (_, end)) in spans.iter().enumerate() {
+        if caret <= *end {
+            line = index;
+            break;
         }
     }
-    best
+    let start = spans[line].0;
+    let text = chars[start..caret].iter().collect::<String>();
+    (line, width(&text, style, layout))
+}
+
+fn column(line: &str, x: f32, style: TextStyle, layout: &mut crate::text::Text) -> usize {
+    let count = line.chars().count();
+    let (mut low, mut high) = (0usize, count);
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if width(prefix(line, middle), style, layout) <= x {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let before = width(prefix(line, low), style, layout);
+    if low < count {
+        let after = width(prefix(line, low + 1), style, layout);
+        if (after - x).abs() < (before - x).abs() {
+            return low + 1;
+        }
+    }
+    low
+}
+
+fn width(text: &str, style: TextStyle, layout: &mut crate::text::Text) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    layout
+        .layout(
+            text,
+            style.font,
+            0.0,
+            false,
+            false,
+            crate::text::Align::Start,
+        )
+        .size
+        .x
 }
 
 fn prefix(text: &str, index: usize) -> &str {
@@ -153,24 +203,15 @@ pub(super) fn paint_field(
         } else {
             painter.measure(before, style).x
         };
-        let mut offset = (caret_x - inner.width() + 2.0).max(0.0);
         let preedit = info.preedit.filter(|composed| !composed.is_empty());
         let preedit_width = preedit.map_or(0.0, |composed| painter.measure(composed, style).x);
-        if !field.multiline {
-            offset = (caret_x + preedit_width - inner.width() + 2.0).max(0.0);
-        }
+        let mut offset = shift(caret_x, preedit_width, inner.width());
         if field.multiline {
             let line_height = style.font.leading.max(style.font.size * 1.28);
             let chars: Vec<char> = text.chars().collect();
             let spans = line_spans(&chars);
             let (_, line_x) = caret_xy(painter, style, &chars, &spans, caret);
-            let mut next = 0.0;
-            if line_x < next + 2.0 {
-                next = line_x - 2.0;
-            } else if line_x + 2.0 + preedit_width > next + inner.width() {
-                next = line_x + 2.0 + preedit_width - inner.width();
-            }
-            offset = next.max(0.0);
+            offset = shift(line_x, preedit_width, inner.width());
             let selection = anchor.min(caret)..anchor.max(caret);
             if selection.start != selection.end {
                 for (index, (start, end)) in spans.iter().enumerate() {

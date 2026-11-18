@@ -33,28 +33,28 @@ pub(super) fn encode(stage: Stage<'_>) {
         data,
         features,
     } = stage;
-    let Some(shadow) =
-        shadow.filter(|_| !features.slice && scene.shading.shadows > 0.0 && features.volume)
-    else {
+    let Some(shadow) = shadow.filter(|_| !features.slice && scene.shading.shadows > 0.0) else {
         return;
     };
+    if meshes.is_none() && !features.volume {
+        return;
+    }
     let groups = ShadowGroups {
         scene: table.shadow_group(),
         level,
         atlas,
         occupancy,
     };
-    let object = keys.objects();
-    if shadow.object_key() != Some(object) {
-        shadow.set_object_key(object);
-        shadow.clear_objects(encoder);
-        if let Some(meshes) = meshes {
+    if let Some(meshes) = meshes {
+        let object = keys.objects();
+        if shadow.object_key() != Some(object) {
+            shadow.set_object_key(object);
+            shadow.clear_objects(encoder);
             meshes.draw_shadow(encoder, shadow.objects());
         }
     }
-    let key = keys.volume();
-    if shadow.stale(key) {
+    if shadow.stale(keys.volume()) {
         table.write_shadow_frame(queue, *data);
     }
-    shadow.encode_tau(encoder, groups, key);
+    shadow.encode_tau(encoder, groups, keys.volume());
 }
