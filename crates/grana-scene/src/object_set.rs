@@ -1656,40 +1656,58 @@ impl ObjectSet {
 
     pub(crate) fn retain_objects(
         &mut self,
-        time: u32,
-        keep: &[bool],
+        plan: &[(u32, Vec<bool>)],
         stamp: Revision,
-    ) -> Result<bool, String> {
-        let Some(frame) = self
-            .frames
-            .get(time as usize)
-            .and_then(|slot| slot.shared())
-        else {
-            return Ok(false);
-        };
-        assert_eq!(
-            keep.len(),
-            frame.object_count(),
-            "the kept objects cover every object of the frame"
-        );
-        if keep.iter().all(|kept| *kept) {
-            return Ok(false);
+    ) -> Result<usize, String> {
+        let mut pruned = Vec::with_capacity(plan.len());
+        for (time, keep) in plan {
+            let Some(frame) = self
+                .frames
+                .get(*time as usize)
+                .and_then(|slot| slot.shared())
+            else {
+                return Err(format!("the object set holds no frame {time}"));
+            };
+            if keep.len() != frame.object_count() {
+                return Err(format!(
+                    "the frame {time} holds {} objects and {} are named",
+                    frame.object_count(),
+                    keep.len()
+                ));
+            }
+            if keep.iter().all(|kept| *kept) {
+                continue;
+            }
+            let retained = frame.retain(keep).map_err(|error| {
+                format!("the objects of frame {time} cannot be dropped: {error}")
+            })?;
+            pruned.push((*time, retained, keep, frame.anchors()));
+        }
+        if pruned.is_empty() {
+            return Ok(0);
         }
         if !self.curation.is_empty() {
             self.apply_curation(stamp)?;
         }
-        let curation = Arc::make_mut(&mut self.curation);
-        curation.seed(self.frames.len());
-        curation.record(time, keep, &frame.anchors());
-        let removed = keep
-            .iter()
-            .enumerate()
-            .filter(|(_, kept)| !**kept)
-            .map(|(object, _)| object)
-            .collect::<Vec<_>>();
-        let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
-        self.install_retained(time, pruned, &removed, stamp);
-        Ok(true)
+        {
+            let curation = Arc::make_mut(&mut self.curation);
+            curation.seed(self.frames.len());
+            for (time, _, keep, anchors) in &pruned {
+                curation.record(*time, keep, anchors);
+            }
+        }
+        let mut removed = 0usize;
+        for (time, retained, keep, _) in pruned {
+            let objects = keep
+                .iter()
+                .enumerate()
+                .filter(|(_, kept)| !**kept)
+                .map(|(object, _)| object)
+                .collect::<Vec<_>>();
+            removed += objects.len();
+            self.install_retained(time, retained, &objects, stamp);
+        }
+        Ok(removed)
     }
 
     pub fn curation(&self) -> &Curation {

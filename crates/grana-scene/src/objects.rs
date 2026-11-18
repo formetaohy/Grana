@@ -336,16 +336,15 @@ impl Objects {
     pub fn retain_objects(
         &mut self,
         id: ObjectSetId,
-        time: u32,
-        keep: &[bool],
-    ) -> Result<bool, String> {
+        plan: &[(u32, Vec<bool>)],
+    ) -> Result<usize, String> {
         let stamp = self.revisions.mint();
         let removed = match self.get_mut(id) {
-            Some(set) => set.retain_objects(time, keep, stamp)?,
-            None => false,
+            Some(set) => set.retain_objects(plan, stamp)?,
+            None => return Ok(0),
         };
-        if !removed {
-            return Ok(false);
+        if removed == 0 {
+            return Ok(0);
         }
         let targets = self
             .sets
@@ -360,12 +359,17 @@ impl Objects {
             .map(ObjectSet::id)
             .collect::<Vec<_>>();
         for target in targets {
-            let stamp = self.revisions.mint();
-            if let Some(set) = self.get_mut(target) {
-                set.invalidate_relation(id, time, stamp);
+            for (time, keep) in plan {
+                if keep.iter().all(|kept| *kept) {
+                    continue;
+                }
+                let stamp = self.revisions.mint();
+                if let Some(set) = self.get_mut(target) {
+                    set.invalidate_relation(id, *time, stamp);
+                }
             }
         }
-        Ok(true)
+        Ok(removed)
     }
 
     pub fn copy(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {

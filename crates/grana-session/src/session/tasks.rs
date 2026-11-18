@@ -47,7 +47,10 @@ pub(super) enum Completion {
         set: ObjectSetId,
         outcome: Result<Written, String>,
     },
-    Csv(Result<PathBuf, String>),
+    Csv {
+        name: String,
+        outcome: Result<PathBuf, String>,
+    },
     Geff(Result<PathBuf, String>),
     Localizations(Result<PathBuf, String>),
     Provenance(Result<PathBuf, String>),
@@ -155,7 +158,7 @@ pub(super) struct Tasks {
     pub plot: Option<PlotJob>,
     pub document: Option<Document>,
     pub labels: Option<Labels>,
-    pub csv: Option<Writer>,
+    pub csv: Option<(Writer, String)>,
     pub geff: Option<Writer>,
     pub localizations: Option<Writer>,
     pub provenance: Option<Provenance>,
@@ -166,7 +169,7 @@ pub(super) struct Tasks {
     previews: Option<Previews>,
     autosave: Option<Progress<Result<RecoveryEntry, String>>>,
     channels: Vec<PendingChannel>,
-    pending_csv: Option<PathBuf>,
+    pending_csv: Option<(PathBuf, MeasureKey, String)>,
 }
 
 impl Tasks {
@@ -271,19 +274,23 @@ impl Tasks {
                 }
             }
         }
-        if let Some(slot) = self.csv.as_mut() {
+        if let Some((slot, name)) = self.csv.as_mut() {
             stepped |= slot.stepped();
+            let name = name.clone();
             match slot.poll() {
                 Poll::Event(outcome) => {
                     self.csv = None;
-                    completions.push(Completion::Csv(outcome));
+                    completions.push(Completion::Csv { name, outcome });
                 }
                 Poll::Empty => {}
                 Poll::Closed => {
                     self.csv = None;
-                    completions.push(Completion::Csv(Err(
-                        "the statistics export stopped before the file was written".to_string(),
-                    )));
+                    completions.push(Completion::Csv {
+                        name,
+                        outcome: Err(
+                            "the statistics export stopped before the file was written".to_string()
+                        ),
+                    });
                 }
             }
         }
@@ -541,7 +548,7 @@ impl Tasks {
         let writer = [
             self.geff.as_ref(),
             self.localizations.as_ref(),
-            self.csv.as_ref(),
+            self.csv.as_ref().map(|(writer, _)| writer),
         ]
         .into_iter()
         .flatten()
@@ -572,15 +579,15 @@ impl Tasks {
         self.materialize = Some(MaterializeJob::start(request));
     }
 
-    pub(super) fn defer_csv(&mut self, path: PathBuf) {
-        self.pending_csv = Some(path);
+    pub(super) fn defer_csv(&mut self, path: PathBuf, key: MeasureKey, name: String) {
+        self.pending_csv = Some((path, key, name));
     }
 
     pub(super) fn pending_csv(&self) -> bool {
         self.pending_csv.is_some()
     }
 
-    pub(super) fn take_csv(&mut self) -> Option<PathBuf> {
+    pub(super) fn take_csv(&mut self) -> Option<(PathBuf, MeasureKey, String)> {
         self.pending_csv.take()
     }
 
@@ -623,7 +630,7 @@ impl Session {
                 self.finish_document(path, hash, outcome);
             }
             Completion::Labels { set, outcome } => self.finish_labels(set, outcome),
-            Completion::Csv(outcome) => self.finish_csv(outcome),
+            Completion::Csv { name, outcome } => self.finish_csv(name, outcome),
             Completion::Geff(outcome) => self.finish_geff(outcome),
             Completion::Localizations(outcome) => self.finish_localizations(outcome),
             Completion::Provenance(outcome) => self.finish_provenance(outcome),

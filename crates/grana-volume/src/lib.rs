@@ -9,6 +9,7 @@ mod fingerprint;
 mod intensity;
 mod level;
 mod pack;
+mod probe;
 mod pyramid;
 mod region;
 mod series;
@@ -23,7 +24,7 @@ pub use brick::{
     BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, CELL_AXIS, CELL_COUNT,
     CELL_SIDE, CHANNEL_LIMIT, PADDED_SIDE, blank_brick, pad_brick,
 };
-pub use channel::{ChannelInfo, ChannelSet};
+pub use channel::{ChannelInfo, ChannelSet, name_of, tint_of};
 pub use clip::Clip;
 pub use damage::Damage;
 pub use extent::Extent;
@@ -31,6 +32,7 @@ pub use fingerprint::Fingerprint;
 pub use intensity::Intensity;
 pub use level::Level;
 pub use pack::{PACK, PACK_LIMIT, Pack, PackedBrick, components, pack_count, texels};
+pub use probe::Probe;
 pub use pyramid::Pyramid;
 pub use region::Region;
 pub use series::VolumeSeries;

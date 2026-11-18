@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
-    VoxelData, VoxelFormat, pad_brick,
+    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Probe, Pyramid,
+    Spacing, VoxelData, VoxelFormat, name_of, pad_brick, tint_of,
 };
 
 use crate::Cache;
@@ -20,19 +20,6 @@ use crate::tag::{
 
 const CACHE_BYTES: u64 = 128 << 20;
 const PAGE_LIMIT: usize = 4096;
-const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
-const RANGE_PROBE_SIDE: u32 = 32;
-const RANGE_SAMPLE_FRAMES: u32 = 4;
-const PALETTE: [[f32; 3]; 8] = [
-    [0.25, 0.55, 1.00],
-    [0.20, 0.95, 0.35],
-    [1.00, 0.25, 0.55],
-    [1.00, 0.72, 0.20],
-    [0.60, 0.40, 1.00],
-    [0.20, 0.90, 0.90],
-    [1.00, 0.45, 0.20],
-    [0.85, 0.85, 0.30],
-];
 
 pub struct Image {
     path: PathBuf,
@@ -227,23 +214,18 @@ impl Image {
             let name = info
                 .and_then(|channel| channel.name.clone())
                 .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| format!("Channel {}", index + 1));
+                .unwrap_or_else(|| name_of(index));
             let tint = info
                 .and_then(|channel| channel.tint)
-                .unwrap_or(PALETTE[index as usize % PALETTE.len()]);
+                .unwrap_or_else(|| tint_of(index));
             let sampled = sample_range(&files, &levels, &cache, index, sizes[0])?;
-            let full = match format {
-                VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
-                VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
-                VoxelFormat::F32 => sampled.unwrap_or_else(|| Intensity::new(0.0, 1.0)),
-            };
-            let window = sampled.filter(|window| window.span() > 0.0).unwrap_or(full);
-            let window = if window.span() > 0.0 {
-                window
-            } else {
-                Intensity::new(0.0, 1.0)
-            };
-            channels.push(ChannelInfo::new(name, tint, full, window, format));
+            channels.push(ChannelInfo::resolve(
+                name,
+                tint,
+                format,
+                &[sampled],
+                &[sampled],
+            ));
         }
         let interval = ome.as_ref().and_then(|ome| ome.interval).unwrap_or(1.0);
         let name = ome
@@ -749,24 +731,9 @@ fn sample_range(
         return Ok(None);
     };
     let index = levels.len() - 1;
-    let extent = level.extent;
-    let samples = frames.clamp(1, RANGE_SAMPLE_FRAMES);
-    let budget = (RANGE_SAMPLE_VOXELS / u64::from(samples)).max(1);
-    let probe = |limit: u32| {
-        let side = limit.min(RANGE_PROBE_SIDE);
-        let start = (limit - side) / 2;
-        start..start + side
-    };
-    let spatial = if extent.voxel_count() <= budget {
-        (0..extent.x(), 0..extent.y(), 0..extent.z())
-    } else {
-        (probe(extent.x()), probe(extent.y()), probe(extent.z()))
-    };
-    let mut low = f32::INFINITY;
-    let mut high = f32::NEG_INFINITY;
-    for sample in 0..samples {
-        let time = sample * frames / samples;
-        let data = region(
+    let mut probe = Probe::of(level.extent, frames);
+    probe.measure(|time, ranges| {
+        region(
             files,
             cache,
             levels,
@@ -774,20 +741,12 @@ fn sample_range(
                 time,
                 level: index,
                 channel,
-                x: spatial.0.clone(),
-                y: spatial.1.clone(),
-                z: spatial.2.clone(),
+                x: ranges[0].clone(),
+                y: ranges[1].clone(),
+                z: ranges[2].clone(),
             },
-        )?;
-        let range = data.range();
-        low = low.min(range.min());
-        high = high.max(range.max());
-    }
-    if high > low {
-        Ok(Some(Intensity::new(low, high)))
-    } else {
-        Ok(None)
-    }
+        )
+    })
 }
 
 pub fn dataset_name(path: &Path) -> String {

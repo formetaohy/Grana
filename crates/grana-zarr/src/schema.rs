@@ -1,15 +1,43 @@
 use grana_volume::Level;
 use serde_json::{Value, json};
 
-pub(crate) const VERSION: &str = "0.6";
-pub(crate) const INTRINSIC: &str = "physical";
-pub(crate) const DISPLAY: &str = "stage";
+const VERSION_DIRECT: &str = "0.5";
+const VERSION_NAMED: &str = "0.6";
+const INTRINSIC: &str = "physical";
+const DISPLAY: &str = "stage";
 
 const ALIGNMENT_TOLERANCE: f64 = 1.0e-6;
 
 const PERMUTATION: [[f64; 3]; 3] = [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
 
 const PLANE_PERMUTATION: [[f64; 3]; 3] = [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Schema {
+    Direct,
+    Named,
+}
+
+impl Schema {
+    pub(crate) fn of(minor: u32) -> Self {
+        if minor >= 6 {
+            Self::Named
+        } else {
+            Self::Direct
+        }
+    }
+
+    pub(crate) fn placed(rotated: bool) -> Self {
+        if rotated { Self::Named } else { Self::Direct }
+    }
+
+    pub(crate) fn version(self) -> &'static str {
+        match self {
+            Self::Direct => VERSION_DIRECT,
+            Self::Named => VERSION_NAMED,
+        }
+    }
+}
 
 pub(crate) fn axes() -> Vec<Value> {
     vec![
@@ -104,11 +132,19 @@ pub(crate) struct Display {
 }
 
 pub(crate) fn multiscales(
+    schema: Schema,
     name: &str,
     axes: &[Value],
     datasets: Vec<Value>,
     display: Option<Display>,
 ) -> Value {
+    if schema == Schema::Direct {
+        assert!(
+            display.is_none(),
+            "the direct schema declares no display coordinate system"
+        );
+        return json!([{ "name": name, "axes": axes, "datasets": datasets }]);
+    }
     let Some(display) = display else {
         return json!([{
             "name": name,
@@ -167,17 +203,26 @@ fn determinant(columns: &[[f64; 3]; 3], spatial: usize) -> f64 {
         + z[0] * (x[1] * y[2] - x[2] * y[1])
 }
 
-pub(crate) fn dataset(path: &str, scale: &[f64], translation: &[f64]) -> Value {
-    json!({
-        "path": path,
-        "coordinateTransformations": [{
-            "type": "sequence",
-            "input": { "path": path },
-            "output": { "name": INTRINSIC },
-            "transformations": [
+pub(crate) fn dataset(schema: Schema, path: &str, scale: &[f64], translation: &[f64]) -> Value {
+    match schema {
+        Schema::Direct => json!({
+            "path": path,
+            "coordinateTransformations": [
                 { "type": "scale", "scale": scale },
                 { "type": "translation", "translation": translation },
             ],
-        }],
-    })
+        }),
+        Schema::Named => json!({
+            "path": path,
+            "coordinateTransformations": [{
+                "type": "sequence",
+                "input": { "path": path },
+                "output": { "name": INTRINSIC },
+                "transformations": [
+                    { "type": "scale", "scale": scale },
+                    { "type": "translation", "translation": translation },
+                ],
+            }],
+        }),
+    }
 }

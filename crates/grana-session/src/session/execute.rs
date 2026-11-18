@@ -723,7 +723,9 @@ impl Session {
                 }
             }
             Command::SetLocalizationLayer { set, layer } => {
-                self.localization.set_layer(set, layer);
+                if let Err(detail) = self.localization.set_layer(set, layer) {
+                    self.message = Some(Message::error(detail));
+                }
             }
             Command::ClusterLocalizations(set) => self.start_clusters(set),
             Command::EstimateLocalizationClusters(set) => self.estimate_clusters(set),
@@ -859,7 +861,7 @@ impl Session {
         Some(Recording {
             edit,
             undo,
-            hash: self.document_hash()?,
+            hash: self.edit_hash()?,
             analyses: self.analysis.len(),
         })
     }
@@ -871,7 +873,7 @@ impl Session {
             hash,
             analyses,
         } = recording;
-        let changed = self.document_hash() != Some(hash);
+        let changed = self.edit_hash() != Some(hash);
         let started = self.analysis.len() > analyses;
         if changed || (edit.asynchronous() && started) {
             self.deferred = false;
@@ -881,7 +883,14 @@ impl Session {
 
     pub(super) fn snapshot(&self) -> Option<Snapshot> {
         let scene = self.scene.as_ref()?;
-        Some(Snapshot::capture(scene, &self.measure, &self.timeline))
+        Some(Snapshot::capture(
+            scene,
+            &self.measure,
+            &self.timeline,
+            self.export,
+            &self.views,
+            self.current_view.as_ref().map(|view| view.camera),
+        ))
     }
 
     pub(super) fn undo(&mut self) -> Effects {
@@ -971,7 +980,14 @@ impl Session {
     }
 
     pub(super) fn restore(&mut self, snapshot: Snapshot) {
-        let (state, measure, timeline) = snapshot.into_parts();
+        let Snapshot {
+            scene: state,
+            measure,
+            timeline,
+            export,
+            views,
+            camera,
+        } = snapshot;
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
@@ -980,7 +996,21 @@ impl Session {
         let derived = scene.derived_shared() != derived;
         self.measure.restore(measure, scene);
         self.measure.set_roi(scene.region_scope());
-        self.timeline = timeline;
+        self.timeline = timeline.clamped(scene.frame_count());
+        self.export = export;
+        self.views = views;
+        let placed = camera.filter(|camera| {
+            self.current_view
+                .as_ref()
+                .is_none_or(|view| view.camera != *camera)
+        });
+        if let Some(camera) = placed {
+            self.view = Some(ViewState {
+                camera,
+                timeline: self.timeline.clone(),
+                export: self.export,
+            });
+        }
         if let Some(source) = &self.source {
             source.set_time(scene.time());
         }

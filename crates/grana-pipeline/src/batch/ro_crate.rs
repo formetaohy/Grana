@@ -15,6 +15,12 @@ const SAMPLE: u64 = 1 << 20;
 
 const LISTING_LIMIT: usize = 100_000;
 
+const CONTENT_SAMPLES: usize = 256;
+
+const CONTENT_SAMPLE: u64 = 64 << 10;
+
+const CONTENT_TAIL: u64 = 4 << 10;
+
 const ROOT_PARTS: [(&str, &str); 14] = [
     ("protocol.json", "application/json"),
     ("run.json", "application/json"),
@@ -35,7 +41,7 @@ const ROOT_PARTS: [(&str, &str); 14] = [
 struct Fingerprint {
     sha256: String,
     size: u64,
-    coverage: &'static str,
+    coverage: String,
 }
 
 pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
@@ -169,7 +175,7 @@ fn file_digest(path: &Path, size: u64) -> Result<Fingerprint, String> {
         return Ok(Fingerprint {
             sha256: hex(&hasher.finalize()),
             size,
-            coverage: "complete file",
+            coverage: "complete file".to_string(),
         });
     }
     let mut buffer = vec![0u8; SAMPLE as usize];
@@ -185,51 +191,101 @@ fn file_digest(path: &Path, size: u64) -> Result<Fingerprint, String> {
     Ok(Fingerprint {
         sha256: hex(&hasher.finalize()),
         size,
-        coverage: "three sampled megabytes",
+        coverage: "three sampled megabytes".to_string(),
     })
 }
 
 fn directory_digest(path: &Path) -> Result<Fingerprint, String> {
-    let mut entries = Vec::new();
-    collect(path, path, &mut entries)?;
-    entries.sort();
+    let mut listing = Listing::default();
+    collect(path, path, &mut listing)?;
+    listing.entries.sort();
     let mut hasher = Sha256::new();
     let mut size = 0u64;
-    for (name, length) in entries {
+    for (name, length) in &listing.entries {
         hasher.update(name.as_bytes());
         hasher.update(length.to_le_bytes());
         size += length;
     }
+    let mut sampled = 0usize;
+    let step = listing.entries.len().div_ceil(CONTENT_SAMPLES).max(1);
+    for (name, length) in listing.entries.iter().step_by(step) {
+        if let Some(sample) = content(&path.join(name), *length)? {
+            hasher.update(name.as_bytes());
+            hasher.update(sample);
+            sampled += 1;
+        }
+    }
+    let mut coverage = format!(
+        "{} directory entries with the contents of {sampled} sampled files",
+        listing.entries.len()
+    );
+    if listing.truncated {
+        coverage.push_str(&format!(
+            ", truncated at {LISTING_LIMIT} entries of a larger tree"
+        ));
+    }
     Ok(Fingerprint {
         sha256: hex(&hasher.finalize()),
         size,
-        coverage: "directory listing",
+        coverage,
     })
 }
 
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64)>) -> Result<(), String> {
-    let listing = std::fs::read_dir(folder)
-        .map_err(|error| format!("failed to read {}: {error}", folder.display()))?;
-    for entry in listing {
-        let entry =
-            entry.map_err(|error| format!("failed to read {}: {error}", folder.display()))?;
-        let path = entry.path();
-        let metadata = entry
-            .metadata()
+#[derive(Default)]
+struct Listing {
+    entries: Vec<(String, u64)>,
+    truncated: bool,
+}
+
+fn content(path: &Path, length: u64) -> Result<Option<Vec<u8>>, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let mut sample = Vec::with_capacity((CONTENT_SAMPLE + CONTENT_TAIL) as usize);
+    let mut head = vec![0u8; CONTENT_SAMPLE.min(length) as usize];
+    let count = file
+        .read(&mut head)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    sample.extend_from_slice(&head[..count]);
+    if length > 2 * CONTENT_SAMPLE {
+        file.seek(SeekFrom::Start(length - CONTENT_TAIL))
+            .map_err(|error| format!("failed to seek {}: {error}", path.display()))?;
+        let mut tail = vec![0u8; CONTENT_TAIL as usize];
+        let count = file
+            .read(&mut tail)
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        if metadata.is_dir() {
-            collect(root, &path, entries)?;
-        } else {
-            let name = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            entries.push((name, metadata.len()));
-        }
-        if entries.len() >= LISTING_LIMIT {
+        sample.extend_from_slice(&tail[..count]);
+    }
+    Ok((!sample.is_empty()).then_some(sample))
+}
+
+fn collect(root: &Path, folder: &Path, listing: &mut Listing) -> Result<(), String> {
+    let mut names = std::fs::read_dir(folder)
+        .map_err(|error| format!("failed to read {}: {error}", folder.display()))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(|error| format!("failed to read {}: {error}", folder.display()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    names.sort();
+    for name in names {
+        if listing.entries.len() >= LISTING_LIMIT {
+            listing.truncated = true;
             return Ok(());
         }
+        let path = folder.join(&name);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        if metadata.is_dir() {
+            collect(root, &path, listing)?;
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        listing.entries.push((relative, metadata.len()));
     }
     Ok(())
 }

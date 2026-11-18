@@ -1,6 +1,7 @@
 use serde_json::{Map, Value};
 
 use crate::Error;
+use crate::schema::Schema;
 use crate::transform::{self, Affine};
 
 const DEPENDENCE_TOLERANCE: f64 = 1.0e-9;
@@ -122,11 +123,12 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
         .and_then(Value::as_array)
         .and_then(|multiscales| multiscales.first())
         .ok_or_else(|| absent(path, attributes, fields))?;
-    let (axes, datasets) = if minor >= 6 {
-        named(path, multiscales)?
-    } else {
-        direct(path, multiscales)?
+    let schema = Schema::of(minor);
+    let frame = match schema {
+        Schema::Named => named(path, multiscales, schema)?,
+        Schema::Direct => direct(path, multiscales, schema)?,
     };
+    let datasets = placed(path, multiscales, &frame)?;
     let channels = channels(path, fields.get("omero"))?;
     Ok(Metadata {
         name: multiscales
@@ -136,7 +138,7 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
             .map(str::to_owned),
         version,
         minor,
-        axes,
+        axes: frame.source,
         datasets,
         channels,
     })
@@ -184,50 +186,37 @@ fn absent(path: &str, attributes: &Map<String, Value>, fields: &Map<String, Valu
     metadata_error(path, detail)
 }
 
-fn direct(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
+struct Frame {
+    schema: Schema,
+    source: Vec<Axis>,
+    target: Vec<Axis>,
+    display: bool,
+    placed: bool,
+    global: Affine,
+}
+
+fn direct(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error> {
     let axes = axes_of(path, multiscale.get("axes"))?;
     let dimensions = axes.len();
+    let declared = multiscale.get("coordinateTransformations").is_some();
     let global = multiscale
         .get("coordinateTransformations")
         .map(|value| transforms(path, value, dimensions, dimensions))
         .transpose()?
         .unwrap_or_else(|| Affine::identity(dimensions));
-    let global_placed = multiscale.get("coordinateTransformations").is_some();
-    let datasets = entries(path, multiscale)?
-        .iter()
-        .map(|entry| {
-            let name = path_of(path, entry)?;
-            let transformed = entry.get("coordinateTransformations").is_some();
-            let local = entry
-                .get("coordinateTransformations")
-                .map(|value| transforms(path, value, dimensions, dimensions))
-                .transpose()?
-                .unwrap_or_else(|| Affine::identity(dimensions));
-            let total = global.composite(&local).map_err(|error| {
-                metadata_error(
-                    path,
-                    format!("the transforms of `{name}` do not compose: {error}"),
-                )
-            })?;
-            compose(Placement {
-                path,
-                name,
-                total: &total,
-                source: &axes,
-                target: &axes,
-                display: false,
-                entry: None,
-                placed: global_placed || transformed,
-            })
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok((axes, datasets))
+    Ok(Frame {
+        schema,
+        source: axes.clone(),
+        target: axes,
+        display: false,
+        placed: declared,
+        global,
+    })
 }
 
-fn named(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
+fn named(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error> {
     let systems = systems(path, multiscale)?;
-    let entries = entries(path, multiscale)?;
-    let intrinsic = entries
+    let intrinsic = entries(path, multiscale)?
         .first()
         .and_then(|dataset| dataset.get("coordinateTransformations"))
         .and_then(Value::as_array)
@@ -250,57 +239,60 @@ fn named(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Er
                 format!("the coordinate system `{intrinsic}` is not declared"),
             )
         })?;
-    let axes = source.axes.clone();
-    let dimensions = axes.len();
-    let display = display(path, multiscale, &systems, intrinsic)?;
-    let datasets = entries
+    let (global, target, display) = match display(path, multiscale, &systems, intrinsic)? {
+        Some((affine, target)) => (affine, target.axes, true),
+        None => (
+            Affine::identity(source.axes.len()),
+            source.axes.clone(),
+            false,
+        ),
+    };
+    Ok(Frame {
+        schema,
+        source: source.axes.clone(),
+        target,
+        display,
+        placed: true,
+        global,
+    })
+}
+
+fn placed(path: &str, multiscale: &Value, frame: &Frame) -> Result<Vec<Dataset>, Error> {
+    let named = frame.schema == Schema::Named;
+    entries(path, multiscale)?
         .iter()
         .map(|entry| {
             let name = path_of(path, entry)?;
-            let local = transforms(
-                path,
-                entry.get("coordinateTransformations").ok_or_else(|| {
-                    metadata_error(
+            let dimensions = frame.source.len();
+            let declared = entry.get("coordinateTransformations");
+            let local = match declared {
+                Some(value) => transforms(path, value, dimensions, dimensions)?,
+                None if named => {
+                    return Err(metadata_error(
                         path,
                         format!("the dataset `{name}` names no coordinate transformation"),
-                    )
-                })?,
-                dimensions,
-                dimensions,
-            )?;
-            match &display {
-                Some((affine, target)) => {
-                    let total = affine.composite(&local).map_err(|error| {
-                        metadata_error(
-                            path,
-                            format!("the transforms of `{name}` do not compose: {error}"),
-                        )
-                    })?;
-                    compose(Placement {
-                        path,
-                        name,
-                        total: &total,
-                        source: &axes,
-                        target: &target.axes,
-                        display: true,
-                        entry: Some(entry),
-                        placed: true,
-                    })
+                    ));
                 }
-                None => compose(Placement {
+                None => Affine::identity(dimensions),
+            };
+            let total = frame.global.composite(&local).map_err(|error| {
+                metadata_error(
                     path,
-                    name,
-                    total: &local,
-                    source: &axes,
-                    target: &axes,
-                    display: false,
-                    entry: Some(entry),
-                    placed: true,
-                }),
-            }
+                    format!("the transforms of `{name}` do not compose: {error}"),
+                )
+            })?;
+            compose(Placement {
+                path,
+                name,
+                total: &total,
+                source: &frame.source,
+                target: &frame.target,
+                display: frame.display,
+                entry: named.then_some(entry),
+                placed: frame.placed || declared.is_some(),
+            })
         })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok((axes, datasets))
+        .collect()
 }
 
 struct Placement<'a> {

@@ -230,16 +230,18 @@ impl Session {
         };
         self.message = None;
         if self.measure.export(scene).is_some() {
-            self.start_csv_export(path);
+            self.start_csv_export(path, name.to_string());
             return;
         }
-        if TableRequest::new(scene, set, self.measure.group(), self.measure.aggregate()).is_none() {
+        let Some(request) =
+            TableRequest::new(scene, set, self.measure.group(), self.measure.aggregate())
+        else {
             self.message = Some(Message::error(
                 "the statistics of the chosen object set hold no table to export",
             ));
             return;
-        }
-        self.tasks.defer_csv(path);
+        };
+        self.tasks.defer_csv(path, request.key(), name.to_string());
     }
 
     fn export_ripley(&mut self) {
@@ -294,53 +296,49 @@ impl Session {
 
     pub(super) fn finish_measure(&mut self, key: MeasureKey, table: Option<Table>) {
         self.measure.install(key, table.map(std::sync::Arc::new));
-        let Some(path) = self.tasks.take_csv() else {
+        let Some((path, deferred, name)) = self.tasks.take_csv() else {
             return;
         };
-        self.start_csv_export(path);
+        if deferred != key {
+            self.message = Some(Message::error(format!(
+                "the statistics of {name} changed before they were measured, so {} was not written",
+                path.display()
+            )));
+            return;
+        }
+        self.start_csv_export(path, name);
     }
 
     pub(super) fn finish_rows(&mut self, rows: grana_scene::Rows) {
         self.measure.install_rows(rows);
     }
 
-    pub(super) fn finish_csv(&mut self, outcome: Result<PathBuf, String>) {
+    pub(super) fn finish_csv(&mut self, name: String, outcome: Result<PathBuf, String>) {
         self.message = Some(match outcome {
-            Ok(path) => Message::info(format!(
-                "wrote {} statistics to {}",
-                self.csv_name(),
-                path.display()
-            )),
+            Ok(path) => Message::info(format!("wrote {name} statistics to {}", path.display())),
             Err(detail) => Message::error(detail),
         });
     }
 
-    fn csv_name(&self) -> String {
-        self.scene
-            .as_ref()
-            .and_then(|scene| self.measure.set().and_then(|set| scene.objects.get(set)))
-            .map_or_else(
-                || "the object set".to_string(),
-                |object| object.name().to_string(),
-            )
-    }
-
-    fn start_csv_export(&mut self, path: PathBuf) {
-        let name = self.csv_name();
+    fn start_csv_export(&mut self, path: PathBuf, name: String) {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
         let Some((table, rows)) = self.measure.export(scene) else {
-            self.message = Some(Message::error(
-                "the statistics of the chosen object set hold no table to export",
-            ));
+            self.message = Some(Message::error(format!(
+                "the statistics of {name} were not measured, so {} was not written",
+                path.display()
+            )));
             return;
         };
         self.message = None;
         let label = format!("Exporting {name} statistics");
-        self.tasks.csv = Some(Writer::start(label, path, move |_, progress, path| {
-            write(path, &table, &rows, progress).map(|_| ())
-        }));
+        self.tasks.csv = Some((
+            Writer::start(label, path, move |_, progress, path| {
+                write(path, &table, &rows, progress).map(|_| ())
+            }),
+            name,
+        ));
     }
 
     pub(super) fn export_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {

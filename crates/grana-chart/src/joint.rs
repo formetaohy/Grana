@@ -187,45 +187,56 @@ impl Joint {
     }
 
     fn paint_cells(&self, painter: &mut Painter, frame: Rect) {
-        let cells = self.bins.clamp(1, CELLS);
-        let block = self.bins.div_ceil(cells);
-        let mut grid = vec![0u64; cells * cells];
+        let block = self.bins.div_ceil(CELLS);
+        let columns = self.bins.div_ceil(block);
+        let mut grid = vec![0u64; columns * columns];
         for cell in &self.cells {
             let index = cell.cell() as usize;
             let column = (index % self.bins) / block;
             let row = (index / self.bins) / block;
-            let slot = column + cells * row;
+            let slot = column + columns * row;
             grid[slot] = grid[slot].max(cell.count());
         }
         let maximum = grid.iter().copied().max().unwrap_or(1).max(1);
         let ceiling = (maximum as f32 + 1.0).ln();
-        let width = frame.width() / cells as f32;
-        let height = frame.height() / cells as f32;
-        for row in 0..cells {
-            for column in 0..cells {
-                let count = grid[column + cells * row];
+        let span = 2.0 * (columns - 1).max(1) as f32;
+        for row in 0..columns {
+            for column in 0..columns {
+                let count = grid[column + columns * row];
                 if count == 0 {
                     continue;
                 }
                 let weight = ((count as f32 + 1.0).ln() / ceiling).clamp(0.0, 1.0);
-                let blend = (column + row) as f32 / (2.0 * (cells - 1).max(1) as f32);
+                let blend = (column + row) as f32 / span;
                 let brightness = DIM + (1.0 - DIM) * weight;
                 let tint = [0, 1, 2].map(|axis| {
                     (self.tints[0][axis] + (self.tints[1][axis] - self.tints[0][axis]) * blend)
                         * brightness
                 });
-                let left = frame.min.x + column as f32 * width;
-                let top = frame.max.y - (row + 1) as f32 * height;
+                let left = frame.min.x + frame.width() * self.cell(column);
+                let right =
+                    (frame.min.x + frame.width() * self.cell(column + 1) + INSET).min(frame.max.x);
+                let bottom = frame.max.y - frame.height() * self.cell(row);
+                let top =
+                    (frame.max.y - frame.height() * self.cell(row + 1) - INSET).max(frame.min.y);
                 painter.rect(
                     Rect::from_min_size(
                         Vec2::new(left, top),
-                        Vec2::new(width + INSET, height + INSET),
+                        Vec2::new((right - left).max(INSET), (bottom - top).max(INSET)),
                     ),
                     Corners::ZERO,
                     grana_ui::Color::rgba(tint[0], tint[1], tint[2], 1.0),
                 );
             }
         }
+    }
+
+    fn cell(&self, edge: usize) -> f32 {
+        (edge * self.block()).min(self.bins) as f32 / self.bins as f32
+    }
+
+    fn block(&self) -> usize {
+        self.bins.div_ceil(CELLS)
     }
 }
 

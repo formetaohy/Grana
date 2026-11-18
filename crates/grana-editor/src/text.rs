@@ -83,6 +83,8 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::Drift => ("drift correction", "漂移校正"),
         Action::Registration => ("channel registration", "通道配准"),
         Action::Keyframe => ("keyframes", "关键帧"),
+        Action::NamedView => ("named view", "命名视图"),
+        Action::Export => ("export settings", "导出设置"),
         Action::TimelineFps => ("frame rate", "帧率"),
         Action::TimelineDuration => ("duration", "时长"),
     };

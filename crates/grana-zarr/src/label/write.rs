@@ -293,34 +293,27 @@ fn build(
     let (x, y, z) = (*x, *y, *z);
     let axes = image.axes();
     let axes_json = axes.iter().map(Axis::json).collect::<Vec<_>>();
+    let schema = crate::schema::Schema::of(image.minor());
     let datasets = image
         .datasets()
         .iter()
         .enumerate()
         .map(|(level, dataset)| {
-            if image.modern() {
-                crate::schema::dataset(&level.to_string(), &dataset.scale, &dataset.translation)
-            } else {
-                json!({
-                    "path": level.to_string(),
-                    "coordinateTransformations": [
-                        { "type": "scale", "scale": dataset.scale },
-                        { "type": "translation", "translation": dataset.translation },
-                    ],
-                })
-            }
+            crate::schema::dataset(
+                schema,
+                &level.to_string(),
+                &dataset.scale,
+                &dataset.translation,
+            )
         })
         .collect::<Vec<_>>();
-    let multiscales = if image.modern() {
-        let level = image.pyramid().level(0);
-        let spatial = kinds.iter().filter(|kind| **kind == Kind::Space).count();
-        let matrix = crate::schema::placement(level, spatial);
-        let display = crate::schema::rotated(level, spatial);
-        crate::schema::multiscales(
-            spec.name,
-            &axes_json,
-            datasets,
-            display.then_some(crate::schema::Display {
+    let display = match schema {
+        crate::schema::Schema::Direct => None,
+        crate::schema::Schema::Named => {
+            let level = image.pyramid().level(0);
+            let spatial = kinds.iter().filter(|kind| **kind == Kind::Space).count();
+            let matrix = crate::schema::placement(level, spatial);
+            crate::schema::rotated(level, spatial).then_some(crate::schema::Display {
                 matrix,
                 dropped: kinds
                     .iter()
@@ -328,15 +321,10 @@ fn build(
                     .filter_map(|(index, kind)| (*kind != Kind::Space).then_some(index))
                     .collect(),
                 spatial,
-            }),
-        )
-    } else {
-        json!([{
-            "name": spec.name,
-            "axes": axes_json,
-            "datasets": datasets,
-        }])
+            })
+        }
     };
+    let multiscales = crate::schema::multiscales(schema, spec.name, &axes_json, datasets, display);
     let colors = (1..=spec.labels)
         .map(|label| {
             json!({

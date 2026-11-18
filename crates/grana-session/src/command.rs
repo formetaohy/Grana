@@ -559,6 +559,8 @@ pub enum Action {
     Drift,
     Registration,
     Keyframe,
+    NamedView,
+    Export,
     TimelineFps,
     TimelineDuration,
 }
@@ -901,6 +903,10 @@ impl Command {
             Self::ClearRegistration => Edit::new(Action::Registration),
             Self::ApplyProtocol => Edit::new(Action::ApplyProtocol),
             Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
+            Self::SaveView | Self::ApplyView(_) | Self::RemoveView(_) => {
+                Edit::new(Action::NamedView)
+            }
+            Self::SetExport(_) => Edit::new(Action::Export),
             Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),
             Self::SetTimelineDuration(_) => Edit::new(Action::TimelineDuration),
             _ => return None,

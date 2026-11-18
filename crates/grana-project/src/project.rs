@@ -176,9 +176,7 @@ impl ViewState {
             None => hash = mix(hash, 0),
         }
         hash = mix(hash, self.timeline.document());
-        hash = mix(hash, u64::from(self.export.image));
-        hash = mix(hash, u64::from(self.export.movie));
-        mix(hash, u64::from(self.export.transparent))
+        mix(hash, self.export.document())
     }
 }
 
@@ -210,6 +208,13 @@ impl Export {
                 .contains(&self.image))
             && (grana_display::OutputSize::MIN..=grana_display::OutputSize::MAX)
                 .contains(&self.movie)
+    }
+
+    pub fn document(&self) -> u64 {
+        let mut hash = HASH_OFFSET;
+        hash = mix(hash, u64::from(self.image));
+        hash = mix(hash, u64::from(self.movie));
+        mix(hash, u64::from(self.transparent))
     }
 }
 

@@ -82,16 +82,22 @@ impl Localizations {
         self.entries.len()
     }
 
-    pub(super) fn set_layer(&mut self, set: ObjectSetId, layer: usize) -> bool {
+    pub(super) fn set_layer(&mut self, set: ObjectSetId, layer: usize) -> Result<bool, String> {
         let Some(entry) = self.entries.get_mut(&set) else {
-            return false;
+            return Err("the object set holds no super-resolution image".to_string());
         };
-        let layer = layer.min(entry.bitmaps.len().saturating_sub(1));
+        if layer >= entry.bitmaps.len() {
+            return Err(format!(
+                "the super-resolution image holds {} slices and slice {} is past its deepest",
+                entry.bitmaps.len(),
+                layer + 1
+            ));
+        }
         if entry.layer == layer {
-            return false;
+            return Ok(false);
         }
         entry.layer = layer;
-        true
+        Ok(true)
     }
 
     pub(super) fn install(

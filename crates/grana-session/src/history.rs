@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
 use grana_animation::Timeline;
+use grana_display::CameraState;
+use grana_project::{Export, NamedView};
 use grana_scene::{Measure, MeasureState, Scene, SceneState};
 
 use crate::command::{Action, Edit};
@@ -9,22 +11,31 @@ const MAX_ENTRIES: usize = 64;
 const COALESCE: Duration = Duration::from_millis(600);
 
 pub(crate) struct Snapshot {
-    scene: SceneState,
-    measure: MeasureState,
-    timeline: Timeline,
+    pub(crate) scene: SceneState,
+    pub(crate) measure: MeasureState,
+    pub(crate) timeline: Timeline,
+    pub(crate) export: Export,
+    pub(crate) views: Vec<NamedView>,
+    pub(crate) camera: Option<CameraState>,
 }
 
 impl Snapshot {
-    pub(crate) fn capture(scene: &Scene, measure: &Measure, timeline: &Timeline) -> Self {
+    pub(crate) fn capture(
+        scene: &Scene,
+        measure: &Measure,
+        timeline: &Timeline,
+        export: Export,
+        views: &[NamedView],
+        camera: Option<CameraState>,
+    ) -> Self {
         Self {
             scene: scene.state(),
             measure: measure.state(scene),
             timeline: timeline.clone(),
+            export,
+            views: views.to_vec(),
+            camera,
         }
-    }
-
-    pub(crate) fn into_parts(self) -> (SceneState, MeasureState, Timeline) {
-        (self.scene, self.measure, self.timeline)
     }
 }
 

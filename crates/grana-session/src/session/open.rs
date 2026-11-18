@@ -404,8 +404,21 @@ impl Session {
             .iter()
             .fold(0u64, |hash, view| hash.rotate_left(7) ^ view.document());
         Some(
-            scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document() ^ views,
+            scene.document_hash()
+                ^ self.measure.document_hash()
+                ^ self.timeline.document()
+                ^ views
+                ^ self.export.document(),
         )
+    }
+
+    pub(crate) fn edit_hash(&self) -> Option<u64> {
+        let document = self.document_hash()?;
+        let view = match &self.view {
+            Some(view) => view.document(),
+            None => self.current_view.as_ref().map_or(0, ViewState::document),
+        };
+        Some(document ^ view)
     }
 
     pub(super) fn reset(&mut self) {

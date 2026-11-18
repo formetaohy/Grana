@@ -346,7 +346,8 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     let axes = crate::schema::axes();
     let matrix = crate::schema::placement(spec.levels[0], 3);
     let inverse = crate::schema::inverse(matrix);
-    let display = crate::schema::rotated(spec.levels[0], 3);
+    let rotated = crate::schema::rotated(spec.levels[0], 3);
+    let schema = crate::schema::Schema::placed(rotated);
     let datasets = spec
         .levels
         .iter()
@@ -373,7 +374,7 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                 spacing[0],
             ];
             let translation = [0.0, 0.0, translation[0], translation[1], translation[2]];
-            crate::schema::dataset(&level.to_string(), &scale, &translation)
+            crate::schema::dataset(schema, &level.to_string(), &scale, &translation)
         })
         .collect::<Vec<_>>();
     let channels = spec
@@ -399,12 +400,13 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
         })
         .collect::<Vec<_>>();
     let ome = json!({
-        "version": crate::schema::VERSION,
+        "version": schema.version(),
         "multiscales": crate::schema::multiscales(
+            schema,
             spec.name,
             &axes,
             datasets,
-            display.then_some(crate::schema::Display {
+            rotated.then_some(crate::schema::Display {
                 matrix,
                 dropped: vec![0, 1],
                 spatial: 3,

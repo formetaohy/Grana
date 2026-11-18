@@ -2,6 +2,25 @@ use crate::{Intensity, VoxelFormat};
 
 const BITS: usize = crate::CHANNEL_LIMIT;
 
+const TINTS: [[f32; 3]; 8] = [
+    [0.25, 0.55, 1.00],
+    [0.20, 0.95, 0.35],
+    [1.00, 0.25, 0.55],
+    [1.00, 0.72, 0.20],
+    [0.60, 0.40, 1.00],
+    [0.20, 0.90, 0.90],
+    [1.00, 0.45, 0.20],
+    [0.85, 0.85, 0.30],
+];
+
+pub fn tint_of(channel: u32) -> [f32; 3] {
+    TINTS[channel as usize % TINTS.len()]
+}
+
+pub fn name_of(channel: u32) -> String {
+    format!("Channel {}", channel + 1)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ChannelSet {
     bits: u32,
@@ -82,6 +101,22 @@ impl ChannelInfo {
         }
     }
 
+    pub fn resolve(
+        name: impl Into<String>,
+        tint: [f32; 3],
+        format: VoxelFormat,
+        domains: &[Option<Intensity>],
+        windows: &[Option<Intensity>],
+    ) -> Self {
+        let intensity = match format {
+            VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
+            VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
+            VoxelFormat::F32 => first(domains).unwrap_or_else(fallback),
+        };
+        let window = first(windows).unwrap_or(intensity);
+        Self::new(name, tint, intensity, window, format)
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -101,4 +136,16 @@ impl ChannelInfo {
     pub fn format(&self) -> VoxelFormat {
         self.format
     }
+}
+
+fn first(candidates: &[Option<Intensity>]) -> Option<Intensity> {
+    candidates
+        .iter()
+        .flatten()
+        .copied()
+        .find(|candidate| candidate.span() > 0.0)
+}
+
+fn fallback() -> Intensity {
+    Intensity::new(0.0, 1.0)
 }

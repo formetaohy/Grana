@@ -726,69 +726,65 @@ impl Scene {
         time: u32,
         object: usize,
     ) -> Result<bool, String> {
-        self.delete_objects(id, time, &[object])
+        self.delete_objects(id, &[(time, vec![object])])
     }
 
     pub fn delete_objects(
         &mut self,
         id: ObjectSetId,
-        time: u32,
-        objects: &[usize],
+        plan: &[(u32, Vec<usize>)],
     ) -> Result<bool, String> {
-        if objects.is_empty() {
-            return Ok(false);
-        }
-        let Some(count) = self
-            .objects
-            .get(id)
-            .and_then(|set| set.frame_shared(time))
-            .map(|frame| frame.object_count())
-        else {
-            return Ok(false);
-        };
-        let mut keep = vec![true; count];
-        for object in objects {
-            assert!(
-                *object < keep.len(),
-                "a deleted object lies inside its frame"
-            );
-            keep[*object] = false;
-        }
-        self.retain_objects(id, time, &keep)
-    }
-
-    pub fn retain_objects(
-        &mut self,
-        id: ObjectSetId,
-        time: u32,
-        keep: &[bool],
-    ) -> Result<bool, String> {
-        if !self.objects.retain_objects(id, time, keep)? {
-            return Ok(false);
-        }
-        let mut positions = Vec::with_capacity(keep.len());
-        let mut next = 0;
-        for kept in keep {
-            positions.push(kept.then_some(next));
-            if *kept {
-                next += 1;
+        let mut keeps = Vec::with_capacity(plan.len());
+        for (time, objects) in plan {
+            if objects.is_empty() {
+                continue;
             }
-        }
-        self.selections.retain_mut(|selection| {
-            if selection.set != id {
-                return true;
+            let count = self
+                .objects
+                .get(id)
+                .and_then(|set| set.frame_shared(*time))
+                .map(|frame| frame.object_count())
+                .ok_or_else(|| {
+                    format!("the deleted objects name the frame {time} of no picture")
+                })?;
+            let mut keep = vec![true; count];
+            for object in objects {
+                let slot = keep.get_mut(*object).ok_or_else(|| {
+                    format!("the frame {time} holds {count} objects and object {object} is named")
+                })?;
+                *slot = false;
             }
-            let Item::Object(index) = selection.item else {
-                return true;
-            };
-            match positions.get(index).copied().flatten() {
-                Some(mapped) => {
-                    selection.item = Item::Object(mapped);
-                    true
+            keeps.push((*time, keep));
+        }
+        if self.objects.retain_objects(id, &keeps)? == 0 {
+            return Ok(false);
+        }
+        let time = self.time();
+        if let Some((_, keep)) = keeps.iter().find(|(at, _)| *at == time) {
+            let mut positions = Vec::with_capacity(keep.len());
+            let mut next = 0;
+            for kept in keep {
+                positions.push(kept.then_some(next));
+                if *kept {
+                    next += 1;
                 }
-                None => false,
             }
-        });
+            self.selections.retain_mut(|selection| {
+                if selection.set != id {
+                    return true;
+                }
+                let Item::Object(index) = selection.item else {
+                    return true;
+                };
+                match positions.get(index).copied().flatten() {
+                    Some(mapped) => {
+                        selection.item = Item::Object(mapped);
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
         self.sync_coloc_mask();
         self.sync_masks();
         Ok(true)

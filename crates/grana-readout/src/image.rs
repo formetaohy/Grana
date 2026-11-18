@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
-    VoxelData, VoxelFormat, pad_brick,
+    VoxelData, VoxelFormat, name_of, pad_brick, tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
 use openreadout_core::{ImageInfo, PixelType, Plane, PlaneIndex};
@@ -18,18 +18,6 @@ use crate::reader::{self, Readers};
 use crate::scene::{self, Scene};
 
 const CACHE_BYTES: usize = 256 << 20;
-const DISPLAY_FORMAT: f32 = 65535.0;
-
-const PALETTE: [[f32; 3]; 8] = [
-    [0.25, 0.55, 1.00],
-    [0.20, 0.95, 0.35],
-    [1.00, 0.25, 0.55],
-    [1.00, 0.72, 0.20],
-    [0.60, 0.40, 1.00],
-    [0.20, 0.90, 0.90],
-    [1.00, 0.45, 0.20],
-    [0.85, 0.85, 0.30],
-];
 
 const RED: [f32; 3] = [1.0, 0.0, 0.0];
 const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
@@ -372,12 +360,12 @@ fn channel(image: &ImageInfo, view: View, index: usize, probe: Option<Intensity>
     let base = source
         .and_then(|channel| channel.name.as_deref().or(channel.fluorophore.as_deref()))
         .filter(|name| !name.trim().is_empty())
-        .map_or_else(|| format!("Channel {}", view.channel + 1), str::to_string);
+        .map_or_else(|| name_of(view.channel), str::to_string);
     let (name, tint) = if image.samples_per_pixel <= 1 {
         let tint = source
             .and_then(|channel| channel.color.as_deref())
             .and_then(color)
-            .unwrap_or(PALETTE[index % PALETTE.len()]);
+            .unwrap_or_else(|| tint_of(index as u32));
         (base, tint)
     } else {
         let (suffix, tint) = match view.sample {
@@ -387,20 +375,7 @@ fn channel(image: &ImageInfo, view: View, index: usize, probe: Option<Intensity>
         };
         (format!("{base} {suffix}"), tint)
     };
-    let intensity = match view.format {
-        VoxelFormat::U8 => Intensity::new(0.0, 255.0),
-        VoxelFormat::U16 => Intensity::new(0.0, DISPLAY_FORMAT),
-        VoxelFormat::F32 => probe.unwrap_or_else(|| Intensity::new(0.0, 1.0)),
-    };
-    let window = probe
-        .filter(|range| range.span() > 0.0)
-        .unwrap_or(intensity);
-    let window = if window.span() > 0.0 {
-        window
-    } else {
-        Intensity::new(0.0, 1.0)
-    };
-    ChannelInfo::new(name, tint, intensity, window, view.format)
+    ChannelInfo::resolve(name, tint, view.format, &[probe], &[probe])
 }
 
 fn format_of(pixel: PixelType) -> Option<VoxelFormat> {

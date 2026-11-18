@@ -473,6 +473,63 @@ fn sample(channel: usize, frame: u32, position: [u32; 3]) -> u32 {
 }
 
 #[test]
+fn writes_the_released_ome_zarr_schema() {
+    let temp = Temp::new("suite-zarr-schema");
+    let path = temp.path().join("released.ome.zarr");
+    write_zarr(&path);
+    let metadata = serde_json::from_slice::<serde_json::Value>(
+        &std::fs::read(path.join("zarr.json")).expect("the group metadata reads"),
+    )
+    .expect("the group metadata parses");
+    let ome = &metadata["attributes"]["ome"];
+    assert_eq!(
+        ome["version"],
+        serde_json::json!("0.5"),
+        "an axis aligned image declares the released schema"
+    );
+    let multiscales = &ome["multiscales"][0];
+    assert!(
+        multiscales.get("coordinateSystems").is_none(),
+        "the released schema names its axes on the multiscales entry"
+    );
+    assert_eq!(
+        multiscales["axes"],
+        serde_json::json!([
+            { "name": "t", "type": "time", "unit": "second" },
+            { "name": "c", "type": "channel" },
+            { "name": "z", "type": "space", "unit": "micrometer" },
+            { "name": "y", "type": "space", "unit": "micrometer" },
+            { "name": "x", "type": "space", "unit": "micrometer" },
+        ])
+    );
+    for (level, dataset) in multiscales["datasets"]
+        .as_array()
+        .expect("the levels are listed")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(dataset["path"], serde_json::json!(level.to_string()));
+        let transforms = dataset["coordinateTransformations"]
+            .as_array()
+            .expect("a level lists its transforms");
+        assert_eq!(
+            transforms
+                .iter()
+                .map(|transform| transform["type"].as_str())
+                .collect::<Vec<_>>(),
+            [Some("scale"), Some("translation")],
+            "the released schema places a level with a scale and a translation"
+        );
+        assert!(transforms.iter().all(|transform| {
+            transform["scale"]
+                .as_array()
+                .or(transform["translation"].as_array())
+                .is_some_and(|values| values.len() == 5)
+        }));
+    }
+}
+
+#[test]
 fn writes_and_reads_a_tiny_ome_zarr() {
     let temp = Temp::new("suite-zarr");
     let path = temp.path().join("tiny.ome.zarr");

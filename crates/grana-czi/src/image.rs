@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
-    VoxelFormat, pad_brick,
+    VoxelFormat, name_of, pad_brick, tint_of,
 };
 
 use crate::Cache;
@@ -23,16 +23,6 @@ const CACHE_BYTES: u64 = 256 << 20;
 const METADATA_XML_OFFSET: u64 = 256;
 const PROBE_SIDE: u32 = 64;
 const DISPLAY_LIMIT: f32 = 1.5;
-const PALETTE: [[f32; 3]; 8] = [
-    [0.25, 0.55, 1.00],
-    [0.20, 0.95, 0.35],
-    [1.00, 0.25, 0.55],
-    [1.00, 0.72, 0.20],
-    [0.60, 0.40, 1.00],
-    [0.20, 0.90, 0.90],
-    [1.00, 0.45, 0.20],
-    [0.85, 0.85, 0.30],
-];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scene {
@@ -147,27 +137,29 @@ impl Image {
         let mut channels = Vec::with_capacity(selected.pixels.len());
         for (index, pixel) in selected.pixels.iter().enumerate() {
             let format = pixel.format();
-            let intensity = intensity(format);
             let display = metadata.display.get(index);
-            let measured =
-                match display.and_then(|display| window(display.low, display.high, intensity)) {
-                    Some(measured) => Some(measured),
-                    None => probe(&document.store, path, base, &cache, format, index as u32)?,
-                };
-            let window = measured
-                .filter(|window| window.span() > 0.0)
-                .unwrap_or(intensity);
+            let embedded = display.and_then(|display| window(display.low, display.high, format));
+            let measured = match embedded {
+                Some(measured) => Some(measured),
+                None => probe(&document.store, path, base, &cache, format, index as u32)?,
+            };
             let source = metadata.channels.get(index);
             let name = display
                 .and_then(|display| display.name.clone())
                 .or_else(|| source.and_then(|channel| channel.name.clone()))
                 .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| format!("Channel {}", index + 1));
+                .unwrap_or_else(|| name_of(index as u32));
             let tint = source
                 .and_then(|channel| channel.tint)
                 .or_else(|| display.and_then(|display| display.tint))
-                .unwrap_or(PALETTE[index % PALETTE.len()]);
-            channels.push(ChannelInfo::new(name, tint, intensity, window, format));
+                .unwrap_or_else(|| tint_of(index as u32));
+            channels.push(ChannelInfo::resolve(
+                name,
+                tint,
+                format,
+                &[measured],
+                &[measured],
+            ));
         }
         let stored = selected.levels.len();
         let pyramid = Pyramid::new(
@@ -437,7 +429,7 @@ fn xml(store: &Store, header: &Header, path: &Path) -> Result<Metadata, Error> {
     metadata::parse(&String::from_utf8_lossy(&text)).map_err(|detail| Error::metadata(path, detail))
 }
 
-fn window(low: Option<f32>, high: Option<f32>, intensity: Intensity) -> Option<Intensity> {
+fn window(low: Option<f32>, high: Option<f32>, format: VoxelFormat) -> Option<Intensity> {
     let low = low.unwrap_or(0.0);
     let high = high?;
     if !(0.0..=DISPLAY_LIMIT).contains(&low) || !(0.0..=DISPLAY_LIMIT).contains(&high) {
@@ -446,16 +438,12 @@ fn window(low: Option<f32>, high: Option<f32>, intensity: Intensity) -> Option<I
     if high <= low {
         return None;
     }
-    let top = intensity.max();
+    let top = match format {
+        VoxelFormat::U8 => f32::from(u8::MAX),
+        VoxelFormat::U16 => f32::from(u16::MAX),
+        VoxelFormat::F32 => 1.0,
+    };
     Some(Intensity::new(low * top, high * top))
-}
-
-fn intensity(format: VoxelFormat) -> Intensity {
-    match format {
-        VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
-        VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
-        VoxelFormat::F32 => Intensity::new(0.0, 1.0),
-    }
 }
 
 fn sample_bytes(format: VoxelFormat) -> usize {

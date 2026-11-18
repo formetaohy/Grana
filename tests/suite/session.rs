@@ -408,6 +408,95 @@ fn undoes_and_replays_object_edits() {
     assert!(session.history().undo.is_none());
 }
 
+#[test]
+fn undoes_a_named_view_with_its_timeline() {
+    let mut session = Session::new();
+    session.open_series("views", series());
+    let saved = view_state();
+    session.observe_view(saved.clone());
+    session.execute(Command::SaveView);
+    assert_eq!(session.views().len(), 1, "the view joins the document");
+    session.execute(Command::SetTimelineFps(12));
+    assert_eq!(session.timeline().fps(), 12);
+    let later = ViewState {
+        timeline: Timeline::new(12, 10.0),
+        camera: CameraState {
+            yaw: 0.9,
+            ..saved.camera
+        },
+        ..view_state()
+    };
+    session.observe_view(later.clone());
+    session.execute(Command::ApplyView(0));
+    assert_eq!(
+        session.history().undo,
+        Some(grana_session::Action::NamedView),
+        "applying a view is an undoable edit"
+    );
+    assert_eq!(session.timeline().fps(), saved.timeline.fps());
+    let applied = session
+        .take_view()
+        .expect("the applied view reaches the renderer");
+    assert_eq!(applied.camera.yaw, saved.camera.yaw);
+    session.observe_view(applied);
+    session.execute(Command::Undo);
+    assert_eq!(
+        session.timeline().fps(),
+        12,
+        "undo restores the timeline the view replaced"
+    );
+    let restored = session
+        .take_view()
+        .expect("undo returns the camera the view replaced");
+    assert_eq!(restored.camera.yaw, later.camera.yaw);
+    session.observe_view(restored);
+    session.execute(Command::Redo);
+    assert_eq!(session.timeline().fps(), saved.timeline.fps());
+    let reapplied = session.take_view().expect("redo applies the view again");
+    assert_eq!(reapplied.camera.yaw, saved.camera.yaw);
+    session.execute(Command::Undo);
+    session.execute(Command::Undo);
+    assert_eq!(session.timeline().fps(), 30, "the frame rate reverts too");
+    session.execute(Command::Undo);
+    assert!(session.views().is_empty(), "undo drops the saved view");
+    session.execute(Command::Redo);
+    assert_eq!(session.views().len(), 1, "redo saves the view again");
+    let posed = ViewState {
+        camera: CameraState {
+            yaw: 1.4,
+            ..saved.camera
+        },
+        ..saved
+    };
+    session.observe_view(posed.clone());
+    session.execute(Command::SaveView);
+    assert_eq!(session.views().len(), 2);
+    let elsewhere = ViewState {
+        camera: CameraState {
+            yaw: -0.6,
+            ..posed.camera
+        },
+        ..posed
+    };
+    session.observe_view(elsewhere.clone());
+    session.execute(Command::ApplyView(1));
+    assert_eq!(
+        session.history().undo,
+        Some(grana_session::Action::NamedView),
+        "a view that only moves the camera edits the document too"
+    );
+    let moved = session
+        .take_view()
+        .expect("the applied camera reaches the renderer");
+    assert_eq!(moved.camera.yaw, posed.camera.yaw);
+    session.observe_view(moved);
+    session.execute(Command::Undo);
+    let back = session
+        .take_view()
+        .expect("undo returns the camera the view replaced");
+    assert_eq!(back.camera.yaw, elsewhere.camera.yaw);
+}
+
 fn oriented_region() -> Region {
     Region::new(
         Vec3::new(0.5, -0.25, 0.75),

@@ -547,16 +547,22 @@ impl Session {
     }
     pub(super) fn apply_view(&mut self, index: usize) -> bool {
         let Some(named) = self.views.get(index).map(|named| named.view.clone()) else {
+            self.message = Some(Message::error("the document holds no such named view"));
             return false;
         };
-        self.restore_timeline(named.timeline.clone());
+        self.restore_timeline(named.timeline);
         self.export = named.export;
-        self.view = Some(named);
+        self.view = Some(ViewState {
+            camera: named.camera,
+            timeline: self.timeline.clone(),
+            export: self.export,
+        });
         self.touch();
         true
     }
     pub(super) fn remove_view(&mut self, index: usize) -> bool {
         if index >= self.views.len() {
+            self.message = Some(Message::error("the document holds no such named view"));
             return false;
         }
         self.views.remove(index);

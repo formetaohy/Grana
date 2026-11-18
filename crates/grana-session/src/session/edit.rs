@@ -78,36 +78,27 @@ impl Session {
                 return false;
             }
         };
-        let mut removed = 0usize;
-        let mut failure = None;
-        for (time, objects) in deletions {
+        let deleted = {
             let Some(scene) = self.scene.as_mut() else {
-                break;
+                return false;
             };
-            match scene.delete_objects(set, time, &objects) {
-                Ok(true) => removed += objects.len(),
-                Ok(false) => {}
+            match scene.delete_objects(set, &deletions) {
+                Ok(deleted) => deleted,
                 Err(detail) => {
-                    failure = Some(detail);
-                    break;
+                    self.message = Some(Message::error(detail));
+                    return false;
                 }
             }
-        }
-        if removed > 0 {
-            self.defer_relations(set);
-            self.refresh_dependents(set);
-            self.resume_relations(set);
-        }
-        if let Some(detail) = failure {
-            self.message = Some(Message::error(detail));
-            return removed > 0;
-        }
-        if removed == 0 {
+        };
+        if !deleted {
             self.message = Some(Message::error(
                 "every object matches the statistics filters",
             ));
             return false;
         }
+        self.defer_relations(set);
+        self.refresh_dependents(set);
+        self.resume_relations(set);
         true
     }
 

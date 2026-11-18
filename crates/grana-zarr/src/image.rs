@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Pyramid, VoxelData,
-    VoxelFormat, pad_brick,
+    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Probe, Pyramid, VoxelData,
+    VoxelFormat, name_of, pad_brick, tint_of,
 };
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
@@ -18,21 +18,6 @@ use crate::axes::{self, Layout};
 use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
 use crate::root::Root;
-
-const PALETTE: [[f32; 3]; 8] = [
-    [0.25, 0.55, 1.00],
-    [0.20, 0.95, 0.35],
-    [1.00, 0.25, 0.55],
-    [1.00, 0.72, 0.20],
-    [0.60, 0.40, 1.00],
-    [0.20, 0.90, 0.90],
-    [1.00, 0.45, 0.20],
-    [0.85, 0.85, 0.30],
-];
-
-const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
-const RANGE_PROBE_SIDE: u32 = 32;
-const RANGE_SAMPLE_FRAMES: u32 = 4;
 
 struct LevelArray {
     path: String,
@@ -196,10 +181,6 @@ impl Image {
 
     pub(crate) fn minor(&self) -> u32 {
         self.minor
-    }
-
-    pub(crate) fn modern(&self) -> bool {
-        self.minor >= 6
     }
 
     pub(crate) fn axes(&self) -> &[metadata::Axis] {
@@ -448,10 +429,10 @@ fn channels(
             let name = metadata
                 .and_then(|metadata| metadata.label.clone())
                 .filter(|label| !label.is_empty())
-                .unwrap_or_else(|| format!("Channel {}", index + 1));
+                .unwrap_or_else(|| name_of(index));
             let tint = metadata
                 .map(|metadata| metadata.tint)
-                .unwrap_or(PALETTE[index as usize % PALETTE.len()]);
+                .unwrap_or_else(|| tint_of(index));
             let data_range = metadata.and_then(|metadata| metadata.data).and_then(valid);
             let omero_window = metadata
                 .and_then(|metadata| metadata.window)
@@ -461,20 +442,13 @@ fn channels(
             } else {
                 None
             };
-            let intensity = match format {
-                VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
-                VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
-                VoxelFormat::F32 => data_range
-                    .or(omero_window)
-                    .or(sampled)
-                    .unwrap_or_else(|| Intensity::new(0.0, 1.0)),
-            };
-            let window = omero_window
-                .or(data_range)
-                .or(sampled)
-                .or_else(|| (intensity.span() > 0.0).then_some(intensity))
-                .unwrap_or_else(|| Intensity::new(0.0, 1.0));
-            Ok(ChannelInfo::new(name, tint, intensity, window, format))
+            Ok(ChannelInfo::resolve(
+                name,
+                tint,
+                format,
+                &[data_range, omero_window, sampled],
+                &[omero_window, data_range, sampled],
+            ))
         })
         .collect()
 }
@@ -485,41 +459,18 @@ fn sample_range(
     frames: u32,
 ) -> Result<Option<Intensity>, Error> {
     let level = levels.last().expect("a multiscale image has a level");
-    let extent = level.layout.extent;
-    let samples = frames.clamp(1, RANGE_SAMPLE_FRAMES);
-    let budget = (RANGE_SAMPLE_VOXELS / u64::from(samples)).max(1);
-    let probe = |limit: u32| {
-        let side = limit.min(RANGE_PROBE_SIDE);
-        let start = (limit - side) / 2;
-        start..start + side
-    };
-    let spatial = if extent.voxel_count() <= budget {
-        (0..extent.x(), 0..extent.y(), 0..extent.z())
-    } else {
-        (probe(extent.x()), probe(extent.y()), probe(extent.z()))
-    };
-    let mut low = f32::INFINITY;
-    let mut high = f32::NEG_INFINITY;
-    for sample in 0..samples {
-        let time = u64::from(sample) * u64::from(frames) / u64::from(samples);
+    let mut probe = Probe::of(level.layout.extent, frames);
+    probe.measure(|time, ranges| {
         let ranges = level.layout.ranges(
-            time,
+            u64::from(time),
             channel as u64,
-            spatial.0.clone(),
-            spatial.1.clone(),
-            spatial.2.clone(),
+            ranges[0].clone(),
+            ranges[1].clone(),
+            ranges[2].clone(),
         );
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve(&level.cache, &subset, &level.path)?;
-        let range = data.range();
-        low = low.min(range.min());
-        high = high.max(range.max());
-    }
-    if high > low {
-        Ok(Some(Intensity::new(low, high)))
-    } else {
-        Ok(None)
-    }
+        retrieve(&level.cache, &subset, &level.path)
+    })
 }
 
 fn valid(range: [f32; 2]) -> Option<Intensity> {
