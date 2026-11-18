@@ -12,7 +12,7 @@ use crate::geometry::{Corners, Rect};
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role, Theme};
 
@@ -552,6 +552,5 @@ pub(super) fn paint_gradient_bar(
             width: 1.0,
             color: info.theme.palette.outline_variant.with_alpha(0.5),
         },
-        Shadow::NONE,
     );
 }

@@ -221,13 +221,7 @@ pub fn view<'a>(
         .view(props, move |_, painter, info| {
             let card = info.rect;
             let surface = theme.surface(Role::Card, State::Rest);
-            painter.outlined(
-                card,
-                surface.corners,
-                surface.fill,
-                surface.border,
-                surface.shadow,
-            );
+            painter.outlined(card, surface.corners, surface.fill, surface.border);
             let style = Style::card(&theme, distribution).with_language(language);
             let chart = PlotView {
                 plot,

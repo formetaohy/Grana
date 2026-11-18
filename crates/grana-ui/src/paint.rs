@@ -7,11 +7,10 @@ use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::image::ImageAtlas;
 use crate::record::Mark;
-use crate::style::{Border, Fill, Shadow, Surface};
+use crate::style::{Border, Fill, Surface};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
-pub const KIND_SHADOW: u32 = 1;
 pub const KIND_GLYPH: u32 = 2;
 pub const KIND_SCENE: u32 = 3;
 pub const KIND_SEGMENT: u32 = 4;
@@ -43,10 +42,6 @@ impl Instance {
         self.clip[0] += delta.x;
         self.clip[1] += delta.y;
         match self.meta[0] {
-            KIND_SHADOW => {
-                self.uv[0] += delta.x;
-                self.uv[1] += delta.y;
-            }
             KIND_SEGMENT => {
                 self.rect[2] += delta.x;
                 self.rect[3] += delta.y;
@@ -272,26 +267,10 @@ impl<'a> Painter<'a> {
     }
 
     pub fn surface(&mut self, rect: Rect, surface: Surface) {
-        self.outlined(
-            rect,
-            surface.corners,
-            surface.fill,
-            surface.border,
-            surface.shadow,
-        );
+        self.outlined(rect, surface.corners, surface.fill, surface.border);
     }
 
-    pub fn outlined(
-        &mut self,
-        rect: Rect,
-        corners: Corners,
-        fill: Fill,
-        border: Border,
-        shadow: Shadow,
-    ) {
-        if shadow.color.alpha > 0.0 && shadow.radius > 0.0 {
-            self.shadow(rect, corners, shadow);
-        }
+    pub fn outlined(&mut self, rect: Rect, corners: Corners, fill: Fill, border: Border) {
         match fill {
             Fill::None => {}
             Fill::Solid(color) => self.rect(rect, corners, color),
@@ -323,27 +302,6 @@ impl<'a> Painter<'a> {
                 clip,
             });
         }
-    }
-
-    pub fn shadow(&mut self, rect: Rect, corners: Corners, shadow: Shadow) {
-        if rect.is_empty() || shadow.color.alpha <= 0.0 || shadow.radius <= 0.0 {
-            return;
-        }
-        let mut instance = Instance::blank(KIND_SHADOW);
-        let sigma = (shadow.radius * 0.5).max(0.5);
-        let expanded = rect.translate(shadow.offset).expand(2.6 * sigma);
-        instance.rect = [
-            expanded.min.x,
-            expanded.min.y,
-            expanded.width(),
-            expanded.height(),
-        ];
-        instance.corners = corners_array(corners.resolved(rect.size()));
-        instance.color = shadow.color.to_array();
-        instance.color2 = corners_array(corners.resolved(rect.size()));
-        instance.uv = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.extra = [sigma, 0.0, 0.0, 0.0];
-        self.push(instance);
     }
 
     pub fn scene(&mut self, rect: Rect, corners: Corners, uv: [f32; 4]) {

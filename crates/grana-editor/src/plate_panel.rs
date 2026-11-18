@@ -4,7 +4,7 @@ use glam::Vec2;
 use grana_session::{Command, PlateView, Well};
 use grana_ui::{
     Align, Bitmap, BuildContext, Color, Corners, Element, Fill, Icon, Key, Length, Level, Rect,
-    Role, Shadow, TextStyle, TypeStyle,
+    Role, TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -185,7 +185,6 @@ fn cell<'a>(
                         width: 2.0,
                         color: border,
                     },
-                    Shadow::NONE,
                 );
             }
             if cell.present {

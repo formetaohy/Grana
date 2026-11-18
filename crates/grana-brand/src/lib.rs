@@ -1,4 +1,4 @@
-use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Shadow, Vec2};
+use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Vec2};
 
 const CANVAS: f32 = 512.0;
 const RADIUS: f32 = 124.0;
@@ -58,7 +58,6 @@ pub fn paint(painter: &mut Painter<'_>, area: Rect) {
             width: BORDER * scale,
             color: EDGE.with_alpha(EDGE_ALPHA),
         },
-        Shadow::NONE,
     );
     for (index, slab) in SLABS.iter().enumerate() {
         if index > 0 {

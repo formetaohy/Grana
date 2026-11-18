@@ -4,7 +4,9 @@ labels! {
     show_sidebar => "Show sidebar" / "显示侧边栏";
     hide_sidebar => "Hide sidebar" / "隐藏侧边栏";
     settings => "Settings" / "设置";
-    open => "Open" / "打开";
+    save => "Save" / "保存";
+    export => "Export" / "导出";
+    open_remote => "Open from the web" / "从网络打开";
     analysis => "Analysis" / "分析";
     frame_volume => "Frame the volume" / "适配体数据视图";
     nothing_to_undo => "Nothing to undo" / "没有可撤销的操作";

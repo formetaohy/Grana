@@ -250,7 +250,6 @@ fn draw(painter: &mut Painter, label: &Placed, rect: Rect) {
             width: 0.75,
             color: border,
         },
-        grana_ui::Shadow::NONE,
     );
     let accent = if label.selected {
         Color::rgba(1.0, 0.86, 0.45, 1.0)

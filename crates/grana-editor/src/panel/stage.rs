@@ -20,15 +20,20 @@ pub(super) fn view<'a>(
     full: Rect,
 ) -> Vec<Element<'a, Message>> {
     let mut elements = Vec::new();
-    let palette = ctx.theme().palette;
+    let theme = *ctx.theme();
+    let palette = theme.palette;
     let backdrop = palette.surface_dim;
+    let frame = palette.surface_container_lowest;
+    let corners = Corners::all(theme.metrics.corner_xl);
     let stage = state.stage;
     let region = stage.region();
     let quad = stage.quad();
+    let pane = layout.viewport;
     let content = grana_ui::canvas(Length::Fill, full.height())
         .view(region, move |_, painter, info| {
             painter.rect(info.rect, Corners::ZERO, backdrop);
-            painter.scene(quad, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
+            painter.rect(pane, corners.resolved(pane.size()), frame);
+            painter.scene(quad, corners.resolved(quad.size()), [0.0, 0.0, 1.0, 1.0]);
         })
         .named("stage.content")
         .at(full)

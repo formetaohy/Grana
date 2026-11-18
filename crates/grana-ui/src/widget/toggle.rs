@@ -7,7 +7,7 @@ use crate::icon::{self, Icon};
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Metrics, Theme};
 
@@ -173,7 +173,6 @@ fn paint_switch(runtime: &Runtime, painter: &mut Painter, info: &PaintInfo<'_>, 
             width: 1.5 * (1.0 - progress),
             color: border_color,
         },
-        Shadow::NONE,
     );
     let diameter = 11.0 + 5.5 * progress + 2.0 * info.press;
     let start_x = rect.min.x + 10.5;
@@ -222,7 +221,6 @@ pub(super) fn paint_checkbox(
             width: 1.5 * (1.0 - mark),
             color: outline,
         },
-        Shadow::NONE,
     );
     if mark > 0.05 {
         icon::paint(

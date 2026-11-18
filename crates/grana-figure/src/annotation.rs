@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
 use grana_measure::Unit;
 use grana_scene::Scene;
-use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, TypeStyle};
+use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, TextStyle, TypeStyle};
 
 const POINT_RADIUS: f32 = 3.2;
 const PICK_RADIUS: f32 = 10.0;
@@ -203,7 +203,6 @@ fn chip(painter: &mut Painter, at: Vec2, text: &str, accent: Color, occupied: &m
             width: 0.75,
             color: Color::white_alpha(0.18),
         },
-        Shadow::NONE,
     );
     painter.rect(
         Rect::from_center_size(

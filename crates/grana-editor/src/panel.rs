@@ -167,15 +167,19 @@ pub fn build(
             let mut ctx = ui.build();
             let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
             elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
+            elements.extend(crate::settings_panel::view(&mut ctx, full, workspace));
             if let Some(palette) = palette.as_ref() {
                 elements.extend(crate::palette::view(&mut ctx, full, palette));
             }
             elements
         };
         ui.present(grana_ui::place(full, elements));
-        frame.startup = ui
+        let size = ui
             .bounds("shell.panel")
-            .map(|panel| crate::shell::window_size(panel.size()));
+            .map_or_else(crate::settings_panel::window_floor, |panel| {
+                crate::shell::window_size(panel.size())
+            });
+        frame.startup = Some(size);
         return frame;
     };
     if workspace.panel == Some(Panel::Statistics) && view.measure.set().is_none() {
@@ -254,6 +258,7 @@ fn view_elements<'a>(
         layout.viewport,
         state.workspace.remote_open,
     ));
+    elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
     if let Some(palette) = state.palette {
         elements.extend(crate::palette::view(ctx, full, palette));
     }

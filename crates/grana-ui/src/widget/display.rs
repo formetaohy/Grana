@@ -255,7 +255,7 @@ pub fn combo<'a, A>(
         let look = theme
             .surface(Role::Field, State::Rest)
             .lerp(theme.surface(Role::Field, State::Hover), info.hover);
-        painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
+        painter.outlined(info.rect, look.corners, look.fill, look.border);
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(info.rect.min.x + 10.0, info.rect.min.y),

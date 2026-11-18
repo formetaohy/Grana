@@ -1,6 +1,6 @@
 use crate::color::Color;
 use crate::geometry::Corners;
-use crate::style::{Border, Fill, Shadow, State, Surface};
+use crate::style::{Border, Fill, State, Surface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -217,7 +217,7 @@ impl Metrics {
             corner_sm: 8.0,
             corner_md: 12.0,
             corner_lg: 16.0,
-            corner_xl: 24.0,
+            corner_xl: 20.0,
             corner_xxl: 28.0,
             slider_track: 14.0,
             slider_gap: 5.0,
@@ -401,42 +401,36 @@ impl Theme {
                 fill: Fill::Solid(p.surface_container_low),
                 corners: Corners::all(m.corner_xl),
                 border: Border::NONE,
-                shadow: Shadow::new(Color::black_alpha(0.45), 24.0, 8.0),
                 text: p.on_surface,
             },
             Role::FloatingToolbar => Surface {
                 fill: Fill::Solid(p.surface_container),
                 corners: Corners::capsule(),
                 border: Border::NONE,
-                shadow: Shadow::new(Color::black_alpha(0.50), 22.0, 6.0),
                 text: p.on_surface,
             },
             Role::Menu => Surface {
                 fill: Fill::Solid(p.surface_container_high),
-                corners: Corners::all(m.corner_lg),
+                corners: Corners::all(m.corner_md),
                 border: Border::NONE,
-                shadow: Shadow::new(Color::black_alpha(0.56), 26.0, 8.0),
                 text: p.on_surface,
             },
             Role::Card => Surface {
                 fill: Fill::Solid(p.surface_container),
                 corners: Corners::all(m.corner_lg),
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: p.on_surface,
             },
             Role::CardElevated => Surface {
                 fill: Fill::Solid(p.surface_container_high),
                 corners: Corners::all(m.corner_lg),
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: p.on_surface,
             },
             Role::Filled => Surface {
                 fill: Fill::Solid(lift(p.primary, p.on_primary)),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -447,7 +441,6 @@ impl Theme {
                 fill: Fill::Solid(lift(p.primary_container, p.on_primary_container)),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -458,7 +451,6 @@ impl Theme {
                 fill: Fill::Solid(lift(p.secondary_container, p.on_secondary_container)),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -469,7 +461,6 @@ impl Theme {
                 fill: Fill::Solid(lift(p.tertiary_container, p.on_tertiary_container)),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -480,7 +471,6 @@ impl Theme {
                 fill: Fill::Solid(lift(p.surface_container_high, p.on_surface)),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -506,7 +496,6 @@ impl Theme {
                         p.outline_variant
                     },
                 },
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -532,7 +521,6 @@ impl Theme {
                 }),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else if hovered || pressed || selected {
@@ -553,7 +541,6 @@ impl Theme {
                 }),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else if hovered || pressed {
@@ -581,7 +568,6 @@ impl Theme {
                         Color::TRANSPARENT
                     },
                 },
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else {
@@ -600,7 +586,6 @@ impl Theme {
                 }),
                 corners: button_corners,
                 border: Border::NONE,
-                shadow: Shadow::NONE,
                 text: if disabled {
                     p.on_surface.with_alpha(0.38)
                 } else if hovered || pressed {

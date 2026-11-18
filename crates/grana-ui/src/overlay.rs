@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::geometry::{Corners, Rect};
 use crate::paint::{Clip, Painter};
-use crate::style::{Border, Fill, Shadow, State};
+use crate::style::{Border, Fill, State};
 use crate::text::TextStyle;
 use crate::theme::{Level, Role};
 use crate::ui::{TOOLTIP_DELAY, Ui};
@@ -94,7 +94,6 @@ impl<A: Clone> Ui<A> {
                         width: 2.0,
                         color: self.theme.palette.primary,
                     },
-                    Shadow::NONE,
                 );
                 painter.pop_clip(previous);
             }

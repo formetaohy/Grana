@@ -15,6 +15,7 @@ pub mod palette;
 pub mod panel;
 pub mod plate;
 pub mod relation;
+pub mod settings;
 pub mod shell;
 pub mod timeline;
 pub mod track;

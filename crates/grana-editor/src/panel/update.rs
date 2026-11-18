@@ -85,6 +85,14 @@ pub fn apply(
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
             Message::SetLanguage(language) => workspace.language = language,
+            Message::ToggleSettings(open) => {
+                workspace.settings.open = open;
+            }
+            Message::SetSettingsSection(index) => {
+                if index < crate::state::Settings::SECTIONS {
+                    workspace.settings.section = index;
+                }
+            }
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {

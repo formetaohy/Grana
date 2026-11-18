@@ -23,6 +23,7 @@ fn navigation<'a>(
     layout: &Layout,
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
+    let theme = *ctx.theme();
     let hidden = state.workspace.sidebar_hidden;
     let language = ctx.language();
     let tooltip = if hidden {
@@ -30,31 +31,23 @@ fn navigation<'a>(
     } else {
         grana_i18n::header::hide_sidebar(language)
     };
-    let toggle_role = if hidden {
-        Role::SurfaceHigh
-    } else {
-        Role::Tonal
-    };
-    let toggle_corners = if hidden {
-        Corners::capsule()
-    } else {
-        Corners::all(10.0)
-    };
     let toggle = crate::view::icon_button(
         ctx,
         "sidebar.toggle",
         Icon::Sidebar,
         30.0,
-        toggle_role,
+        if hidden {
+            Role::SurfaceHigh
+        } else {
+            Role::Tonal
+        },
         tooltip,
         Message::ToggleSidebar,
     )
-    .shaped(toggle_corners);
+    .shaped(Corners::capsule());
     let project = project_split(ctx, state);
-    let open = open_split(ctx);
     let project_menu = project_menu(ctx, state);
-    let open_menu = open_menu(ctx, state);
-    let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
+    let surface = theme.surface(Role::FloatingToolbar, State::Rest);
     grana_ui::row()
         .at(layout.toolbar_left)
         .named("header.navigation")
@@ -63,41 +56,7 @@ fn navigation<'a>(
         .align(Align::Center)
         .height(Length::Fill)
         .background(surface)
-        .children([toggle, project, open, project_menu, open_menu])
-}
-
-fn settings_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let key = Key::new("settings.menu");
-    let width = 264.0;
-    if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, width, std::iter::empty());
-    }
-    let language = ctx.language();
-    let english = grana_i18n::Language::English;
-    let chinese = grana_i18n::Language::Chinese;
-    grana_ui::popover::popup(
-        key,
-        width,
-        [
-            crate::view::menu_row(
-                ctx,
-                "settings.language.english",
-                english.label(),
-                language == english,
-                Some(Message::SetLanguage(english)),
-            ),
-            crate::view::menu_row(
-                ctx,
-                "settings.language.chinese",
-                chinese.label(),
-                language == chinese,
-                Some(Message::SetLanguage(chinese)),
-            ),
-        ],
-    )
-    .persistent()
-    .padding(Edges::all(8.0))
-    .gap(4.0)
+        .children([toggle, project, project_menu])
 }
 
 fn project_split<'a>(
@@ -118,25 +77,11 @@ fn project_split<'a>(
     let full = ctx
         .measure(&project, TextStyle::new(project_font, Color::WHITE))
         .x;
-    let open_label = grana_i18n::header::open(ctx.language());
-    let inset = (theme.metrics.control_height * 0.44).round() + 1.0;
-    let open_lead_w =
-        ctx.measure(
-            open_label,
-            TextStyle::new(theme.button_font(), Color::WHITE),
-        )
-        .x + inset * 2.0
-            + 20.0;
-    let open_split_w = open_lead_w + theme.metrics.group_gap + theme.metrics.control_height;
     let trail_span = theme.metrics.control_height + theme.metrics.group_gap;
-    let available_lead = (crate::panel::TOOLBAR_LEFT
-        - 12.0
-        - theme.metrics.control_height
-        - 12.0
-        - open_split_w
-        - trail_span)
-        .max(84.0);
-    let lead_width = available_lead;
+    let ceiling =
+        (crate::panel::TOOLBAR_LEFT - 12.0 - theme.metrics.control_height - 12.0 - trail_span)
+            .max(96.0);
+    let lead_width = (full + 34.0 + if dirty { 12.0 } else { 0.0 }).clamp(112.0, ceiling);
     let measured = (lead_width - 34.0 - if dirty { 12.0 } else { 0.0 }).max(32.0);
     let menu_key = Key::new("project.menu");
     let open = ctx.popup_open(menu_key);
@@ -225,18 +170,6 @@ fn project_split<'a>(
         .children([lead, trail])
 }
 
-fn open_split<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let label = grana_i18n::header::open(ctx.language());
-    crate::view::split_button(
-        ctx,
-        Some(Icon::Folder),
-        label,
-        Role::SurfaceHigh,
-        ("open.lead", Message::Command(Command::OpenImage)),
-        (Key::new("open.menu"), Message::Noop),
-    )
-}
-
 fn actions<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
@@ -318,10 +251,10 @@ fn actions<'a>(
         inner,
         sliced,
     ));
-    let settings_open = ctx.popup_open(Key::new("settings.menu"));
+    let settings_open = state.workspace.settings.open;
     let settings = crate::view::icon_button(
         ctx,
-        "settings.menu",
+        "header.settings",
         Icon::Sliders,
         30.0,
         if settings_open {
@@ -330,7 +263,7 @@ fn actions<'a>(
             Role::SurfaceHigh
         },
         grana_i18n::header::settings(ctx.language()),
-        Message::Noop,
+        Message::ToggleSettings(!settings_open),
     )
     .shaped(Corners::group_horizontal(
         2,
@@ -344,7 +277,6 @@ fn actions<'a>(
         .align(Align::Center)
         .children([fit, slice_btn, settings]);
 
-    let settings_popup = settings_menu(ctx);
     let pending = state.io.pending > 0 || !state.jobs.is_empty();
     let mut children = Vec::new();
     if pending {
@@ -355,7 +287,6 @@ fn actions<'a>(
         history_group,
         tools_group,
         analysis(ctx, state),
-        settings_popup,
     ]);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     let actions = grana_ui::row()
@@ -413,33 +344,42 @@ fn analysis<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         .press(message)
 }
 
-fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let key = Key::new("open.menu");
+fn project_menu<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let key = Key::new("project.menu");
     if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 240.0, std::iter::empty());
+        return grana_ui::popover::popup(key, 248.0, std::iter::empty());
     }
+    let language = ctx.language();
     let mut rows = vec![
         command_row(ctx, "open.image"),
-        command_row(ctx, "open.tiles"),
         command_row(ctx, "open.folder"),
-        command_row(ctx, "open.remote"),
-        grana_ui::spacer(8.0),
         command_row(ctx, "open.project"),
     ];
-    if state.access.viewer() {
-        rows.remove(1);
+    if state.access.author() {
+        rows.push(command_row(ctx, "open.tiles"));
+        rows.push(command_row(ctx, "package.open"));
     }
+    rows.push(grana_ui::spacer(8.0));
+    rows.push(crate::view::section_header(
+        ctx,
+        grana_i18n::header::open_remote(language),
+        None,
+    ));
+    rows.push(command_row(ctx, "open.remote"));
     if !state.recent.is_empty() {
         rows.push(grana_ui::spacer(8.0));
         rows.push(crate::view::section_header(
             ctx,
-            grana_i18n::header::recent(ctx.language()),
+            grana_i18n::header::recent(language),
             None,
         ));
         for (index, entry) in state.recent.iter().take(crate::RECENT_LIMIT).enumerate() {
             rows.push(crate::view::action_menu_message(
                 ctx,
-                &format!("open.recent.{index}"),
+                &format!("project.recent.{index}"),
                 match entry.kind() {
                     grana_session::RecentKind::Image => Icon::Cube,
                     grana_session::RecentKind::Project => Icon::Folder,
@@ -451,27 +391,26 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
             ));
         }
     }
-    menu(ctx, key, 240.0, rows)
-}
-
-fn project_menu<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    state: &'a View<'a>,
-) -> Element<'a, Message> {
-    let key = Key::new("project.menu");
-    if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 224.0, std::iter::empty());
-    }
-    let mut rows = Vec::new();
     if state.access.author() {
+        rows.push(grana_ui::spacer(8.0));
+        rows.push(crate::view::section_header(
+            ctx,
+            grana_i18n::header::save(language),
+            None,
+        ));
         rows.push(command_row(ctx, "save.project"));
         rows.push(command_row(ctx, "save.as"));
-        rows.push(grana_ui::spacer(8.0));
     }
+    rows.push(grana_ui::spacer(8.0));
+    rows.push(crate::view::section_header(
+        ctx,
+        grana_i18n::header::export(language),
+        None,
+    ));
     rows.push(command_row(ctx, "snapshot"));
     rows.push(command_row(ctx, "figure"));
     rows.push(command_row(ctx, "labels"));
-    menu(ctx, key, 224.0, rows)
+    menu(ctx, key, 248.0, rows)
 }
 
 fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a, Message> {

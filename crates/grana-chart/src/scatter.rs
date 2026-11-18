@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_measure::Scatter;
-use grana_ui::{Align, Border, Corners, Fill, Painter, Rect, Shadow};
+use grana_ui::{Align, Border, Corners, Fill, Painter, Rect};
 
 use crate::axis::Axis;
 use crate::decor::{BrushKind, Decor, Highlight};
@@ -37,7 +37,6 @@ pub fn paint(
                     width: 0.75,
                     color: accent.with_alpha(0.32),
                 },
-                Shadow::NONE,
             );
         }
         (Some(gate), None) => {
@@ -147,7 +146,6 @@ pub fn paint(
                         width: 0.75,
                         color: accent.with_alpha(0.55),
                     },
-                    Shadow::NONE,
                 );
             }
             BrushKind::Lasso => {
@@ -167,7 +165,6 @@ pub fn paint(
                 width: 1.4,
                 color: accent,
             },
-            Shadow::NONE,
         );
     }
     if let Some(pointer) = decor.pointer {

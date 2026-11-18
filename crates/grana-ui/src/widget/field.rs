@@ -6,7 +6,7 @@ use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::node::Runtime;
 use crate::paint::Painter;
-use crate::style::{Shadow, State};
+use crate::style::State;
 use crate::text::TextStyle;
 use crate::theme::Role;
 
@@ -183,13 +183,7 @@ pub(super) fn paint_field(
     let look = info.theme.surface(Role::Field, state);
     let palette = info.theme.palette;
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 4.0));
-    painter.outlined(
-        rect,
-        Corners::all(radius),
-        look.fill,
-        look.border,
-        Shadow::NONE,
-    );
+    painter.outlined(rect, Corners::all(radius), look.fill, look.border);
     let clip = painter.clip();
     painter.push_clip(inner, Corners::ZERO);
     let style = field.style;

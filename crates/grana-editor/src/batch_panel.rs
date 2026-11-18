@@ -387,7 +387,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         children.push(grana_ui::canvas(Length::Fill, 30.0).view(
             path,
             move |path: &String, painter, info| {
-                painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
+                painter.outlined(info.rect, look.corners, look.fill, look.border);
                 painter.text_in(
                     info.rect.shrink2(Vec2::new(10.0, 0.0)),
                     path,

@@ -212,6 +212,16 @@ pub struct Palette {
     pub selected: usize,
 }
 
+#[derive(Default)]
+pub struct Settings {
+    pub open: bool,
+    pub section: usize,
+}
+
+impl Settings {
+    pub const SECTIONS: usize = 2;
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub last_panel: Panel,
@@ -252,6 +262,7 @@ pub struct Workspace {
     pub(crate) measure_request: Option<ObjectSetId>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub palette: Option<Palette>,
+    pub settings: Settings,
     pub language: grana_i18n::Language,
     pub chrome: crate::chrome::ChromeView,
     pub(crate) overlay: Overlay,
@@ -301,6 +312,7 @@ impl Default for Workspace {
             measure_request: None,
             batch_chart: crate::batch_panel::Chart::default(),
             palette: None,
+            settings: Settings::default(),
             language: grana_i18n::Language::English,
             chrome: crate::chrome::ChromeView::default(),
             overlay: Overlay::default(),

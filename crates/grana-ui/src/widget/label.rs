@@ -9,7 +9,7 @@ use crate::content::{
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::Corners;
 use crate::paint::Painter;
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Theme, TypeStyle};
 
@@ -165,6 +165,5 @@ pub(super) fn paint_color_swatch(
             width: 1.5,
             color: Color::white_alpha(0.28 + 0.42 * info.hover),
         },
-        Shadow::NONE,
     );
 }

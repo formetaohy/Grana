@@ -1,5 +1,3 @@
-use glam::Vec2;
-
 use crate::color::Color;
 use crate::geometry::Corners;
 
@@ -82,42 +80,10 @@ impl Border {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Shadow {
-    pub color: Color,
-    pub radius: f32,
-    pub offset: Vec2,
-}
-
-impl Shadow {
-    pub const NONE: Self = Self {
-        color: Color::TRANSPARENT,
-        radius: 0.0,
-        offset: Vec2::ZERO,
-    };
-
-    pub const fn new(color: Color, radius: f32, offset_y: f32) -> Self {
-        Self {
-            color,
-            radius,
-            offset: Vec2::new(0.0, offset_y),
-        }
-    }
-
-    pub fn lerp(self, other: Self, t: f32) -> Self {
-        Self {
-            color: self.color.lerp(other.color, t),
-            radius: self.radius + (other.radius - self.radius) * t,
-            offset: self.offset + (other.offset - self.offset) * t,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surface {
     pub fill: Fill,
     pub corners: Corners,
     pub border: Border,
-    pub shadow: Shadow,
     pub text: Color,
 }
 
@@ -126,7 +92,6 @@ impl Surface {
         fill: Fill::None,
         corners: Corners::ZERO,
         border: Border::NONE,
-        shadow: Shadow::NONE,
         text: Color::WHITE,
     };
 
@@ -142,17 +107,11 @@ impl Surface {
         self
     }
 
-    pub const fn with_shadow(mut self, shadow: Shadow) -> Self {
-        self.shadow = shadow;
-        self
-    }
-
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
             fill: self.fill.lerp(other.fill, t),
             corners: self.corners.lerp(other.corners, t),
             border: self.border.lerp(other.border, t),
-            shadow: self.shadow.lerp(other.shadow, t),
             text: self.text.lerp(other.text, t),
         }
     }

@@ -299,7 +299,6 @@ fn paint_caption(painter: &mut Painter, rect: Rect, caption: Option<&Placed>, ba
                 width: 0.5,
                 color: Color::white_alpha(0.10),
             },
-            grana_ui::Shadow::NONE,
         );
     }
     let mut top = origin.y;
@@ -544,7 +543,6 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32, backdrop: 
                 width: 1.0,
                 color: Color::white_alpha(0.12),
             },
-            grana_ui::Shadow::NONE,
         );
     }
     painter.segment(
@@ -620,7 +618,6 @@ fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend], backdrop
                     width: 1.0,
                     color: Color::white_alpha(0.12),
                 },
-                grana_ui::Shadow::NONE,
             );
         }
         painter.text_at(

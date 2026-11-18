@@ -5,7 +5,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::paint::Painter;
-use crate::style::{Border, Fill, Shadow};
+use crate::style::{Border, Fill};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -109,7 +109,6 @@ pub fn paint(
                 width: stroke,
                 color,
             },
-            Shadow::NONE,
         );
     };
     let dot = |painter: &mut Painter<'_>, x: f32, y: f32, radius: f32| {

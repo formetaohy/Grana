@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_measure::{Distribution, DistributionSeries};
-use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle};
+use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, TextStyle};
 
 use crate::axis::Axis;
 use crate::decor::{BrushKind, Decor, Highlight};
@@ -130,7 +130,6 @@ pub fn paint(
                 width: 0.75,
                 color: accent.with_alpha(0.52),
             },
-            Shadow::NONE,
         );
     }
     if let Some(Highlight::Group { index, value }) = decor.highlight
@@ -145,7 +144,6 @@ pub fn paint(
                 width: 1.3,
                 color: accent,
             },
-            Shadow::NONE,
         );
     }
 }
@@ -217,7 +215,6 @@ fn box_shape(
             width: 1.0,
             color: border,
         },
-        Shadow::NONE,
     );
     let median = y.y(frame, series.median() as f32);
     painter.segment(

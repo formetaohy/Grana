@@ -51,7 +51,7 @@ pub use record::Mark;
 pub use recorder::Recorder;
 pub use render::Figure;
 pub use scroll::Window;
-pub use style::{Border, Fill, Shadow, State, Surface};
+pub use style::{Border, Fill, State, Surface};
 pub use text::{Align, Text, TextLayout, TextStyle};
 pub use theme::{Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
 pub use ui::{BuildContext, Ui};

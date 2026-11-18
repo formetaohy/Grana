@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_i18n::Language;
 use grana_measure::{Ripley, Trend};
 use grana_profile::Profile;
-use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, Theme};
+use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, TextStyle, Theme};
 
 use crate::axis::Axis;
 use crate::chart::{HEIGHT, Heading, WIDTH};
@@ -357,7 +357,6 @@ pub fn paint(
                 width: 0.75,
                 color: accent.with_alpha(0.52),
             },
-            Shadow::NONE,
         );
     }
     let neutral = palette.outline;
@@ -515,7 +514,6 @@ pub fn paint(
                 width: 1.3,
                 color: accent,
             },
-            Shadow::NONE,
         );
     }
     paint_notes(painter, frame, chart, style);
@@ -530,7 +528,6 @@ pub fn paint(
                 width: 1.3,
                 color: accent,
             },
-            Shadow::NONE,
         );
     }
     if let Some(pointer) = decor.pointer {
@@ -627,7 +624,6 @@ fn legend(painter: &mut Painter, frame: Rect, style: &Style, chart: &SeriesChart
                     width: 0.6,
                     color: color.with_alpha(0.45),
                 },
-                Shadow::NONE,
             );
         } else {
             painter.rect(swatch, Corners::capsule(), color);

@@ -609,13 +609,7 @@ fn combo<'a>(
     let anchor = grana_ui::canvas(Length::Fixed(width), 30.0)
         .view(label, move |label: &String, painter, info| {
             let surface = if info.hover > 0.5 { hover } else { rest };
-            painter.outlined(
-                info.rect,
-                surface.corners,
-                surface.fill,
-                surface.border,
-                surface.shadow,
-            );
+            painter.outlined(info.rect, surface.corners, surface.fill, surface.border);
             painter.text_in(
                 Rect::from_min_max(
                     info.rect.min + Vec2::new(10.0, 0.0),

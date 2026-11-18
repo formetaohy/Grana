@@ -25,7 +25,11 @@ struct Status {
 }
 
 pub(crate) fn window_size(panel: Vec2) -> Vec2 {
-    Vec2::new(panel.x, crate::chrome::TITLE_HEIGHT + panel.y)
+    let floor = crate::settings_panel::window_floor();
+    Vec2::new(
+        panel.x.max(floor.x),
+        crate::chrome::TITLE_HEIGHT + panel.y.max(floor.y),
+    )
 }
 
 pub(crate) fn view<'a>(
@@ -67,7 +71,7 @@ pub(crate) fn view<'a>(
             .layer(Layer::Content),
     ];
     let mut children = vec![
-        hero_header(ctx, &status),
+        hero_header(ctx, &status, workspace),
         grana_ui::text(status.detail.clone(), detail_style),
     ];
     let mut popups = Vec::new();
@@ -159,7 +163,11 @@ pub(crate) fn view<'a>(
     elements
 }
 
-fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a, Message> {
+fn hero_header<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    status: &Status,
+    workspace: &Workspace,
+) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let brand = grana_ui::canvas(Length::Fixed(48.0), 48.0)
@@ -181,9 +189,13 @@ fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Elem
         status.text.clone(),
         TextStyle::new(theme.font(Level::Headline), title_color).truncating(),
     ));
+    let language = ctx.language();
+    let close = workspace.chrome.controls && workspace.chrome.close_only;
+    let controls = if close { 2.0 } else { 1.0 };
+    let trail_width = 36.0 * controls + 4.0 * (controls - 1.0);
     let title_col = grana_ui::column()
         .width(Length::Fixed(
-            PANEL_WIDTH - 2.0 * PANEL_PADDING - 48.0 - 124.0 - 24.0,
+            PANEL_WIDTH - 2.0 * PANEL_PADDING - 48.0 - 12.0 - trail_width,
         ))
         .gap(2.0)
         .justify(Align::Center)
@@ -197,23 +209,24 @@ fn hero_header<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Elem
                 .align(Align::Center)
                 .children(status_row),
         ]);
-    let language = ctx.language();
-    let labels = grana_i18n::Language::ALL.map(grana_i18n::Language::label);
-    let selected = grana_i18n::Language::ALL
-        .iter()
-        .position(|candidate| *candidate == language)
-        .unwrap_or(0);
-    let lang_switch = crate::view::segmented(ctx, "shell.language", &labels, selected, |index| {
-        match grana_i18n::Language::ALL.get(index) {
-            Some(language) => Message::SetLanguage(*language),
-            None => Message::Noop,
-        }
-    });
+    let settings = crate::view::icon_button(
+        ctx,
+        "shell.settings",
+        Icon::Sliders,
+        36.0,
+        Role::Standard,
+        grana_i18n::header::settings(language),
+        Message::ToggleSettings(true),
+    );
+    let mut trail = vec![settings];
+    if close {
+        trail.push(crate::chrome::close_button(ctx, 36.0));
+    }
     grana_ui::row()
         .gap(12.0)
         .align(Align::Center)
         .height(Length::Fixed(HERO_HEIGHT))
-        .children([brand, title_col, lang_switch])
+        .children([brand, title_col, grana_ui::row().gap(4.0).children(trail)])
 }
 
 fn primary_actions<'a>(

@@ -26,7 +26,6 @@ struct Instance {
 @group(0) @binding(7) var images_sampler: sampler;
 
 const KIND_SURFACE: u32 = 0u;
-const KIND_SHADOW: u32 = 1u;
 const KIND_GLYPH: u32 = 2u;
 const KIND_SCENE: u32 = 3u;
 const KIND_SEGMENT: u32 = 4u;
@@ -128,12 +127,7 @@ fn premultiplied(color: vec4<f32>, mask: f32) -> vec4<f32> {
     return vec4<f32>(color.rgb * alpha, alpha);
 }
 
-fn normal_cdf(x: f32) -> f32 {
-    return 1.0 / (1.0 + exp(-1.702 * x));
-}
-
-fn cross2(a: vec2<f32>, b: vec2<f32>) -> f32 {
-    return a.x * b.y - a.y * b.x;
+fn cross2(a: vec2<f32>, b: vec2<f32>) -> f32 {    return a.x * b.y - a.y * b.x;
 }
 
 fn triangle_coverage(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, point: vec2<f32>) -> f32 {
@@ -167,17 +161,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         var alpha = textureSampleLevel(atlas, atlas_sampler, in.uv, 0.0).r;
         alpha = pow(alpha, instance.extra.x);
         return premultiplied(instance.color, alpha * clip_mask);
-    }
-
-    if (kind == KIND_SHADOW) {
-        let shape_half = instance.uv.zw * scale * 0.5;
-        let shape_centre = (instance.uv.xy + instance.uv.zw * 0.5) * scale;
-        let distance = squircle(in.position_px - shape_centre, shape_half, instance.color2 * scale);
-        let sigma = max(instance.extra.x * scale, 0.75);
-        let coverage = normal_cdf(-distance / sigma);
-        let outside = smoothstep(0.0, 1.5, distance);
-        let alpha = instance.color.a * coverage * outside * clip_mask;
-        return vec4<f32>(instance.color.rgb * alpha, alpha);
     }
 
     if (kind == KIND_SEGMENT) {
