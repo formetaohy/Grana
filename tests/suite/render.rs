@@ -1564,9 +1564,24 @@ fn invalidates_the_streamed_content_and_restreams_it() {
     renderer.upload(&bricks);
     settle(&gpu, &mut renderer, &view, &volume);
     let after = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let restreamed = difference(&before, &after);
+    let differing = before
+        .iter()
+        .zip(&after)
+        .filter(|(settled, restreamed)| settled != restreamed)
+        .count();
+    let peak = before
+        .iter()
+        .zip(&after)
+        .flat_map(|(settled, restreamed)| {
+            (0..3).map(move |channel| i32::from(settled[channel]) - i32::from(restreamed[channel]))
+        })
+        .map(i32::abs)
+        .max()
+        .unwrap_or(0);
     assert!(
-        difference(&before, &after) < 1.0,
-        "the restreamed content differs from the settled image"
+        restreamed < 1.0,
+        "the restreamed content differs from the settled image: {restreamed} ({differing} pixels differ, peak {peak})"
     );
 }
 
