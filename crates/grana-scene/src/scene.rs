@@ -26,6 +26,7 @@ use crate::mask::{MaskFilter, MaskGate, RelationGate};
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
+use crate::overlay::Overlays;
 use crate::provenance::{Criteria, Provenance};
 use crate::registration::Registration;
 use crate::segment::SegmentParams;
@@ -62,6 +63,7 @@ pub struct Scene {
     drifts: Drifts,
     registration: Registration,
     pub objects: Objects,
+    pub overlays: Overlays,
     pub coloc: Coloc,
     derived: Vec<Derived>,
     base_channels: usize,
@@ -95,6 +97,7 @@ impl Scene {
             drifts: Drifts::new(),
             registration: Registration::default(),
             objects: Objects::new(),
+            overlays: Overlays::default(),
             coloc: Coloc::new(channel_count),
             derived: Vec::new(),
             base_channels: channel_count,

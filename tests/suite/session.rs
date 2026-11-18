@@ -93,6 +93,39 @@ fn series() -> VolumeSeries {
     VolumeSeries::new(vec![volume], 1.0)
 }
 
+#[test]
+fn undoes_a_computed_drift_correction() {
+    let volume = support::spheres(
+        Extent::new(64, 32, 32),
+        Spacing::new(0.1, 0.1, 0.1),
+        &[([26.0, 16.0, 16.0], 3.0), ([38.0, 16.0, 16.0], 5.0)],
+        HIGH,
+    );
+    let mut session = Session::new();
+    session.open_series(
+        "drift",
+        VolumeSeries::new(vec![volume.clone(), volume], 1.0),
+    );
+    session.execute(Command::ComputeDrift);
+    settle(&mut session);
+    let drift = session
+        .scene()
+        .expect("the series opens")
+        .drift(0)
+        .cloned()
+        .expect("the drift correction installs");
+    assert_eq!(drift.frames(), 2, "the correction aligns both frames");
+    session.execute(Command::Undo);
+    assert!(
+        session
+            .scene()
+            .expect("the series opens")
+            .drift(0)
+            .is_none(),
+        "undo removes the computed drift correction"
+    );
+}
+
 fn last_surfaces(session: &Session) -> grana_scene::ObjectSetId {
     session
         .scene()

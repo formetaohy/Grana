@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
-use grana_scene::{Dataset, Scene};
+use grana_scene::{Dataset, ObjectKind, Scene};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
 };
@@ -262,6 +262,74 @@ fn cancels_an_export_without_leaving_a_partial_file() {
     assert_eq!(
         staging, 0,
         "a cancelled movie leaves no staging file behind"
+    );
+}
+
+#[test]
+fn paints_the_scene_overlay_in_an_export() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = export_volume();
+    let pyramid = volume.pyramid();
+    let mut scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let size = output(WIDTH, false);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let half = 0.5 * scene.dataset.world_size();
+    let corners = [
+        [-half.x, -half.y, 0.0],
+        [half.x, -half.y, 0.0],
+        [half.x, half.y, 0.0],
+        [-half.x, half.y, 0.0],
+    ];
+    let pixels = Arc::from(vec![255u8; 64 * 64 * 4]);
+    let bitmap = grana_raster::Bitmap::new([64, 64], pixels);
+    let overlay = grana_raster::Overlay::new(bitmap, corners, [1.0, 0.0, 0.0], 1.0);
+    assert!(
+        scene.overlays.set(set, overlay),
+        "the scene holds the overlay it was given"
+    );
+    let temp = Temp::new("grana-export-overlay");
+    let path = temp.path().join("overlay.png");
+    let plan = Plan {
+        destination: Destination::Image { path: path.clone() },
+        size,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            camera: camera.state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let task = Task {
+        plan,
+        scene: scene.snapshot().into_scene(),
+        bricks: Arc::new(VolumeBricks { volume, pyramid }),
+    };
+    match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => {}
+        Outcome::Failed { detail } => panic!("the overlay export failed: {detail}"),
+        Outcome::Cancelled => panic!("the overlay export was cancelled"),
+    }
+    let image = grana_raster::read(&path).expect("the overlay export writes an image");
+    let total = (image.width() * image.height()) as usize;
+    let red = image
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| {
+            i32::from(pixel[0]) > 120
+                && i32::from(pixel[0]) > i32::from(pixel[1]) + 40
+                && i32::from(pixel[0]) > i32::from(pixel[2]) + 40
+        })
+        .count();
+    assert!(
+        red > total / 50,
+        "the export paints {red} of {total} pixels with the overlay"
     );
 }
 

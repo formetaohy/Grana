@@ -60,6 +60,53 @@ impl Session {
             params,
         ))
     }
+
+    pub(super) fn drift_input(&self, channel: usize, reference: u32) -> Input {
+        Input::drift(crate::input::DriftInput::channels(channel, reference))
+    }
+
+    pub(super) fn localization_drift_input(&self, set: ObjectSetId) -> Option<Input> {
+        let scene = self.scene.as_ref()?;
+        let object = scene.objects.get(set)?;
+        let channel = object.channel();
+        let base = crate::input::drift_base(scene, channel);
+        Some(Input::drift(crate::input::DriftInput::localizations(
+            channel,
+            base.reference(),
+            set,
+            object.revision(),
+            base.digest(),
+        )))
+    }
+
+    pub(super) fn register_input(&self, reference: usize) -> Input {
+        Input::register(crate::input::RegisterInput::channels(reference))
+    }
+
+    pub(super) fn fiducial_input(&self, reference: usize, sets: &[ObjectSetId]) -> Option<Input> {
+        let scene = self.scene.as_ref()?;
+        let sources = sets
+            .iter()
+            .map(|set| Some((*set, scene.objects.get(*set)?.revision())))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Input::register(crate::input::RegisterInput::localizations(
+            reference, sources,
+        )))
+    }
+
+    pub(super) fn drift_current(&self, held: &crate::input::DriftInput) -> bool {
+        self.scene
+            .as_ref()
+            .and_then(|scene| held.current(scene))
+            .is_some_and(|current| &current == held)
+    }
+
+    pub(super) fn register_current(&self, held: &crate::input::RegisterInput) -> bool {
+        self.scene
+            .as_ref()
+            .and_then(|scene| held.current(scene))
+            .is_some_and(|current| &current == held)
+    }
 }
 
 fn seed_digest(scene: &grana_scene::Scene, object: &grana_scene::ObjectSet) -> u64 {

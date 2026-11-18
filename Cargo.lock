@@ -3946,6 +3946,7 @@ dependencies = [
  "grana-object",
  "grana-optics",
  "grana-profile",
+ "grana-raster",
  "grana-store",
  "grana-volume",
  "grana-warp",

@@ -17,6 +17,7 @@ grana-model = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
 grana-profile = { workspace = true }
+grana-raster = { workspace = true }
 grana-volume = { workspace = true }
 
 [features]

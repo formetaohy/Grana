@@ -214,7 +214,8 @@ impl Export {
         }
         let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
-        let frame = rendered.frame(&[]);
+        let overlays = grana_engine::overlays(scene);
+        let frame = rendered.frame(&overlays);
         let info = match renderer.draw(
             device,
             queue,

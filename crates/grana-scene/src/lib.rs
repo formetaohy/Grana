@@ -18,6 +18,7 @@ mod measure;
 mod object;
 mod object_set;
 mod objects;
+mod overlay;
 mod provenance;
 mod registration;
 mod relation;
@@ -62,6 +63,7 @@ pub use measure::{MaterializeRequest, Measure, MeasureState, PlotKey, PlotReques
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
+pub use overlay::Overlays;
 pub use provenance::{Criteria, FilterRange, IntensitySource, LassoPath, Provenance, Recipe};
 pub use registration::Registration;
 pub use relation::Relation;

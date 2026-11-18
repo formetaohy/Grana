@@ -26,7 +26,6 @@ mod editor;
 mod export;
 mod frame;
 mod input;
-mod overlay;
 mod sync;
 mod time;
 mod viewport;

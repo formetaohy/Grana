@@ -367,6 +367,7 @@ impl Session {
     }
 
     pub(crate) fn touch(&mut self) -> Revision {
+        self.sync_localizations();
         self.revision = self.stamps.mint();
         self.revision
     }
@@ -585,9 +586,9 @@ impl Session {
     pub fn take_damage(&mut self) -> Vec<Damage> {
         std::mem::take(&mut self.damages)
     }
-    fn prune_localizations(&mut self) -> bool {
-        match self.scene.as_ref() {
-            Some(scene) => self.localization.retain(scene),
+    fn sync_localizations(&mut self) -> bool {
+        match self.scene.as_mut() {
+            Some(scene) => self.localization.sync(scene),
             None => self.localization.clear(),
         }
     }
@@ -666,7 +667,7 @@ impl Session {
         repaint |= self.poll_batch();
         repaint |= self.poll_stitch();
         repaint |= self.refresh_masks();
-        repaint |= self.prune_localizations();
+        repaint |= self.sync_localizations();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
             self.baseline = self.document_hash();
             self.deferred = false;

@@ -113,8 +113,8 @@ impl App {
     pub(super) fn render(&mut self, delivery: Delivery) -> Option<Duration> {
         let viewport = self.viewport();
         let cap = self.level_cap();
-        let overlays = super::overlay::overlays(&self.session);
         let scene = self.session.scene();
+        let overlays = scene.map_or_else(Vec::new, grana_engine::overlays);
         let outcome = {
             let App {
                 surface,

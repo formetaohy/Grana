@@ -1,7 +1,7 @@
 use grana_measure::{ColocPair, ColocSettings};
 use grana_object::TrackParams;
 use grana_pipeline::Layout;
-use grana_scene::{MaskKey, ObjectParams, ObjectSetId, Revision};
+use grana_scene::{Drift, MaskKey, ObjectParams, ObjectSetId, Revision, Scene};
 use grana_volume::Region;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +10,8 @@ pub enum Input {
     ObjectColoc(ObjectColocInput),
     Detect(DetectInput),
     Track(TrackInput),
+    Drift(DriftInput),
+    Register(RegisterInput),
 }
 
 impl Input {
@@ -72,6 +74,14 @@ impl Input {
     pub fn track(frames: Vec<Option<Revision>>, params: TrackParams) -> Self {
         Self::Track(TrackInput { frames, params })
     }
+
+    pub fn drift(input: DriftInput) -> Self {
+        Self::Drift(input)
+    }
+
+    pub fn register(input: RegisterInput) -> Self {
+        Self::Register(input)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,4 +119,87 @@ pub struct DetectInput {
 pub struct TrackInput {
     pub frames: Vec<Option<Revision>>,
     pub params: TrackParams,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DriftInput {
+    channel: usize,
+    reference: u32,
+    source: Option<(ObjectSetId, Revision)>,
+    base: Option<u64>,
+}
+
+impl DriftInput {
+    pub fn channels(channel: usize, reference: u32) -> Self {
+        Self {
+            channel,
+            reference,
+            source: None,
+            base: None,
+        }
+    }
+
+    pub fn localizations(
+        channel: usize,
+        reference: u32,
+        source: ObjectSetId,
+        revision: Revision,
+        base: u64,
+    ) -> Self {
+        Self {
+            channel,
+            reference,
+            source: Some((source, revision)),
+            base: Some(base),
+        }
+    }
+
+    pub fn current(&self, scene: &Scene) -> Option<Self> {
+        let source = match self.source {
+            Some((set, _)) => Some((set, scene.objects.get(set)?.revision())),
+            None => None,
+        };
+        let base = self.base.map(|_| drift_base(scene, self.channel).digest());
+        Some(Self {
+            channel: self.channel,
+            reference: self.reference,
+            source,
+            base,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegisterInput {
+    reference: usize,
+    sources: Vec<(ObjectSetId, Revision)>,
+}
+
+impl RegisterInput {
+    pub fn channels(reference: usize) -> Self {
+        Self {
+            reference,
+            sources: Vec::new(),
+        }
+    }
+
+    pub fn localizations(reference: usize, sources: Vec<(ObjectSetId, Revision)>) -> Self {
+        Self { reference, sources }
+    }
+
+    pub fn current(&self, scene: &Scene) -> Option<Self> {
+        let sources = self
+            .sources
+            .iter()
+            .map(|(set, _)| Some((*set, scene.objects.get(*set)?.revision())))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            reference: self.reference,
+            sources,
+        })
+    }
+}
+
+pub fn drift_base(scene: &Scene, channel: usize) -> Drift {
+    scene.drift(channel).cloned().unwrap_or_default()
 }

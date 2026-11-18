@@ -407,10 +407,17 @@ impl Session {
                     }
                 }
                 Update::Drift(drift) => {
-                    if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
-                        scene.set_drift(drift);
+                    let current = match inputs[index].as_ref() {
+                        Some(Input::Drift(held)) => self.drift_current(held),
+                        _ => false,
+                    };
+                    if current {
+                        self.install_drift(drift);
+                    } else {
+                        self.message = Some(Message::info(
+                            "the drift correction finished after the localizations or image it aligned changed, so its result was discarded",
+                        ));
                     }
-                    self.realign();
                 }
                 Update::DriftSummary { segments, fallback } => {
                     self.message = Some(Message::info(format!(
@@ -418,11 +425,17 @@ impl Session {
                     )));
                 }
                 Update::Registration(registration) => {
-                    if let (Job::Register, Some(scene)) = (job, self.scene.as_mut()) {
-                        scene.set_registration(registration);
+                    let current = match inputs[index].as_ref() {
+                        Some(Input::Register(held)) => self.register_current(held),
+                        _ => false,
+                    };
+                    if current {
+                        self.install_registration(registration);
+                    } else {
+                        self.message = Some(Message::info(
+                            "the channel registration finished after the localizations or channels it aligned changed, so its result was discarded",
+                        ));
                     }
-                    self.install_channels();
-                    self.realign();
                 }
                 Update::Fiducial {
                     channels,
@@ -1570,12 +1583,20 @@ impl Session {
         let base = scene.drift(channel).cloned().unwrap_or_default();
         let reference = base.reference();
         let source = object.source();
+        let Some(input) = self.localization_drift_input(set) else {
+            return;
+        };
         self.message = None;
         self.record_progress(Job::Drift, 0, 0, 0);
-        self.analysis.push(crate::localization_drift(
-            Job::Drift,
-            grana_pipeline::run::LocalizationDriftRequest::new(source, reference, channel, base),
-        ));
+        self.analysis.push(
+            crate::localization_drift(
+                Job::Drift,
+                grana_pipeline::run::LocalizationDriftRequest::new(
+                    source, reference, channel, base,
+                ),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn align_drift(&mut self, channel: usize, reference: u32) {
@@ -1624,11 +1645,15 @@ impl Session {
         }
         self.message = None;
         self.record_progress(Job::Drift, 0, 0, scene.frame_count() as usize);
-        self.analysis.push(crate::drift(
-            Job::Drift,
-            channels,
-            grana_pipeline::DriftRequest::new(channel, reference),
-        ));
+        let input = self.drift_input(channel, reference);
+        self.analysis.push(
+            crate::drift(
+                Job::Drift,
+                channels,
+                grana_pipeline::DriftRequest::new(channel, reference),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn set_drift_reference(&mut self, reference: u32) {
@@ -1742,6 +1767,12 @@ impl Session {
             .voxel()
             .into_iter()
             .fold(f32::INFINITY, f32::min);
+        let fiducial_sets = std::iter::once(source)
+            .chain(moving.iter().copied())
+            .collect::<Vec<_>>();
+        let Some(input) = self.fiducial_input(reference, &fiducial_sets) else {
+            return;
+        };
         let reference =
             grana_pipeline::run::FiducialChannel::new(reference, fiducial_points(scene, source));
         let moving = moving
@@ -1755,10 +1786,13 @@ impl Session {
         let channels = scene.base_channels();
         self.message = None;
         self.record_progress(Job::Register, 0, 0, total);
-        self.analysis.push(crate::fiducial(
-            Job::Register,
-            grana_pipeline::run::FiducialRequest::new(reference, moving, channels, scale),
-        ));
+        self.analysis.push(
+            crate::fiducial(
+                Job::Register,
+                grana_pipeline::run::FiducialRequest::new(reference, moving, channels, scale),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn start_registration(&mut self, reference: usize) {
@@ -1792,11 +1826,15 @@ impl Session {
         };
         self.message = None;
         self.record_progress(Job::Register, 0, 0, stored.0);
-        self.analysis.push(crate::register(
-            Job::Register,
-            channels,
-            grana_pipeline::RegisterRequest::new(reference, stored.1),
-        ));
+        let input = self.register_input(reference);
+        self.analysis.push(
+            crate::register(
+                Job::Register,
+                channels,
+                grana_pipeline::RegisterRequest::new(reference, stored.1),
+            )
+            .keyed(input),
+        );
     }
 
     pub(super) fn clear_registration(&mut self) {
@@ -1807,6 +1845,35 @@ impl Session {
             self.install_channels();
             self.realign();
         }
+    }
+
+    fn install_drift(&mut self, drift: grana_scene::Drift) {
+        let Some(recording) = self.begin_change(Edit::new(Action::Drift)) else {
+            self.message = Some(Message::info(
+                "the drift correction finished while the document was loading, so its result was discarded",
+            ));
+            return;
+        };
+        if let Some(scene) = self.scene.as_mut() {
+            scene.set_drift(drift);
+        }
+        self.realign();
+        self.commit_edit(recording);
+    }
+
+    fn install_registration(&mut self, registration: grana_scene::Registration) {
+        let Some(recording) = self.begin_change(Edit::new(Action::Registration)) else {
+            self.message = Some(Message::info(
+                "the channel registration finished while the document was loading, so its result was discarded",
+            ));
+            return;
+        };
+        if let Some(scene) = self.scene.as_mut() {
+            scene.set_registration(registration);
+        }
+        self.install_channels();
+        self.realign();
+        self.commit_edit(recording);
     }
 
     pub(super) fn realign(&mut self) {
