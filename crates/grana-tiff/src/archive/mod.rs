@@ -8,12 +8,16 @@ use std::path::{Path, PathBuf};
 use grana_archive::{Fill, Filler, ImageSpec, Written};
 
 use crate::Error;
-use tile::{LevelInfo, Request, Tile};
+use tile::{LevelInfo, Request, SIDE, Tile};
 
 const ALIGN: u64 = 8;
 const ZEROS: [u8; 8] = [0; 8];
 const ALIGNMENT: f32 = 1.0e-5;
 const CANCELLED: &str = "the write was cancelled";
+const TILE_OVERHEAD: u64 = 256;
+const POINTER_BYTES: u64 = 16;
+const PAGE_OVERHEAD: u64 = 4 << 10;
+const METADATA_OVERHEAD: u64 = 1 << 20;
 
 pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, crate::Error> {
     spec.check();
@@ -35,6 +39,8 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
     let per_plane = levels.iter().map(|level| level.tiles() as u64).sum::<u64>();
     let total = usize::try_from(planes * per_plane)
         .expect("an archive writes at most this platform's tiles");
+    let expected = planned(planes, per_plane, levels.len());
+    grana_file::require(path, expected).map_err(|error| Error::write(path, error.to_string()))?;
     let description = layout::description(spec);
     let atomic =
         grana_file::Atomic::file(path).map_err(|error| Error::write(path, error.to_string()))?;
@@ -181,6 +187,11 @@ fn validate(path: &Path, spec: &ImageSpec<'_>) -> Result<(), Error> {
 
 fn align(at: u64) -> u64 {
     at.div_ceil(ALIGN) * ALIGN
+}
+
+fn planned(planes: u64, per_plane: u64, levels: usize) -> u64 {
+    let tile = u64::from(SIDE) * u64::from(SIDE) * 4 + TILE_OVERHEAD + POINTER_BYTES;
+    planes * (per_plane * tile + (levels as u64 + 1) * PAGE_OVERHEAD) + METADATA_OVERHEAD
 }
 
 fn pack(values: &[u64]) -> Vec<u8> {

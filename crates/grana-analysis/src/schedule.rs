@@ -33,10 +33,6 @@ pub fn workers(requested: usize) -> usize {
     .clamp(1, WORKER_LIMIT)
 }
 
-pub fn unit_window(bytes: u64, unit: u64) -> usize {
-    (bytes / unit.max(1)).max(1) as usize
-}
-
 pub enum Delivery<T> {
     Progress {
         unit: usize,

@@ -605,7 +605,7 @@ impl Run<'_, '_> {
                         region,
                         roi,
                         drifts.clone(),
-                        task.workers,
+                        grana_analysis::Budget::new(task.workers),
                         store,
                     )
                     .with_seeds(seeds, policy),

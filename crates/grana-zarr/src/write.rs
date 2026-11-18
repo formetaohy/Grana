@@ -10,6 +10,7 @@ use zarrs::array::{Array, ArrayBuilder, ArraySubset, data_type};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
+use crate::archive::Archive;
 use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::parallel;
@@ -19,39 +20,15 @@ const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
 const SLAB_Z: u32 = 4;
-const CANCELLED: &str = "the write was cancelled";
+pub(crate) const CANCELLED: &str = "the write was cancelled";
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
 pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Error> {
     spec.check();
-    if path.is_file() {
-        return Err(Error::Write {
-            path: path.display().to_string(),
-            detail: "the destination is a file".to_string(),
-        });
-    }
-    let atomic = grana_file::Atomic::directory(path).map_err(|error| Error::Write {
-        path: path.display().to_string(),
-        detail: error.to_string(),
-    })?;
-    build(atomic.staging(), spec).map_err(|detail| Error::Write {
-        path: path.display().to_string(),
-        detail,
-    })?;
-    let bytes = grana_file::bytes(atomic.staging()).map_err(|error| Error::Write {
-        path: path.display().to_string(),
-        detail: format!("failed to measure the written dataset: {error}"),
-    })?;
-    if spec.cancelled() {
-        return Err(Error::Write {
-            path: path.display().to_string(),
-            detail: CANCELLED.to_string(),
-        });
-    }
-    atomic.commit().map_err(|error| Error::Write {
-        path: path.display().to_string(),
-        detail: format!("failed to move the dataset into place: {error}"),
-    })?;
+    let expected = crate::space::image_space(spec.levels, spec.frames, spec.channels.len());
+    let mut archive = Archive::create(path, expected)?;
+    archive.image(spec)?;
+    let bytes = archive.commit()?;
     Ok(Written::new(
         path.to_path_buf(),
         spec.name.to_string(),
@@ -62,7 +39,7 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
     ))
 }
 
-fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
+pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     let store = Arc::new(
         FilesystemStore::new(path).map_err(|error| format!("failed to open the store: {error}"))?,
     );

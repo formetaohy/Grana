@@ -216,8 +216,8 @@ impl<'a> Assembler<'a> {
         let patches = SurfacePatches::new(positions, normals, triangles, basin_of_triangle);
         let info = TopologyInfo::new(
             plan.level_index,
-            plan.channels,
-            plan.detection,
+            plan.channels.count(),
+            plan.channels.detection(),
             plan.placement(),
         )
         .with_sampling(plan.span, self.seed_count);

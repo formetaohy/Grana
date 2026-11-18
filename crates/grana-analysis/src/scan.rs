@@ -6,7 +6,10 @@ use grana_volume::{Intensity, Level, Pyramid, Region as VolumeRegion, VoxelData}
 
 use grana_object::{Mask, SpotParams};
 
-use crate::local::{BlockField, BlockLevels};
+use crate::budget::Budget;
+use crate::channel::ChannelSet;
+use crate::detection::{DetectionImage, Plan as DetectionPlan};
+use crate::local::BlockField;
 use crate::schedule::Delivery;
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
@@ -22,6 +25,7 @@ const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
 const CORE_VOXELS_PER_SIGMA: f32 = 8.0;
 const PROGRESS_STRIDE: usize = 4;
+const RESPONSE_REACH: u32 = 2;
 
 pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
@@ -31,6 +35,7 @@ pub fn spot_level(
     pyramid: &Pyramid,
     region: VolumeRegion,
     params: SpotParams,
+    budget: Budget,
 ) -> Result<usize, String> {
     let sigma = params.diameter() / FWHM_PER_SIGMA;
     let resolvable = (0..pyramid.level_count())
@@ -43,15 +48,15 @@ pub fn spot_level(
         })
         .unwrap_or(0);
     let affordable = pyramid
-        .fit_level(region, crate::work::SPOT_VOXELS)
+        .fit_level(region, budget.voxels())
         .unwrap_or(pyramid.level_count() - 1);
     Ok(affordable.min(resolvable))
 }
 
 pub struct SpotScanner {
     level_index: usize,
-    channels: usize,
-    detection: usize,
+    channels: ChannelSet,
+    budget: Budget,
     template: SpotScan,
 }
 
@@ -62,18 +67,14 @@ impl SpotScanner {
         intensity: Intensity,
         params: SpotParams,
         region: VolumeRegion,
-        channels: usize,
-        detection: usize,
+        channels: ChannelSet,
+        budget: Budget,
     ) -> Self {
-        assert!(
-            channels > 0 && detection < channels,
-            "the detection channel is one of the measured channels"
-        );
         Self {
             level_index,
             channels,
-            detection,
-            template: SpotScan::new(level, intensity, params, region),
+            budget,
+            template: SpotScan::new(level, intensity, params, region, budget),
         }
     }
 
@@ -81,29 +82,15 @@ impl SpotScanner {
         self.template.block_count()
     }
 
-    pub fn peak_read_voxels(&self) -> u64 {
-        (0..self.template.block_count())
-            .map(|index| {
-                let range = self.template.read_range(index);
-                [0, 1, 2]
-                    .map(|axis| u64::from(range[axis].end - range[axis].start))
-                    .iter()
-                    .product::<u64>()
-            })
-            .max()
-            .unwrap_or(0)
-    }
-
     pub fn frame(
         &self,
-        workers: usize,
         cancel: &AtomicBool,
         roi: Option<&Mask>,
         read: &ChannelRead<'_>,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Option<SpotSet>, String> {
-        let channels = self.channels;
-        let detection = self.detection;
+        let channels = self.channels.count();
+        let detection = self.channels.detection();
         let total = self.template.block_count();
         if total == 0 {
             return Ok(Some(SpotSet::new(
@@ -112,10 +99,24 @@ impl SpotScanner {
                 IntensityTable::new(channels, Vec::new()),
             )));
         }
-        let bytes = self.peak_read_voxels() * 4 * 3;
-        let workers = crate::schedule::workers(workers)
-            .min((crate::work::SPOT_WORKER_BYTES / bytes.max(1)).max(1) as usize);
-        let Some(field) = self.template.field(detection, workers, cancel, read)? else {
+        let workers = self
+            .budget
+            .workers()
+            .min(self.budget.window(self.template.worker_bytes()));
+        let detection_read = |ranges: &[Range<u32>; 3]| read(detection, ranges);
+        let plan = DetectionPlan {
+            cover: self.template.cover(),
+            kernels: &self.template.kernels,
+            anchor: self.template.field_anchor(),
+            region: self.template.ranges.clone(),
+            intensity: self.template.intensity,
+            budget: self.budget,
+            cancel,
+            read: &detection_read,
+        };
+        let bands = plan.bands();
+        let step = total + bands;
+        let Some(build) = plan.build(&mut |done, _| progress(done, step))? else {
             return Ok(None);
         };
         let mut spots = Vec::new();
@@ -128,8 +129,8 @@ impl SpotScanner {
                 cancel,
             },
             workers,
-            || SpotWorker::new(&self.template),
-            |worker, index, _| worker.run(index, channels, detection, &field, read, roi),
+            || SpotWorker::new(&self.template, self.channels, roi),
+            |worker, index, _| worker.run(index, &build.image, &build.field, read),
             |delivery| match delivery {
                 Delivery::Progress { .. } => Ok(()),
                 Delivery::Unit { value: block, .. } => {
@@ -137,7 +138,7 @@ impl SpotScanner {
                     accumulators.extend(block.accumulators);
                     done += 1;
                     if done.is_multiple_of(PROGRESS_STRIDE) || done == total {
-                        progress(done, total);
+                        progress(bands + done, step);
                     }
                     Ok(())
                 }
@@ -159,8 +160,10 @@ impl SpotScanner {
     }
 }
 
-struct SpotWorker {
+struct SpotWorker<'a> {
     scan: SpotScan,
+    channels: ChannelSet,
+    roi: Option<&'a Mask>,
     values: Vec<f32>,
     spots: Vec<Spot>,
     accumulators: Vec<SampleAccumulator>,
@@ -171,10 +174,12 @@ struct SpotBlock {
     accumulators: Vec<SampleAccumulator>,
 }
 
-impl SpotWorker {
-    fn new(template: &SpotScan) -> Self {
+impl<'a> SpotWorker<'a> {
+    fn new(template: &SpotScan, channels: ChannelSet, roi: Option<&'a Mask>) -> Self {
         Self {
             scan: template.worker(),
+            channels,
+            roi,
             values: Vec::new(),
             spots: Vec::new(),
             accumulators: Vec::new(),
@@ -184,17 +189,17 @@ impl SpotWorker {
     fn run(
         &mut self,
         index: usize,
-        channels: usize,
-        detection: usize,
+        image: &DetectionImage,
         field: &BlockField,
         read: &ChannelRead<'_>,
-        roi: Option<&Mask>,
     ) -> Result<SpotBlock, String> {
+        let channels = self.channels.count();
+        let detection = self.channels.detection();
         let range = self.scan.read_range(index);
         self.load(detection, &range, read)?;
         self.spots.clear();
         self.spots
-            .extend(self.scan.detect(index, &self.values, field, roi));
+            .extend(self.scan.detect(index, image, field, self.roi)?);
         self.accumulators.clear();
         self.accumulators
             .resize(self.spots.len() * channels, SampleAccumulator::new());
@@ -232,12 +237,11 @@ impl SpotWorker {
     }
 }
 
-pub struct SpotScan {
+struct SpotScan {
     extent: [u32; 3],
     level: Level,
     spacing: [f32; 3],
     sigma_world: f32,
-    truncate: [usize; 3],
     halo: [u32; 3],
     core_side: u32,
     first: [u32; 3],
@@ -249,16 +253,17 @@ pub struct SpotScan {
     intensity: Intensity,
     span: f32,
     radius: f32,
-    source: Vec<f32>,
     blurred: Vec<f32>,
+    response: Vec<f32>,
 }
 
 impl SpotScan {
-    pub fn new(
+    fn new(
         level: Level,
         intensity: Intensity,
         params: SpotParams,
         region: VolumeRegion,
+        budget: Budget,
     ) -> Self {
         let span = intensity.span();
         assert!(
@@ -272,7 +277,7 @@ impl SpotScan {
         let sigma_world = params.diameter() / FWHM_PER_SIGMA;
         let sigma = spacing.map(|step| (sigma_world / step).max(MIN_SIGMA));
         let truncate = sigma.map(|value| (3.0 * value).ceil() as usize);
-        let halo = truncate.map(|value| value as u32 + 2);
+        let halo = truncate.map(|value| value as u32 + RESPONSE_REACH);
         let maximum = sigma.iter().copied().fold(0.0f32, f32::max);
         let core_side = ((CORE_VOXELS_PER_SIGMA * maximum).ceil() as u32)
             .clamp(CORE_MIN, CORE_MAX)
@@ -292,9 +297,9 @@ impl SpotScan {
                 .map(|axis| u64::from(extent[axis].min(core_side) + 2 * halo[axis]))
                 .product::<u64>();
             assert!(
-                maximum_read <= crate::work::SPOT_READ_VOXELS,
+                maximum_read <= budget.read_voxels(),
                 "the spot diameter needs more than {} voxels per block",
-                crate::work::SPOT_READ_VOXELS
+                budget.read_voxels()
             );
         }
         let kernels = [0, 1, 2].map(|axis| gaussian(sigma[axis], truncate[axis]));
@@ -304,7 +309,6 @@ impl SpotScan {
             level,
             spacing,
             sigma_world,
-            truncate,
             halo,
             core_side,
             first,
@@ -316,48 +320,55 @@ impl SpotScan {
             intensity,
             span,
             radius: 0.5 * params.diameter(),
-            source: Vec::new(),
             blurred: Vec::new(),
+            response: Vec::new(),
         }
     }
 
-    pub fn block_count(&self) -> usize {
+    fn block_count(&self) -> usize {
         self.counts[0] as usize * self.counts[1] as usize * self.counts[2] as usize
     }
 
-    fn field(
-        &self,
-        channel: usize,
-        workers: usize,
-        cancel: &AtomicBool,
-        read: &ChannelRead<'_>,
-    ) -> Result<Option<BlockField>, String> {
-        let ranges = self.ranges.clone();
-        let anchor = [
-            i64::from(ranges[0].start),
-            i64::from(ranges[1].start),
-            i64::from(ranges[2].start),
-        ];
-        let mut levels = BlockLevels::new(
-            anchor,
-            ranges.clone(),
-            ranges.clone(),
-            self.intensity,
-            workers,
-        );
-        let mut plane = Vec::new();
-        for z in ranges[2].start..ranges[2].end {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return Ok(None);
-            }
-            let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
-            let data = read(channel, &slice)?;
-            plane.clear();
-            plane.resize(data.voxel_count(), 0.0);
-            data.write_values(&mut plane);
-            levels.push(z, &plane, 1);
+    fn cover(&self) -> [Range<u32>; 3] {
+        [0, 1, 2].map(|axis| {
+            let start = self.ranges[axis].start.saturating_sub(self.halo[axis]);
+            let end = self.ranges[axis]
+                .end
+                .saturating_add(self.halo[axis])
+                .min(self.extent[axis]);
+            start..end
+        })
+    }
+
+    fn field_anchor(&self) -> [i64; 3] {
+        [
+            i64::from(self.ranges[0].start),
+            i64::from(self.ranges[1].start),
+            i64::from(self.ranges[2].start),
+        ]
+    }
+
+    fn worker_bytes(&self) -> u64 {
+        let voxel = std::mem::size_of::<f32>() as u64;
+        let mut read = 0u64;
+        let mut span = 0u64;
+        for index in 0..self.block_count() {
+            let range = self.read_range(index);
+            read = read.max(
+                (0..3)
+                    .map(|axis| u64::from(range[axis].end - range[axis].start))
+                    .product::<u64>(),
+            );
+            let core = self.core(index);
+            span = span.max(
+                (0..3)
+                    .map(|axis| {
+                        u64::from(core[axis].end - core[axis].start) + 2 * u64::from(RESPONSE_REACH)
+                    })
+                    .product::<u64>(),
+            );
         }
-        Ok(Some(levels.finish()))
+        (read + 2 * span) * voxel
     }
 
     fn worker(&self) -> Self {
@@ -366,7 +377,6 @@ impl SpotScan {
             level: self.level,
             spacing: self.spacing,
             sigma_world: self.sigma_world,
-            truncate: self.truncate,
             halo: self.halo,
             core_side: self.core_side,
             first: self.first,
@@ -378,8 +388,8 @@ impl SpotScan {
             intensity: self.intensity,
             span: self.span,
             radius: self.radius,
-            source: Vec::new(),
             blurred: Vec::new(),
+            response: Vec::new(),
         }
     }
 
@@ -392,7 +402,7 @@ impl SpotScan {
         field.at(block).0
     }
 
-    pub fn read_range(&self, index: usize) -> [Range<u32>; 3] {
+    fn read_range(&self, index: usize) -> [Range<u32>; 3] {
         let core = self.core(index);
         [0, 1, 2].map(|axis| {
             let start = core[axis].start as i64 - i64::from(self.halo[axis]);
@@ -401,82 +411,55 @@ impl SpotScan {
         })
     }
 
-    pub fn detect(
+    fn detect(
         &mut self,
         index: usize,
-        values: &[f32],
+        image: &DetectionImage,
         field: &BlockField,
         roi: Option<&Mask>,
-    ) -> Vec<Spot> {
+    ) -> Result<Vec<Spot>, String> {
         let core = self.core(index);
-        let read = self.read_range(index);
-        let read_dims = dimensions(&read);
-        assert_eq!(
-            values.len(),
-            read_dims[0] * read_dims[1] * read_dims[2],
-            "the block values cover the requested region"
-        );
-        let desired = [
-            (core[0].end - core[0].start) as usize + 2 * self.halo[0] as usize,
-            (core[1].end - core[1].start) as usize + 2 * self.halo[1] as usize,
-            (core[2].end - core[2].start) as usize + 2 * self.halo[2] as usize,
+        let patch = image.patch(&[0, 1, 2].map(|axis| {
+            let start = core[axis].start.saturating_sub(RESPONSE_REACH);
+            let end = core[axis]
+                .end
+                .saturating_add(RESPONSE_REACH)
+                .min(self.extent[axis]);
+            start..end
+        }))?;
+        let patch_dims = patch.dims();
+        let patch_origin = [
+            core[0].start.saturating_sub(RESPONSE_REACH),
+            core[1].start.saturating_sub(RESPONSE_REACH),
+            core[2].start.saturating_sub(RESPONSE_REACH),
         ];
-        let desired_count = desired[0] * desired[1] * desired[2];
-        self.source.clear();
-        self.source.resize(desired_count, 0.0);
-        self.blurred.resize(desired_count, 0.0);
-        let origin = [
-            core[0].start as i64 - i64::from(self.halo[0]),
-            core[1].start as i64 - i64::from(self.halo[1]),
-            core[2].start as i64 - i64::from(self.halo[2]),
-        ];
-        for z in 0..desired[2] {
-            let volume_z = (origin[2] + z as i64).clamp(0, i64::from(self.extent[2]) - 1);
-            let read_z = (volume_z - i64::from(read[2].start)) as usize;
-            for y in 0..desired[1] {
-                let volume_y = (origin[1] + y as i64).clamp(0, i64::from(self.extent[1]) - 1);
-                let read_y = (volume_y - i64::from(read[1].start)) as usize;
-                for x in 0..desired[0] {
-                    let volume_x = (origin[0] + x as i64).clamp(0, i64::from(self.extent[0]) - 1);
-                    let read_x = (volume_x - i64::from(read[0].start)) as usize;
-                    self.source[x + desired[0] * (y + desired[1] * z)] =
-                        values[read_x + read_dims[0] * (read_y + read_dims[1] * read_z)];
+        let dims = [0, 1, 2].map(|axis| (core[axis].end - core[axis].start) as usize + 4);
+        let origin = [0, 1, 2].map(|axis| core[axis].start as i64 - i64::from(RESPONSE_REACH));
+        let count = dims[0] * dims[1] * dims[2];
+        self.blurred.clear();
+        self.blurred.resize(count, 0.0);
+        let source = patch.values();
+        for z in 0..dims[2] {
+            let voxel = (origin[2] + z as i64).clamp(0, i64::from(self.extent[2]) - 1);
+            let read_z = (voxel - i64::from(patch_origin[2])) as usize;
+            for y in 0..dims[1] {
+                let voxel = (origin[1] + y as i64).clamp(0, i64::from(self.extent[1]) - 1);
+                let read_y = (voxel - i64::from(patch_origin[1])) as usize;
+                for x in 0..dims[0] {
+                    let voxel = (origin[0] + x as i64).clamp(0, i64::from(self.extent[0]) - 1);
+                    let read_x = (voxel - i64::from(patch_origin[0])) as usize;
+                    self.blurred[x + dims[0] * (y + dims[1] * z)] =
+                        source[read_x + patch_dims[0] * (read_y + patch_dims[1] * read_z)];
                 }
             }
         }
-        let valid = [0, 1, 2].map(|axis| [0, desired[axis]]);
-        let valid_x = shrink(&valid, 0, self.truncate[0]);
-        blur_axis(
-            &self.source,
-            &mut self.blurred,
-            &desired,
-            &valid_x,
-            0,
-            &self.kernels[0],
-        );
-        let valid_y = shrink(&valid_x, 1, self.truncate[1]);
-        blur_axis(
-            &self.blurred,
-            &mut self.source,
-            &desired,
-            &valid_y,
-            1,
-            &self.kernels[1],
-        );
-        let valid_z = shrink(&valid_y, 2, self.truncate[2]);
-        blur_axis(
-            &self.source,
-            &mut self.blurred,
-            &desired,
-            &valid_z,
-            2,
-            &self.kernels[2],
-        );
-        let response = shrink(&shrink(&shrink(&valid_z, 0, 1), 1, 1), 2, 1);
-        let strides = [1usize, desired[0], desired[0] * desired[1]];
+        let response = [0, 1, 2].map(|axis| [1, dims[axis] - 1]);
+        let strides = [1usize, dims[0], dims[0] * dims[1]];
+        self.response.clear();
+        self.response.resize(count, 0.0);
         for z in response[2][0]..response[2][1] {
             for y in response[1][0]..response[1][1] {
-                let row = desired[0] * (y + desired[1] * z);
+                let row = dims[0] * (y + dims[1] * z);
                 for x in response[0][0]..response[0][1] {
                     let cell = x + row;
                     let center = self.blurred[cell];
@@ -486,7 +469,7 @@ impl SpotScan {
                             * (self.blurred[cell + stride] - 2.0 * center
                                 + self.blurred[cell - stride]);
                     }
-                    self.source[cell] =
+                    self.response[cell] =
                         -self.sigma_world * self.sigma_world * laplacian / self.span;
                 }
             }
@@ -499,15 +482,14 @@ impl SpotScan {
                     z: i64::from(z),
                 });
                 for x in core[0].clone() {
-                    let base = x as usize - core[0].start as usize
-                        + self.halo[0] as usize
-                        + desired[0]
-                            * (y as usize - core[1].start as usize
-                                + self.halo[1] as usize
-                                + desired[1]
-                                    * (z as usize - core[2].start as usize
-                                        + self.halo[2] as usize));
-                    let value = self.source[base];
+                    let base = (x - core[0].start) as usize
+                        + RESPONSE_REACH as usize
+                        + dims[0]
+                            * ((y - core[1].start) as usize
+                                + RESPONSE_REACH as usize
+                                + dims[1]
+                                    * ((z - core[2].start) as usize + RESPONSE_REACH as usize));
+                    let value = self.response[base];
                     if value <= 0.0 {
                         continue;
                     }
@@ -521,7 +503,7 @@ impl SpotScan {
                                     + dy * strides[1] as i64
                                     + dz * strides[2] as i64)
                                     as usize;
-                                let candidate = self.source[neighbour];
+                                let candidate = self.response[neighbour];
                                 if candidate > best {
                                     best = candidate;
                                     best_index = neighbour;
@@ -539,8 +521,8 @@ impl SpotScan {
                     let mut voxel = [x as f32, y as f32, z as f32];
                     for axis in 0..3 {
                         let step = strides[axis];
-                        let minus = self.source[base - step];
-                        let plus = self.source[base + step];
+                        let minus = self.response[base - step];
+                        let plus = self.response[base + step];
                         let denominator = minus - 2.0 * value + plus;
                         if denominator < -1.0e-12 {
                             voxel[axis] += (0.5 * (minus - plus) / denominator).clamp(-0.5, 0.5);
@@ -552,7 +534,7 @@ impl SpotScan {
                     }
                     let radius = self.fit_radius(
                         &origin,
-                        &desired,
+                        &dims,
                         &response,
                         voxel,
                         self.background(field, voxel),
@@ -561,10 +543,10 @@ impl SpotScan {
                 }
             }
         }
-        spots
+        Ok(spots)
     }
 
-    pub fn measure(&self, index: usize, spots: &[Spot], values: &[f32]) -> Vec<SampleAccumulator> {
+    fn measure(&self, index: usize, spots: &[Spot], values: &[f32]) -> Vec<SampleAccumulator> {
         let read = self.read_range(index);
         let dims = dimensions(&read);
         assert_eq!(
@@ -748,38 +730,4 @@ fn gaussian(sigma: f32, truncate: usize) -> Vec<f32> {
         *weight /= total;
     }
     kernel
-}
-
-fn shrink(region: &Region, axis: usize, amount: usize) -> Region {
-    let mut shrunk = *region;
-    shrunk[axis][0] += amount;
-    shrunk[axis][1] -= amount;
-    shrunk
-}
-
-fn blur_axis(
-    input: &[f32],
-    output: &mut [f32],
-    dims: &[usize; 3],
-    valid: &Region,
-    axis: usize,
-    kernel: &[f32],
-) {
-    let strides = [1usize, dims[0], dims[0] * dims[1]];
-    let step = strides[axis] as isize;
-    let radius = (kernel.len() / 2) as isize;
-    for z in valid[2][0]..valid[2][1] {
-        for y in valid[1][0]..valid[1][1] {
-            let row = dims[0] * (y + dims[1] * z);
-            for x in valid[0][0]..valid[0][1] {
-                let index = x + row;
-                let mut sum = 0.0;
-                for (tap, weight) in kernel.iter().enumerate() {
-                    sum +=
-                        input[(index as isize + (tap as isize - radius) * step) as usize] * weight;
-                }
-                output[index] = sum;
-            }
-        }
-    }
 }

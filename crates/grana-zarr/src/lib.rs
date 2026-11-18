@@ -1,3 +1,4 @@
+mod archive;
 mod axes;
 mod chunk;
 mod error;
@@ -10,9 +11,11 @@ mod parallel;
 mod plan;
 mod root;
 mod schema;
+mod space;
 mod transform;
 mod write;
 
+pub use archive::Archive;
 pub use error::Error;
 pub use hcs::{
     Field, Kind as GroupKind, Plate, Well, group_path, kind as group_kind, open as open_plate,
@@ -23,4 +26,5 @@ pub use label::{
     write_group_labels,
 };
 pub use root::Root;
+pub use space::{image_space, label_space};
 pub use write::write_image;

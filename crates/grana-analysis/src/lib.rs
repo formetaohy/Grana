@@ -1,5 +1,8 @@
+mod budget;
 mod cell;
+mod channel;
 mod coloc;
+mod detection;
 mod drift;
 mod fiducial;
 mod filament;
@@ -18,7 +21,9 @@ mod table;
 mod track;
 mod work;
 
+pub use budget::Budget;
 pub use cell::{Band, CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
+pub use channel::ChannelSet;
 pub use coloc::{ColocRead, ColocSampling, ColocScan, ColocScanConfig, coloc_sampling};
 pub use drift::{
     BLOCK, Blocks, Lattice, Sample, Smoothing, blocks as drift_blocks,
@@ -34,10 +39,9 @@ pub use localization_drift::{
 };
 pub use object_coloc::{LabelRead, ObjectColocScan, object_coloc_level};
 pub use relation::{Reference, RelationRun, relate_frames};
-pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
-pub use schedule::{Delivery, Run, ordered, parallel, unit_window, workers};
+pub use scan::{ChannelRead, SpotScanner, spot_level};
+pub use schedule::{Delivery, Run, ordered, parallel, workers};
 pub use surface::{
     SeedPolicy, Sources, SurfaceBuilder, SurfaceScan, apply, merge, recut, split, surface_level,
 };
 pub use track::TrackLinker;
-pub use work::FIELD_PEAK_BYTES;

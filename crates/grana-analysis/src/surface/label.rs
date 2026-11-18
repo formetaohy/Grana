@@ -243,7 +243,7 @@ impl Tile<'_> {
         });
         let measured_dims = super::dims_of(&ranges);
         let measured_count = measured_dims[0] * measured_dims[1] * measured_dims[2];
-        let channels = plan.channels;
+        let channels = plan.channels.count();
         let mut measured = Vec::with_capacity(channels);
         for channel in 0..channels {
             let data = measure(channel, &ranges)?;

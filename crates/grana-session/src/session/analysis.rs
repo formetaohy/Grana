@@ -1175,7 +1175,7 @@ impl Session {
                         region,
                         roi,
                         drifts,
-                        0,
+                        grana_analysis::Budget::new(0),
                         self.store(),
                     )
                     .with_seeds(seeds, policy),

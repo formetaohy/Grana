@@ -850,6 +850,128 @@ fn round_trips_a_typed_geff_lineage() {
 }
 
 #[test]
+fn refuses_a_dataset_that_cannot_fit_beside_the_previous_one() {
+    let temp = Temp::new("suite-zarr-space");
+    let path = temp.path().join("kept.ome.zarr");
+    write_zarr(&path);
+    let levels = [
+        Level::new(Extent::new(24, 16, 8), Spacing::new(0.5, 0.5, 1.0)),
+        Level::new(Extent::new(12, 8, 4), Spacing::new(1.0, 1.0, 2.0)),
+    ];
+    let voxels = levels
+        .iter()
+        .map(|level| level.extent().voxel_count())
+        .sum::<u64>();
+    assert!(
+        grana_zarr::image_space(&levels, 2, 3) >= voxels * 2 * 3 * 4,
+        "the planned image covers every stored float voxel"
+    );
+    assert!(
+        grana_zarr::label_space(&levels, 2) >= voxels * 2 * 2,
+        "the planned label image covers every stored sixteen bit voxel"
+    );
+    let error = grana_zarr::Archive::create(&path, u64::MAX / 4)
+        .err()
+        .expect("the volume cannot hold the planned dataset beside its previous version");
+    assert!(
+        error.to_string().contains("GiB"),
+        "the refusal names the volume sizes: {error}"
+    );
+    let kept = grana_zarr::Image::open(&path).expect("the previous dataset still opens");
+    assert_eq!(kept.pyramid().level(0).extent(), Extent::new(24, 16, 8));
+    let staging = std::fs::read_dir(temp.path())
+        .expect("the temporary directory lists")
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".part"))
+        .count();
+    assert_eq!(staging, 0, "a refused dataset leaves no staging behind");
+}
+
+#[test]
+fn keeps_the_previous_dataset_when_a_label_cannot_join_the_export() {
+    let temp = Temp::new("suite-zarr-transaction");
+    let path = temp.path().join("kept.ome.zarr");
+    write_zarr(&path);
+    let extent = Extent::new(8, 8, 4);
+    let volume = || {
+        Volume::new(
+            extent,
+            Spacing::new(1.0, 1.0, 1.0),
+            vec![Channel::new(
+                "signal",
+                [1.0, 1.0, 1.0],
+                VoxelData::U16(vec![3u16; extent.voxel_count() as usize]),
+            )],
+        )
+    };
+    let image = Arc::new(
+        Image::open(&Source::memory(VolumeSeries::new(
+            vec![volume(), volume()],
+            1.0,
+        )))
+        .expect("the image opens"),
+    );
+    let levels = image.pyramid().levels().to_vec();
+    let mut label_scene = Scene::new(Dataset::synthetic("labelled", image.pyramid().clone()));
+    let label_set = label_scene.add_object(ObjectKind::Spots, 0);
+    let centre = image.pyramid().level(0).voxel_center([3.0, 3.0, 2.0]);
+    let spots = || {
+        SpotSet::new(
+            0,
+            vec![Spot::new(centre, 0.9, 1.0)],
+            IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]),
+        )
+    };
+    label_scene.install(label_set, 0, ObjectFrame::from_spots(spots()));
+    label_scene.install(label_set, 1, ObjectFrame::from_spots(spots()));
+    let label = LabelLayer::of(
+        label_scene
+            .objects
+            .get(label_set)
+            .expect("the label set exists"),
+        &levels,
+    )
+    .expect("the label layer builds");
+    let mut progress = |_, _| {};
+    let outcome = grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: path.clone(),
+            name: "labelled".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                range: Intensity::new(0.0, 10.0),
+            }],
+            levels,
+            origins: vec![[0, 0, 0]; image.pyramid().level_count()],
+            placement: image.pyramid().placement(),
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: vec![label],
+        },
+        &Channels::stored(Arc::clone(&image)),
+        &AtomicBool::new(false),
+        &mut progress,
+    );
+    assert!(
+        outcome.is_err(),
+        "a label image that names a frame the export omits fails the export"
+    );
+    let kept = grana_zarr::Image::open(&path).expect("the previous dataset still opens");
+    assert_eq!(kept.pyramid().level(0).extent(), Extent::new(24, 16, 8));
+    assert!(
+        kept.labels()
+            .expect("the previous labels read")
+            .names()
+            .next()
+            .is_none(),
+        "the failed export leaves the previous dataset unlabelled"
+    );
+}
+
+#[test]
 fn reads_picasso_localization_tables() {
     let temp = Temp::new("suite-picasso-table");
     let path = temp.path().join("localizations.hdf5");

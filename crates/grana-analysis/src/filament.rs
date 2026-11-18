@@ -11,15 +11,16 @@ use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
+use crate::budget::Budget;
+use crate::channel::ChannelSet;
 use crate::local::LocalField;
-use crate::work;
 use grana_object::FilamentParams;
 use grana_object::Mask;
 
 const MAX_STEP: u32 = 32;
 
-pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
-    pyramid.fit_level(Region::none(), work::FILAMENT_VOXELS)
+pub fn filament_level(pyramid: &Pyramid, budget: Budget) -> Option<usize> {
+    pyramid.fit_level(Region::none(), budget.filament_voxels())
 }
 
 pub(super) struct Grid {
@@ -60,11 +61,11 @@ pub struct FilamentScan {
     params: FilamentParams,
     intensity: Intensity,
     threshold: f32,
-    channels: usize,
-    detection: usize,
+    channels: ChannelSet,
     grid: Grid,
     region: Region,
     empty: bool,
+    budget: Budget,
     mask: Vec<u8>,
     distance: Vec<u16>,
 }
@@ -74,15 +75,11 @@ impl FilamentScan {
         level: usize,
         info: Level,
         params: FilamentParams,
-        channels: usize,
-        detection: usize,
+        channels: ChannelSet,
         region: Region,
         intensity: Intensity,
+        budget: Budget,
     ) -> Self {
-        assert!(
-            channels > 0 && detection < channels,
-            "the detection channel is one of the measured channels"
-        );
         let empty = region.voxel_range(info).is_none();
         let extent = info.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
@@ -108,9 +105,9 @@ impl FilamentScan {
             .map(|value| u64::from(*value))
             .product::<u64>();
         assert!(
-            voxel_count <= work::FILAMENT_VOXELS,
+            voxel_count <= budget.filament_voxels(),
             "a filament scan holds at most {} voxels",
-            work::FILAMENT_VOXELS
+            budget.filament_voxels()
         );
         let stride = [
             1,
@@ -125,7 +122,6 @@ impl FilamentScan {
             intensity,
             threshold: params.threshold(),
             channels,
-            detection,
             grid: Grid {
                 dims,
                 padded,
@@ -137,6 +133,7 @@ impl FilamentScan {
             },
             region,
             empty,
+            budget,
             mask: vec![0; voxel_count as usize],
             distance: vec![0; voxel_count as usize],
         }
@@ -154,7 +151,7 @@ impl FilamentScan {
                 self.level,
                 Mesh::new(Vec::new(), Vec::new()),
                 Vec::new(),
-                IntensityTable::empty(self.channels),
+                IntensityTable::empty(self.channels.count()),
             ));
         }
         let expected = self
@@ -170,7 +167,7 @@ impl FilamentScan {
             [0, 0, 0],
             [0, 0, 0],
             self.intensity,
-            1,
+            self.budget,
             |index| detection.value(index),
         );
         volume::mask(
@@ -192,9 +189,9 @@ impl FilamentScan {
             &self.grid,
             self.params.min_length(),
         );
-        let mut accumulators = vec![SampleAccumulator::new(); traced.len() * self.channels];
-        for channel in 0..self.channels {
-            let measured = if channel == self.detection {
+        let mut accumulators = vec![SampleAccumulator::new(); traced.len() * self.channels.count()];
+        for channel in 0..self.channels.count() {
+            let measured = if channel == self.channels.detection() {
                 None
             } else {
                 Some(read(channel)?)
@@ -212,7 +209,8 @@ impl FilamentScan {
             };
             for (index, filament) in traced.iter().enumerate() {
                 for node in &filament.nodes {
-                    accumulators[index * self.channels + channel].push(self.sample(data, *node));
+                    accumulators[index * self.channels.count() + channel]
+                        .push(self.sample(data, *node));
                 }
             }
         }
@@ -240,7 +238,7 @@ impl FilamentScan {
             .map(|filament| filament.statistics)
             .collect::<Vec<_>>();
         let intensities = IntensityTable::new(
-            self.channels,
+            self.channels.count(),
             accumulators
                 .into_iter()
                 .map(SampleAccumulator::statistics)

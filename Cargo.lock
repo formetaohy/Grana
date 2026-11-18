@@ -3597,6 +3597,10 @@ dependencies = [
 [[package]]
 name = "grana-file"
 version = "0.2.0"
+dependencies = [
+ "fs4",
+ "rayon",
+]
 
 [[package]]
 name = "grana-geometry"

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::channels::Channels;
 use grana_analysis::local::field_bytes;
 use grana_analysis::{
-    ColocScan, ColocScanConfig, FIELD_PEAK_BYTES, FilamentScan, ObjectColocScan, RelationRun,
+    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun,
     SeedPolicy, Sources, SpotScanner, SurfaceBuilder, SurfaceScan, coloc_sampling, filament_level,
     relate_frames, spot_level, surface_level,
 };
@@ -62,14 +62,7 @@ pub type EditedFrame = (u32, Option<Arc<ObjectFrame>>);
 
 const MINIMUM_AGREEMENT: f32 = 0.1;
 
-const FILAMENT_BYTES: u64 = 512 << 20;
-
 const FILAMENT_VOXEL_BYTES: u64 = 12;
-
-fn share(workers: usize, window: usize, total: u32) -> usize {
-    let concurrent = workers.min(window).min(total.max(1) as usize);
-    (workers / concurrent).max(1)
-}
 
 fn voxel_count(level: grana_volume::Level, region: grana_volume::Region) -> u64 {
     region.voxel_range(level).map_or(0, |ranges| {
@@ -102,7 +95,7 @@ pub struct DetectRequest {
     seeds: Vec<Vec<[f32; 3]>>,
     seed_policy: SeedPolicy,
     drifts: Drifts,
-    workers: usize,
+    budget: Budget,
     store: Arc<SpillStore>,
 }
 
@@ -113,7 +106,7 @@ impl DetectRequest {
         region: grana_volume::Region,
         roi: Option<Roi>,
         drifts: Drifts,
-        workers: usize,
+        budget: Budget,
         store: Arc<SpillStore>,
     ) -> Self {
         Self {
@@ -124,7 +117,7 @@ impl DetectRequest {
             seeds: Vec::new(),
             seed_policy: SeedPolicy::Unseeded,
             drifts,
-            workers,
+            budget,
             store,
         }
     }
@@ -138,11 +131,10 @@ impl DetectRequest {
 
 pub fn detect(
     reader: &Channels,
-    mut request: DetectRequest,
+    request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
-    request.workers = grana_analysis::workers(request.workers);
     match request.params {
         ObjectParams::Spots(params) => spots(reader, params, request, cancel, sink),
         ObjectParams::Surfaces(params) => surfaces(reader, params, request, cancel, sink),
@@ -440,13 +432,13 @@ pub fn object_coloc(
             .map_or_else(Vec::new, |frame| frame.anchors())
     });
     let info = pyramid.level(level_index);
-    let workers = grana_analysis::workers(workers);
-    let window = workers;
-    let share = share(workers, window, totals);
+    let budget = Budget::new(workers);
+    let window = budget.workers();
+    let share = budget.split(window, totals).workers();
     let mut collected: Vec<Option<Vec<ObjectColocValue>>> = vec![None; totals as usize];
     let completed = pipeline(
         totals,
-        workers,
+        budget.workers(),
         window,
         cancel,
         || (),
@@ -522,7 +514,7 @@ fn spots(
         channel,
         region,
         roi,
-        workers,
+        budget,
         drifts,
         ..
     } = request;
@@ -538,24 +530,24 @@ fn spots(
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
-    let level_index = spot_level(pyramid, region, params)?;
+    let level_index = spot_level(pyramid, region, params, budget)?;
     let level = pyramid.level(level_index);
+    let domain = Domain::new(region, level);
+    let totals = pyramid.frame_count();
+    let window = budget.window(field_bytes(level, region, budget));
+    let share = budget.split(window, totals);
     let scanner = SpotScanner::new(
         level_index,
         level,
         intensity,
         params,
         region,
-        channels,
-        channel,
+        ChannelSet::new(channels, channel),
+        share,
     );
-    let domain = Domain::new(region, level);
-    let totals = pyramid.frame_count();
-    let window = grana_analysis::unit_window(FIELD_PEAK_BYTES, field_bytes(level, region));
-    let share = share(workers, window, totals);
     let completed = pipeline(
         totals,
-        workers,
+        budget.workers(),
         window,
         cancel,
         || (),
@@ -572,7 +564,7 @@ fn spots(
                     )
                     .map_err(String::from)
             };
-            let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
+            let set = scanner.frame(cancel, mask.as_ref(), &read, &mut |done, total| {
                 report(done, total)
             })?;
             Ok(set.map(|set| ObjectFrame::Spots(Arc::new(set))))
@@ -599,7 +591,7 @@ fn surfaces(
         seeds,
         seed_policy,
         drifts,
-        workers,
+        budget,
         store,
         ..
     } = request;
@@ -614,18 +606,18 @@ fn surfaces(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
-    let level_index = surface_level(pyramid, region)?;
+    let level_index = surface_level(pyramid, region, budget)?;
     let level = pyramid.level(level_index);
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
-    let window = grana_analysis::unit_window(
-        FIELD_PEAK_BYTES,
-        field_bytes(level, region).max(voxel_count(level, region) * 4),
+    let window = budget.window(
+        field_bytes(level, region, budget)
+            .max(voxel_count(level, region) * std::mem::size_of::<f32>() as u64),
     );
-    let share = share(workers, window, totals);
+    let share = budget.split(window, totals);
     let completed = pipeline(
         totals,
-        workers,
+        budget.workers(),
         window,
         cancel,
         || (),
@@ -639,8 +631,7 @@ fn surfaces(
                 level_index,
                 level,
                 params,
-                pyramid.channel_count(),
-                channel,
+                ChannelSet::new(pyramid.channel_count(), channel),
                 region,
                 pyramid.channels()[channel].intensity(),
             )
@@ -705,7 +696,7 @@ fn filaments(
         roi,
         drifts,
         store,
-        workers,
+        budget,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -718,7 +709,7 @@ fn filaments(
     if pyramid.channels()[channel].intensity().span() <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
-    let level = filament_level(pyramid).ok_or_else(|| {
+    let level = filament_level(pyramid, budget).ok_or_else(|| {
         "the dataset is too large to trace filaments at any resolution level".to_string()
     })?;
     let channels = pyramid.channel_count();
@@ -727,14 +718,24 @@ fn filaments(
     let extent = info.extent();
     let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());
     let totals = pyramid.frame_count();
-    let window = grana_analysis::unit_window(FILAMENT_BYTES, voxels * FILAMENT_VOXEL_BYTES);
+    let window = budget.window(voxels * FILAMENT_VOXEL_BYTES);
     let intensity = pyramid.channels()[channel].intensity();
     let completed = pipeline(
         totals,
-        workers,
+        budget.workers(),
         window,
         cancel,
-        || FilamentScan::new(level, info, params, channels, channel, region, intensity),
+        || {
+            FilamentScan::new(
+                level,
+                info,
+                params,
+                ChannelSet::new(channels, channel),
+                region,
+                intensity,
+                budget,
+            )
+        },
         |scan, time, _report| {
             let detection = full_region(
                 reader,

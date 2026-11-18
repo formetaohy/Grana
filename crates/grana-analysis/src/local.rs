@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use grana_volume::{Intensity, Level, Region};
 
+use crate::budget::Budget;
 use crate::work;
 
 pub(crate) const BLOCK: i64 = 8;
@@ -132,8 +133,8 @@ const _: () = {
     assert!(size_of::<f32>() as u64 == work::FIELD_SIGNAL_BYTES);
 };
 
-fn bins(columns: usize) -> usize {
-    let each = work::FIELD_HISTOGRAM_BYTES / (columns.max(1) as u64 * work::FIELD_BIN_BYTES);
+fn bins(columns: usize, histogram: u64) -> usize {
+    let each = histogram / (columns.max(1) as u64 * work::FIELD_BIN_BYTES);
     each.clamp(work::FIELD_BIN_MIN, work::FIELD_BIN_MAX) as usize
 }
 
@@ -180,17 +181,17 @@ fn column_count(blocks: [usize; 3]) -> usize {
     blocks[0] * blocks[1]
 }
 
-pub(crate) fn footprint(blocks: [usize; 3]) -> u64 {
+pub(crate) fn footprint(blocks: [usize; 3], budget: Budget) -> u64 {
     let columns = column_count(blocks) as u64;
-    let bins = bins(column_count(blocks)) as u64;
+    let bins = bins(column_count(blocks), budget.histogram_bytes()) as u64;
     columns * (bins * work::FIELD_BIN_BYTES + work::FIELD_COUNT_BYTES + work::FIELD_LEVEL_BYTES)
         + columns * blocks[2] as u64 * (work::FIELD_BACKGROUND_BYTES + work::FIELD_SIGNAL_BYTES)
 }
 
-pub fn field_bytes(level: Level, region: Region) -> u64 {
+pub fn field_bytes(level: Level, region: Region, budget: Budget) -> u64 {
     region
         .voxel_range(level)
-        .map_or(0, |ranges| footprint(block_counts(&ranges)))
+        .map_or(0, |ranges| footprint(block_counts(&ranges), budget))
 }
 
 pub struct BlockLevels {
@@ -218,7 +219,7 @@ impl BlockLevels {
         region: [Range<u32>; 3],
         cover: [Range<u32>; 3],
         intensity: Intensity,
-        workers: usize,
+        budget: Budget,
     ) -> Self {
         assert!(
             region.iter().all(|range| !range.is_empty()),
@@ -232,7 +233,7 @@ impl BlockLevels {
         let columns = column_count(blocks);
         let width = (cover[0].end - cover[0].start) as usize;
         let height = (cover[1].end - cover[1].start) as usize;
-        let bins = bins(columns);
+        let bins = bins(columns, budget.histogram_bytes());
         Self {
             anchor,
             region,
@@ -241,7 +242,7 @@ impl BlockLevels {
             height,
             blocks,
             intensity,
-            workers: workers.max(1),
+            workers: budget.workers(),
             bins,
             scale: bins as f32 / intensity.span(),
             histograms: vec![0; columns * bins],
@@ -431,7 +432,7 @@ impl LocalField {
         start: [i64; 3],
         anchor: [i64; 3],
         intensity: Intensity,
-        workers: usize,
+        budget: Budget,
         value: impl Fn(usize) -> f32,
     ) -> Self {
         assert!(
@@ -453,7 +454,7 @@ impl LocalField {
         let count = blocks[0] * blocks[1] * blocks[2];
         let mut background = vec![INVALID; count];
         let mut signal = vec![INVALID; count];
-        let bins = bins(column_count(blocks));
+        let bins = bins(column_count(blocks), budget.histogram_bytes());
         let scale = bins as f32 / intensity.span();
         let mut histogram = vec![0u16; bins];
         for block_z in 0..blocks[2] {
@@ -490,7 +491,13 @@ impl LocalField {
             }
         }
         Self(finish(
-            anchor, origin, blocks, intensity, background, signal, workers,
+            anchor,
+            origin,
+            blocks,
+            intensity,
+            background,
+            signal,
+            budget.workers(),
         ))
     }
 

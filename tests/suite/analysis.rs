@@ -1,12 +1,11 @@
 use std::f64::consts::PI;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use grana_analysis::localization::{LocalizationFilter, LocalizationSpec};
 use grana_analysis::{
-    ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan, SurfaceBuilder,
-    TrackLinker, coloc_sampling,
-    local::{BlockField, BlockLevels},
+    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScanner,
+    SurfaceBuilder, TrackLinker, coloc_sampling,
 };
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::Source;
@@ -35,14 +34,39 @@ fn detects_and_localises_bright_spots() {
     let spacing = Spacing::new(0.1, 0.1, 0.1);
     let data = spot_volume(extent, spacing);
     let level = Level::new(extent, spacing);
-    let mut scan = SpotScan::new(
+    let scanner = SpotScanner::new(
+        0,
         level,
         data.range(),
         SpotParams::new(0.5, 0.2),
         Region::none(),
+        ChannelSet::new(1, 0),
+        Budget::new(2),
     );
-    let spots = scan_all(&mut scan, &data, level);
+    let voxels = AtomicU64::new(0);
+    let read = |channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
+        assert_eq!(channel, 0, "the spot scan reads its detection channel");
+        let region = data.region(
+            level.extent(),
+            ranges[0].clone(),
+            ranges[1].clone(),
+            ranges[2].clone(),
+        );
+        voxels.fetch_add(region.voxel_count() as u64, Ordering::Relaxed);
+        Ok(region)
+    };
+    let set = scanner
+        .frame(&AtomicBool::new(false), None, &read, &mut |_, _| {})
+        .expect("the spot frame is detected")
+        .expect("the spot frame is not cancelled");
+    let spots = set.spots();
     assert_eq!(spots.len(), 2, "each bright blob is one spot");
+    let volume = extent.voxel_count();
+    let read = voxels.load(Ordering::Relaxed);
+    assert!(
+        read < 3 * volume,
+        "the detection channel is read once into the detection image plus once per block, {read} voxels for a {volume} voxel region"
+    );
     let world = level.world_extent();
     for centre in [[24.0f32, 32.0, 16.0], [66.0, 32.0, 16.0]] {
         let expected = [0, 1, 2].map(|axis| {
@@ -106,41 +130,6 @@ fn spacing_axis(spacing: Spacing, axis: usize) -> f32 {
         1 => spacing.y(),
         _ => spacing.z(),
     }
-}
-
-fn scan_all(scan: &mut SpotScan, data: &VoxelData, level: Level) -> Vec<Spot> {
-    let field = spot_field(data, level);
-    let mut spots = Vec::new();
-    let mut values = Vec::new();
-    for index in 0..scan.block_count() {
-        let range = scan.read_range(index);
-        let region = data.region(
-            level.extent(),
-            range[0].clone(),
-            range[1].clone(),
-            range[2].clone(),
-        );
-        values.clear();
-        values.resize(region.voxel_count(), 0.0);
-        region.write_values(&mut values);
-        spots.extend(scan.detect(index, &values, &field, None));
-    }
-    spots
-}
-
-fn spot_field(data: &VoxelData, level: Level) -> BlockField {
-    let extent = level.extent();
-    let ranges = [0..extent.x(), 0..extent.y(), 0..extent.z()];
-    let mut levels = BlockLevels::new([0, 0, 0], ranges.clone(), ranges.clone(), data.range(), 1);
-    let mut plane = Vec::new();
-    for z in ranges[2].start..ranges[2].end {
-        let region = data.region(extent, ranges[0].clone(), ranges[1].clone(), z..z + 1);
-        plane.clear();
-        plane.resize(region.voxel_count(), 0.0);
-        region.write_values(&mut plane);
-        levels.push(z, &plane, 1);
-    }
-    levels.finish()
 }
 
 #[test]
@@ -254,11 +243,18 @@ fn extract_surfaces_at(
 ) -> SurfaceSet {
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
-    let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity);
+    let builder = SurfaceBuilder::new(
+        0,
+        level,
+        params,
+        ChannelSet::new(channels, 0),
+        Region::none(),
+        intensity,
+    );
     let cancel = AtomicBool::new(false);
     let scan = builder
         .scan(
-            4,
+            Budget::new(4),
             &cancel,
             roi,
             &mut |_done, _total| {},
@@ -446,10 +442,10 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         0,
         level,
         FilamentParams::new(8_000.0 / f32::from(HIGH), 2.5),
-        1,
-        0,
+        ChannelSet::new(1, 0),
         Region::none(),
         intensity,
+        Budget::new(1),
     );
     let set = scan
         .frame(&data, None, &SpillStore::memory(), |_| Ok(data.clone()))
@@ -1039,7 +1035,7 @@ fn spots_of(channels: &Channels) -> Vec<Spot> {
         Region::none(),
         None,
         grana_scene::Drifts::new(),
-        1,
+        Budget::new(1),
         SpillStore::temporary(256 << 20).expect("the geometry store opens"),
     );
     let mut spots = Vec::new();

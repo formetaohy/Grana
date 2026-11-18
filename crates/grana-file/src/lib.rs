@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use rayon::prelude::*;
+
 mod lease;
 
 pub use lease::Lease;
@@ -14,6 +16,7 @@ const STAGING_SUFFIX: &str = ".part";
 const BACKUP_SUFFIX: &str = ".old";
 const HIDDEN: char = '.';
 const SEQUENCE_SEPARATOR: &str = "-";
+const HEADROOM: u64 = 64 << 20;
 
 #[cfg(windows)]
 const TRANSIENT: [i32; 3] = [5, 32, 33];
@@ -62,9 +65,11 @@ impl Atomic {
             .lease
             .take()
             .expect("an atomic write holds its target lease");
+        sync(&self.staging)?;
         if !self.directory {
             attempt(|| fs::rename(&self.staging, &self.target))?;
             self.committed = true;
+            sync_parent(&self.target)?;
             return Ok(Replaced {
                 target: self.target.clone(),
                 backup: self.backup.clone(),
@@ -82,6 +87,7 @@ impl Atomic {
         match attempt(|| fs::rename(&self.staging, &self.target)) {
             Ok(()) => {
                 self.committed = true;
+                sync_parent(&self.target)?;
                 Ok(Replaced {
                     target: self.target.clone(),
                     backup: self.backup.clone(),
@@ -195,6 +201,100 @@ pub fn bytes(path: &Path) -> io::Result<u64> {
         total += bytes(&entry?.path())?;
     }
     Ok(total)
+}
+
+pub fn available(path: &Path) -> io::Result<u64> {
+    let mut anchor = path;
+    loop {
+        match fs4::available_space(anchor) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let Some(parent) = anchor
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                else {
+                    return Err(error);
+                };
+                anchor = parent;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+pub fn require(target: &Path, expected: u64) -> io::Result<()> {
+    let held = match bytes(target) {
+        Ok(held) => held,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error),
+    };
+    let free = available(target)?;
+    let needed = held.saturating_add(expected).saturating_add(HEADROOM);
+    if free >= needed {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "writing {} keeps the current version of {:.2} GiB beside the {:.2} GiB it is expected to store, and needs {:.2} GiB free, but the volume holds {:.2} GiB available",
+        target.display(),
+        gib(held),
+        gib(expected),
+        gib(needed),
+        gib(free),
+    )))
+}
+
+pub fn sync(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return sync_file(path);
+    }
+    let mut files = Vec::new();
+    let mut directories = vec![path.to_path_buf()];
+    collect(path, &mut files, &mut directories)?;
+    files.par_iter().try_for_each(|file| sync_file(file))?;
+    sync_directories(&directories)
+}
+
+fn collect(
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+    directories: &mut Vec<PathBuf>,
+) -> io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if fs::symlink_metadata(&path)?.is_dir() {
+            directories.push(path.clone());
+            collect(&path, files, directories)?;
+        } else {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn sync_file(path: &Path) -> io::Result<()> {
+    fs::OpenOptions::new().write(true).open(path)?.sync_all()
+}
+
+fn sync_parent(target: &Path) -> io::Result<()> {
+    sync_directories(&[parent(target).to_path_buf()])
+}
+
+#[cfg(unix)]
+fn sync_directories(directories: &[PathBuf]) -> io::Result<()> {
+    for directory in directories {
+        fs::File::open(directory)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_directories(_directories: &[PathBuf]) -> io::Result<()> {
+    Ok(())
+}
+
+fn gib(bytes: u64) -> f64 {
+    bytes as f64 / (1u64 << 30) as f64
 }
 
 fn recover_held(target: &Path) -> io::Result<()> {

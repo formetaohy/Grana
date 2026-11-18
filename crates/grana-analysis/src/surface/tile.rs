@@ -247,7 +247,7 @@ impl<'a> Tile<'a> {
             parent: node,
             ..Node::new(reach)
         });
-        for _ in 0..self.pass.plan.channels {
+        for _ in 0..self.pass.plan.channels.count() {
             self.accumulators.push(SampleAccumulator::new());
         }
         node

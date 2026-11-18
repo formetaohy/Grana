@@ -27,12 +27,15 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
-use detection::{DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
+use detection::DetectionSource;
 use distance::Distance;
 pub use edit::{apply, merge, split};
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 
+use crate::budget::Budget;
+use crate::channel::ChannelSet;
+use crate::detection::{Build as DetectionBuild, Plan as DetectionPlan};
 use crate::schedule::Delivery;
 use crate::work;
 
@@ -66,7 +69,7 @@ pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
 pub(crate) const REMOVED: f32 = 1.0e-3;
 
-pub(crate) type Read<'a> = dyn Fn(&[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
+pub(crate) use crate::detection::Read;
 pub(crate) type Measure<'a> =
     dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
@@ -154,8 +157,7 @@ impl Gate<'_> {
 
 pub struct SurfaceBuilder {
     level_index: usize,
-    detection: usize,
-    channels: usize,
+    channels: ChannelSet,
     extent: [u32; 3],
     placement: Level,
     span: f32,
@@ -181,15 +183,10 @@ impl SurfaceBuilder {
         level_index: usize,
         level: Level,
         params: SurfaceParams,
-        channels: usize,
-        detection: usize,
+        channels: ChannelSet,
         region: Region,
         intensity: Intensity,
     ) -> Self {
-        assert!(
-            channels > 0 && detection < channels,
-            "the detection channel is one of the measured channels"
-        );
         let extent = level.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = level.spacing();
@@ -217,19 +214,8 @@ impl SurfaceBuilder {
             region[1].start as i64,
             region[2].start as i64,
         ];
-        let plane = u64::from(extent[0]) * u64::from(extent[1]);
-        let slab = (work::SURFACE_TILE_BYTES / (work::SURFACE_PLANE_BYTES_PER_VOXEL * plane.max(1)))
-            .max(1) as u32;
-        let tile_z = slab.clamp(TILE_Z_FLOOR, TILE_SIDE).div_ceil(TILE_Z_FLOOR) * TILE_Z_FLOOR;
-        let tile = [TILE_SIDE, TILE_SIDE, tile_z];
-        let tiles = [0, 1, 2].map(|axis| {
-            let count = region[axis].end.saturating_sub(region[axis].start);
-            count.div_ceil(tile[axis])
-        });
-        let tile_count = tiles[0] as usize * tiles[1] as usize * tiles[2] as usize;
         Self {
             level_index,
-            detection,
             channels,
             extent,
             placement: level,
@@ -239,9 +225,9 @@ impl SurfaceBuilder {
             threshold: params.threshold(),
             region,
             anchor,
-            tile,
-            tiles,
-            tile_count,
+            tile: [0; 3],
+            tiles: [0; 3],
+            tile_count: 0,
             metric,
             kernels,
             opening,
@@ -252,12 +238,29 @@ impl SurfaceBuilder {
         }
     }
 
-    pub fn tile_count(&self) -> usize {
-        self.tile_count
+    fn plan_tiles(&mut self, budget: Budget) {
+        let plane = u64::from(self.extent[0]) * u64::from(self.extent[1]);
+        let slab = (budget.tile_bytes() / (work::SURFACE_PLANE_BYTES_PER_VOXEL * plane.max(1)))
+            .max(1) as u32;
+        let tile_z = slab.clamp(TILE_Z_FLOOR, TILE_SIDE).div_ceil(TILE_Z_FLOOR) * TILE_Z_FLOOR;
+        self.tile = [TILE_SIDE, TILE_SIDE, tile_z];
+        self.recount();
+    }
+
+    fn recount(&mut self) {
+        self.tiles = [0, 1, 2].map(|axis| {
+            let count = self.region[axis].end - self.region[axis].start;
+            count.div_ceil(self.tile[axis])
+        });
+        self.tile_count = self.tiles[0] as usize * self.tiles[1] as usize * self.tiles[2] as usize;
     }
 
     pub fn level(&self) -> usize {
         self.level_index
+    }
+
+    pub(super) fn tile_count(&self) -> usize {
+        self.tile_count
     }
 
     pub(super) fn placement(&self) -> Level {
@@ -344,11 +347,7 @@ impl SurfaceBuilder {
             self.region[1].start as i64,
             self.region[2].start as i64,
         ];
-        self.tiles = [0, 1, 2].map(|axis| {
-            let count = self.region[axis].end - self.region[axis].start;
-            count.div_ceil(self.tile[axis])
-        });
-        self.tile_count = self.tiles[0] as usize * self.tiles[1] as usize * self.tiles[2] as usize;
+        self.recount();
         true
     }
 
@@ -455,46 +454,43 @@ impl SurfaceBuilder {
 
     pub fn scan(
         mut self,
-        workers: usize,
+        budget: Budget,
         cancel: &AtomicBool,
         roi: Option<&Mask>,
         progress: &mut dyn FnMut(usize, usize),
         sources: Sources<'_>,
     ) -> Result<SurfaceScan, String> {
+        self.plan_tiles(budget);
         if !self.restrict(roi) {
             return Ok(SurfaceScan::Empty);
         }
-        let desired = crate::schedule::workers(workers);
+        let desired = budget.workers();
         let store = sources.store;
         let total = self.tile_count;
         let step = total * 2 + 1;
         let cover = self.coverage();
         let build = {
             let mut report = band(progress, step, 0, 35);
-            DetectionStore::build(
-                DetectionInput {
-                    plan: &self,
-                    cover: &cover,
-                    workers: desired,
-                },
+            DetectionPlan {
+                cover: cover.clone(),
+                kernels: &self.kernels,
+                anchor: self.anchor,
+                region: self.region.clone(),
+                intensity: self.intensity,
+                budget,
                 cancel,
-                sources.read,
-                work::SURFACE_DETECTION_BYTES,
-                &mut report,
-            )?
+                read: sources.read,
+            }
+            .build(&mut report)?
         };
-        let Some(DetectionBuild {
-            store: detection,
-            field,
-        }) = build
-        else {
+        let Some(DetectionBuild { image, field }) = build else {
             return Ok(if cancel.load(Ordering::Relaxed) {
                 SurfaceScan::Cancelled
             } else {
                 SurfaceScan::Empty
             });
         };
-        let source = DetectionSource::new(&self, &cover, desired, cancel, &detection);
+        let source = DetectionSource::new(&self, &cover, desired, cancel, &image);
         let Some(mask) = mask::build(&source, roi, progress, step, &field)? else {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(SurfaceScan::Cancelled);
@@ -512,9 +508,8 @@ impl SurfaceBuilder {
         let limit = (distance.reach().ceil() as u32)
             .saturating_add(margin)
             .clamp(base, ceiling);
-        let pass = Pass::new(&self, limit, seeds, &distance);
-        let window =
-            crate::schedule::unit_window(work::SURFACE_FRAME_BYTES, work::SURFACE_WORKER_BYTES);
+        let pass = Pass::new(&self, limit, seeds, &distance, budget);
+        let window = budget.window(budget.worker_bytes() + work::SURFACE_FRAGMENT_BYTES);
         let workers = desired.min(pass.total().max(1));
         let topology = {
             let mut report = band(progress, step, 78, 100);
@@ -553,12 +548,10 @@ impl SurfaceBuilder {
     }
 }
 
-pub fn surface_level(pyramid: &Pyramid, region: Region) -> Result<usize, String> {
-    pyramid
-        .fit_level(region, work::SURFACE_VOXELS)
-        .ok_or_else(|| {
-            "the dataset is too large to detect surfaces at any resolution level".to_string()
-        })
+pub fn surface_level(pyramid: &Pyramid, region: Region, budget: Budget) -> Result<usize, String> {
+    pyramid.fit_level(region, budget.voxels()).ok_or_else(|| {
+        "the dataset is too large to detect surfaces at any resolution level".to_string()
+    })
 }
 
 pub fn recut(
@@ -587,6 +580,7 @@ struct Pass<'a> {
     cap: u32,
     limit: u32,
     distance: &'a Distance,
+    budget: Budget,
 }
 
 impl<'a> Pass<'a> {
@@ -595,6 +589,7 @@ impl<'a> Pass<'a> {
         limit: u32,
         seeds: &'a [[i64; 3]],
         distance: &'a Distance,
+        budget: Budget,
     ) -> Self {
         let cap = limit * limit;
         Self {
@@ -603,6 +598,7 @@ impl<'a> Pass<'a> {
             cap,
             limit,
             distance,
+            budget,
         }
     }
 
@@ -616,7 +612,7 @@ impl<'a> Pass<'a> {
         let mut reach = bound;
         loop {
             let pad = [0, 1, 2].map(|axis| align(reach + radius(plan, axis) + 1));
-            if array_bytes(plan, index, pad) <= work::SURFACE_WORKER_BYTES {
+            if array_bytes(plan, index, pad) <= self.budget.worker_bytes() {
                 return pad;
             }
             assert!(
@@ -848,10 +844,4 @@ fn align(value: u32) -> u32 {
     value.div_ceil(PAD_ALIGN) * PAD_ALIGN
 }
 
-pub(crate) fn dims_of(ranges: &[Range<u32>; 3]) -> [usize; 3] {
-    [0, 1, 2].map(|axis| (ranges[axis].end - ranges[axis].start) as usize)
-}
-
-pub(crate) fn strides_of(dims: [usize; 3]) -> [usize; 3] {
-    [1, dims[0], dims[0] * dims[1]]
-}
+pub(crate) use crate::detection::{dims_of, strides_of};

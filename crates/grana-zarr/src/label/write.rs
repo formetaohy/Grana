@@ -75,7 +75,112 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
     write_group(path, "/", spec)
 }
 
-pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Written, Error> {
+pub fn write_group(path: &Path, group: &str, mut spec: LabelSpec<'_>) -> Result<Written, Error> {
+    identity(&spec);
+    let directory = path.join(group.trim_start_matches('/'));
+    if !directory.join("zarr.json").is_file() {
+        return Err(Error::Unsupported {
+            path: directory.display().to_string(),
+            detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
+        });
+    }
+    let fail = |detail: String| Error::Write {
+        path: directory.display().to_string(),
+        detail,
+    };
+    let image = Image::open_group(path, group).map_err(|error| fail(error.to_string()))?;
+    let layout = layout(&image, &spec).map_err(&fail)?;
+    label_index(&directory, image.version()).map_err(&fail)?;
+    let root = directory.join("labels").join(spec.name);
+    let expected = crate::space::label_space(image.pyramid().levels(), spec.frames.len());
+    grana_file::require(&root, expected).map_err(|error| fail(error.to_string()))?;
+    let atomic = grana_file::Atomic::directory(&root).map_err(|error| fail(error.to_string()))?;
+    let temporary = atomic
+        .staging()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .expect("the label staging names a folder");
+    build(path, group, &temporary, &image, &layout, &mut spec).map_err(&fail)?;
+    let bytes = grana_file::bytes(atomic.staging())
+        .map_err(|error| fail(format!("failed to measure the written labels: {error}")))?;
+    if spec.cancelled() {
+        return Err(fail(CANCELLED.to_string()));
+    }
+    let published = atomic
+        .commit_held()
+        .map_err(|error| fail(error.to_string()))?;
+    let index = match label_index(&directory, image.version()) {
+        Ok(index) => index,
+        Err(detail) => {
+            published
+                .rollback()
+                .map_err(|error| fail(error.to_string()))?;
+            return Err(fail(detail));
+        }
+    };
+    if let Err(detail) = index.publish(spec.name) {
+        published
+            .rollback()
+            .map_err(|error| fail(error.to_string()))?;
+        return Err(fail(detail));
+    }
+    published.publish();
+    Ok(Written {
+        path: root,
+        name: spec.name.to_string(),
+        labels: spec.labels,
+        frames: spec.frames.len(),
+        bytes,
+    })
+}
+
+pub(crate) fn write_inside(
+    root: &Path,
+    group: &str,
+    mut spec: LabelSpec<'_>,
+) -> Result<String, String> {
+    identity(&spec);
+    assert!(
+        root.join("zarr.json").is_file(),
+        "a dataset holds its image before it holds its labels"
+    );
+    let image = Image::open_group(root, group).map_err(|error| error.to_string())?;
+    let layout = layout(&image, &spec)?;
+    build(root, group, spec.name, &image, &layout, &mut spec)?;
+    if spec.cancelled() {
+        return Err(CANCELLED.to_string());
+    }
+    Ok(image.version().to_string())
+}
+
+pub(crate) fn write_index(
+    root: &Path,
+    group: &str,
+    version: &str,
+    names: &[String],
+) -> Result<(), String> {
+    let directory = root.join(group.trim_start_matches('/')).join("labels");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "failed to create the labels group of {}: {error}",
+            directory.display()
+        )
+    })?;
+    let value = json!({
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": { "ome": { "version": version, "labels": names } },
+    });
+    let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+    std::fs::write(directory.join("zarr.json"), bytes).map_err(|error| {
+        format!(
+            "failed to write the metadata of the labels group of {}: {error}",
+            directory.display()
+        )
+    })
+}
+
+fn identity(spec: &LabelSpec<'_>) {
     assert!(
         !spec.name.is_empty() && !spec.name.contains('/') && !spec.name.contains('\\'),
         "a label image name is a path segment"
@@ -92,35 +197,21 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         (0.0..=1.0).contains(&spec.opacity),
         "a label color is a unit opacity"
     );
-    let directory = path.join(group.trim_start_matches('/'));
-    if !directory.join("zarr.json").is_file() {
-        return Err(Error::Unsupported {
-            path: directory.display().to_string(),
-            detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
-        });
-    }
-    let labels_group = crate::hcs::join(group, "labels");
-    let root = directory.join("labels").join(spec.name);
-    let atomic = grana_file::Atomic::directory(&root).map_err(|error| Error::Write {
-        path: directory.display().to_string(),
-        detail: error.to_string(),
-    })?;
-    let temporary_name = atomic
-        .staging()
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .expect("the label staging names a folder");
-    let temporary_group = crate::hcs::join(&labels_group, &temporary_name);
-    let fail = |detail: String| Error::Write {
-        path: directory.display().to_string(),
-        detail,
-    };
-    let image = Image::open_group(path, group)?;
+}
+
+struct Layout {
+    kinds: Vec<Kind>,
+    x: usize,
+    y: usize,
+    z: Option<usize>,
+}
+
+fn layout(image: &Image, spec: &LabelSpec<'_>) -> Result<Layout, String> {
     if image.minor() < 5 {
-        return Err(fail(format!(
+        return Err(format!(
             "label images are written into OME-Zarr 0.5 or newer datasets, not {}",
             image.version()
-        )));
+        ));
     }
     if spec.frames.is_empty()
         || spec
@@ -128,22 +219,19 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             .iter()
             .any(|frame| *frame >= image.pyramid().frame_count())
     {
-        return Err(fail(format!(
+        return Err(format!(
             "the exported frames must lie inside the {} frames of the dataset",
             image.pyramid().frame_count()
-        )));
+        ));
     }
     if spec.frames.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(fail(
-            "the exported frames are ordered and unique".to_string(),
-        ));
+        return Err("the exported frames are ordered and unique".to_string());
     }
     let axes = image.axes();
     let kinds = axes
         .iter()
         .map(kind)
-        .collect::<Result<Vec<Kind>, String>>()
-        .map_err(&fail)?;
+        .collect::<Result<Vec<Kind>, String>>()?;
     let space = kinds
         .iter()
         .enumerate()
@@ -151,9 +239,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if space.len() < 2 {
-        return Err(fail(
-            "the dataset does not name two spatial axes to label".to_string(),
-        ));
+        return Err("the dataset does not name two spatial axes to label".to_string());
     }
     let x = axes.len() - 1;
     let y = axes.len() - 2;
@@ -167,40 +253,50 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         && axes[y].name().eq_ignore_ascii_case("y")
         && z.is_none_or(|z| axes[z].name().eq_ignore_ascii_case("z"));
     if !canonical {
-        return Err(fail(
+        return Err(
             "label images are written into datasets whose space axes are ordered z, y, x"
                 .to_string(),
-        ));
+        );
     }
-    label_index(&directory, image.version()).map_err(&fail)?;
-    let levels = image.pyramid().level_count();
-    if image.datasets().len() != levels {
-        return Err(fail(
-            "the dataset does not describe the scales of its levels".to_string(),
-        ));
+    if image.datasets().len() != image.pyramid().level_count() {
+        return Err("the dataset does not describe the scales of its levels".to_string());
     }
+    for dataset in image.datasets() {
+        if dataset.scale.len() != axes.len() || dataset.translation.len() != axes.len() {
+            return Err(
+                "the level transform does not describe every axis of the dataset".to_string(),
+            );
+        }
+        if dataset
+            .scale
+            .iter()
+            .chain(&dataset.translation)
+            .any(|value| !value.is_finite())
+        {
+            return Err("the level transform holds a non-finite component".to_string());
+        }
+    }
+    Ok(Layout { kinds, x, y, z })
+}
+
+fn build(
+    root: &Path,
+    image_group: &str,
+    dirname: &str,
+    image: &Image,
+    layout: &Layout,
+    spec: &mut LabelSpec<'_>,
+) -> Result<(), String> {
+    let Layout { kinds, x, y, z } = layout;
+    let (x, y, z) = (*x, *y, *z);
+    let axes = image.axes();
     let axes_json = axes.iter().map(Axis::json).collect::<Vec<_>>();
     let datasets = image
         .datasets()
         .iter()
         .enumerate()
         .map(|(level, dataset)| {
-            if dataset.scale.len() != axes.len() || dataset.translation.len() != axes.len() {
-                return Err(fail(
-                    "the level transform does not describe every axis of the dataset".to_string(),
-                ));
-            }
-            if dataset
-                .scale
-                .iter()
-                .chain(&dataset.translation)
-                .any(|value| !value.is_finite())
-            {
-                return Err(fail(
-                    "the level transform holds a non-finite component".to_string(),
-                ));
-            }
-            Ok(if image.modern() {
+            if image.modern() {
                 crate::schema::dataset(&level.to_string(), &dataset.scale, &dataset.translation)
             } else {
                 json!({
@@ -210,12 +306,12 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
                         { "type": "translation", "translation": dataset.translation },
                     ],
                 })
-            })
+            }
         })
-        .collect::<Result<Vec<_>, Error>>()?;
+        .collect::<Vec<_>>();
     let multiscales = if image.modern() {
         let level = image.pyramid().level(0);
-        let spatial = space.len();
+        let spatial = kinds.iter().filter(|kind| **kind == Kind::Space).count();
         let matrix = crate::schema::placement(level, spatial);
         let display = crate::schema::rotated(level, spatial);
         crate::schema::multiscales(
@@ -257,7 +353,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         .iter()
         .map(|(label, name)| json!({ "label-value": label, "name": name }))
         .collect::<Vec<_>>();
-    let depth = group
+    let depth = image_group
         .trim_start_matches('/')
         .split('/')
         .filter(|part| !part.is_empty())
@@ -275,10 +371,11 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             "image-label": image_label,
         },
     });
-    let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
-        path: path.display().to_string(),
-        detail: error.to_string(),
-    })?);
+    let labels_group = crate::hcs::join(image_group, "labels");
+    let label_group = crate::hcs::join(&labels_group, dirname);
+    let store = Arc::new(
+        FilesystemStore::new(root).map_err(|error| format!("failed to open the store: {error}"))?,
+    );
     let mut group_builder = GroupBuilder::new();
     group_builder.attributes(
         label_attributes
@@ -286,16 +383,15 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             .expect("label attributes are a json object")
             .clone(),
     );
-    let group = group_builder
-        .build(store.clone(), &temporary_group)
-        .map_err(|error| fail(error.to_string()))?;
-    group
-        .store_metadata()
-        .map_err(|error| fail(error.to_string()))?;
+    let node = group_builder
+        .build(store.clone(), &label_group)
+        .map_err(|error| error.to_string())?;
+    node.store_metadata().map_err(|error| error.to_string())?;
+    let levels = image.pyramid().level_count();
     let per_level = (0..levels)
         .map(|level| {
             let extent = image.pyramid().level(level).extent();
-            let chunk = chunk_shape(extent, &kinds, x, y, z);
+            let chunk = chunk_shape(extent, kinds, x, y, z);
             spatial_chunks(extent, &chunk, x, y, z)
         })
         .collect::<Vec<_>>();
@@ -303,11 +399,11 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     let mut base = 0;
     for (level, chunks) in per_level.iter().enumerate() {
         if spec.cancelled() {
-            return Err(fail(CANCELLED.to_string()));
+            return Err(CANCELLED.to_string());
         }
         let extent = image.pyramid().level(level).extent();
-        let chunk = chunk_shape(extent, &kinds, x, y, z);
-        let shape = shape(extent, image.pyramid().frame_count(), &kinds);
+        let chunk = chunk_shape(extent, kinds, x, y, z);
+        let shape = shape(extent, image.pyramid().frame_count(), kinds);
         let names = axes
             .iter()
             .map(|axis| axis.name().to_string())
@@ -317,21 +413,19 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             .dimension_names(Some(names))
             .build(
                 store.clone(),
-                &crate::hcs::join(&temporary_group, &level.to_string()),
+                &crate::hcs::join(&label_group, &level.to_string()),
             )
-            .map_err(|error| fail(error.to_string()))?;
-        array
-            .store_metadata()
-            .map_err(|error| fail(error.to_string()))?;
+            .map_err(|error| error.to_string())?;
+        array.store_metadata().map_err(|error| error.to_string())?;
         write_level(
             &array,
             Slice {
-                image: &image,
+                image,
                 level,
                 frames: spec.frames,
             },
             Geometry {
-                kinds: &kinds,
+                kinds,
                 x,
                 y,
                 z,
@@ -341,41 +435,10 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             total,
             spec.fill,
             &mut *spec.progress,
-        )
-        .map_err(&fail)?;
+        )?;
         base += chunks * spec.frames.len();
     }
-    let bytes = grana_file::bytes(atomic.staging())
-        .map_err(|error| fail(format!("failed to measure the written labels: {error}")))?;
-    if spec.cancelled() {
-        return Err(fail(CANCELLED.to_string()));
-    }
-    let published = atomic
-        .commit_held()
-        .map_err(|error| fail(error.to_string()))?;
-    let index = match label_index(&directory, image.version()) {
-        Ok(index) => index,
-        Err(detail) => {
-            published
-                .rollback()
-                .map_err(|error| fail(error.to_string()))?;
-            return Err(fail(detail));
-        }
-    };
-    if let Err(detail) = index.publish(spec.name) {
-        published
-            .rollback()
-            .map_err(|error| fail(error.to_string()))?;
-        return Err(fail(detail));
-    }
-    published.publish();
-    Ok(Written {
-        path: root,
-        name: spec.name.to_string(),
-        labels: spec.labels,
-        frames: spec.frames.len(),
-        bytes,
-    })
+    Ok(())
 }
 
 struct Slice<'a> {
