@@ -78,15 +78,11 @@ impl Image {
             Inner::Readout(image) => image.pyramid(),
         };
         let pyramid = level::extended(declared);
-        let revision = match &inner {
-            Inner::Zarr(image) => image.revision(),
-            _ => None,
-        };
         let dataset = match &inner {
             Inner::Zarr(image) => image.identity(),
             _ => None,
         };
-        let identity = cache::identity(source, &geometry(&pyramid), revision.as_deref(), dataset);
+        let identity = cache::identity(source, &geometry(&pyramid), dataset);
         let store = match (source, identity) {
             (Source::Memory(_), _) | (_, None) => None,
             (Source::File { .. } | Source::Remote { .. }, Some(_)) => {
@@ -239,7 +235,10 @@ impl Image {
         let spatial = grid.padded_range(coord);
         let covered = covered_extent(&spatial);
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
-        let stamp = self.source_stamp(time, level, channel, &spatial);
+        if let Some(data) = self.bricks.fetch(key) {
+            return Ok(data);
+        }
+        let stamp = self.source_stamp(time, level, channel, &spatial)?;
         if let Some(data) = self.held(key, covered, format, stamp) {
             return Ok(data);
         }
@@ -393,7 +392,11 @@ impl Image {
                         continue;
                     }
                     let key = self.key(time, level, channel, coord);
-                    let stamp = self.source_stamp(time, level, channel, &covered);
+                    if let Some(brick) = self.bricks.fetch(key) {
+                        region::copy_intersection(&mut output, ranges, &brick, &covered);
+                        continue;
+                    }
+                    let stamp = self.source_stamp(time, level, channel, &covered)?;
                     if let Some(brick) =
                         self.held(key, covered_extent(&covered), info.format(), stamp)
                     {
@@ -429,9 +432,6 @@ impl Image {
         format: VoxelFormat,
         stamp: Option<u64>,
     ) -> Option<Arc<VoxelData>> {
-        if let Some(data) = self.bricks.fetch(key) {
-            return Some(data);
-        }
         let store = self.store.as_ref()?;
         let data = store.load(key, Shape { extent, format }, stamp?)?;
         let data = Arc::new(data);
@@ -469,26 +469,23 @@ impl Image {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-    ) -> Option<u64> {
+    ) -> Result<Option<u64>, Error> {
         let scale = Scale::of(&self.pyramid, level);
         let source = scale.source_ranges(ranges);
         if source.iter().any(|range| range.start >= range.end) {
-            return Some(0);
+            return Ok(Some(0));
         }
         match &self.inner {
-            Inner::Zarr(image) => image
-                .stamps(
-                    scale.source(),
-                    time,
-                    channel,
-                    source[0].clone(),
-                    source[1].clone(),
-                    source[2].clone(),
-                )
-                .ok()
-                .flatten(),
-            Inner::Memory(_) => None,
-            Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => Some(0),
+            Inner::Zarr(image) => Ok(image.stamps(
+                scale.source(),
+                time,
+                channel,
+                source[0].clone(),
+                source[1].clone(),
+                source[2].clone(),
+            )?),
+            Inner::Memory(_) => Ok(None),
+            Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => Ok(Some(0)),
         }
     }
 

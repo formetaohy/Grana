@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Probe, Pyramid, VoxelData,
@@ -17,12 +17,13 @@ use crate::Error;
 use crate::axes::{self, Layout};
 use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
-use crate::root::Root;
+use crate::root::{Root, Witness};
 
 struct LevelArray {
     path: String,
     cache: Cache,
     layout: Layout,
+    witness: OnceLock<Result<Witness, String>>,
 }
 
 pub struct Image {
@@ -119,6 +120,7 @@ impl Image {
                 path: array_path,
                 cache: Cache::open(array, cache_bytes),
                 layout,
+                witness: OnceLock::new(),
             });
         }
         let channel_count = channel_count.expect("a multiscale image has at least one dataset");
@@ -195,13 +197,7 @@ impl Image {
         &self.name
     }
 
-    pub fn revision(&self) -> Option<String> {
-        self.root.revision()
-    }
-
     pub fn identity(&self) -> Option<u64> {
-        let root = self.root.path()?;
-        let directory = root.join(self.group.trim_start_matches('/'));
         let levels = self
             .levels
             .iter()
@@ -210,7 +206,7 @@ impl Image {
                 Some((level.path.clone(), metadata))
             })
             .collect::<Option<Vec<_>>>()?;
-        crate::identity::dataset(&directory, &levels)
+        crate::identity::dataset(self.root.path(), &levels)
     }
 
     pub fn stamps(
@@ -222,22 +218,15 @@ impl Image {
         y: Range<u32>,
         z: Range<u32>,
     ) -> Result<Option<u64>, Error> {
-        let Some(root) = self.root.path() else {
-            return Ok(None);
-        };
         let Some(level) = self.levels.get(level) else {
             return Err(Error::Region {
                 array: self.root.tag(&self.group),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
-        let ranges = level.layout.ranges(
-            u64::from(time),
-            channel as u64,
-            x.clone(),
-            y.clone(),
-            z.clone(),
-        );
+        let ranges = level
+            .layout
+            .ranges(u64::from(time), channel as u64, x, y, z);
         let subset = ArraySubset::new_with_ranges(&ranges);
         let array = level.cache.array();
         let Some(chunks) = array
@@ -250,7 +239,19 @@ impl Image {
             return Ok(None);
         };
         let keys = chunk_keys(&array, chunks.start(), chunks.shape());
-        Ok(crate::identity::chunks(root, keys.into_iter()))
+        let witness = level
+            .witness
+            .get_or_init(|| {
+                self.root
+                    .witness(&level.path)
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|detail| Error::Read {
+                array: level.path.clone(),
+                detail: detail.clone(),
+            })?;
+        witness.stamp(keys.into_iter())
     }
 
     pub fn labels(&self) -> Result<crate::Labels, Error> {

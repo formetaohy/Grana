@@ -1,4 +1,5 @@
 use super::depth::LocalizationDepth;
+use super::preview::LocalizationPreview;
 use super::report::{LocalizationGeometry, LocalizationImage};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,5 +57,21 @@ impl LocalizationStack {
 
     pub fn count(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn preview(&self, layer: usize) -> Option<LocalizationPreview> {
+        let image = self.layer(layer)?;
+        let size = self.geometry.size();
+        Some(LocalizationPreview::of_bitmap(
+            self.geometry.origin(),
+            [
+                size[0] as f32 * self.geometry.pixel(),
+                size[1] as f32 * self.geometry.pixel(),
+            ],
+            size,
+            self.depth,
+            u32::try_from(layer).expect("a localization stack holds fewer than 4G slices"),
+            image.shared(),
+        ))
     }
 }

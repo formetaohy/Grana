@@ -34,8 +34,8 @@ pub struct Client {
 }
 
 #[derive(Clone, Debug)]
-pub struct Fetched {
-    pub bytes: Vec<u8>,
+pub struct Probe {
+    pub size: Option<u64>,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
 }
@@ -59,7 +59,7 @@ impl Client {
         Arc::clone(SHARED.get_or_init(|| Arc::new(Self::new())))
     }
 
-    pub fn get(&self, url: &str, span: Option<Span>) -> Result<Option<Fetched>, Error> {
+    pub fn get(&self, url: &str, span: Option<Span>) -> Result<Option<Vec<u8>>, Error> {
         let mut attempt = 0;
         loop {
             let request = match span {
@@ -82,8 +82,6 @@ impl Client {
                             status,
                         });
                     }
-                    let etag = header(&response, "etag");
-                    let last_modified = header(&response, "last-modified");
                     let bytes = response
                         .body_mut()
                         .with_config()
@@ -93,11 +91,7 @@ impl Client {
                             url: url.to_string(),
                             detail: error.to_string(),
                         })?;
-                    return Ok(Some(Fetched {
-                        bytes,
-                        etag,
-                        last_modified,
-                    }));
+                    return Ok(Some(bytes));
                 }
                 Err(error) => {
                     if retry(attempt) {
@@ -113,11 +107,49 @@ impl Client {
         }
     }
 
-    pub fn size(&self, url: &str) -> Result<Option<u64>, Error> {
+    pub fn probe(&self, url: &str) -> Result<Option<Probe>, Error> {
         let mut attempt = 0;
         loop {
             match self.agent.head(url).call() {
                 Ok(response) => {
+                    let status = response.status().as_u16();
+                    if matches!(status, 404 | 410) {
+                        return Ok(None);
+                    }
+                    if transient(status) && retry(attempt) {
+                        attempt += 1;
+                        continue;
+                    }
+                    if matches!(status, 403 | 405 | 501) {
+                        return self.probe_ranged(url);
+                    }
+                    if !(200..300).contains(&status) {
+                        return Err(Error::Status {
+                            url: url.to_string(),
+                            status,
+                        });
+                    }
+                    return Ok(Some(probed(&response)));
+                }
+                Err(error) => {
+                    if retry(attempt) {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(Error::Transport {
+                        url: url.to_string(),
+                        detail: error.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn probe_ranged(&self, url: &str) -> Result<Option<Probe>, Error> {
+        let mut attempt = 0;
+        loop {
+            match self.agent.get(url).header("Range", "bytes=0-0").call() {
+                Ok(mut response) => {
                     let status = response.status().as_u16();
                     if matches!(status, 404 | 410) {
                         return Ok(None);
@@ -132,9 +164,21 @@ impl Client {
                             status,
                         });
                     }
-                    return Ok(
-                        header(&response, "content-length").and_then(|value| value.parse().ok())
-                    );
+                    let mut probe = probed(&response);
+                    if probe.size.is_none() {
+                        probe.size = response
+                            .headers()
+                            .get("content-range")
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(|value| value.rsplit('/').next())
+                            .and_then(|value| value.parse().ok());
+                    }
+                    let _ = response
+                        .body_mut()
+                        .with_config()
+                        .limit(1 << 20)
+                        .read_to_vec();
+                    return Ok(Some(probe));
                 }
                 Err(error) => {
                     if retry(attempt) {
@@ -167,6 +211,14 @@ fn retry(attempt: u32) -> bool {
     }
     sleep(BACKOFF * (1u32 << attempt));
     true
+}
+
+fn probed(response: &ureq::http::Response<ureq::Body>) -> Probe {
+    Probe {
+        size: header(response, "content-length").and_then(|value| value.parse().ok()),
+        etag: header(response, "etag"),
+        last_modified: header(response, "last-modified"),
+    }
 }
 
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {

@@ -16,6 +16,7 @@ mod schema;
 mod shape;
 mod space;
 mod transform;
+mod witness;
 mod write;
 
 pub use archive::Archive;

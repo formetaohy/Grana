@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use grana_net::{Client, Fetched, Span, Target};
+use grana_net::{Client, Probe, Span, Target};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::byte_range::{ByteRange, ByteRangeIterator};
 use zarrs::storage::{
@@ -11,6 +11,7 @@ use zarrs::storage::{
 };
 
 use crate::Error;
+use crate::witness::{self, Local};
 
 const BLOCK_BUDGET: u64 = 96 << 20;
 const BLOCK_LIMIT: u64 = 64 << 20;
@@ -27,10 +28,7 @@ enum Store {
 
 enum Origin {
     Local(PathBuf),
-    Remote {
-        target: Target,
-        revision: Arc<Mutex<Option<String>>>,
-    },
+    Remote { target: Target },
 }
 
 impl Root {
@@ -54,17 +52,15 @@ impl Root {
             path: url.to_string(),
             detail: error.to_string(),
         })?;
-        let revision = Arc::new(Mutex::new(None));
         let store = RemoteStore {
             target: target.clone(),
             client: Client::shared(),
-            revision: Arc::clone(&revision),
             blocks: Mutex::new(Blocks::default()),
-            sizes: Mutex::new(HashMap::new()),
+            probes: Mutex::new(HashMap::new()),
         };
         Ok(Self {
             store: Store::Remote(Arc::new(store)),
-            origin: Origin::Remote { target, revision },
+            origin: Origin::Remote { target },
         })
     }
 
@@ -78,17 +74,7 @@ impl Root {
     pub fn display(&self) -> String {
         match &self.origin {
             Origin::Local(path) => path.display().to_string(),
-            Origin::Remote { target, .. } => target.display().to_string(),
-        }
-    }
-
-    pub fn revision(&self) -> Option<String> {
-        match &self.origin {
-            Origin::Local(_) => None,
-            Origin::Remote { revision, .. } => revision
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone(),
+            Origin::Remote { target } => target.display().to_string(),
         }
     }
 
@@ -121,7 +107,7 @@ impl Root {
                 .join(group.trim_start_matches('/'))
                 .display()
                 .to_string(),
-            Origin::Remote { target, .. } => {
+            Origin::Remote { target } => {
                 let group = group.trim_matches('/');
                 if group.is_empty() {
                     target.display().to_string()
@@ -129,6 +115,23 @@ impl Root {
                     target.join(group)
                 }
             }
+        }
+    }
+
+    pub(crate) fn witness(&self, directory: &str) -> Result<Witness, Error> {
+        match &self.store {
+            Store::Local(_) => {
+                let root = self.path().expect("a local root names its directory");
+                let local = Local::of(root, directory).map_err(|error| Error::Read {
+                    array: directory.to_string(),
+                    detail: error.to_string(),
+                })?;
+                Ok(Witness::Local(local))
+            }
+            Store::Remote(store) => Ok(Witness::Remote {
+                store: Arc::clone(store),
+                tag: self.tag(directory),
+            }),
         }
     }
 
@@ -143,6 +146,51 @@ impl Root {
         match &self.store {
             Store::Local(store) => store.clone(),
             Store::Remote(store) => store.clone(),
+        }
+    }
+}
+
+pub(crate) enum Witness {
+    Local(Local),
+    Remote {
+        store: Arc<RemoteStore>,
+        tag: String,
+    },
+}
+
+impl Witness {
+    pub(crate) fn stamp(&self, keys: impl Iterator<Item = String>) -> Result<Option<u64>, Error> {
+        match self {
+            Self::Local(local) => Ok(Some(crate::identity::chunks(keys, |key| {
+                local.metadata(key)
+            }))),
+            Self::Remote { store, tag } => {
+                let mut hash = witness::START;
+                for key in keys {
+                    hash = witness::mix(hash, key.as_bytes());
+                    let probed = store.probe(&key).map_err(|error| Error::Read {
+                        array: tag.clone(),
+                        detail: error.to_string(),
+                    })?;
+                    match probed {
+                        Some(probe) => {
+                            let Some(size) = probe.size else {
+                                return Ok(None);
+                            };
+                            let Some(validator) =
+                                probe.etag.as_deref().or(probe.last_modified.as_deref())
+                            else {
+                                return Ok(None);
+                            };
+                            hash = witness::mix(hash, &[1]);
+                            hash = witness::mix(hash, &size.to_le_bytes());
+                            hash = witness::mix(hash, validator.as_bytes());
+                        }
+                        None => hash = witness::mix(hash, &[0]),
+                    }
+                }
+                Ok(Some(hash))
+            }
         }
     }
 }
@@ -183,61 +231,46 @@ enum Block {
     Ranged,
 }
 
-struct RemoteStore {
+pub(crate) struct RemoteStore {
     target: Target,
     client: Arc<Client>,
-    revision: Arc<Mutex<Option<String>>>,
     blocks: Mutex<Blocks>,
-    sizes: Mutex<HashMap<String, Option<u64>>>,
+    probes: Mutex<HashMap<String, Option<Probe>>>,
 }
 
 impl RemoteStore {
-    fn url(&self, key: &StoreKey) -> String {
-        self.target.join(key.as_str())
+    fn url(&self, key: &str) -> String {
+        self.target.join(key)
     }
 
-    fn fetch(&self, key: &StoreKey, span: Option<Span>) -> Result<Option<Fetched>, StorageError> {
-        let url = self.url(key);
-        let fetched = self
-            .client
-            .get(&url, span)
-            .map_err(|error| StorageError::Other(error.to_string()))?;
-        if let Some(fetched) = &fetched
-            && let Some(stamp) = fetched
-                .etag
-                .clone()
-                .or_else(|| fetched.last_modified.clone())
+    fn fetch(&self, key: &StoreKey, span: Option<Span>) -> Result<Option<Vec<u8>>, StorageError> {
+        self.client
+            .get(&self.url(key.as_str()), span)
+            .map_err(|error| StorageError::Other(error.to_string()))
+    }
+
+    fn probe(&self, key: &str) -> Result<Option<Probe>, StorageError> {
+        if let Some(probed) = self
+            .probes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(key)
         {
-            let mut revision = self
-                .revision
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if revision.is_none() {
-                *revision = Some(stamp);
-            }
+            return Ok(probed.clone());
         }
-        Ok(fetched)
+        let probed = self
+            .client
+            .probe(&self.url(key))
+            .map_err(|error| StorageError::Other(error.to_string()))?;
+        self.probes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(key.to_string(), probed.clone());
+        Ok(probed)
     }
 
     fn size(&self, key: &StoreKey) -> Result<Option<u64>, StorageError> {
-        let name = key.as_str().to_string();
-        if let Some(size) = self
-            .sizes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&name)
-        {
-            return Ok(*size);
-        }
-        let size = self
-            .client
-            .size(&self.url(key))
-            .map_err(|error| StorageError::Other(error.to_string()))?;
-        self.sizes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(name, size);
-        Ok(size)
+        Ok(self.probe(key.as_str())?.and_then(|probe| probe.size))
     }
 
     fn block(&self, key: &StoreKey) -> Result<Option<Block>, StorageError> {
@@ -256,10 +289,10 @@ impl RemoteStore {
         if size > BLOCK_LIMIT {
             return Ok(Some(Block::Ranged));
         }
-        let Some(fetched) = self.fetch(key, None)? else {
+        let Some(bytes) = self.fetch(key, None)? else {
             return Ok(None);
         };
-        let block = Arc::new(fetched.bytes);
+        let block = Arc::new(bytes);
         self.blocks
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -270,17 +303,13 @@ impl RemoteStore {
     fn ranged(&self, key: &StoreKey, range: ByteRange) -> Result<MaybeBytes, StorageError> {
         let size = self.size(key)?;
         let span = span(range, size)?;
-        Ok(self
-            .fetch(key, Some(span))?
-            .map(|fetched| Bytes::from(fetched.bytes)))
+        Ok(self.fetch(key, Some(span))?.map(Bytes::from))
     }
 }
 
 impl ReadableStorageTraits for RemoteStore {
     fn get(&self, key: &StoreKey) -> Result<MaybeBytes, StorageError> {
-        Ok(self
-            .fetch(key, None)?
-            .map(|fetched| Bytes::from(fetched.bytes)))
+        Ok(self.fetch(key, None)?.map(Bytes::from))
     }
 
     fn get_partial_many<'a>(

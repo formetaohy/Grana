@@ -113,16 +113,6 @@ fn sphere_volume() -> Volume {
     spheres(extent, spacing, &[([32.0, 32.0, 16.0], 12.0)], 60_000)
 }
 
-fn quad(half: f32) -> Mesh {
-    let vertices = vec![
-        MeshVertex::new([-half, -half, 0.0], [0.0, 0.0, 1.0], 0),
-        MeshVertex::new([half, -half, 0.0], [0.0, 0.0, 1.0], 0),
-        MeshVertex::new([half, half, 0.0], [0.0, 0.0, 1.0], 0),
-        MeshVertex::new([-half, half, 0.0], [0.0, 0.0, 1.0], 0),
-    ];
-    Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
-}
-
 fn pack(volume: &Volume, requests: &[BrickRequest]) -> Vec<(BrickRequest, PackedBrick)> {
     let grid = BrickGrid::new(volume.extent());
     let pyramid = volume.pyramid();
@@ -298,6 +288,29 @@ fn streams_and_shades_two_channels() {
     );
 }
 
+fn placed_quads(quads: &[([f32; 2], f32)]) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, (center, half)) in quads.iter().enumerate() {
+        let base = vertices.len() as u32;
+        for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            vertices.push(MeshVertex::new(
+                [center[0] + across * half, center[1] + down * half, 0.0],
+                [0.0, 0.0, 1.0],
+                object as u32,
+            ));
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
+fn around(point: [u32; 2], radius: u32) -> [u32; 4] {
+    let left = point[0].saturating_sub(radius).min(SIDE - 2 * radius);
+    let top = point[1].saturating_sub(radius).min(SIDE - 2 * radius);
+    [left, top, left + 2 * radius, top + 2 * radius]
+}
+
 #[test]
 fn composites_a_mesh_layer() {
     let Some(gpu) = gpu() else {
@@ -317,8 +330,13 @@ fn composites_a_mesh_layer() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mesh = PackedMesh::new(quad(8.0));
-    let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 1.0)]);
+    let centers = [([-3.4, 0.0], 1.6), ([3.4, 0.0], 1.6), ([0.0, 3.4], 1.6)];
+    let mesh = PackedMesh::new(placed_quads(&centers));
+    let styles = Arc::from([
+        Style::new([1.0, 0.1, 0.1], true, false, 1.0),
+        Style::new([0.1, 0.3, 1.0], true, false, 0.5),
+        Style::new([0.1, 1.0, 0.1], false, false, 1.0),
+    ]);
     let layers = [Layer::new(
         LayerKey::stable(1, 0, 1),
         1,
@@ -347,104 +365,58 @@ fn composites_a_mesh_layer() {
         delivery: grana_render::Delivery::Immediate,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    let opaque = around(project(&camera, [centers[0].0[0], centers[0].0[1], 0.0]), 7);
+    let translucent = around(project(&camera, [centers[1].0[0], centers[1].0[1], 0.0]), 7);
+    let hidden = project(&camera, [centers[2].0[0], centers[2].0[1], 0.0]);
     assert!(
-        shot.hue(shot.all(), Hue::Red) > 1_000,
-        "the mesh barely rendered: {} red pixels",
-        shot.hue(shot.all(), Hue::Red)
+        shot.hue(opaque, Hue::Red) > 100,
+        "the opaque object barely rendered: {} red pixels",
+        shot.hue(opaque, Hue::Red)
+    );
+    assert!(
+        shot.coverage(opaque) > 0.6,
+        "the opaque object does not cover its place: {:.2}",
+        shot.coverage(opaque)
+    );
+    assert!(
+        shot.hue(translucent, Hue::Blue) > 100,
+        "the translucent object faded: {} blue pixels",
+        shot.hue(translucent, Hue::Blue)
+    );
+    assert!(
+        shot.coverage(translucent) > 0.5,
+        "the translucent object barely covers its centre: {:.2}",
+        shot.coverage(translucent)
+    );
+    assert!(
+        shot.contrast(translucent) > 10.0,
+        "the translucent object is invisible against the background: {:.1}",
+        shot.contrast(translucent)
+    );
+    assert_eq!(
+        shot.hue(WHOLE, Hue::Green),
+        0,
+        "an invisible object painted its style"
     );
     assert_eq!(
         shot.painted([0, 0, SIDE / 8, SIDE / 8]),
         0,
         "the mesh spilled into the corner"
     );
-}
-
-#[test]
-fn keeps_a_translucent_layer() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volume = sphere_volume();
-    let pyramid = volume.pyramid();
-    let transfers = pyramid
-        .channels()
-        .iter()
-        .map(|channel| TransferFunction::tinted(channel.tint()))
-        .collect::<Vec<_>>();
-    let mut channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let mesh = PackedMesh::new(quad(8.0));
-    let styles = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 0.5)]);
-    let layers = [Layer::new(
-        LayerKey::stable(1, 0, 1),
-        1,
-        Arc::new(mesh),
-        Arc::clone(&styles),
-        0,
-    )];
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        layers: &layers,
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let mut renderer = build_renderer(&gpu, &pyramid);
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        region: Region::none(),
-        scene: &scene,
-        viewport: WHOLE,
-        delivery: grana_render::Delivery::Immediate,
-    };
-    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
-    let painted = shot.painted(WHOLE);
-    assert!(
-        painted > 400,
-        "the translucent layer faded: {painted} painted pixels"
-    );
-    assert!(
-        shot.coverage(shot.middle()) > 0.5,
-        "the translucent layer barely covers its centre: {:.2}",
-        shot.coverage(shot.middle())
-    );
-    assert!(
-        shot.contrast(shot.middle()) > 10.0,
-        "the translucent layer is invisible against the background: {:.1}",
-        shot.contrast(shot.middle())
-    );
-    for channel in &mut channels {
-        channel.visible = false;
-    }
-    let hidden = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        layers: &layers,
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let view = View {
-        target: &view_texture,
-        camera: &camera,
-        region: Region::none(),
-        scene: &hidden,
-        viewport: WHOLE,
-        delivery: grana_render::Delivery::Immediate,
-    };
-    let hidden_shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
-    assert!(
-        hidden_shot.painted(WHOLE) > 400,
-        "hiding every channel dropped the translucent layer: {} painted pixels",
-        hidden_shot.painted(WHOLE)
-    );
+    assert!(renderer.request_pick(
+        gpu.device(),
+        gpu.queue(),
+        project(&camera, [centers[0].0[0], centers[0].0[1], 0.0])
+    ));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::Style(0));
+    assert!(renderer.request_pick(
+        gpu.device(),
+        gpu.queue(),
+        project(&camera, [centers[1].0[0], centers[1].0[1], 0.0])
+    ));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::Style(1));
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), hidden));
+    assert_eq!(picked(&gpu, &mut renderer), PickId::None);
 }
 
 fn far_pair_volume() -> Volume {

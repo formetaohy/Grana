@@ -1,8 +1,10 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
 
@@ -149,6 +151,132 @@ impl grana_measure::FrameSource for MeasureSource {
             &[],
         ));
     }
+}
+
+pub struct Server {
+    url: String,
+    stop: Arc<AtomicBool>,
+    downloads: Arc<AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Server {
+    pub fn serve(root: &Path) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("the fixture server binds");
+        listener
+            .set_nonblocking(true)
+            .expect("the fixture server polls");
+        let address = listener
+            .local_addr()
+            .expect("the fixture server names itself");
+        let root = root.to_path_buf();
+        let stop = Arc::new(AtomicBool::new(false));
+        let downloads = Arc::new(AtomicUsize::new(0));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            let downloads = Arc::clone(&downloads);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => respond(stream, &root, &downloads),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        };
+        Self {
+            url: format!("http://{address}/"),
+            stop,
+            downloads,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn downloads(&self) -> usize {
+        self.downloads.load(Ordering::Relaxed)
+    }
+
+    pub fn reset(&self) {
+        self.downloads.store(0, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize) {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).unwrap_or(0);
+        if read == 0 {
+            return;
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if request.len() > 64 << 10 {
+            return;
+        }
+    }
+    let text = String::from_utf8_lossy(&request);
+    let mut parts = text.lines().next().unwrap_or_default().split(' ');
+    let method = parts.next().unwrap_or_default();
+    let target = parts
+        .next()
+        .unwrap_or_default()
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    let relative = target.trim_start_matches('/');
+    if relative.split('/').any(|part| part == "..") {
+        return status(&mut stream, 400);
+    }
+    let body = match std::fs::read(root.join(relative)) {
+        Ok(body) => body,
+        Err(_) => return status(&mut stream, 404),
+    };
+    if method == "GET" && !relative.ends_with("zarr.json") {
+        downloads.fetch_add(1, Ordering::Relaxed);
+    }
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"{:016x}\"\r\nConnection: close\r\n\r\n",
+        body.len(),
+        digest(&body)
+    );
+    let _ = stream.write_all(head.as_bytes());
+    if method != "HEAD" {
+        let _ = stream.write_all(&body);
+    }
+    let _ = stream.flush();
+}
+
+fn status(stream: &mut TcpStream, code: u16) {
+    let head = format!("HTTP/1.1 {code} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.flush();
+}
+
+fn digest(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 pub struct Noise(u32);

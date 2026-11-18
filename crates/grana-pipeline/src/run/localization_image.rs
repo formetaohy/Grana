@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::localization::{
-    CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationLayout,
-    LocalizationRenderer, LocalizationStack,
+    CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationDepth,
+    LocalizationGeometry, LocalizationLayout, LocalizationPreview, LocalizationRenderer,
 };
 use grana_archive::{Channel, Fill, ImageSpec, Sample};
 use grana_object::LocalizationSpec;
@@ -85,7 +85,7 @@ pub fn localization_image(
     request: LocalizationImageRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
-) -> Result<(), String> {
+) -> Result<Option<LocalizationPreview>, String> {
     let LocalizationImageRequest {
         window,
         spec,
@@ -111,7 +111,7 @@ pub fn localization_image(
     };
     let Some(layout) = LocalizationLayout::new(&window, spec, pixel, &tick)? else {
         sink(Event::Done);
-        return Ok(());
+        return Ok(None);
     };
     let geometry = layout.geometry();
     let depth = layout.depth();
@@ -127,7 +127,7 @@ pub fn localization_image(
     renderer.survey()?;
     if cancel.load(Ordering::Relaxed) {
         sink(Event::Done);
-        return Ok(());
+        return Ok(None);
     }
     let pixel = geometry.pixel();
     let slice = if depth.step() > 0.0 {
@@ -135,107 +135,75 @@ pub fn localization_image(
     } else {
         pixel
     };
-    let written = match raster {
+    let preview = match raster {
         Raster::Png => {
             renderer.begin(layer.min(depth.layers().saturating_sub(1) as usize) as u32)?;
             grana_raster::write_stream(&path, geometry.size(), &mut |_, row| renderer.row(row))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            None
         }
-        Raster::Stack => write_stack(
+        Raster::Stack => Some(write_stack(
             &path,
             &name,
             &mut renderer,
-            geometry.size(),
+            geometry,
+            depth,
             [pixel, pixel, slice],
-            depth.layers(),
             cancel,
-        ),
+        )?),
     };
-    written?;
     sink(Event::Done);
-    Ok(())
-}
-
-pub fn localization_stack(
-    window: LocalizationWindow,
-    spec: LocalizationSpec,
-    pixel: f32,
-    cancel: &AtomicBool,
-    sink: &mut dyn FnMut(Event),
-) -> Result<Option<LocalizationStack>, String> {
-    assert!(
-        pixel.is_finite() && pixel > 0.0,
-        "a super-resolution stack knows its positive camera pixel"
-    );
-    sink(Event::Progress {
-        time: 0,
-        done: 0,
-        total: 0,
-    });
-    let mut stack = |done: usize, total: usize| {
-        sink(Event::Progress {
-            time: 0,
-            done,
-            total,
-        });
-        !cancel.load(Ordering::Relaxed)
-    };
-    let held = grana_analysis::localization::localization_stack(&window, spec, pixel, &mut stack)?;
-    sink(Event::Done);
-    Ok(held)
+    Ok(preview)
 }
 
 pub fn localization_overlay(
-    stack: &LocalizationStack,
-    layer: usize,
-    bitmap: Bitmap,
+    preview: &LocalizationPreview,
     tint: [f32; 3],
     opacity: f32,
-) -> Option<Overlay> {
-    let image = stack.layer(layer)?;
-    assert_eq!(
-        bitmap.size(),
-        image.size(),
-        "an overlay bitmap covers the slice it paints"
-    );
-    let geometry = stack.geometry();
-    let depth = stack.depth();
-    let [width, height] = geometry.size();
-    let pixel = geometry.pixel();
-    let origin = geometry.origin();
-    let layer = layer as u32;
+) -> Overlay {
+    let bitmap = Bitmap::new(preview.size(), preview.shared());
+    let depth = preview.depth();
+    let layer = preview.layer();
+    let [width, height] = preview.extent();
+    let origin = preview.origin();
     let z = 0.5 * (depth.lower(layer) + depth.upper(layer));
     let corners = [
         [origin[0], origin[1], z],
-        [origin[0] + width as f32 * pixel, origin[1], z],
-        [
-            origin[0] + width as f32 * pixel,
-            origin[1] + height as f32 * pixel,
-            z,
-        ],
-        [origin[0], origin[1] + height as f32 * pixel, z],
+        [origin[0] + width, origin[1], z],
+        [origin[0] + width, origin[1] + height, z],
+        [origin[0], origin[1] + height, z],
     ];
-    Some(Overlay::new(
+    Overlay::new(
         bitmap,
         corners,
         grana_display::srgb_to_linear(tint),
         opacity,
-    ))
+    )
 }
 
 fn write_stack(
     path: &Path,
     name: &str,
     layered: &mut impl Layered,
-    size: [u32; 2],
+    geometry: LocalizationGeometry,
+    depth: LocalizationDepth,
     spacing: [f32; 3],
-    layers: u32,
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<LocalizationPreview, String> {
+    let size = geometry.size();
+    let layers = depth.layers();
     let rendered = render_stack(layered, size, layers, cancel)?;
     let pixels = rendered
         .bytes()
         .ok_or_else(|| "a rendered stack keeps its mapped pixels".to_string())?;
+    let layer = layers / 2;
+    let plane = size[0] as usize * 3 * size[1] as usize;
+    let preview = LocalizationPreview::of_layer(
+        geometry,
+        depth,
+        layer,
+        &pixels[plane * layer as usize..plane * (layer as usize + 1)],
+    );
     let levels = [Level::new(
         Extent::new(size[0], size[1], layers),
         Spacing::new(spacing[0], spacing[1], spacing[2]),
@@ -282,8 +250,8 @@ fn write_stack(
             progress: &mut progress,
         },
     )
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    Ok(preview)
 }
 
 pub struct CompositionSource {
@@ -369,14 +337,13 @@ pub fn localization_composition(
     } else {
         pixel
     };
-    let size = geometry.size();
     write_stack(
         &path,
         &name,
         &mut composition,
-        size,
+        geometry,
+        depth,
         [pixel, pixel, slice],
-        depth.layers(),
         cancel,
     )?;
     sink(Event::Done);

@@ -349,10 +349,7 @@ impl Renderer {
             if !shot.slice
                 && let Some(passes) = meshes.as_mut()
             {
-                passes.cull_volume(encoder, resources.scene.group());
-                if scene.shading.shadows > 0.0 {
-                    passes.cull_shadow(encoder, resources.scene.group());
-                }
+                passes.compact(queue, encoder, resources.scene.group());
             }
         }
         Ok(Prepared {

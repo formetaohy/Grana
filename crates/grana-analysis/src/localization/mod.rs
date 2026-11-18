@@ -16,6 +16,7 @@ mod group;
 mod image;
 mod layout;
 mod nena;
+mod preview;
 mod report;
 mod sample;
 mod source;
@@ -31,6 +32,7 @@ use grid::Grid;
 pub use group::{GroupStat, Groups};
 pub use image::LocalizationRenderer;
 pub use layout::LocalizationLayout;
+pub use preview::LocalizationPreview;
 pub use report::{Frc, LocalizationGeometry, LocalizationImage, LocalizationReport, NeNa};
 pub use source::LocalizationSource;
 pub use stack::LocalizationStack;
@@ -142,35 +144,6 @@ pub fn localization_report(
         groups: layout.groups().clone(),
         stack,
     }))
-}
-
-pub fn localization_stack(
-    source: &dyn LocalizationSource,
-    spec: LocalizationSpec,
-    camera_pixel: f32,
-    report: &mut dyn FnMut(usize, usize) -> bool,
-) -> Result<Option<LocalizationStack>, String> {
-    assert!(
-        camera_pixel.is_finite() && camera_pixel > 0.0,
-        "a localization stack knows its camera pixel"
-    );
-    if source.is_empty() {
-        return Err("the frame range holds no frame".to_string());
-    }
-    let ticker = RefCell::new(Ticker::new(frame_steps(source.len()), report));
-    let tick = |_: usize, _: usize| ticker.borrow_mut().tick();
-    let Some(layout) = LocalizationLayout::new(source, spec, camera_pixel, &tick)? else {
-        if ticker.borrow().cancelled() {
-            return Ok(None);
-        }
-        return Err("the frame range holds no visible localization".to_string());
-    };
-    let preview = preview_of(&layout, spec)?;
-    let (_, stack) = paint(source, spec, &layout, preview, &tick)?;
-    if ticker.borrow().cancelled() {
-        return Ok(None);
-    }
-    Ok(Some(stack))
 }
 
 fn preview_of(layout: &LocalizationLayout, spec: LocalizationSpec) -> Result<Preview, String> {

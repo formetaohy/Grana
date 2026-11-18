@@ -21,7 +21,7 @@ use crate::target::SCENE_FORMAT;
 
 const SHADER: &str = include_str!("shader/overlay.wgsl");
 
-const SHEET_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+const SHEET_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
 
 const ROW_ALIGNMENT: u32 = 256;
 

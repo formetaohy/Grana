@@ -155,14 +155,10 @@ impl Localizations {
 
 impl Entry {
     fn overlay(&self, tint: [f32; 3], opacity: f32) -> Option<grana_raster::Overlay> {
-        let bitmap = self.bitmaps.get(self.layer)?.clone();
-        grana_pipeline::run::localization_overlay(
-            self.report.stack(),
-            self.layer,
-            bitmap,
-            tint,
-            opacity,
-        )
+        let preview = self.report.stack().preview(self.layer)?;
+        Some(grana_pipeline::run::localization_overlay(
+            &preview, tint, opacity,
+        ))
     }
 }
 
@@ -445,6 +441,7 @@ impl Session {
                         progress(done, total);
                     }
                 })
+                .map(|_| ())
             },
         ));
         Ok(())

@@ -1368,6 +1368,42 @@ fn renders_and_measures_localizations() {
     assert!((geometry.pixel() - 0.01).abs() < 1.0e-7);
     assert!(geometry.renderable(), "the geometry covers a raster");
     assert!(report.density() > 0.0, "the report normalizes its density");
+
+    let depth = grana_analysis::localization::LocalizationDepth::projection(4.0);
+    let width = 4096u32;
+    let mut stripes = Vec::with_capacity(width as usize * 3);
+    for column in 0..width {
+        stripes.extend_from_slice(&[if column % 2 == 0 { 0u8 } else { 255u8 }; 3]);
+    }
+    let preview = grana_analysis::localization::LocalizationPreview::of_raster(
+        [1.0, 2.0],
+        0.5,
+        [width, 1],
+        depth,
+        0,
+        &stripes,
+    );
+    assert_eq!(
+        preview.size(),
+        [2048, 1],
+        "a preview bounds its longer side to 2048"
+    );
+    assert_eq!(preview.origin(), [1.0, 2.0]);
+    assert_eq!(preview.extent(), [2048.0, 0.5]);
+    let average = (grana_display::linear_to_srgb(0.5) * 255.0).round() as u8;
+    assert!(
+        average > 128,
+        "a preview averages black and white in linear light"
+    );
+    assert!(
+        preview
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| { pixel[..3].iter().all(|value| *value == average) && pixel[3] == 255 }),
+        "every preview pixel averages its block"
+    );
 }
 
 #[test]

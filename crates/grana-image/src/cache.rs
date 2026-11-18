@@ -246,7 +246,6 @@ fn accounting(root: &Path) -> Accounting {
 pub(crate) fn identity(
     source: &crate::Source,
     geometry: &[u8],
-    revision: Option<&str>,
     dataset: Option<u64>,
 ) -> Option<u64> {
     let mut hash = mix(FNV_BASE, geometry);
@@ -280,7 +279,7 @@ pub(crate) fn identity(
             if let Some(group) = group {
                 hash = mix(hash, group.as_bytes());
             }
-            Some(mix(hash, revision?.as_bytes()))
+            Some(mix(hash, &dataset?.to_le_bytes()))
         }
     }
 }

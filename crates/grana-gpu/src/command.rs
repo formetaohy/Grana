@@ -11,43 +11,49 @@ struct IndexedArgs {
     first_instance: u32,
 }
 
-pub struct IndexedCommands {
-    buffer: Buffer,
-    count: u32,
+pub struct IndirectDraw {
+    args: Buffer,
+    counters: Buffer,
     stride: u64,
 }
 
-impl IndexedCommands {
-    pub fn new(device: &Device, label: &'static str, count: usize, regions: usize) -> Self {
-        assert!(
-            count > 0,
-            "an indirect draw table holds at least one command"
-        );
+impl IndirectDraw {
+    pub fn new(device: &Device, label: &'static str, regions: usize) -> Self {
         assert!(regions > 0, "an indirect draw table holds a region");
-        let stride = (count * size_of::<IndexedArgs>()) as u64;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let stride = size_of::<IndexedArgs>() as u64;
+        let args = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: stride * regions as u64,
             usage: BufferUsages::INDIRECT | BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let counters = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: size_of::<[u32; 8]>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
-            buffer,
-            count: count as u32,
+            args,
+            counters,
             stride,
         }
     }
 
-    pub fn buffer(&self) -> &Buffer {
-        &self.buffer
+    pub fn args(&self) -> &Buffer {
+        &self.args
     }
 
-    pub fn count(&self) -> u32 {
-        self.count
+    pub fn counters(&self) -> &Buffer {
+        &self.counters
     }
 
-    pub fn offset(&self, region: usize) -> u64 {
+    pub fn region(&self, region: usize) -> u64 {
         self.stride * region as u64
+    }
+
+    pub fn reset(&self, queue: &Queue) {
+        queue.write_buffer(&self.counters, 0, bytes_of(&[0u32; 8]));
     }
 }
 

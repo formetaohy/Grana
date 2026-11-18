@@ -812,7 +812,7 @@ impl Run<'_, '_> {
         let request =
             run::LocalizationImageRequest::new(window.clone(), spec, pixel, &name, 0, &path)?;
         let progress = &self.progress;
-        run::localization_image(request, self.task.cancel, &mut |event| {
+        let preview = run::localization_image(request, self.task.cancel, &mut |event| {
             if let RunEvent::Progress { done, total, .. } = event
                 && progress.hold()
             {
@@ -823,20 +823,12 @@ impl Run<'_, '_> {
                 });
             }
         })?;
-        if self.task.protocol.snapshot().is_none() && !self.task.project {
+        if self.task.protocol.snapshot().is_none() {
             return Ok(());
         }
-        let stack = run::localization_stack(window, spec, pixel, self.task.cancel, &mut |_| {})?;
-        if let Some(stack) = stack {
-            let layer = stack.count() / 2;
-            let bitmap = stack
-                .layer(layer)
-                .map(|image| grana_raster::Bitmap::new(image.size(), image.shared()));
-            if let Some(overlay) = bitmap
-                .and_then(|bitmap| run::localization_overlay(&stack, layer, bitmap, tint, opacity))
-            {
-                self.scene.overlays.set(id, overlay);
-            }
+        if let Some(preview) = preview {
+            let overlay = run::localization_overlay(&preview, tint, opacity);
+            self.scene.overlays.set(id, overlay);
         }
         Ok(())
     }

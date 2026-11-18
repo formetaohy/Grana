@@ -593,17 +593,120 @@ fn writes_and_reads_a_tiny_ome_zarr() {
             .set_modified(later)
             .expect("the stored chunk restamps");
     }
+    let reopened = grana_zarr::Image::open(&path).expect("the rewritten image reopens");
     assert_eq!(
-        image.identity(),
+        reopened.identity(),
         Some(identity),
         "the metadata digest cannot see a chunk rewritten in place"
     );
     assert_ne!(
-        image
+        reopened
             .stamps(0, 0, 0, 0..24, 0..16, 0..8)
             .expect("the chunk stamps reread"),
         stamps,
         "a rewritten chunk restamps every tile composed from it"
+    );
+}
+
+fn write_derived_zarr(root: &std::path::Path, value: f32) {
+    let levels = [Level::new(
+        Extent::new(64, 64, 16),
+        Spacing::new(1.0, 1.0, 1.0),
+    )];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        range: Intensity::new(0.0, 255.0),
+    }];
+    let fill = move |_: usize,
+                     _: u32,
+                     _: usize,
+                     _: [u32; 3],
+                     _: [u32; 3],
+                     data: &mut [f32]|
+          -> Result<(), String> {
+        data.fill(value);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        root,
+        &mut ImageSpec {
+            name: "remote",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_archive::Sample::Float,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the remote fixture writes");
+}
+
+fn derived_values(image: &Image, ranges: &[std::ops::Range<u32>; 3]) -> Vec<f32> {
+    let data = image
+        .read_region(0, 1, 0, ranges, &grana_warp::Warp::IDENTITY)
+        .expect("the derived level composes");
+    let VoxelData::F32(values) = data else {
+        panic!("the fixture stores float voxels");
+    };
+    values
+}
+
+#[test]
+fn caches_the_derived_levels_of_a_remote_ome_zarr() {
+    let temp = Temp::new("suite-zarr-remote");
+    let path = temp.path().join("remote.ome.zarr");
+    let cache = temp.path().join("cache");
+    let ranges = [0..32u32, 0..32, 0..8];
+    write_derived_zarr(&path, 64.0);
+    let server = support::Server::serve(&path);
+    let source = Source::remote(server.url().to_string());
+    let first =
+        Image::open_with_cache(&source, Some(cache.clone())).expect("the remote image opens");
+    assert!(
+        derived_values(&first, &ranges)
+            .iter()
+            .all(|value| *value == 64.0),
+        "the derived level averages the stored voxels"
+    );
+    assert!(
+        server.downloads() > 0,
+        "the first read downloads the stored shards"
+    );
+    drop(first);
+    server.reset();
+    let cached =
+        Image::open_with_cache(&source, Some(cache.clone())).expect("the remote image reopens");
+    assert!(
+        derived_values(&cached, &ranges)
+            .iter()
+            .all(|value| *value == 64.0),
+        "a reopened image reads its derived level"
+    );
+    assert_eq!(
+        server.downloads(),
+        0,
+        "a reopened image reads its derived level from the disk cache"
+    );
+    drop(cached);
+    write_derived_zarr(&path, 200.0);
+    server.reset();
+    let rewritten =
+        Image::open_with_cache(&source, Some(cache)).expect("the rewritten image opens");
+    assert!(
+        derived_values(&rewritten, &ranges)
+            .iter()
+            .all(|value| *value == 200.0),
+        "a rewritten shard restamps the derived level"
+    );
+    assert!(
+        server.downloads() > 0,
+        "a rewritten shard invalidates the disk cache"
     );
 }
 
