@@ -21,4 +21,5 @@ mod stitch;
 mod stitch_cancel;
 mod stream;
 mod support;
+mod ui;
 mod weights;

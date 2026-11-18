@@ -1,11 +1,12 @@
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+mod lease;
+
+pub use lease::Lease;
 
 const ATTEMPTS: usize = 8;
 const BACKOFF: Duration = Duration::from_millis(25);
@@ -20,7 +21,6 @@ const TRANSIENT: [i32; 3] = [5, 32, 33];
 const TRANSIENT: [i32; 0] = [];
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
-static LIVE: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 pub struct Atomic {
     target: PathBuf,
@@ -28,27 +28,23 @@ pub struct Atomic {
     backup: PathBuf,
     directory: bool,
     committed: bool,
+    lease: Option<Lease>,
 }
 
 pub struct Replaced {
     target: PathBuf,
-    staging: PathBuf,
     backup: PathBuf,
     replaced: bool,
+    _lease: Lease,
 }
 
 impl Atomic {
     pub fn file(target: &Path) -> io::Result<Self> {
-        let atomic = Self::new(target, false)?;
-        let _ = remove_if_present(&atomic.staging);
-        claim(&atomic.staging);
-        Ok(atomic)
+        Self::new(target, false)
     }
 
     pub fn directory(target: &Path) -> io::Result<Self> {
         let atomic = Self::new(target, true)?;
-        recover(target)?;
-        claim(&atomic.staging);
         fs::create_dir_all(&atomic.staging)?;
         Ok(atomic)
     }
@@ -62,14 +58,18 @@ impl Atomic {
     }
 
     pub fn commit_held(mut self) -> io::Result<Replaced> {
+        let lease = self
+            .lease
+            .take()
+            .expect("an atomic write holds its target lease");
         if !self.directory {
             attempt(|| fs::rename(&self.staging, &self.target))?;
             self.committed = true;
             return Ok(Replaced {
                 target: self.target.clone(),
-                staging: self.staging.clone(),
                 backup: self.backup.clone(),
                 replaced: false,
+                _lease: lease,
             });
         }
         if path_exists(&self.backup) {
@@ -84,9 +84,9 @@ impl Atomic {
                 self.committed = true;
                 Ok(Replaced {
                     target: self.target.clone(),
-                    staging: self.staging.clone(),
                     backup: self.backup.clone(),
                     replaced,
+                    _lease: lease,
                 })
             }
             Err(error) => {
@@ -100,25 +100,28 @@ impl Atomic {
 
     fn new(target: &Path, directory: bool) -> io::Result<Self> {
         let name = segment(target)?;
+        let lease = Lease::acquire(target)?;
         let staging = target.with_file_name(format!(
             "{HIDDEN}{name}.{}-{}{STAGING_SUFFIX}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        let backup = target.with_file_name(format!("{HIDDEN}{name}{BACKUP_SUFFIX}"));
+        let backup = backup_path(target);
+        clear_staging(parent(target), &name)?;
+        restore_backup(target)?;
         Ok(Self {
             target: target.to_path_buf(),
             staging,
             backup,
             directory,
             committed: false,
+            lease: Some(lease),
         })
     }
 }
 
 impl Drop for Atomic {
     fn drop(&mut self) {
-        release(&self.staging);
         if self.committed {
             return;
         }
@@ -140,29 +143,15 @@ impl Replaced {
     }
 }
 
-impl Drop for Replaced {
-    fn drop(&mut self) {
-        release(&self.staging);
-    }
-}
-
 pub fn recover(target: &Path) -> io::Result<()> {
-    let Some(name) = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-    else {
-        return Ok(());
-    };
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    clear_staging(parent, &name)?;
-    let backup = target.with_file_name(format!("{HIDDEN}{name}{BACKUP_SUFFIX}"));
-    if !path_exists(&backup) {
+    if !artifacts(target)? {
         return Ok(());
     }
-    if path_exists(target) {
-        return attempt(|| remove(&backup));
+    match Lease::acquire(target) {
+        Ok(_lease) => recover_held(target),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        Err(error) => Err(error),
     }
-    attempt(|| fs::rename(&backup, target))
 }
 
 pub fn recover_inside(directory: &Path) -> io::Result<()> {
@@ -206,6 +195,59 @@ pub fn bytes(path: &Path) -> io::Result<u64> {
         total += bytes(&entry?.path())?;
     }
     Ok(total)
+}
+
+fn recover_held(target: &Path) -> io::Result<()> {
+    let name = segment(target)?;
+    clear_staging(parent(target), &name)?;
+    restore_backup(target)
+}
+
+fn restore_backup(target: &Path) -> io::Result<()> {
+    let backup = backup_path(target);
+    if !path_exists(&backup) {
+        return Ok(());
+    }
+    if path_exists(target) {
+        return attempt(|| remove(&backup));
+    }
+    attempt(|| fs::rename(&backup, target))
+}
+
+fn artifacts(target: &Path) -> io::Result<bool> {
+    let name = segment(target)?;
+    if path_exists(&backup_path(target)) {
+        return Ok(true);
+    }
+    let entries = match fs::read_dir(parent(target)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let held = entry?.file_name();
+        let Some(held) = held.to_str() else {
+            continue;
+        };
+        if staging_name(held) == Some(name.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn backup_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    target.with_file_name(format!("{HIDDEN}{name}{BACKUP_SUFFIX}"))
+}
+
+fn parent(target: &Path) -> &Path {
+    target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn segment(target: &Path) -> io::Result<String> {
@@ -256,31 +298,9 @@ fn clear_staging(parent: &Path, name: &str) -> io::Result<()> {
         if staging_name(held) != Some(name) {
             continue;
         }
-        let path = entry.path();
-        if live(&path) {
-            continue;
-        }
-        attempt(|| remove(&path))?;
+        attempt(|| remove(&entry.path()))?;
     }
     Ok(())
-}
-
-fn claim(staging: &Path) {
-    LIVE.lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(staging.to_path_buf());
-}
-
-fn release(staging: &Path) {
-    LIVE.lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(staging);
-}
-
-fn live(staging: &Path) -> bool {
-    LIVE.lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .contains(staging)
 }
 
 fn path_exists(path: &Path) -> bool {

@@ -92,6 +92,7 @@ pub struct Atlas {
     shelves: Vec<Shelf>,
     slots: HashMap<GlyphKey, GlyphSlot>,
     uploads: Vec<Upload>,
+    used: u64,
 }
 
 impl Atlas {
@@ -104,6 +105,7 @@ impl Atlas {
             shelves: Vec::new(),
             slots: HashMap::new(),
             uploads: Vec::new(),
+            used: 0,
         }
     }
 
@@ -117,6 +119,17 @@ impl Atlas {
 
     pub fn size(&self) -> u32 {
         SIZE
+    }
+
+    pub fn saturated(&self) -> bool {
+        self.used * 8 >= u64::from(SIZE) * u64::from(SIZE) * 7
+    }
+
+    pub fn reset(&mut self) {
+        self.shelves.clear();
+        self.slots.clear();
+        self.uploads.clear();
+        self.used = 0;
     }
 
     pub fn slot(&mut self, fonts: &mut Fonts, request: GlyphRequest) -> Option<GlyphSlot> {
@@ -154,6 +167,7 @@ impl Atlas {
             return None;
         }
         let (x, y) = self.allocate(width, height)?;
+        self.used += u64::from(width) * u64::from(height);
         let mut data = vec![0u8; (width * height) as usize];
         for row in 0..raster.height {
             let source = (row * raster.width) as usize;

@@ -95,6 +95,8 @@ pub struct Input {
     delta: Vec2,
     wheel: Vec2,
     buttons: [ButtonState; 3],
+    press: [Option<Vec2>; 3],
+    release: [Option<Vec2>; 3],
     modifiers: Modifiers,
     cancelled: bool,
     events: Vec<Event>,
@@ -115,6 +117,8 @@ impl Input {
             delta: Vec2::ZERO,
             wheel: Vec2::ZERO,
             buttons: [ButtonState::default(); 3],
+            press: [None; 3],
+            release: [None; 3],
             modifiers: Modifiers::default(),
             cancelled: false,
             events: Vec::new(),
@@ -147,6 +151,7 @@ impl Input {
         self.cancelled = false;
         self.keys.clear();
         self.texts.clear();
+        self.release = [None; 3];
         for button in self.buttons.iter_mut() {
             button.pressed = false;
             button.released = false;
@@ -164,11 +169,13 @@ impl Input {
                     let state = &mut self.buttons[button.index()];
                     state.down = true;
                     state.pressed = true;
+                    self.press[button.index()] = Some(self.position);
                 }
                 Event::Up(button) => {
                     let state = &mut self.buttons[button.index()];
                     state.down = false;
                     state.released = true;
+                    self.release[button.index()] = Some(self.position);
                 }
                 Event::Cancel => {
                     self.cancelled = true;
@@ -217,6 +224,14 @@ impl Input {
 
     pub fn button(&self, button: Button) -> ButtonState {
         self.buttons[button.index()]
+    }
+
+    pub fn press_position(&self, button: Button) -> Option<Vec2> {
+        self.press[button.index()]
+    }
+
+    pub fn release_position(&self, button: Button) -> Option<Vec2> {
+        self.release[button.index()]
     }
 
     pub fn modifiers(&self) -> Modifiers {

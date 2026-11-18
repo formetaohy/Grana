@@ -141,12 +141,24 @@ impl Text {
             .expect("a text atlas is bound to a device")
     }
 
-    pub fn begin(&mut self, pixels_per_point: f32) {
+    pub fn begin(&mut self, pixels_per_point: f32) -> bool {
         self.pixels_per_point = pixels_per_point;
         self.frame += 1;
         if self.frame.is_multiple_of(120) {
             self.evict();
         }
+        let saturated = self.atlas.as_ref().is_some_and(Atlas::saturated);
+        if saturated {
+            self.atlas
+                .as_mut()
+                .expect("a saturated atlas is bound to a device")
+                .reset();
+        }
+        saturated
+    }
+
+    pub fn set_pixels_per_point(&mut self, pixels_per_point: f32) {
+        self.pixels_per_point = pixels_per_point;
     }
 
     pub fn flush(&mut self, queue: &wgpu::Queue) {

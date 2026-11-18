@@ -61,21 +61,29 @@ impl<A: Clone> Ui<A> {
             }
         }
         let primary = self.input.button(Button::Primary);
+        let press_pointer = self
+            .input
+            .press_position(Button::Primary)
+            .unwrap_or(pointer);
+        let release_pointer = self
+            .input
+            .release_position(Button::Primary)
+            .unwrap_or(pointer);
         let editing = self.edit;
         if primary.pressed
             && let Some(node) = editing
-            && self.tree.nodes[node].rect.contains(pointer)
+            && self.tree.nodes[node].rect.contains(press_pointer)
         {
-            self.edit_press(node);
+            self.edit_press(node, press_pointer);
         } else if primary.pressed {
             if let Some(previous) = self.press {
                 self.wake_animation(previous);
             }
-            self.press = self.hover;
+            self.press = hit::resolve(&self.hits, press_pointer).map(|hit| hit.node);
             if let Some(node) = self.press {
                 self.wake_animation(node);
             }
-            self.press_at = pointer;
+            self.press_at = press_pointer;
             self.drag = None;
             self.focus_visible = false;
             self.dismiss_popups();
@@ -106,6 +114,7 @@ impl<A: Clone> Ui<A> {
             );
         }
         if primary.released {
+            let released = hit::resolve(&self.hits, release_pointer).map(|hit| hit.node);
             if let Some(press) = self.press {
                 self.wake_animation(press);
                 let dragged = self.drag == Some(press);
@@ -128,7 +137,7 @@ impl<A: Clone> Ui<A> {
                         Content::Segment(_) | Content::Tabs(_)
                     );
                 let clicked = self.drag.is_none()
-                    && self.hover.is_none_or(|hover| hover == press)
+                    && released.is_none_or(|hover| hover == press)
                     && !self.edit_drag;
                 if dragged && switch {
                     self.commit_toggle(press);
@@ -442,9 +451,20 @@ impl<A: Clone> Ui<A> {
         let action = {
             let node = &self.tree.nodes[node];
             if let Interaction::Pointer { handler } = &node.interaction {
+                let position = match phase {
+                    Phase::Down => self
+                        .input
+                        .press_position(Button::Primary)
+                        .unwrap_or(self.pointer),
+                    Phase::Move | Phase::Up => self.pointer,
+                };
+                let delta = match phase {
+                    Phase::Down => Vec2::ZERO,
+                    Phase::Move | Phase::Up => self.input.delta(),
+                };
                 handler(Pointer {
-                    position: self.pointer,
-                    delta: self.input.delta(),
+                    position,
+                    delta,
                     phase,
                     button: Button::Primary,
                     modifiers: self.input.modifiers(),
@@ -633,7 +653,7 @@ impl<A: Clone> Ui<A> {
         self.wake_animation(node);
     }
 
-    fn edit_press(&mut self, node: NodeId) {
+    fn edit_press(&mut self, node: NodeId, at: Vec2) {
         let Content::Field(field) = &self.tree.nodes[node].content else {
             return;
         };
@@ -641,7 +661,7 @@ impl<A: Clone> Ui<A> {
         let rect = self.tree.nodes[node].rect;
         let extend = self.input.modifiers().shift;
         let time = self.time;
-        let pointer = self.pointer;
+        let pointer = at;
         let Some(edit) = self.tree.nodes[node].runtime.edit.as_mut() else {
             return;
         };

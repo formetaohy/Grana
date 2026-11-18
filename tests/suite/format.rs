@@ -748,6 +748,21 @@ fn rolls_back_an_unpublished_directory_replacement() {
         !labels.join(".cells.old").exists(),
         "the rollback restores the previous label image"
     );
+    let staging = labels.join(".cells.100-0.part");
+    std::fs::create_dir_all(&staging).expect("a writer stages a replacement");
+    std::fs::write(staging.join("zarr.json"), "{}").expect("the staging holds metadata");
+    let lease = grana_file::Lease::acquire(&target).expect("the target lease is held");
+    grana_file::recover(&target).expect("recovery skips a leased target");
+    assert!(
+        staging.exists(),
+        "recovery keeps the staging of a live writer"
+    );
+    drop(lease);
+    grana_file::recover(&target).expect("recovery reclaims a released target");
+    assert!(
+        !staging.exists(),
+        "recovery reclaims staging no writer holds"
+    );
 }
 
 #[test]

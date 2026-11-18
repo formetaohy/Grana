@@ -324,7 +324,9 @@ impl<A: Clone> Ui<A> {
                 self.tree.nodes[edit].paint_dirty = true;
             }
         }
-        self.text.begin(scale);
+        if self.text.begin(scale) {
+            self.invalidate();
+        }
         self.actions.clear();
         self.cursor = Cursor::Arrow;
         self.animating = false;
@@ -474,7 +476,7 @@ impl<A: Clone> Ui<A> {
         pixels_per_point: f32,
         content: impl FnOnce(&mut Painter),
     ) -> Vec<crate::paint::Instance> {
-        self.text.begin(pixels_per_point);
+        self.text.set_pixels_per_point(pixels_per_point);
         let clip = Clip::new(
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
@@ -485,7 +487,7 @@ impl<A: Clone> Ui<A> {
                 Painter::new(&mut instances, &mut self.text, &mut self.images, clip, None);
             content(&mut painter);
         }
-        self.text.begin(self.scale);
+        self.text.set_pixels_per_point(self.scale);
         instances.material
     }
 
@@ -495,7 +497,7 @@ impl<A: Clone> Ui<A> {
         pixels_per_point: f32,
         content: impl FnOnce(&mut Painter),
     ) -> Vec<crate::record::Mark> {
-        self.text.begin(pixels_per_point);
+        self.text.set_pixels_per_point(pixels_per_point);
         let clip = Clip::new(
             Rect::from_min_size(Vec2::ZERO, size),
             crate::geometry::Corners::ZERO,
@@ -512,7 +514,7 @@ impl<A: Clone> Ui<A> {
             );
             content(&mut painter);
         }
-        self.text.begin(self.scale);
+        self.text.set_pixels_per_point(self.scale);
         marks
     }
 
