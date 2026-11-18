@@ -911,7 +911,7 @@ fn render_volume(
         region: Region::none(),
         scene: &scene,
         viewport: WHOLE,
-        delivery: grana_render::Delivery::Immediate,
+        delivery: grana_render::Delivery::Assured,
     };
     settle(gpu, &mut renderer, &view, volume);
     read_pixels(gpu, &target, [SIDE, SIDE])
@@ -956,9 +956,23 @@ fn projects_the_maximum_and_surfaces_the_isovalue() {
     let near_maximum = render_volume(&gpu, &near_bright, maximum, &camera, true);
     let far_maximum = render_volume(&gpu, &far_bright, maximum, &camera, true);
     let projected = difference(&near_maximum, &far_maximum);
+    let differing = near_maximum
+        .iter()
+        .zip(&far_maximum)
+        .filter(|(near, far)| near != far)
+        .count();
+    let peak = near_maximum
+        .iter()
+        .zip(&far_maximum)
+        .flat_map(|(near, far)| {
+            (0..3).map(move |channel| i32::from(near[channel]) - i32::from(far[channel]))
+        })
+        .map(i32::abs)
+        .max()
+        .unwrap_or(0);
     assert!(
         projected < 1.0,
-        "the maximum projection follows depth: {projected}"
+        "the maximum projection follows depth: {projected} ({differing} pixels differ, peak {peak})"
     );
     let near_blend = render_volume(&gpu, &near_bright, blend, &camera, true);
     let far_blend = render_volume(&gpu, &far_bright, blend, &camera, true);
