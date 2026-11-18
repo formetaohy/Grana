@@ -71,10 +71,6 @@ pub fn splat(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> gran
 }
 
 pub fn gpu() -> Option<Gpu> {
-    if std::env::var("GRANA_GPU_TESTS").as_deref() == Ok("off") {
-        println!("the graphics tests are disabled, skipping");
-        return None;
-    }
     static SERIAL: Mutex<()> = Mutex::new(());
     let serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let headless = match grana_gpu::Headless::shared() {

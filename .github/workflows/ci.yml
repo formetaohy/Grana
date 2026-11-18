@@ -66,18 +66,6 @@ jobs:
           cache-on-failure: true
 
       - name: Test
-        if: runner.os == 'Windows'
-        run: cargo test -p grana --test suite --all-features --locked
-
-      - name: Test without graphics
-        if: runner.os == 'macOS'
-        env:
-          GRANA_GPU_TESTS: "off"
-        run: cargo test -p grana --test suite --all-features --locked
-
-      - name: Test graphics
-        if: runner.os == 'macOS'
-        continue-on-error: true
         run: cargo test -p grana --test suite --all-features --locked
 
   build:

@@ -169,33 +169,36 @@ fn spread(pixels: &[[u8; 4]]) -> (f32, f32) {
 }
 
 fn settle(gpu: &Gpu, renderer: &mut Renderer, frame: &Frame<'_, '_>, volume: &Volume) {
-    for _ in 0..64 {
-        let mut info = renderer
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let info = renderer
             .draw(gpu.device(), gpu.queue(), copy(frame))
             .expect("the frame draws");
-        if !renderer.requests_pending() {
-            while info.drawn && (info.age < FRAMES || info.fading) {
-                info = renderer
-                    .draw(gpu.device(), gpu.queue(), copy(frame))
-                    .expect("the frame draws");
+        if renderer.requests_pending() {
+            if let Some(requests) = demand(gpu, renderer) {
+                let grid = BrickGrid::new(volume.extent());
+                let pyramid = volume.pyramid();
+                let bricks = requests
+                    .volume
+                    .iter()
+                    .map(|request| {
+                        let data = volume.brick(&grid, request.coord);
+                        (*request, PackedBrick::of(&data, &pyramid, request.channels))
+                    })
+                    .collect::<Vec<_>>();
+                renderer.upload(&bricks);
             }
+        } else if info.drawn && info.settled && info.age >= FRAMES && !info.fading {
             return;
         }
-        if let Some(requests) = demand(gpu, renderer) {
-            let grid = BrickGrid::new(volume.extent());
-            let pyramid = volume.pyramid();
-            let bricks = requests
-                .volume
-                .iter()
-                .map(|request| {
-                    let data = volume.brick(&grid, request.coord);
-                    (*request, PackedBrick::of(&data, &pyramid, request.channels))
-                })
-                .collect::<Vec<_>>();
-            renderer.upload(&bricks);
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the optics view never settled: age {}, settled {}, pending {}",
+            info.age,
+            info.settled,
+            renderer.requests_pending()
+        );
     }
-    panic!("the optics view never settled");
 }
 
 fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {

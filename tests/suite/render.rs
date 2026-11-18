@@ -148,26 +148,29 @@ fn settle_with<'a, 'b: 'a>(
     build: impl Fn() -> Frame<'a, 'b>,
     volume: &Volume,
 ) -> Requests {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let mut latest = Requests::default();
-    for _ in 0..64 {
-        let mut info = renderer
+    loop {
+        let info = renderer
             .draw(gpu.device(), gpu.queue(), build())
             .expect("the frame draws");
-        if !renderer.requests_pending() {
-            while info.drawn && (info.age < FRAMES || info.fading) {
-                info = renderer
-                    .draw(gpu.device(), gpu.queue(), build())
-                    .expect("the frame draws");
+        if renderer.requests_pending() {
+            if let Some(requests) = next_demand(gpu, renderer) {
+                let bricks = pack(volume, &requests.volume);
+                renderer.upload(&bricks);
+                latest = requests;
             }
+        } else if info.drawn && info.settled && info.age >= FRAMES && !info.fading {
             return latest;
         }
-        if let Some(requests) = next_demand(gpu, renderer) {
-            let bricks = pack(volume, &requests.volume);
-            renderer.upload(&bricks);
-            latest = requests;
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stream never settled: age {}, settled {}, pending {}",
+            info.age,
+            info.settled,
+            renderer.requests_pending()
+        );
     }
-    panic!("the stream never settled");
 }
 
 fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
@@ -1032,36 +1035,39 @@ fn stream_levels(
     view: &View<'_>,
     volumes: &[Volume],
 ) -> grana_render::FrameInfo {
-    for _ in 0..64 {
-        let mut info = renderer
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let info = renderer
             .draw(gpu.device(), gpu.queue(), frame(view))
             .expect("the frame draws");
-        if !renderer.requests_pending() {
-            while info.drawn && (info.age < FRAMES || info.fading) {
-                info = renderer
-                    .draw(gpu.device(), gpu.queue(), frame(view))
-                    .expect("the frame draws");
+        if renderer.requests_pending() {
+            if let Some(requests) = next_demand(gpu, renderer) {
+                let bricks = requests
+                    .volume
+                    .iter()
+                    .map(|request| {
+                        let volume = &volumes[request.level];
+                        let grid = BrickGrid::new(volume.extent());
+                        let data = volume.brick(&grid, request.coord);
+                        (
+                            *request,
+                            PackedBrick::of(&data, &volume.pyramid(), request.channels),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                renderer.upload(&bricks);
             }
+        } else if info.drawn && info.settled && info.age >= FRAMES && !info.fading {
             return info;
         }
-        if let Some(requests) = next_demand(gpu, renderer) {
-            let bricks = requests
-                .volume
-                .iter()
-                .map(|request| {
-                    let volume = &volumes[request.level];
-                    let grid = BrickGrid::new(volume.extent());
-                    let data = volume.brick(&grid, request.coord);
-                    (
-                        *request,
-                        PackedBrick::of(&data, &volume.pyramid(), request.channels),
-                    )
-                })
-                .collect::<Vec<_>>();
-            renderer.upload(&bricks);
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stream never settled: age {}, settled {}, pending {}",
+            info.age,
+            info.settled,
+            renderer.requests_pending()
+        );
     }
-    panic!("the stream never settled");
 }
 
 fn ladder_view<'a>(
