@@ -133,6 +133,58 @@ fn spacing_axis(spacing: Spacing, axis: usize) -> f32 {
 }
 
 #[test]
+fn detects_a_spilled_detection_image_like_a_resident_one() {
+    let extent = Extent::new(1024, 1024, 8);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let data = spot_volume(extent, spacing);
+    let level = Level::new(extent, spacing);
+    let scan = |budget: Budget| {
+        let scanner = SpotScanner::new(
+            0,
+            level,
+            data.range(),
+            SpotParams::new(0.5, 0.2),
+            Region::none(),
+            ChannelSet::new(1, 0),
+            budget,
+        );
+        let read = |channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
+            assert_eq!(channel, 0, "the spot scan reads its detection channel");
+            Ok(data.region(
+                level.extent(),
+                ranges[0].clone(),
+                ranges[1].clone(),
+                ranges[2].clone(),
+            ))
+        };
+        scanner
+            .frame(&AtomicBool::new(false), None, &read, &mut |_, _| {})
+            .expect("the spot frame is detected")
+            .expect("the spot frame is not cancelled")
+    };
+    let spilled = scan(Budget::with_bytes(2, 32 << 20));
+    let resident = scan(Budget::new(2));
+    assert_eq!(spilled.spots().len(), 2, "each bright blob is one spot");
+    assert_eq!(
+        spilled.spots().len(),
+        resident.spots().len(),
+        "a detection image beyond its budget detects every resident spot"
+    );
+    for (spilled, resident) in spilled.spots().iter().zip(resident.spots()) {
+        assert_eq!(
+            spilled.center(),
+            resident.center(),
+            "a spilled spot keeps its localisation"
+        );
+        assert_eq!(
+            spilled.quality(),
+            resident.quality(),
+            "a spilled spot keeps its quality"
+        );
+    }
+}
+
+#[test]
 fn extracts_measured_surfaces_from_two_balls() {
     let extent = Extent::new(80, 64, 48);
     let spacing = Spacing::new(0.2, 0.2, 0.2);

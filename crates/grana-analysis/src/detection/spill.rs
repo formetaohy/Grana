@@ -1,5 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, SystemTime};
@@ -17,11 +18,58 @@ static RESERVED: Mutex<u64> = Mutex::new(0);
 
 pub(super) enum Storage {
     Memory(Vec<f32>),
-    Spill {
-        file: Mutex<File>,
-        path: PathBuf,
-        bytes: u64,
-    },
+    Spill(Spill),
+}
+
+pub(super) struct Spill {
+    file: Option<File>,
+    mapping: OnceLock<Mapping>,
+    path: PathBuf,
+    bytes: u64,
+}
+
+struct Mapping {
+    mapped: memmap2::Mmap,
+}
+
+impl Spill {
+    pub(super) fn file_mut(&mut self) -> &mut File {
+        self.file.as_mut().expect("an open spill holds its file")
+    }
+
+    fn floats(&self, offset: usize, length: usize) -> Result<&[f32], String> {
+        if self.mapping.get().is_none() {
+            let file = self.file.as_ref().expect("an open spill holds its file");
+            let mapped = unsafe { memmap2::Mmap::map(file) }
+                .map_err(|error| format!("failed to map the detection spill: {error}"))?;
+            let _ = self.mapping.set(Mapping { mapped });
+        }
+        let mapping = self
+            .mapping
+            .get()
+            .ok_or_else(|| "the detection spill holds no mapping".to_string())?;
+        let start = offset * size_of::<f32>();
+        let end = start + length * size_of::<f32>();
+        Ok(bytemuck::cast_slice(&mapping.mapped[start..end]))
+    }
+}
+
+impl Drop for Spill {
+    fn drop(&mut self) {
+        drop(self.mapping.take());
+        self.file = None;
+        let _ = std::fs::remove_file(&self.path);
+        release(self.bytes);
+    }
+}
+
+impl Storage {
+    pub(super) fn floats(&self, offset: usize, length: usize) -> Result<&[f32], String> {
+        match self {
+            Self::Memory(values) => Ok(&values[offset..offset + length]),
+            Self::Spill(spill) => spill.floats(offset, length),
+        }
+    }
 }
 
 pub(super) fn spill(bytes: u64, budget: Budget) -> Result<Storage, String> {
@@ -55,11 +103,12 @@ pub(super) fn spill(bytes: u64, budget: Budget) -> Result<Storage, String> {
             return Err(detail);
         }
     };
-    Ok(Storage::Spill {
-        file: Mutex::new(file),
+    Ok(Storage::Spill(Spill {
+        file: Some(file),
+        mapping: OnceLock::new(),
         path,
         bytes,
-    })
+    }))
 }
 
 pub(super) fn release(bytes: u64) {

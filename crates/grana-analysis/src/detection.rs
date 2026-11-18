@@ -2,7 +2,7 @@ mod spill;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::io::{Seek as _, SeekFrom, Write as _};
 use std::mem::size_of;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +10,7 @@ use std::sync::mpsc;
 
 use grana_volume::{Intensity, VoxelData};
 
-use self::spill::{Storage, release, spill};
+use self::spill::{Storage, spill};
 use crate::budget::Budget;
 use crate::local::{BlockField, BlockLevels};
 
@@ -44,7 +44,7 @@ pub(crate) struct DetectionImage {
 }
 
 pub(crate) struct Slab<'a> {
-    values: Cow<'a, [f32]>,
+    values: &'a [f32],
     start: [i64; 3],
     dims: [usize; 3],
     strides: [usize; 3],
@@ -60,17 +60,6 @@ struct Production<'a> {
     kernels: &'a [Vec<f32>; 3],
     radius: usize,
     workers: usize,
-}
-
-impl Drop for DetectionImage {
-    fn drop(&mut self) {
-        let storage = std::mem::replace(&mut self.storage, Storage::Memory(Vec::new()));
-        if let Storage::Spill { file, path, bytes } = storage {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            release(bytes);
-        }
-    }
 }
 
 impl Plan<'_> {
@@ -232,13 +221,11 @@ impl DetectionImage {
                 target(values);
                 levels.push(start, values, planes);
             }
-            Storage::Spill { file, .. } => {
+            Storage::Spill(spill) => {
                 let mut values = vec![0.0f32; planes * plane];
                 target(&mut values);
-                let file = file
-                    .get_mut()
-                    .map_err(|_| "the detection spill file is poisoned".to_string())?;
                 let offset = (start - low) as u64 * plane as u64 * size_of::<f32>() as u64;
+                let file = spill.file_mut();
                 file.seek(SeekFrom::Start(offset))
                     .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
                 file.write_all(bytemuck::cast_slice(&values))
@@ -258,24 +245,8 @@ impl DetectionImage {
         let offset = (z.start - low) as usize * self.plane;
         let length = (z.end - z.start) as usize * self.plane;
         let dims = [self.dims[0], self.dims[1], (z.end - z.start) as usize];
-        let values = match &self.storage {
-            Storage::Memory(store) => Cow::Borrowed(&store[offset..offset + length]),
-            Storage::Spill { file, .. } => {
-                let mut values = vec![0.0f32; length];
-                let bytes = bytemuck::cast_slice_mut(&mut values);
-                let mut file = file
-                    .lock()
-                    .map_err(|_| "the detection spill file is poisoned".to_string())?;
-                file.seek(SeekFrom::Start(offset as u64 * size_of::<f32>() as u64))
-                    .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
-                file.read_exact(bytes)
-                    .map_err(|error| format!("failed to read the detection spill: {error}"))?;
-                drop(file);
-                Cow::Owned(values)
-            }
-        };
         Ok(Some(Slab {
-            values,
+            values: self.storage.floats(offset, length)?,
             start: [self.start[0], self.start[1], i64::from(z.start)],
             dims,
             strides: strides_of(dims),
@@ -297,47 +268,32 @@ impl DetectionImage {
         let dims = dims_of(range);
         let count = dims[0] * dims[1] * dims[2];
         let offset = [0, 1, 2].map(|axis| (range[axis].start - low[axis]) as usize);
-        let values = match &self.storage {
-            Storage::Memory(store) => {
-                if dims[0] == self.dims[0] && dims[1] == self.dims[1] {
-                    let base = offset[0] + self.dims[0] * (offset[1] + self.dims[1] * offset[2]);
-                    Cow::Borrowed(&store[base..base + count])
-                } else {
-                    let mut values = vec![0.0f32; count];
-                    for z in 0..dims[2] {
-                        for y in 0..dims[1] {
-                            let source = offset[0]
-                                + self.dims[0] * (offset[1] + y + self.dims[1] * (offset[2] + z));
-                            let target = dims[0] * (y + dims[1] * z);
-                            values[target..target + dims[0]]
-                                .copy_from_slice(&store[source..source + dims[0]]);
-                        }
-                    }
-                    Cow::Owned(values)
+        let values = if dims[0] == self.dims[0] && dims[1] == self.dims[1] {
+            let base = offset[0] + self.dims[0] * (offset[1] + self.dims[1] * offset[2]);
+            Cow::Borrowed(self.storage.floats(base, count)?)
+        } else {
+            let mut values = vec![0.0f32; count];
+            if dims[0] == self.dims[0] {
+                let length = dims[0] * dims[1];
+                for z in 0..dims[2] {
+                    let source =
+                        offset[0] + self.dims[0] * (offset[1] + self.dims[1] * (offset[2] + z));
+                    let target = length * z;
+                    values[target..target + length]
+                        .copy_from_slice(self.storage.floats(source, length)?);
                 }
-            }
-            Storage::Spill { file, .. } => {
-                let mut values = vec![0.0f32; count];
-                let mut file = file
-                    .lock()
-                    .map_err(|_| "the detection spill file is poisoned".to_string())?;
+            } else {
                 for z in 0..dims[2] {
                     for y in 0..dims[1] {
                         let source = offset[0]
                             + self.dims[0] * (offset[1] + y + self.dims[1] * (offset[2] + z));
                         let target = dims[0] * (y + dims[1] * z);
-                        let bytes = bytemuck::cast_slice_mut(&mut values[target..target + dims[0]]);
-                        file.seek(SeekFrom::Start(source as u64 * size_of::<f32>() as u64))
-                            .map_err(|error| {
-                                format!("failed to seek the detection spill: {error}")
-                            })?;
-                        file.read_exact(bytes).map_err(|error| {
-                            format!("failed to read the detection spill: {error}")
-                        })?;
+                        values[target..target + dims[0]]
+                            .copy_from_slice(self.storage.floats(source, dims[0])?);
                     }
                 }
-                Cow::Owned(values)
             }
+            Cow::Owned(values)
         };
         Ok(Patch { values, dims })
     }

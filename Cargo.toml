@@ -33,6 +33,7 @@ zarrs = { version = "0.23", default-features = false, features = ["filesystem", 
 openh264 = "0.9"
 burn = { version = "0.22.1", default-features = false, features = ["std", "wgpu", "cubecl", "pytorch"] }
 hdf5-pure = "0.47"
+memmap2 = "0.9"
 openreadout-core = "0.4"
 openreadout-hdf5 = "0.4"
 openreadout-jpegxr = "0.4"

@@ -10,9 +10,14 @@ pub struct Budget {
 
 impl Budget {
     pub fn new(workers: usize) -> Self {
+        Self::with_bytes(workers, ANALYSIS_BYTES)
+    }
+
+    pub fn with_bytes(workers: usize, bytes: u64) -> Self {
+        assert!(bytes > 0, "an analysis budget holds at least one byte");
         Self {
             workers: schedule::workers(workers),
-            bytes: ANALYSIS_BYTES,
+            bytes,
         }
     }
 

@@ -67,7 +67,7 @@ impl Atomic {
             .expect("an atomic write holds its target lease");
         sync(&self.staging)?;
         if !self.directory {
-            attempt(|| fs::rename(&self.staging, &self.target))?;
+            attempt(|| rename(&self.staging, &self.target))?;
             self.committed = true;
             sync_parent(&self.target)?;
             return Ok(Replaced {
@@ -82,9 +82,9 @@ impl Atomic {
         }
         let replaced = path_exists(&self.target);
         if replaced {
-            attempt(|| fs::rename(&self.target, &self.backup))?;
+            attempt(|| rename(&self.target, &self.backup))?;
         }
-        match attempt(|| fs::rename(&self.staging, &self.target)) {
+        match attempt(|| rename(&self.staging, &self.target)) {
             Ok(()) => {
                 self.committed = true;
                 sync_parent(&self.target)?;
@@ -97,7 +97,7 @@ impl Atomic {
             }
             Err(error) => {
                 if replaced {
-                    let _ = attempt(|| fs::rename(&self.backup, &self.target));
+                    let _ = attempt(|| rename(&self.backup, &self.target));
                 }
                 Err(error)
             }
@@ -143,7 +143,7 @@ impl Replaced {
     pub fn rollback(self) -> io::Result<()> {
         remove_if_present(&self.target)?;
         if self.replaced {
-            attempt(|| fs::rename(&self.backup, &self.target))?;
+            attempt(|| rename(&self.backup, &self.target))?;
         }
         Ok(())
     }
@@ -280,6 +280,46 @@ fn sync_parent(target: &Path) -> io::Result<()> {
     sync_directories(&[parent(target).to_path_buf()])
 }
 
+#[cfg(windows)]
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+
+    let from = from
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+    let to = to
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+    let moved = unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
+}
+
 #[cfg(unix)]
 fn sync_directories(directories: &[PathBuf]) -> io::Result<()> {
     for directory in directories {
@@ -311,7 +351,7 @@ fn restore_backup(target: &Path) -> io::Result<()> {
     if path_exists(target) {
         return attempt(|| remove(&backup));
     }
-    attempt(|| fs::rename(&backup, target))
+    attempt(|| rename(&backup, target))
 }
 
 fn artifacts(target: &Path) -> io::Result<bool> {

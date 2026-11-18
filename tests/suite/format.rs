@@ -278,6 +278,103 @@ fn writes_a_sixteen_bit_ome_tiff() {
     }
 }
 
+#[test]
+fn writes_a_sharded_ome_zarr_level() {
+    let temp = Temp::new("suite-zarr-shard");
+    let path = temp.path().join("sharded.ome.zarr");
+    let extent = Extent::new(300, 270, 40);
+    let levels = [Level::new(extent, Spacing::new(0.5, 0.5, 1.0))];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        range: Intensity::new(0.0, 1.0),
+    }];
+    let fill = |_level, _frame, _channel, origin: [u32; 3], length: [u32; 3], data: &mut [f32]| {
+        for z in 0..length[2] {
+            for y in 0..length[1] {
+                for x in 0..length[0] {
+                    let index = x as usize
+                        + length[0] as usize * (y as usize + length[1] as usize * z as usize);
+                    data[index] = (origin[0] + x) as f32
+                        + 1000.0 * (origin[1] + y) as f32
+                        + 1_000_000.0 * (origin[2] + z) as f32;
+                }
+            }
+        }
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        &path,
+        &mut ImageSpec {
+            name: "sharded",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the sharded image writes");
+    let metadata = serde_json::from_slice::<serde_json::Value>(
+        &std::fs::read(path.join("0").join("zarr.json")).expect("the level metadata reads"),
+    )
+    .expect("the level metadata parses");
+    assert_eq!(
+        metadata["chunk_grid"]["configuration"]["chunk_shape"],
+        serde_json::json!([1, 1, 32, 256, 256]),
+        "a level stores shards of four by four by two subchunks"
+    );
+    assert_eq!(
+        metadata["codecs"][0]["name"],
+        serde_json::json!("sharding_indexed"),
+        "a level indexes its subchunks through a shard"
+    );
+    assert_eq!(
+        metadata["codecs"][0]["configuration"]["chunk_shape"],
+        serde_json::json!([1, 1, 16, 64, 64]),
+        "a shard holds subchunks of sixty four by sixty four by sixteen voxels"
+    );
+    let shards = files(&path.join("0")) - 1;
+    assert_eq!(
+        shards, 8,
+        "a level writes one file per shard, not per chunk"
+    );
+    let image = grana_zarr::Image::open(&path).expect("the sharded image opens");
+    let data = image
+        .read_region(0, 0, 0, 250..262, 250..258, 30..34)
+        .expect("a region across every shard boundary reads");
+    let VoxelData::F32(values) = data else {
+        panic!("the sharded image stores float voxels");
+    };
+    for z in 30..34u32 {
+        for y in 250..258u32 {
+            for x in 250..262u32 {
+                let index = (x - 250 + 12 * (y - 250 + 8 * (z - 30))) as usize;
+                assert_eq!(
+                    values[index],
+                    x as f32 + 1000.0 * y as f32 + 1_000_000.0 * z as f32,
+                    "voxel {x},{y},{z}"
+                );
+            }
+        }
+    }
+}
+
+fn files(directory: &std::path::Path) -> usize {
+    std::fs::read_dir(directory)
+        .expect("a stored directory lists")
+        .flatten()
+        .map(|entry| match entry.path().is_dir() {
+            true => files(&entry.path()),
+            false => 1,
+        })
+        .sum()
+}
+
 fn write_zarr(root: &std::path::Path) {
     let levels = [
         Level::new(Extent::new(24, 16, 8), Spacing::new(0.5, 0.5, 1.0)),

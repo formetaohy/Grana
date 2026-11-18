@@ -28,6 +28,15 @@ impl Format {
         }
     }
 
+    pub fn planned_bytes(self, size: [u32; 2], frames: usize) -> u64 {
+        let pixels = u64::from(size[0]) * u64::from(size[1]);
+        let sample = match self {
+            Self::H264 => pixels * 3 / 2,
+            Self::Png => pixels * 4,
+        };
+        sample.saturating_mul(frames as u64)
+    }
+
     pub fn required(path: &Path, transparent: bool) -> Result<Self, Error> {
         let name = path
             .file_name()

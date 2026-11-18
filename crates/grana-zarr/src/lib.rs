@@ -1,5 +1,6 @@
 mod archive;
 mod axes;
+mod cache;
 mod chunk;
 mod error;
 mod frame;
@@ -11,6 +12,7 @@ mod parallel;
 mod plan;
 mod root;
 mod schema;
+mod shape;
 mod space;
 mod transform;
 mod write;

@@ -15,10 +15,8 @@ use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::parallel;
 use crate::plan::{Located, Plan};
+use crate::shape;
 
-const CHUNK_X: u32 = 256;
-const CHUNK_Y: u32 = 256;
-const CHUNK_Z: u32 = 32;
 const SLAB_Z: u32 = 4;
 pub(crate) const CANCELLED: &str = "the write was cancelled";
 const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
@@ -75,6 +73,7 @@ pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String>
             data_type::float32(),
             0.0f32,
         )
+        .subchunk_shape(subchunk_shape(plan).to_vec())
         .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
         .dimension_names(Some(
             AXIS_NAMES
@@ -290,17 +289,11 @@ fn reduce(
 }
 
 fn extent(level: Level) -> [u32; 3] {
-    let extent = level.extent();
-    [extent.x(), extent.y(), extent.z()]
+    shape::extent(level)
 }
 
 fn block(level: Level) -> Chunk {
-    let extent = level.extent();
-    Chunk::new([
-        extent.x().min(CHUNK_X),
-        extent.y().min(CHUNK_Y),
-        extent.z().min(CHUNK_Z),
-    ])
+    Chunk::new(shape::shard(shape::extent(level)))
 }
 
 fn chunk_shape(plan: &Plan) -> [u64; 5] {
@@ -311,6 +304,18 @@ fn chunk_shape(plan: &Plan) -> [u64; 5] {
         u64::from(shape[2]),
         u64::from(shape[1]),
         u64::from(shape[0]),
+    ]
+}
+
+fn subchunk_shape(plan: &Plan) -> [u64; 5] {
+    let extent = plan.extent();
+    let inner = shape::inner(extent);
+    [
+        1,
+        1,
+        u64::from(inner[2]),
+        u64::from(inner[1]),
+        u64::from(inner[0]),
     ]
 }
 

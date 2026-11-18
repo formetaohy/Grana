@@ -17,6 +17,7 @@ grana-display = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
 grana-volume = { workspace = true }
+memmap2 = { workspace = true }
 rayon = { workspace = true }
 
 [lints]

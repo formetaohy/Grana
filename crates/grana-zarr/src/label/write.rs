@@ -13,10 +13,8 @@ use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::metadata::{Axis, AxisKind};
 use crate::parallel;
+use crate::shape;
 
-const CHUNK_X: u32 = 256;
-const CHUNK_Y: u32 = 256;
-const CHUNK_Z: u32 = 32;
 const LABEL_LIMIT: usize = u16::MAX as usize;
 const CANCELLED: &str = "the write was cancelled";
 
@@ -391,7 +389,7 @@ fn build(
     let per_level = (0..levels)
         .map(|level| {
             let extent = image.pyramid().level(level).extent();
-            let chunk = chunk_shape(extent, kinds, x, y, z);
+            let chunk = chunk_shape(shape::of(extent), kinds, x, y, z);
             spatial_chunks(extent, &chunk, x, y, z)
         })
         .collect::<Vec<_>>();
@@ -402,13 +400,15 @@ fn build(
             return Err(CANCELLED.to_string());
         }
         let extent = image.pyramid().level(level).extent();
-        let chunk = chunk_shape(extent, kinds, x, y, z);
-        let shape = shape(extent, image.pyramid().frame_count(), kinds);
+        let spatial = shape::of(extent);
+        let chunk = chunk_shape(spatial, kinds, x, y, z);
+        let array_shape = array_shape(extent, image.pyramid().frame_count(), kinds);
         let names = axes
             .iter()
             .map(|axis| axis.name().to_string())
             .collect::<Vec<_>>();
-        let array = ArrayBuilder::new(shape, chunk.clone(), data_type::uint16(), 0u16)
+        let array = ArrayBuilder::new(array_shape, chunk.clone(), data_type::uint16(), 0u16)
+            .subchunk_shape(subchunk_shape(spatial, kinds, x, y, z))
             .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
             .dimension_names(Some(names))
             .build(
@@ -626,23 +626,35 @@ fn spatial_chunks(
         * u64::from(depth_extent).div_ceil(depth)) as usize
 }
 
-fn chunk_shape(
-    extent: grana_volume::Extent,
+fn chunk_shape(extent: [u32; 3], kinds: &[Kind], x: usize, y: usize, z: Option<usize>) -> Vec<u64> {
+    let mut chunk = vec![1u64; kinds.len()];
+    let shard = shape::shard(extent);
+    chunk[x] = u64::from(shard[0]);
+    chunk[y] = u64::from(shard[1]);
+    if let Some(z) = z {
+        chunk[z] = u64::from(shard[2]);
+    }
+    chunk
+}
+
+fn subchunk_shape(
+    extent: [u32; 3],
     kinds: &[Kind],
     x: usize,
     y: usize,
     z: Option<usize>,
 ) -> Vec<u64> {
     let mut chunk = vec![1u64; kinds.len()];
-    chunk[x] = u64::from(extent.x().min(CHUNK_X));
-    chunk[y] = u64::from(extent.y().min(CHUNK_Y));
+    let inner = shape::inner(extent);
+    chunk[x] = u64::from(inner[0]);
+    chunk[y] = u64::from(inner[1]);
     if let Some(z) = z {
-        chunk[z] = u64::from(extent.z().min(CHUNK_Z));
+        chunk[z] = u64::from(inner[2]);
     }
     chunk
 }
 
-fn shape(extent: grana_volume::Extent, frames: u32, kinds: &[Kind]) -> Vec<u64> {
+fn array_shape(extent: grana_volume::Extent, frames: u32, kinds: &[Kind]) -> Vec<u64> {
     let spatial = [extent.x(), extent.y(), extent.z()];
     let x = kinds.len() - 1;
     let y = kinds.len() - 2;

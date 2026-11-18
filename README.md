@@ -22,13 +22,11 @@ Grana is a next-generation microscopy platform for 3D and 4D imaging, written in
 
 ## Features
 
-- **File formats** — OME-TIFF, OME-Zarr, CZI, LIF and ND2 open directly.
-- **3D viewing** — whole volumes, slices and projections.
-- **Detection and tracking** — nuclei, cells, spots, surfaces and filaments, followed over time.
-- **Measurements** — statistics, colocalization, charts and filters.
-- **Batch analysis** — save an analysis as a protocol and run it over a folder of datasets.
-- **Export** — PNG and OME-TIFF images, SVG and PDF figures, MP4 and MOV movies, CSV tables.
-- **Performance** — large volumes render quickly and use little memory.
+- **Broad Format Support** — Open OME-TIFF, OME-Zarr (local or HTTP), Zeiss CZI, Leica LIF/LOF/XLIF, Nikon ND2 and Imaris IMS volumes, plus Picasso HDF5 and CSV localization tables.
+- **3D Visualization** — Explore whole volumes, slices, and projections seamlessly.
+- **Detection & Tracking** — Segment and track nuclei, cells, spots, surfaces, and filaments over time.
+- **Batch & Quantitative Analysis** — Measure statistics and colocalization, and automate workflows across folders as reusable protocols.
+- **High Performance** — Fast rendering with a minimal memory footprint on large volumes.
 
 ## Download
 

@@ -6,7 +6,6 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Pyramid, VoxelData,
     VoxelFormat, pad_brick,
 };
-use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
 use zarrs::group::Group;
@@ -16,6 +15,7 @@ use rayon::prelude::*;
 
 use crate::Error;
 use crate::axes::{self, Layout};
+use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
 use crate::root::Root;
 
@@ -33,10 +33,6 @@ const PALETTE: [[f32; 3]; 8] = [
 const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
 const RANGE_PROBE_SIDE: u32 = 32;
 const RANGE_SAMPLE_FRAMES: u32 = 4;
-const CHUNK_CACHE_BYTES: u64 = 128 << 20;
-const CHUNK_CACHE_MINIMUM: u64 = 8 << 20;
-
-type Cache = ChunkCacheLruSizeLimit<ChunkCacheTypeDecoded>;
 
 struct LevelArray {
     path: String,
@@ -73,8 +69,7 @@ impl Image {
         })?;
         let metadata = metadata::parse(&tag, opened.attributes())?;
         let readable: Arc<dyn ReadableStorageTraits> = root.readable();
-        let cache_bytes =
-            (CHUNK_CACHE_BYTES / metadata.datasets.len() as u64).max(CHUNK_CACHE_MINIMUM);
+        let cache_bytes = cache::per_level(metadata.datasets.len());
         let mut levels = Vec::with_capacity(metadata.datasets.len());
         let mut channel_count = None;
         let mut frames = None;
@@ -137,7 +132,7 @@ impl Image {
             }
             levels.push(LevelArray {
                 path: array_path,
-                cache: Cache::new(array, cache_bytes),
+                cache: Cache::open(array, cache_bytes),
                 layout,
             });
         }
@@ -417,21 +412,15 @@ fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData
     let data_type = array.data_type();
     if data_type == &uint8() {
         Ok(VoxelData::U8(
-            cache
-                .retrieve_array_subset::<Vec<u8>>(subset, &options)
-                .map_err(&mut read)?,
+            cache.retrieve::<u8>(subset, &options).map_err(&mut read)?,
         ))
     } else if data_type == &uint16() {
         Ok(VoxelData::U16(
-            cache
-                .retrieve_array_subset::<Vec<u16>>(subset, &options)
-                .map_err(&mut read)?,
+            cache.retrieve::<u16>(subset, &options).map_err(&mut read)?,
         ))
     } else {
         Ok(VoxelData::F32(
-            cache
-                .retrieve_array_subset::<Vec<f32>>(subset, &options)
-                .map_err(&mut read)?,
+            cache.retrieve::<f32>(subset, &options).map_err(&mut read)?,
         ))
     }
 }
