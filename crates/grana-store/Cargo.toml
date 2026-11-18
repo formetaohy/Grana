@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
-fs4 = { workspace = true }
 
 [lints]
 workspace = true

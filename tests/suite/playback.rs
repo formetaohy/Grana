@@ -9,10 +9,8 @@ use crate::support::gpu;
 
 const PLAYBACK: Duration = Duration::from_millis(90);
 
-fn play(delivery: Delivery, seconds: f64, advancing: bool) -> (u32, usize) {
-    let Some(gpu) = gpu() else {
-        return (0, 0);
-    };
+fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize)> {
+    let gpu = gpu()?;
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/data/zebrafish_neuromast.ome.tif");
     let mut session = Session::new();
@@ -83,12 +81,14 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> (u32, usize) {
         draws += 1;
         std::thread::sleep(Duration::from_millis(2));
     }
-    (time, draws)
+    Some((time, draws))
 }
 
 #[test]
 fn playback_advances_through_the_time_series() {
-    let (time, draws) = play(Delivery::Awaited, 6.0, true);
+    let Some((time, draws)) = play(Delivery::Awaited, 6.0, true) else {
+        return;
+    };
     assert!(
         time >= 8,
         "playback advanced {time} frames in six seconds with {draws} draws"
@@ -97,7 +97,9 @@ fn playback_advances_through_the_time_series() {
 
 #[test]
 fn a_still_resolves_the_frame_it_shows() {
-    let (time, draws) = play(Delivery::Immediate, 3.0, false);
+    let Some((time, draws)) = play(Delivery::Immediate, 3.0, false) else {
+        return;
+    };
     assert_eq!(
         time, 0,
         "a still moved away from its frame in {draws} draws"

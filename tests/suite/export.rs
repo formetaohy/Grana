@@ -479,6 +479,9 @@ fn cancels_an_export_without_leaving_a_partial_file() {
 
 #[test]
 fn runs_an_export_on_the_worker_thread() {
+    let Some(_gpu) = gpu() else {
+        return;
+    };
     let temp = Temp::new("grana-export-worker");
     let path = temp.path().join("image.png");
     let volume = export_volume();

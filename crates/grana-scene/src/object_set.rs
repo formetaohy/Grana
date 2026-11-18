@@ -1361,9 +1361,8 @@ impl ObjectSet {
         }
         set.settle_pages();
         let curation = Arc::make_mut(&mut set.curation);
-        for time in 0..set.frames.len() {
-            let stamp = set.frames[time].stamp;
-            curation.set_applied(time as u32, stamp);
+        for (time, frame) in set.frames.iter().enumerate() {
+            curation.set_applied(time as u32, frame.stamp);
         }
         if let Some(coloc) = object_coloc {
             assert_eq!(
@@ -1740,9 +1739,8 @@ impl ObjectSet {
             self.install_retained(time, pruned, &removed, stamp);
         }
         let curation = Arc::make_mut(&mut self.curation);
-        for time in 0..self.frames.len() {
-            let stamp = self.frames[time].stamp;
-            curation.set_applied(time as u32, stamp);
+        for (time, frame) in self.frames.iter().enumerate() {
+            curation.set_applied(time as u32, frame.stamp);
         }
         self.reapply_hidden(stamp);
         Arc::make_mut(&mut self.curation).set_pending(pending);

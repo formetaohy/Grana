@@ -170,8 +170,8 @@ impl Graph {
         }
         for node in &mut nodes {
             let count = node.voxels.len() as f32;
-            for axis in 0..3 {
-                node.position[axis] /= count;
+            for value in &mut node.position {
+                *value /= count;
             }
         }
         let mut edges = Vec::new();

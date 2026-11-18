@@ -113,8 +113,8 @@ impl<'a> Assembler<'a> {
             }
             let mut found = EMPTY;
             let mut best = 0u64;
-            for corner in 0..contact.count as usize {
-                let root = find(&mut self.nodes, base + contact.labels[corner]);
+            for label in contact.labels.iter().take(contact.count as usize) {
+                let root = find(&mut self.nodes, base + *label);
                 if root == object {
                     continue;
                 }

@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Match the tag against the workspace version
         run: |
@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
@@ -98,7 +98,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Install Apple silicon target
         run: rustup target add aarch64-apple-darwin

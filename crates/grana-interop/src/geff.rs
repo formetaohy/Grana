@@ -1957,10 +1957,9 @@ fn bounds(lineage: &Lineage) -> Limits {
         let time = detection.time() as f32;
         limits.time[0] = limits.time[0].min(time);
         limits.time[1] = limits.time[1].max(time);
-        for axis in 0..3 {
-            let value = detection.position()[axis];
-            limits.space[axis][0] = limits.space[axis][0].min(value);
-            limits.space[axis][1] = limits.space[axis][1].max(value);
+        for (limit, value) in limits.space.iter_mut().zip(detection.position()) {
+            limit[0] = limit[0].min(value);
+            limit[1] = limit[1].max(value);
         }
     }
     limits

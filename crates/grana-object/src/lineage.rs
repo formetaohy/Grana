@@ -393,8 +393,8 @@ impl Lineage {
         let count = self.detections.len();
         let mut chain_of = vec![usize::MAX; count];
         let mut chains: Vec<Vec<usize>> = Vec::new();
-        for start in 0..count {
-            if adjacency.incoming[start]
+        for (start, incoming) in adjacency.incoming.iter().enumerate() {
+            if incoming
                 .iter()
                 .any(|source| self.continues(*source) == Some(start))
             {

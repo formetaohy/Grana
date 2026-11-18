@@ -434,12 +434,12 @@ impl Residence {
         key: ViewKey,
     ) {
         if let Some(feedback) = self.feedback.as_ref() {
-            for band in 0..BAND {
+            for (band, view) in planner.view.bands.iter().enumerate() {
                 feedback.stage(
                     encoder,
                     slot,
                     band as u64 * self.bytes,
-                    planner.view.bands[band].buffer(),
+                    view.buffer(),
                     self.bytes,
                 );
             }

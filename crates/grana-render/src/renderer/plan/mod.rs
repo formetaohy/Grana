@@ -155,7 +155,7 @@ pub(super) fn schedule(
         tables[0].bounds.0.to_array(),
         tables[0].world.to_array(),
     );
-    for band in 0..BAND {
+    for (band, view) in planner.view.bands.iter_mut().enumerate() {
         let (capacity, dispatch, base) = match tables.get(band) {
             Some(table) => (
                 levels.capacity.get(band).copied().unwrap_or(0) as u32,
@@ -164,7 +164,7 @@ pub(super) fn schedule(
             ),
             None => (0, 0, 0),
         };
-        planner.view.bands[band].prepare(
+        view.prepare(
             queue,
             Schedule {
                 time,

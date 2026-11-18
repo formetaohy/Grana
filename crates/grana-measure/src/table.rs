@@ -901,8 +901,8 @@ impl Table {
 
     fn time_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
         let mut rows = std::collections::HashMap::with_capacity(self.rows());
-        for row in 0..self.rows() {
-            if let Some(time) = self.observations[row].time() {
+        for (row, observation) in self.observations.iter().enumerate() {
+            if let Some(time) = observation.time() {
                 rows.insert(time, row);
             }
         }

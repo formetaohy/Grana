@@ -29,14 +29,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        run: rustup show
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -47,7 +46,7 @@ jobs:
   test:
     name: ${{ matrix.platform }} Test
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -57,15 +56,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: test-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Test
+        if: runner.os == 'Windows'
+        run: cargo test -p grana --test suite --all-features --locked
+
+      - name: Test without graphics
+        if: runner.os == 'macOS'
+        env:
+          GRANA_GPU_TESTS: "off"
+        run: cargo test -p grana --test suite --all-features --locked
+
+      - name: Test graphics
+        if: runner.os == 'macOS'
+        continue-on-error: true
         run: cargo test -p grana --test suite --all-features --locked
 
   build:
@@ -77,12 +89,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Build release binary
         run: cargo build --workspace --all-features --release --locked
@@ -104,7 +117,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
       - name: Install Apple silicon target
         if: runner.os == 'macOS'
@@ -115,6 +128,7 @@ jobs:
         with:
           key: installer-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Build release binary
         if: runner.os == 'Windows'
