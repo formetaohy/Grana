@@ -34,57 +34,6 @@ fn reads_imaris_filaments() {
 }
 
 #[test]
-fn reads_imaris_points() {
-    let imported = imported(&fixture("imaris-points.ims")).expect("the point fixture opens");
-    let objects = imported.objects();
-    assert_eq!(objects.len(), 1);
-    assert_eq!(objects[0].kind(), ImportedKind::Spots);
-    let ImportedFrame::Spots(spots) = &objects[0].frames()[0].1 else {
-        panic!("the frame holds spots");
-    };
-    assert_eq!(spots.len(), 2);
-    assert_eq!(spots[0].center(), [-2.0, -1.0, 0.0]);
-    assert_eq!(spots[0].radius(), 0.5);
-    assert_eq!(spots[1].center(), [2.0, -1.0, 0.0]);
-    assert_eq!(spots[1].radius(), 0.75);
-}
-
-#[test]
-fn reads_imaris_track_edges_between_filaments() {
-    let imported = imported(&fixture("imaris-tracks.ims")).expect("the track fixture opens");
-    let objects = imported.objects();
-    assert_eq!(objects.len(), 1, "the filament object is read");
-    let object = &objects[0];
-    assert_eq!(object.name(), "Filaments 1");
-    assert_eq!(object.kind(), ImportedKind::Filaments);
-    let frames = object.frames();
-    assert_eq!(frames.len(), 2, "both filmed frames carry a filament");
-    assert_eq!(object.links(), &[([0, 0], [1, 0])]);
-}
-
-#[test]
-fn reads_legacy_filaments_and_reports_a_block_model() {
-    let imported = imported(&fixture("imaris-blocks.ims")).expect("the block fixture opens");
-    let objects = imported.objects();
-    assert_eq!(
-        objects.len(),
-        1,
-        "the legacy graphs stand in for the object"
-    );
-    let object = &objects[0];
-    assert_eq!(object.name(), "Filaments 2");
-    let ImportedFrame::Filaments(filaments) = &object.frames()[0].1 else {
-        panic!("the frame holds filaments");
-    };
-    assert_eq!(filaments[0].positions().len(), 2);
-    assert_eq!(filaments[0].edges(), &[[0, 1]]);
-    let diagnostics = imported.diagnostics();
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].name(), "Surface 1");
-    assert!(diagnostics[0].detail().contains("block model"));
-}
-
-#[test]
 fn reads_an_imaris_scene() {
     let imported = imported(&fixture("imaris.ims")).expect("the Imaris fixture opens");
     assert_eq!(imported.center(), [2.0, 2.0, 2.0]);

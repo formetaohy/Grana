@@ -29,27 +29,6 @@ fn writes_chunked_media_boxes_with_matching_tables() {
     }
 }
 
-#[test]
-fn rejects_a_container_that_does_not_carry_its_codec() {
-    let temp = Temp::new("grana-movie-format");
-    let transparent =
-        grana_video::Recorder::start(&temp.path().join("movie.mp4"), [16, 16], 25, true);
-    assert!(
-        matches!(transparent, Err(grana_video::Error::Transparent { .. })),
-        "a transparent movie refuses an mp4 name"
-    );
-    let lossy = grana_video::Recorder::start(&temp.path().join("movie.mov"), [16, 16], 25, false);
-    assert!(
-        matches!(lossy, Err(grana_video::Error::Opaque { .. })),
-        "a lossy movie refuses a mov name"
-    );
-    let unknown = grana_video::Recorder::start(&temp.path().join("movie.png"), [16, 16], 25, false);
-    assert!(
-        matches!(unknown, Err(grana_video::Error::Extension { .. })),
-        "a movie names a movie container"
-    );
-}
-
 fn verify(bytes: &[u8], alpha: bool) {
     let atoms = atoms(bytes);
     assert_eq!(

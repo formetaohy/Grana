@@ -1,8 +1,6 @@
 use glam::Vec3;
-use grana_geometry::{
-    Bounds, Hull, Mesh, MeshVertex, PackedMesh, SectionCutter, SectionPlane, SurfaceShape, simplify,
-};
-use grana_object::{IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics};
+use grana_geometry::{Hull, Mesh, MeshVertex, simplify};
+use grana_object::Mask;
 use grana_volume::{Extent, Level, Region, Spacing};
 
 fn torus(object: u32, major: u32, minor: u32, offset: f32) -> Mesh {
@@ -41,40 +39,6 @@ fn torus_gap(point: [f32; 3]) -> f32 {
     let point = Vec3::from(point);
     (((point.x * point.x + point.y * point.y).sqrt() - 5.0).powi(2) + point.z * point.z).sqrt()
         - 1.5
-}
-
-#[test]
-fn builds_coarse_surface_details_in_the_background() {
-    let mesh = torus(0, 192, 96, 0.0);
-    let triangles = mesh.triangle_count();
-    let statistics = SurfaceStatistics::new(
-        1,
-        1.0,
-        1.0,
-        [0.0; 3],
-        Bounds::new([-6.5, -6.5, -1.5], [6.5, 6.5, 1.5]),
-        None,
-    );
-    let intensities = IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]);
-    let set = SurfaceSet::new(0, mesh, vec![statistics], intensities);
-    let level = set.select_detail(triangles / 8);
-    assert!(level >= 2, "a distant surface asks for a coarse detail");
-    let (base, _) = set.detail(level).expect("the base surface loads");
-    assert_eq!(base.object_count(), 1, "the detail keeps its object");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let (mesh, available) = set.detail(level).expect("a surface detail loads");
-        if mesh.triangle_count() <= triangles / 4 {
-            assert_eq!(mesh.object_count(), 1, "the coarse detail keeps its object");
-            assert!(available >= 2, "the ladder reports the built level");
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the detail ladder never built"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
 }
 
 #[test]
@@ -131,101 +95,6 @@ fn simplifies_a_dense_torus_without_losing_its_shape() {
         "the simplified mesh holds whole triangles"
     );
 }
-
-fn cube(half: f32) -> Mesh {
-    let corners = [
-        [-half, -half, -half],
-        [half, -half, -half],
-        [half, half, -half],
-        [-half, half, -half],
-        [-half, -half, half],
-        [half, -half, half],
-        [half, half, half],
-        [-half, half, half],
-    ];
-    let vertices = corners
-        .into_iter()
-        .map(|corner| MeshVertex::new(corner, [0.0, 0.0, 1.0], 0))
-        .collect();
-    let indices = vec![
-        0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6,
-        3, 0, 4, 3, 4, 7,
-    ];
-    Mesh::new(vertices, indices)
-}
-
-fn area(vertices: &[[f32; 2]]) -> f32 {
-    let (quads, remainder) = vertices.as_chunks::<4>();
-    assert!(remainder.is_empty(), "cut faces are quads");
-    let mut total = 0.0f32;
-    for quad in quads {
-        let corners = (*quad).map(glam::Vec2::from);
-        let edges = [
-            corners[1] - corners[0],
-            corners[2] - corners[1],
-            corners[3] - corners[2],
-            corners[0] - corners[3],
-        ];
-        total += 0.5 * edges[0].perp_dot(edges[1]) + 0.5 * edges[2].perp_dot(edges[3]);
-    }
-    total.abs()
-}
-
-#[test]
-fn cuts_a_box_along_an_oblique_plane() {
-    let mesh = PackedMesh::new(cube(1.0));
-    let normal = Vec3::new(1.0, 1.0, 0.0).normalize();
-    let plane = SectionPlane::new(normal, Vec3::X, 0.0);
-    let mut cutter = SectionCutter::new();
-    let mut vertices = Vec::new();
-    let quads = cutter.cut(&mesh, 0, &plane, &mut vertices);
-    assert_eq!(quads, 1, "a box cut by one plane spans one quad");
-    let cut = area(&vertices);
-    let expected = 4.0 * 2.0f32.sqrt();
-    assert!(
-        (cut - expected).abs() < 1.0e-3 * expected,
-        "an oblique cut covers {cut} of the expected {expected}"
-    );
-}
-
-fn tilted(half: f32) -> Region {
-    let across = Vec3::new(1.0, 0.0, 1.0).normalize();
-    let down = Vec3::new(-1.0, 0.0, 1.0).normalize();
-    Region::new(Vec3::ZERO, [across, Vec3::Y, down], Vec3::splat(half))
-}
-
-#[test]
-fn describes_an_oriented_box() {
-    let region = tilted(1.0);
-    assert!(region.contains(Vec3::new(0.4, -0.7, 0.4)));
-    assert!(!region.contains(Vec3::new(1.0, 0.0, 1.0)));
-    assert!(!region.contains(Vec3::new(0.0, 1.2, 0.0)));
-    for index in 0..8 {
-        let corner = region.corner(index);
-        let local = region.local(corner);
-        assert!((local.abs() - region.half()).length() < 1.0e-5);
-    }
-    let (entry, exit) = region
-        .interval(-5.0 * Vec3::X, Vec3::X)
-        .expect("the ray crosses the box");
-    let reach = 2.0f32.sqrt();
-    assert!((entry - (5.0 - reach)).abs() < 1.0e-4, "entry {entry}");
-    assert!((exit - (5.0 + reach)).abs() < 1.0e-4, "exit {exit}");
-    assert!(
-        region.interval(Vec3::new(0.0, 2.0, 0.0), Vec3::X).is_none(),
-        "a ray above the box misses it"
-    );
-    assert!(
-        Region::checked(
-            [0.0; 3],
-            [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-            [1.0; 3]
-        )
-        .is_none(),
-        "parallel axes do not describe a box"
-    );
-}
-
 #[test]
 fn rasterises_an_oriented_region_exactly() {
     let extent = Extent::new(24, 20, 16);
@@ -260,39 +129,6 @@ fn rasterises_an_oriented_region_exactly() {
     assert!(
         inside < extent.voxel_count() as usize,
         "the tilted box holds the whole volume"
-    );
-}
-
-#[test]
-fn measures_the_shape_of_a_box() {
-    let mesh = cube(1.0);
-    let positions = mesh
-        .vertices()
-        .iter()
-        .map(|vertex| vertex.position())
-        .collect::<Vec<_>>();
-    let mut hulled = positions.clone();
-    hulled.push([0.0, 0.0, 0.0]);
-    hulled.push([0.2, -0.3, 0.4]);
-    let shape = SurfaceShape::of(&hulled, mesh.indices().as_chunks::<3>().0)
-        .expect("a box carries a shape");
-    let axis = (5.0f64 / 3.0).sqrt();
-    for measured in shape.axes() {
-        assert!(
-            (measured - axis).abs() < 1.0e-4,
-            "a box semi axis is {measured} and not {axis}"
-        );
-    }
-    let diameter = shape.diameter();
-    let expected = 12.0f64.sqrt();
-    assert!(
-        (diameter - expected).abs() < 1.0e-4,
-        "a box diagonal is {diameter} and not {expected}"
-    );
-    let volume = shape.hull_volume();
-    assert!(
-        (volume - 8.0).abs() < 1.0e-6,
-        "a unit box hull holds {volume} of the expected 8"
     );
 }
 

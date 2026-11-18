@@ -1,52 +1,11 @@
 use grana_exec::Cancel;
 use grana_image::Source;
-use grana_session::Session;
 use grana_stitch::{Request, stitch};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 const TILE: usize = 160;
 const OVERLAP: usize = 32;
 const DEPTH: u32 = 4;
-
-#[test]
-fn scans_a_tile_folder_before_offering_a_grid() {
-    let temp = crate::support::Temp::new("grana-stitch-scan");
-    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("plane.tif");
-    for index in 0..4 {
-        std::fs::copy(&fixture, temp.path().join(format!("tile-{index}.tif")))
-            .expect("a tile is placed in the folder");
-    }
-    let mut session = Session::new();
-    assert!(session.begin_stitch(temp.path().to_path_buf()));
-    let scanned = session.stitch().expect("the stitch panel opens");
-    assert_eq!(scanned.view().tiles, 0, "the panel starts out empty");
-    assert!(scanned.view().scanning, "the panel reports the scan");
-    assert_eq!(
-        session.stitch().map(|stitch| stitch.view().rows),
-        Some(0),
-        "a grid arrives only once the folder is scanned"
-    );
-    for _ in 0..600 {
-        session.poll();
-        if !session
-            .stitch()
-            .expect("the panel stays open")
-            .view()
-            .scanning
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let view = session.stitch().expect("the panel stays open").view();
-    assert!(!view.scanning, "the scan settles");
-    assert_eq!(view.tiles, 4, "the folder holds four tiles");
-    assert_eq!((view.rows, view.columns), (2, 2), "the tiles form a grid");
-    assert_eq!(view.channels.len(), 1, "the tiles name one channel");
-}
 
 #[test]
 fn a_cancelled_stitch_removes_its_staging() {

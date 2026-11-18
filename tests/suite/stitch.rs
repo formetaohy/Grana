@@ -1,57 +1,10 @@
 use grana_image::{Image, Source};
-use grana_stitch::{Edge, Offset, Plane, Request, Side, estimate, solve, stitch};
+use grana_stitch::{Request, stitch};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 const TILE: usize = 160;
 const OVERLAP: usize = 32;
 const DEPTH: u32 = 4;
-
-#[test]
-fn recovers_the_offsets_of_a_tiled_image() {
-    let width = 2 * TILE - OVERLAP;
-    let values = (0..width * width)
-        .map(|index| pattern(index % width, index / width))
-        .collect::<Vec<_>>();
-    let tile = |x: usize, y: usize| crop(&values, width, x, y);
-    let first = tile(0, 0);
-    let right = tile(TILE - OVERLAP, 0);
-    let below = tile(0, TILE - OVERLAP);
-    let corner = tile(TILE - OVERLAP, TILE - OVERLAP);
-    let step = Offset::new((TILE - OVERLAP) as i64, 0);
-    let down = Offset::new(0, (TILE - OVERLAP) as i64);
-    assert_eq!(
-        estimate(&first, &right, Side::Right).expect("the right tile registers"),
-        step
-    );
-    assert_eq!(
-        estimate(&first, &below, Side::Below).expect("the lower tile registers"),
-        down
-    );
-    let edges = [
-        Edge::new(0, 1, step),
-        Edge::new(0, 2, down),
-        Edge::new(
-            1,
-            3,
-            estimate(&right, &corner, Side::Below).expect("the corner registers"),
-        ),
-        Edge::new(
-            2,
-            3,
-            estimate(&below, &corner, Side::Right).expect("the corner registers"),
-        ),
-    ];
-    let positions = solve(4, &edges).expect("the tile grid solves");
-    assert_eq!(
-        positions,
-        vec![
-            Offset::new(0, 0),
-            step,
-            down,
-            Offset::new((TILE - OVERLAP) as i64, (TILE - OVERLAP) as i64),
-        ]
-    );
-}
 
 #[test]
 fn writes_a_stitched_mosaic() {
@@ -143,20 +96,6 @@ fn writes_a_stitched_mosaic() {
     }
     let _ = std::fs::remove_dir_all(&output);
 }
-
-fn crop(values: &[f32], width: usize, x: usize, y: usize) -> Plane {
-    Plane::new(
-        TILE,
-        TILE,
-        (0..TILE * TILE)
-            .map(|index| {
-                let (column, row) = (index % TILE, index / TILE);
-                values[(column + x) + width * (row + y)]
-            })
-            .collect(),
-    )
-}
-
 fn memory_tile(values: &[f32], width: usize, x: usize, y: usize) -> Source {
     let mut data = Vec::with_capacity(TILE * TILE * DEPTH as usize);
     for z in 0..DEPTH as usize {

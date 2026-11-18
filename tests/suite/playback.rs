@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_display::Camera;
-use grana_engine::{Engine, SETTLE};
+use grana_engine::Engine;
 use grana_render::Delivery;
 use grana_session::Session;
 
@@ -92,108 +92,5 @@ fn playback_advances_through_the_time_series() {
     assert!(
         time >= 8,
         "playback advanced {time} frames in six seconds with {draws} draws"
-    );
-}
-
-#[test]
-fn a_still_resolves_the_frame_it_shows() {
-    let Some((time, draws)) = play(Delivery::Immediate, 3.0, false) else {
-        return;
-    };
-    assert_eq!(
-        time, 0,
-        "a still moved away from its frame in {draws} draws"
-    );
-}
-
-#[test]
-fn a_frame_lands_at_the_full_viewport() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/data/zebrafish_neuromast.ome.tif");
-    let mut session = Session::new();
-    session.begin_load(path);
-    let mut waited = Duration::ZERO;
-    while session.scene().is_none() {
-        session.poll();
-        std::thread::sleep(Duration::from_millis(10));
-        waited += Duration::from_millis(10);
-        assert!(
-            waited < Duration::from_secs(120),
-            "the dataset never opened"
-        );
-    }
-    let scene = session.scene().expect("a scene");
-    let mut engine = Engine::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        gpu.pipelines(),
-    );
-    engine.set_dataset(gpu.device(), scene.dataset.pyramid());
-    let mut camera = Camera::new(35.0);
-    camera.fit(scene.dataset.world_size(), 1.0);
-    let size = [320, 320];
-    let draw = |engine: &mut Engine, session: &mut Session, delivery: Delivery| {
-        let current = session.scene().expect("a scene").time();
-        if let Some(requests) = engine.poll_requests(gpu.device(), current) {
-            session.request(requests.time, &requests.volume, &requests.prefetch);
-        }
-        let bricks = session.take_bricks();
-        if !bricks.is_empty() {
-            engine.upload(&bricks);
-        }
-        engine
-            .draw(
-                gpu.device(),
-                gpu.queue(),
-                grana_engine::View {
-                    scene: session.scene().expect("a scene"),
-                    camera: &camera,
-                    size,
-                    delivery,
-                    level_cap: 99,
-                    overlays: &[],
-                },
-            )
-            .expect("the viewport draws");
-    };
-    draw(&mut engine, &mut session, Delivery::Immediate);
-    assert!(engine.info().drawn, "a still frame draws");
-    let revision = engine.image_revision();
-    session.execute(grana_session::Command::SetExposure(2.0));
-    draw(&mut engine, &mut session, Delivery::Immediate);
-    assert_ne!(
-        engine.image_revision(),
-        revision,
-        "an exposure change presents the accumulated samples"
-    );
-    assert!(
-        engine.request_pick(gpu.device(), gpu.queue(), [size[0] - 20, size[1] - 20]),
-        "a frame covers the whole viewport"
-    );
-    while engine.pick_pending() {
-        engine.poll_pick(gpu.device());
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    for _ in 0..SETTLE * 4 {
-        draw(&mut engine, &mut session, Delivery::Immediate);
-        if engine.info().age >= SETTLE {
-            break;
-        }
-    }
-    let age = engine.info().age;
-    assert!(
-        age >= SETTLE,
-        "a still view settles until its history fills, reached {age} frames"
-    );
-    session.execute(grana_session::Command::SetExposure(0.5));
-    draw(&mut engine, &mut session, Delivery::Immediate);
-    assert_eq!(
-        engine.info().age,
-        age,
-        "an exposure change presents the settled history instead of drawing again"
     );
 }

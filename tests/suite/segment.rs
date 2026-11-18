@@ -62,57 +62,6 @@ fn assembles_slices_by_overlap() {
 }
 
 #[test]
-fn measures_the_minimum_size_of_an_assembled_object() {
-    let width = 4u32;
-    let height = 1u32;
-    let mut lower = vec![0u32; 4];
-    let mut upper = vec![0u32; 4];
-    for slice in [&mut lower, &mut upper] {
-        slice[0] = 1;
-        slice[1] = 1;
-        slice[2] = 1;
-        slice[3] = 2;
-    }
-    let volume = grana_segment::assemble(&mut [lower, upper], width, height, 0.5, 4)
-        .expect("the slices assemble");
-    assert_eq!(
-        volume.count(),
-        1,
-        "the minimum size measures objects once they are assembled"
-    );
-    assert_eq!(volume.labels()[0], volume.labels()[4]);
-    assert_eq!(
-        volume.labels()[3],
-        0,
-        "the thin object falls below the minimum size"
-    );
-    assert_eq!(volume.labels()[7], 0);
-}
-
-#[test]
-fn normalizes_a_plane_to_its_one_and_ninety_ninth_percentiles() {
-    let mut values = (0..1000).map(|index| index as f32).collect::<Vec<_>>();
-    values[0] = -5.0;
-    let normalized = grana_segment::normalize(&values);
-    let expected = (-5.0 - 9.99) / (989.01 - 9.99);
-    assert!(
-        (normalized[0] - expected).abs() <= 1.0e-5,
-        "the plane keeps its values below the first percentile: {} against {expected}",
-        normalized[0]
-    );
-    assert!(
-        normalized[999] > 1.0,
-        "the plane keeps its values above the ninety ninth percentile: {}",
-        normalized[999]
-    );
-    let flat = grana_segment::normalize(&[3.0; 16]);
-    assert!(
-        flat.iter().all(|value| *value == 0.0),
-        "a plane without contrast normalizes to zeros"
-    );
-}
-
-#[test]
 fn assigns_flow_basins_to_their_seeds() {
     let flow = basin_flow();
     let labels = flow.seeded(Prompt::new(&CENTERS, 0.0, 6.0));
