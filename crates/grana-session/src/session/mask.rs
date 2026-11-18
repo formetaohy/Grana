@@ -60,26 +60,26 @@ impl Session {
         )));
     }
 
-    pub(super) fn add_restore_channel(&mut self, source: usize, psf: Psf, iterations: u32) {
+    pub(super) fn add_restore_channel(&mut self, source: usize, psf: Psf, iterations: u32) -> bool {
         if self.recipe.is_some() {
             self.message = Some(Message::error(
                 "a protocol replay builds its own derived channels",
             ));
-            return;
+            return false;
         }
         let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             self.message = Some(Message::error("open a dataset before restoring it"));
-            return;
+            return false;
         };
         let (fundus, name) = {
             let Some(scene) = self.scene.as_mut() else {
-                return;
+                return false;
             };
             if source >= scene.base_channels() {
                 self.message = Some(Message::error(
                     "a restored channel restores a stored channel",
                 ));
-                return;
+                return false;
             }
             let fundus = scene.dataset.channels()[source].clone();
             let name = scene.unique_channel_name(&format!("{} restored", fundus.name()));
@@ -103,6 +103,7 @@ impl Session {
             iterations,
             task,
         });
+        true
     }
 
     pub(super) fn add_smooth_channel(&mut self, source: usize, sigma: f32) {
@@ -247,6 +248,16 @@ impl Session {
             ));
             return;
         };
+        if self
+            .scene
+            .as_ref()
+            .is_some_and(|scene| source >= scene.base_channels())
+        {
+            self.message = Some(Message::error(
+                "a bleach correction normalizes a stored channel",
+            ));
+            return;
+        }
         let prepared = (|| {
             let scene = self.scene.as_ref()?;
             let info = scene.dataset.channels().get(source)?;
@@ -456,7 +467,7 @@ impl Session {
                 let current = self.source.as_ref().and_then(Loader::channels);
                 match current {
                     Some(current) if current.layout() == pending.channels().layout() => {
-                        self.install_channel(pending, intensity);
+                        self.accept_channel(pending, intensity);
                     }
                     _ => {
                         self.message = Some(Message::info(
@@ -467,6 +478,14 @@ impl Session {
             }
             Err(detail) => self.message = Some(Message::error(detail)),
         }
+    }
+
+    fn accept_channel(&mut self, pending: PendingChannel, intensity: Intensity) {
+        let Some(recording) = self.begin_change(Edit::new(Action::Derived)) else {
+            return;
+        };
+        self.install_channel(pending, intensity);
+        self.commit_edit(recording);
     }
 
     fn install_channel(&mut self, pending: PendingChannel, intensity: Intensity) {

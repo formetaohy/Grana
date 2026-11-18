@@ -8,8 +8,7 @@ const RESIDUAL_BYTES: u64 = 16;
 const PIXEL_STEP: u64 = 1 << 17;
 const LAYER_LIMIT: u64 = 8;
 
-pub const ASSURED_LAYERS: u64 = 2;
-pub const INTERACTIVE_LAYERS: u64 = 1;
+pub const LAYERS: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fragment {

@@ -15,10 +15,8 @@ use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
 use grana_page::Format;
 
-const STILL_FRAMES: u32 = grana_render::SETTLE;
-const MOVIE_FRAMES: u32 = 1;
-const IMAGE_ATTEMPTS: u32 = 4096;
-const MOVIE_ATTEMPTS: u32 = 4096;
+const FRAMES: u32 = grana_render::SETTLE;
+const ATTEMPTS: u32 = 4096;
 const READBACK_SLOTS: usize = 2;
 
 pub(crate) enum Step {
@@ -149,14 +147,13 @@ impl Export {
             },
         };
         let lens = detail_lens(&poses, viewport.size[1]);
-        let frames = if movie { MOVIE_FRAMES } else { STILL_FRAMES };
         Ok(Self {
             sink: Some(sink),
             poses,
             frame: 0,
             written: 0,
             attempts: 0,
-            frames,
+            frames: FRAMES,
             drawn: 0,
             viewport,
             lens,
@@ -212,6 +209,9 @@ impl Export {
             return self.harvest(device, scene, true).unwrap_or(Step::Running);
         }
         let pose = self.poses[self.frame];
+        if self.drawn == 0 && self.attempts == 0 {
+            renderer.restart();
+        }
         let camera = camera(&pose.camera);
         renderer.set_transparent(self.transparent);
         let frame = rendered.frame(&[]);
@@ -243,7 +243,7 @@ impl Export {
             self.drawn += 1;
         }
         if self.drawn < self.frames {
-            if self.attempts > self.attempts_limit() {
+            if self.attempts > ATTEMPTS {
                 return self
                     .fail("the export could not resolve the volume being streamed".to_string());
             }
@@ -259,13 +259,6 @@ impl Export {
         match self.store(ui, drawn, composer) {
             Ok(step) => step,
             Err(detail) => Step::Failed(detail),
-        }
-    }
-
-    fn attempts_limit(&self) -> u32 {
-        match self.sink {
-            Some(Sink::Movie { .. }) => MOVIE_ATTEMPTS,
-            _ => IMAGE_ATTEMPTS,
         }
     }
 

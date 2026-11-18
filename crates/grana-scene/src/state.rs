@@ -17,7 +17,7 @@ use crate::label_export::LabelExport;
 use crate::localization::LocalizationSource;
 use crate::mask::MaskFilter;
 use crate::object::{ObjectKind, ObjectParams, TrackStyle};
-use crate::object_set::ObjectSetId;
+use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
 use crate::registration::Registration;
 use crate::revision::Revision;
@@ -107,6 +107,7 @@ pub struct SetState {
     pub seeds: Seeds,
     pub frames: Vec<Option<Frame>>,
     pub relations: Vec<RelationState>,
+    pub visibility: Visibility,
     pub provenance: Provenance,
     pub version: u32,
     pub curation: Arc<Curation>,
@@ -328,10 +329,6 @@ impl Scene {
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document().raw());
             hash = mix(hash, set.seed_source().map_or(0, ObjectSetId::raw));
-            let seeds = (0..self.frame_count())
-                .map(|time| set.seeds(time).len() as u64)
-                .sum::<u64>();
-            hash = mix(hash, seeds);
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.mask_radius.to_bits()));

@@ -1223,6 +1223,7 @@ impl ObjectSet {
                     frames: relation.shared_frames().to_vec(),
                 })
                 .collect(),
+            visibility: self.visibility.clone(),
             provenance: self.provenance.clone(),
             version: self.version,
             curation: Arc::clone(&self.curation),
@@ -1256,6 +1257,7 @@ impl ObjectSet {
             seeds,
             frames,
             relations,
+            visibility,
             provenance,
             version,
             curation,
@@ -1417,6 +1419,7 @@ impl ObjectSet {
                 .thickness();
             set.tracks = Some(TrackLayer::shared(tracks, thickness, stamps.mint()));
         }
+        set.set_visibility(visibility, stamps.mint());
         set.restore_coloring(object_color, track_color);
         set.document = document;
         set

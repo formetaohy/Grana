@@ -353,6 +353,17 @@ impl Renderer {
         self.info = FrameInfo::default();
     }
 
+    pub fn restart(&mut self) {
+        for target in self.targets.iter_mut() {
+            target.structure = None;
+            target.taa.invalidate();
+            target.phase = 0;
+        }
+        self.motion = None;
+        self.fade = None;
+        self.info = FrameInfo::default();
+    }
+
     pub fn set_exporting(&mut self, exporting: bool) {
         if self.exporting != exporting {
             self.fade = None;

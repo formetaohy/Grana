@@ -52,6 +52,24 @@ impl Mask {
         self.rows
     }
 
+    pub fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    pub fn from_words(rows: usize, words: Vec<u64>) -> Option<Self> {
+        if words.len() != rows.div_ceil(WORD) {
+            return None;
+        }
+        if let Some(last) = words.last()
+            && !rows.is_multiple_of(WORD)
+            && (last >> (rows % WORD)) != 0
+        {
+            return None;
+        }
+        let count = words.iter().map(|word| u64::from(word.count_ones())).sum();
+        Some(Self { words, rows, count })
+    }
+
     pub fn count(&self) -> u64 {
         self.count
     }

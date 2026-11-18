@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ use grana_scene::{
     ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey,
     Operation, Provenance, RatioSpec, Recipe, Registration, RelationState, RestoreSpec, SceneState,
     Seeds, SelectionState, SetState, SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor,
-    TrackColor, TrackEdit, TrackStyle,
+    TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
@@ -669,6 +670,12 @@ impl Decode for SetState {
             .into_iter()
             .map(|frame| frame.map(|frame| grana_scene::Frame::resident(Arc::new(frame))))
             .collect::<Vec<_>>();
+        let relations = Vec::<RelationState>::decode(reader)?;
+        let provenance = Provenance::decode(reader)?;
+        let version = reader.u32()?;
+        let curation = Arc::<Curation>::decode(reader)?;
+        let document = grana_scene::Revision::from_raw(reader.u64()?);
+        let visibility = Visibility::decode(reader)?;
         let state = Self {
             id,
             key,
@@ -693,14 +700,79 @@ impl Decode for SetState {
             localization,
             seeds,
             frames,
-            relations: Vec::<RelationState>::decode(reader)?,
-            provenance: Provenance::decode(reader)?,
-            version: reader.u32()?,
-            curation: Arc::<Curation>::decode(reader)?,
-            document: grana_scene::Revision::from_raw(reader.u64()?),
+            relations,
+            provenance,
+            version,
+            curation,
+            document,
+            visibility,
         };
+        validate_visibility(&state.visibility, &state.frames, state.tracks.as_deref())?;
         Ok(state)
     }
+}
+
+impl Decode for grana_measure::Mask {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let rows = reader.count(1)?;
+        let words = rows.div_ceil(u64::BITS as usize);
+        let mut bits = Vec::with_capacity(reserve(words));
+        for _ in 0..words {
+            bits.push(reader.u64()?);
+        }
+        Self::from_words(rows, bits).ok_or(FAULT_VALUE)
+    }
+}
+
+impl Decode for Visibility {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::All),
+            1 => Ok(Self::Objects {
+                mask: Arc::new(grana_measure::Mask::decode(reader)?),
+                frames: Arc::new(Vec::<u32>::decode(reader)?),
+            }),
+            2 => Ok(Self::Tracks(Arc::new(grana_measure::Mask::decode(reader)?))),
+            3 => {
+                let mask = Arc::new(grana_measure::Mask::decode(reader)?);
+                let count = reader.count(8)?;
+                let mut rows = HashMap::with_capacity(reserve(count));
+                for _ in 0..count {
+                    let group = reader.u32()?;
+                    let row = reader.u32()?;
+                    if rows.insert(group, row).is_some() {
+                        return Err(FAULT_VALUE);
+                    }
+                }
+                Ok(Self::Molecules {
+                    mask,
+                    rows: Arc::new(rows),
+                })
+            }
+            _ => Err(FAULT_SHAPE),
+        }
+    }
+}
+
+fn validate_visibility(
+    visibility: &Visibility,
+    slots: &[Option<grana_scene::Frame>],
+    tracks: Option<&TrackSet>,
+) -> Result<(), &'static str> {
+    let holds = match visibility {
+        Visibility::All => true,
+        Visibility::Objects { mask, frames } => {
+            let objects = slots
+                .iter()
+                .flatten()
+                .map(grana_scene::Frame::objects)
+                .sum::<usize>();
+            frames.len() == slots.len() && mask.rows() == objects
+        }
+        Visibility::Tracks(mask) => mask.rows() == tracks.map_or(0, TrackSet::len),
+        Visibility::Molecules { mask, rows } => mask.rows() == rows.len(),
+    };
+    if holds { Ok(()) } else { Err(FAULT_SHAPE) }
 }
 
 impl Decode for Provenance {

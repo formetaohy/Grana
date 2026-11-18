@@ -648,11 +648,11 @@ impl Session {
         }
     }
     pub fn apply_measure(&mut self) {
-        if self.measure.take_dirty() {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if self.measure.apply(scene) {
             self.touch();
-            if let Some(scene) = self.scene.as_mut() {
-                self.measure.apply(scene);
-            }
         }
     }
     pub fn poll(&mut self) -> bool {
@@ -699,6 +699,9 @@ impl Session {
     }
     pub fn plotting(&self) -> bool {
         self.tasks.plotting()
+    }
+    pub fn deriving(&self) -> bool {
+        self.tasks.deriving()
     }
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         self.tasks.progress()

@@ -243,6 +243,7 @@ impl Session {
         if self.reject_transfer() {
             return;
         }
+        self.apply_measure();
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
@@ -429,6 +430,7 @@ impl Session {
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();
+        self.resume.clear();
         self.deferred = false;
         self.recut = None;
         self.message = None;

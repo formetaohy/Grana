@@ -440,15 +440,12 @@ impl Session {
                     beads,
                     iterations,
                 } => {
-                    if job == Job::Calibrate {
-                        let before = self.scene.as_ref().map_or(0, |scene| scene.derived().len());
-                        self.add_restore_channel(source, Psf::Measured(*psf), iterations);
-                        let after = self.scene.as_ref().map_or(0, |scene| scene.derived().len());
-                        if after > before {
-                            self.message = Some(Message::info(format!(
-                                "a measured point spread function was calibrated from {beads} beads"
-                            )));
-                        }
+                    if job == Job::Calibrate
+                        && self.add_restore_channel(source, Psf::Measured(*psf), iterations)
+                    {
+                        self.message = Some(Message::info(format!(
+                            "a measured point spread function was calibrated from {beads} beads"
+                        )));
                     }
                 }
                 Update::Done => {

@@ -520,6 +520,10 @@ impl Tasks {
         self.channels.push(channel);
     }
 
+    pub(super) fn deriving(&self) -> bool {
+        !self.channels.is_empty()
+    }
+
     pub(super) fn progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             let (done, total) = labels.progress();

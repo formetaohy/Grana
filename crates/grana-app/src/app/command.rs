@@ -150,23 +150,24 @@ impl App {
     }
 
     pub(super) fn follow_resume(&mut self) -> bool {
-        if self.resume.is_none() || self.session.transferring() {
+        if self.session.transferring() {
             return false;
         }
-        if self.session.dirty() {
-            self.resume = None;
+        let Some(next) = self.resume.take() else {
+            return false;
+        };
+        if !self.release_document(next.clone()) {
             return false;
         }
-        match self.resume.take() {
-            Some(Resume::Exit) => {
+        match next {
+            Resume::Exit => {
                 self.exiting = true;
                 true
             }
-            Some(Resume::Command(command)) => {
+            Resume::Command(command) => {
                 self.apply(vec![command]);
                 false
             }
-            None => false,
         }
     }
 

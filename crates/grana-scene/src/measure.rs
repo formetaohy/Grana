@@ -510,10 +510,6 @@ impl Measure {
         self.pin();
     }
 
-    pub fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
-    }
-
     pub fn reset(&mut self) {
         self.set = None;
         self.table = None;
@@ -640,15 +636,23 @@ impl Measure {
         Some((table, rows.rows().to_vec()))
     }
 
-    pub fn apply(&mut self, scene: &mut Scene) {
-        self.dirty = false;
+    pub fn apply(&mut self, scene: &mut Scene) -> bool {
+        if !self.dirty {
+            return false;
+        }
         let Some(id) = self.set else {
-            return;
+            self.dirty = false;
+            return false;
         };
+        if scene.objects.get(id).is_none() {
+            self.dirty = false;
+            return false;
+        }
         let Some(visibility) = self.restriction(scene, id) else {
-            return;
+            return false;
         };
-        scene.objects.set_visibility(id, visibility);
+        self.dirty = false;
+        scene.objects.set_visibility(id, visibility)
     }
 
     fn restriction(&self, scene: &Scene, id: ObjectSetId) -> Option<Visibility> {
@@ -726,6 +730,7 @@ impl Measure {
         self.group = state.group;
         self.aggregate = state.aggregate;
         self.scope = state.scope;
+        self.roi = scene.region_scope();
         self.time = scene.time();
         self.visibility = state.visibility;
         self.view = state.view;

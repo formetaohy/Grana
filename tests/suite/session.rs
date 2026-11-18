@@ -523,12 +523,32 @@ fn round_trips_a_project() {
         0,
         ObjectFrame::from_spots(SpotSet::new(
             0,
-            vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
+            vec![
+                Spot::new([0.0, 0.0, 0.0], 1.0, 0.5),
+                Spot::new([1.0, 0.0, 0.0], 1.0, 0.5),
+            ],
             IntensityTable::new(
                 1,
-                vec![SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0)],
+                vec![SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0); 2],
             ),
         )),
+    );
+    let visibility = grana_scene::Visibility::Objects {
+        mask: std::sync::Arc::new(grana_measure::Mask::of(2, |row| row == 0)),
+        frames: std::sync::Arc::new(vec![0u32]),
+    };
+    assert!(
+        scene.objects.set_visibility(spots, visibility.clone()),
+        "a statistics filter excludes the second spot"
+    );
+    scene.restore(scene.state());
+    assert_eq!(
+        scene
+            .objects
+            .get(spots)
+            .map(grana_scene::ObjectSet::visibility),
+        Some(&visibility),
+        "a restored scene keeps the objects its filters excluded"
     );
     scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
     scene.set_volume_mode(0, grana_display::VolumeMode::Isosurface);
@@ -561,6 +581,11 @@ fn round_trips_a_project() {
     )
     .expect("the project reads");
     assert_eq!(loaded, project);
+    assert_ne!(
+        loaded.scene.sets[0].visibility,
+        grana_scene::Visibility::All,
+        "a project keeps the objects its statistics filters exclude"
+    );
 }
 
 #[test]

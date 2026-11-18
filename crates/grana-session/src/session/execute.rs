@@ -104,7 +104,9 @@ impl Session {
                 source,
                 psf,
                 iterations,
-            } => self.add_restore_channel(source, psf, iterations),
+            } => {
+                self.add_restore_channel(source, psf, iterations);
+            }
             Command::AddSmoothChannel { source, sigma } => {
                 self.add_smooth_channel(source, sigma);
             }
@@ -849,10 +851,13 @@ impl Session {
     }
 
     pub(super) fn begin_edit(&self, command: &Command) -> Option<Recording> {
+        self.begin_change(command.edit()?)
+    }
+
+    pub(super) fn begin_change(&self, edit: Edit) -> Option<Recording> {
         if self.loading.is_some() {
             return None;
         }
-        let edit = command.edit()?;
         let undo = if self.history.coalesces(&edit) {
             Undo::Coalesced
         } else {

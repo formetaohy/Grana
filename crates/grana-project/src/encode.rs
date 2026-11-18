@@ -19,7 +19,7 @@ use grana_scene::{
     Criteria, Curation, DerivedSpec, Drift, Drifts, FilterRange, ItemState, LabelExport, LassoPath,
     LocalizationAlignment, LocalizationSource, MeasureState, ObjectColor, ObjectFrame,
     ObjectParams, Provenance, Recipe, Registration, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 use grana_warp::Warp;
@@ -512,6 +512,44 @@ impl Encode for SetState {
         writer.u32(self.version);
         self.curation.encode(writer);
         writer.u64(self.document.raw());
+        self.visibility.encode(writer);
+    }
+}
+
+impl Encode for grana_measure::Mask {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.rows());
+        for word in self.words() {
+            writer.u64(*word);
+        }
+    }
+}
+
+impl Encode for Visibility {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::All => writer.u8(0),
+            Self::Objects { mask, frames } => {
+                writer.u8(1);
+                mask.encode(writer);
+                frames.encode(writer);
+            }
+            Self::Tracks(mask) => {
+                writer.u8(2);
+                mask.encode(writer);
+            }
+            Self::Molecules { mask, rows } => {
+                writer.u8(3);
+                mask.encode(writer);
+                writer.count(rows.len());
+                let mut entries = rows.iter().collect::<Vec<_>>();
+                entries.sort_unstable_by_key(|(group, _)| **group);
+                for (group, row) in entries {
+                    writer.u32(*group);
+                    writer.u32(*row);
+                }
+            }
+        }
     }
 }
 

@@ -245,11 +245,7 @@ impl Renderer {
             info.fading = false;
             return Err(Halt::Hold(*info));
         }
-        let layers = shot.translucent.then_some(if shot.assured {
-            crate::fragment::ASSURED_LAYERS
-        } else {
-            crate::fragment::INTERACTIVE_LAYERS
-        });
+        let layers = shot.translucent.then_some(crate::fragment::LAYERS);
         if let Err(detail) = allocate::targets(
             device,
             layouts,

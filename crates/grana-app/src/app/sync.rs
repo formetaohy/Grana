@@ -78,9 +78,9 @@ impl App {
         if !idle || !due || !self.session.dirty() || self.session.analysing() {
             return;
         }
-        self.autosave_at = Some(now);
-        let view = self.view_state();
-        self.session.autosave(view);
+        if self.session.autosave(self.view_state()) {
+            self.autosave_at = Some(now);
+        }
     }
 
     pub(super) fn autosave_wait(&self) -> Duration {

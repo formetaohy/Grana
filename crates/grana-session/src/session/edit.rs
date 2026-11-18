@@ -698,6 +698,7 @@ impl Session {
             }
         };
         let mut created = false;
+        let mut previous = None;
         let (source, target) = match self
             .scene
             .as_ref()
@@ -709,6 +710,7 @@ impl Session {
                     .map(|(source, edits)| (source, edits.to_vec()))
             }) {
             Some((source, mut edits)) => {
+                let held = edits.clone();
                 edits.extend(plan);
                 let replanned = self
                     .scene
@@ -718,6 +720,7 @@ impl Session {
                     self.message = Some(Message::error("the object set holds no surface edits"));
                     return false;
                 }
+                previous = Some(held);
                 (source, set)
             }
             None => {
@@ -736,6 +739,10 @@ impl Session {
         if let Err(detail) = self.apply_edit_plan(target) {
             if created {
                 self.remove_object(target);
+            } else if let Some(previous) = previous
+                && let Some(scene) = self.scene.as_mut()
+            {
+                scene.replan_object(target, previous);
             }
             self.message = Some(Message::error(detail));
             return false;
