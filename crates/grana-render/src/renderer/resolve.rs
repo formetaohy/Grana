@@ -24,7 +24,7 @@ pub(super) struct Stage<'a> {
     pub(super) volume: bool,
     pub(super) phase: u32,
     pub(super) reset: bool,
-    pub(super) moved: bool,
+    pub(super) clamp: bool,
     pub(super) previous: Option<Mat4>,
     pub(super) dummy_normal: &'a TextureView,
     pub(super) dummy_volume: &'a crate::target::Unreached,
@@ -51,7 +51,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         volume,
         phase,
         reset,
-        moved,
+        clamp,
         previous,
         dummy_normal,
         dummy_volume,
@@ -64,7 +64,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         previous.unwrap_or(current),
         [offset, target.jitter],
         intact,
-        moved,
+        clamp,
     );
     let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume, volume);
     let group = taa.bind(device, target.scene.color(), target.taa.read());

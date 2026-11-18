@@ -16,17 +16,16 @@ pub(super) struct Signature<'a> {
 }
 
 impl Signature<'_> {
-    pub(super) fn structure(self) -> u64 {
+    pub(super) fn layers(self) -> u64 {
         let Self {
             data,
             region,
             versions,
-            channels,
             content,
             time,
             epoch,
             size,
-            step,
+            ..
         } = self;
         let mut hasher = DefaultHasher::new();
         region.hash(&mut hasher);
@@ -34,11 +33,7 @@ impl Signature<'_> {
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);
         content.hash(&mut hasher);
-        channels.hash(&mut hasher);
-        versions.data().hash(&mut hasher);
-        versions.objects().hash(&mut hasher);
-        versions.style().hash(&mut hasher);
-        step.to_bits().hash(&mut hasher);
+        versions.topology().hash(&mut hasher);
         data.clip.map(f32::to_bits).hash(&mut hasher);
         data.slice.map(f32::to_bits).hash(&mut hasher);
         data.slice_view.map(f32::to_bits).hash(&mut hasher);
@@ -46,10 +41,33 @@ impl Signature<'_> {
         for axis in data.region_axis {
             axis.map(f32::to_bits).hash(&mut hasher);
         }
+        hasher.finish()
+    }
+
+    pub(super) fn classification(self) -> u64 {
+        let Self { data, versions, .. } = self;
+        let mut hasher = DefaultHasher::new();
+        versions.classification().hash(&mut hasher);
+        data.march[1].to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    pub(super) fn appearance(self) -> u64 {
+        let Self {
+            data,
+            versions,
+            channels,
+            step,
+            ..
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        versions.appearance().hash(&mut hasher);
+        channels.hash(&mut hasher);
+        step.to_bits().hash(&mut hasher);
         data.light.map(f32::to_bits).hash(&mut hasher);
         data.light_reach.map(f32::to_bits).hash(&mut hasher);
         data.shading.map(f32::to_bits).hash(&mut hasher);
-        for value in &data.march[1..] {
+        for value in &data.march[2..] {
             value.to_bits().hash(&mut hasher);
         }
         hasher.finish()
@@ -99,12 +117,7 @@ pub(super) struct ShadowVolume {
 }
 
 impl ShadowKeys {
-    pub(super) fn of(
-        objects: u64,
-        visibility: u64,
-        volume: ShadowVolume,
-        space: &ShadowSpace,
-    ) -> Self {
+    pub(super) fn of(layers: u64, volume: ShadowVolume, space: &ShadowSpace) -> Self {
         let ShadowVolume {
             revision,
             writes,
@@ -122,7 +135,7 @@ impl ShadowKeys {
                 writes,
                 space,
             ]),
-            objects: digest(&[objects, visibility, space]),
+            objects: digest(&[layers, space]),
         }
     }
 
@@ -147,8 +160,8 @@ pub(super) fn shadow_visibility(layers: &[Layer]) -> u64 {
 
 #[derive(Clone, Copy)]
 pub(super) struct SceneSummary {
-    objects: u64,
-    style: u64,
+    topology: u64,
+    classification: u64,
     bounds: (Vec3, Vec3),
     visibility: u64,
 }
@@ -156,15 +169,15 @@ pub(super) struct SceneSummary {
 impl SceneSummary {
     pub(super) fn of(scene: &SceneFrame<'_>, world: Vec3) -> Self {
         Self {
-            objects: scene.versions.objects(),
-            style: scene.versions.style(),
+            topology: scene.versions.topology(),
+            classification: scene.versions.classification(),
             bounds: surface_bounds(scene, world),
             visibility: shadow_visibility(scene.layers),
         }
     }
 
     pub(super) fn holds(self, versions: Versions) -> bool {
-        self.objects == versions.objects() && self.style == versions.style()
+        self.topology == versions.topology() && self.classification == versions.classification()
     }
 
     pub(super) fn bounds(self) -> (Vec3, Vec3) {

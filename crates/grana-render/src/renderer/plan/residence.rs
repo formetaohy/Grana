@@ -19,8 +19,7 @@ const PREFETCH_SHARE: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Passes {
-    objects: u64,
-    style: u64,
+    layers: u64,
 }
 
 pub(crate) struct ResidencyDemand {
@@ -326,15 +325,13 @@ impl Residence {
     pub(crate) fn passes_outdated(&self, versions: Versions) -> bool {
         self.passes
             != Some(Passes {
-                objects: versions.objects(),
-                style: versions.style(),
+                layers: versions.topology(),
             })
     }
 
     pub(crate) fn load_passes(&mut self, versions: Versions) {
         self.passes = Some(Passes {
-            objects: versions.objects(),
-            style: versions.style(),
+            layers: versions.topology(),
         });
     }
 
@@ -389,7 +386,7 @@ impl Residence {
         self.level = Some(planned.ladder.base);
         let key = ViewKey::of(
             self.epoch,
-            self.stamp(versions.data()),
+            self.stamp(versions.topology()),
             Mode { prefetch, assured },
             time,
             ViewState {

@@ -9,29 +9,15 @@ use grana_volume::Intensity;
 pub struct LayerKey {
     owner: u64,
     part: u32,
-    frame: Option<u64>,
-    revision: u64,
     detail: u16,
 }
 
 impl LayerKey {
-    pub fn at_frame(owner: u64, part: u32, frame: u64, revision: u64, detail: u16) -> Self {
+    pub fn new(owner: u64, part: u32, detail: u16) -> Self {
         Self {
             owner,
             part,
-            frame: Some(frame),
-            revision,
             detail,
-        }
-    }
-
-    pub fn stable(owner: u64, part: u32, revision: u64) -> Self {
-        Self {
-            owner,
-            part,
-            frame: None,
-            revision,
-            detail: 0,
         }
     }
 
@@ -51,8 +37,6 @@ impl LayerKey {
         let mut key = Digest::new();
         key.mix(self.owner);
         key.mix(u64::from(self.part));
-        key.mix(self.frame.unwrap_or(u64::MAX));
-        key.mix(self.revision);
         key.mix(u64::from(self.detail));
         key.finish()
     }
@@ -60,30 +44,30 @@ impl LayerKey {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Versions {
-    data: u64,
-    objects: u64,
-    style: u64,
+    topology: u64,
+    classification: u64,
+    appearance: u64,
 }
 
 impl Versions {
-    pub fn new(data: u64, objects: u64, style: u64) -> Self {
+    pub fn new(topology: u64, classification: u64, appearance: u64) -> Self {
         Self {
-            data,
-            objects,
-            style,
+            topology,
+            classification,
+            appearance,
         }
     }
 
-    pub fn data(self) -> u64 {
-        self.data
+    pub fn topology(self) -> u64 {
+        self.topology
     }
 
-    pub fn objects(self) -> u64 {
-        self.objects
+    pub fn classification(self) -> u64 {
+        self.classification
     }
 
-    pub fn style(self) -> u64 {
-        self.style
+    pub fn appearance(self) -> u64 {
+        self.appearance
     }
 }
 
@@ -202,6 +186,7 @@ pub struct ChannelRow {
 pub struct Layer {
     pub key: LayerKey,
     pub geometry: u64,
+    pub look: u64,
     pub mesh: Arc<PackedMesh>,
     pub styles: Arc<[Style]>,
     pub pick_base: u32,
@@ -211,6 +196,7 @@ impl Layer {
     pub fn new(
         key: LayerKey,
         geometry: u64,
+        look: u64,
         mesh: Arc<PackedMesh>,
         styles: Arc<[Style]>,
         pick_base: u32,
@@ -227,6 +213,7 @@ impl Layer {
         Self {
             key,
             geometry,
+            look,
             mesh,
             styles,
             pick_base,

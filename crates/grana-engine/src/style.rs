@@ -13,12 +13,14 @@ struct Entry {
     set: ObjectSetId,
     part: u32,
     digest: u64,
+    classification: u64,
     styles: Arc<[Style]>,
     ids: Arc<[Selection]>,
 }
 
 pub(crate) struct Rows {
     digest: u64,
+    classification: u64,
     styles: Arc<[Style]>,
     ids: Arc<[Selection]>,
 }
@@ -26,6 +28,10 @@ pub(crate) struct Rows {
 impl Rows {
     pub(crate) fn digest(&self) -> u64 {
         self.digest
+    }
+
+    pub(crate) fn classification(&self) -> u64 {
+        self.classification
     }
 
     pub(crate) fn styles(&self) -> Arc<[Style]> {
@@ -72,6 +78,7 @@ impl StyleCache {
                     set: set.id(),
                     part,
                     digest: 0,
+                    classification: 0,
                     styles: Arc::from(Vec::new()),
                     ids: Arc::from(Vec::new()),
                 });
@@ -89,16 +96,27 @@ impl StyleCache {
                 "a style cache fills one style per object"
             );
             assert_eq!(ids.len(), count, "a style cache fills one id per object");
+            entry.classification = classification(&styles);
             entry.styles = Arc::from(styles);
             entry.ids = Arc::from(ids);
             entry.digest = digest;
         }
         Rows {
             digest: entry.digest,
+            classification: entry.classification,
             styles: Arc::clone(&entry.styles),
             ids: Arc::clone(&entry.ids),
         }
     }
+}
+
+fn classification(styles: &[Style]) -> u64 {
+    let mut digest = Digest::new();
+    for style in styles {
+        digest.flag(style.visible());
+        digest.flag(style.transparent());
+    }
+    digest.finish()
 }
 
 fn digest(scene: &Scene, set: &ObjectSet, part: u32, count: usize) -> u64 {

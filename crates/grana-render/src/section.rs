@@ -78,6 +78,7 @@ impl PlaneKey {
 }
 
 struct Indices {
+    geometry: u64,
     normal: [u32; 3],
     objects: Vec<SectionIndex>,
 }
@@ -340,7 +341,7 @@ impl Sections {
             structure.mix(u64::from(layer.pick_base));
         }
         let structure = structure.finish();
-        let version = scene.versions.style();
+        let version = scene.versions.classification();
         if let Some(held) = self.visibility
             && held.version == version
             && held.structure == structure
@@ -363,7 +364,7 @@ impl Sections {
     }
 
     fn style_digest(&mut self, scene: &SceneFrame<'_>) -> (u64, u64) {
-        let version = scene.versions.style();
+        let version = scene.versions.appearance();
         if let Some(held) = self.styles
             && held.0 == version
         {
@@ -383,11 +384,13 @@ impl Sections {
                 .indices
                 .entry(layer.key)
                 .and_modify(|indices| {
-                    if indices.normal != plane.normal.map(f32::to_bits) {
-                        *indices = Indices::new(&layer.mesh, plane.normal);
+                    if indices.normal != plane.normal.map(f32::to_bits)
+                        || indices.geometry != layer.geometry
+                    {
+                        *indices = Indices::new(&layer.mesh, plane.normal, layer.geometry);
                     }
                 })
-                .or_insert_with(|| Indices::new(&layer.mesh, plane.normal));
+                .or_insert_with(|| Indices::new(&layer.mesh, plane.normal, layer.geometry));
             for (object, index) in indices.objects.iter().enumerate() {
                 if !layer.styles[object].visible() {
                     continue;
@@ -523,11 +526,12 @@ fn style_stamp(layers: &[Layer]) -> u64 {
 }
 
 impl Indices {
-    fn new(mesh: &PackedMesh, normal: [f32; 3]) -> Self {
+    fn new(mesh: &PackedMesh, normal: [f32; 3], geometry: u64) -> Self {
         let objects = (0..mesh.groups().len())
             .map(|object| SectionIndex::new(mesh, object, normal))
             .collect();
         Self {
+            geometry,
             normal: normal.map(f32::to_bits),
             objects,
         }

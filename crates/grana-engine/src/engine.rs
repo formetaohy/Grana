@@ -57,22 +57,26 @@ struct Identities {
 }
 
 struct Prepared {
-    structure: u64,
+    topology: u64,
+    classification: u64,
+    appearance: u64,
     display: u64,
     targets: Arc<view::Targets>,
     rendered: RenderedScene,
 }
 
 struct Plan {
-    structure: u64,
+    topology: u64,
+    classification: u64,
     camera: CameraState,
     scale: f32,
     targets: Arc<view::Targets>,
 }
 
 impl Plan {
-    fn accepts(&self, structure: u64, camera: CameraState, scale: f32, moving: bool) -> bool {
-        self.structure == structure
+    fn accepts(&self, keys: view::Key, camera: CameraState, scale: f32, moving: bool) -> bool {
+        self.topology == keys.topology()
+            && self.classification == keys.classification()
             && (self.camera == camera
                 || (moving && (scale / self.scale).ln().abs() <= PLAN_BAND.ln()))
     }
@@ -235,7 +239,7 @@ impl Engine {
             .camera
             .world_per_point(size[1] as f32, view.camera.distance());
         let detail = match &self.plan {
-            Some(plan) if plan.accepts(keys.structure(), content.camera, scale, moving) => {
+            Some(plan) if plan.accepts(keys, content.camera, scale, moving) => {
                 Arc::clone(&plan.targets)
             }
             _ => {
@@ -248,7 +252,8 @@ impl Engine {
                     &mut self.cache,
                 ));
                 self.plan = Some(Plan {
-                    structure: keys.structure(),
+                    topology: keys.topology(),
+                    classification: keys.classification(),
                     camera: content.camera,
                     scale,
                     targets: Arc::clone(&targets),
@@ -257,20 +262,25 @@ impl Engine {
             }
         };
         if self.prepared.as_ref().is_none_or(|prepared| {
-            prepared.structure != keys.structure() || prepared.targets.as_ref() != detail.as_ref()
+            prepared.topology != keys.topology()
+                || prepared.classification != keys.classification()
+                || prepared.targets.as_ref() != detail.as_ref()
         }) {
             let rendered = view::frame(view.scene, &detail, &mut self.cache)?;
             self.prepared = Some(Prepared {
-                structure: keys.structure(),
+                topology: keys.topology(),
+                classification: keys.classification(),
+                appearance: keys.appearance(),
                 display: keys.display(),
                 targets: detail,
                 rendered,
             });
         } else if let Some(prepared) = self.prepared.as_mut()
-            && prepared.display != keys.display()
+            && (prepared.appearance != keys.appearance() || prepared.display != keys.display())
         {
+            prepared.appearance = keys.appearance();
             prepared.display = keys.display();
-            view::restyle(&mut prepared.rendered, view.scene);
+            prepared.rendered = view::frame(view.scene, &prepared.targets, &mut self.cache)?;
         }
         let info = {
             let Self {

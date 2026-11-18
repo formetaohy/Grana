@@ -113,7 +113,7 @@ impl Renderer {
         if !frame.scene.splats.is_empty() {
             return true;
         }
-        let version = frame.scene.versions.style();
+        let version = frame.scene.versions.appearance();
         if let Some((held, translucent)) = self.translucent
             && held == version
         {
@@ -314,7 +314,9 @@ impl Renderer {
         let started = timing::begin(Begin {
             target,
             levels: LevelKey::of(outlook.levels),
-            structure: signature.structure(),
+            layers: signature.layers(),
+            classification: signature.classification(),
+            appearance: signature.appearance(),
             view: signature::view(&data),
             camera: Mat4::from_cols_array_2d(&data.view_projection),
             exporting: *exporting,
@@ -326,7 +328,7 @@ impl Renderer {
             target.snapshot(encoder, view.region);
             *fade = Some(Fade { weight: 0.0 });
         }
-        if stale {
+        if stale || started.restaged || started.restyled {
             if shot.surfaces {
                 meshes
                     .get_or_insert_with(|| MeshPasses::new(device, layouts, *budget / 2, pipelines))
@@ -341,9 +343,11 @@ impl Renderer {
             } else if let Some(passes) = splats.as_mut() {
                 passes.clear();
             }
+        }
+        if stale {
             residence.load_passes(scene.versions);
         }
-        if started.reset || started.moved {
+        if started.reset || started.clamps_history() {
             if let Some(passes) = splats.as_mut() {
                 passes.rewind(queue);
                 passes.cull_volume(encoder, resources.scene.group());
@@ -497,7 +501,7 @@ impl Renderer {
             dummy_normal,
             dummy_volume,
         });
-        target.age = if started.reset || started.changed {
+        target.age = if started.resets_age() {
             1
         } else {
             target.age.saturating_add(1)
@@ -558,7 +562,7 @@ impl Renderer {
             volume: prepared.shot.volume,
             phase: prepared.started.phase,
             reset: prepared.started.reset,
-            moved: prepared.started.moved,
+            clamp: prepared.started.clamps_history(),
             previous: prepared.started.previous,
             dummy_normal,
             dummy_volume,

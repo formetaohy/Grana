@@ -240,7 +240,7 @@ impl Resolve {
         previous: Mat4,
         jitter: [Vec2; 2],
         intact: bool,
-        moved: bool,
+        clamp: bool,
     ) {
         let uniforms = Uniforms {
             previous: previous.to_cols_array_2d(),
@@ -249,7 +249,7 @@ impl Resolve {
                 f32::from(u8::from(intact)),
                 FEEDBACK,
                 MOTION_REACH,
-                f32::from(u8::from(moved)),
+                f32::from(u8::from(clamp)),
             ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));

@@ -307,9 +307,13 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         .as_ref()
         .expect("the shadow band carries a table")
         .revision();
-    let keys = ShadowKeys::of(
-        versions.objects(),
+    let layers = digest(&[
+        versions.topology(),
+        versions.classification(),
         held.visibility(),
+    ]);
+    let keys = ShadowKeys::of(
+        layers,
         ShadowVolume {
             revision,
             writes: atlas.level_writes(level),

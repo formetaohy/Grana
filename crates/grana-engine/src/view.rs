@@ -127,13 +127,23 @@ impl RenderedScene {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
-    structure: u64,
+    topology: u64,
+    classification: u64,
+    appearance: u64,
     display: u64,
 }
 
 impl Key {
-    pub fn structure(self) -> u64 {
-        self.structure
+    pub fn topology(self) -> u64 {
+        self.topology
+    }
+
+    pub fn classification(self) -> u64 {
+        self.classification
+    }
+
+    pub fn appearance(self) -> u64 {
+        self.appearance
     }
 
     pub fn display(self) -> u64 {
@@ -142,29 +152,32 @@ impl Key {
 
     pub fn digest(self) -> u64 {
         let mut digest = Digest::new();
-        digest.mix(self.structure);
+        digest.mix(self.topology);
+        digest.mix(self.classification);
+        digest.mix(self.appearance);
         digest.mix(self.display);
         digest.finish()
     }
 }
 
-pub fn key(scene: &Scene) -> Key {
-    let mut structure = Digest::new();
-    structure.mix(u64::from(scene.time()));
-    structure.mix(scene.channels.len() as u64);
-    structure.mix(scene.derived().len() as u64);
-    for selection in scene.selections() {
-        structure.mix(selection.set.raw());
-        structure.mix(match selection.item {
-            Item::Object(index) => (index as u64) * 2,
-            Item::Track(index) => (index as u64) * 2 + 1,
-        });
+fn item_digest(item: Item) -> u64 {
+    match item {
+        Item::Object(index) => (index as u64) * 2,
+        Item::Track(index) => (index as u64) * 2 + 1,
     }
+}
+
+pub fn key(scene: &Scene) -> Key {
+    let mut topology = Digest::new();
+    topology.mix(u64::from(scene.time()));
+    topology.mix(scene.channels.len() as u64);
+    topology.mix(scene.derived().len() as u64);
+    let mut classification = Digest::new();
+    let mut appearance = Digest::new();
     for set in scene.objects.iter() {
-        structure.mix(set.id().raw());
-        structure.mix(set.revision().raw());
-        structure.mix(set.document().raw());
-        structure.mix(
+        topology.mix(set.id().raw());
+        topology.mix(set.revision().raw());
+        topology.mix(
             set.frame_stamp(scene.time())
                 .map_or(u64::MAX, |stamp| stamp.raw()),
         );
@@ -172,14 +185,27 @@ pub fn key(scene: &Scene) -> Key {
             && source.projected()
         {
             for time in source.projected_frames(scene.time(), scene.frame_count()) {
-                structure.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
+                topology.mix(set.frame_stamp(time).map_or(u64::MAX, |stamp| stamp.raw()));
             }
         }
-        structure.mix(
+        topology.mix(
             set.tracks()
                 .map_or(u64::MAX, |tracks| tracks.revision().raw()),
         );
-        structure.flag(scene.shown(set));
+        classification.mix(set.shape().raw());
+        classification.flag(scene.shown(set));
+        classification.mix(u64::from(set.opacity().to_bits()));
+        classification.flag(set.track_visible());
+        classification.mix(
+            set.frame_appearance(scene.time())
+                .map_or(u64::MAX, |stamp| stamp.raw()),
+        );
+        appearance.mix(set.document().raw());
+        appearance.mix(scene.table_revision(set.id()).unwrap_or(u64::MAX));
+    }
+    for selection in scene.selections() {
+        appearance.mix(selection.set.raw());
+        appearance.mix(item_digest(selection.item));
     }
     let mut display = Digest::new();
     for channel in &scene.channels {
@@ -204,7 +230,9 @@ pub fn key(scene: &Scene) -> Key {
     display.real(scene.shading.elevation);
     display.real(scene.step_scale);
     Key {
-        structure: structure.finish(),
+        topology: topology.finish(),
+        classification: classification.finish(),
+        appearance: appearance.finish(),
         display: display.finish(),
     }
 }
@@ -259,21 +287,28 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
     let mut picks = Vec::new();
     let mut splats = Vec::new();
     let mut members = Vec::new();
-    let mut data = Digest::new();
-    let mut objects = Digest::new();
+    let mut topology = Digest::new();
+    let mut classification = Digest::new();
     let mut appearance = Digest::new();
     let mut ordinal = 0usize;
     let mut base = 0u32;
     let time = scene.time();
     let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
-    data.mix(scene.channels.len() as u64);
-    data.mix(scene.dataset.channels().len() as u64);
+    topology.mix(scene.channels.len() as u64);
+    topology.mix(scene.dataset.channels().len() as u64);
     for set in scene.objects.iter() {
         let shown = scene.shown(set);
-        objects.mix(set.id().raw());
-        objects.flag(shown);
+        topology.mix(set.id().raw());
+        classification.mix(set.shape().raw());
+        classification.flag(shown);
+        classification.mix(u64::from(set.opacity().to_bits()));
+        classification.flag(set.track_visible());
+        classification.mix(
+            set.frame_appearance(time)
+                .map_or(u64::MAX, |stamp| stamp.raw()),
+        );
         appearance.mix(set.document().raw());
-        appearance.mix(set.revision().raw());
+        appearance.mix(scene.table_revision(set.id()).unwrap_or(u64::MAX));
         if !shown {
             continue;
         }
@@ -282,8 +317,8 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
         };
         let choice = targets.splats[ordinal];
         ordinal += 1;
-        objects.mix(detail as u64);
-        objects.mix(choice.digest());
+        topology.mix(detail as u64);
+        topology.mix(choice.digest());
         let mut seeded = Vec::new();
         let seed_sigma = seed_radius / grana_object::RADIUS_PER_SIGMA;
         let seed_color = srgb_to_linear(SEED_COLOR);
@@ -294,6 +329,8 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
             let key = splat_key(set.id().raw(), SEED_PART);
             let stamp = seed_stamp(scene, set);
             let count = seeded.len();
+            topology.mix(key);
+            topology.mix(stamp);
             splats.push(SplatChunk::single(key, stamp, seeded));
             members.push(SplatMembers::standalone(key, set.id(), count));
         }
@@ -315,11 +352,12 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 choice,
             );
             for chunk in &prepared.chunks {
-                objects.mix(chunk.key());
-                objects.mix(u64::from(chunk.level()));
-                objects.flag(chunk.active());
-                objects.mix(chunk.data().geometry_stamp());
-                objects.mix(chunk.data().style_stamp());
+                topology.mix(chunk.key());
+                topology.mix(u64::from(chunk.level()));
+                topology.flag(chunk.active());
+                classification.mix(chunk.data().geometry_stamp());
+                classification.mix(chunk.data().style_stamp());
+                appearance.mix(chunk.data().style_stamp());
             }
             splats.extend(prepared.chunks);
             members.push(prepared.members);
@@ -338,8 +376,8 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
             if !highlight.geometry.is_empty() {
                 let key = splat_key(set.id().raw(), HIGHLIGHT_PART);
                 let stamp = highlight_stamp(scene, set);
-                objects.mix(key);
-                objects.mix(stamp);
+                topology.mix(key);
+                appearance.mix(stamp);
                 splats.push(SplatChunk::new(
                     key,
                     0,
@@ -393,20 +431,21 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                     }
                 });
             appearance.mix(rows.digest());
+            classification.mix(rows.classification());
             let layer = Layer::new(
-                LayerKey::at_frame(
-                    set.id().raw(),
-                    OBJECT_PART,
-                    look_id.raw(),
-                    stamp.raw(),
-                    level as u16,
-                ),
+                LayerKey::new(set.id().raw(), OBJECT_PART, level as u16),
                 geometry_id.raw(),
+                look_id.raw(),
                 mesh,
                 rows.styles(),
                 base,
             );
-            objects.mix(layer.key.digest());
+            topology.mix(layer.key.digest());
+            topology.mix(layer.geometry);
+            topology.mix(stamp.raw());
+            topology.mix(count as u64);
+            topology.mix(u64::from(base));
+            appearance.mix(layer.look);
             base += count as u32;
             picks.push(PickRows {
                 base: layer.pick_base,
@@ -440,14 +479,19 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                     }
                 });
             appearance.mix(rows.digest());
+            classification.mix(rows.classification());
             let layer = Layer::new(
-                LayerKey::stable(set.id().raw(), TRACK_PART, tracks.revision().raw()),
+                LayerKey::new(set.id().raw(), TRACK_PART, 0),
+                tracks.revision().raw(),
                 tracks.revision().raw(),
                 tracks.mesh(),
                 rows.styles(),
                 base,
             );
-            objects.mix(layer.key.digest());
+            topology.mix(layer.key.digest());
+            topology.mix(layer.geometry);
+            topology.mix(count as u64);
+            topology.mix(u64::from(base));
             base += count as u32;
             picks.push(PickRows {
                 base: layer.pick_base,
@@ -457,14 +501,8 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
         }
     }
     for selection in scene.selections() {
-        let item = match selection.item {
-            Item::Object(index) => (index as u64) * 2,
-            Item::Track(index) => (index as u64) * 2 + 1,
-        };
-        objects.mix(selection.set.raw());
-        objects.mix(item);
         appearance.mix(selection.set.raw());
-        appearance.mix(item);
+        appearance.mix(item_digest(selection.item));
     }
     let channels = channel_rows(scene);
     assert_eq!(
@@ -478,7 +516,11 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
     cache.geometry.retain(&present);
     cache.styles.retain(&present);
     Ok(RenderedScene {
-        versions: Versions::new(data.finish(), objects.finish(), appearance.finish()),
+        versions: Versions::new(
+            topology.finish(),
+            classification.finish(),
+            appearance.finish(),
+        ),
         channels,
         layers,
         splats,
@@ -487,12 +529,6 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
         step_scale: scene.step_scale,
         picks,
     })
-}
-
-pub fn restyle(rendered: &mut RenderedScene, scene: &Scene) {
-    rendered.channels = channel_rows(scene);
-    rendered.shading = scene.shading;
-    rendered.step_scale = scene.step_scale;
 }
 
 fn channel_rows(scene: &Scene) -> Vec<ChannelRow> {
@@ -512,9 +548,12 @@ fn channel_rows(scene: &Scene) -> Vec<ChannelRow> {
 fn seed_stamp(scene: &Scene, set: &ObjectSet) -> u64 {
     let mut stamp = Digest::new();
     stamp.mix(set.id().raw());
-    stamp.mix(set.revision().raw());
-    stamp.mix(set.document().raw());
     stamp.mix(u64::from(scene.time()));
+    for seed in scene.seeds(set.id()) {
+        for axis in seed {
+            stamp.real(*axis);
+        }
+    }
     stamp.finish()
 }
 

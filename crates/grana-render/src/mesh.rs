@@ -470,10 +470,16 @@ impl MeshPasses {
                 .get_mut(&geometry_key)
                 .expect("the mesh geometry is resident");
             geometry.touch(order);
-            if !self.rows.contains_key(&layer.key) {
-                let rows = MeshRows::new(device, layouts, layer.objects());
+            let fitted = self
+                .rows
+                .get(&layer.key)
+                .is_some_and(|rows| rows.holds(layer));
+            if !fitted {
+                let rows = MeshRows::new(device, layouts, layer.objects(), layer.geometry);
                 self.resident += rows.bytes;
-                self.rows.insert(layer.key, rows);
+                if let Some(held) = self.rows.insert(layer.key, rows) {
+                    self.resident = self.resident.saturating_sub(held.bytes);
+                }
             }
             let rows = self
                 .rows
@@ -866,6 +872,7 @@ impl MeshGeometry {
 
 struct MeshRows {
     objects: usize,
+    geometry: u64,
     styles: Table<StyleData>,
     style_group: BindGroup,
     pick: Table<u32>,
@@ -877,7 +884,7 @@ struct MeshRows {
 }
 
 impl MeshRows {
-    fn new(device: &Device, layouts: &Layouts, objects: usize) -> Self {
+    fn new(device: &Device, layouts: &Layouts, objects: usize, geometry: u64) -> Self {
         assert!(objects > 0, "a mesh layer carries an object");
         let styles = Table::with_capacity(device, "grana.mesh.styles", objects);
         let style_group = bind_group(device, &layouts.styles, styles.buffer());
@@ -886,6 +893,7 @@ impl MeshRows {
         let bytes = (objects * size_of::<StyleData>() + objects * size_of::<u32>()) as u64;
         Self {
             objects,
+            geometry,
             styles,
             style_group,
             pick,
@@ -895,6 +903,10 @@ impl MeshRows {
             bytes,
             used: 0,
         }
+    }
+
+    fn holds(&self, layer: &Layer) -> bool {
+        self.objects == layer.objects() && self.geometry == layer.geometry
     }
 
     fn touch(&mut self, order: u64) {

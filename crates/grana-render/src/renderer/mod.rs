@@ -355,7 +355,7 @@ impl Renderer {
 
     pub fn restart(&mut self) {
         for target in self.targets.iter_mut() {
-            target.structure = None;
+            target.layers = None;
             target.taa.invalidate();
             target.phase = 0;
         }
@@ -464,7 +464,7 @@ impl Renderer {
             return;
         }
         for target in self.targets.iter_mut() {
-            target.structure = None;
+            target.layers = None;
             target.taa.invalidate();
         }
         resources.damage(&scopes, &mut self.residence, self.time);

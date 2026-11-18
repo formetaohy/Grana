@@ -312,6 +312,159 @@ fn around(point: [u32; 2], radius: u32) -> [u32; 4] {
 }
 
 #[test]
+fn restyles_and_hides_objects_without_resetting_the_frame() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = Volume::new(
+        EMPTY,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "empty",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(vec![0; EMPTY.voxel_count() as usize]),
+        )],
+    );
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let centers = [([-3.4, 0.0], 1.6), ([3.4, 0.0], 1.6)];
+    let mesh = Arc::new(PackedMesh::new(placed_quads(&centers)));
+    let stamp = revision();
+    let styles = Arc::from([
+        Style::new([1.0, 0.1, 0.1], true, false, 1.0),
+        Style::new([0.1, 0.3, 1.0], true, false, 1.0),
+    ]);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let core = |index: usize| {
+        around(
+            project(&camera, [centers[index].0[0], centers[index].0[1], 0.0]),
+            6,
+        )
+    };
+    let drawn = {
+        let layers = [Layer::new(
+            LayerKey::new(1, 0, 0),
+            stamp,
+            stamp,
+            Arc::clone(&mesh),
+            Arc::clone(&styles),
+            0,
+        )];
+        let scene = SceneFrame {
+            versions: grana_render::Versions::new(stamp, stamp, stamp),
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 1.0,
+            layers: &layers,
+            splats: Splats::empty(),
+            overlays: &[],
+        };
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Immediate,
+        };
+        settle(&gpu, &mut renderer, &view, &volume);
+        read_pixels(&gpu, &target, [SIDE, SIDE])
+    };
+    let mut changed = |styles: Arc<[Style]>, versions: grana_render::Versions| {
+        let layers = [Layer::new(
+            LayerKey::new(1, 0, 0),
+            stamp,
+            versions.appearance(),
+            Arc::clone(&mesh),
+            Arc::clone(&styles),
+            0,
+        )];
+        let scene = SceneFrame {
+            versions,
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 1.0,
+            layers: &layers,
+            splats: Splats::empty(),
+            overlays: &[],
+        };
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Immediate,
+        };
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the restyled frame draws");
+        (info, read_pixels(&gpu, &target, [SIDE, SIDE]))
+    };
+    let selected = Arc::from([
+        Style::new([1.0, 0.1, 0.1], true, true, 1.0),
+        Style::new([0.1, 0.3, 1.0], true, false, 1.0),
+    ]);
+    let (restyled, tinted) = changed(
+        selected,
+        grana_render::Versions::new(stamp, stamp, stamp.wrapping_add(1)),
+    );
+    assert!(!restyled.rebuilt, "a style change rebuilt the mesh passes");
+    assert!(
+        restyled.history,
+        "a style change dropped the converged history"
+    );
+    assert!(
+        rect_difference(&drawn, &tinted, core(0)) > 10.0,
+        "the selected object kept its style"
+    );
+    let hidden = Arc::from([
+        Style::new([1.0, 0.1, 0.1], true, false, 1.0),
+        Style::new([0.1, 0.3, 1.0], false, false, 1.0),
+    ]);
+    let (staged, cleared) = changed(
+        hidden,
+        grana_render::Versions::new(stamp, stamp.wrapping_add(1), stamp.wrapping_add(2)),
+    );
+    assert!(
+        !staged.rebuilt,
+        "a visibility change rebuilt the mesh passes"
+    );
+    assert!(
+        staged.history,
+        "a visibility change dropped the converged history"
+    );
+    assert!(
+        rect_difference(&tinted, &cleared, core(1)) > 10.0,
+        "the hidden object stayed drawn"
+    );
+}
+
+fn rect_difference(left: &[[u8; 4]], right: &[[u8; 4]], rect: [u32; 4]) -> f32 {
+    let mut total = 0i64;
+    let mut count = 0i64;
+    for y in rect[1]..rect[3] {
+        for x in rect[0]..rect[2] {
+            let index = (y * SIDE + x) as usize;
+            total += (0..3)
+                .map(|channel| {
+                    (i32::from(left[index][channel]) - i32::from(right[index][channel])).abs()
+                        as i64
+                })
+                .max()
+                .unwrap_or(0);
+            count += 1;
+        }
+    }
+    total as f32 / count.max(1) as f32
+}
+
+#[test]
 fn composites_a_mesh_layer() {
     let Some(gpu) = gpu() else {
         return;
@@ -338,7 +491,8 @@ fn composites_a_mesh_layer() {
         Style::new([0.1, 1.0, 0.1], false, false, 1.0),
     ]);
     let layers = [Layer::new(
-        LayerKey::stable(1, 0, 1),
+        LayerKey::new(1, 0, 0),
+        1,
         1,
         Arc::new(mesh),
         Arc::clone(&styles),
