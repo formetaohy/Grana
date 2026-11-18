@@ -167,7 +167,7 @@ impl Key {
 }
 
 fn cached(key: &Key) -> Option<Bitmap> {
-    let cache = cache().lock().ok()?;
+    let cache = cache().lock().unwrap_or_else(|error| error.into_inner());
     cache
         .iter()
         .find(|entry| entry.0 == *key)
@@ -175,9 +175,7 @@ fn cached(key: &Key) -> Option<Bitmap> {
 }
 
 fn store(key: Key, bitmap: Bitmap) {
-    let Ok(mut cache) = cache().lock() else {
-        return;
-    };
+    let mut cache = cache().lock().unwrap_or_else(|error| error.into_inner());
     cache.retain(|entry| entry.0 != key);
     cache.push((key, bitmap));
     while cache.len() > CACHE_LIMIT {

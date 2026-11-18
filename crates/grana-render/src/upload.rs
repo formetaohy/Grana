@@ -70,6 +70,54 @@ impl Upload {
         });
     }
 
+    pub fn bricks(
+        &mut self,
+        texture: &Texture,
+        origin: [u32; 3],
+        side: u32,
+        texel: u32,
+        columns: &[&[u8]],
+    ) {
+        assert!(
+            !columns.is_empty(),
+            "an uploaded brick batch holds at least one brick"
+        );
+        let stride = (side * texel) as usize;
+        let extent = usize::try_from(side).expect("a brick side fits this platform's addresses");
+        for column in columns {
+            assert_eq!(
+                column.len(),
+                stride * extent * extent,
+                "an uploaded brick covers every texel of its rows"
+            );
+        }
+        let width = stride * columns.len();
+        let row_bytes = width.next_multiple_of(ALIGNMENT as usize);
+        let offset = self.bytes.len().next_multiple_of(ALIGNMENT as usize);
+        let length = row_bytes * extent * extent;
+        self.bytes.resize(offset, 0);
+        self.bytes.resize(offset + length, 0);
+        for line in 0..extent * extent {
+            let row = &mut self.bytes[offset + line * row_bytes..offset + line * row_bytes + width];
+            for (column, source) in columns.iter().enumerate() {
+                row[column * stride..(column + 1) * stride]
+                    .copy_from_slice(&source[line * stride..(line + 1) * stride]);
+            }
+        }
+        self.copies.push(Copy::Texture {
+            texture: texture.clone(),
+            origin,
+            extent: [
+                side * u32::try_from(columns.len()).expect("a brick batch fits u32 columns"),
+                side,
+                side,
+            ],
+            rows: side,
+            row_bytes: u32::try_from(row_bytes).expect("a brick row fits u32"),
+            offset: offset as u64,
+        });
+    }
+
     pub fn buffer(&mut self, target: &Buffer, target_offset: u64, bytes: &[u8]) {
         assert!(
             target_offset.is_multiple_of(4) && bytes.len().is_multiple_of(4),

@@ -1,10 +1,20 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
+use grana_archive::{Channel, Fill, ImageSpec, Sample};
 use grana_render::Pixels;
 use grana_scene::Scene;
 use grana_video::{Recorder, Sequence};
+use grana_volume::{Extent, Level, Spacing};
 
 use crate::quantize::{Depth, Quantizer};
+
+const CHANNELS: [(&str, [f32; 3]); 4] = [
+    ("Red", [1.0, 0.0, 0.0]),
+    ("Green", [0.0, 1.0, 0.0]),
+    ("Blue", [0.0, 0.0, 1.0]),
+    ("Alpha", [1.0, 1.0, 1.0]),
+];
 
 pub(crate) enum Sink {
     Png { path: PathBuf },
@@ -40,26 +50,59 @@ impl Sink {
                 .map_err(String::from)
             }
             Self::Tiff { path } => {
-                let mut quantizer = Quantizer::new(
-                    size,
-                    samples(transparent),
-                    Depth::Sixteen,
-                    transparent,
-                    false,
-                );
                 let name = picture_name(scene, time);
-                let stream = grana_tiff::Stream16 {
-                    size,
-                    samples: u8::try_from(quantizer.samples())
-                        .expect("a picture carries fewer than four samples"),
-                    name: &name,
-                    physical: Some([physical, physical]),
-                    interval: Some(scene.dataset.frame_interval()),
-                };
-                grana_tiff::write16(path, &stream, &mut |line, row| {
-                    quantizer.row16(line, picture.row(line), row);
+                let samples = samples(transparent);
+                let channels = CHANNELS[..samples]
+                    .iter()
+                    .map(|(name, tint)| Channel {
+                        name,
+                        tint: *tint,
+                        range: grana_volume::Intensity::new(0.0, 1.0),
+                    })
+                    .collect::<Vec<_>>();
+                let levels = [Level::new(
+                    Extent::new(size[0], size[1], 1),
+                    Spacing::new(physical, physical, physical),
+                )];
+                let fill = |_: usize,
+                            _: u32,
+                            channel: usize,
+                            origin: [u32; 3],
+                            extent: [u32; 3],
+                            data: &mut [f32]|
+                 -> Result<(), String> {
+                    for line in 0..extent[1] {
+                        let row = picture.row(origin[1] + line).as_chunks::<16>().0;
+                        let start = (line * extent[0]) as usize;
+                        let values = &mut data[start..start + extent[0] as usize];
+                        for (value, texel) in values.iter_mut().zip(&row[origin[0] as usize..]) {
+                            *value = f32::from_le_bytes(
+                                texel[channel * 4..channel * 4 + 4]
+                                    .try_into()
+                                    .expect("a picture sample spans four bytes"),
+                            );
+                        }
+                    }
                     Ok(())
-                })
+                };
+                let cancel = AtomicBool::new(false);
+                let mut progress = |_: usize, _: usize| {};
+                grana_tiff::write_archive(
+                    path,
+                    &mut ImageSpec {
+                        name: &name,
+                        channels: &channels,
+                        levels: &levels,
+                        placement: [0.0; 3],
+                        frames: 1,
+                        interval: Some(scene.dataset.frame_interval()),
+                        sample: Sample::Unsigned16,
+                        fill: Fill::EveryLevel(&fill),
+                        cancel: &cancel,
+                        progress: &mut progress,
+                    },
+                )
+                .map(|_| ())
                 .map_err(|error| error.to_string())
             }
             Self::Figure { .. } => {

@@ -60,6 +60,13 @@ struct PlaneKey {
     offset: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Visibility {
+    version: u64,
+    structure: u64,
+    styles: u64,
+}
+
 impl PlaneKey {
     fn of(plane: SectionPlane) -> Self {
         Self {
@@ -168,7 +175,8 @@ pub(crate) struct Sections {
     color: RenderPipeline,
     pick: RenderPipeline,
     geometry: Option<u64>,
-    styles: Option<u64>,
+    visibility: Option<Visibility>,
+    styles: Option<(u64, u64)>,
     indices: HashMap<LayerKey, Indices>,
     cutter: SectionCutter,
     chunks: Vec<Chunk>,
@@ -246,6 +254,7 @@ impl Sections {
             color,
             pick,
             geometry: None,
+            visibility: None,
             styles: None,
             indices: HashMap::new(),
             cutter: SectionCutter::new(),
@@ -259,6 +268,7 @@ impl Sections {
 
     pub fn clear(&mut self) {
         self.geometry = None;
+        self.visibility = None;
         self.styles = None;
         self.indices.clear();
         for chunk in &mut self.chunks {
@@ -281,7 +291,8 @@ impl Sections {
             SectionPlane::new(normal, normal.any_orthonormal_vector(), plane.offset())
         });
         let key = plane.map(PlaneKey::of);
-        let geometry = geometry_stamp(scene, key);
+        let visibility = self.visibility(scene);
+        let geometry = geometry_stamp(key, visibility);
         if self.geometry != Some(geometry) {
             self.geometry = Some(geometry);
             self.corners.clear();
@@ -303,7 +314,7 @@ impl Sections {
                 origin: origin.extend(0.0).to_array(),
             },
         );
-        let styles = style_stamp(scene.styles);
+        let styles = self.style_digest(scene);
         if self.styles != Some(styles) {
             self.styles = Some(styles);
             let rows = scene
@@ -319,6 +330,47 @@ impl Sections {
                 .collect::<Vec<_>>();
             self.style.write(device, queue, layouts, &rows);
         }
+    }
+
+    fn visibility(&mut self, scene: &SceneFrame<'_>) -> Visibility {
+        let mut structure = Digest::new();
+        for layer in scene.layers {
+            structure.mix(layer.key.digest());
+            structure.mix(layer.style_start as u64);
+        }
+        let structure = structure.finish();
+        let version = scene.versions.style();
+        if let Some(held) = self.visibility
+            && held.version == version
+            && held.structure == structure
+        {
+            return held;
+        }
+        let mut digest = Digest::new();
+        for layer in scene.layers {
+            for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
+                digest.flag(style.visible());
+            }
+        }
+        let held = Visibility {
+            version,
+            structure,
+            styles: digest.finish(),
+        };
+        self.visibility = Some(held);
+        held
+    }
+
+    fn style_digest(&mut self, scene: &SceneFrame<'_>) -> (u64, u64) {
+        let version = scene.versions.style();
+        if let Some(held) = self.styles
+            && held.0 == version
+        {
+            return held;
+        }
+        let held = (version, style_stamp(scene.styles));
+        self.styles = Some(held);
+        held
     }
 
     fn cut(&mut self, scene: &SceneFrame<'_>, plane: SectionPlane) {
@@ -440,29 +492,17 @@ fn style_group(device: &Device, layouts: &Layouts, style: &StyleTable) -> BindGr
     })
 }
 
-fn geometry_stamp(scene: &SceneFrame<'_>, plane: Option<PlaneKey>) -> u64 {
+fn geometry_stamp(plane: Option<PlaneKey>, visibility: Visibility) -> u64 {
     let mut digest = Digest::new();
     match plane {
         Some(key) => {
             for value in key.normal.into_iter().chain(key.right).chain([key.offset]) {
                 digest.mix(u64::from(value));
             }
-            for layer in scene.layers {
-                digest.mix(layer.key.digest());
-                digest.mix(layer.style_start as u64);
-                for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count]
-                {
-                    digest.flag(style.visible());
-                }
-            }
+            digest.mix(visibility.structure);
+            digest.mix(visibility.styles);
         }
-        None => {
-            digest.mix(u64::MAX);
-            for layer in scene.layers {
-                digest.mix(layer.key.digest());
-                digest.mix(layer.style_start as u64);
-            }
-        }
+        None => digest.mix(u64::MAX),
     }
     digest.finish()
 }

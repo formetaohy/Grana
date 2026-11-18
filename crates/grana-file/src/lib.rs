@@ -97,7 +97,14 @@ impl Atomic {
             }
             Err(error) => {
                 if replaced {
-                    let _ = attempt(|| rename(&self.backup, &self.target));
+                    attempt(|| rename(&self.backup, &self.target)).map_err(|rollback| {
+                        io::Error::new(
+                            error.kind(),
+                            format!(
+                                "{error}, and restoring the previous target failed: {rollback}"
+                            ),
+                        )
+                    })?;
                 }
                 Err(error)
             }

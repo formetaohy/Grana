@@ -412,6 +412,7 @@ impl Session {
         self.measure.reset();
         self.tasks.clear();
         self.labels_queue.clear();
+        self.labels_failed.clear();
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();

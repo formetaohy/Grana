@@ -242,11 +242,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
         let _ = events.send(Event::Done { cancelled: true });
         return;
     }
-    let evidence = plan
+    let evidence = match plan
         .datasets
         .iter()
         .map(|dataset| evidence(dataset.image_path()))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()
+    {
+        Ok(evidence) => evidence,
+        Err(detail) => {
+            let _ = events.send(Event::Failed(detail));
+            let _ = events.send(Event::Done { cancelled: false });
+            return;
+        }
+    };
     if let Err(detail) = manifest::write(&plan, &evidence, &[], &corrections) {
         let _ = events.send(Event::Failed(detail));
         let _ = events.send(Event::Done { cancelled: false });
@@ -410,14 +418,19 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
         grana_chart::DistributionStyle::Box,
         pipeline::language(),
     );
-    let recorded = plan
-        .datasets
-        .iter()
-        .flat_map(|dataset| {
-            grana_page::Recorded::read(&plan.output.join(dataset.folder()).join(PAGES))
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
+    let mut recorded = Vec::new();
+    for dataset in &plan.datasets {
+        let path = plan.output.join(dataset.folder()).join(PAGES);
+        if !path.exists() {
+            continue;
+        }
+        match grana_page::Recorded::read(&path) {
+            Ok(pages) => recorded.extend(pages),
+            Err(detail) => {
+                let _ = events.send(Event::Failed(detail));
+            }
+        }
+    }
     if (!pages.is_empty() || !recorded.is_empty())
         && let Err(detail) = grana_page::write_report(&pages, &recorded, &plan.output.join(REPORT))
     {

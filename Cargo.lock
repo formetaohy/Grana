@@ -3708,6 +3708,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "grana-animation",
+ "grana-archive",
  "grana-chart",
  "grana-display",
  "grana-engine",

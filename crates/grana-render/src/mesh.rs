@@ -745,13 +745,25 @@ impl MeshSlot {
             self.object_count as usize,
             "every mesh object carries one style"
         );
-        let data = styles
-            .iter()
-            .map(|style| style_data(*style))
-            .collect::<Vec<_>>();
-        if data != self.cached_styles {
-            queue.write_buffer(self.styles.buffer(), 0, bytemuck::cast_slice(&data));
-            self.cached_styles = data;
+        if self.cached_styles.len() != styles.len() {
+            self.cached_styles = vec![StyleData::zeroed(); styles.len()];
+        }
+        let mut first = usize::MAX;
+        let mut end = 0;
+        for (row, style) in styles.iter().enumerate() {
+            let data = style_data(*style);
+            if self.cached_styles[row] != data {
+                self.cached_styles[row] = data;
+                first = first.min(row);
+                end = row + 1;
+            }
+        }
+        if first < end {
+            queue.write_buffer(
+                self.styles.buffer(),
+                (first * size_of::<StyleData>()) as u64,
+                bytemuck::cast_slice(&self.cached_styles[first..end]),
+            );
         }
     }
 

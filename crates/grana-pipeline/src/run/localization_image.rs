@@ -5,10 +5,18 @@ use grana_analysis::localization::{
     CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationLayout,
     LocalizationRenderer,
 };
+use grana_archive::{Channel, Fill, ImageSpec, Sample};
 use grana_object::LocalizationSpec;
+use grana_volume::{Extent, Level, Spacing};
 
 use super::localization_window::LocalizationWindow;
 use crate::event::Event;
+
+const COMPOSITION_CHANNELS: [(&str, [f32; 3]); 3] = [
+    ("Red", [1.0, 0.0, 0.0]),
+    ("Green", [0.0, 1.0, 0.0]),
+    ("Blue", [0.0, 0.0, 1.0]),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Raster {
@@ -132,32 +140,82 @@ pub fn localization_image(
             grana_raster::write_stream(&path, geometry.size(), &mut |_, row| renderer.row(row))
                 .map_err(|error| error.to_string())
         }
-        Raster::Stack => {
-            let mut current = u32::MAX;
-            grana_tiff::write_stack(
-                &path,
-                &grana_tiff::Stack {
-                    size: geometry.size(),
-                    samples: 3,
-                    name: &name,
-                    physical: Some([pixel, pixel, slice]),
-                    interval: None,
-                    depth: depth.layers(),
-                },
-                &mut |layer, _, bytes| {
-                    if layer != current {
-                        renderer.begin(layer)?;
-                        current = layer;
-                    }
-                    renderer.row_rgb(bytes)
-                },
-            )
-            .map_err(|error| error.to_string())
-        }
+        Raster::Stack => write_stack(
+            &path,
+            &name,
+            &mut renderer,
+            geometry.size(),
+            [pixel, pixel, slice],
+            depth.layers(),
+            cancel,
+        ),
     };
     written?;
     sink(Event::Done);
     Ok(())
+}
+
+fn write_stack(
+    path: &Path,
+    name: &str,
+    layered: &mut impl Layered,
+    size: [u32; 2],
+    spacing: [f32; 3],
+    layers: u32,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let rendered = render_stack(layered, size, layers, cancel)?;
+    let pixels = rendered
+        .bytes()
+        .ok_or_else(|| "a rendered stack keeps its mapped pixels".to_string())?;
+    let levels = [Level::new(
+        Extent::new(size[0], size[1], layers),
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+    )];
+    let channels = COMPOSITION_CHANNELS.map(|(name, tint)| Channel {
+        name,
+        tint,
+        range: grana_volume::Intensity::new(0.0, 1.0),
+    });
+    let fill = |_: usize,
+                _: u32,
+                channel: usize,
+                origin: [u32; 3],
+                extent: [u32; 3],
+                data: &mut [f32]|
+     -> Result<(), String> {
+        let width = size[0] as usize;
+        for line in 0..extent[1] as usize {
+            let row =
+                &pixels[((origin[2] as usize * size[1] as usize) + line + origin[1] as usize)
+                    * width
+                    * 3..];
+            let start = line * extent[0] as usize;
+            let values = &mut data[start..start + extent[0] as usize];
+            for (column, value) in values.iter_mut().enumerate() {
+                *value = f32::from(row[(origin[0] as usize + column) * 3 + channel]) / 255.0;
+            }
+        }
+        Ok(())
+    };
+    let mut progress = |_: usize, _: usize| {};
+    grana_tiff::write_archive(
+        path,
+        &mut ImageSpec {
+            name,
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: None,
+            sample: Sample::Unsigned8,
+            fill: Fill::EveryLevel(&fill),
+            cancel,
+            progress: &mut progress,
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 pub struct CompositionSource {
@@ -243,26 +301,65 @@ pub fn localization_composition(
     } else {
         pixel
     };
-    let mut current = u32::MAX;
-    grana_tiff::write_stack(
+    let size = geometry.size();
+    write_stack(
         &path,
-        &grana_tiff::Stack {
-            size: geometry.size(),
-            samples: 3,
-            name: &name,
-            physical: Some([pixel, pixel, slice]),
-            interval: None,
-            depth: depth.layers(),
-        },
-        &mut |layer, _, bytes| {
-            if layer != current {
-                composition.begin(layer)?;
-                current = layer;
-            }
-            composition.row_rgb(bytes)
-        },
-    )
-    .map_err(|error| error.to_string())?;
+        &name,
+        &mut composition,
+        size,
+        [pixel, pixel, slice],
+        depth.layers(),
+        cancel,
+    )?;
     sink(Event::Done);
     Ok(())
+}
+
+trait Layered {
+    fn begin_layer(&mut self, layer: u32) -> Result<(), String>;
+
+    fn compose_row(&mut self, row: &mut [u8]) -> Result<(), String>;
+}
+
+impl Layered for LocalizationRenderer<'_> {
+    fn begin_layer(&mut self, layer: u32) -> Result<(), String> {
+        self.begin(layer)
+    }
+
+    fn compose_row(&mut self, row: &mut [u8]) -> Result<(), String> {
+        self.row_rgb(row)
+    }
+}
+
+impl Layered for LocalizationComposition<'_> {
+    fn begin_layer(&mut self, layer: u32) -> Result<(), String> {
+        self.begin(layer)
+    }
+
+    fn compose_row(&mut self, row: &mut [u8]) -> Result<(), String> {
+        self.row_rgb(row)
+    }
+}
+
+fn render_stack(
+    layered: &mut impl Layered,
+    size: [u32; 2],
+    layers: u32,
+    cancel: &AtomicBool,
+) -> Result<grana_store::Scratch, String> {
+    let stride = size[0] as usize * 3;
+    let plane = stride * size[1] as usize;
+    let mut pixels = grana_store::Scratch::acquire((plane * layers as usize) as u64)
+        .map_err(|error| error.to_string())?;
+    let held = pixels.bytes_mut().map_err(|error| error.to_string())?;
+    for (layer, rows) in held.chunks_mut(plane).enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("the super-resolution image was cancelled".to_string());
+        }
+        layered.begin_layer(layer as u32)?;
+        for row in rows.chunks_mut(stride) {
+            layered.compose_row(row)?;
+        }
+    }
+    Ok(pixels)
 }

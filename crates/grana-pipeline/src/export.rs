@@ -58,7 +58,7 @@ pub struct LabelLayer {
 }
 
 impl LabelLayer {
-    pub fn of(set: &ObjectSet, levels: &[Level]) -> Option<Self> {
+    pub fn of(set: &ObjectSet, levels: &[Level]) -> Result<Option<Self>, String> {
         let frames = (0..set.frame_count())
             .filter(|time| set.frame_stamp(*time).is_some())
             .collect::<Vec<_>>();
@@ -67,15 +67,21 @@ impl LabelLayer {
             .map(|time| set.object_count(*time))
             .max()
             .unwrap_or(0);
-        if labels == 0 || labels > LABEL_LIMIT {
-            return None;
+        if labels == 0 {
+            return Ok(None);
+        }
+        if labels > LABEL_LIMIT {
+            return Err(format!(
+                "a uint16 label image addresses at most {LABEL_LIMIT} objects, and {} holds {labels}",
+                set.name()
+            ));
         }
         if !(0..set.frame_count())
             .any(|time| (0..set.object_count(time)).any(|index| set.visible_object(time, index)))
         {
-            return None;
+            return Ok(None);
         }
-        Some(Self {
+        Ok(Some(Self {
             name: grana_scene::slug(set.name()),
             frames,
             color: set.color(),
@@ -86,7 +92,7 @@ impl LabelLayer {
                 levels.to_vec(),
                 set.name().to_string(),
             ),
-        })
+        }))
     }
 
     pub fn name(&self) -> &str {
@@ -208,6 +214,12 @@ pub fn write_dataset(
             path.display()
         )
     })?;
+    if format == Format::Tiff && !labels.is_empty() {
+        return Err(format!(
+            "an OME-TIFF archive carries no object label layer, and this dataset holds {}; export it as OME-Zarr to keep them",
+            labels.len()
+        ));
+    }
     let (levels, origins) = match format {
         Format::Zarr => (levels, origins),
         Format::Tiff => {
@@ -277,7 +289,8 @@ pub fn write_dataset(
         levels: &levels,
         placement,
         frames,
-        interval,
+        interval: Some(interval),
+        sample: grana_archive::Sample::Float,
         fill: Fill::EveryLevel(&fill),
         cancel,
         progress: &mut image_progress,

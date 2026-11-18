@@ -1,5 +1,5 @@
 use grana_optics::{Kernel, KernelBank};
-use grana_restore::{Backend, Job, Restorer};
+use grana_restore::{Job, Restorer};
 
 use crate::support;
 
@@ -11,10 +11,7 @@ fn graphics_restore_matches_the_processor() {
     let Some(_gpu) = support::gpu() else {
         return;
     };
-    let graphics = Restorer::shared();
-    if graphics.backend() != Backend::Graphics {
-        return;
-    }
+    let graphics = Restorer::shared().expect("the shared restorer runs on the graphics device");
     let bank = KernelBank::from_kernels(&[kernel(1.0), kernel(0.7)], DIMS[2]);
     let source = source();
     let job = Job {

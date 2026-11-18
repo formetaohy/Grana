@@ -5,10 +5,10 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use grana_archive::{Fill, Filler, ImageSpec, Written};
+use grana_archive::{Fill, Filler, ImageSpec, Sample, Written};
 
 use crate::Error;
-use tile::{LevelInfo, Request, SIDE, Tile};
+use tile::{LevelInfo, Request, SIDE, Tile, bytes};
 
 const ALIGN: u64 = 8;
 const ZEROS: [u8; 8] = [0; 8];
@@ -39,7 +39,7 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
     let per_plane = levels.iter().map(|level| level.tiles() as u64).sum::<u64>();
     let total = usize::try_from(planes * per_plane)
         .expect("an archive writes at most this platform's tiles");
-    let expected = planned(planes, per_plane, levels.len());
+    let expected = planned(planes, per_plane, levels.len(), spec.sample);
     grana_file::require(path, expected).map_err(|error| Error::write(path, error.to_string()))?;
     let description = layout::description(spec);
     let atomic =
@@ -52,7 +52,7 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
         cursor: 0,
         done: 0,
         total,
-        tile: Tile::default(),
+        tile: Tile::new(spec.sample),
     };
     sink.write(&layout::header())?;
     let mut pointer: Option<u64> = None;
@@ -74,6 +74,7 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                     base.height(),
                     base.tiles(),
                     levels.len() - 1,
+                    spec.sample,
                     first.then_some(description.as_str()),
                 );
                 sink.write(&block)?;
@@ -83,15 +84,21 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                     channel,
                     z,
                 };
-                let (offsets, counts) = sink.tiles(&request, base, fill, spec.progress)?;
+                let (offsets, counts) =
+                    sink.tiles(&request, base, spec.sample, fill, spec.progress)?;
                 sink.patch(spots.offsets, &offsets)?;
                 sink.patch(spots.counts, &counts)?;
                 let mut sub_ifds = Vec::with_capacity(levels.len() - 1);
                 for (index, level) in levels.iter().enumerate().skip(1) {
                     let at = align(sink.cursor);
                     sink.pad(at)?;
-                    let (block, spots) =
-                        layout::sub_page(at, level.width(), level.height(), level.tiles());
+                    let (block, spots) = layout::sub_page(
+                        at,
+                        level.width(),
+                        level.height(),
+                        level.tiles(),
+                        spec.sample,
+                    );
                     sink.write(&block)?;
                     let request = Request {
                         level: index,
@@ -99,7 +106,8 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                         channel,
                         z,
                     };
-                    let (offsets, counts) = sink.tiles(&request, *level, fill, spec.progress)?;
+                    let (offsets, counts) =
+                        sink.tiles(&request, *level, spec.sample, fill, spec.progress)?;
                     sink.patch(spots.offsets, &offsets)?;
                     sink.patch(spots.counts, &counts)?;
                     sub_ifds.push(at);
@@ -189,8 +197,9 @@ fn align(at: u64) -> u64 {
     at.div_ceil(ALIGN) * ALIGN
 }
 
-fn planned(planes: u64, per_plane: u64, levels: usize) -> u64 {
-    let tile = u64::from(SIDE) * u64::from(SIDE) * 4 + TILE_OVERHEAD + POINTER_BYTES;
+fn planned(planes: u64, per_plane: u64, levels: usize, sample: Sample) -> u64 {
+    let tile =
+        u64::from(SIDE) * u64::from(SIDE) * bytes(sample) as u64 + TILE_OVERHEAD + POINTER_BYTES;
     planes * (per_plane * tile + (levels as u64 + 1) * PAGE_OVERHEAD) + METADATA_OVERHEAD
 }
 
@@ -248,6 +257,7 @@ impl Sink {
         &mut self,
         request: &Request,
         info: LevelInfo,
+        sample: Sample,
         fill: &Filler<'_>,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
@@ -257,7 +267,7 @@ impl Sink {
             for column in 0..info.across() {
                 let length = self
                     .tile
-                    .encode(request, info, column, row, fill)
+                    .encode(request, info, column, row, sample, fill)
                     .map_err(|detail| Error::write(&self.path, detail))?;
                 offsets.push(self.cursor);
                 counts.push(length);

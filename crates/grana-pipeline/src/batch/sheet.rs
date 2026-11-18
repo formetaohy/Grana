@@ -31,21 +31,23 @@ pub(super) fn write(
 ) -> Result<(), String> {
     let mut entries = Vec::new();
     let mut cells = vec![None; plan.datasets.len()];
+    let files = super::pipeline::capture_files(&plan.protocol, "snapshot", Some("png"));
+    let Some(file) = files.first() else {
+        return Ok(());
+    };
     for (index, row) in rows.iter().enumerate() {
         let Some(row) = row else {
             continue;
         };
         let dataset = &plan.datasets[index];
         let folder = plan.output.join(dataset.folder());
-        let Some(file) = super::pipeline::capture_files(&plan.protocol, "snapshot", Some("png"))
-            .into_iter()
-            .next()
-        else {
-            continue;
-        };
-        let Ok(image) = grana_raster::read(&folder.join(file)) else {
-            continue;
-        };
+        let path = folder.join(file);
+        let image = grana_raster::read(&path).map_err(|error| {
+            format!(
+                "the quality sheet cannot read the snapshot {}: {error}",
+                path.display()
+            )
+        })?;
         entries.push(Entry {
             dataset: index,
             group: dataset.group().to_string(),
@@ -56,7 +58,10 @@ pub(super) fn write(
         });
     }
     if entries.is_empty() {
-        return Ok(());
+        return Err(
+            "the quality sheet found no dataset snapshot to draw, so the batch wrote none"
+                .to_string(),
+        );
     }
     entries.sort_by(|left, right| {
         left.group

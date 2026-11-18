@@ -63,7 +63,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             levels: &levels,
             placement: [1.5, -2.0, 3.0],
             frames: 2,
-            interval: 0.5,
+            interval: Some(0.5),
+            sample: grana_archive::Sample::Float,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -228,15 +229,48 @@ fn writes_a_sixteen_bit_ome_tiff() {
     for (index, value) in pixels.iter_mut().enumerate() {
         *value = (index as u16).wrapping_mul(1237).wrapping_add(3);
     }
-    grana_tiff::write(
+    let levels = [Level::new(
+        Extent::new(size[0], size[1], 1),
+        Spacing::new(0.5, 0.5, 0.5),
+    )];
+    let channels = ["Red", "Green", "Blue"].map(|name| WriteChannel {
+        name,
+        tint: match name {
+            "Red" => [1.0, 0.0, 0.0],
+            "Green" => [0.0, 1.0, 0.0],
+            _ => [0.0, 0.0, 1.0],
+        },
+        range: Intensity::new(0.0, 1.0),
+    });
+    let fill = |_level: usize,
+                _frame: u32,
+                channel: usize,
+                origin: [u32; 3],
+                length: [u32; 3],
+                data: &mut [f32]| {
+        for y in 0..length[1] {
+            for x in 0..length[0] {
+                let index = (origin[0] + x) as usize + size[0] as usize * (origin[1] + y) as usize;
+                data[(x + length[0] * y) as usize] =
+                    f32::from(pixels[index * 3 + channel]) / f32::from(u16::MAX);
+            }
+        }
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_tiff::write_archive(
         &path,
-        &grana_tiff::Picture {
-            size,
-            samples: 3,
-            pixels: &pixels,
+        &mut ImageSpec {
             name: "figure & frame",
-            physical: Some([0.5, 0.5]),
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
             interval: Some(2.0),
+            sample: grana_archive::Sample::Unsigned16,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
         },
     )
     .expect("the picture writes");
@@ -249,6 +283,10 @@ fn writes_a_sixteen_bit_ome_tiff() {
     assert!(
         metadata.contains("TimeIncrement=\"2\""),
         "the picture records its frame interval"
+    );
+    assert!(
+        metadata.contains("Type=\"uint16\""),
+        "the picture declares its sixteen bit samples"
     );
     let image = grana_tiff::Image::open(&path).expect("the written picture opens");
     assert_eq!(image.name(), "figure & frame");
@@ -312,7 +350,8 @@ fn writes_a_sharded_ome_zarr_level() {
             levels: &levels,
             placement: [0.0; 3],
             frames: 1,
-            interval: 1.0,
+            interval: Some(1.0),
+            sample: grana_archive::Sample::Float,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -419,7 +458,8 @@ fn write_zarr(root: &std::path::Path) {
             levels: &levels,
             placement: [1.5, -2.0, 3.0],
             frames: 2,
-            interval: 1.5,
+            interval: Some(1.5),
+            sample: grana_archive::Sample::Float,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -533,7 +573,8 @@ fn exports_a_region_of_the_channels_and_labels() {
             .expect("the label set exists"),
         &cropped.levels,
     )
-    .expect("the label layer builds");
+    .expect("the label layer builds")
+    .expect("the label set holds labelled objects");
     let channels = Channels::stored(Arc::clone(&image));
     let mut progress = |_, _| {};
     grana_pipeline::write_dataset(
@@ -696,7 +737,8 @@ fn writes_and_reads_a_label_image() {
             levels: &levels,
             placement: [0.0; 3],
             frames: 2,
-            interval: 1.0,
+            interval: Some(1.0),
+            sample: grana_archive::Sample::Float,
             fill: Fill::EveryLevel(&image_fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -1028,7 +1070,8 @@ fn keeps_the_previous_dataset_when_a_label_cannot_join_the_export() {
             .expect("the label set exists"),
         &levels,
     )
-    .expect("the label layer builds");
+    .expect("the label layer builds")
+    .expect("the label set holds labelled objects");
     let mut progress = |_, _| {};
     let outcome = grana_pipeline::write_dataset(
         DatasetSpec {

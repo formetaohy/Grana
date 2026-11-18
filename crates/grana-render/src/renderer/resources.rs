@@ -22,6 +22,7 @@ pub(super) struct Resources {
     pub(super) bake: Bake,
     pub(super) baked: BakeQueue,
     pub(super) upload: crate::upload::Upload,
+    pub(super) staged: Vec<(usize, u32, usize)>,
     pub(super) level_group: BindGroup,
     pub(super) planner: Planner,
     pub(super) shadow: Shadow,
@@ -109,6 +110,7 @@ impl Resources {
             bake,
             baked: BakeQueue::new(),
             upload: crate::upload::Upload::new(),
+            staged: Vec::new(),
             level_group,
             planner,
             shadow,
@@ -236,6 +238,7 @@ impl Resources {
             pyramid,
             channels,
             upload,
+            staged,
             occupancy,
             ..
         } = self;
@@ -248,7 +251,7 @@ impl Resources {
         let mut values = [0.0f32; CELL_WORDS];
         {
             let (prefetched, refreshes) = residence.streams();
-            for (request, packed) in bricks {
+            for (position, (request, packed)) in bricks.iter().enumerate() {
                 let BrickRequest {
                     time: held,
                     level,
@@ -275,7 +278,7 @@ impl Resources {
                     let refresh = refreshes.remove(request);
                     if refresh || !scope.covers(total) {
                         for (pack, block) in packed.packs() {
-                            push_texels(upload, atlas, pack, slot, block);
+                            staged.push((pack, slot, position));
                             occupy(&mut values, occupancy, slot, pack, block);
                         }
                         occupancy.flush(upload, slot);
@@ -321,7 +324,7 @@ impl Resources {
                 }
                 occupancy.reset(slot);
                 for (pack, block) in packed.packs() {
-                    push_texels(upload, atlas, pack, slot, block);
+                    staged.push((pack, slot, position));
                     occupy(&mut values, occupancy, slot, pack, block);
                 }
                 occupancy.flush(upload, slot);
@@ -346,6 +349,7 @@ impl Resources {
             }
         }
         residence.set_generation(generation);
+        stage(upload, atlas, bricks, staged);
         for (held, level, index) in supplied {
             residence.supply(held, level, index);
         }
@@ -366,20 +370,50 @@ fn occupy(values: &mut [f32], occupancy: &mut Occupancy, slot: u32, pack: usize,
     occupancy.stage(slot, pack, values);
 }
 
-fn push_texels(
+fn stage(
     upload: &mut crate::upload::Upload,
     atlas: &Atlas,
-    pack: usize,
-    slot: u32,
-    block: &grana_volume::Pack,
+    bricks: &[(BrickRequest, PackedBrick)],
+    staged: &mut Vec<(usize, u32, usize)>,
 ) {
-    let origin = atlas.origin(slot);
-    upload.texture(
-        atlas.texture(pack),
-        [origin.x, origin.y, origin.z],
-        [PADDED_SIDE, PADDED_SIDE, PADDED_SIDE],
-        block.row_pitch(),
-        PADDED_SIDE,
-        cast_slice(block.rows()),
-    );
+    if staged.is_empty() {
+        return;
+    }
+    staged.sort_by_key(|(pack, slot, _)| (*pack, *slot));
+    let columns = atlas.slot_grid()[0];
+    let mut bytes = Vec::new();
+    let mut first = 0;
+    while first < staged.len() {
+        let (pack, slot, position) = staged[first];
+        let block = bricks[position]
+            .1
+            .pack(pack)
+            .expect("a staged brick names one of its packs");
+        let mut last = first + 1;
+        while last < staged.len() {
+            let (other, next, _) = staged[last];
+            if other != pack || next != staged[last - 1].1 + 1 || next.is_multiple_of(columns) {
+                break;
+            }
+            last += 1;
+        }
+        bytes.clear();
+        bytes.extend(staged[first..last].iter().map(|(pack, _, position)| {
+            let block = bricks[*position]
+                .1
+                .pack(*pack)
+                .expect("a staged brick names one of its packs");
+            cast_slice(block.rows())
+        }));
+        let origin = atlas.origin(slot);
+        upload.bricks(
+            atlas.texture(pack),
+            [origin.x, origin.y, origin.z],
+            PADDED_SIDE,
+            block.texel_bytes(),
+            &bytes,
+        );
+        first = last;
+    }
+    staged.clear();
 }

@@ -37,7 +37,10 @@ pub(super) fn write(
     let labels = scene
         .objects
         .iter()
-        .filter_map(|set| LabelLayer::of(set, &cropped.levels))
+        .map(|set| LabelLayer::of(set, &cropped.levels))
+        .collect::<Result<Vec<_>, String>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
     let frames = scene.frame_count();
     let drift = (0..frames)

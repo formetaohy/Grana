@@ -231,7 +231,7 @@ impl Image {
             let tint = info
                 .and_then(|channel| channel.tint)
                 .unwrap_or(PALETTE[index as usize % PALETTE.len()]);
-            let sampled = sample_range(&files, &levels, &cache, path, index, sizes[0])?;
+            let sampled = sample_range(&files, &levels, &cache, index, sizes[0])?;
             let full = match format {
                 VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
                 VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
@@ -742,7 +742,6 @@ fn sample_range(
     files: &[Arc<File>],
     levels: &[LevelPages],
     cache: &Cache,
-    path: &Path,
     channel: u32,
     frames: u32,
 ) -> Result<Option<Intensity>, Error> {
@@ -767,7 +766,7 @@ fn sample_range(
     let mut high = f32::NEG_INFINITY;
     for sample in 0..samples {
         let time = sample * frames / samples;
-        let data = match region(
+        let data = region(
             files,
             cache,
             levels,
@@ -779,15 +778,11 @@ fn sample_range(
                 y: spatial.1.clone(),
                 z: spatial.2.clone(),
             },
-        ) {
-            Ok(data) => data,
-            Err(_) => return Ok(None),
-        };
+        )?;
         let range = data.range();
         low = low.min(range.min());
         high = high.max(range.max());
     }
-    let _ = path;
     if high > low {
         Ok(Some(Intensity::new(low, high)))
     } else {

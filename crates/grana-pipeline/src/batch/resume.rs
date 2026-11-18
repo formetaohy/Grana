@@ -60,25 +60,24 @@ pub(super) struct Evidence {
     pub(super) modified: Option<u64>,
 }
 
-pub(super) fn evidence(dataset: &Path) -> Evidence {
+pub(super) fn evidence(dataset: &Path) -> Result<Evidence, String> {
     match std::fs::metadata(dataset) {
-        Err(_) => Evidence {
-            content: 0,
-            bytes: 0,
-            modified: None,
-        },
+        Err(error) => Err(format!(
+            "the batch cannot measure {}: {error}",
+            dataset.display()
+        )),
         Ok(metadata) if metadata.is_dir() => directory_evidence(dataset),
-        Ok(metadata) => Evidence {
-            content: file_content(dataset, metadata.len()),
+        Ok(metadata) => Ok(Evidence {
+            content: file_content(dataset, metadata.len())?,
             bytes: metadata.len(),
             modified: modified(&metadata),
-        },
+        }),
     }
 }
 
-fn directory_evidence(root: &Path) -> Evidence {
+fn directory_evidence(root: &Path) -> Result<Evidence, String> {
     let mut entries = Vec::new();
-    collect(root, root, &mut entries);
+    collect(root, root, &mut entries)?;
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     let mut hash = mix_u64(HASH, entries.len() as u64);
     let mut bytes = 0;
@@ -89,13 +88,13 @@ fn directory_evidence(root: &Path) -> Evidence {
         hash = mix_bytes(hash, entry.name.as_bytes());
         bytes += entry.size;
         modified_at = modified_at.max(entry.modified);
-        hash = file_bytes(hash, &root.join(&entry.name), entry.size);
+        hash = file_bytes(hash, &root.join(&entry.name), entry.size)?;
     }
-    Evidence {
+    Ok(Evidence {
         content: hash,
         bytes,
         modified: modified_at,
-    }
+    })
 }
 
 struct Entry {
@@ -104,17 +103,22 @@ struct Entry {
     modified: Option<u64>,
 }
 
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) {
-    let Ok(listing) = std::fs::read_dir(folder) else {
-        return;
-    };
-    for entry in listing.flatten() {
+fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) -> Result<(), String> {
+    let listing = std::fs::read_dir(folder)
+        .map_err(|error| format!("the batch cannot list {}: {error}", folder.display()))?;
+    for entry in listing {
+        let entry = entry.map_err(|error| {
+            format!(
+                "the batch cannot read an entry of {}: {error}",
+                folder.display()
+            )
+        })?;
         let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("the batch cannot measure {}: {error}", path.display()))?;
         if metadata.is_dir() {
-            collect(root, &path, entries);
+            collect(root, &path, entries)?;
             continue;
         }
         let name = path
@@ -131,6 +135,7 @@ fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) {
             name,
         });
     }
+    Ok(())
 }
 
 fn derived(name: &str) -> bool {
@@ -146,16 +151,19 @@ fn modified(metadata: &std::fs::Metadata) -> Option<u64> {
         .map(|elapsed| elapsed.as_secs())
 }
 
-fn file_content(path: &Path, length: u64) -> u64 {
+fn file_content(path: &Path, length: u64) -> Result<u64, String> {
     file_bytes(HASH, path, length)
 }
 
-fn file_bytes(seed: u64, path: &Path, length: u64) -> u64 {
+fn file_bytes(seed: u64, path: &Path, length: u64) -> Result<u64, String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut hash = mix_u64(seed, length);
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return hash;
-    };
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        format!(
+            "the batch cannot open {} to fingerprint it: {error}",
+            path.display()
+        )
+    })?;
     let span = CONTENT_SAMPLE.min(length);
     let mut buffer = vec![0u8; span as usize];
     for offset in [
@@ -163,15 +171,21 @@ fn file_bytes(seed: u64, path: &Path, length: u64) -> u64 {
         length.saturating_sub(span) / 2,
         length.saturating_sub(span),
     ] {
-        if file.seek(SeekFrom::Start(offset)).is_err() {
-            break;
-        }
-        let Ok(count) = file.read(&mut buffer) else {
-            break;
-        };
+        file.seek(SeekFrom::Start(offset)).map_err(|error| {
+            format!(
+                "the batch cannot seek {} to fingerprint it: {error}",
+                path.display()
+            )
+        })?;
+        let count = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "the batch cannot read {} to fingerprint it: {error}",
+                path.display()
+            )
+        })?;
         hash = mix_bytes(hash, &buffer[..count]);
     }
-    hash
+    Ok(hash)
 }
 
 fn mix_bytes(mut hash: u64, bytes: &[u8]) -> u64 {

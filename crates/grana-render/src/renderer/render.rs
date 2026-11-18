@@ -23,7 +23,7 @@ pub(super) struct Shot {
 }
 
 impl Shot {
-    fn of(frame: &Frame<'_, '_>) -> Self {
+    fn of(frame: &Frame<'_, '_>, translucent: bool) -> Self {
         let slice = frame.camera.slice().is_some();
         Self {
             view: View::new(
@@ -36,13 +36,7 @@ impl Shot {
             awaits: frame.delivery.awaits(),
             assured: frame.delivery.assures(),
             slice,
-            translucent: !slice
-                && (frame
-                    .scene
-                    .styles
-                    .iter()
-                    .any(|style| style.visible() && style.transparent())
-                    || !frame.scene.splats.is_empty()),
+            translucent,
             surfaces: !frame.scene.layers.is_empty(),
             splats: !frame.scene.splats.is_empty(),
             volume: frame
@@ -86,7 +80,8 @@ impl Renderer {
             label: Some("grana.frame"),
         });
         self.info.drawn = false;
-        let shot = Shot::of(&frame);
+        let translucent = self.translucent(&frame);
+        let shot = Shot::of(&frame, translucent);
         let mut prepared = match self.prepare(device, queue, &mut encoder, target, &frame, shot) {
             Ok(prepared) => prepared,
             Err(Halt::Blank) => {
@@ -109,6 +104,28 @@ impl Renderer {
 
     fn register(&mut self) {
         self.residence.register();
+    }
+
+    fn translucent(&mut self, frame: &Frame<'_, '_>) -> bool {
+        if frame.camera.slice().is_some() {
+            return false;
+        }
+        if !frame.scene.splats.is_empty() {
+            return true;
+        }
+        let version = frame.scene.versions.style();
+        if let Some((held, translucent)) = self.translucent
+            && held == version
+        {
+            return translucent;
+        }
+        let translucent = frame
+            .scene
+            .styles
+            .iter()
+            .any(|style| style.visible() && style.transparent());
+        self.translucent = Some((version, translucent));
+        translucent
     }
 
     fn prepare(

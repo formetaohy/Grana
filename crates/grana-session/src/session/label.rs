@@ -139,15 +139,27 @@ impl super::Session {
     pub(super) fn start_next_label(&mut self) {
         while self.tasks.labels.is_none() {
             let Some(set) = self.labels_queue.first().copied() else {
+                self.report_label_failures();
                 return;
             };
             self.labels_queue.remove(0);
             if let Err(detail) = self.begin_labels(set) {
-                self.message = Some(crate::Message::error(detail));
+                self.labels_failed.push(detail);
                 continue;
             }
             return;
         }
+    }
+
+    fn report_label_failures(&mut self) {
+        if self.labels_failed.is_empty() {
+            return;
+        }
+        let detail = std::mem::take(&mut self.labels_failed);
+        self.message = Some(crate::Message::error(format!(
+            "could not label every object set: {}",
+            detail.join("; ")
+        )));
     }
 
     pub(super) fn begin_labels(&mut self, set: ObjectSetId) -> Result<(), String> {
@@ -221,14 +233,13 @@ impl super::Session {
             levels,
             title: object.name().to_string(),
         };
-        self.message = None;
         self.tasks.labels = Some(Labels::start(request, set));
         Ok(())
     }
 
     pub(super) fn finish_labels(&mut self, set: ObjectSetId, outcome: Result<Written, String>) {
         let mut success = false;
-        self.message = Some(match outcome {
+        match outcome {
             Ok(written) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_label_export(
@@ -241,15 +252,15 @@ impl super::Session {
                     );
                 }
                 success = true;
-                crate::Message::info(format!(
+                self.message = Some(crate::Message::info(format!(
                     "wrote {} labels over {} frames to {}",
                     written.labels(),
                     written.frames(),
                     written.path().display()
-                ))
+                )));
             }
-            Err(detail) => crate::Message::error(detail),
-        });
+            Err(detail) => self.labels_failed.push(detail),
+        }
         let recipe = self
             .recipe
             .as_ref()

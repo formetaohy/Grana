@@ -297,7 +297,7 @@ pub fn discover(root: &Path, tiles: bool) -> Result<Vec<DatasetEntry>, DiscoverE
         return Ok(entries_of(root, ""));
     }
     if tiles {
-        let found = tiles_of(root);
+        let found = tiles_of(root)?;
         if found > 1 {
             return Ok(tile_entries(root, ""));
         }
@@ -314,14 +314,22 @@ pub fn discover(root: &Path, tiles: bool) -> Result<Vec<DatasetEntry>, DiscoverE
     Ok(datasets)
 }
 
-fn tiles_of(folder: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return 0;
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| grana_image::is_image(&entry.path()))
-        .count()
+fn tiles_of(folder: &Path) -> Result<usize, DiscoverError> {
+    let entries = std::fs::read_dir(folder).map_err(|error| DiscoverError::Read {
+        path: folder.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    let mut count = 0;
+    for entry in entries {
+        let entry = entry.map_err(|error| DiscoverError::Read {
+            path: folder.display().to_string(),
+            detail: error.to_string(),
+        })?;
+        if grana_image::is_image(&entry.path()) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn tile_entries(folder: &Path, group: &str) -> Vec<DatasetEntry> {
@@ -392,8 +400,11 @@ fn walk(
             path: folder.display().to_string(),
             detail: error.to_string(),
         })?
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| DiscoverError::Read {
+            path: folder.display().to_string(),
+            detail: error.to_string(),
+        })?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
@@ -404,7 +415,7 @@ fn walk(
         let directory = entry.file_type().is_ok_and(|kind| kind.is_dir())
             && !entry.file_name().to_string_lossy().starts_with('.');
         if directory {
-            if tiles && tiles_of(&path) > 1 {
+            if tiles && tiles_of(&path)? > 1 {
                 datasets.extend(tile_entries(&path, &group_of(root, &path)));
                 continue;
             }

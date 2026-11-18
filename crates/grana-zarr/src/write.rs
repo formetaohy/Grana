@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_archive::{Fill, Filler, ImageSpec, Written};
+use grana_archive::{Fill, Filler, ImageSpec, Sample, Written};
 use grana_volume::Level;
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
@@ -37,6 +37,15 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
 }
 
 pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
+    assert_eq!(
+        spec.sample,
+        Sample::Float,
+        "an OME-Zarr image stores float samples"
+    );
+    assert!(
+        spec.interval.is_some(),
+        "an OME-Zarr image declares its frame interval"
+    );
     let store = Arc::new(
         FilesystemStore::new(path).map_err(|error| format!("failed to open the store: {error}"))?,
     );
@@ -354,7 +363,10 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                     .sum::<f64>()
             });
             let scale = [
-                f64::from(spec.interval),
+                f64::from(
+                    spec.interval
+                        .expect("an OME-Zarr image declares its frame interval"),
+                ),
                 1.0,
                 spacing[2],
                 spacing[1],

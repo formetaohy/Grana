@@ -13,51 +13,33 @@ pub struct Job<'a> {
     pub iterations: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Backend {
-    Graphics,
+pub struct Restorer {
+    core: Core,
+}
+
+enum Core {
+    Graphics(Mutex<gpu::Gpu>),
     Processor,
 }
 
-impl Backend {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Graphics => "graphics",
-            Self::Processor => "processor",
-        }
-    }
-}
-
-pub struct Restorer {
-    graphics: Mutex<Option<gpu::Gpu>>,
-}
-
 impl Restorer {
-    pub fn shared() -> &'static Self {
-        static SHARED: OnceLock<Restorer> = OnceLock::new();
-        SHARED.get_or_init(Self::new)
+    pub fn shared() -> Result<&'static Self, String> {
+        static SHARED: OnceLock<Result<Restorer, String>> = OnceLock::new();
+        SHARED
+            .get_or_init(Self::graphics)
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
-    pub fn new() -> Self {
-        Self {
-            graphics: Mutex::new(gpu::Gpu::new().ok()),
-        }
+    pub fn graphics() -> Result<Self, String> {
+        Ok(Self {
+            core: Core::Graphics(Mutex::new(gpu::Gpu::new()?)),
+        })
     }
 
     pub fn processor() -> Self {
         Self {
-            graphics: Mutex::new(None),
-        }
-    }
-
-    pub fn backend(&self) -> Backend {
-        let held = self
-            .graphics
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        match *held {
-            Some(_) => Backend::Graphics,
-            None => Backend::Processor,
+            core: Core::Processor,
         }
     }
 
@@ -98,24 +80,17 @@ impl Restorer {
         if jobs.is_empty() {
             return Vec::new();
         }
-        let mut held = self
-            .graphics
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        match held.as_mut() {
-            Some(gpu) => gpu.restore_batch(bank, jobs),
-            None => jobs
+        match &self.core {
+            Core::Graphics(graphics) => graphics
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .restore_batch(bank, jobs),
+            Core::Processor => jobs
                 .iter()
                 .map(|job| {
                     cpu::restore(job.dims, job.source, bank, job.first_plane, job.iterations)
                 })
                 .collect(),
         }
-    }
-}
-
-impl Default for Restorer {
-    fn default() -> Self {
-        Self::new()
     }
 }

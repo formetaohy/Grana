@@ -45,6 +45,7 @@ pub(crate) struct Residence {
     generation: u64,
     pin: u64,
     prefetched: HashSet<BrickRequest>,
+    observed: HashSet<(usize, u32)>,
     prefetch_key: Option<u64>,
     prefetch_issued: Vec<BrickRequest>,
     refreshes: HashSet<BrickRequest>,
@@ -170,6 +171,7 @@ impl Residence {
             generation: 0,
             pin: 0,
             prefetched: HashSet::new(),
+            observed: HashSet::new(),
             prefetch_key: None,
             prefetch_issued: Vec::new(),
             refreshes: HashSet::new(),
@@ -524,30 +526,35 @@ impl Residence {
             self.prefetch_key = Some(view);
             self.prefetched.clear();
         }
-        let demanded = bands
-            .iter()
-            .flat_map(|band| {
+        if !self.prefetch_issued.is_empty() {
+            self.observed.clear();
+            for (level, index) in bands.iter().flat_map(|band| {
                 band.indices
                     .iter()
                     .map(move |index| (band.info.level, *index))
-            })
-            .collect::<HashSet<_>>();
-        let mut issued = 0;
-        let mut hit = 0;
-        for request in &self.prefetch_issued {
-            if request.time != key.time {
-                continue;
+            }) {
+                self.observed.insert((level, index));
             }
-            issued += 1;
-            if demanded.contains(&(request.level, index_of(request, pyramid))) {
-                hit += 1;
+            let mut issued = 0;
+            let mut hit = 0;
+            for request in &self.prefetch_issued {
+                if request.time != key.time {
+                    continue;
+                }
+                issued += 1;
+                if self
+                    .observed
+                    .contains(&(request.level, index_of(request, pyramid)))
+                {
+                    hit += 1;
+                }
             }
+            if issued > 0 {
+                let rate = hit as f32 / issued as f32;
+                self.prefetch_rate = 0.7 * self.prefetch_rate + 0.3 * rate.clamp(0.25, 1.0);
+            }
+            self.prefetch_issued.clear();
         }
-        if issued > 0 {
-            let rate = hit as f32 / issued as f32;
-            self.prefetch_rate = 0.7 * self.prefetch_rate + 0.3 * rate.clamp(0.25, 1.0);
-        }
-        self.prefetch_issued.clear();
         for band in bands {
             for request in &band.requests {
                 self.prefetched.remove(request);

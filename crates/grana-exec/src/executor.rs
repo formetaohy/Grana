@@ -204,7 +204,9 @@ fn serve(inner: &Inner) {
         let Some(Task { cancel, work, .. }) = task else {
             return;
         };
-        let _ = crate::fault::contain(move || work(&cancel));
+        if let Err(fault) = crate::fault::contain(move || work(&cancel)) {
+            eprintln!("{}", fault.describe("a background task"));
+        }
     }
 }
 

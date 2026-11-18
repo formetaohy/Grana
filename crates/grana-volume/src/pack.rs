@@ -11,8 +11,6 @@ pub const PACK: usize = 4;
 
 pub const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
 
-const ROW_ALIGNMENT: u32 = 256;
-
 const PADDED: usize = PADDED_SIDE as usize;
 
 const APRON: usize = BRICK_APRON as usize;
@@ -39,11 +37,6 @@ pub fn texels(components: usize) -> usize {
     }
 }
 
-pub fn row_pitch(components: usize) -> u32 {
-    let row = PADDED_SIDE * (texels(components) * size_of::<u16>()) as u32;
-    row.div_ceil(ROW_ALIGNMENT) * ROW_ALIGNMENT
-}
-
 fn covers(channels: usize, scope: ChannelSet, pack: usize) -> bool {
     (pack * PACK..(pack + 1) * PACK).all(|channel| channel >= channels || scope.contains(channel))
 }
@@ -56,12 +49,8 @@ pub struct Pack {
 }
 
 impl Pack {
-    pub fn components(&self) -> usize {
-        self.components
-    }
-
-    pub fn row_pitch(&self) -> u32 {
-        row_pitch(self.components)
+    pub fn texel_bytes(&self) -> u32 {
+        (texels(self.components) * size_of::<u16>()) as u32
     }
 
     pub fn maximum(&self) -> f32 {
@@ -77,12 +66,11 @@ impl Pack {
     }
 
     fn new(components: usize) -> Self {
-        let row = (row_pitch(components) / 2) as usize;
         Self {
             components,
             maximum: 0.0,
             cells: vec![0.0; CELL_COUNT],
-            rows: vec![0; row * PADDED * PADDED],
+            rows: vec![0; PADDED * PADDED * PADDED * texels(components)],
         }
     }
 
@@ -94,7 +82,7 @@ impl Pack {
             })
             .collect::<Vec<_>>();
         let stride = texels(self.components);
-        let row = (row_pitch(self.components) / 2) as usize;
+        let row = PADDED * stride;
         let (maximum, cells) = self
             .rows
             .par_chunks_mut(row * PADDED)

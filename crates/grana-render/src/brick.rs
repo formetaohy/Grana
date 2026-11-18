@@ -136,6 +136,7 @@ pub(crate) struct BrickTable {
     time: Option<u32>,
     records: Vec<BrickRecord>,
     dirty: Vec<Range<usize>>,
+    residents: Vec<crate::atlas::Resident>,
     revision: u64,
 }
 
@@ -169,6 +170,7 @@ impl BrickTable {
             time: None,
             records: vec![BrickRecord::MISSING; grid.count()],
             dirty: Vec::new(),
+            residents: Vec::new(),
             revision: 0,
         }
     }
@@ -189,14 +191,22 @@ impl BrickTable {
         atlas: &Atlas,
         arena: &BrickArena,
     ) {
-        for resident in atlas.residents(time, self.level) {
+        let Self {
+            level,
+            records,
+            dirty,
+            residents,
+            ..
+        } = self;
+        atlas.residents(time, *level, residents);
+        for resident in residents.iter() {
             let record = match resident.slot {
                 Some(slot) => BrickRecord::new(slot + 1, time, content),
                 None => BrickRecord::hollow(time, content),
             };
-            if self.records[resident.index] != record {
-                self.records[resident.index] = record;
-                self.mark(resident.index);
+            if records[resident.index] != record {
+                records[resident.index] = record;
+                dirty.push(resident.index..resident.index + 1);
             }
         }
         self.flush(upload, arena);

@@ -1,4 +1,4 @@
-use grana_archive::ImageSpec;
+use grana_archive::{ImageSpec, Sample};
 
 use super::tile::SIDE;
 
@@ -27,8 +27,8 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 const DEFLATE: u16 = 8;
 const BLACK_IS_ZERO: u16 = 1;
 const CHUNKY: u16 = 1;
+const UNSIGNED: u16 = 1;
 const FLOAT: u16 = 3;
-const BITS: u16 = 32;
 
 const SOFTWARE: &str = "Grana";
 const COUNT_BYTES: usize = 8;
@@ -73,13 +73,23 @@ pub(crate) fn page(
     height: u32,
     tiles: usize,
     sub_levels: usize,
+    sample: Sample,
     description: Option<&str>,
 ) -> (Vec<u8>, Spots) {
-    block(at, entries(width, height, tiles, sub_levels, description))
+    block(
+        at,
+        entries(width, height, tiles, sub_levels, sample, description),
+    )
 }
 
-pub(crate) fn sub_page(at: u64, width: u32, height: u32, tiles: usize) -> (Vec<u8>, Spots) {
-    block(at, entries(width, height, tiles, 0, None))
+pub(crate) fn sub_page(
+    at: u64,
+    width: u32,
+    height: u32,
+    tiles: usize,
+    sample: Sample,
+) -> (Vec<u8>, Spots) {
+    block(at, entries(width, height, tiles, 0, sample, None))
 }
 
 fn entries(
@@ -87,12 +97,17 @@ fn entries(
     height: u32,
     tiles: usize,
     sub_levels: usize,
+    sample: Sample,
     description: Option<&str>,
 ) -> Vec<Entry> {
     let mut entries = Vec::with_capacity(15);
     entries.push(scalar(TAG_IMAGE_WIDTH, KIND_LONG, u64::from(width)));
     entries.push(scalar(TAG_IMAGE_LENGTH, KIND_LONG, u64::from(height)));
-    entries.push(scalar(TAG_BITS_PER_SAMPLE, KIND_SHORT, u64::from(BITS)));
+    entries.push(scalar(
+        TAG_BITS_PER_SAMPLE,
+        KIND_SHORT,
+        u64::from(bits(sample)),
+    ));
     entries.push(scalar(TAG_COMPRESSION, KIND_SHORT, u64::from(DEFLATE)));
     entries.push(scalar(
         TAG_PHOTOMETRIC,
@@ -118,8 +133,27 @@ fn entries(
     if sub_levels > 0 {
         entries.push(blob(TAG_SUB_IFDS, KIND_IFD8, sub_levels * 8));
     }
-    entries.push(scalar(TAG_SAMPLE_FORMAT, KIND_SHORT, u64::from(FLOAT)));
+    entries.push(scalar(
+        TAG_SAMPLE_FORMAT,
+        KIND_SHORT,
+        u64::from(format(sample)),
+    ));
     entries
+}
+
+fn bits(sample: Sample) -> u16 {
+    match sample {
+        Sample::Float => 32,
+        Sample::Unsigned16 => 16,
+        Sample::Unsigned8 => 8,
+    }
+}
+
+fn format(sample: Sample) -> u16 {
+    match sample {
+        Sample::Float => FLOAT,
+        Sample::Unsigned16 | Sample::Unsigned8 => UNSIGNED,
+    }
 }
 
 fn scalar(tag: u16, kind: u16, value: u64) -> Entry {
@@ -226,7 +260,8 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     );
     xml.push_str(&format!(" Name=\"{}\">\n", escape(spec.name)));
     xml.push_str(&format!(
-        "  <Pixels ID=\"Pixels:0\" DimensionOrder=\"XYZCT\" Type=\"float\" SizeX=\"{}\" SizeY=\"{}\" SizeZ=\"{}\" SizeC=\"{}\" SizeT=\"{}\"",
+        "  <Pixels ID=\"Pixels:0\" DimensionOrder=\"XYZCT\" Type=\"{}\" SizeX=\"{}\" SizeY=\"{}\" SizeZ=\"{}\" SizeC=\"{}\" SizeT=\"{}\"",
+        kind(spec.sample),
         extent.x(),
         extent.y(),
         extent.z(),
@@ -239,10 +274,12 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
         number(basis.step(1)),
         number(basis.step(2))
     ));
-    xml.push_str(&format!(
-        " TimeIncrement=\"{}\" TimeIncrementUnit=\"s\"",
-        number(spec.interval)
-    ));
+    if let Some(interval) = spec.interval {
+        xml.push_str(&format!(
+            " TimeIncrement=\"{}\" TimeIncrementUnit=\"s\"",
+            number(interval)
+        ));
+    }
     xml.push_str(">\n");
     for (index, channel) in spec.channels.iter().enumerate() {
         xml.push_str(&format!(
@@ -281,6 +318,14 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     }
     xml.push_str("  </Pixels>\n </Image>\n</OME>");
     xml
+}
+
+fn kind(sample: Sample) -> &'static str {
+    match sample {
+        Sample::Float => "float",
+        Sample::Unsigned16 => "uint16",
+        Sample::Unsigned8 => "uint8",
+    }
 }
 
 fn color(tint: [f32; 3]) -> i32 {

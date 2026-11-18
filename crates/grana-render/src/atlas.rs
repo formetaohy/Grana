@@ -369,31 +369,27 @@ impl Atlas {
         self.pruned = None;
     }
 
-    pub fn residents(&self, time: u32, level: usize) -> Vec<Resident> {
-        let mut residents = self
-            .frames
-            .get(&(time, level))
-            .into_iter()
-            .flatten()
-            .map(|slot| Resident {
-                index: self.slots[*slot as usize]
-                    .brick
-                    .expect("a framed slot holds a brick")
-                    .index,
-                slot: Some(*slot),
-            })
-            .collect::<Vec<_>>();
-        residents.extend(
-            self.hollowed
-                .get(&(time, level))
-                .into_iter()
-                .flatten()
-                .map(|index| Resident {
+    pub fn residents(&self, time: u32, level: usize, out: &mut Vec<Resident>) {
+        out.clear();
+        if let Some(slots) = self.frames.get(&(time, level)) {
+            for slot in slots {
+                out.push(Resident {
+                    index: self.slots[*slot as usize]
+                        .brick
+                        .expect("a framed slot holds a brick")
+                        .index,
+                    slot: Some(*slot),
+                });
+            }
+        }
+        if let Some(indices) = self.hollowed.get(&(time, level)) {
+            for index in indices {
+                out.push(Resident {
                     index: *index,
                     slot: None,
-                }),
-        );
-        residents
+                });
+            }
+        }
     }
 
     pub fn touch(&mut self, time: u32, level: usize, indices: impl Iterator<Item = u32>, pin: u64) {

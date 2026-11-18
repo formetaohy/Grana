@@ -9,6 +9,13 @@ pub struct Channel<'a> {
     pub range: Intensity,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sample {
+    Float,
+    Unsigned16,
+    Unsigned8,
+}
+
 pub type Filler<'a> = dyn Fn(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String>
     + Send
     + Sync
@@ -38,7 +45,8 @@ pub struct ImageSpec<'a> {
     pub levels: &'a [Level],
     pub placement: [f32; 3],
     pub frames: u32,
-    pub interval: f32,
+    pub interval: Option<f32>,
+    pub sample: Sample,
     pub fill: Fill<'a>,
     pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),
@@ -73,8 +81,13 @@ impl ImageSpec<'_> {
             "an exported image carries at least one frame"
         );
         assert!(
-            self.interval.is_finite() && self.interval > 0.0,
+            self.interval
+                .is_none_or(|interval| interval.is_finite() && interval > 0.0),
             "an exported image carries a positive frame interval"
+        );
+        assert!(
+            self.frames == 1 || self.interval.is_some(),
+            "an exported time series declares its frame interval"
         );
         assert!(
             self.placement.iter().all(|value| value.is_finite()),

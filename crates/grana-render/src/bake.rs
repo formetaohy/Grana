@@ -8,7 +8,7 @@ use wgpu::{
     ComputePipelineDescriptor, Device, Queue, ShaderModuleDescriptor, ShaderSource, TextureView,
 };
 
-use crate::atlas::Atlas;
+use crate::atlas::{Atlas, Resident};
 use crate::layout::Layouts;
 
 const SHADER: &str = concat!(
@@ -131,6 +131,7 @@ impl Bake {
 pub(crate) struct BakeQueue {
     staged: HashMap<u32, u64>,
     entries: Vec<BakeEntry>,
+    residents: Vec<Resident>,
     collected: Option<Stamp>,
 }
 
@@ -148,6 +149,7 @@ impl BakeQueue {
         Self {
             staged: HashMap::new(),
             entries: Vec::new(),
+            residents: Vec::new(),
             collected: None,
         }
     }
@@ -179,7 +181,8 @@ impl BakeQueue {
         self.entries.clear();
         let mut complete = true;
         'bands: for (band, level) in levels.iter().enumerate() {
-            for resident in atlas.residents(time, *level) {
+            atlas.residents(time, *level, &mut self.residents);
+            for resident in &self.residents {
                 let Some(slot) = resident.slot else {
                     continue;
                 };

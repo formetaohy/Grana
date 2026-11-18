@@ -104,20 +104,6 @@ pub fn write_stream(path: &Path, size: [u32; 2], row: StreamRow<'_>) -> Result<(
     atomic.commit().map_err(|error| write(error.to_string()))
 }
 
-pub fn encode16(size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<Vec<u8>, Error> {
-    assert_eq!(
-        pixels.len(),
-        size[0] as usize * size[1] as usize * samples,
-        "the samples fill every pixel of a sixteen bit image"
-    );
-    encode16_stream(size, samples, &mut |line, row| {
-        let start = line as usize * size[0] as usize * samples;
-        let end = start + row.len();
-        row.copy_from_slice(&pixels[start..end]);
-        Ok(())
-    })
-}
-
 pub fn encode16_stream(
     size: [u32; 2],
     samples: usize,
@@ -126,14 +112,6 @@ pub fn encode16_stream(
     let mut buffer = Vec::new();
     encode16_into(&mut buffer, size, samples, row)?;
     Ok(buffer)
-}
-
-pub fn write16(path: &Path, size: [u32; 2], samples: usize, pixels: &[u16]) -> Result<(), Error> {
-    let bytes = encode16(size, samples, pixels)?;
-    grana_file::write(path, &bytes).map_err(|error| Error::Write {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })
 }
 
 pub fn write16_stream(

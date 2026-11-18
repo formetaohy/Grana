@@ -141,11 +141,18 @@ impl super::Session {
                 range: info.window(),
             })
             .collect::<Vec<_>>();
-        let labels = scene
+        let labels = match scene
             .objects
             .iter()
-            .filter_map(|set| LabelLayer::of(set, &cropped.levels))
-            .collect::<Vec<_>>();
+            .map(|set| LabelLayer::of(set, &cropped.levels))
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(labels) => labels.into_iter().flatten().collect::<Vec<_>>(),
+            Err(detail) => {
+                self.message = Some(crate::Message::error(detail));
+                return;
+            }
+        };
         let frames = scene.frame_count();
         let drift = (0..frames).map(|time| scene.drift_warps(time)).collect();
         let name = scene.dataset.name().to_string();

@@ -854,7 +854,8 @@ impl RestoreChannel {
                 iterations: self.iterations,
             })
             .collect::<Vec<_>>();
-        let restored = Restorer::shared().restore_batch(bank, &jobs);
+        let restorer = Restorer::shared().map_err(|detail| ChannelsError::Derived { detail })?;
+        let restored = restorer.restore_batch(bank, &jobs);
         let mut tiles = self.tiles.lock().unwrap_or_else(|error| error.into_inner());
         for (plan, values) in plans.iter().zip(&restored) {
             let covered = extent_of(&plan.ranges);

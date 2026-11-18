@@ -2,12 +2,16 @@ use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use grana_archive::Filler;
+use grana_archive::{Filler, Sample};
 use grana_volume::Level;
 
 pub(crate) const SIDE: u32 = 256;
 
 const BLOCK: usize = (SIDE * SIDE) as usize;
+
+const MAXIMUM_16: f32 = u16::MAX as f32;
+
+const MAXIMUM_8: f32 = u8::MAX as f32;
 
 #[derive(Clone, Copy)]
 pub(crate) struct LevelInfo {
@@ -70,24 +74,24 @@ pub(crate) struct Tile {
     compressed: Vec<u8>,
 }
 
-impl Default for Tile {
-    fn default() -> Self {
+impl Tile {
+    pub(crate) fn new(sample: Sample) -> Self {
+        let texel = bytes(sample);
         Self {
             block: vec![0.0; BLOCK],
             scratch: vec![0.0; BLOCK],
-            raw: vec![0; BLOCK * size_of::<f32>()],
+            raw: vec![0; BLOCK * texel],
             compressed: Vec::new(),
         }
     }
-}
 
-impl Tile {
     pub(crate) fn encode(
         &mut self,
         request: &Request,
         info: LevelInfo,
         column: u32,
         row: u32,
+        sample: Sample,
         fill: &Filler<'_>,
     ) -> Result<u64, String> {
         let origin = [column * SIDE, row * SIDE, request.z];
@@ -114,9 +118,7 @@ impl Tile {
             let to = line * stride;
             self.block[to..to + columns].copy_from_slice(&self.scratch[from..from + columns]);
         }
-        for (slot, value) in self.raw.as_chunks_mut::<4>().0.iter_mut().zip(&self.block) {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
+        self.encode_block(sample);
         let mut compressed = std::mem::take(&mut self.compressed);
         compressed.clear();
         let mut encoder = ZlibEncoder::new(compressed, Compression::default());
@@ -127,7 +129,36 @@ impl Tile {
         Ok(self.compressed.len() as u64)
     }
 
+    fn encode_block(&mut self, sample: Sample) {
+        match sample {
+            Sample::Float => {
+                for (slot, value) in self.raw.as_chunks_mut::<4>().0.iter_mut().zip(&self.block) {
+                    slot.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            Sample::Unsigned16 => {
+                for (slot, value) in self.raw.as_chunks_mut::<2>().0.iter_mut().zip(&self.block) {
+                    let unit = (value.clamp(0.0, 1.0) * MAXIMUM_16).round() as u16;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            Sample::Unsigned8 => {
+                for (slot, value) in self.raw.iter_mut().zip(&self.block) {
+                    *slot = (value.clamp(0.0, 1.0) * MAXIMUM_8).round() as u8;
+                }
+            }
+        }
+    }
+
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.compressed
+    }
+}
+
+pub(crate) fn bytes(sample: Sample) -> usize {
+    match sample {
+        Sample::Float => size_of::<f32>(),
+        Sample::Unsigned16 => size_of::<u16>(),
+        Sample::Unsigned8 => size_of::<u8>(),
     }
 }

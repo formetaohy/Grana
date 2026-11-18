@@ -11,6 +11,7 @@ grana-warp = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 grana-animation = { workspace = true }
+grana-archive = { workspace = true }
 grana-chart = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
