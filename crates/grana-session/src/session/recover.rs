@@ -10,6 +10,13 @@ pub(super) struct Restore {
     pub(super) project: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Restored {
+    Fresh,
+    Field,
+    Mismatch,
+}
+
 impl Session {
     pub fn attach_recovery_store(&mut self) {
         self.recovery = Recovery::persistent();
@@ -133,12 +140,17 @@ impl Session {
         }
     }
 
-    pub(super) fn accept_open(&mut self) {
+    pub(super) fn accept_open(&mut self, restored: Restored) {
+        if restored == Restored::Mismatch {
+            self.restore = None;
+            self.baseline = self.document_hash();
+            return;
+        }
         if let Some(restore) = self.restore.take() {
             self.project = restore.project;
             self.baseline = None;
             self.deferred = false;
-        } else {
+        } else if restored == Restored::Fresh {
             self.baseline = self.document_hash();
         }
         self.recovery.discard();

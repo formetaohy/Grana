@@ -16,16 +16,19 @@ use crate::witness::{self, Local};
 const BLOCK_BUDGET: u64 = 96 << 20;
 const BLOCK_LIMIT: u64 = 64 << 20;
 
+#[derive(Clone)]
 pub struct Root {
     store: Store,
     origin: Origin,
 }
 
+#[derive(Clone)]
 enum Store {
     Local(Arc<FilesystemStore>),
     Remote(Arc<RemoteStore>),
 }
 
+#[derive(Clone)]
 enum Origin {
     Local(PathBuf),
     Remote { target: Target },

@@ -256,6 +256,7 @@ impl super::Session {
                     self.label_images.push(name);
                     self.label_images.sort();
                 }
+                self.touch();
                 success = true;
                 self.message = Some(crate::Message::info(format!(
                     "wrote {} labels over {} frames to {}",

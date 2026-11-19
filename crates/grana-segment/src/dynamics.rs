@@ -13,7 +13,7 @@ const SEED_WINDOW_MIN_COUNT: u32 = 2;
 const NEIGHBOUR_COUNT: f64 = 9.0;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Flow {
+pub(crate) struct Flow {
     width: u32,
     height: u32,
     dy: Vec<f32>,
@@ -22,27 +22,19 @@ pub struct Flow {
 }
 
 impl Flow {
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    pub fn dy(&self) -> &[f32] {
+    pub(crate) fn dy(&self) -> &[f32] {
         &self.dy
     }
 
-    pub fn dx(&self) -> &[f32] {
+    pub(crate) fn dx(&self) -> &[f32] {
         &self.dx
     }
 
-    pub fn cellprob(&self) -> &[f32] {
+    pub(crate) fn cellprob(&self) -> &[f32] {
         &self.cellprob
     }
 
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         width: u32,
         height: u32,
         dy: Vec<f32>,
@@ -67,7 +59,7 @@ impl Flow {
         }
     }
 
-    pub fn masks(&self, cellprob_threshold: f32) -> Vec<u32> {
+    pub(crate) fn masks(&self, cellprob_threshold: f32) -> Vec<u32> {
         let width = self.width as usize;
         let height = self.height as usize;
         let area = width * height;
@@ -192,68 +184,6 @@ impl Flow {
         masks
     }
 
-    pub fn seeded(&self, prompt: Prompt<'_>) -> Vec<u32> {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let area = width * height;
-        if width < 2 || height < 2 {
-            return vec![0; area];
-        }
-        for seed in prompt.seeds() {
-            assert!(
-                seed[0] >= 0.0
-                    && seed[0] <= (width - 1) as f32
-                    && seed[1] >= 0.0
-                    && seed[1] <= (height - 1) as f32,
-                "a prompt seed lies inside its plane"
-            );
-        }
-        let Some(prepared) = self.prepared(prompt.threshold()) else {
-            return vec![0; area];
-        };
-        let scale_x = (width - 1) as f32;
-        let scale_y = (height - 1) as f32;
-        let mut prompt_x = Vec::with_capacity(prompt.seeds().len());
-        let mut prompt_y = Vec::with_capacity(prompt.seeds().len());
-        for (x, y) in prompt
-            .seeds()
-            .iter()
-            .map(|seed| (2.0 * seed[0] / scale_x - 1.0, 2.0 * seed[1] / scale_y - 1.0))
-        {
-            prompt_x.push(x);
-            prompt_y.push(y);
-        }
-        integrate(
-            &mut prompt_x,
-            &mut prompt_y,
-            &prepared.flow_x,
-            &prepared.flow_y,
-            width,
-            height,
-        );
-        let (prompt_end_x, prompt_end_y) = endpoints(&prompt_x, &prompt_y, width, height);
-
-        let reach = prompt.reach().max(1.0);
-        let limit = reach * reach;
-        let mut masks = vec![0u32; area];
-        for (point, &index) in prepared.indices.iter().enumerate() {
-            let mut nearest = 0u32;
-            let mut distance = limit;
-            for (rank, (&x, &y)) in prompt_end_x.iter().zip(&prompt_end_y).enumerate() {
-                let offset_x = prepared.end_x[point] as f32 - x as f32;
-                let offset_y = prepared.end_y[point] as f32 - y as f32;
-                let squared = offset_x * offset_x + offset_y * offset_y;
-                if squared <= distance {
-                    distance = squared;
-                    nearest = rank as u32 + 1;
-                }
-            }
-            masks[index] = nearest;
-        }
-        renumber(&mut masks);
-        masks
-    }
-
     fn prepared(&self, cellprob_threshold: f32) -> Option<Prepared> {
         let width = self.width as usize;
         let height = self.height as usize;
@@ -294,8 +224,6 @@ impl Flow {
             indices,
             end_x,
             end_y,
-            flow_x,
-            flow_y,
         })
     }
 
@@ -318,50 +246,6 @@ struct Prepared {
     indices: Vec<usize>,
     end_x: Vec<usize>,
     end_y: Vec<usize>,
-    flow_x: Vec<f32>,
-    flow_y: Vec<f32>,
-}
-
-pub struct Prompt<'a> {
-    seeds: &'a [[f32; 2]],
-    threshold: f32,
-    reach: f32,
-}
-impl<'a> Prompt<'a> {
-    pub fn new(seeds: &'a [[f32; 2]], threshold: f32, reach: f32) -> Self {
-        assert!(!seeds.is_empty(), "a prompt names at least one seed point");
-        assert!(
-            seeds
-                .iter()
-                .all(|seed| seed.iter().all(|value| value.is_finite())),
-            "a prompt seed point is finite"
-        );
-        assert!(
-            threshold.is_finite(),
-            "a prompt cell probability threshold is finite"
-        );
-        assert!(
-            reach.is_finite() && reach >= 0.0,
-            "a prompt reach is a non negative distance"
-        );
-        Self {
-            seeds,
-            threshold,
-            reach,
-        }
-    }
-
-    pub fn seeds(&self) -> &[[f32; 2]] {
-        self.seeds
-    }
-
-    pub fn threshold(&self) -> f32 {
-        self.threshold
-    }
-
-    pub fn reach(&self) -> f32 {
-        self.reach
-    }
 }
 
 fn integrate(

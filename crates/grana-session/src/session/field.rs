@@ -16,6 +16,7 @@ pub(super) struct Field {
     pub(super) mask_stamps: Vec<u64>,
     pub(super) project: Option<PathBuf>,
     pub(super) baseline: Option<u64>,
+    pub(super) unsaved: bool,
 }
 
 pub(super) enum Recovered {
@@ -41,12 +42,22 @@ impl Fields {
         Recovered::Field(Box::new(field))
     }
 
-    pub(super) fn keep(&mut self, field: Field) {
+    pub(super) fn keep(&mut self, field: Field) -> Option<usize> {
         self.entries.retain(|held| held.series != field.series);
         self.entries.push(field);
+        let mut dropped = None;
         while self.entries.len() > FIELD_LIMIT {
-            self.entries.remove(0);
+            let evicted = self
+                .entries
+                .iter()
+                .position(|held| !held.unsaved)
+                .unwrap_or(0);
+            let field = self.entries.remove(evicted);
+            if field.unsaved {
+                dropped = Some(field.series);
+            }
         }
+        dropped
     }
 
     pub(super) fn clear(&mut self) {
@@ -59,6 +70,7 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
+        let unsaved = self.dirty();
         let Some(scene) = self.scene.take() else {
             return;
         };
@@ -85,8 +97,13 @@ impl Session {
             mask_stamps: std::mem::take(&mut self.mask_stamps),
             project: self.project.take(),
             baseline: self.baseline.take(),
+            unsaved,
         };
-        self.fields.keep(field);
+        if let Some(series) = self.fields.keep(field) {
+            self.message = Some(Message::error(format!(
+                "the unsaved analysis of series {series} was dropped from the well cache"
+            )));
+        }
     }
 
     pub(super) fn recover_field(&mut self, field: Field) {

@@ -458,6 +458,7 @@ impl Session {
         self.discard_streamed();
         self.timeline = Timeline::new(30, frame_duration(&scene));
         self.history.clear();
+        let mut restored = Restored::Fresh;
         if let Some(pending) = self.pending.take() {
             match pending.project.matches(&scene.dataset, fingerprint) {
                 Ok(()) => {
@@ -471,6 +472,7 @@ impl Session {
                     self.project = Some(pending.path);
                 }
                 Err(mismatch) => {
+                    restored = Restored::Mismatch;
                     self.message = Some(Message::error(match mismatch {
                         Mismatch::Dataset => "the project was saved from a different dataset",
                         Mismatch::Shape => {
@@ -482,7 +484,12 @@ impl Session {
         }
         self.scene = Some(scene);
         match self.fields.take(self.series_index, fingerprint) {
-            Recovered::Field(field) => self.recover_field(*field),
+            Recovered::Field(field) => {
+                self.recover_field(*field);
+                if restored == Restored::Fresh {
+                    restored = Restored::Field;
+                }
+            }
             Recovered::Changed => {
                 self.message = Some(Message::info(
                     "the well changed since it was last open, so its analysis was reset",
@@ -508,7 +515,7 @@ impl Session {
             self.mask_stamps = scene.mask_stamps();
             self.mask_extents = scene.mask_extents(scene.time());
         }
-        self.accept_open();
+        self.accept_open(restored);
     }
 
     pub(super) fn frame_duration(&self) -> f32 {

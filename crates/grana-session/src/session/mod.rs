@@ -72,7 +72,7 @@ use grana_pipeline::{
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
 pub use localization::Localizations;
-use recover::Restore;
+use recover::{Restore, Restored};
 use stitch::Stitch;
 use tasks::Tasks;
 

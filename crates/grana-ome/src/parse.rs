@@ -1,49 +1,12 @@
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-#[derive(Default)]
-pub(crate) struct Ome {
-    pub name: Option<String>,
-    pub dimension_order: Option<String>,
-    pub size_x: Option<u32>,
-    pub size_y: Option<u32>,
-    pub size_z: Option<u32>,
-    pub size_c: Option<u32>,
-    pub size_t: Option<u32>,
-    pub physical: [Option<f32>; 3],
-    pub interval: Option<f32>,
-    pub channels: Vec<Channel>,
-    pub tiff_data: Vec<TiffData>,
-    pub planes: Vec<Plane>,
-}
+use crate::image::{Channel, Image, Plane, TiffData};
 
-pub(crate) struct Channel {
-    pub name: Option<String>,
-    pub tint: Option<[f32; 3]>,
-}
-
-#[derive(Default, Clone)]
-pub(crate) struct TiffData {
-    pub ifd: u32,
-    pub z: u32,
-    pub c: u32,
-    pub t: u32,
-    pub planes: u32,
-    pub file: Option<String>,
-}
-
-#[derive(Default, Clone)]
-pub(crate) struct Plane {
-    pub z: u32,
-    pub c: u32,
-    pub t: u32,
-    pub position: [Option<f32>; 3],
-}
-
-pub(crate) fn parse(xml: &str) -> Result<Vec<Ome>, String> {
+pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
-    let mut images: Vec<Ome> = Vec::new();
+    let mut images: Vec<Image> = Vec::new();
     let mut depth = 0usize;
     let mut image_depth = None;
     let mut pending: Option<TiffData> = None;
@@ -100,16 +63,16 @@ pub(crate) fn parse(xml: &str) -> Result<Vec<Ome>, String> {
     Ok(images)
 }
 
-fn series(start: &BytesStart) -> Result<Ome, String> {
-    Ok(Ome {
+fn series(start: &BytesStart) -> Result<Image, String> {
+    Ok(Image {
         name: attribute(start, b"Name")?,
-        ..Ome::default()
+        ..Image::default()
     })
 }
 
 fn element(
     start: &BytesStart,
-    ome: &mut Ome,
+    ome: &mut Image,
     pending: &mut Option<TiffData>,
 ) -> Result<(), String> {
     match start.name().local_name().as_ref() {
@@ -140,7 +103,7 @@ fn element(
     }
 }
 
-fn pixels(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
+fn pixels(start: &BytesStart, ome: &mut Image) -> Result<(), String> {
     ome.dimension_order = attribute(start, b"DimensionOrder")?;
     ome.size_x = integer_attribute(start, b"SizeX")?;
     ome.size_y = integer_attribute(start, b"SizeY")?;
@@ -154,7 +117,7 @@ fn pixels(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
     Ok(())
 }
 
-fn channel(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
+fn channel(start: &BytesStart, ome: &mut Image) -> Result<(), String> {
     let name = attribute(start, b"Name")?;
     let tint = match attribute(start, b"Color")? {
         Some(color) => {
@@ -175,7 +138,7 @@ fn channel(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
     Ok(())
 }
 
-fn plane(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
+fn plane(start: &BytesStart, ome: &mut Image) -> Result<(), String> {
     let mut position = [None; 3];
     for (axis, (name, unit)) in [
         (b"PositionX", b"PositionXUnit"),

@@ -1,0 +1,13 @@
+[package]
+name = "grana-ome"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+
+[lints]
+workspace = true

@@ -539,12 +539,13 @@ impl Session {
         for state in rolled_back {
             self.rollback(state);
         }
-        if let Some((set, cut)) = self.recut.take()
-            && !self
+        let startable = self.recut.is_some_and(|(set, _)| {
+            !self
                 .analysis
                 .iter()
                 .any(|analysis| analysis.job() == Job::Recut(set))
-        {
+        });
+        if startable && let Some((set, cut)) = self.recut.take() {
             self.start_recut(set, cut);
         }
         for (set, recut) in detected

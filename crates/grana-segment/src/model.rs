@@ -17,12 +17,12 @@ const ROW_EQUATION: &str = "bghwc,hkc->bghwk";
 const COLUMN_EQUATION: &str = "bghwc,wkc->bghwk";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ModelInfo {
+pub(crate) struct ModelInfo {
     side: u32,
 }
 
 impl ModelInfo {
-    pub fn side(&self) -> u32 {
+    pub(crate) fn side(&self) -> u32 {
         self.side
     }
 }
@@ -369,7 +369,7 @@ impl Head {
     }
 }
 
-pub struct Model {
+pub(crate) struct Model {
     device: Device,
     info: ModelInfo,
     geometry: Geometry,
@@ -384,7 +384,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         let checkpoint = Checkpoint::open(path)?;
         let layout = Layout::resolve(&checkpoint)?;
         let device = crate::device::open()?;
@@ -436,11 +436,11 @@ impl Model {
         })
     }
 
-    pub fn info(&self) -> &ModelInfo {
+    pub(crate) fn info(&self) -> &ModelInfo {
         &self.info
     }
 
-    pub fn infer_batch(&self, tiles: &[Vec<f32>]) -> Result<Vec<Flow>> {
+    pub(crate) fn infer_batch(&self, tiles: &[Vec<f32>]) -> Result<Vec<Flow>> {
         if tiles.is_empty() {
             return Err(Error::input("the model needs at least one tile"));
         }

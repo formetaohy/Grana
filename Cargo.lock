@@ -3733,6 +3733,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-ome"
+version = "0.2.0"
+dependencies = [
+ "quick-xml",
+]
+
+[[package]]
 name = "grana-optics"
 version = "0.2.0"
 dependencies = [
@@ -4042,9 +4049,9 @@ dependencies = [
  "flate2",
  "grana-archive",
  "grana-file",
+ "grana-ome",
  "grana-store",
  "grana-volume",
- "quick-xml",
  "thiserror 2.0.21",
 ]
 
@@ -4113,6 +4120,7 @@ dependencies = [
  "grana-archive",
  "grana-file",
  "grana-net",
+ "grana-ome",
  "grana-volume",
  "rayon",
  "serde_json",

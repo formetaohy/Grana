@@ -1111,6 +1111,51 @@ fn browses_an_ome_zarr_plate() {
 }
 
 #[test]
+fn browses_a_bioformats2raw_collection() {
+    let temp = Temp::new("suite-collection");
+    let root = temp.path().join("series.ome.zarr");
+    support::collection(&root);
+    assert!(
+        grana_image::is_image(&root),
+        "a collection folder is a dataset"
+    );
+    assert_eq!(
+        grana_image::series_count(&root).expect("the collection counts its series"),
+        2
+    );
+    assert_eq!(
+        grana_image::series_names(&root).expect("the collection names its series"),
+        vec![Some("Overview".to_string()), Some("Detail".to_string())]
+    );
+    assert_eq!(
+        grana_image::series_group(&root, 1).expect("the second series resolves"),
+        Some("/1".to_string())
+    );
+    let resolved = grana_image::resolve_series(&Source::file_series(root.clone(), 1))
+        .expect("the second series resolves");
+    assert_eq!(resolved.group(), Some("/1"));
+    let detail = Image::open(&resolved).expect("the second series opens");
+    assert_eq!(detail.selected(), 1);
+    assert_eq!(detail.pyramid().level(0).extent(), Extent::new(12, 10, 6));
+    assert_eq!(detail.series().len(), 2);
+    assert_eq!(detail.series()[1].name(), Some("Detail"));
+    let overview =
+        Image::open(&Source::file(root.clone())).expect("the folder opens its first series");
+    assert_eq!(overview.selected(), 0);
+    assert_eq!(overview.pyramid().level(0).extent(), Extent::new(8, 6, 4));
+    let collection =
+        grana_zarr::collection(&grana_zarr::Root::local(&root).expect("the collection opens"))
+            .expect("the collection metadata parses")
+            .expect("the folder is a collection");
+    assert_eq!(collection.name(), "series");
+    assert_eq!(collection.series().len(), 2);
+    assert!(
+        Image::open(&Source::file_series(root.clone(), 2)).is_err(),
+        "a series outside the collection is refused"
+    );
+}
+
+#[test]
 fn writes_and_reads_a_label_image() {
     let temp = Temp::new("suite-zarr-label-write");
     let path = temp.path().join("labelled.ome.zarr");
@@ -1386,8 +1431,8 @@ fn round_trips_a_typed_geff_lineage() {
 }
 
 #[test]
-fn refuses_a_dataset_that_cannot_fit_beside_the_previous_one() {
-    let temp = Temp::new("suite-zarr-space");
+fn keeps_the_previous_dataset_when_an_export_fails() {
+    let temp = Temp::new("suite-zarr-transaction");
     let path = temp.path().join("kept.ome.zarr");
     write_zarr(&path);
     let levels = [
@@ -1421,12 +1466,7 @@ fn refuses_a_dataset_that_cannot_fit_beside_the_previous_one() {
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".part"))
         .count();
     assert_eq!(staging, 0, "a refused dataset leaves no staging behind");
-}
 
-#[test]
-fn keeps_the_previous_dataset_when_a_label_cannot_join_the_export() {
-    let temp = Temp::new("suite-zarr-transaction");
-    let path = temp.path().join("kept.ome.zarr");
     write_zarr(&path);
     let extent = Extent::new(8, 8, 4);
     let volume = || {

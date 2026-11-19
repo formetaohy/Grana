@@ -144,18 +144,23 @@ pub enum Kind {
     Collection,
 }
 
+impl Kind {
+    pub fn of(fields: &Map<String, Value>) -> Self {
+        if fields.get("plate").is_some() {
+            Self::Plate
+        } else if fields.get("well").is_some() {
+            Self::Well
+        } else if fields.get("multiscales").is_some() {
+            Self::Image
+        } else {
+            Self::Collection
+        }
+    }
+}
+
 pub fn kind(root: &Root) -> Result<Kind, Error> {
     let attributes = attributes(root, "/")?;
-    let fields = fields(&attributes);
-    Ok(if fields.get("plate").is_some() {
-        Kind::Plate
-    } else if fields.get("well").is_some() {
-        Kind::Well
-    } else if fields.get("multiscales").is_some() {
-        Kind::Image
-    } else {
-        Kind::Collection
-    })
+    Ok(Kind::of(fields(&attributes)))
 }
 
 pub fn open(root: &Root) -> Result<Plate, Error> {
@@ -432,7 +437,7 @@ pub fn join(group: &str, path: &str) -> String {
     }
 }
 
-fn attributes(root: &Root, group: &str) -> Result<Map<String, Value>, Error> {
+pub(crate) fn attributes(root: &Root, group: &str) -> Result<Map<String, Value>, Error> {
     let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
         path: root.tag(group),
         detail: error.to_string(),
@@ -440,7 +445,7 @@ fn attributes(root: &Root, group: &str) -> Result<Map<String, Value>, Error> {
     Ok(opened.attributes().clone())
 }
 
-fn fields(attributes: &Map<String, Value>) -> &Map<String, Value> {
+pub(crate) fn fields(attributes: &Map<String, Value>) -> &Map<String, Value> {
     attributes
         .get("ome")
         .and_then(Value::as_object)

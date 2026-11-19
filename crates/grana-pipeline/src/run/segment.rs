@@ -1,9 +1,9 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{Mask, Roi};
+use grana_object::{Mask, Roi, SurfaceSet};
 use grana_scene::{Drifts, ObjectFrame, SegmentParams};
-use grana_segment::{Segmenter, Settings, assemble};
+use grana_segment::{Segmenter, Settings, Volume, assemble};
 use grana_volume::{Level, Region};
 
 use crate::channels::Channels;
@@ -78,9 +78,6 @@ pub fn segment(
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
-    if request.seeds.iter().any(|frame| !frame.is_empty()) {
-        return prompt::segment(reader, request, cancel, sink);
-    }
     let info = reader.pyramid().level(0);
     let bounds = request
         .region
@@ -95,13 +92,31 @@ pub fn segment(
                 .to_string(),
         );
     }
-    let depth = bounds[2].end - bounds[2].start;
     let Some((segmenter, _)) = segmenter(&request.params, cancel, sink)? else {
         return Ok(());
     };
-    let domain = Domain::new(request.region, info);
-    let frames = reader.pyramid().frame_count();
-    let total = frames as usize * depth as usize;
+    let slicer = Slicer {
+        reader,
+        request: &request,
+        segmenter: &segmenter,
+        info,
+        domain: Domain::new(request.region, info),
+        bounds,
+    };
+    if request.seeds.iter().any(|frame| !frame.is_empty()) {
+        return prompt::segment(&slicer, cancel, sink);
+    }
+    dense(&slicer, reader.pyramid().frame_count(), cancel, sink)
+}
+
+fn dense(
+    slicer: &Slicer<'_>,
+    frames: u32,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<(), String> {
+    let depth = slicer.depth() as usize;
+    let total = frames as usize * depth;
     sink(Event::Progress {
         time: 0,
         done: 0,
@@ -111,62 +126,21 @@ pub fn segment(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let warp = request.drifts.warp(request.channel, time);
-        let mask = domain.mask(request.roi.as_ref(), time)?;
-        let Some(ranges) = clip(&bounds, mask.as_ref(), info) else {
+        let base = time as usize * depth;
+        let Some(assembly) = slicer.volume(time, cancel, &mut |done| {
+            sink(Event::Progress {
+                time,
+                done: (base + done).min(total),
+                total,
+            });
+        })?
+        else {
             continue;
         };
-        let width = ranges[0].end - ranges[0].start;
-        let height = ranges[1].end - ranges[1].start;
-        let mut slices = Vec::with_capacity(depth as usize);
-        for (offset, z) in ranges[2].clone().enumerate() {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
-            let values = reader
-                .read_region(time, 0, request.channel, &slice, warp)
-                .map_err(|error| error.to_string())?;
-            let mut plane = vec![0.0f32; values.voxel_count()];
-            values.write_values(&mut plane);
-            let kept = match mask.as_ref() {
-                Some(mask) => covers(mask, &ranges, z),
-                None => true,
-            };
-            let mut labels = if kept {
-                segmenter
-                    .segment(&plane, width, height)
-                    .map_err(|error| format!("the segmentation model failed: {error}"))?
-            } else {
-                vec![0u32; width as usize * height as usize]
-            };
-            if let Some(mask) = mask.as_ref() {
-                keep_labels(&mut labels, mask, &ranges, z);
-            }
-            slices.push(labels);
-            let done = (time as usize * depth as usize + offset + 1).min(total);
-            sink(Event::Progress { time, done, total });
-        }
-        let volume = assemble(
-            &mut slices,
-            width,
-            height,
-            request.params.slice_overlap(),
-            request.params.minimum_size(),
-        )
-        .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
-        if volume.count() == 0 {
+        if assembly.volume.count() == 0 {
             continue;
         }
-        if let Some(set) = labelled::surfaces(
-            reader,
-            time,
-            0,
-            info,
-            &ranges,
-            volume.labels(),
-            &request.drifts,
-        )? {
+        if let Some(set) = slicer.surfaces(time, &assembly)? {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Surfaces(set),
@@ -183,6 +157,92 @@ pub fn segment(
     });
     sink(Event::Done);
     Ok(())
+}
+
+pub(super) struct Slicer<'a> {
+    pub(super) reader: &'a Channels,
+    pub(super) request: &'a SegmentRequest,
+    segmenter: &'a Segmenter,
+    pub(super) info: Level,
+    domain: Domain,
+    bounds: [Range<u32>; 3],
+}
+
+pub(super) struct Assembly {
+    pub(super) volume: Volume,
+    pub(super) ranges: [Range<u32>; 3],
+}
+
+impl Slicer<'_> {
+    pub(super) fn depth(&self) -> u32 {
+        self.bounds[2].end - self.bounds[2].start
+    }
+
+    fn volume(
+        &self,
+        time: u32,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<Option<Assembly>, String> {
+        let mask = self.domain.mask(self.request.roi.as_ref(), time)?;
+        let Some(ranges) = clip(&self.bounds, mask.as_ref(), self.info) else {
+            return Ok(None);
+        };
+        let warp = self.request.drifts.warp(self.request.channel, time);
+        let width = ranges[0].end - ranges[0].start;
+        let height = ranges[1].end - ranges[1].start;
+        let mut slices = Vec::with_capacity((ranges[2].end - ranges[2].start) as usize);
+        for (offset, z) in ranges[2].clone().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
+            let values = self
+                .reader
+                .read_region(time, 0, self.request.channel, &slice, warp)
+                .map_err(|error| error.to_string())?;
+            let mut plane = vec![0.0f32; values.voxel_count()];
+            values.write_values(&mut plane);
+            let kept = mask.as_ref().is_none_or(|mask| covers(mask, &ranges, z));
+            let mut labels = if kept {
+                self.segmenter
+                    .segment(&plane, width, height)
+                    .map_err(|error| format!("the segmentation model failed: {error}"))?
+            } else {
+                vec![0u32; width as usize * height as usize]
+            };
+            if let Some(mask) = mask.as_ref() {
+                keep_labels(&mut labels, mask, &ranges, z);
+            }
+            slices.push(labels);
+            progress(offset + 1);
+        }
+        let volume = assemble(
+            &mut slices,
+            width,
+            height,
+            self.request.params.slice_overlap(),
+            self.request.params.minimum_size(),
+        )
+        .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
+        Ok(Some(Assembly { volume, ranges }))
+    }
+
+    pub(super) fn surfaces(
+        &self,
+        time: u32,
+        assembly: &Assembly,
+    ) -> Result<Option<SurfaceSet>, String> {
+        labelled::surfaces(
+            self.reader,
+            time,
+            0,
+            self.info,
+            &assembly.ranges,
+            assembly.volume.labels(),
+            &self.request.drifts,
+        )
+    }
 }
 
 fn clip(region: &[Range<u32>; 3], mask: Option<&Mask>, level: Level) -> Option<[Range<u32>; 3]> {

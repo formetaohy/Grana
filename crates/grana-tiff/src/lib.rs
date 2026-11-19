@@ -2,7 +2,6 @@ mod archive;
 mod codec;
 mod error;
 mod image;
-mod ome;
 mod page;
 mod planes;
 mod store;

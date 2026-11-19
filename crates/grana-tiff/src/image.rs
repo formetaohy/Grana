@@ -8,9 +8,10 @@ use grana_volume::{
     Spacing, VoxelData, VoxelFormat, name_of, pad_brick, tint_of,
 };
 
+use grana_ome::{Image as OmeImage, TiffData};
+
 use crate::Cache;
 use crate::error::Error;
-use crate::ome::{self, Ome, TiffData};
 use crate::page::{Layout, Page, Plane, Region, Source as PageSource};
 use crate::planes::Planes;
 use crate::store::Store;
@@ -457,7 +458,7 @@ fn named(path: &Path, file: &str) -> bool {
 fn assign(
     file: usize,
     volume: &File,
-    ome: Option<&Ome>,
+    ome: Option<&OmeImage>,
     planes: &Planes,
     format: VoxelFormat,
     placed: &mut HashMap<usize, Slot>,
@@ -576,7 +577,7 @@ fn gather(
 }
 
 fn counts(
-    ome: Option<&Ome>,
+    ome: Option<&OmeImage>,
     pages: usize,
     samples: u32,
     chunky: bool,
@@ -606,7 +607,7 @@ fn counts(
     Ok([size_t, size_c, ome.size_z.unwrap_or(1)])
 }
 
-fn spacing(ome: Option<&Ome>, volume: &File, path: &Path) -> Result<Spacing, Error> {
+fn spacing(ome: Option<&OmeImage>, volume: &File, path: &Path) -> Result<Spacing, Error> {
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
     let x = match physical[0] {
         Some(value) => value,
@@ -621,7 +622,7 @@ fn spacing(ome: Option<&Ome>, volume: &File, path: &Path) -> Result<Spacing, Err
 }
 
 fn placement(
-    ome: Option<&Ome>,
+    ome: Option<&OmeImage>,
     level: grana_volume::Level,
     depth: u32,
     path: &Path,
@@ -681,21 +682,21 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
     Ok(Some((micrometres / value) as f32))
 }
 
-fn metadata(volume: &File, path: &Path) -> Result<Vec<Ome>, Error> {
+fn metadata(volume: &File, path: &Path) -> Result<Vec<OmeImage>, Error> {
     let description = volume
         .directory()?
         .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?;
     parse_metadata(description.as_deref(), path)
 }
 
-fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Vec<Ome>, Error> {
+fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Vec<OmeImage>, Error> {
     let Some(text) = description else {
         return Ok(Vec::new());
     };
     if !text.trim_start().starts_with('<') {
         return Ok(Vec::new());
     }
-    ome::parse(text).map_err(|detail| Error::metadata(path, detail))
+    grana_ome::parse(text).map_err(|detail| Error::metadata(path, detail))
 }
 
 pub fn series_count(path: &Path) -> Result<usize, Error> {
@@ -713,7 +714,7 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
         .collect())
 }
 
-fn declared(images: &[Ome], page: &Page, stacked: usize, chunky: bool) -> Vec<Series> {
+fn declared(images: &[OmeImage], page: &Page, stacked: usize, chunky: bool) -> Vec<Series> {
     if images.is_empty() {
         let depth = u32::try_from(stacked).unwrap_or(u32::MAX).max(1);
         let channels = if chunky {

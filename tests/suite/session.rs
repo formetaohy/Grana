@@ -727,6 +727,17 @@ fn navigates_a_plate_field_by_field() {
     }
     session.execute(Command::SelectField(1));
     open_field(&mut session, Extent::new(12, 10, 6));
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    assert!(session.dirty(), "an edit leaves the field unsaved");
+    session.execute(Command::SelectField(0));
+    open_field(&mut session, Extent::new(8, 6, 4));
+    assert!(!session.dirty(), "the untouched field stays saved");
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    assert!(
+        session.dirty(),
+        "a field keeps its unsaved work after switching away and back"
+    );
     {
         let plate = session.plate().expect("the plate keeps its layout");
         assert_eq!(plate.selected, 1);

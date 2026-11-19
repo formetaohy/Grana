@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::cache;
-use crate::dynamics::{self, Flow, Prompt};
+use crate::dynamics::{self, Flow};
 use crate::error::Error;
 use crate::model::Model;
 use crate::normalize;
 use crate::tile;
 
 const TILE_BATCH: usize = 4;
-const SEED_REACH: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -74,25 +73,6 @@ impl Segmenter {
         let settings = self.settings;
         let flow = self.flow(plane, width, height)?;
         let mut labels = flow.masks(settings.cellprob_threshold());
-        self.finish(&flow, &mut labels, width, height);
-        Ok(labels)
-    }
-
-    pub fn seeded(
-        &self,
-        plane: &[f32],
-        width: u32,
-        height: u32,
-        seeds: &[[f32; 2]],
-    ) -> Result<Vec<u32>> {
-        check_plane(plane, width, height)?;
-        let flow = self.flow(plane, width, height)?;
-        let settings = self.settings;
-        let mut labels = flow.seeded(Prompt::new(
-            seeds,
-            settings.cellprob_threshold(),
-            SEED_REACH,
-        ));
         self.finish(&flow, &mut labels, width, height);
         Ok(labels)
     }
@@ -256,6 +236,75 @@ impl Volume {
 
     pub fn count(&self) -> u32 {
         self.count
+    }
+
+    pub fn retain_containing(&mut self, voxels: &[[u32; 3]]) -> Vec<Component> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let limits = [self.width, self.height, self.depth];
+        let mut selected: Vec<u32> = Vec::with_capacity(voxels.len());
+        for voxel in voxels {
+            if (0..3).any(|axis| voxel[axis] >= limits[axis]) {
+                continue;
+            }
+            let index =
+                voxel[0] as usize + width * (voxel[1] as usize + height * voxel[2] as usize);
+            let label = self.labels[index];
+            if label > 0 && !selected.contains(&label) {
+                selected.push(label);
+            }
+        }
+        selected.sort_unstable();
+        let mut slots = vec![u32::MAX; self.count as usize + 1];
+        for (slot, label) in selected.iter().enumerate() {
+            slots[*label as usize] = slot as u32;
+        }
+        let mut sums = vec![[0.0f64; 3]; selected.len()];
+        let mut areas = vec![0u64; selected.len()];
+        for (index, label) in self.labels.iter_mut().enumerate() {
+            if *label == 0 {
+                continue;
+            }
+            let slot = slots[*label as usize];
+            if slot == u32::MAX {
+                *label = 0;
+                continue;
+            }
+            *label = slot + 1;
+            let x = index % width;
+            let y = index / width % height;
+            let z = index / (width * height);
+            let sum = &mut sums[slot as usize];
+            sum[0] += x as f64;
+            sum[1] += y as f64;
+            sum[2] += z as f64;
+            areas[slot as usize] += 1;
+        }
+        self.count = selected.len() as u32;
+        sums.iter()
+            .zip(&areas)
+            .map(|(sum, area)| {
+                let area = *area as f64;
+                Component {
+                    center: [
+                        (sum[0] / area) as f32,
+                        (sum[1] / area) as f32,
+                        (sum[2] / area) as f32,
+                    ],
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Component {
+    center: [f32; 3],
+}
+
+impl Component {
+    pub fn center(&self) -> [f32; 3] {
+        self.center
     }
 }
 

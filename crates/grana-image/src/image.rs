@@ -673,7 +673,10 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
 }
 
 fn series_count_at(root: &grana_zarr::Root) -> Result<usize, Error> {
-    plate_of_root(root).map(|plate| plate.map_or(1, |plate| plate.len().max(1)))
+    if let Some(plate) = plate_of_root(root)? {
+        return Ok(plate.len().max(1));
+    }
+    Ok(collection_of_root(root)?.map_or(1, |collection| collection.series().len().max(1)))
 }
 
 pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
@@ -699,12 +702,19 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
 }
 
 fn series_names_at(root: &grana_zarr::Root) -> Result<Vec<Option<String>>, Error> {
-    Ok(plate_of_root(root)?
-        .map(|plate| {
-            plate
-                .fields()
+    if let Some(plate) = plate_of_root(root)? {
+        return Ok(plate
+            .fields()
+            .iter()
+            .map(|field| Some(field.name().to_string()))
+            .collect());
+    }
+    Ok(collection_of_root(root)?
+        .map(|collection| {
+            collection
+                .series()
                 .iter()
-                .map(|field| Some(field.name().to_string()))
+                .map(|series| series.name().map(str::to_string))
                 .collect()
         })
         .unwrap_or_default())
@@ -722,17 +732,29 @@ pub fn remote_series_group(url: &str, series: usize) -> Result<Option<String>, E
 }
 
 fn series_group_at(root: &grana_zarr::Root, series: usize) -> Result<Option<String>, Error> {
-    let Some(plate) = plate_of_root(root)? else {
+    if let Some(plate) = plate_of_root(root)? {
+        let field = plate.field(series).ok_or_else(|| Error::Unsupported {
+            path: PathBuf::from(root.display()),
+            detail: format!(
+                "the plate holds {} fields of view and field {series} was requested",
+                plate.len()
+            ),
+        })?;
+        return Ok(Some(field.path().to_string()));
+    }
+    let Some(collection) = collection_of_root(root)? else {
         return Ok(None);
     };
-    let field = plate.field(series).ok_or_else(|| Error::Unsupported {
-        path: PathBuf::from(root.display()),
-        detail: format!(
-            "the plate holds {} fields of view and field {series} was requested",
-            plate.len()
-        ),
-    })?;
-    Ok(Some(field.path().to_string()))
+    let entry = collection
+        .series_at(series)
+        .ok_or_else(|| Error::Unsupported {
+            path: PathBuf::from(root.display()),
+            detail: format!(
+                "the collection holds {} series and series {series} was requested",
+                collection.series().len()
+            ),
+        })?;
+    Ok(Some(entry.path().to_string()))
 }
 
 pub fn plate(source: &Source) -> Result<Option<Plate>, Error> {
@@ -767,6 +789,10 @@ fn plate_of_root(root: &grana_zarr::Root) -> Result<Option<Plate>, Error> {
         });
     }
     Ok(Some(plate))
+}
+
+fn collection_of_root(root: &grana_zarr::Root) -> Result<Option<grana_zarr::Collection>, Error> {
+    Ok(grana_zarr::collection(root)?)
 }
 
 pub fn is_remote(location: &str) -> bool {
@@ -821,19 +847,7 @@ impl Inner {
     ) -> Result<(Self, Vec<Series>), Error> {
         if path.is_dir() {
             let root = grana_zarr::Root::local(path)?;
-            if let Some(group) = group {
-                let image = grana_zarr::Image::open_root(root, group)?;
-                let series = vec![Series::of(image.pyramid())];
-                return Ok((Self::Zarr(image), series));
-            }
-            if grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate {
-                return Err(Error::Unsupported {
-                    path: path.to_path_buf(),
-                    detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
-                });
-            }
-            let image = grana_zarr::Image::open_root(root, "/")?;
-            let series = single_series(image.pyramid(), path, series)?;
+            let (image, series) = open_zarr(root, path, series, group)?;
             return Ok((Self::Zarr(image), series));
         }
         if is_czi(path)? {
@@ -896,21 +910,83 @@ impl Inner {
         group: Option<&str>,
     ) -> Result<(Self, Vec<Series>), Error> {
         let root = grana_zarr::Root::remote(url)?;
-        if let Some(group) = group {
-            let image = grana_zarr::Image::open_root(root, group)?;
-            let series = vec![Series::of(image.pyramid())];
-            return Ok((Self::Zarr(image), series));
-        }
-        if grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate {
-            return Err(Error::Unsupported {
-                path: PathBuf::from(url),
-                detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
-            });
-        }
-        let image = grana_zarr::Image::open_root(root, "/")?;
-        let series = single_series(image.pyramid(), Path::new(url), series)?;
+        let (image, series) = open_zarr(root, Path::new(url), series, group)?;
         Ok((Self::Zarr(image), series))
     }
+}
+
+fn open_zarr(
+    root: grana_zarr::Root,
+    location: &Path,
+    series: usize,
+    group: Option<&str>,
+) -> Result<(grana_zarr::Image, Vec<Series>), Error> {
+    let plate = grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate;
+    if let Some(group) = group {
+        let image = grana_zarr::Image::open_root(root.clone(), group)?;
+        let listed = if plate {
+            vec![Series::of(image.pyramid())]
+        } else if let Some(collection) = collection_of_root(&root)? {
+            collection_series(&root, &collection, series, &image)?
+        } else {
+            single_series(image.pyramid(), location, series)?
+        };
+        return Ok((image, listed));
+    }
+    if plate {
+        return Err(Error::Unsupported {
+            path: location.to_path_buf(),
+            detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
+        });
+    }
+    let Some(collection) = collection_of_root(&root)? else {
+        let image = grana_zarr::Image::open_root(root, "/")?;
+        let listed = single_series(image.pyramid(), location, series)?;
+        return Ok((image, listed));
+    };
+    let entry = collection
+        .series_at(series)
+        .ok_or_else(|| Error::Unsupported {
+            path: location.to_path_buf(),
+            detail: format!(
+                "the collection holds {} series and series {series} was requested",
+                collection.series().len()
+            ),
+        })?;
+    let image = grana_zarr::Image::open_root(root.clone(), entry.path())?;
+    let listed = collection_series(&root, &collection, series, &image)?;
+    Ok((image, listed))
+}
+
+fn collection_series(
+    root: &grana_zarr::Root,
+    collection: &grana_zarr::Collection,
+    selected: usize,
+    opened: &grana_zarr::Image,
+) -> Result<Vec<Series>, Error> {
+    let mut listed = Vec::with_capacity(collection.series().len());
+    for (index, entry) in collection.series().iter().enumerate() {
+        let name = entry.name().map(str::to_string);
+        if index == selected {
+            let pyramid = opened.pyramid();
+            listed.push(Series::new(
+                pyramid.level(0).extent(),
+                pyramid.channel_count(),
+                pyramid.frame_count(),
+                name,
+            ));
+            continue;
+        }
+        let image = grana_zarr::Image::open_root(root.clone(), entry.path())?;
+        let pyramid = image.pyramid();
+        listed.push(Series::new(
+            pyramid.level(0).extent(),
+            pyramid.channel_count(),
+            pyramid.frame_count(),
+            name,
+        ));
+    }
+    Ok(listed)
 }
 
 fn single_series(pyramid: &Pyramid, path: &Path, series: usize) -> Result<Vec<Series>, Error> {

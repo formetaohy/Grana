@@ -1,38 +1,12 @@
-use grana_segment::{Flow, Prompt};
+use grana_segment::assemble;
 
-const SIDE: u32 = 64;
-const CENTERS: [[f32; 2]; 2] = [[16.5, 16.5], [46.5, 46.5]];
-const RADIUS: f32 = 8.0;
-
-fn basin_flow() -> Flow {
-    let width = SIDE as usize;
-    let mut dy = vec![0f32; width * width];
-    let mut dx = vec![0f32; width * width];
-    let mut cellprob = vec![0f32; width * width];
-    for y in 0..width {
-        for x in 0..width {
-            let point = [x as f32 + 0.5, y as f32 + 0.5];
-            let (direction, distance) = CENTERS
-                .iter()
-                .map(|center| {
-                    let offset = [center[0] - point[0], center[1] - point[1]];
-                    let distance = offset[0].hypot(offset[1]);
-                    (offset, distance)
-                })
-                .fold(([0.0f32; 2], f32::INFINITY), |best, candidate| {
-                    if candidate.1 < best.1 {
-                        candidate
-                    } else {
-                        best
-                    }
-                });
-            let index = x + width * y;
-            dx[index] = direction[0] / distance.max(1.0e-6);
-            dy[index] = direction[1] / distance.max(1.0e-6);
-            cellprob[index] = if distance <= RADIUS { 5.0 } else { -5.0 };
-        }
-    }
-    Flow::from_parts(SIDE, SIDE, dy, dx, cellprob)
+fn two_objects() -> grana_segment::Volume {
+    let width = 4u32;
+    let height = 2u32;
+    let first = vec![1, 1, 0, 2, 1, 1, 0, 2];
+    let second = vec![3, 3, 0, 0, 3, 3, 0, 0];
+    assemble(&mut [first, second], width, height, 0.5, 0)
+        .expect("the slices assemble into two objects")
 }
 
 #[test]
@@ -62,24 +36,38 @@ fn assembles_slices_by_overlap() {
 }
 
 #[test]
-fn assigns_flow_basins_to_their_seeds() {
-    let flow = basin_flow();
-    let labels = flow.seeded(Prompt::new(&CENTERS, 0.0, 6.0));
-    let width = SIDE as usize;
-    let at = |x: usize, y: usize| labels[x + width * y];
-    assert_eq!(at(16, 16), 1, "the first seed marks another basin");
-    assert_eq!(at(46, 46), 2, "the second seed marks another basin");
-    assert_eq!(at(1, 1), 0, "the background belongs to no seed");
-    let first = labels.iter().filter(|label| **label == 1).count();
-    let second = labels.iter().filter(|label| **label == 2).count();
-    assert!(
-        first > 100 && second > 100,
-        "the seeded basins are too small: {first} and {second}"
+fn keeps_the_components_that_hold_the_seeds() {
+    let mut volume = two_objects();
+    assert_eq!(volume.count(), 2);
+    let components = volume.retain_containing(&[[0, 0, 0]]);
+    assert_eq!(components.len(), 1, "the seed keeps one object");
+    assert_eq!(volume.count(), 1, "the other object is dropped");
+    assert_eq!(components[0].center(), [0.5, 0.5, 0.5]);
+    let held = volume
+        .labels()
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| **label > 0)
+        .collect::<Vec<_>>();
+    assert_eq!(held.len(), 8, "the kept object spans both slices");
+    assert!(held.iter().all(|(_, label)| **label == 1));
+
+    let mut volume = two_objects();
+    let components = volume.retain_containing(&[[3, 0, 0]]);
+    assert_eq!(
+        components.len(),
+        1,
+        "the second seed keeps the other object"
     );
-    assert_eq!(first, second, "the symmetric basins keep their areas");
-    let automatic = flow.masks(0.0);
+    assert_eq!(components[0].center(), [3.0, 0.5, 0.0]);
+    assert_eq!(volume.labels()[3], 1, "the kept object is renumbered");
+    assert_eq!(volume.labels()[0], 0, "the dropped object is cleared");
+
+    let mut volume = two_objects();
     assert!(
-        automatic.contains(&2),
-        "the automatic pipeline finds both basins"
+        volume.retain_containing(&[[2, 1, 1]]).is_empty(),
+        "a seed in the background keeps no object"
     );
+    assert_eq!(volume.count(), 0);
+    assert!(volume.labels().iter().all(|label| *label == 0));
 }
