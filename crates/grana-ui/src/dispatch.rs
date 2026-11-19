@@ -38,13 +38,11 @@ impl<A: Clone> Ui<A> {
             .then(|| hit::resolve(&self.hits, pointer).map(|hit| hit.node))
             .flatten();
         if hover != self.hover {
-            if let Some(previous) = self.hover
-                && self.tree.nodes.contains_key(previous)
-            {
-                self.wake_animation(previous);
+            if let Some(previous) = self.hover {
+                self.wake_hover_chain(previous);
             }
             if let Some(node) = hover {
-                self.wake_animation(node);
+                self.wake_hover_chain(node);
             }
             self.hover = hover;
         }
@@ -454,6 +452,18 @@ impl<A: Clone> Ui<A> {
             self.actions.push(action);
         }
     }
+
+    fn wake_hover_chain(&mut self, node: NodeId) {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if !self.tree.nodes.contains_key(id) {
+                return;
+            }
+            self.wake_animation(id);
+            current = self.tree.nodes[id].parent;
+        }
+    }
+
     fn pointer_events(&mut self, node: NodeId, phase: Phase) {
         let action = {
             let node = &self.tree.nodes[node];

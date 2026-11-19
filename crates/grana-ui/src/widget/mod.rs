@@ -47,6 +47,7 @@ pub struct PaintInfo<'a> {
 
 pub(crate) struct FrameAnimation {
     pub hovered: bool,
+    pub within_hover: bool,
     pub pressed: bool,
     pub dragging: bool,
     pub pointer: Vec2,
@@ -231,6 +232,12 @@ pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut 
             node.paint_dirty = true;
         }
         node.runtime.resnap = false;
+    }
+    if node.hover_surface.is_some() {
+        node.runtime.engaged.animate_to(
+            if frame.within_hover { 1.0 } else { 0.0 },
+            Motion::effect_fast().spring(),
+        );
     }
     node.runtime.commit = None;
     let mut animating = false;

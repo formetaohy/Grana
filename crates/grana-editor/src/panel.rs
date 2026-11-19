@@ -163,8 +163,8 @@ pub fn build(
         stage.set_viewport(full);
         let elements = {
             let mut ctx = ui.build();
-            let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
-            elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
+            let mut elements = crate::chrome::view(&mut ctx, full, workspace.chrome);
+            elements.extend(crate::shell::view(&mut ctx, view, workspace, full));
             elements
         };
         ui.present(grana_ui::place(full, elements));
@@ -232,8 +232,8 @@ fn view_elements<'a>(
     state: &'a View<'a>,
     full: Rect,
 ) -> Vec<Element<'a, Message>> {
-    let mut elements = stage::view(ctx, layout, state, full);
-    elements.extend(crate::chrome::view(ctx, full, state.workspace.chrome));
+    let mut elements = crate::chrome::view(ctx, full, state.workspace.chrome);
+    elements.extend(stage::view(ctx, layout, state, full));
     elements.extend(header::view(ctx, layout, state));
     if layout.sidebar_visible {
         elements.push(sidebar(ctx, layout, state));

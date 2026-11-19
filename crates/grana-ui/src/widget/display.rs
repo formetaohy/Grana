@@ -5,7 +5,7 @@ use crate::element::{CanvasInfo, Element, Key, Layout, Length, Size, text};
 use crate::geometry::{Corners, Edges, Rect};
 use crate::icon::{self, Icon, IconStyle};
 use crate::paint::Painter;
-use crate::style::{State, Surface};
+use crate::style::{Fill, State, Surface};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role, Theme};
 
@@ -45,10 +45,20 @@ pub fn group_card<'a, A>(
         theme.metrics.corner_xs,
         active,
     );
+    let base = theme.surface(role, State::Rest).with_corners(corners);
+    let hover = Surface {
+        fill: Fill::Solid(if active {
+            theme.palette.surface_container_highest
+        } else {
+            theme.palette.surface_container_high
+        }),
+        ..base
+    };
     Element::column()
         .padding(padding)
         .gap(gap)
-        .background(theme.surface(role, State::Rest).with_corners(corners))
+        .background(base)
+        .hover_highlight(hover)
         .children(children)
 }
 

@@ -8,6 +8,15 @@ use crate::widget::FrameAnimation;
 impl<A: Clone> Ui<A> {
     pub(crate) fn animate_nodes(&mut self) {
         let elapsed = self.elapsed;
+        let mut hovered_chain = Vec::new();
+        let mut ancestor = self.hover;
+        while let Some(id) = ancestor {
+            if !self.tree.nodes.contains_key(id) {
+                break;
+            }
+            hovered_chain.push(id);
+            ancestor = self.tree.nodes[id].parent;
+        }
         let mut animation = std::mem::take(&mut self.animation);
         animation.append(&mut self.tree.activated);
         let mut next = Vec::with_capacity(animation.len());
@@ -21,6 +30,7 @@ impl<A: Clone> Ui<A> {
             }
             let frame = FrameAnimation {
                 hovered: self.hover == Some(id),
+                within_hover: hovered_chain.contains(&id),
                 pressed: self.press == Some(id) || self.drag == Some(id),
                 dragging: self.drag == Some(id),
                 pointer: self.pointer,

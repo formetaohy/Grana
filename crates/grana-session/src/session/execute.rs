@@ -31,6 +31,7 @@ impl Session {
         let recording = self.begin_edit(&command);
         let mut effects = Effects::default();
         match command {
+            Command::OpenAny => effects.open_any = true,
             Command::OpenDataset => effects.open_dataset = true,
             Command::OpenImage => effects.open_image = true,
             Command::OpenTiles => effects.open_tiles = true,

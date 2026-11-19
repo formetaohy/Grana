@@ -106,6 +106,7 @@ struct Pending {
 
 #[derive(Default)]
 pub struct Effects {
+    pub open_any: bool,
     pub open_dataset: bool,
     pub open_image: bool,
     pub open_tiles: bool,

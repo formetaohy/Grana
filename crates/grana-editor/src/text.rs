@@ -96,17 +96,17 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
 
 pub(crate) fn command(language: Language, id: &str) -> &'static str {
     let (english, chinese) = match id {
-        "open.image" => ("Open Image…", "打开图像…"),
-        "open.tiles" => ("Open Tile Folder…", "打开瓦片文件夹…"),
-        "open.folder" => ("Open OME-Zarr Folder…", "打开 OME-Zarr 文件夹…"),
-        "open.remote" => ("Open Remote OME-Zarr…", "打开远程 OME-Zarr…"),
-        "open.project" => ("Open Project…", "打开项目…"),
-        "package.open" => ("Open Share Package…", "打开分享包…"),
+        "open.image" => ("Open Image", "打开图像"),
+        "open.tiles" => ("Open Tile Folder", "打开瓦片文件夹"),
+        "open.folder" => ("Open Folder", "打开文件夹"),
+        "open.remote" => ("Open Remote OME-Zarr", "打开远程 OME-Zarr"),
+        "open.project" => ("Open Project", "打开项目"),
+        "package.open" => ("Open Share Package", "打开分享包"),
         "save.project" => ("Save Project", "保存项目"),
-        "save.as" => ("Save Project As…", "项目另存为…"),
-        "snapshot" => ("Save Snapshot…", "保存快照…"),
-        "figure" => ("Save Vector Figure…", "保存矢量图…"),
-        "labels" => ("Export Labels…", "导出标签…"),
+        "save.as" => ("Save Project As", "项目另存为"),
+        "snapshot" => ("Save Snapshot", "保存快照"),
+        "figure" => ("Save Vector Figure", "保存矢量图"),
+        "labels" => ("Export Labels", "导出标签"),
         _ => panic!("every menu command carries a title"),
     };
     match language {

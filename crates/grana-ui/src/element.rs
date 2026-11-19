@@ -284,6 +284,7 @@ pub struct Element<'a, A> {
     pub(crate) canvas: Option<Canvas<'a>>,
     pub(crate) children: Vec<Element<'a, A>>,
     pub(crate) background: Option<Surface>,
+    pub(crate) hover_surface: Option<Surface>,
     pub(crate) layer: Option<Layer>,
     pub(crate) position: Option<Rect>,
     pub(crate) scroll: Option<Scroll>,
@@ -305,6 +306,7 @@ impl<'a, A> Element<'a, A> {
             canvas: None,
             children: Vec::new(),
             background: None,
+            hover_surface: None,
             layer: None,
             position: None,
             scroll: None,
@@ -382,6 +384,14 @@ impl<'a, A> Element<'a, A> {
 
     pub fn background(mut self, surface: Surface) -> Self {
         self.background = Some(surface);
+        self
+    }
+
+    pub fn hover_highlight(mut self, surface: Surface) -> Self {
+        self.hover_surface = Some(surface);
+        if matches!(self.interaction, Interaction::None) {
+            self.interaction = Interaction::Hit;
+        }
         self
     }
 
@@ -607,6 +617,7 @@ impl<'a, A> Element<'a, A> {
             self.interaction,
         );
         node.background = self.background;
+        node.hover_surface = self.hover_surface;
         node.layer = self.layer.unwrap_or(layer);
         node.layer_explicit = self.layer.is_some();
         node.position = self.position;
@@ -633,6 +644,7 @@ impl<'a, A> Element<'a, A> {
             canvas: _,
             children: _,
             background,
+            hover_surface,
             layer: _,
             position,
             scroll,
@@ -673,6 +685,10 @@ impl<'a, A> Element<'a, A> {
         if node.background != background {
             node.background = background;
             dirty = dirty.union(Dirty::INTERACTION);
+        }
+        if node.hover_surface != hover_surface {
+            node.hover_surface = hover_surface;
+            dirty = dirty.union(Dirty::PAINT);
         }
         if node.tooltip != tooltip {
             node.tooltip = tooltip;

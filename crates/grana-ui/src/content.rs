@@ -295,6 +295,7 @@ pub struct ActionRowContent {
     pub detail: Option<String>,
     pub font: TypeStyle,
     pub trailing: Option<Trailing>,
+    pub highlight: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

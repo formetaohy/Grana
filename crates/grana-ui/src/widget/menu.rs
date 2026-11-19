@@ -42,6 +42,7 @@ pub fn action_row<'a, A>(
         detail: None,
         font: theme.font(Level::Label),
         trailing: None,
+        highlight: true,
     }))
 }
 
@@ -68,6 +69,7 @@ pub fn disclosure_row<'a, A>(
             angle,
             open,
         }),
+        highlight: false,
     }))
 }
 
@@ -129,11 +131,17 @@ pub(super) fn paint_action_row(
     info: &PaintInfo<'_>,
 ) {
     let palette = info.theme.palette;
-    if info.hover > 0.01 {
+    if row.highlight && info.hover > 0.01 {
         painter.rect(
             info.rect.shrink2(Vec2::new(2.0, 0.0)),
             Corners::capsule(),
             palette.secondary_container.with_alpha(0.65 * info.hover),
+        );
+    } else if !row.highlight && info.press > 0.01 {
+        painter.rect(
+            info.rect.shrink2(Vec2::new(2.0, 0.0)),
+            Corners::all(info.theme.metrics.corner_sm),
+            palette.on_surface.with_alpha(0.08 * info.press),
         );
     }
     let trailing = row.trailing.map_or(10.0, |_| 34.0);

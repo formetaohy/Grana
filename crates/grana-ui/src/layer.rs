@@ -182,19 +182,35 @@ impl<A: Clone> Ui<A> {
         canvases: &SecondaryMap<NodeId, CanvasPaint<'a>>,
         instances: &mut Instances,
     ) {
-        let (rect, clip, clip_corners, background, popup, enabled, hover, press, engaged) = {
+        let (
+            rect,
+            clip,
+            clip_corners,
+            background,
+            hover_surface,
+            popup,
+            enabled,
+            hover,
+            press,
+            engaged,
+        ) = {
             let node = &self.tree.nodes[id];
             (
                 node.rect,
                 node.clip,
                 node.clip_corners,
                 node.background,
+                node.hover_surface,
                 node.popup_spec.is_some(),
                 node.enabled,
                 node.runtime.hover.value,
                 node.runtime.press.value,
                 node.runtime.engaged.value,
             )
+        };
+        let background = match (background, hover_surface) {
+            (Some(base), Some(target)) => Some(base.lerp(target, engaged.clamp(0.0, 1.0))),
+            (base, _) => base,
         };
         let background =
             background.or_else(|| popup.then(|| self.theme.surface(Role::Menu, State::Rest)));

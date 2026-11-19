@@ -19,6 +19,7 @@ pub use grana_project::Export;
 
 #[derive(Clone)]
 pub enum Command {
+    OpenAny,
     OpenDataset,
     OpenImage,
     OpenTiles,
@@ -653,6 +654,7 @@ pub(crate) enum Nature {
 impl Command {
     pub(crate) fn nature(&self) -> Nature {
         match self {
+            Self::OpenAny => Nature::Document,
             Self::OpenDataset => Nature::Document,
             Self::OpenImage => Nature::Document,
             Self::OpenTiles => Nature::Document,

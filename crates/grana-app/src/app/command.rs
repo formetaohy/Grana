@@ -30,10 +30,16 @@ impl App {
         if effects.repaint {
             self.request_redraw();
         }
+        if effects.open_any
+            && let Some(path) = self.pick_any()
+        {
+            self.session.open_path(path);
+            return true;
+        }
         if effects.open_dataset
             && let Some(path) = self.pick_folder()
         {
-            self.session.begin_load(path);
+            self.session.open_path(path);
             return true;
         }
         if effects.open_image
@@ -173,10 +179,28 @@ impl App {
 
     pub(super) fn pick_folder(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_ome_zarr_folder(
-                self.workspace.language,
-            ))
+            .set_title(grana_i18n::app::open_folder(self.workspace.language))
             .pick_folder()
+    }
+
+    pub(super) fn pick_any(&self) -> Option<PathBuf> {
+        let language = self.workspace.language;
+        rfd::FileDialog::new()
+            .set_title(grana_i18n::app::open_anything(language))
+            .add_filter(
+                grana_i18n::app::supported_files(language),
+                &[
+                    "grana", "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                ],
+            )
+            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
+            .add_filter(
+                grana_i18n::app::microscopy_image(language),
+                &[
+                    "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                ],
+            )
+            .pick_file()
     }
 
     pub(super) fn pick_tiles(&self) -> Option<PathBuf> {

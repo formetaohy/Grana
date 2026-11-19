@@ -3,11 +3,9 @@ use crate::labels;
 use crate::messages;
 
 labels! {
-    ome_zarr_folder => "OME-Zarr" / "OME-Zarr";
-    remote_ome_zarr => "Remote" / "远程";
-    project => "Project" / "项目";
-    package => "Share" / "分享包";
-    open_image => "Open Image…" / "打开图像…";
+    open_anything => "Open" / "打开";
+    folder => "Folder" / "文件夹";
+    remote => "Remote" / "远程";
     tiles => "Tiles" / "瓦片";
     scanning_tiles => "Scanning tiles…" / "正在扫描瓦片…";
     stitch => "Stitch" / "拼接";

@@ -198,26 +198,26 @@ fn open_bento<'a>(
     let content_width = PANEL_WIDTH - 2.0 * PANEL_PADDING;
     let menu_key = Key::new("shell.open.menu");
     let open = ctx.popup_open(menu_key);
-    let primary_h = 40.0;
-    let lead_w = content_width - primary_h - gap;
+    let height = 40.0;
+    let lead_w = content_width - height - gap;
     let lead = grana_ui::widget::action_button(
         &theme,
         Icon::Cube,
-        grana_i18n::shell::open_image(language),
+        grana_i18n::shell::open_anything(language),
         Role::Filled,
     )
     .shaped(Corners::new(outer, inner, inner, inner))
     .width(Length::Fixed(lead_w))
-    .height(Length::Fixed(primary_h))
-    .named("shell.open.image")
-    .press(Message::Command(Command::OpenImage));
+    .height(Length::Fixed(height))
+    .named("shell.open.any")
+    .press(Message::Command(Command::OpenAny));
     let trail = grana_ui::widget::icon_button(
         if open {
             Icon::ChevronUp
         } else {
             Icon::ChevronDown
         },
-        primary_h,
+        height,
         Role::Filled,
         "",
     )
@@ -232,25 +232,9 @@ fn open_bento<'a>(
         let rows = vec![
             crate::view::action_menu_message(
                 ctx,
-                "shell.menu.image",
-                Icon::Cube,
-                crate::text::command(language, "open.image"),
-                None,
-                Message::Command(Command::OpenImage),
-            ),
-            crate::view::action_menu_message(
-                ctx,
-                "shell.menu.tiles",
-                Icon::Grid,
-                crate::text::command(language, "open.tiles"),
-                None,
-                Message::Command(Command::OpenTiles),
-            ),
-            crate::view::action_menu_message(
-                ctx,
                 "shell.menu.folder",
                 Icon::Folder,
-                crate::text::command(language, "open.folder"),
+                grana_i18n::shell::folder(language),
                 None,
                 Message::Command(Command::OpenDataset),
             ),
@@ -258,26 +242,9 @@ fn open_bento<'a>(
                 ctx,
                 "shell.menu.remote",
                 Icon::Globe,
-                crate::text::command(language, "open.remote"),
+                grana_i18n::shell::remote(language),
                 None,
                 Message::BeginRemote,
-            ),
-            grana_ui::spacer(6.0),
-            crate::view::action_menu_message(
-                ctx,
-                "shell.menu.project",
-                Icon::Folder,
-                crate::text::command(language, "open.project"),
-                None,
-                Message::Command(Command::OpenProject),
-            ),
-            crate::view::action_menu_message(
-                ctx,
-                "shell.menu.package",
-                Icon::Export,
-                grana_i18n::shell::package(language),
-                None,
-                Message::Command(Command::OpenPackage),
             ),
         ];
         popups.push(crate::view::menu(ctx, menu_key, 240.0, rows));
@@ -288,55 +255,11 @@ fn open_bento<'a>(
             std::iter::empty(),
         ));
     }
-    let top_row = grana_ui::row()
+    grana_ui::row()
         .gap(gap)
         .align(Align::Center)
-        .height(Length::Fixed(primary_h))
-        .children([lead, trail]);
-
-    let secondary_h = 36.0;
-    let third = (content_width - 2.0 * gap) / 3.0;
-    let bottom_row = grana_ui::row()
-        .gap(gap)
-        .align(Align::Center)
-        .height(Length::Fixed(secondary_h))
-        .children([
-            grana_ui::widget::action_button(
-                &theme,
-                Icon::Folder,
-                grana_i18n::shell::ome_zarr_folder(language),
-                Role::SurfaceHigh,
-            )
-            .shaped(Corners::new(inner, inner, inner, outer))
-            .width(Length::Fixed(third))
-            .height(Length::Fixed(secondary_h))
-            .named("shell.open.dataset")
-            .press(Message::Command(Command::OpenDataset)),
-            grana_ui::widget::action_button(
-                &theme,
-                Icon::Globe,
-                grana_i18n::shell::remote_ome_zarr(language),
-                Role::SurfaceHigh,
-            )
-            .shaped(Corners::all(inner))
-            .width(Length::Fixed(third))
-            .height(Length::Fixed(secondary_h))
-            .named("shell.open.remote")
-            .press(Message::BeginRemote),
-            grana_ui::widget::action_button(
-                &theme,
-                Icon::Folder,
-                grana_i18n::shell::project(language),
-                Role::SurfaceHigh,
-            )
-            .shaped(Corners::new(inner, inner, outer, inner))
-            .width(Length::Fixed(third))
-            .height(Length::Fixed(secondary_h))
-            .named("shell.open.project")
-            .press(Message::Command(Command::OpenProject)),
-        ]);
-
-    grana_ui::column().gap(gap).children([top_row, bottom_row])
+        .height(Length::Fixed(height))
+        .children([lead, trail])
 }
 
 fn stitch_block<'a>(
