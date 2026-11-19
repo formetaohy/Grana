@@ -42,7 +42,7 @@ impl App {
             engine.damage(&damages);
         }
         let time = session.scene().map_or(0, |scene| scene.time());
-        if let Some(requests) = engine.poll_requests(&surface.gpu.device, time)? {
+        if let Some(requests) = engine.poll_requests(surface.device(), time)? {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
@@ -76,18 +76,13 @@ impl App {
             return;
         };
         if replaced || !engine.holds(&pyramid) {
-            engine.set_dataset(&surface.gpu.device, &pyramid);
+            engine.set_dataset(surface.device(), &pyramid);
         } else {
             engine.invalidate(&pyramid);
         }
     }
 
     pub(super) fn fit_view(&mut self) {
-        let scale = self
-            .surface
-            .as_ref()
-            .map_or(1.0, |surface| surface.window.scale_factor() as f32);
-        self.stage.set_pixels_per_point(scale);
         let viewport = self.viewport();
         let sized = viewport.region[2] > 64 && viewport.region[3] > 64;
         if self.needs_fit
@@ -100,15 +95,7 @@ impl App {
     }
 
     pub(super) fn viewport(&self) -> Viewport {
-        let scale = self
-            .surface
-            .as_ref()
-            .map_or(1.0, |surface| surface.window.scale_factor() as f32);
-        let size = self
-            .surface
-            .as_ref()
-            .map_or([1, 1], |surface| surface.gpu.size());
-        Viewport::screen(scale, size, self.stage.region())
+        Viewport::screen(self.stage.surface(), self.stage.region())
     }
 
     pub(super) fn render(&mut self, delivery: Delivery) -> Option<Duration> {
@@ -125,8 +112,8 @@ impl App {
             } = self;
             match (surface.as_ref(), engine.as_mut(), scene) {
                 (Some(surface), Some(engine), Some(scene)) => engine.draw(
-                    &surface.gpu.device,
-                    &surface.gpu.queue,
+                    surface.device(),
+                    surface.queue(),
                     grana_engine::View {
                         scene,
                         camera,
@@ -175,7 +162,7 @@ impl App {
         let Some(surface) = surface.as_mut() else {
             return;
         };
-        let Some(frame) = surface.gpu.acquire() else {
+        let Some(frame) = surface.acquire() else {
             return;
         };
         let view = frame
@@ -183,8 +170,7 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder =
             surface
-                .gpu
-                .device
+                .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
@@ -196,8 +182,8 @@ impl App {
             &view,
             engine.as_ref().and_then(grana_engine::Engine::view),
         );
-        surface.gpu.queue.submit([encoder.finish()]);
-        surface.gpu.queue.present(frame);
+        surface.queue().submit([encoder.finish()]);
+        surface.present(frame);
     }
 
     pub(super) fn frame_info(&self) -> FrameInfo {

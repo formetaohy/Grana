@@ -1,4 +1,4 @@
-use grana_display::OutputSize;
+use grana_display::{OutputSize, SurfaceSize};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport {
@@ -8,11 +8,10 @@ pub struct Viewport {
 }
 
 impl Viewport {
-    pub fn screen(scale: f32, size: [u32; 2], region: [u32; 4]) -> Self {
-        assert!(scale > 0.0, "a screen holds a positive pixel density");
+    pub fn screen(surface: SurfaceSize, region: [u32; 4]) -> Self {
         Self {
-            size,
-            pixels_per_point: scale,
+            size: surface.physical(),
+            pixels_per_point: surface.scale(),
             region,
         }
         .checked()

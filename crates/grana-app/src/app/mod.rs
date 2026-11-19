@@ -3,8 +3,6 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use glam::Vec2;
-
 use grana_display::Camera;
 use grana_editor::{Frame, Stage, Workspace};
 use grana_engine::Engine;
@@ -27,11 +25,15 @@ mod export;
 mod fail;
 mod frame;
 mod input;
+mod placement;
+mod surface;
 mod sync;
 mod time;
 mod viewport;
 
 use self::export::Export;
+use self::placement::{Fit, Placement};
+use self::surface::Surface;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
 use crate::stream::Stream;
@@ -50,24 +52,11 @@ const AUTOSAVE_IDLE: Duration = Duration::from_secs(8);
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 const EDITOR_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
 const EDITOR_MINIMUM: LogicalSize<f64> = LogicalSize::new(1080.0, 700.0);
-const STARTUP_MINIMUM: LogicalSize<f64> = LogicalSize::new(360.0, 260.0);
-
-struct Surface {
-    window: Arc<Window>,
-    gpu: Gpu,
-    ui: Ui<grana_editor::Message>,
-}
 
 #[derive(Clone)]
 enum Resume {
     Exit,
     Command(Command),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WindowFit {
-    Startup,
-    Editor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,9 +107,7 @@ pub struct App {
     chrome: window::Chrome,
     cursor: Option<winit::window::CursorIcon>,
     closing: bool,
-    window_fit: WindowFit,
-    window_fitted: bool,
-    startup_size: Option<Vec2>,
+    placement: Placement,
 }
 
 impl App {
@@ -143,13 +130,17 @@ impl App {
         let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
         workspace.language = language;
+        let fit = if startup.is_some() {
+            Fit::Editor
+        } else {
+            Fit::Startup
+        };
         Self {
             surface: None,
             session,
             wake,
             engine: None,
             pending_engine: None,
-            startup_size: None,
             start: Instant::now(),
             capture,
             startup,
@@ -187,8 +178,7 @@ impl App {
             chrome: window::Chrome::new(),
             cursor: None,
             closing: false,
-            window_fit: WindowFit::Startup,
-            window_fitted: false,
+            placement: Placement::new(fit),
         }
     }
 
@@ -210,8 +200,7 @@ impl App {
                         .with_title("Grana")
                         .with_window_icon(Some(icon))
                         .with_visible(false)
-                        .with_inner_size(initial)
-                        .with_min_inner_size(STARTUP_MINIMUM),
+                        .with_inner_size(initial),
                 ))
                 .expect("failed to create the window"),
         );
@@ -241,7 +230,7 @@ impl App {
         ui.set_clipboard(Box::new(SystemClipboard::new()));
         self.replaced = self.session.replaced();
         self.content = self.session.content();
-        self.surface = Some(Surface { window, gpu, ui });
+        self.surface = Some(Surface::new(window, gpu, ui));
         self.cursor = None;
     }
 
@@ -286,10 +275,12 @@ impl App {
         if self.fatal.is_some() {
             return;
         }
+        let Some(size) = self.surface.as_mut().map(Surface::synchronize) else {
+            return;
+        };
         if !self.pump() {
             return;
         }
-        self.sync_window_fit();
         self.track_changes();
         self.poll_export();
         self.sync_plate_panel();
@@ -301,9 +292,9 @@ impl App {
         {
             self.workspace.seed = None;
         }
-        let (frame, wait) = self.run_ui();
+        let (frame, wait) = self.run_ui(size);
         let animating = wait.is_some_and(|wait| wait.is_zero());
-        self.fit_window(&frame);
+        self.place_window(&frame);
         self.animating = animating;
         self.sync_preference();
         self.sync_ime();
@@ -320,7 +311,20 @@ impl App {
         self.advance_animation();
         let delivery = self.delivery();
         self.fit_view();
+        if let Some(surface) = self.surface.as_ref()
+            && !self.placement.settled(surface)
+        {
+            self.arm_pump();
+            self.repaint_at = Some(Instant::now());
+            return;
+        }
         let mut delay = self.render(delivery).unwrap_or(Duration::MAX);
+        self.reveal();
+        if let Some(surface) = self.surface.as_ref()
+            && let Some(wait) = self.placement.wait(surface)
+        {
+            delay = delay.min(wait);
+        }
         if let Some(wait) = wait {
             delay = delay.min(wait);
         }
@@ -367,8 +371,7 @@ impl App {
             self.exiting = true;
         }
         if delay.is_zero() {
-            self.repaint_at = None;
-            self.request_redraw();
+            self.repaint_at = Some(Instant::now());
         } else if delay < MAX_REPAINT_DELAY {
             self.repaint_at = Some(Instant::now() + delay);
         } else {
@@ -427,59 +430,35 @@ impl App {
         }
     }
 
-    fn sync_window_fit(&mut self) {
-        let fit = if self.session.scene().is_some() {
-            WindowFit::Editor
-        } else {
-            WindowFit::Startup
-        };
-        if self.window_fit != fit {
-            self.window_fit = fit;
-            self.window_fitted = false;
-            self.startup_size = None;
-        }
-    }
-
-    fn fit_window(&mut self, frame: &Frame) {
-        let Some(surface) = self.surface.as_mut() else {
+    fn place_window(&mut self, frame: &Frame) {
+        let Self {
+            surface,
+            placement,
+            session,
+            ..
+        } = self;
+        let Some(surface) = surface.as_ref() else {
             return;
         };
-        let window = surface.window.clone();
-        match self.window_fit {
-            WindowFit::Startup => {
-                let Some(size) = frame.startup else {
-                    return;
-                };
-                if self.startup_size == Some(size) {
-                    return;
-                }
-                self.startup_size = Some(size);
-                let size = LogicalSize::new(size.x as f64, size.y as f64);
-                window.set_min_inner_size(Some(size));
-                let _ = window.request_inner_size(size);
-                let inner = window.inner_size();
-                surface.gpu.resize([inner.width, inner.height]);
-            }
-            WindowFit::Editor => {
-                if self.window_fitted {
-                    return;
-                }
-                window.set_min_inner_size(Some(EDITOR_MINIMUM));
-                let scale = window.scale_factor();
-                let current = window.inner_size().to_logical::<f64>(scale);
-                if current.width < EDITOR_SIZE.width || current.height < EDITOR_SIZE.height {
-                    let _ = window.request_inner_size(LogicalSize::new(
-                        current.width.max(EDITOR_SIZE.width),
-                        current.height.max(EDITOR_SIZE.height),
-                    ));
-                    let inner = window.inner_size();
-                    surface.gpu.resize([inner.width, inner.height]);
-                }
-                self.window_fitted = true;
-            }
-        }
-        if self.capture.is_none() {
-            window.set_visible(true);
+        let fit = if session.scene().is_some()
+            || (session.loading().is_some() && placement.fit() == Fit::Editor)
+        {
+            Fit::Editor
+        } else {
+            Fit::Startup
+        };
+        placement.place(fit, frame.startup, &surface.window);
+    }
+
+    fn reveal(&mut self) {
+        let Self {
+            surface,
+            placement,
+            capture,
+            ..
+        } = self;
+        if let Some(surface) = surface.as_ref() {
+            placement.reveal(surface, capture.is_some());
         }
     }
 
@@ -549,21 +528,22 @@ impl ApplicationHandler<Wake> for App {
         self.push_event(&event);
         match event {
             WindowEvent::CloseRequested => self.request_close(event_loop),
-            WindowEvent::Resized(size) => {
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.gpu.resize([size.width, size.height]);
+            WindowEvent::Resized(_) => {
+                if let Some(surface) = self.surface.as_ref() {
                     self.chrome.refresh(&surface.window);
                     if !self.camera_touched {
                         self.needs_fit = true;
                     }
                     surface.window.request_redraw();
                 }
+                self.repaint_at = Some(Instant::now());
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(surface) = &self.surface {
                     self.chrome.refresh(&surface.window);
                     surface.window.request_redraw();
                 }
+                self.repaint_at = Some(Instant::now());
             }
             WindowEvent::Moved(_) => {}
             WindowEvent::DroppedFile(path) => {
@@ -608,15 +588,21 @@ impl ApplicationHandler<Wake> for App {
             }
             self.arm_pump();
         }
-        let paint = self.repaint_at.is_some_and(|at| now >= at);
-        if paint {
+        if self.repaint_at.is_some_and(|at| now >= at) {
             self.repaint_at = None;
+            if self.placement.shown() {
+                self.request_redraw();
+            } else {
+                self.redraw();
+                if self.exiting {
+                    event_loop.exit();
+                    return;
+                }
+            }
         }
         if self.repaint_at.is_none() {
+            let now = Instant::now();
             self.repaint_at = self.idle_delay().map(|delay| now + delay);
-        }
-        if paint && let Some(surface) = &self.surface {
-            surface.window.request_redraw();
         }
         let deadline = match (self.repaint_at, self.pump_at) {
             (Some(repaint), Some(pump)) => Some(repaint.min(pump)),

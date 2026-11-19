@@ -16,17 +16,19 @@ const RECENT_HEADER: f32 = 20.0;
 const RECENT_ROW: f32 = 44.0;
 const STITCH_GAP: f32 = 8.0;
 
-pub const STARTUP_SIZE: Vec2 = Vec2::new(PANEL_WIDTH, 180.0);
+const PANEL_MINIMUM: f32 = 168.0;
+
+pub const STARTUP_SIZE: Vec2 = Vec2::new(PANEL_WIDTH, PANEL_MINIMUM);
+
+pub(crate) fn window_size(panel: Vec2) -> Vec2 {
+    Vec2::new(PANEL_WIDTH, panel.y.max(PANEL_MINIMUM))
+}
 
 struct Status {
     text: String,
     detail: Option<String>,
     busy: bool,
     error: bool,
-}
-
-pub(crate) fn window_size(panel: Vec2) -> Vec2 {
-    Vec2::new(PANEL_WIDTH, panel.y.max(168.0))
 }
 
 pub(crate) fn view<'a>(

@@ -9,7 +9,7 @@ impl App {
         if self.fatal.is_some() {
             return false;
         }
-        match self.surface.as_ref().and_then(|surface| surface.gpu.lost()) {
+        match self.surface.as_ref().and_then(|surface| surface.lost()) {
             Some(detail) => {
                 self.fail(detail);
                 false

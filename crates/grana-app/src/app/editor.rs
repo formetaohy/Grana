@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use grana_display::SurfaceSize;
 use grana_editor::Frame;
 use grana_session::{Session, SessionView};
-use grana_ui::Vec2 as UiVec2;
 
 use super::App;
 
@@ -37,7 +37,7 @@ fn session_view<'a>(
 }
 
 impl App {
-    pub(super) fn run_ui(&mut self) -> (Frame, Option<Duration>) {
+    pub(super) fn run_ui(&mut self, size: SurfaceSize) -> (Frame, Option<Duration>) {
         let App {
             surface,
             session,
@@ -53,18 +53,16 @@ impl App {
         let Some(surface) = surface.as_mut() else {
             return (Frame::default(), None);
         };
-        let scale = surface.window.scale_factor() as f32;
-        let size = surface.gpu.size();
-        let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
-        surface.ui.resize(size);
+        let points = size.points();
         surface.ui.set_language(workspace.language);
         workspace.chrome = chrome.view(&surface.window);
         workspace.chrome.close_only = session.scene().is_none();
         let actions = surface
             .ui
-            .update(points, scale, self.start.elapsed().as_secs_f64());
+            .update(points, size.scale(), self.start.elapsed().as_secs_f64());
         let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
         let view = session_view(session, export.progress(), output.as_deref(), failure);
+        stage.set_surface(size);
         let frame = grana_editor::build(&mut surface.ui, actions, &view, camera, stage, workspace);
         let wait = surface.ui.finish();
         (frame, wait)
@@ -86,8 +84,10 @@ impl App {
             let Some(surface) = surface.as_mut() else {
                 return false;
             };
+            let size = surface.size();
             let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
             let view = session_view(session, export.progress(), output.as_deref(), failure);
+            stage.set_surface(size);
             let mut frame = Frame::default();
             grana_editor::apply(
                 &mut surface.ui,

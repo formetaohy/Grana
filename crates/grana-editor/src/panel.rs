@@ -158,7 +158,6 @@ pub fn build(
         workspace.last_panel = panel;
     }
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
-    stage.set_pixels_per_point(ui.scale());
     let Some(scene) = view.scene else {
         stage.set_viewport(full);
         let elements = {

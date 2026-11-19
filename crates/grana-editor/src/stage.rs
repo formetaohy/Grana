@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_display::Camera;
+use grana_display::{Camera, SurfaceSize};
 use grana_ui::{Button, Cursor, Modifiers, Rect, Ui};
 
 use crate::state::AnnotationTool;
@@ -66,7 +66,7 @@ pub struct Stage {
 
     hovered: bool,
     viewport: Rect,
-    pixels_per_point: f32,
+    surface: Option<SurfaceSize>,
     modifiers: Modifiers,
 }
 
@@ -85,7 +85,7 @@ impl Stage {
 
             hovered: false,
             viewport: Rect::ZERO,
-            pixels_per_point: 1.0,
+            surface: None,
             modifiers: Modifiers::default(),
         }
     }
@@ -98,22 +98,27 @@ impl Stage {
         self.viewport
     }
 
-    pub fn set_pixels_per_point(&mut self, scale: f32) {
-        assert!(
-            scale.is_finite() && scale > 0.0,
-            "a stage covers a positive pixel density"
-        );
-        self.pixels_per_point = scale;
+    pub fn set_surface(&mut self, surface: SurfaceSize) {
+        self.surface = Some(surface);
     }
 
-    pub fn pixels_per_point(&self) -> f32 {
-        self.pixels_per_point
+    pub fn surface(&self) -> SurfaceSize {
+        self.surface.expect("the stage is laid out on a surface")
     }
 
     pub fn region(&self) -> [u32; 4] {
-        let scale = self.pixels_per_point;
-        let low = (self.viewport.min * scale).round().max(Vec2::ZERO);
-        let high = (self.viewport.max * scale).round().max(low + Vec2::ONE);
+        let surface = self.surface();
+        let [width, height] = surface.physical();
+        let low = surface.pixels(self.viewport.min).round();
+        let high = surface.pixels(self.viewport.max).round();
+        assert!(
+            high.x > low.x && high.y > low.y,
+            "a view covers at least one pixel"
+        );
+        assert!(
+            low.x >= 0.0 && low.y >= 0.0 && high.x <= width as f32 && high.y <= height as f32,
+            "the view lies on the surface"
+        );
         [
             low.x as u32,
             low.y as u32,
@@ -124,7 +129,7 @@ impl Stage {
 
     pub fn quad(&self) -> Rect {
         let [x, y, width, height] = self.region();
-        let scale = self.pixels_per_point;
+        let scale = self.surface().scale();
         Rect::from_min_size(
             Vec2::new(x as f32, y as f32) / scale,
             Vec2::new(width as f32, height as f32) / scale,

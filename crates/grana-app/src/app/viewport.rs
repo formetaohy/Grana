@@ -368,14 +368,13 @@ impl App {
     }
 
     pub(super) fn volume_ray(&self, point: Vec2) -> Option<(Vec3, Vec3)> {
-        let surface = self.surface.as_ref()?;
         let region = self.stage.region();
         if region[2] == 0 || region[3] == 0 {
             return None;
         }
-        let scale = surface.window.scale_factor() as f32;
-        let x = point.x * scale;
-        let y = point.y * scale;
+        let position = self.stage.surface().pixels(point);
+        let x = position.x;
+        let y = position.y;
         let ndc = Vec2::new(
             2.0 * (x - region[0] as f32) / region[2] as f32 - 1.0,
             1.0 - 2.0 * (y - region[1] as f32) / region[3] as f32,
@@ -438,14 +437,14 @@ impl App {
             return;
         };
         let region = self.stage.region();
-        let scale = surface.window.scale_factor() as f32;
-        let x = point.x * scale - region[0] as f32;
-        let y = point.y * scale - region[1] as f32;
+        let position = self.stage.surface().pixels(point);
+        let x = position.x - region[0] as f32;
+        let y = position.y - region[1] as f32;
         if x < 0.0 || y < 0.0 || x >= region[2] as f32 || y >= region[3] as f32 {
             return;
         }
         let point = [x.round() as u32, y.round() as u32];
-        if engine.request_pick(&surface.gpu.device, &surface.gpu.queue, point) {
+        if engine.request_pick(surface.device(), surface.queue(), point) {
             self.pick_toggle = Some(toggle);
         }
     }
@@ -460,7 +459,7 @@ impl App {
         if !engine.pick_pending() {
             return;
         }
-        let picked = match engine.poll_pick(&surface.gpu.device) {
+        let picked = match engine.poll_pick(surface.device()) {
             Ok(Some(picked)) => picked,
             Ok(None) => return,
             Err(detail) => {

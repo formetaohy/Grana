@@ -20,7 +20,7 @@ impl App {
         let Some(caret) = surface.ui.edit_caret() else {
             return;
         };
-        let scale = surface.window.scale_factor() as f32;
+        let scale = self.stage.surface().scale();
         let area = (
             (caret.min.x * scale).round() as i32,
             (caret.min.y * scale).round() as i32,
@@ -114,7 +114,7 @@ impl App {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let scale = surface.window.scale_factor() as f32;
+        let scale = self.stage.surface().scale();
         let input = surface.ui.input_mut();
         match event {
             WindowEvent::CursorMoved { position, .. } => input.push(UiEvent::Moved(UiVec2::new(
