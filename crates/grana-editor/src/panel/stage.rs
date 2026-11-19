@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Handle, Label, Legend, Viewport};
 use grana_ui::{
-    BuildContext, Color, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
-    State, TextStyle, icon,
+    BuildContext, Color, Corners, Edges, Element, Icon, IconStyle, Key, Layer, Length, Level, Rect,
+    Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -410,9 +410,9 @@ fn chip<'a>(
                     symbol,
                     painter,
                     Vec2::new(rect.min.x + 14.0, rect.center().y),
-                    12.5,
+                    14.0,
                     tint,
-                    1.6,
+                    IconStyle::FILLED,
                 );
                 painter.text(
                     &layout,
@@ -468,9 +468,9 @@ pub(super) fn toast<'a>(
                         mark,
                         painter,
                         Vec2::new(rect.min.x + 18.0, rect.center().y),
-                        14.5,
+                        16.0,
                         tint.with_alpha(tint.alpha * appear),
-                        1.6,
+                        IconStyle::REGULAR,
                     );
                     painter.text(
                         &layout_text,

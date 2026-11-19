@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::content::{ActionRowContent, Content, MenuRowContent, Trailing};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::icon::{self, Icon};
+use crate::icon::{self, Icon, IconStyle};
 use crate::node::Runtime;
 use crate::paint::Painter;
 use crate::text::{Align, TextStyle};
@@ -101,7 +101,7 @@ pub(super) fn paint_menu_row(
             Vec2::new(info.rect.min.x + 14.0, info.rect.center().y),
             12.0,
             palette.on_secondary_container,
-            1.8,
+            IconStyle::REGULAR,
         );
     }
     let text_color = if row.checked {
@@ -158,17 +158,17 @@ pub(super) fn paint_action_row(
     icon::paint(
         row.symbol,
         painter,
-        Vec2::new(info.rect.min.x + 14.0, info.rect.center().y),
-        13.5,
+        Vec2::new(info.rect.min.x + 16.0, info.rect.center().y),
+        16.0,
         palette
             .on_surface_variant
             .lerp(palette.on_secondary_container, runtime.hover.value),
-        1.6,
+        IconStyle::REGULAR,
     );
     painter.text_in(
         Rect::from_min_max(
-            Vec2::new(info.rect.min.x + 29.0, info.rect.min.y),
-            Vec2::new(right.max(info.rect.min.x + 29.0), info.rect.max.y),
+            Vec2::new(info.rect.min.x + 32.0, info.rect.min.y),
+            Vec2::new(right.max(info.rect.min.x + 32.0), info.rect.max.y),
         ),
         &row.label,
         TextStyle::new(
@@ -220,14 +220,14 @@ pub(super) fn paint_action_row(
         icon::chevron(
             painter,
             badge.center(),
-            8.0,
+            16.0,
             std::f32::consts::FRAC_PI_2 * trailing.angle,
             if trailing.open {
                 palette.on_secondary_container
             } else {
                 palette.on_surface_variant
             },
-            1.6,
+            IconStyle::REGULAR,
         );
     }
 }

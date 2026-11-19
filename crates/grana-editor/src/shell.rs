@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
-    Align, BuildContext, Corners, Edges, Element, Fill, Icon, Key, Layer, Length, Level, Rect,
-    Role, State, TextStyle,
+    Align, BuildContext, Corners, Edges, Element, Fill, Icon, IconStyle, Key, Layer, Length, Level,
+    Rect, Role, State, TextStyle,
 };
 
 use crate::message::Message;
@@ -686,12 +686,12 @@ fn recent_row<'a>(
                 grana_ui::icon::paint(
                     symbol,
                     painter,
-                    Vec2::new(rect.min.x + 16.0, rect.center().y),
-                    14.0,
+                    Vec2::new(rect.min.x + 17.0, rect.center().y),
+                    16.0,
                     palette
                         .primary
                         .lerp(palette.on_secondary_container, info.hover),
-                    1.6,
+                    IconStyle::REGULAR,
                 );
                 painter.text_in(
                     Rect::from_min_max(
@@ -715,11 +715,11 @@ fn recent_row<'a>(
                     Icon::ChevronRight,
                     painter,
                     Vec2::new(rect.max.x - 14.0, rect.center().y),
-                    10.0,
+                    16.0,
                     palette
                         .outline
                         .lerp(palette.on_secondary_container, info.hover),
-                    1.6,
+                    IconStyle::REGULAR,
                 );
             },
         )

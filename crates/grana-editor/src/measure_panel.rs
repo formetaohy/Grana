@@ -6,8 +6,8 @@ use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis, Sco
 use grana_scene::{Item, ObjectSetId, Selection};
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
-    Role, State, TextStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, IconStyle, Key, Length,
+    Level, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -852,9 +852,9 @@ fn table<'a>(
                                 arrow,
                                 painter,
                                 Vec2::new(info.rect.max.x - 10.0, info.rect.center().y),
-                                9.5,
+                                14.0,
                                 icon_color,
-                                1.5,
+                                IconStyle::REGULAR,
                             );
                         }
                     },

@@ -1,10 +1,11 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 use grana_raster::Bitmap;
-use grana_text::{Contour, Curve};
+use grana_text::{Contour, Curve, GlyphStyle};
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::icon::{Icon, IconStyle};
 use crate::image::ImageAtlas;
 use crate::record::Mark;
 use crate::style::{Border, Fill, Surface};
@@ -451,12 +452,48 @@ impl<'a> Painter<'a> {
             instance.rect = [plot.left, plot.top, plot.width, plot.height];
             instance.color = plot.color.to_array();
             instance.uv = plot.slot.uv;
-            instance.extra = [gamma, 0.0, 0.0, 0.0];
+            instance.extra = [gamma, 1.0, 0.0, 0.0];
             if instance.touches(clip.rect) {
                 instances.material.push(clipped(instance, clip));
             }
         });
         ink
+    }
+
+    pub fn icon(
+        &mut self,
+        icon: Icon,
+        center: Vec2,
+        size: f32,
+        angle: f32,
+        color: Color,
+        style: IconStyle,
+    ) {
+        if size <= 0.0 || color.alpha <= 0.0 {
+            return;
+        }
+        let glyph = style.glyph(size);
+        let (sine, cosine) = angle.sin_cos();
+        let Self {
+            instances,
+            text,
+            clip,
+            gamma,
+            ..
+        } = self;
+        let clip = *clip;
+        let gamma = *gamma;
+        text.icon(icon.character(), glyph, center, color, |plot| {
+            let mut instance = Instance::blank(KIND_GLYPH);
+            instance.rect = [plot.left, plot.top, plot.width, plot.height];
+            instance.color = plot.color.to_array();
+            instance.uv = plot.slot.uv;
+            instance.extra = [gamma, cosine, sine, 0.0];
+            if instance.touches(clip.rect) {
+                instances.material.push(clipped(instance, clip));
+            }
+        });
+        self.record_icon(icon, glyph, center, angle, color);
     }
 
     pub fn text(&mut self, layout: &TextLayout, position: Vec2, color: Color) {
@@ -552,6 +589,31 @@ impl<'a> Painter<'a> {
             return;
         }
         let contours = self.text.contours(layout, origin);
+        if contours.is_empty() {
+            return;
+        }
+        let clip = self.clip.rect;
+        self.mark(Mark::Outline {
+            contours,
+            color,
+            clip,
+        });
+    }
+
+    fn record_icon(
+        &mut self,
+        icon: Icon,
+        glyph: GlyphStyle,
+        center: Vec2,
+        angle: f32,
+        color: Color,
+    ) {
+        if self.marks.is_none() || color.alpha <= 0.0 {
+            return;
+        }
+        let contours = self
+            .text
+            .icon_contours(icon.character(), glyph, center, angle);
         if contours.is_empty() {
             return;
         }
@@ -684,6 +746,19 @@ fn bounds(instance: &Instance) -> Rect {
             let b = Vec2::new(instance.uv[2], instance.uv[3]);
             let c = Vec2::new(instance.extra[0], instance.extra[1]);
             Rect::from_min_max(a.min(b).min(c), a.max(b).max(c))
+        }
+        KIND_GLYPH => {
+            let min = Vec2::new(instance.rect[0], instance.rect[1]);
+            let size = Vec2::new(instance.rect[2], instance.rect[3]);
+            let center = min + size * 0.5;
+            let half = size * 0.5;
+            let cosine = instance.extra[1].abs();
+            let sine = instance.extra[2].abs();
+            let extent = Vec2::new(
+                cosine * half.x + sine * half.y,
+                sine * half.x + cosine * half.y,
+            );
+            Rect::from_center_size(center, extent * 2.0)
         }
         _ => {
             let border = if (instance.meta[1] & FLAG_BORDER) != 0 {

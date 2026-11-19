@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
-use grana_text::{Fonts, GlyphRaster};
+use grana_text::{Fonts, GlyphRaster, GlyphStyle};
 use wgpu::{
     Device, FilterMode, Queue, Sampler, SamplerDescriptor, Texture, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
-
-use crate::theme::TypeStyle;
 
 const PADDING: u32 = 1;
 const SIZE: u32 = 4096;
@@ -19,19 +17,21 @@ pub struct GlyphKey {
     weight: u16,
     width: u16,
     grade: i16,
+    fill: u16,
     hint: bool,
     subpixel_x: u8,
     subpixel_y: u8,
 }
 
 impl GlyphKey {
-    fn new(face: usize, id: u16, style: TypeStyle, pixels_per_point: f32, hint: bool) -> Self {
+    fn new(face: usize, id: u16, style: GlyphStyle, pixels_per_point: f32) -> Self {
         let pixels = (style.size * pixels_per_point * 4.0)
             .round()
             .clamp(1.0, 65535.0) as u16;
         let weight = (style.weight * 4.0).round().clamp(0.0, 65535.0) as u16;
         let width = (style.width * 4.0).round().clamp(0.0, 65535.0) as u16;
         let grade = (style.grade * 4.0).round().clamp(-32768.0, 32767.0) as i16;
+        let fill = (style.fill * 1000.0).round().clamp(0.0, 65535.0) as u16;
         Self {
             face: face as u16,
             id,
@@ -39,7 +39,8 @@ impl GlyphKey {
             weight,
             width,
             grade,
-            hint,
+            fill,
+            hint: style.hint,
             subpixel_x: 0,
             subpixel_y: 0,
         }
@@ -55,9 +56,8 @@ impl GlyphKey {
 pub struct GlyphRequest {
     pub face: usize,
     pub id: u16,
-    pub style: TypeStyle,
+    pub style: GlyphStyle,
     pub pixels_per_point: f32,
-    pub hint: bool,
     pub position: (f32, f32),
 }
 
@@ -142,7 +142,6 @@ impl Atlas {
             request.id,
             request.style,
             request.pixels_per_point,
-            request.hint,
         )
         .with_subpixel(quantized_x, quantized_y);
         if let Some(slot) = self.slots.get(&key) {
@@ -151,7 +150,7 @@ impl Atlas {
         let raster = fonts.rasterize(
             request.face,
             request.id,
-            request.style.glyph(request.hint),
+            request.style,
             request.pixels_per_point,
             [quantized_x as f32 / 4.0, quantized_y as f32 / 4.0],
         )?;

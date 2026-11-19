@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use crate::color::Color;
 use crate::element::{Element, Length, text};
 use crate::geometry::Edges;
-use crate::icon::Icon;
+use crate::icon::{Icon, IconStyle};
 use crate::style::Surface;
 use crate::text::TextStyle;
 use crate::theme::{Role, Theme, TypeStyle};
@@ -19,8 +19,14 @@ impl<'a, A> BuildContext<'a, A> {
         text(value, style)
     }
 
-    pub fn icon<'e>(&self, symbol: Icon, size: f32, color: Color, weight: f32) -> Element<'e, A> {
-        widget::icon(symbol, size, color, weight)
+    pub fn icon<'e>(
+        &self,
+        symbol: Icon,
+        size: f32,
+        color: Color,
+        style: IconStyle,
+    ) -> Element<'e, A> {
+        widget::icon(symbol, size, color, style)
     }
 
     pub fn surface<'e>(&self, surface: Surface) -> Element<'e, A> {

@@ -83,6 +83,17 @@ fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) index: u
         let extent = instance.rect.z + instance.rect.w;
         position_px = (center + (corner * 2.0 - 1.0) * extent) * uniforms.scale;
         uv = corner;
+    } else if (kind == KIND_GLYPH) {
+        let center = instance.rect.xy + instance.rect.zw * 0.5;
+        let local = (corner - vec2<f32>(0.5)) * instance.rect.zw;
+        let cosine = instance.extra.y;
+        let sine = instance.extra.z;
+        let rotated = vec2<f32>(
+            local.x * cosine - local.y * sine,
+            local.x * sine + local.y * cosine,
+        );
+        position_px = (center + rotated) * uniforms.scale;
+        uv = mix(instance.uv.xy, instance.uv.zw, corner);
     } else {
         position_px = (instance.rect.xy + corner * instance.rect.zw) * uniforms.scale;
         uv = mix(instance.uv.xy, instance.uv.zw, corner);

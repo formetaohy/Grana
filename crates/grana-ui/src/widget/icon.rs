@@ -3,12 +3,12 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::content::{Content, IconContent};
 use crate::element::{Element, Layout, Length, Size};
-use crate::icon::{self, Icon};
+use crate::icon::{self, Icon, IconStyle};
 use crate::paint::Painter;
 
 use super::PaintInfo;
 
-pub fn icon<'a, A>(symbol: Icon, size: f32, color: Color, weight: f32) -> Element<'a, A> {
+pub fn icon<'a, A>(symbol: Icon, size: f32, color: Color, style: IconStyle) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fixed(size), Length::Fixed(size)),
         ..Layout::row()
@@ -17,7 +17,7 @@ pub fn icon<'a, A>(symbol: Icon, size: f32, color: Color, weight: f32) -> Elemen
         symbol,
         size,
         color,
-        weight,
+        style,
     }))
 }
 
@@ -32,6 +32,6 @@ pub(super) fn paint(content: &IconContent, painter: &mut Painter, info: &PaintIn
         info.rect.center(),
         content.size,
         content.color,
-        content.weight,
+        content.style,
     );
 }

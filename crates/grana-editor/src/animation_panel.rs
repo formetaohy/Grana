@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::{Command, Export};
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
-    Role, State, TextStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, IconStyle, Key, Length,
+    Level, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -621,11 +621,11 @@ fn combo<'a>(
             );
             icon::chevron(
                 painter,
-                Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-                5.0,
+                Vec2::new(info.rect.max.x - 12.0, info.rect.center().y),
+                16.0,
                 std::f32::consts::FRAC_PI_2,
                 palette.on_surface_variant,
-                1.5,
+                IconStyle::REGULAR,
             );
         })
         .named(key)

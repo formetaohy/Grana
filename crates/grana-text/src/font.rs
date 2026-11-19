@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use swash::scale::{Render, ScaleContext, Scaler, Source};
@@ -5,7 +6,7 @@ use swash::shape::{ShapeContext, Shaper};
 use swash::zeno::{Format, Vector};
 use swash::{FontRef, Setting};
 
-use crate::face::{self, Face};
+use crate::face::{self, Face, Role};
 use crate::glyph::GlyphRaster;
 use crate::outline::Outline;
 
@@ -15,6 +16,8 @@ const FALLBACK_START: usize = 2;
 
 pub struct Fonts {
     faces: Vec<Face>,
+    icon: usize,
+    icons: HashMap<char, IconGlyph>,
     shape: ShapeContext,
     scale: ScaleContext,
     names: Vec<String>,
@@ -29,8 +32,14 @@ impl Fonts {
             faces.push(face);
             names.push(name);
         }
+        let icon = faces
+            .iter()
+            .position(|face| face.role == Role::Icon)
+            .expect("an icon face is embedded");
         Self {
             faces,
+            icon,
+            icons: HashMap::new(),
             shape: ShapeContext::new(),
             scale: ScaleContext::new(),
             names,
@@ -50,11 +59,8 @@ impl Fonts {
         if self.faces[PRIMARY_FLEX].covers(character) {
             return PRIMARY_FLEX;
         }
-        if let Some(offset) = self.faces[FALLBACK_START..]
-            .iter()
-            .position(|face| face.covers(character))
-        {
-            return FALLBACK_START + offset;
+        if let Some(found) = self.fallback_for(character) {
+            return found;
         }
         while !self.pending.is_empty() {
             let path = self.pending.remove(0);
@@ -69,6 +75,37 @@ impl Fonts {
             }
         }
         PRIMARY_FLEX
+    }
+
+    fn fallback_for(&self, character: char) -> Option<usize> {
+        self.faces
+            .iter()
+            .enumerate()
+            .skip(FALLBACK_START)
+            .find(|(_, face)| face.role == Role::Text && face.covers(character))
+            .map(|(index, _)| index)
+    }
+
+    pub fn icon(&mut self, character: char) -> IconGlyph {
+        if let Some(glyph) = self.icons.get(&character) {
+            return *glyph;
+        }
+        let font = self.faces[self.icon].font;
+        let id = font.charmap().map(character);
+        assert!(
+            id != 0,
+            "the icon set covers U+{:04X}",
+            u32::from(character)
+        );
+        let units_per_em = font.metrics(&[]).units_per_em as f32;
+        let advance = font.glyph_metrics(&[]).advance_width(id) / units_per_em;
+        let glyph = IconGlyph {
+            face: self.icon,
+            id,
+            advance,
+        };
+        self.icons.insert(character, glyph);
+        glyph
     }
 
     pub fn face_for_mono(&mut self, character: char) -> usize {
@@ -228,12 +265,13 @@ impl Fonts {
     }
 }
 
-fn variations(style: GlyphStyle) -> [Setting<f32>; 4] {
+fn variations(style: GlyphStyle) -> [Setting<f32>; 5] {
     [
         Setting::from(("wght", style.weight)),
         Setting::from(("wdth", style.width)),
         Setting::from(("opsz", style.size.clamp(8.0, 144.0))),
         Setting::from(("GRAD", style.grade)),
+        Setting::from(("FILL", style.fill)),
     ]
 }
 
@@ -243,6 +281,7 @@ pub struct GlyphStyle {
     pub weight: f32,
     pub width: f32,
     pub grade: f32,
+    pub fill: f32,
     pub hint: bool,
 }
 
@@ -253,6 +292,7 @@ impl GlyphStyle {
             weight,
             width: 100.0,
             grade: 0.0,
+            fill: 0.0,
             hint: false,
         }
     }
@@ -263,10 +303,22 @@ impl GlyphStyle {
         self
     }
 
+    pub const fn with_fill(mut self, fill: bool) -> Self {
+        self.fill = if fill { 1.0 } else { 0.0 };
+        self
+    }
+
     pub const fn hinted(mut self, hint: bool) -> Self {
         self.hint = hint;
         self
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct IconGlyph {
+    pub face: usize,
+    pub id: u16,
+    pub advance: f32,
 }
 
 #[derive(Clone, Copy, Debug)]

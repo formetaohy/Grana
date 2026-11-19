@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Layer, Length, Level, Motion, Rect, Role,
-    State, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, IconStyle, Key, Layer, Length, Level, Motion,
+    Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -208,9 +208,9 @@ fn rail_view<'a>(
                             symbol,
                             painter,
                             Vec2::new(info.rect.min.x + 18.0, info.rect.center().y),
-                            14.0,
+                            16.0,
                             tint,
-                            1.6,
+                            IconStyle::REGULAR,
                         );
                         painter.text_in(
                             Rect::from_min_max(

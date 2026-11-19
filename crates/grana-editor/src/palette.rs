@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::{RecentKind, SessionView};
 use grana_ui::{
-    Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
-    State, TextStyle, Ui,
+    Align, BuildContext, Corners, Edges, Element, Icon, IconStyle, Key, Layer, Length, Level, Rect,
+    Role, State, TextStyle, Ui,
 };
 
 use crate::command::{Action, Group, Scope, Shortcut};
@@ -262,9 +262,9 @@ pub(crate) fn view<'a>(
             Icon::Search,
             painter,
             info.rect.center(),
-            14.5,
+            16.0,
             theme.palette.primary,
-            1.6,
+            IconStyle::REGULAR,
         );
     });
     let mut children = vec![
@@ -376,14 +376,14 @@ fn row<'a>(
                 grana_ui::icon::paint(
                     symbol,
                     painter,
-                    Vec2::new(rect.min.x + 15.0, rect.center().y),
-                    13.5,
+                    Vec2::new(rect.min.x + 16.0, rect.center().y),
+                    16.0,
                     if selected {
                         palette.on_secondary_container
                     } else {
                         palette.on_surface_variant.lerp(palette.on_surface, engaged)
                     },
-                    1.6,
+                    IconStyle::REGULAR,
                 );
                 let shortcut_width = shortcut.as_ref().map_or(10.0, |label| {
                     24.0 + painter.measure(label, shortcut_style).x

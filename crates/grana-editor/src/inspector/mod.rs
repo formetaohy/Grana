@@ -4,8 +4,8 @@ use grana_optics::{Psf, PsfParams};
 use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Edges, Element, Icon, Key, Length, Level, Motion, Rect,
-    Role, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Edges, Element, Icon, IconStyle, Key, Length, Level,
+    Motion, Rect, Role, TextStyle, icon,
 };
 use grana_volume::{Clip, Intensity};
 
@@ -410,11 +410,11 @@ pub(crate) fn disclosure<'a>(
             );
             icon::chevron(
                 painter,
-                Vec2::new(rect.max.x - 8.0, rect.center().y),
-                8.0,
+                Vec2::new(rect.max.x - 9.0, rect.center().y),
+                16.0,
                 std::f32::consts::FRAC_PI_2 * arrow,
                 palette.outline.lerp(palette.on_surface, info.hover),
-                1.6,
+                IconStyle::REGULAR,
             );
         })
         .key(token)

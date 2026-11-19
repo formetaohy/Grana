@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Edges, Element, Icon, Key, Length, Level, Rect, Role,
-    State, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Edges, Element, Icon, IconStyle, Key, Length, Level, Rect,
+    Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -108,10 +108,10 @@ fn project_split<'a>(
             icon::paint(
                 mark,
                 painter,
-                Vec2::new(frame.min.x + 13.0, frame.center().y),
-                13.0,
+                Vec2::new(frame.min.x + 13.5, frame.center().y),
+                15.0,
                 palette.primary,
-                1.6,
+                IconStyle::REGULAR,
             );
             let title_left = frame.min.x + 23.0;
             painter.text_in(

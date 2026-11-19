@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::content::{CheckboxContent, Content, ToggleContent};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::icon::{self, Icon};
+use crate::icon::{self, Icon, IconStyle};
 use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
@@ -188,9 +188,9 @@ fn paint_switch(runtime: &Runtime, painter: &mut Painter, info: &PaintInfo<'_>, 
             Icon::Check,
             painter,
             center,
-            10.5,
+            11.0,
             palette.primary.with_alpha(alpha),
-            1.8,
+            IconStyle::REGULAR,
         );
     }
 }
@@ -227,9 +227,9 @@ pub(super) fn paint_checkbox(
             Icon::Check,
             painter,
             box_rect.center(),
-            11.5,
+            11.0,
             palette.on_primary.with_alpha(mark),
-            1.9,
+            IconStyle::REGULAR,
         );
     }
     painter.text_in(

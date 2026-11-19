@@ -2,8 +2,8 @@ use glam::Vec2;
 use grana_chart::{Decor, Page, Style};
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Length, Level,
-    Phase, Rect, Role, State, TextStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, IconStyle, Key,
+    Length, Level, Phase, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::chart::{ComparisonRequest, comparison_chart, group_names, set_names};
@@ -246,10 +246,10 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                         icon::paint(
                             Icon::Folder,
                             painter,
-                            Vec2::new(info.rect.min.x + 12.0, info.rect.center().y),
-                            14.0,
+                            Vec2::new(info.rect.min.x + 13.0, info.rect.center().y),
+                            16.0,
                             palette.on_surface_variant,
-                            1.5,
+                            IconStyle::REGULAR,
                         );
                         painter.text_in(
                             Rect::from_min_max(

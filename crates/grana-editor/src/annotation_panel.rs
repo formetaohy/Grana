@@ -3,7 +3,8 @@ use grana_i18n::Language;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Length, Level, Rect, Role, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, IconStyle, Key, Length, Level, Rect, Role,
+    TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -228,14 +229,14 @@ fn row<'a>(
                         AnnotationTag::Distance => Icon::Ruler,
                     },
                     painter,
-                    Vec2::new(rect.min.x + 14.0, rect.center().y),
-                    14.0,
+                    Vec2::new(rect.min.x + 15.0, rect.center().y),
+                    16.0,
                     if selected {
                         palette.on_secondary_container
                     } else {
                         palette.primary
                     },
-                    1.6,
+                    IconStyle::REGULAR,
                 );
                 painter.text_in(
                     Rect::from_min_max(

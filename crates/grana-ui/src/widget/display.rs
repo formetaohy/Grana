@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::element::{CanvasInfo, Element, Key, Layout, Length, Size, spacer, text};
 use crate::geometry::{Corners, Edges, Rect};
-use crate::icon::{self, Icon};
+use crate::icon::{self, Icon, IconStyle};
 use crate::paint::Painter;
 use crate::style::{State, Surface};
 use crate::text::{Align, TextStyle};
@@ -121,9 +121,9 @@ pub fn empty_state<'a, A>(
         .background(Surface::fill(palette.secondary_container).with_corners(Corners::all(14.0)))
         .children([super::icon::icon(
             symbol,
-            21.0,
+            24.0,
             palette.on_secondary_container,
-            1.6,
+            IconStyle::REGULAR,
         )]);
     let card = Element::column()
         .width(Length::Maximum(480.0))
@@ -196,10 +196,10 @@ fn paint_heading(props: &Heading, painter: &mut Painter, info: CanvasInfo<'_>) {
         icon::paint(
             symbol,
             painter,
-            Vec2::new(rect.min.x + 8.0, rect.center().y),
-            14.0,
+            Vec2::new(rect.min.x + 9.0, rect.center().y),
+            16.0,
             props.accent,
-            1.6,
+            IconStyle::REGULAR,
         );
     }
     let detail = props
@@ -267,11 +267,11 @@ pub fn combo<'a, A>(
         );
         icon::chevron(
             painter,
-            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
-            5.0,
+            Vec2::new(info.rect.max.x - 12.0, info.rect.center().y),
+            16.0,
             std::f32::consts::FRAC_PI_2,
             chevron,
-            1.5,
+            IconStyle::REGULAR,
         );
     })
     .key(key)

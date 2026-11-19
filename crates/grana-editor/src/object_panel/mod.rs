@@ -7,8 +7,8 @@ use grana_scene::{
 };
 use grana_session::{Command, MeshFormat};
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Motion, Rect, Role,
-    TextStyle, icon,
+    Align, BuildContext, Color, Corners, Element, Icon, IconStyle, Key, Length, Level, Motion,
+    Rect, Role, TextStyle, icon,
 };
 
 use crate::message::Message;

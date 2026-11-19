@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec2;
-use grana_text::{Contour, Fonts};
+use grana_text::{Contour, Fonts, GlyphStyle, IconGlyph};
 
-use crate::atlas::{Atlas, GlyphSlot};
+use crate::atlas::{Atlas, GlyphRequest, GlyphSlot};
 use crate::color::Color;
 use crate::theme::TypeStyle;
 
@@ -388,40 +388,104 @@ impl Text {
         color: Color,
         mut plot: impl FnMut(GlyphPlot),
     ) {
-        if layout.glyphs.is_empty() {
-            return;
+        let style = layout.style.glyph(false);
+        for glyph in &layout.glyphs {
+            let position = origin + Vec2::new(glyph.x, glyph.baseline);
+            self.emit_glyph(
+                glyph.face as usize,
+                glyph.id,
+                style,
+                position,
+                color,
+                &mut plot,
+            );
         }
+    }
+
+    pub fn icon(
+        &mut self,
+        character: char,
+        style: GlyphStyle,
+        center: Vec2,
+        color: Color,
+        mut plot: impl FnMut(GlyphPlot),
+    ) {
+        let icon = self.fonts.icon(character);
+        self.emit_glyph(
+            icon.face,
+            icon.id,
+            style,
+            icon_origin(icon, style, center),
+            color,
+            &mut plot,
+        );
+    }
+
+    pub fn icon_contours(
+        &mut self,
+        character: char,
+        style: GlyphStyle,
+        center: Vec2,
+        angle: f32,
+    ) -> Vec<Contour> {
+        let icon = self.fonts.icon(character);
+        let Some(mut outline) = self.fonts.outline(icon.face, icon.id, style) else {
+            return Vec::new();
+        };
+        let origin = icon_origin(icon, style, center);
+        let (sine, cosine) = angle.sin_cos();
+        outline.transform(|[x, y]| {
+            let offset = Vec2::new(origin.x + x, origin.y - y) - center;
+            let rotated = Vec2::new(
+                offset.x * cosine - offset.y * sine,
+                offset.x * sine + offset.y * cosine,
+            );
+            (center + rotated).to_array()
+        });
+        outline.into_contours()
+    }
+
+    fn emit_glyph(
+        &mut self,
+        face: usize,
+        id: u16,
+        style: GlyphStyle,
+        origin: Vec2,
+        color: Color,
+        plot: &mut impl FnMut(GlyphPlot),
+    ) {
         let Some(atlas) = self.atlas.as_mut() else {
             return;
         };
         let pixels_per_point = self.pixels_per_point;
-        let hint = false;
-        for glyph in &layout.glyphs {
-            let pen_x = (origin.x + glyph.x) * pixels_per_point;
-            let baseline = (origin.y + glyph.baseline) * pixels_per_point;
-            let Some(slot) = atlas.slot(
-                &mut self.fonts,
-                crate::atlas::GlyphRequest {
-                    face: glyph.face as usize,
-                    id: glyph.id,
-                    style: layout.style,
-                    pixels_per_point,
-                    hint,
-                    position: (pen_x, baseline),
-                },
-            ) else {
-                continue;
-            };
-            plot(GlyphPlot {
-                slot,
-                left: (pen_x.floor() + slot.left as f32) / pixels_per_point,
-                top: (baseline.floor() - slot.top as f32) / pixels_per_point,
-                width: slot.width as f32 / pixels_per_point,
-                height: slot.height as f32 / pixels_per_point,
-                color,
-            });
-        }
+        let pen_x = origin.x * pixels_per_point;
+        let baseline = origin.y * pixels_per_point;
+        let Some(slot) = atlas.slot(
+            &mut self.fonts,
+            GlyphRequest {
+                face,
+                id,
+                style,
+                pixels_per_point,
+                position: (pen_x, baseline),
+            },
+        ) else {
+            return;
+        };
+        plot(GlyphPlot {
+            slot,
+            left: (pen_x.floor() + slot.left as f32) / pixels_per_point,
+            top: (baseline.floor() - slot.top as f32) / pixels_per_point,
+            width: slot.width as f32 / pixels_per_point,
+            height: slot.height as f32 / pixels_per_point,
+            color,
+        });
     }
+}
+
+fn icon_origin(icon: IconGlyph, style: GlyphStyle, center: Vec2) -> Vec2 {
+    let half = 0.5 * style.size;
+    center + Vec2::new(-icon.advance * half, half)
 }
 
 #[derive(Clone, Copy, Debug)]

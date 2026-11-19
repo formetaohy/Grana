@@ -42,7 +42,7 @@ pub use geometry::{Corners, Edges, Rect};
 pub use glam::Vec2;
 pub use grana_i18n::Language;
 pub use grana_raster::Bitmap;
-pub use icon::Icon;
+pub use icon::{Icon, IconStyle};
 pub use image::ImageAtlas;
 pub use input::{Button, ButtonState, Cursor, Event, Input, Key as InputKey, KeyEvent, Modifiers};
 pub use motion::{Animated, Motion, Spring};

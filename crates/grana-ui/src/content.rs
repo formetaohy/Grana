@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 
 use crate::color::Color;
 use crate::geometry::Corners;
-use crate::icon::Icon;
+use crate::icon::{Icon, IconStyle};
 use crate::text::TextStyle;
 use crate::theme::{Role, TypeStyle};
 
@@ -184,7 +184,7 @@ pub struct IconContent {
     pub symbol: Icon,
     pub size: f32,
     pub color: Color,
-    pub weight: f32,
+    pub style: IconStyle,
 }
 
 #[derive(Clone, Debug, PartialEq)]

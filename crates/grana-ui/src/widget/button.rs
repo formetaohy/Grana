@@ -3,7 +3,7 @@ use glam::Vec2;
 use crate::content::{ButtonContent, Content, IconButtonContent};
 use crate::element::{Element, Key, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::icon::{self, Icon};
+use crate::icon::{self, Icon, IconStyle};
 use crate::paint::Painter;
 use crate::style::{State, Surface};
 use crate::text::{Align, TextStyle};
@@ -125,7 +125,7 @@ pub(super) fn measure(
         .layout(&button.label, button.font, 0.0, false, false, Align::Start)
         .size
         .x;
-    let extra = if button.symbol.is_some() { 20.0 } else { 0.0 };
+    let extra = if button.symbol.is_some() { 22.0 } else { 0.0 };
     let natural = measured + button.inset * 2.0 + extra;
     let width = match button.width {
         Length::Auto => natural,
@@ -155,14 +155,21 @@ pub(super) fn paint(button: &ButtonContent, painter: &mut Painter, info: &PaintI
     match button.symbol {
         Some(symbol) => {
             let text_w = painter.measure(&button.label, style).x;
-            let content_w = 18.5 + text_w;
+            let icon = 16.0;
+            let content_w = icon + 6.0 + text_w;
             let start_x =
                 (body.center().x - content_w * 0.5 + optical).max(body.min.x + button.inset);
-            let glyph = Vec2::new(start_x + 5.0, body.center().y);
-            icon::paint(symbol, painter, glyph, 13.5, surface.text, 1.6);
+            icon::paint(
+                symbol,
+                painter,
+                Vec2::new(start_x + icon * 0.5, body.center().y),
+                icon,
+                surface.text,
+                IconStyle::REGULAR,
+            );
             painter.text_in(
                 Rect::from_min_max(
-                    Vec2::new(glyph.x + 12.0, body.min.y),
+                    Vec2::new(start_x + icon + 6.0, body.min.y),
                     Vec2::new(body.max.x - button.inset + optical, body.max.y),
                 ),
                 &button.label,
@@ -199,9 +206,9 @@ pub(super) fn paint_icon(content: &IconButtonContent, painter: &mut Painter, inf
         content.symbol,
         painter,
         body.center() + Vec2::new(optical, 0.0),
-        (content.size * 0.48).clamp(11.5, 16.0),
+        (content.size * 0.55).clamp(14.0, 20.0),
         surface.text,
-        1.6,
+        IconStyle::REGULAR,
     );
 }
 

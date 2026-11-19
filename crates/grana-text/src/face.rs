@@ -4,6 +4,7 @@ use swash::FontRef;
 
 const ROBOTO_FLEX: &[u8] = include_bytes!("../assets/roboto-flex.ttf");
 const ROBOTO_MONO: &[u8] = include_bytes!("../assets/roboto-mono.ttf");
+const MATERIAL_SYMBOLS: &[u8] = include_bytes!("../assets/material-symbols-rounded.ttf");
 
 pub(crate) const FALLBACK_CANDIDATES: &[&str] = &[
     "C:/Windows/Fonts/seguisym.ttf",
@@ -19,22 +20,33 @@ pub(crate) const FALLBACK_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Role {
+    Text,
+    Icon,
+}
+
 pub(crate) struct Face {
     pub(crate) font: FontRef<'static>,
+    pub(crate) role: Role,
 }
 
 impl Face {
-    pub(crate) fn embedded(data: &'static [u8]) -> Self {
-        let font =
-            FontRef::from_index(data, 0).expect("embedded Material 3 Expressive font is valid");
-        Self { font }
+    fn embedded(data: &'static [u8], role: Role) -> Self {
+        Self {
+            font: FontRef::from_index(data, 0).expect("an embedded font is valid"),
+            role,
+        }
     }
 
     pub(crate) fn load(path: &Path) -> Option<Self> {
         let data = std::fs::read(path).ok()?;
         let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
         let font = FontRef::from_index(leaked, 0)?;
-        Some(Self { font })
+        Some(Self {
+            font,
+            role: Role::Text,
+        })
     }
 
     pub(crate) fn covers(&self, character: char) -> bool {
@@ -44,8 +56,18 @@ impl Face {
 
 pub(crate) fn primary_faces() -> Vec<(Face, String)> {
     vec![
-        (Face::embedded(ROBOTO_FLEX), "Roboto Flex".to_string()),
-        (Face::embedded(ROBOTO_MONO), "Roboto Mono".to_string()),
+        (
+            Face::embedded(ROBOTO_FLEX, Role::Text),
+            "Roboto Flex".to_string(),
+        ),
+        (
+            Face::embedded(ROBOTO_MONO, Role::Text),
+            "Roboto Mono".to_string(),
+        ),
+        (
+            Face::embedded(MATERIAL_SYMBOLS, Role::Icon),
+            "Material Symbols Rounded".to_string(),
+        ),
     ]
 }
 

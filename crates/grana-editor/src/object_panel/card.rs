@@ -82,7 +82,14 @@ pub(super) fn header_row<'a>(
                 Vec2::splat(30.0),
             );
             painter.rect(tile, Corners::all(10.0), tint.with_alpha(0.20));
-            icon::paint(kind_icon(kind), painter, tile.center(), 15.0, tint, 1.6);
+            icon::paint(
+                kind_icon(kind),
+                painter,
+                tile.center(),
+                18.0,
+                tint,
+                IconStyle::REGULAR,
+            );
         })
         .key(base.then("header.icon"))
         .press(toggle());
@@ -172,14 +179,14 @@ pub(super) fn header_row<'a>(
             icon::chevron(
                 painter,
                 info.rect.center(),
-                8.0,
+                16.0,
                 std::f32::consts::FRAC_PI_2 * arrow,
                 if expanded {
                     palette.on_secondary_container
                 } else {
                     palette.on_surface_variant
                 },
-                1.6,
+                IconStyle::REGULAR,
             );
         })
         .key(base.then("arrow.anchor"))
