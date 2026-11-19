@@ -1,0 +1,2 @@
+[alias]
+dist = "run --release --locked -p grana-package -- dist"

@@ -3746,6 +3746,7 @@ dependencies = [
  "grana-brand",
  "grana-ui",
  "png",
+ "serde_json",
 ]
 
 [[package]]
