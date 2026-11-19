@@ -182,11 +182,6 @@ impl Offline {
         }
     }
 
-    pub fn render(&mut self, task: Task) -> Outcome {
-        let cancel = AtomicBool::new(false);
-        self.run(task, &cancel, &mut |_, _| {})
-    }
-
     fn pump(&mut self, bricks: &Arc<dyn Bricks>, scene: &Scene) -> Result<(), String> {
         let Some(requests) = self.renderer.poll_requests(&self.device) else {
             return Ok(());

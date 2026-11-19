@@ -1174,6 +1174,7 @@ impl grana_pipeline::Capture for StillCapture {
         _channels: &grana_pipeline::Channels,
         _scene: &Scene,
         request: &grana_pipeline::CaptureRequest,
+        _cancel: &std::sync::atomic::AtomicBool,
         path: &std::path::Path,
     ) -> Result<(), String> {
         let [width, height] = request.size;

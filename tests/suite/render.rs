@@ -137,14 +137,24 @@ fn settle_with<'a, 'b: 'a>(
 ) -> Requests {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let mut latest = Requests::default();
+    let mut refilled = false;
     loop {
         let info = renderer
             .draw(gpu.device(), gpu.queue(), build())
             .expect("the frame draws");
+        if refilled && info.drawn {
+            assert_eq!(
+                info.age, 1,
+                "newly arrived bricks did not restart the temporal accumulation"
+            );
+            refilled = false;
+        }
         if renderer.requests_pending() {
             if let Some(requests) = next_demand(gpu, renderer) {
                 let bricks = pack(volume, &requests.volume);
+                let generation = renderer.generation();
                 renderer.upload(&bricks);
+                refilled = renderer.generation() != generation;
                 latest = requests;
             }
         } else if info.drawn && info.settled && info.age >= FRAMES && !info.fading {

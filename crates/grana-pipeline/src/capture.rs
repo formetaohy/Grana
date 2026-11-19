@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use grana_project::ViewState;
 use grana_scene::Scene;
@@ -27,6 +28,7 @@ pub trait Capture: Send + Sync {
         channels: &Channels,
         scene: &Scene,
         request: &CaptureRequest,
+        cancel: &AtomicBool,
         path: &Path,
     ) -> Result<(), String>;
 }

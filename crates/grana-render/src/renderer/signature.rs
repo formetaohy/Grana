@@ -9,6 +9,7 @@ pub(super) struct Signature<'a> {
     pub(super) versions: Versions,
     pub(super) channels: u64,
     pub(super) content: u32,
+    pub(super) stamp: u64,
     pub(super) time: u32,
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
@@ -42,6 +43,10 @@ impl Signature<'_> {
             axis.map(f32::to_bits).hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    pub(super) fn content(self) -> u64 {
+        digest(&[self.layers(), self.stamp])
     }
 
     pub(super) fn classification(self) -> u64 {

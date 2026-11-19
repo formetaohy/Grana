@@ -1415,7 +1415,7 @@ fn clusters_localizations_into_molecules() {
         Vec::new(),
         vec![spot(0.0)],
     ];
-    let held = support::Localizations::of(frames);
+    let held = support::Localizations::of(frames.clone());
     let spec = grana_object::ClusterSpec::new(0.05, 2, 2);
     let clusters = grana_analysis::localization::cluster(
         &held,
@@ -1437,6 +1437,28 @@ fn clusters_localizations_into_molecules() {
     assert_eq!(groups[1], vec![Some(1)]);
     assert!(groups[2].is_empty());
     assert_eq!(groups[3], vec![Some(1)]);
+    let mut rows = Vec::new();
+    for (time, frame) in frames.iter().enumerate() {
+        for (index, group) in groups[time].iter().enumerate() {
+            if let Some(group) = group {
+                rows.push((*group, time as u32, index, frame[index].center()));
+            }
+        }
+    }
+    let tracks = grana_object::grouped_tracks(1.0, rows).expect("the molecules track");
+    let single = tracks
+        .tracks()
+        .iter()
+        .position(|track| track.nodes().len() == 1 && track.start() == 3);
+    assert!(
+        single.is_some(),
+        "a molecule that shows up in one frame keeps its track"
+    );
+    assert_eq!(
+        tracks.track_at(3, 0),
+        single,
+        "the single-frame detection names its own track"
+    );
     let short = grana_object::ClusterSpec::new(0.05, 1, 2);
     let clusters = grana_analysis::localization::cluster(
         &held,

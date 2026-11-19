@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use grana_animation::Timeline;
 use grana_display::Camera;
+use grana_exec::Cancel;
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_mesh::Format as MeshFormat;
@@ -366,7 +367,15 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 label: format!("rendering the captures of {}", reader.name()),
             });
             let view = view_state(task.protocol.view(), &scene);
-            capture_view(capture, &render, &scene, &spec, view, folder, &stems[0])?;
+            ViewCapture {
+                capture,
+                render: &render,
+                scene: &scene,
+                spec: &spec,
+                cancel: task.cancel,
+                folder,
+            }
+            .view(view, &stems[0])?;
         } else {
             for (name, stem) in spec.views().iter().zip(&stems) {
                 let named = task
@@ -380,7 +389,15 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                     label: format!("rendering the view {name} of {}", reader.name()),
                 });
                 let view = view_state(Some(named.view()), &scene);
-                capture_view(capture, &render, &scene, &spec, view, folder, stem)?;
+                ViewCapture {
+                    capture,
+                    render: &render,
+                    scene: &scene,
+                    spec: &spec,
+                    cancel: task.cancel,
+                    folder,
+                }
+                .view(view, stem)?;
             }
             scene.set_time(time.min(scene.frame_count() - 1));
         }
@@ -1410,58 +1427,66 @@ fn arrive(
     }
 }
 
-fn capture_view(
-    capture: &dyn Capture,
-    render: &Channels,
-    scene: &Scene,
-    spec: &SnapshotSpec,
-    view: ViewState,
-    folder: &Path,
-    stem: &str,
-) -> Result<(), String> {
-    let still_size = spec.size_for(Some(view.export));
-    let film_size = spec.film_size_for(Some(view.export));
-    let still = CaptureRequest {
-        view: view.clone(),
-        size: still_size,
-        transparent: spec.transparent,
-        kind: CaptureKind::Still { time: scene.time() },
-    };
-    capture.capture(
-        render,
-        scene,
-        &still,
-        &folder.join(format!("snapshot{stem}.png")),
-    )?;
-    if spec.movies() {
-        let film = CaptureRequest {
+struct ViewCapture<'a> {
+    capture: &'a dyn Capture,
+    render: &'a Channels,
+    scene: &'a Scene,
+    spec: &'a SnapshotSpec,
+    cancel: &'a Cancel,
+    folder: &'a Path,
+}
+
+impl ViewCapture<'_> {
+    fn view(&self, view: ViewState, stem: &str) -> Result<(), String> {
+        let still_size = self.spec.size_for(Some(view.export));
+        let film_size = self.spec.film_size_for(Some(view.export));
+        let still = CaptureRequest {
             view: view.clone(),
-            size: film_size,
-            transparent: spec.transparent,
-            kind: CaptureKind::Movie,
-        };
-        capture.capture(
-            render,
-            scene,
-            &film,
-            &folder.join(movie_name(stem, spec.transparent)),
-        )?;
-    }
-    if spec.sequences() {
-        let frames = CaptureRequest {
-            view,
             size: still_size,
-            transparent: spec.transparent,
-            kind: CaptureKind::Sequence,
+            transparent: self.spec.transparent,
+            kind: CaptureKind::Still {
+                time: self.scene.time(),
+            },
         };
-        capture.capture(
-            render,
-            scene,
-            &frames,
-            &folder.join(format!("sequence{stem}")),
+        self.capture.capture(
+            self.render,
+            self.scene,
+            &still,
+            self.cancel,
+            &self.folder.join(format!("snapshot{stem}.png")),
         )?;
+        if self.spec.movies() {
+            let film = CaptureRequest {
+                view: view.clone(),
+                size: film_size,
+                transparent: self.spec.transparent,
+                kind: CaptureKind::Movie,
+            };
+            self.capture.capture(
+                self.render,
+                self.scene,
+                &film,
+                self.cancel,
+                &self.folder.join(movie_name(stem, self.spec.transparent)),
+            )?;
+        }
+        if self.spec.sequences() {
+            let frames = CaptureRequest {
+                view,
+                size: still_size,
+                transparent: self.spec.transparent,
+                kind: CaptureKind::Sequence,
+            };
+            self.capture.capture(
+                self.render,
+                self.scene,
+                &frames,
+                self.cancel,
+                &self.folder.join(format!("sequence{stem}")),
+            )?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn movie_name(stem: &str, transparent: bool) -> String {

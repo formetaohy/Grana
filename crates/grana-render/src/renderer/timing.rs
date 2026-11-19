@@ -5,6 +5,7 @@ pub(super) struct Begin<'a> {
     pub(super) target: &'a mut FrameTarget,
     pub(super) levels: LevelKey,
     pub(super) layers: u64,
+    pub(super) content: u64,
     pub(super) classification: u64,
     pub(super) appearance: u64,
     pub(super) view: u64,
@@ -16,7 +17,8 @@ pub(super) struct Begin<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct Started {
-    pub(super) reset: bool,
+    pub(super) restart: bool,
+    pub(super) refresh: bool,
     pub(super) restaged: bool,
     pub(super) restyled: bool,
     pub(super) moved: bool,
@@ -32,7 +34,7 @@ impl Started {
     }
 
     pub(super) fn resets_age(self) -> bool {
-        self.reset || self.restaged || self.restyled || self.changed
+        self.refresh || self.restaged || self.restyled || self.changed
     }
 }
 
@@ -41,6 +43,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         target,
         levels,
         layers,
+        content,
         classification,
         appearance,
         view,
@@ -61,20 +64,23 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         && !assured
         && target.camera.is_some();
     target.levels = Some(levels);
-    let reset = target.layers != Some(layers);
+    let restart = target.layers != Some(layers);
+    let refresh = restart || target.content != Some(content);
     let restaged = target.classification != Some(classification);
     let restyled = target.appearance != Some(appearance);
     target.layers = Some(layers);
+    target.content = Some(content);
     target.classification = Some(classification);
     target.appearance = Some(appearance);
     target.view = Some(view);
     target.camera = Some(camera);
-    if reset {
+    if refresh {
         target.taa.invalidate();
         target.phase = 0;
     }
     Started {
-        reset,
+        restart,
+        refresh,
         restaged,
         restyled,
         moved,

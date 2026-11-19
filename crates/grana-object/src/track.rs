@@ -745,7 +745,7 @@ pub fn grouped_tracks(
             if !broken {
                 continue;
             }
-            if index - start > 1 {
+            if index > start {
                 tracks.push(Track::new(nodes[start..index].to_vec()));
             }
             start = index;

@@ -308,7 +308,7 @@ fn thumbnail(
         transparent: false,
         kind: CaptureKind::Still { time: scene.time() },
     };
-    capture.capture(&render, scene, &request, &path)?;
+    capture.capture(&render, scene, &request, cancel, &path)?;
     std::fs::read(&path)
         .map(Some)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))

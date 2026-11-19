@@ -306,6 +306,7 @@ impl Renderer {
             versions: scene.versions,
             channels: channel,
             content: residence.content(),
+            stamp: residence.stamp(scene.versions.topology()),
             time: frame.time,
             epoch: residence.epoch(),
             size: target.size,
@@ -315,6 +316,7 @@ impl Renderer {
             target,
             levels: LevelKey::of(outlook.levels),
             layers: signature.layers(),
+            content: signature.content(),
             classification: signature.classification(),
             appearance: signature.appearance(),
             view: signature::view(&data),
@@ -347,7 +349,7 @@ impl Renderer {
         if stale {
             residence.load_passes(scene.versions);
         }
-        if started.reset || started.clamps_history() {
+        if started.restart || started.clamps_history() {
             if let Some(passes) = splats.as_mut() {
                 passes.rewind(queue);
                 passes.cull_volume(encoder, resources.scene.group());
@@ -561,7 +563,7 @@ impl Renderer {
             transparent: *transparent,
             volume: prepared.shot.volume,
             phase: prepared.started.phase,
-            reset: prepared.started.reset,
+            reset: prepared.started.refresh,
             clamp: prepared.started.clamps_history(),
             previous: prepared.started.previous,
             dummy_normal,

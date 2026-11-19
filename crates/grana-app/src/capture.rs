@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::OutputSize;
@@ -44,6 +45,7 @@ impl Capture for OfflineCapture {
         channels: &Channels,
         scene: &Scene,
         request: &CaptureRequest,
+        cancel: &AtomicBool,
         path: &Path,
     ) -> Result<(), String> {
         let mut slot = self.state()?;
@@ -109,7 +111,7 @@ impl Capture for OfflineCapture {
                 scene,
             ))),
         };
-        match offline.render(task) {
+        match offline.run(task, cancel, &mut |_, _| {}) {
             Outcome::Complete { .. } => Ok(()),
             Outcome::Failed { detail } => Err(detail),
             Outcome::Cancelled => Err(format!("the capture at {} was cancelled", path.display())),
