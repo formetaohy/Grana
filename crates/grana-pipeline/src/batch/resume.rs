@@ -15,8 +15,10 @@ const PRIME: u64 = 0x0000_0100_0000_01b3;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Record {
+    #[serde(with = "super::hash::hex")]
     pub(super) protocol: u64,
     pub(super) build: String,
+    #[serde(with = "super::hash::hex")]
     pub(super) content: u64,
     pub(super) artifacts: Vec<String>,
     pub(super) labels: Vec<String>,
@@ -36,7 +38,7 @@ pub(super) fn completed(
     modified: Option<u64>,
 ) -> Option<Record> {
     let text = std::fs::read_to_string(folder.join(RESULT)).ok()?;
-    let record = serde_json::from_str::<Record>(&text).ok()?;
+    let record = toml::from_str::<Record>(&text).ok()?;
     (record.protocol == digest
         && record.build == build
         && record.content == content

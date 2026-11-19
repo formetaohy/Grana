@@ -1,6 +1,7 @@
 mod channel;
 mod discover;
 mod gate;
+mod hash;
 mod manifest;
 mod pipeline;
 mod profile;
@@ -40,13 +41,13 @@ pub(super) struct Row {
     pub(super) quality: Vec<Quality>,
 }
 
-const RESULT: &str = "result.json";
+const RESULT: &str = "result.toml";
 
 const COMPARISON: &str = "comparison.svg";
 
 const REPORT: &str = "report.pdf";
 
-const PAGES: &str = "pages.json";
+const PAGES: &str = "pages.toml";
 
 const TREND: &str = "comparison_trend.csv";
 
@@ -54,7 +55,7 @@ const CAPACITY: usize = 64;
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 19;
+const ANALYSIS_REVISION: u32 = 20;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -501,7 +502,7 @@ fn prepare(plan: &Plan, corrections: &[Option<Protocol>]) -> Result<(), String> 
     std::fs::create_dir_all(&plan.output)
         .map_err(|error| format!("failed to create {}: {error}", plan.output.display()))?;
     plan.protocol
-        .write(&plan.output.join("protocol.json"))
+        .write(&plan.output.join(grana_protocol::Protocol::FILE))
         .map_err(|error| error.to_string())?;
     let mut folders = Vec::new();
     for dataset in &plan.datasets {

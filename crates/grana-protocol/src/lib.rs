@@ -72,8 +72,8 @@ pub struct Protocol {
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
-    #[error("the protocol is not valid json: {0}")]
-    Json(String),
+    #[error("the protocol is not valid toml: {0}")]
+    Toml(String),
     #[error("the protocol is not valid: {0}")]
     Invalid(String),
     #[error("failed to read the protocol at {path}: {detail}")]
@@ -83,6 +83,12 @@ pub enum ProtocolError {
 }
 
 impl Protocol {
+    pub const FILE: &'static str = "protocol.toml";
+
+    pub const EXTENSION: &'static str = "toml";
+
+    pub const MEDIA_TYPE: &'static str = "application/toml";
+
     pub fn origin(&self) -> Option<&OriginSpec> {
         self.origin.as_ref()
     }
@@ -170,13 +176,13 @@ impl Protocol {
         self.snapshot.clone()
     }
 
-    pub fn to_json(&self) -> Result<String, ProtocolError> {
-        serde_json::to_string_pretty(self).map_err(|error| ProtocolError::Json(error.to_string()))
+    pub fn to_toml(&self) -> Result<String, ProtocolError> {
+        toml::to_string_pretty(self).map_err(|error| ProtocolError::Toml(error.to_string()))
     }
 
-    pub fn from_json(text: &str) -> Result<Self, ProtocolError> {
-        let protocol = serde_json::from_str::<Self>(text)
-            .map_err(|error| ProtocolError::Json(error.to_string()))?;
+    pub fn from_toml(text: &str) -> Result<Self, ProtocolError> {
+        let protocol =
+            toml::from_str::<Self>(text).map_err(|error| ProtocolError::Toml(error.to_string()))?;
         protocol.checked()
     }
 
@@ -185,11 +191,11 @@ impl Protocol {
             path: path.display().to_string(),
             detail: error.to_string(),
         })?;
-        Self::from_json(&text)
+        Self::from_toml(&text)
     }
 
     pub fn write(&self, path: &Path) -> Result<(), ProtocolError> {
-        grana_file::write(path, self.to_json()?.as_bytes()).map_err(|error| ProtocolError::Write {
+        grana_file::write(path, self.to_toml()?.as_bytes()).map_err(|error| ProtocolError::Write {
             path: path.display().to_string(),
             detail: error.to_string(),
         })
@@ -200,11 +206,10 @@ impl Protocol {
         for set in &mut canonical.sets {
             set.name = set.key.clone();
         }
-        let text = serde_json::to_vec(&canonical).expect("a protocol always serializes");
-        text.into_iter()
-            .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
-                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-            })
+        let text = toml::to_string(&canonical).expect("a protocol always serializes");
+        text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
     }
 
     pub fn summary(&self) -> String {

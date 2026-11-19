@@ -22,7 +22,7 @@ const REPORT_SHARE: usize = 8;
 const TOTAL: usize = 100;
 const BUFFER: usize = 1 << 20;
 const PROJECT_FILE: &str = "analysis.grana";
-const PROTOCOL_FILE: &str = "protocol.json";
+const PROTOCOL_FILE: &str = grana_protocol::Protocol::FILE;
 const REPORT_FILE: &str = "report.html";
 const THUMBNAIL_FILE: &str = "thumbnail.png";
 const METADATA_FILE: &str = "ro-crate-metadata.json";
@@ -170,7 +170,7 @@ fn assemble(
             record.part(
                 PROTOCOL_FILE,
                 PROTOCOL_FILE,
-                "application/json",
+                grana_protocol::Protocol::MEDIA_TYPE,
                 "the protocol that reproduces the analysis",
             );
             Some(PROTOCOL_FILE.to_string())

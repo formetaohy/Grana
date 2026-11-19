@@ -9,9 +9,9 @@ use super::discover::{DatasetEntry, WellKey};
 use super::resume;
 use super::{Plan, Row};
 
-pub(super) const RUN: &str = "run.json";
+pub(super) const RUN: &str = "run.toml";
 
-const CORRECTION: &str = "correction.json";
+const CORRECTION: &str = "correction.toml";
 
 const FORMAT: u32 = 5;
 
@@ -20,6 +20,7 @@ const FORMAT: u32 = 5;
 pub struct Run {
     format: u32,
     build: String,
+    #[serde(with = "super::hash::hex")]
     protocol: u64,
     jobs: usize,
     project: bool,
@@ -44,11 +45,13 @@ pub struct RunDataset {
     status: String,
     objects: usize,
     detail: String,
+    #[serde(with = "super::hash::hex")]
     content: u64,
     bytes: u64,
     modified: Option<u64>,
+    #[serde(with = "super::hash::hex")]
     protocol: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, with = "super::hash::maybe_hex")]
     correction: Option<u64>,
     quality: Vec<Quality>,
 }
@@ -147,7 +150,7 @@ fn correction_at(folder: &Path) -> Result<Option<Protocol>, String> {
             return Err(format!("failed to read {}: {error}", path.display()));
         }
     };
-    Protocol::from_json(&text)
+    Protocol::from_toml(&text)
         .map(Some)
         .map_err(|error| format!("{} is not a valid correction: {error}", path.display()))
 }
@@ -164,7 +167,7 @@ pub fn record(run: &Path, dataset: &Path, scene: usize, protocol: &Protocol) -> 
     std::fs::create_dir_all(&folder)
         .map_err(|error| format!("failed to create {}: {error}", folder.display()))?;
     let text = protocol
-        .to_json()
+        .to_toml()
         .map_err(|error| format!("the correction does not serialize: {error}"))?;
     let path = folder.join(CORRECTION);
     grana_file::write(&path, text.as_bytes())
@@ -253,7 +256,7 @@ pub(super) fn write(
 }
 
 fn write_run(output: &Path, run: &Run) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(run)
+    let text = toml::to_string_pretty(run)
         .map_err(|error| format!("failed to record the batch run: {error}"))?;
     let path = output.join(RUN);
     grana_file::write(&path, text.as_bytes())
@@ -269,7 +272,7 @@ pub fn read(output: &Path) -> Result<Option<Run>, String> {
             return Err(format!("failed to read {}: {error}", path.display()));
         }
     };
-    let run = serde_json::from_str::<Run>(&text)
+    let run = toml::from_str::<Run>(&text)
         .map_err(|error| format!("{} is not a valid run record: {error}", path.display()))?;
     if run.format != FORMAT {
         return Err(format!(

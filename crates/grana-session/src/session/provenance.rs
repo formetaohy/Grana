@@ -67,7 +67,7 @@ fn write(
         sets,
     } = request;
     let stopped = || cancel.load(Ordering::Relaxed);
-    let protocol_path = root.join("protocol.json");
+    let protocol_path = root.join(grana_protocol::Protocol::FILE);
     protocol
         .write(&protocol_path)
         .map_err(|error| error.to_string())?;
@@ -84,9 +84,9 @@ fn write(
         record.source(path);
     }
     record.part(
-        "protocol.json",
-        "protocol.json",
-        "application/json",
+        grana_protocol::Protocol::FILE,
+        grana_protocol::Protocol::FILE,
+        grana_protocol::Protocol::MEDIA_TYPE,
         "the protocol that reproduces the analysis",
     );
     let total = sets.len();
@@ -126,7 +126,7 @@ fn write(
                 trace.version(),
                 trace.objects()
             ),
-            &[file, "protocol.json".to_string()],
+            &[file, grana_protocol::Protocol::FILE.to_string()],
         );
     }
     progress(total, total);

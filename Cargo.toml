@@ -130,6 +130,7 @@ embed-resource = { workspace = true }
 glam = { workspace = true }
 hdf5-pure = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-archive = { workspace = true }

@@ -444,7 +444,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             .write(&folder.join(&file), task.cancel, &mut progress)
             .map_err(|error| format!("failed to write {file}: {error}"))?;
     }
-    let record = serde_json::to_string(&Record {
+    let record = toml::to_string(&Record {
         protocol: task.digest,
         build: build(),
         content: task.evidence.content,

@@ -105,19 +105,21 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
         .set_params(grana_scene::ObjectParams::Spots(
             grana_object::SpotParams::new(0.5, 0.1),
         ));
-    let mut capture = serde_json::from_str::<serde_json::Value>(
+    let mut capture = toml::from_str::<toml::Value>(
         &grana_protocol::Protocol::capture(&scene, &Measure::new(), None, Vec::new(), None)
             .expect("the scene captures")
-            .to_json()
+            .to_toml()
             .expect("the protocol serializes"),
     )
-    .expect("the protocol is json");
+    .expect("the protocol is toml");
     capture
-        .as_object_mut()
-        .expect("the protocol is an object")
+        .as_table_mut()
+        .expect("the protocol is a table")
         .remove("snapshot");
-    let protocol =
-        grana_protocol::Protocol::from_json(&capture.to_string()).expect("the protocol parses");
+    let protocol = grana_protocol::Protocol::from_toml(
+        &toml::to_string(&capture).expect("the protocol serializes"),
+    )
+    .expect("the protocol parses");
     let output = temp.path().join("runs");
     let start = || {
         grana_pipeline::Batch::start(grana_pipeline::Plan {
@@ -151,10 +153,15 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
     assert!(done && failures == 0, "the first run completes");
     let written = results(&output);
     assert_eq!(written.len(), 2, "the first run writes both datasets");
-    let manifest = std::fs::read_to_string(output.join("run.json")).expect("the run record lands");
-    for field in ["\"content\"", "\"bytes\"", "\"modified\"", "\"protocol\""] {
+    let manifest = std::fs::read_to_string(output.join("run.toml")).expect("the run record lands");
+    let manifest = toml::from_str::<toml::Value>(&manifest).expect("the run record is toml");
+    let rows = manifest["datasets"]
+        .as_array()
+        .expect("the run record lists its datasets");
+    assert!(!rows.is_empty(), "the run record names the datasets");
+    for field in ["content", "bytes", "modified", "protocol"] {
         assert!(
-            manifest.contains(field),
+            rows.iter().all(|dataset| dataset.get(field).is_some()),
             "the run record keeps the input evidence {field}"
         );
     }
@@ -164,7 +171,7 @@ fn keeps_previous_results_when_a_batch_rerun_fails() {
         "\"@context\"",
         "\"#input-1\"",
         "\"#output-1\"",
-        "\"protocol.json\"",
+        "\"protocol.toml\"",
         "\"sha256\"",
         "\"CreateAction\"",
     ] {
@@ -208,7 +215,7 @@ fn results(root: &std::path::Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 folders.push(path);
-            } else if path.file_name().and_then(|name| name.to_str()) == Some("result.json") {
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("result.toml") {
                 found.push(path);
             }
         }

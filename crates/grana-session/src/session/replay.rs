@@ -444,7 +444,7 @@ impl Session {
     pub(super) fn load_protocol(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Open an analysis protocol")
-            .add_filter("grana protocol", &["json"])
+            .add_filter("grana protocol", &[grana_protocol::Protocol::EXTENSION])
             .pick_file()
         else {
             return;
@@ -463,17 +463,18 @@ impl Session {
             return;
         };
         let suggested = format!(
-            "{}-protocol.json",
+            "{}-protocol.{}",
             crate::slug(
                 self.scene
                     .as_ref()
                     .map_or("grana", |scene| scene.dataset.name())
-            )
+            ),
+            grana_protocol::Protocol::EXTENSION
         );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Save the analysis protocol")
             .set_file_name(suggested)
-            .add_filter("grana protocol", &["json"])
+            .add_filter("grana protocol", &[grana_protocol::Protocol::EXTENSION])
             .save_file()
         else {
             return;

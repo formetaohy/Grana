@@ -3414,6 +3414,7 @@ dependencies = [
  "grana-zarr",
  "hdf5-pure",
  "serde_json",
+ "toml",
  "wgpu",
  "zarrs",
 ]
@@ -3758,7 +3759,7 @@ dependencies = [
  "grana-ui",
  "grana-vector",
  "serde",
- "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -3802,9 +3803,9 @@ dependencies = [
  "grana-weight",
  "grana-zarr",
  "serde",
- "serde_json",
  "sha2",
  "thiserror 2.0.21",
+ "toml",
 ]
 
 [[package]]
@@ -3867,8 +3868,8 @@ dependencies = [
  "grana-volume",
  "grana-warp",
  "serde",
- "serde_json",
  "thiserror 2.0.21",
+ "toml",
 ]
 
 [[package]]

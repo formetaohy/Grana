@@ -282,17 +282,17 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
     );
     let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
         .expect("the localization scene captures");
-    let text = protocol.to_json().expect("the protocol serializes");
+    let text = protocol.to_toml().expect("the protocol serializes");
     assert!(
         text.contains("localizations.csv"),
         "the protocol records the localization table"
     );
     assert!(
-        text.contains("\"kind\": \"localizations\""),
+        text.contains("kind = \"localizations\""),
         "the protocol names the localization source"
     );
     assert_eq!(
-        Protocol::from_json(&text).expect("the protocol parses"),
+        Protocol::from_toml(&text).expect("the protocol parses"),
         protocol
     );
     let molecules = protocol.sets()[0]
@@ -651,8 +651,8 @@ fn replays_a_captured_protocol() {
         None,
     )
     .expect("the scene captures");
-    let text = protocol.to_json().expect("the protocol serializes");
-    let restored = Protocol::from_json(&text).expect("the protocol parses");
+    let text = protocol.to_toml().expect("the protocol serializes");
+    let restored = Protocol::from_toml(&text).expect("the protocol parses");
     assert_eq!(restored, protocol);
     assert_eq!(restored.label_images().len(), 1);
     assert_eq!(restored.views(), [named]);
@@ -660,16 +660,20 @@ fn replays_a_captured_protocol() {
         restored.snapshot().expect("the protocol snapshots").views(),
         ["Overview"]
     );
-    let mut broken: serde_json::Value = serde_json::from_str(&text).expect("the protocol is json");
-    broken["snapshot"]["views"][0] = serde_json::Value::String("Missing".to_string());
+    let mut broken: toml::Value = toml::from_str(&text).expect("the protocol is toml");
+    broken["snapshot"]["views"][0] = toml::Value::String("Missing".to_string());
     assert!(
-        Protocol::from_json(&broken.to_string()).is_err(),
+        Protocol::from_toml(&toml::to_string(&broken).expect("the protocol serializes")).is_err(),
         "a snapshot rejects a view the protocol does not carry"
     );
-    let mut filmed: serde_json::Value = serde_json::from_str(&text).expect("the protocol is json");
-    filmed["snapshot"]["movies"] = serde_json::Value::Bool(true);
-    filmed["snapshot"]["sequences"] = serde_json::Value::Bool(true);
-    let filmed = Protocol::from_json(&filmed.to_string()).expect("a snapshot films its views");
+    let mut filmed: toml::Value = toml::from_str(&text).expect("the protocol is toml");
+    let snapshot = filmed["snapshot"]
+        .as_table_mut()
+        .expect("the protocol snapshots");
+    snapshot.insert("movies".to_string(), toml::Value::Boolean(true));
+    snapshot.insert("sequences".to_string(), toml::Value::Boolean(true));
+    let filmed = Protocol::from_toml(&toml::to_string(&filmed).expect("the protocol serializes"))
+        .expect("a snapshot films its views");
     let snapshot = filmed.snapshot().expect("the protocol snapshots");
     assert!(
         snapshot.movies() && snapshot.sequences(),
@@ -1110,7 +1114,7 @@ fn exports_a_share_package_that_opens_read_only() {
         "the package holds no dataset: {detail}"
     );
     assert!(
-        package.join("protocol.json").is_file(),
+        package.join("protocol.toml").is_file(),
         "the package holds no protocol: {detail}"
     );
     assert!(
@@ -1364,14 +1368,15 @@ fn keeps_the_analysis_when_an_applied_protocol_does_not_fit() {
     let objects = scene.objects.iter().count();
     let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
         .expect("the scene captures");
-    let mut value: serde_json::Value =
-        serde_json::from_str(&protocol.to_json().expect("the protocol serializes"))
-            .expect("the protocol is json");
+    let mut value: toml::Value =
+        toml::from_str(&protocol.to_toml().expect("the protocol serializes"))
+            .expect("the protocol is toml");
     let recorded = value["channels"]
         .as_array_mut()
         .expect("the protocol records its channels");
-    recorded[0]["name"] = serde_json::Value::String("Absent".to_string());
-    let broken = Protocol::from_json(&value.to_string()).expect("the protocol parses");
+    recorded[0]["name"] = toml::Value::String("Absent".to_string());
+    let broken = Protocol::from_toml(&toml::to_string(&value).expect("the protocol serializes"))
+        .expect("the protocol parses");
     session.set_protocol(broken);
     session.execute(Command::ApplyProtocol);
     assert_eq!(

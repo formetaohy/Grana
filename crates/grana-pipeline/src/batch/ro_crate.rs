@@ -22,8 +22,11 @@ const CONTENT_SAMPLE: u64 = 64 << 10;
 const CONTENT_TAIL: u64 = 4 << 10;
 
 const ROOT_PARTS: [(&str, &str); 14] = [
-    ("protocol.json", "application/json"),
-    ("run.json", "application/json"),
+    (
+        grana_protocol::Protocol::FILE,
+        grana_protocol::Protocol::MEDIA_TYPE,
+    ),
+    (super::manifest::RUN, "application/toml"),
     ("summary.csv", "text/csv"),
     ("quality.csv", "text/csv"),
     ("comparison.csv", "text/csv"),
@@ -293,6 +296,7 @@ fn collect(root: &Path, folder: &Path, listing: &mut Listing) -> Result<(), Stri
 fn media_of(file: &str) -> &'static str {
     match file.rsplit('.').next() {
         Some("json") => "application/json",
+        Some("toml") => "application/toml",
         Some("csv") => "text/csv",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",

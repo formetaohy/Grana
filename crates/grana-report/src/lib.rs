@@ -5,6 +5,7 @@ mod interaction;
 mod quality;
 pub mod share;
 mod significance;
+mod slot;
 
 pub use chart::{Axis, Charted, Request, chart, group_names, pages, set_names};
 pub use comparison::{

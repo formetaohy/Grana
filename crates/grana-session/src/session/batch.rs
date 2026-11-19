@@ -64,13 +64,15 @@ impl Session {
                 return;
             }
         };
-        let protocol = match grana_protocol::Protocol::read(&folder.join("protocol.json")) {
-            Ok(protocol) => protocol,
-            Err(error) => {
-                self.batch_message = Some(format!("the run carries no readable protocol: {error}"));
-                return;
-            }
-        };
+        let protocol =
+            match grana_protocol::Protocol::read(&folder.join(grana_protocol::Protocol::FILE)) {
+                Ok(protocol) => protocol,
+                Err(error) => {
+                    self.batch_message =
+                        Some(format!("the run carries no readable protocol: {error}"));
+                    return;
+                }
+            };
         let mut datasets = Vec::with_capacity(run.datasets().len());
         for dataset in run.datasets() {
             let Some(entry) = dataset.entry() else {

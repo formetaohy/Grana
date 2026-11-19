@@ -64,13 +64,14 @@ impl Recorded {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        serde_json::to_string(&records)
+        toml::to_string(&PageRecords { pages: records })
             .map_err(|error| format!("a page cannot be recorded: {error}"))
     }
 
     pub fn decode(text: &str) -> Result<Vec<Self>, String> {
-        let records = serde_json::from_str::<Vec<PageRecord>>(text)
-            .map_err(|error| format!("a recorded page cannot be read: {error}"))?;
+        let records = toml::from_str::<PageRecords>(text)
+            .map_err(|error| format!("a recorded page cannot be read: {error}"))?
+            .pages;
         records.into_iter().map(PageRecord::into_page).collect()
     }
 
@@ -99,10 +100,16 @@ impl Recorded {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+struct PageRecords {
+    #[serde(default)]
+    pages: Vec<PageRecord>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct PageRecord {
     size: [u32; 2],
     marks: Vec<MarkRecord>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     image: Option<String>,
 }
 

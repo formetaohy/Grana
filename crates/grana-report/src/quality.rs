@@ -89,6 +89,7 @@ pub struct FrameValue {
 #[serde(deny_unknown_fields)]
 pub struct QualityFrame {
     pub time: u32,
+    #[serde(with = "crate::slot")]
     pub values: Vec<Option<FrameValue>>,
 }
 
@@ -102,6 +103,7 @@ pub struct Quality {
     pub kind: String,
     pub objects: usize,
     pub metrics: Vec<Metric>,
+    #[serde(with = "crate::slot")]
     pub values: Vec<Option<Summary>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<QualityFrame>,

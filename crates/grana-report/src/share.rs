@@ -73,7 +73,7 @@ pub fn html(report: &Report<'_>) -> Result<String, String> {
         }
         let _ = writeln!(
             page,
-            "</ol><p class=\"note\">protocol.json replays these steps over the dataset in this package.</p></section>"
+            "</ol><p class=\"note\">protocol.toml replays these steps over the dataset in this package.</p></section>"
         );
     }
     if !report.files.is_empty() {
