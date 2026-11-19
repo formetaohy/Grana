@@ -192,7 +192,6 @@ fn open_bento<'a>(
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
-    let outer = theme.metrics.corner_lg;
     let inner = theme.metrics.corner_xs;
     let gap = theme.metrics.group_gap;
     let content_width = PANEL_WIDTH - 2.0 * PANEL_PADDING;
@@ -206,7 +205,7 @@ fn open_bento<'a>(
         grana_i18n::shell::open_anything(language),
         Role::Filled,
     )
-    .shaped(Corners::new(outer, inner, inner, inner))
+    .shaped(Corners::split_leading(inner))
     .width(Length::Fixed(lead_w))
     .height(Length::Fixed(height))
     .named("shell.open.any")
@@ -224,7 +223,7 @@ fn open_bento<'a>(
     .shaped(if open {
         Corners::capsule()
     } else {
-        Corners::new(inner, outer, inner, inner)
+        Corners::split_trailing(inner)
     })
     .key(menu_key)
     .press(Message::Noop);
