@@ -251,7 +251,7 @@ impl<'a, A> BuildContext<'a, A> {
         widget::form_row(&self.copy(), width, label, content)
     }
 
-    pub fn empty_state<'e>(&self, symbol: Icon, title: &str, detail: &str) -> Element<'e, A> {
-        widget::empty_state(&self.copy(), symbol, title, detail)
+    pub fn empty_state<'e>(&self, symbol: Icon, title: &str) -> Element<'e, A> {
+        widget::empty_state(&self.copy(), symbol, title)
     }
 }

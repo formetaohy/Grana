@@ -149,7 +149,6 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             ctx,
             Icon::Grid,
             grana_i18n::relation::no_relations_title(language),
-            grana_i18n::relation::no_relations_detail(language),
         );
     }
     let selected = state
@@ -158,7 +157,9 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         .and_then(|key| choices.iter().position(|choice| choice.key() == key))
         .unwrap_or(0);
     let choice = choices[selected];
-    let mut children = vec![header(ctx, state, &choices, selected)];
+    let left = grana_ui::column()
+        .width(Length::Fixed(316.0))
+        .children([header(ctx, state, &choices, selected)]);
     let matrix = state.workspace.relation_body.matrix(
         state.scene,
         choice,
@@ -166,17 +167,22 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         state.workspace.relation_filter,
         ctx.size().x,
     );
-    match matrix {
-        Some(matrix) => {
-            children.push(matrix_card(ctx, state, matrix));
-            children.push(pairs_card(ctx, state, matrix));
-        }
-        None => children.push(pending(ctx, state, choice)),
-    }
-    grana_ui::column()
+    let right = match matrix {
+        Some(matrix) => grana_ui::row()
+            .width(Length::Fill)
+            .gap(12.0)
+            .align(Align::Start)
+            .children([
+                matrix_card(ctx, state, matrix).width(Length::Fill),
+                pairs_card(ctx, state, matrix).width(Length::Fixed(296.0)),
+            ]),
+        None => pending(ctx, state, choice).width(Length::Fill),
+    };
+    grana_ui::row()
         .gap(12.0)
+        .align(Align::Start)
         .width(Length::Fill)
-        .children(children)
+        .children([left, right])
 }
 
 fn choices(scene: &Scene) -> Vec<Choice> {
@@ -275,27 +281,19 @@ fn header<'a>(
         slider,
     ));
     let choice = choices[selected];
-    let export = view::button(
+    let export = view::button_with(
         ctx,
         grana_i18n::relation::export_pairs(language),
         Role::SurfaceHigh,
+        Length::Fill,
     )
     .press(Message::Command(Command::ExportRelation {
         source: choice.source,
         target: choice.target,
         shift: choice.shift,
     }));
-    children.push(grana_ui::row().gap(6.0).children([export]));
-    children.push(view::caption(ctx, export_hint(choice, language)));
-    view::card(ctx, 9.0, children)
-}
-
-fn export_hint(choice: Choice, language: Language) -> &'static str {
-    match choice.computed {
-        0 => grana_i18n::relation::no_frame_measured(language),
-        computed if computed == choice.total => grana_i18n::relation::exports_every_pair(language),
-        _ => grana_i18n::relation::exports_measured_pairs(language),
-    }
+    children.push(export);
+    view::card(ctx, 8.0, children)
 }
 
 fn matrix(
@@ -365,7 +363,7 @@ fn layout(
             .then(left.value.total_cmp(&right.value))
             .then((left.source, left.target).cmp(&(right.source, right.target)))
     });
-    let usable = (width - 96.0 - GUTTER).max(MINIMUM_CELL * 4.0);
+    let usable = (width - 680.0 - GUTTER).max(MINIMUM_CELL * 4.0);
     let fit = ((usable / MINIMUM_CELL).floor() as usize).clamp(1, COLUMN_LIMIT);
     let mut rows = ranked(&pairs, |pair| pair.source);
     let mut columns = ranked(&pairs, |pair| pair.target);
@@ -688,9 +686,6 @@ fn pairs_card<'a>(
         ));
         return view::card(ctx, 6.0, children);
     }
-    let source = set_name(language, state.scene, matrix.source);
-    let target = set_name(language, state.scene, matrix.target);
-    children.push(view::caption(ctx, &format!("{source} → {target}")));
     let mut rows = Vec::with_capacity(shown);
     for (index, pair) in matrix.pairs.iter().take(shown).enumerate() {
         let source = pair.source;

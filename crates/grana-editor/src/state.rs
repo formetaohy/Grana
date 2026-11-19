@@ -8,7 +8,6 @@ use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
 
-use crate::message::Message;
 use crate::overlay::Overlay;
 use crate::panel::Panel;
 use crate::relation_panel::Body as RelationBody;
@@ -208,18 +207,8 @@ impl RelationMetric {
 }
 
 #[derive(Default)]
-pub struct Palette {
-    pub selected: usize,
-}
-
-#[derive(Default)]
 pub struct Settings {
     pub open: bool,
-    pub section: usize,
-}
-
-impl Settings {
-    pub const SECTIONS: usize = 2;
 }
 
 pub struct Workspace {
@@ -261,12 +250,10 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub(crate) measure_request: Option<ObjectSetId>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
-    pub palette: Option<Palette>,
     pub settings: Settings,
     pub language: grana_i18n::Language,
     pub chrome: crate::chrome::ChromeView,
     pub(crate) overlay: Overlay,
-    pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
 
@@ -311,12 +298,10 @@ impl Default for Workspace {
             comparison_open: None,
             measure_request: None,
             batch_chart: crate::batch_panel::Chart::default(),
-            palette: None,
             settings: Settings::default(),
             language: grana_i18n::Language::English,
             chrome: crate::chrome::ChromeView::default(),
             overlay: Overlay::default(),
-            palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }
     }
@@ -388,8 +373,6 @@ impl Workspace {
         self.relation = None;
         self.relation_body = RelationBody::default();
         self.measure_request = None;
-        self.palette = None;
-        self.palette_actions.clear();
         self.drag = PlotDrag::default();
         self.playback = Playback::default();
         self.column_widths.clear();
@@ -422,7 +405,6 @@ pub struct View<'a> {
     pub views: &'a [grana_session::NamedView],
     pub recent: &'a [grana_session::RecentEntry],
     pub import: &'a [grana_session::ImportNote],
-    pub palette: Option<&'a crate::palette::PaletteView>,
     pub camera: &'a Camera,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,

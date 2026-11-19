@@ -58,9 +58,16 @@ impl App {
             self.request_redraw();
             return;
         }
-        if self.workspace.palette.is_some() {
+        if self.workspace.settings.open {
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
-                self.dispatch(grana_editor::Message::ClosePalette);
+                self.dispatch(grana_editor::Message::ToggleSettings(false));
+            }
+            self.request_redraw();
+            return;
+        }
+        if self.workspace.remote_open {
+            if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                self.dispatch(grana_editor::Message::CancelRemote);
             }
             self.request_redraw();
             return;

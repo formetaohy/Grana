@@ -1,4 +1,5 @@
 use crate::labels;
+use crate::messages;
 
 labels! {
     tracking => "Tracking" / "轨迹追踪";
@@ -25,19 +26,15 @@ labels! {
     selected_track => "Selected Track" / "所选轨迹";
     set => "Set" / "对象集";
     parameters => "Parameters" / "参数";
-    not_tracked_yet => "Not tracked yet" / "尚未追踪";
-    click_track => "Click a track in the lineage to inspect metrics." / "点击谱系中的轨迹以查看指标。";
-    select_join_target => "Select target track to join" / "选择要连接的目标轨迹";
-    select_daughters => "Select two daughter tracks" / "选择两条子轨迹";
-    select_merge_parents => "Select two parent tracks" / "选择两条父轨迹";
-    select_merge_parent => "Select the second parent track" / "选择第二条父轨迹";
-    select_parent => "Select the parent track" / "选择父轨迹";
+    not_tracked_yet => "Untracked" / "未追踪";
+    select_join_target => "Select target" / "选择目标";
+    select_daughters => "Select 2 daughters" / "选择 2 条子轨迹";
+    select_merge_parents => "Select 2 parents" / "选择 2 条父轨迹";
+    select_merge_parent => "Select 2nd parent" / "选择第 2 条父轨迹";
+    select_parent => "Select parent" / "选择父轨迹";
     no_trackable_objects => "No Trackable Objects" / "无可追踪对象";
-    no_trackable_objects_detail => "Add spots or surfaces, detect them, then follow their trajectories through time." / "添加斑点或表面并完成检测，即可追踪它们随时间的运动轨迹。";
     single_time_frame => "Single Time Frame" / "单一时间帧";
-    single_time_frame_detail => "Tracking follows objects across the frames of a time-series dataset." / "轨迹追踪需要在时间序列数据集的多个帧之间跟踪对象。";
-    no_trajectories => "No Trajectories Yet" / "尚无轨迹";
-    no_trajectories_detail => "Detect objects in this set first, then press Track to link their lineage across frames." / "请先在此对象集中检测对象，再按“追踪”跨帧连接其谱系。";
+    no_trajectories => "No Trajectories" / "暂无轨迹";
     max_step => "Max step" / "最大步长";
     max_gap => "Max gap" / "最大间隔";
     allow_division => "Allow Division" / "允许分裂";
@@ -56,16 +53,14 @@ labels! {
     range => "Range" / "范围";
     auto => "Auto" / "自动";
     fix_range => "Fix Range" / "固定范围";
-    no_values => "No measured values to map yet." / "暂无可映射的测量值。";
+    no_values => "No measured values" / "暂无测量值";
 }
 
-use crate::messages;
-
 messages! {
-    track_counts(tracks: usize, divisions: usize, merges: usize) => "{tracks} tracks · {divisions} divisions · {merges} merges" / "{tracks} 条轨迹 · {divisions} 次分裂 · {merges} 次融合";
-    track_summary(tracks: usize, divisions: usize, merges: usize, frames: usize) => "{tracks} tracks · {divisions} divisions · {merges} merges · {frames} frames" / "{tracks} 条轨迹 · {divisions} 次分裂 · {merges} 次融合 · {frames} 帧";
-    frame_count(frames: u32) => "{frames} frames" / "{frames} 帧";
+    track_counts(tracks: usize, divisions: usize, merges: usize) => "{tracks} · ÷{divisions} · +{merges}" / "{tracks} · ÷{divisions} · +{merges}";
+    track_summary(tracks: usize, divisions: usize, merges: usize, frames: usize) => "{tracks} · ÷{divisions} · +{merges} · {frames}f" / "{tracks} · ÷{divisions} · +{merges} · {frames}帧";
+    frame_count(frames: u32) => "{frames}f" / "{frames} 帧";
     track_number(track: usize) => "Track #{track}" / "轨迹 #{track}";
     relation_metric(name: &str, field: &str, shift: &str, aggregate: &str) => "{name} {field}{shift} · {aggregate}" / "{name} {field}{shift} · {aggregate}";
-    auto_range(minimum: &str, maximum: &str) => "Auto: {minimum} – {maximum}" / "自动：{minimum} – {maximum}";
+    auto_range(minimum: &str, maximum: &str) => "{minimum} – {maximum}" / "{minimum} – {maximum}";
 }

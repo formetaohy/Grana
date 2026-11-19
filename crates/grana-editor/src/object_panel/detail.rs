@@ -461,9 +461,6 @@ pub(super) fn seeds<'a>(
         grana_i18n::object::manual(language),
         row,
     ));
-    if armed {
-        children.push(view::weak(ctx, grana_i18n::object::seed_hint(language)));
-    }
     children
 }
 
@@ -491,7 +488,7 @@ pub(super) fn summary<'a>(
     detected: usize,
     frames: u32,
     time: u32,
-) -> Element<'a, Message> {
+) -> Option<Element<'a, Message>> {
     let language = ctx.language();
     match current {
         Some((count, level)) => {
@@ -506,15 +503,12 @@ pub(super) fn summary<'a>(
                     language, &contrast, mean,
                 ));
             }
-            view::caption(ctx, &text)
+            Some(view::caption(ctx, &text))
         }
-        None if detected == 0 => view::weak(
-            ctx,
-            &grana_i18n::object::detect_summary(language, description(language, kind)),
-        ),
-        None => view::weak(
+        None if detected == 0 => None,
+        None => Some(view::weak(
             ctx,
             &grana_i18n::object::no_objects_frame(language, time + 1, frames),
-        ),
+        )),
     }
 }

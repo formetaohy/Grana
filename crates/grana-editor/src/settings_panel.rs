@@ -1,119 +1,98 @@
 use glam::Vec2;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, IconStyle, Key, Layer, Length, Level, Motion,
-    Rect, Role, State, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Fill, Icon, IconStyle, Key, Layer, Length, Level,
+    Motion, Rect, State, Surface, TextStyle, icon,
 };
 
 use crate::message::Message;
-use crate::state::{Settings, Workspace};
+use crate::state::Workspace;
 
-const WIDTH: f32 = 720.0;
-const HEIGHT: f32 = 528.0;
-const HEADER: f32 = 68.0;
-const RAIL: f32 = 200.0;
+const WIDTH: f32 = 368.0;
+const HEIGHT: f32 = 228.0;
 const PADDING: f32 = 20.0;
-const SECTION_ROW: f32 = 40.0;
-const SECTION_GAP: f32 = 18.0;
-const GUTTER: f32 = 48.0;
-
-pub(crate) fn window_floor() -> Vec2 {
-    Vec2::new(WIDTH + GUTTER, HEIGHT + GUTTER)
-}
-
-fn section_icon(index: usize) -> Icon {
-    match index {
-        0 => Icon::Sliders,
-        _ => Icon::Info,
-    }
-}
-
-fn section_name(language: grana_i18n::Language, index: usize) -> &'static str {
-    match index {
-        0 => grana_i18n::settings::appearance(language),
-        _ => grana_i18n::settings::about(language),
-    }
-}
-
-pub(crate) fn dialog_rect(full: Rect) -> Rect {
-    let width = WIDTH.min((full.width() - GUTTER).max(320.0));
-    let height = HEIGHT.min((full.height() - GUTTER).max(280.0));
-    Rect::from_center_size(full.center(), Vec2::new(width, height))
-}
-
-fn compact(rect: Rect) -> bool {
-    rect.width() < RAIL + 320.0
-}
+const HEADER: f32 = 34.0;
+const LANGUAGE_CARD: f32 = 84.0;
+const ABOUT_CARD: f32 = 54.0;
+const GUTTER: f32 = 32.0;
 
 pub(crate) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     full: Rect,
     workspace: &Workspace,
 ) -> Vec<Element<'a, Message>> {
-    if !workspace.settings.open {
+    let open = workspace.settings.open;
+    let target = if open { 1.0 } else { 0.0 };
+    let spatial = ctx.animate(
+        Key::new("settings.spatial").id(),
+        target,
+        Motion::spatial_default(),
+    );
+    let effect = ctx.animate(
+        Key::new("settings.effect").id(),
+        target,
+        Motion::effect_default(),
+    );
+    if !open && effect <= 0.005 && spatial <= 0.005 {
         return Vec::new();
     }
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let appear = ctx.animate(
-        Key::new("settings.appear").id(),
-        1.0,
-        Motion::spatial_default(),
+    let alpha = effect.clamp(0.0, 1.0);
+    let scale = (0.88 + 0.12 * spatial).max(0.5);
+    let slide = (1.0 - spatial) * -18.0;
+    let base_w = WIDTH.min((full.width() - GUTTER).max(280.0));
+    let base_h = HEIGHT.min((full.height() - GUTTER).max(200.0));
+    let rect = Rect::from_center_size(
+        full.center() + Vec2::new(0.0, slide),
+        Vec2::new(base_w * scale, base_h * scale),
     );
-    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * appear);
-    let rect = dialog_rect(full);
-    let surface = theme
-        .surface(Role::Sheet, State::Rest)
-        .with_corners(Corners::all(theme.metrics.corner_xxl));
-    let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER));
-    let mut children = vec![title_bar(ctx, header, rect)];
-    if compact(rect) {
-        let tabs = Rect::from_min_size(
-            Vec2::new(rect.min.x + PADDING, header.max.y),
-            Vec2::new(rect.width() - 2.0 * PADDING, 40.0),
-        );
-        let labels = (0..Settings::SECTIONS)
-            .map(|index| section_name(ctx.language(), index))
-            .collect::<Vec<_>>();
-        children.push(
-            crate::view::segmented_fill(
-                ctx,
-                "settings.tabs",
-                &labels,
-                workspace.settings.section,
-                Message::SetSettingsSection,
-            )
-            .at(tabs),
-        );
-        let body = Rect::from_min_max(
-            Vec2::new(rect.min.x + PADDING, tabs.max.y + 12.0),
-            Vec2::new(rect.max.x - PADDING, rect.max.y - PADDING),
-        );
-        children.push(body_view(ctx, body, workspace, false));
+    let corners = Corners::all(40.0).lerp(
+        Corners::all(theme.metrics.corner_xxl),
+        spatial.clamp(0.0, 1.0),
+    );
+    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
+    let mut surface = theme.surface(grana_ui::Role::Sheet, State::Rest);
+    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
+    surface.corners = corners;
+
+    let inner = rect.shrink(PADDING * scale);
+    let header_rect = Rect::from_min_size(inner.min, Vec2::new(inner.width(), HEADER));
+    let group_top = header_rect.max.y + 12.0 * scale;
+    let lang_rect = Rect::from_min_size(
+        Vec2::new(inner.min.x, group_top),
+        Vec2::new(inner.width(), LANGUAGE_CARD),
+    );
+    let about_rect = Rect::from_min_size(
+        Vec2::new(inner.min.x, lang_rect.max.y + theme.metrics.group_gap),
+        Vec2::new(inner.width(), ABOUT_CARD),
+    );
+
+    let children = vec![
+        title_bar(ctx, header_rect, alpha, open),
+        language_block(ctx, lang_rect, workspace.language, alpha, open),
+        about_block(ctx, about_rect, alpha),
+    ];
+
+    let backdrop = grana_ui::canvas(Length::Fill, full.height())
+        .view(alpha.to_bits(), move |_, painter, info| {
+            painter.rect(info.rect, Corners::ZERO, scrim);
+        })
+        .named("settings.scrim")
+        .at(full)
+        .layer(Layer::Popup);
+    let backdrop = if open {
+        backdrop.press(Message::ToggleSettings(false))
     } else {
-        let rail = Rect::from_min_max(
-            Vec2::new(rect.min.x + PADDING, header.max.y),
-            Vec2::new(rect.min.x + PADDING + RAIL, rect.max.y - PADDING),
-        );
-        let body = Rect::from_min_max(
-            Vec2::new(rail.max.x + PADDING, header.max.y + 4.0),
-            Vec2::new(rect.max.x - PADDING, rect.max.y - PADDING),
-        );
-        children.push(rail_view(ctx, rail, workspace.settings.section));
-        children.push(body_view(ctx, body, workspace, true));
-    }
+        backdrop
+    };
+
     vec![
-        grana_ui::canvas(Length::Fill, full.height())
-            .view_static(move |painter, info| {
-                painter.rect(info.rect, Corners::ZERO, scrim);
-            })
-            .named("settings.scrim")
-            .at(full)
-            .layer(Layer::Popup)
-            .press(Message::ToggleSettings(false)),
+        backdrop,
         grana_ui::column()
             .at(rect)
             .named("settings.dialog")
             .background(surface)
+            .clipped()
             .layer(Layer::Popup)
             .children(children),
     ]
@@ -122,243 +101,288 @@ pub(crate) fn view<'a>(
 fn title_bar<'a>(
     ctx: &mut BuildContext<'_, Message>,
     header: Rect,
-    dialog: Rect,
+    alpha: f32,
+    open: bool,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let label = grana_i18n::settings::title(ctx.language()).to_string();
-    let style = TextStyle::new(theme.font(Level::Headline), palette.on_surface);
+    let language = ctx.language();
+    let label = grana_i18n::settings::title(language).to_string();
+    let style = TextStyle::new(
+        theme.font(Level::Headline),
+        palette.on_surface.with_alpha(alpha),
+    );
     let title_rect = Rect::from_min_max(
-        Vec2::new(header.min.x + PADDING + 8.0, header.min.y),
-        Vec2::new(header.max.x - PADDING - 44.0, header.max.y),
+        Vec2::new(header.min.x + 4.0, header.min.y),
+        Vec2::new(header.max.x - 38.0, header.max.y),
     );
     let title = grana_ui::canvas(Length::Fill, HEADER)
-        .view(label, move |held: &String, painter, info| {
-            painter.text_in(info.rect, held, style, Align::Center);
-        })
+        .view(
+            (label, alpha.to_bits()),
+            move |(held, _): &(String, u32), painter, info| {
+                painter.text_in(info.rect, held, style, Align::Center);
+            },
+        )
         .named("settings.title")
         .at(title_rect);
-    let close = crate::view::icon_button(
-        ctx,
-        "settings.close",
-        Icon::Close,
-        32.0,
-        Role::Standard,
-        grana_i18n::settings::close(ctx.language()),
-        Message::ToggleSettings(false),
-    )
-    .at(Rect::from_center_size(
-        Vec2::new(dialog.max.x - PADDING - 16.0, header.center().y),
+
+    let close_rect = Rect::from_center_size(
+        Vec2::new(header.max.x - 16.0, header.center().y),
         Vec2::splat(32.0),
-    ));
+    );
+    let close = grana_ui::canvas(Length::Fixed(32.0), 32.0)
+        .view(alpha.to_bits(), move |_, painter, info| {
+            let corners = Corners::capsule()
+                .resolved(info.rect.size())
+                .lerp(Corners::all(theme.metrics.corner_sm), info.press);
+            let fill = palette
+                .surface_container_high
+                .lerp(palette.surface_container_highest, info.hover)
+                .lerp(palette.on_surface, 0.12 * info.press)
+                .with_alpha(alpha);
+            painter.rect(info.rect, corners, fill);
+            icon::paint(
+                Icon::Close,
+                painter,
+                info.rect.center(),
+                16.0,
+                palette
+                    .on_surface_variant
+                    .lerp(palette.on_surface, info.hover)
+                    .with_alpha(alpha),
+                IconStyle::REGULAR,
+            );
+        })
+        .named("settings.close")
+        .tooltip(grana_i18n::settings::close(language))
+        .cursor(grana_ui::Cursor::Pointing)
+        .focus_ring(Corners::capsule())
+        .at(close_rect);
+    let close = if open {
+        close.press(Message::ToggleSettings(false))
+    } else {
+        close
+    };
+
     grana_ui::column()
         .at(header)
         .named("settings.header")
         .children([title, close])
 }
 
-fn rail_view<'a>(
+fn language_block<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    rail: Rect,
-    active: usize,
-) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let rows_rect = Rect::from_min_size(
-        rail.min,
-        Vec2::new(
-            rail.width(),
-            (SECTION_ROW + 4.0) * Settings::SECTIONS as f32,
-        ),
-    );
-    let language = ctx.language();
-    let mut rows = Vec::new();
-    for index in 0..Settings::SECTIONS {
-        let selected = index == active;
-        let symbol = section_icon(index);
-        let label = section_name(language, index).to_string();
-        let font = theme.font(Level::Label);
-        rows.push(
-            grana_ui::canvas(Length::Fill, SECTION_ROW)
-                .view(
-                    (label.clone(), selected),
-                    move |(held, selected): &(String, bool), painter, info| {
-                        let selected = *selected;
-                        let engaged = info.hover.max(if selected { 1.0 } else { 0.0 });
-                        let rest = Corners::capsule().resolved(info.rect.size());
-                        let pressed =
-                            Corners::all(theme.metrics.corner_md).resolved(info.rect.size());
-                        if engaged > 0.01 {
-                            painter.rect(
-                                info.rect,
-                                rest.lerp(pressed, info.press),
-                                if selected {
-                                    palette.secondary_container
-                                } else {
-                                    palette.on_surface.with_alpha(0.08 * engaged)
-                                },
-                            );
-                        }
-                        let tint = if selected {
-                            palette.on_secondary_container
-                        } else {
-                            palette.on_surface_variant.lerp(palette.on_surface, engaged)
-                        };
-                        icon::paint(
-                            symbol,
-                            painter,
-                            Vec2::new(info.rect.min.x + 18.0, info.rect.center().y),
-                            16.0,
-                            tint,
-                            IconStyle::REGULAR,
-                        );
-                        painter.text_in(
-                            Rect::from_min_max(
-                                Vec2::new(info.rect.min.x + 34.0, info.rect.min.y),
-                                Vec2::new(info.rect.max.x - 10.0, info.rect.max.y),
-                            ),
-                            held,
-                            TextStyle::new(font, tint).truncating(),
-                            Align::Center,
-                        );
-                    },
-                )
-                .key(Key::index("settings.section", index))
-                .press(Message::SetSettingsSection(index))
-                .cursor(grana_ui::Cursor::Pointing)
-                .focus_ring(Corners::capsule()),
-        );
-    }
-    grana_ui::column().at(rows_rect).gap(4.0).children(rows)
-}
-
-fn body_view<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    body: Rect,
-    workspace: &Workspace,
-    ruled: bool,
-) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let mut content = Vec::new();
-    match workspace.settings.section {
-        0 => content.push(appearance(ctx, body.width(), workspace.language)),
-        _ => content.push(about(ctx, body.width())),
-    }
-    let scroll = Element::new(grana_ui::Layout::column())
-        .named("settings.body")
-        .at(body)
-        .scroll(grana_ui::Axis::Column, Length::Fill, None)
-        .clipped()
-        .children(content);
-    if !ruled {
-        return scroll;
-    }
-    let divider = grana_ui::canvas(Length::Fixed(1.0), body.height())
-        .view_static(move |painter, info| {
-            painter.rect(
-                info.rect,
-                Corners::ZERO,
-                palette.outline_variant.with_alpha(0.7),
-            );
-        })
-        .at(Rect::from_min_size(
-            Vec2::new(body.min.x - PADDING * 0.5, body.min.y),
-            Vec2::new(1.0, body.height()),
-        ));
-    grana_ui::column()
-        .at(body)
-        .named("settings.pane")
-        .children([divider, scroll])
-}
-
-fn appearance<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    width: f32,
+    rect: Rect,
     language: grana_i18n::Language,
+    alpha: f32,
+    open: bool,
 ) -> Element<'a, Message> {
-    let labels = grana_i18n::Language::ALL.map(grana_i18n::Language::label);
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let corners = Corners::group_vertical(
+        0,
+        2,
+        theme.metrics.corner_lg,
+        theme.metrics.corner_xs,
+        false,
+    );
+    let surface = Surface::fill(palette.surface_container.with_alpha(alpha)).with_corners(corners);
+    let title = grana_i18n::settings::language(language).to_string();
+    let title_font = theme.font(Level::Title);
+    let head_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + 14.0, rect.min.y + 10.0),
+        Vec2::new(rect.width() - 28.0, 22.0),
+    );
+    let head = grana_ui::canvas(Length::Fill, 22.0)
+        .view(
+            (title, alpha.to_bits()),
+            move |(title, _): &(String, u32), painter, info| {
+                icon::paint(
+                    Icon::Globe,
+                    painter,
+                    Vec2::new(info.rect.min.x + 8.0, info.rect.center().y),
+                    15.0,
+                    palette.primary.with_alpha(alpha),
+                    IconStyle::REGULAR,
+                );
+                painter.text_in(
+                    Rect::from_min_max(
+                        Vec2::new(info.rect.min.x + 24.0, info.rect.min.y),
+                        info.rect.max,
+                    ),
+                    title,
+                    TextStyle::new(title_font, palette.on_surface.with_alpha(alpha)),
+                    Align::Center,
+                );
+            },
+        )
+        .at(head_rect);
+
+    let seg_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + 14.0, rect.min.y + 40.0),
+        Vec2::new(rect.width() - 28.0, 32.0),
+    );
     let selected = grana_i18n::Language::ALL
         .iter()
         .position(|candidate| *candidate == language)
         .unwrap_or(0);
-    let selector =
-        crate::view::segmented_fill(ctx, "settings.language", &labels, selected, |index| {
-            match grana_i18n::Language::ALL.get(index) {
-                Some(language) => Message::SetLanguage(*language),
-                None => Message::Noop,
-            }
-        });
-    grana_ui::column().gap(SECTION_GAP).children([
-        section_title(
-            ctx,
-            grana_i18n::settings::language(ctx.language()),
-            grana_i18n::settings::language_detail(ctx.language()),
-        ),
-        grana_ui::column()
-            .width(Length::Fixed(width))
-            .children([selector]),
-    ])
+    let pill_t = ctx.animate(
+        Key::new("settings.language.pill").id(),
+        selected as f32,
+        Motion::spatial_fast(),
+    );
+    let gap = theme.metrics.group_gap;
+    let half = (seg_rect.width() - gap) * 0.5;
+    let label_font = theme.font(Level::Label);
+    let mut buttons = Vec::new();
+    for (index, candidate) in grana_i18n::Language::ALL.into_iter().enumerate() {
+        let cell = Rect::from_min_size(
+            Vec2::new(seg_rect.min.x + index as f32 * (half + gap), seg_rect.min.y),
+            Vec2::new(half, seg_rect.height()),
+        );
+        let active = index == selected;
+        let cell_corners =
+            Corners::group_horizontal(index, 2, Corners::CAPSULE, theme.metrics.corner_sm, active);
+        let button = grana_ui::canvas(Length::Fixed(half), seg_rect.height())
+            .view(
+                (active, alpha.to_bits()),
+                move |(active, _): &(bool, u32), painter, info| {
+                    if !*active {
+                        let fill = palette
+                            .surface_container_high
+                            .lerp(palette.surface_container_highest, info.hover)
+                            .with_alpha(alpha);
+                        let c = cell_corners
+                            .resolved(info.rect.size())
+                            .lerp(Corners::all(theme.metrics.corner_xs), info.press);
+                        painter.rect(info.rect, c, fill);
+                    }
+                },
+            )
+            .key(Key::index("settings.language.option", index))
+            .cursor(grana_ui::Cursor::Pointing)
+            .focus_ring(Corners::capsule())
+            .at(cell);
+        let button = if open {
+            button.press(Message::SetLanguage(candidate))
+        } else {
+            button
+        };
+        buttons.push(button);
+    }
+
+    let overlay = grana_ui::canvas(Length::Fixed(seg_rect.width()), seg_rect.height())
+        .view(
+            (selected, pill_t.to_bits(), alpha.to_bits()),
+            move |_, painter, info| {
+                let x = info.rect.min.x + pill_t.clamp(0.0, 1.0) * (half + gap);
+                let pill = Rect::from_min_size(
+                    Vec2::new(x, info.rect.min.y),
+                    Vec2::new(half, info.rect.height()),
+                );
+                painter.rect(
+                    pill,
+                    Corners::capsule(),
+                    palette.secondary_container.with_alpha(alpha),
+                );
+                for (index, candidate) in grana_i18n::Language::ALL.into_iter().enumerate() {
+                    let cell = Rect::from_min_size(
+                        Vec2::new(
+                            info.rect.min.x + index as f32 * (half + gap),
+                            info.rect.min.y,
+                        ),
+                        Vec2::new(half, info.rect.height()),
+                    );
+                    let color = if index == selected {
+                        palette.on_secondary_container.with_alpha(alpha)
+                    } else {
+                        palette.on_surface_variant.with_alpha(alpha)
+                    };
+                    painter.text_in(
+                        cell,
+                        candidate.label(),
+                        TextStyle::new(label_font, color).aligned(Align::Center),
+                        Align::Center,
+                    );
+                }
+            },
+        )
+        .named("settings.language")
+        .at(seg_rect);
+
+    let mut children = vec![head];
+    children.extend(buttons);
+    children.push(overlay);
+    grana_ui::column()
+        .at(rect)
+        .background(surface)
+        .children(children)
 }
 
-fn about<'a>(ctx: &mut BuildContext<'_, Message>, width: f32) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let language = ctx.language();
-    let brand = grana_ui::canvas(Length::Fixed(56.0), 56.0)
-        .view_static(|painter, info| {
-            grana_brand::paint(
-                painter,
-                Rect::from_center_size(info.rect.center(), Vec2::splat(48.0)),
-            );
-        })
-        .named("settings.brand");
-    let name = grana_ui::text(
-        "Grana",
-        TextStyle::new(theme.font(Level::Display), palette.on_surface),
-    );
-    let version = grana_ui::text(
-        format!(
-            "{} {}",
-            grana_i18n::settings::version(language),
-            env!("CARGO_PKG_VERSION")
-        ),
-        TextStyle::new(theme.font(Level::Monospace), palette.outline),
-    );
-    let row = grana_ui::row()
-        .width(Length::Fixed(width))
-        .gap(14.0)
-        .align(Align::Center)
-        .children([
-            brand,
-            grana_ui::column()
-                .gap(2.0)
-                .justify(Align::Center)
-                .children([name, version]),
-        ]);
-    grana_ui::column().gap(SECTION_GAP).children([
-        section_title(
-            ctx,
-            grana_i18n::settings::about(language),
-            grana_i18n::settings::motion_detail(language),
-        ),
-        row,
-    ])
-}
-
-fn section_title<'a>(
+fn about_block<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    title: &str,
-    detail: &str,
+    rect: Rect,
+    alpha: f32,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let title_style = TextStyle::new(theme.font(Level::Title), palette.on_surface);
-    let detail_style =
-        TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).wrapping();
-    let title_text = grana_ui::text(title, title_style);
-    let detail_text = grana_ui::text(detail, detail_style);
+    let language = ctx.language();
+    let corners = Corners::group_vertical(
+        1,
+        2,
+        theme.metrics.corner_lg,
+        theme.metrics.corner_xs,
+        false,
+    );
+    let surface = Surface::fill(palette.surface_container.with_alpha(alpha)).with_corners(corners);
+    let version = format!(
+        "{} {}",
+        grana_i18n::settings::version(language),
+        env!("CARGO_PKG_VERSION")
+    );
+    let title_font = theme.font(Level::Title);
+    let mono_font = theme.font(Level::Monospace);
+    let content = grana_ui::canvas(Length::Fill, ABOUT_CARD)
+        .view(
+            (version, alpha.to_bits()),
+            move |(version, _): &(String, u32), painter, info| {
+                let badge = Rect::from_center_size(
+                    Vec2::new(info.rect.min.x + 28.0, info.rect.center().y),
+                    Vec2::splat(30.0),
+                );
+                if alpha > 0.15 {
+                    grana_brand::paint(painter, badge);
+                }
+                painter.text_in(
+                    Rect::from_min_max(
+                        Vec2::new(info.rect.min.x + 52.0, info.rect.min.y),
+                        Vec2::new(info.rect.max.x - 110.0, info.rect.max.y),
+                    ),
+                    "Grana",
+                    TextStyle::new(title_font, palette.on_surface.with_alpha(alpha)),
+                    Align::Center,
+                );
+                let pill_style =
+                    TextStyle::new(mono_font, palette.on_secondary_container.with_alpha(alpha))
+                        .aligned(Align::Center);
+                let pill_w = painter.measure(version, pill_style).x + 18.0;
+                let pill = Rect::from_min_size(
+                    Vec2::new(info.rect.max.x - 14.0 - pill_w, info.rect.center().y - 11.0),
+                    Vec2::new(pill_w, 22.0),
+                );
+                painter.rect(
+                    pill,
+                    Corners::capsule(),
+                    palette.secondary_container.with_alpha(alpha),
+                );
+                painter.text_in(pill, version, pill_style, Align::Center);
+            },
+        )
+        .named("settings.brand")
+        .at(rect);
+
     grana_ui::column()
-        .gap(2.0)
-        .children([title_text, detail_text])
+        .at(rect)
+        .background(surface)
+        .children([content])
 }

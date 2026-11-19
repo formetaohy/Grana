@@ -327,7 +327,6 @@ fn titles(plot: &Plot, table: &Table, language: Language) -> (String, String) {
 }
 
 fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language) -> String {
-    let gate_hint = grana_i18n::measure::gate_hint(language);
     let total = table.rows() as u64;
     match (plot, readout) {
         (
@@ -370,7 +369,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
         }
         (Plot::Distribution(distribution), Readout::Group(index)) => {
             let Some(group) = distribution.groups().get(index) else {
-                return gate_hint.to_string();
+                return String::new();
             };
             let group_label = grana_i18n::measure::distribution_group(language, group.label());
             let column = &table.columns()[distribution.column()];
@@ -384,7 +383,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
             };
             let Some(series) = series else {
                 return format!(
-                    "{group_label} · {} · {gate_hint}",
+                    "{group_label} · {}",
                     grana_i18n::measure::no_gated_samples(language)
                 );
             };
@@ -409,7 +408,6 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                     )
                 ));
             }
-            text.push_str(&format!(" · {gate_hint}"));
             text
         }
         (Plot::Distribution(distribution), _) => {
@@ -418,7 +416,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                 grana_i18n::measure::no_objects(language).to_string()
             } else if distribution.gated() < distribution.total() {
                 format!(
-                    "{} · {} · {gate_hint}",
+                    "{} · {}",
                     grana_i18n::measure::gated_count(
                         language,
                         distribution.gated(),
@@ -428,7 +426,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                 )
             } else {
                 format!(
-                    "{} · {} · {gate_hint}",
+                    "{} · {}",
                     grana_i18n::measure::objects(language, distribution.total()),
                     grana_i18n::measure::groups(language, groups)
                 )
@@ -444,14 +442,14 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                     let low = format!("{:.places$}", point.lower());
                     let high = format!("{:.places$}", point.upper());
                     format!(
-                        "{} · {} · 95% CI {low}–{high} · n={} · {gate_hint}",
+                        "{} · {} · 95% CI {low}–{high} · n={}",
                         grana_i18n::measure::frame(language, time + 1),
                         grana_i18n::measure::mean(language, &mean, unit),
                         point.count()
                     )
                 }
                 None => format!(
-                    "{} · {} · {gate_hint}",
+                    "{} · {}",
                     grana_i18n::measure::frame(language, time + 1),
                     grana_i18n::measure::no_samples(language)
                 ),
@@ -488,24 +486,14 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
             if trend.points().is_empty() {
                 grana_i18n::measure::no_frames_trend(language).to_string()
             } else if trend.gated() < trend.total() {
-                format!(
-                    "{} · {gate_hint}",
-                    grana_i18n::measure::gated_values_over_frames(
-                        language,
-                        trend.gated(),
-                        trend.total(),
-                        trend.frames()
-                    )
+                grana_i18n::measure::gated_values_over_frames(
+                    language,
+                    trend.gated(),
+                    trend.total(),
+                    trend.frames(),
                 )
             } else {
-                format!(
-                    "{} · {gate_hint}",
-                    grana_i18n::measure::values_over_frames(
-                        language,
-                        trend.total(),
-                        trend.frames()
-                    )
-                )
+                grana_i18n::measure::values_over_frames(language, trend.total(), trend.frames())
             }
         }
         (Plot::Histogram(histogram), _) => {
@@ -515,7 +503,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
             let unit = column.unit().suffix();
             if statistics.count() == 0 {
                 format!(
-                    "{} · {} · {gate_hint}",
+                    "{} · {}",
                     grana_i18n::measure::objects(language, total),
                     grana_i18n::measure::ungated(language)
                 )
@@ -527,7 +515,7 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                 let mean = format!("{:.places$}", statistics.mean());
                 let deviation = format!("{:.places$}", statistics.deviation());
                 format!(
-                    "{} · {} · MAD {mad} · IQR {low}–{high} · {} · σ {deviation} · {gate_hint}",
+                    "{} · {} · MAD {mad} · IQR {low}–{high} · {} · σ {deviation}",
                     grana_i18n::measure::gated_count(language, statistics.count(), total),
                     grana_i18n::measure::median(language, &median, unit),
                     grana_i18n::measure::mean(language, &mean, unit)
@@ -538,16 +526,15 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
             let correlation = scatter
                 .correlation()
                 .map_or_else(|| "r —".to_string(), |value| format!("r = {value:.2}"));
-            let hint = grana_i18n::measure::scatter_hint(language);
             if scatter.x_summary().count() == 0 {
                 format!(
-                    "{} · {} · {hint}",
+                    "{} · {}",
                     grana_i18n::measure::objects(language, total),
                     grana_i18n::measure::ungated(language)
                 )
             } else {
                 format!(
-                    "{} · {correlation} · {hint}",
+                    "{} · {correlation}",
                     grana_i18n::measure::gated_count(language, scatter.x_summary().count(), total)
                 )
             }

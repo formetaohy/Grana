@@ -318,12 +318,7 @@ fn actions<'a>(
     if pending {
         children.push(crate::view::spinner(ctx, 18.0));
     }
-    children.extend([
-        palette_button(ctx),
-        history_group,
-        tools_group,
-        analysis(ctx, state),
-    ]);
+    children.extend([history_group, tools_group, analysis(ctx, state)]);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     let actions = grana_ui::row()
         .named("header.actions")
@@ -344,22 +339,6 @@ fn actions<'a>(
         .justify(Align::End)
         .height(Length::Fill)
         .children([actions])
-}
-
-fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
-    let shortcut = crate::command::spec("palette.open")
-        .and_then(|spec| spec.shortcut)
-        .map_or_else(String::new, |shortcut| shortcut.label());
-    let tooltip = grana_i18n::header::search_commands(ctx.language(), &shortcut);
-    crate::view::icon_button(
-        ctx,
-        "header.palette",
-        Icon::Search,
-        30.0,
-        Role::SurfaceHigh,
-        &tooltip,
-        Message::OpenPalette,
-    )
 }
 
 fn analysis<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -386,32 +365,20 @@ fn project_menu<'a>(
 ) -> Element<'a, Message> {
     let key = Key::new("project.menu");
     if !ctx.popup_open(key) {
-        return grana_ui::popover::popup(key, 248.0, std::iter::empty());
+        return grana_ui::popover::popup(key, 240.0, std::iter::empty());
     }
-    let language = ctx.language();
     let mut rows = vec![
         command_row(ctx, "open.image"),
         command_row(ctx, "open.folder"),
+        command_row(ctx, "open.remote"),
         command_row(ctx, "open.project"),
     ];
     if state.access.author() {
         rows.push(command_row(ctx, "open.tiles"));
         rows.push(command_row(ctx, "package.open"));
     }
-    rows.push(grana_ui::spacer(8.0));
-    rows.push(crate::view::section_header(
-        ctx,
-        grana_i18n::header::open_remote(language),
-        None,
-    ));
-    rows.push(command_row(ctx, "open.remote"));
     if !state.recent.is_empty() {
-        rows.push(grana_ui::spacer(8.0));
-        rows.push(crate::view::section_header(
-            ctx,
-            grana_i18n::header::recent(language),
-            None,
-        ));
+        rows.push(grana_ui::spacer(6.0));
         for (index, entry) in state.recent.iter().take(crate::RECENT_LIMIT).enumerate() {
             rows.push(crate::view::action_menu_message(
                 ctx,
@@ -428,25 +395,15 @@ fn project_menu<'a>(
         }
     }
     if state.access.author() {
-        rows.push(grana_ui::spacer(8.0));
-        rows.push(crate::view::section_header(
-            ctx,
-            grana_i18n::header::save(language),
-            None,
-        ));
+        rows.push(grana_ui::spacer(6.0));
         rows.push(command_row(ctx, "save.project"));
         rows.push(command_row(ctx, "save.as"));
     }
-    rows.push(grana_ui::spacer(8.0));
-    rows.push(crate::view::section_header(
-        ctx,
-        grana_i18n::header::export(language),
-        None,
-    ));
+    rows.push(grana_ui::spacer(6.0));
     rows.push(command_row(ctx, "snapshot"));
     rows.push(command_row(ctx, "figure"));
     rows.push(command_row(ctx, "labels"));
-    menu(ctx, key, 248.0, rows)
+    menu(ctx, key, 240.0, rows)
 }
 
 fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a, Message> {

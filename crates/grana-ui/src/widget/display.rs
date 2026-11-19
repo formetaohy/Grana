@@ -1,7 +1,7 @@
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::element::{CanvasInfo, Element, Key, Layout, Length, Size, spacer, text};
+use crate::element::{CanvasInfo, Element, Key, Layout, Length, Size, text};
 use crate::geometry::{Corners, Edges, Rect};
 use crate::icon::{self, Icon, IconStyle};
 use crate::paint::Painter;
@@ -106,29 +106,24 @@ pub fn form_row<'a, A>(
         .children([text(label, style).width(Length::Fixed(width)), content])
 }
 
-pub fn empty_state<'a, A>(
-    theme: &Theme,
-    symbol: Icon,
-    title: &str,
-    detail: &str,
-) -> Element<'a, A> {
+pub fn empty_state<'a, A>(theme: &Theme, symbol: Icon, title: &str) -> Element<'a, A> {
     let palette = theme.palette;
     let art = Element::column()
-        .width(Length::Fixed(48.0))
-        .height(Length::Fixed(48.0))
+        .width(Length::Fixed(44.0))
+        .height(Length::Fixed(44.0))
         .align(Align::Center)
         .justify(Align::Center)
         .background(Surface::fill(palette.secondary_container).with_corners(Corners::all(14.0)))
         .children([super::icon::icon(
             symbol,
-            24.0,
+            22.0,
             palette.on_secondary_container,
             IconStyle::REGULAR,
         )]);
     let card = Element::column()
-        .width(Length::Maximum(480.0))
-        .padding(Edges::symmetric(28.0, 24.0))
-        .gap(6.0)
+        .width(Length::Maximum(360.0))
+        .padding(Edges::symmetric(24.0, 20.0))
+        .gap(10.0)
         .align(Align::Center)
         .background(
             Surface::fill(palette.surface_container)
@@ -136,16 +131,9 @@ pub fn empty_state<'a, A>(
         )
         .children([
             art,
-            spacer(6.0),
             text(
                 title,
-                TextStyle::new(theme.font(Level::Headline), palette.on_surface)
-                    .aligned(Align::Center),
-            ),
-            text(
-                detail,
-                TextStyle::new(theme.font(Level::Body), palette.on_surface_variant)
-                    .wrapping()
+                TextStyle::new(theme.font(Level::Title), palette.on_surface_variant)
                     .aligned(Align::Center),
             ),
         ]);

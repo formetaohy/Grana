@@ -28,7 +28,7 @@ pub const TRANSPORT_HEIGHT: f32 = 44.0;
 pub const DOCK_HEADER: f32 = 36.0;
 pub const DOCK_DEFAULT: f32 = 332.0;
 pub const DOCK_MINIMUM: f32 = 210.0;
-pub const TOOLBAR_RIGHT: f32 = 336.0;
+pub const TOOLBAR_RIGHT: f32 = 296.0;
 pub const STAGE_INSET: f32 = 12.0;
 
 pub(crate) fn dock_available(size: Vec2, transport: bool) -> f32 {
@@ -161,21 +161,16 @@ pub fn build(
     stage.set_pixels_per_point(ui.scale());
     let Some(scene) = view.scene else {
         stage.set_viewport(full);
-        let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
             let mut ctx = ui.build();
             let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
             elements.extend(crate::chrome::view(&mut ctx, full, workspace.chrome));
-            elements.extend(crate::settings_panel::view(&mut ctx, full, workspace));
-            if let Some(palette) = palette.as_ref() {
-                elements.extend(crate::palette::view(&mut ctx, full, palette));
-            }
             elements
         };
         ui.present(grana_ui::place(full, elements));
         let size = ui
             .bounds("shell.panel")
-            .map_or_else(crate::settings_panel::window_floor, |panel| {
+            .map_or(crate::shell::STARTUP_SIZE, |panel| {
                 crate::shell::window_size(panel.size())
             });
         frame.startup = Some(size);
@@ -197,7 +192,6 @@ pub fn build(
         workspace.measure_request = None;
     }
     workspace.prepare(view, ui.size());
-    let palette = crate::palette::resolve(ui, view, workspace);
     let frames = scene.frame_count() as usize;
     stage.set_viewport(full);
     let state = View {
@@ -218,7 +212,6 @@ pub fn build(
         views: view.views,
         recent: view.recent,
         import: view.import,
-        palette: palette.as_ref(),
         camera: &*camera,
         stage: &*stage,
         workspace: &*workspace,
@@ -252,15 +245,8 @@ fn view_elements<'a>(
         elements.push(dock(ctx, rect, state));
     }
     elements.extend(stage::toast(ctx, layout, state));
-    elements.extend(crate::panel::remote(
-        ctx,
-        layout.safe,
-        state.workspace.remote_open,
-    ));
+    elements.extend(crate::panel::remote(ctx, full, state.workspace.remote_open));
     elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
-    if let Some(palette) = state.palette {
-        elements.extend(crate::palette::view(ctx, full, palette));
-    }
     elements
 }
 
@@ -433,12 +419,8 @@ fn sidebar<'a>(
     let mono = theme.font(Level::Monospace);
     let summary = grana_ui::canvas(Length::Fill, 26.0)
         .view((dims.clone(), spacing.clone()), move |_, painter, info| {
-            painter.rect(
-                info.rect,
-                Corners::all(theme.metrics.corner_sm),
-                palette.surface_container,
-            );
-            let inner = info.rect.shrink2(Vec2::new(10.0, 0.0));
+            painter.rect(info.rect, Corners::capsule(), palette.surface_container);
+            let inner = info.rect.shrink2(Vec2::new(12.0, 0.0));
             painter.text_in(
                 inner,
                 &dims,
@@ -504,7 +486,9 @@ fn dock<'a>(
                     Vec2::new(36.0 + 14.0 * engaged, 4.0),
                 ),
                 Corners::capsule(),
-                palette.outline_variant.lerp(palette.outline, engaged),
+                palette
+                    .surface_container_highest
+                    .lerp(palette.outline, engaged),
             );
         })
         .at(grip)

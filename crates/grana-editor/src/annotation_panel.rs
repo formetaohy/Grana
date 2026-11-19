@@ -15,25 +15,33 @@ const ROW_HEIGHT: f32 = 34.0;
 const ROW_PAD: f32 = 4.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let authoring = state.access.author();
-    let mut children = Vec::new();
-    if authoring {
-        children.push(tools_card(ctx, state));
+    if !state.access.author() {
+        return list_card(ctx, state);
     }
-    children.push(list_card(ctx, state));
-    if authoring {
-        if let Some(annotation) = selected_card(ctx, state) {
-            children.push(annotation);
-        }
-        if let Some(profile) = profile_card(ctx, state) {
-            children.push(profile);
-        }
-        children.push(region_card(ctx, state));
+    let mut left_cards = vec![tools_card(ctx, state), region_card(ctx, state)];
+    if let Some(selected) = selected_card(ctx, state) {
+        left_cards.push(selected);
     }
-    grana_ui::column()
+    let left = grana_ui::column()
+        .width(Length::Fixed(316.0))
         .gap(8.0)
+        .children(left_cards);
+    let right = match profile_card(ctx, state) {
+        Some(profile) => grana_ui::row()
+            .width(Length::Fill)
+            .gap(12.0)
+            .align(Align::Start)
+            .children([
+                list_card(ctx, state).width(Length::Fill),
+                profile.width(Length::Fill),
+            ]),
+        None => list_card(ctx, state).width(Length::Fill),
+    };
+    grana_ui::row()
+        .gap(12.0)
+        .align(Align::Start)
         .width(Length::Fill)
-        .children(children)
+        .children([left, right])
 }
 
 fn tools_card<'a>(
@@ -60,14 +68,7 @@ fn tools_card<'a>(
         .align(Align::Center)
         .width(Length::Fill)
         .children(row);
-    let detail = match active {
-        Some(AnnotationTool::Point) => grana_i18n::annotation::click_point(language),
-        Some(AnnotationTool::Distance) => grana_i18n::annotation::click_distance(language),
-        Some(AnnotationTool::Roi) => grana_i18n::annotation::click_roi(language),
-        None => grana_i18n::annotation::choose_tool(language),
-    };
-    let caption = view::weak(ctx, detail);
-    view::card(ctx, 8.0, vec![title, buttons, caption])
+    view::card(ctx, 8.0, vec![title, buttons])
 }
 
 fn tool_button<'a>(
@@ -84,19 +85,13 @@ fn tool_button<'a>(
     } else {
         Role::SurfaceHigh
     };
-    view::button_shaped(
-        ctx,
-        tool.name(ctx.language()),
-        role,
-        Length::Fixed(96.0),
-        corners,
-    )
-    .key(Key::index("annotation.tool", tool.index()))
-    .press(Message::SetAnnotationTool(if active {
-        None
-    } else {
-        Some(tool)
-    }))
+    view::button_shaped(ctx, tool.name(ctx.language()), role, Length::Fill, corners)
+        .key(Key::index("annotation.tool", tool.index()))
+        .press(Message::SetAnnotationTool(if active {
+            None
+        } else {
+            Some(tool)
+        }))
 }
 
 fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -133,7 +128,7 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         ctx,
         grana_i18n::common::remove(language),
         Role::SurfaceHigh,
-        Length::Fixed(132.0),
+        Length::Fixed(120.0),
         Corners::split_leading(inner),
     )
     .named("annotation.remove.selected")
@@ -145,7 +140,7 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         ctx,
         grana_i18n::annotation::remove_all(language),
         Role::Error,
-        Length::Fixed(132.0),
+        Length::Fixed(120.0),
         Corners::split_trailing(inner),
     )
     .named("annotation.clear")
@@ -249,7 +244,7 @@ fn row<'a>(
                 );
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(rect.max.x - 190.0, rect.min.y),
+                        Vec2::new(rect.max.x - 160.0, rect.min.y),
                         Vec2::new(rect.max.x - 10.0, rect.max.y),
                     ),
                     &detail,
@@ -310,43 +305,31 @@ fn selected_card<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Option<Element<'a, Message>> {
+    if state.scene.frame_count() <= 1 {
+        return None;
+    }
     let index = state.scene.annotations.selected()?;
     let annotation = state.scene.annotations.get(index)?;
     let language = ctx.language();
     let time = state.scene.time();
     let every = annotation.frame().is_none();
-    let mut children = Vec::new();
-    let detail = if state.scene.frame_count() <= 1 {
-        grana_i18n::annotation::single_frame_detail(language).to_string()
-    } else {
-        match annotation.frame() {
-            Some(frame) => {
-                grana_i18n::annotation::placed_frame(language, frame + 1, state.scene.frame_count())
-            }
-            None => grana_i18n::annotation::shown_every_frame(language).to_string(),
-        }
-    };
     let title = view::card_title(
         ctx,
         Icon::Clock,
         grana_i18n::common::time(language),
         Some(annotation.name()),
     );
-    children.push(title);
-    children.push(view::weak(ctx, &detail));
-    if state.scene.frame_count() > 1 {
-        children.push(view::toggle_row(
-            ctx,
-            "annotation.every_frame",
-            grana_i18n::annotation::on_every_frame(language),
-            every,
-            move |every| Command::SetAnnotationFrame {
-                index,
-                frame: (!every).then_some(time),
-            },
-        ));
-    }
-    Some(view::card(ctx, 8.0, children))
+    let toggle = view::toggle_row(
+        ctx,
+        "annotation.every_frame",
+        grana_i18n::annotation::on_every_frame(language),
+        every,
+        move |every| Command::SetAnnotationFrame {
+            index,
+            frame: (!every).then_some(time),
+        },
+    );
+    Some(view::card(ctx, 6.0, vec![title, toggle]))
 }
 
 fn profile_card<'a>(
@@ -413,11 +396,6 @@ fn profile_card<'a>(
             page.paint(painter, info.rect, &style, &grana_chart::Decor::default());
         });
         children.push(chart);
-    } else {
-        children.push(view::weak(
-            ctx,
-            grana_i18n::annotation::empty_profile(language),
-        ));
     }
     let label = if profile.is_some() {
         grana_i18n::annotation::resample(language)
@@ -457,22 +435,20 @@ fn region_card<'a>(
         Some(detail.as_str()),
     );
     let current = region;
-    let mut children = vec![title];
-    children.push(view::weak(
-        ctx,
-        grana_i18n::annotation::region_detail(language),
-    ));
-    children.push(view::toggle_row(
-        ctx,
-        "annotation.region",
-        grana_i18n::annotation::restrict_region(language),
-        enabled,
-        move |on| {
-            let mut region = current;
-            region.set_enabled(on);
-            Command::SetRegion(region)
-        },
-    ));
+    let mut children = vec![
+        title,
+        view::toggle_row(
+            ctx,
+            "annotation.region",
+            grana_i18n::annotation::restrict_region(language),
+            enabled,
+            move |on| {
+                let mut region = current;
+                region.set_enabled(on);
+                Command::SetRegion(region)
+            },
+        ),
+    ];
     if enabled {
         let half = 0.5 * state.scene.dataset.world_size();
         let whole = grana_volume::Region::full(-half, half);
@@ -480,16 +456,11 @@ fn region_card<'a>(
             ctx,
             grana_i18n::common::clear(language),
             Role::SurfaceHigh,
-            Length::Fixed(132.0),
+            Length::Fill,
         )
         .named("annotation.region.clear")
         .press(Message::Command(Command::SetRegion(whole)));
-        children.push(
-            grana_ui::row()
-                .justify(Align::End)
-                .width(Length::Fill)
-                .children([clear]),
-        );
+        children.push(clear);
     }
     view::card(ctx, 8.0, children)
 }

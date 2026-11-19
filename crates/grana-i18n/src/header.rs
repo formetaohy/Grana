@@ -1,27 +1,21 @@
 use crate::labels;
+use crate::messages;
 
 labels! {
     show_sidebar => "Show sidebar" / "显示侧边栏";
     hide_sidebar => "Hide sidebar" / "隐藏侧边栏";
     settings => "Settings" / "设置";
-    save => "Save" / "保存";
-    export => "Export" / "导出";
-    open_remote => "Open from the web" / "从网络打开";
     analysis => "Analysis" / "分析";
-    frame_volume => "Frame the volume" / "适配体数据视图";
-    nothing_to_undo => "Nothing to undo" / "没有可撤销的操作";
-    nothing_to_redo => "Nothing to redo" / "没有可重做的操作";
-    recent => "Recent" / "最近";
+    frame_volume => "Frame volume" / "适配视图";
+    nothing_to_undo => "Nothing to undo" / "无可撤销";
+    nothing_to_redo => "Nothing to redo" / "无可重做";
     minimize_window => "Minimize" / "最小化";
     maximize_window => "Maximize" / "最大化";
     restore_window => "Restore" / "还原";
     close_window => "Close" / "关闭";
 }
 
-use crate::messages;
-
 messages! {
-    search_commands(shortcut: &str) => "Search commands ({shortcut})" / "搜索命令（{shortcut}）";
     undo_action(action: &str) => "Undo {action}" / "撤销{action}";
     redo_action(action: &str) => "Redo {action}" / "重做{action}";
 }

@@ -8,28 +8,25 @@ use grana_ui::{
 use crate::message::Message;
 use crate::state::Workspace;
 
-const PANEL_WIDTH: f32 = 472.0;
-const PANEL_PADDING: f32 = 24.0;
+const PANEL_WIDTH: f32 = 440.0;
+const PANEL_PADDING: f32 = 20.0;
 const PANEL_GAP: f32 = 14.0;
-const HERO_HEIGHT: f32 = 52.0;
-const RECENT_HEADER: f32 = 22.0;
-const RECENT_ROW: f32 = 42.0;
-const RECOVERY_HEIGHT: f32 = 88.0;
+const HERO_HEIGHT: f32 = 42.0;
+const RECENT_HEADER: f32 = 20.0;
+const RECENT_ROW: f32 = 44.0;
 const STITCH_GAP: f32 = 8.0;
+
+pub const STARTUP_SIZE: Vec2 = Vec2::new(PANEL_WIDTH, 180.0);
 
 struct Status {
     text: String,
-    detail: String,
+    detail: Option<String>,
     busy: bool,
     error: bool,
 }
 
 pub(crate) fn window_size(panel: Vec2) -> Vec2 {
-    let floor = crate::settings_panel::window_floor();
-    Vec2::new(
-        panel.x.max(floor.x),
-        crate::chrome::TITLE_HEIGHT + panel.y.max(floor.y),
-    )
+    Vec2::new(PANEL_WIDTH, panel.y.max(168.0))
 }
 
 pub(crate) fn view<'a>(
@@ -40,19 +37,8 @@ pub(crate) fn view<'a>(
 ) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let status = status(view, workspace.language);
-    let language = workspace.language;
-    let detail_style = TextStyle::new(
-        theme.font(Level::Body),
-        if status.error {
-            palette.error
-        } else {
-            palette.on_surface_variant
-        },
-    )
-    .wrapping();
     let shown = view.recent.len().min(crate::RECENT_LIMIT);
-    let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.58 * full.height()));
+    let glow = Rect::from_min_size(full.min, Vec2::new(full.width(), 0.62 * full.height()));
     let primary = palette.primary;
     let panel_color = palette.surface_container_low;
     let mut elements = vec![
@@ -62,7 +48,7 @@ pub(crate) fn view<'a>(
                 painter.gradient(
                     glow,
                     Corners::ZERO,
-                    panel_color.lerp(primary, 0.09),
+                    panel_color.lerp(primary, 0.08),
                     panel_color,
                 );
             })
@@ -70,79 +56,35 @@ pub(crate) fn view<'a>(
             .at(full)
             .layer(Layer::Content),
     ];
-    let mut children = vec![
-        hero_header(ctx, &status, workspace),
-        grana_ui::text(status.detail.clone(), detail_style),
-    ];
+    let mut children = vec![hero_header(ctx, workspace)];
+    if let Some(status) = status(view, workspace.language) {
+        children.push(status_banner(ctx, &status));
+    }
     let mut popups = Vec::new();
     match view.stitch.as_ref() {
         Some(stitch) => children.push(stitch_block(ctx, stitch, &mut popups)),
         None => {
-            children.push(primary_actions(ctx, &mut popups));
             if let Some(recovery) = view.recovery.as_ref() {
                 children.push(recovery_block(ctx, recovery));
             }
-            let inner = theme.metrics.corner_sm;
-            let third = (PANEL_WIDTH - 2.0 * PANEL_PADDING - 2.0 * theme.metrics.group_gap) / 3.0;
-            children.push(
-                grana_ui::row().gap(theme.metrics.group_gap).children([
-                    grana_ui::widget::action_button(
-                        &theme,
-                        Icon::Folder,
-                        grana_i18n::shell::ome_zarr_folder(language),
-                        Role::SurfaceHigh,
-                    )
-                    .shaped(Corners::group_horizontal(
-                        0,
-                        3,
-                        Corners::CAPSULE,
-                        inner,
-                        false,
-                    ))
-                    .width(Length::Fixed(third))
-                    .named("shell.open.dataset")
-                    .press(Message::Command(Command::OpenDataset)),
-                    grana_ui::widget::action_button(
-                        &theme,
-                        Icon::Globe,
-                        grana_i18n::shell::remote_ome_zarr(language),
-                        Role::SurfaceHigh,
-                    )
-                    .shaped(Corners::group_horizontal(
-                        1,
-                        3,
-                        Corners::CAPSULE,
-                        inner,
-                        false,
-                    ))
-                    .width(Length::Fixed(third))
-                    .named("shell.open.remote")
-                    .press(Message::BeginRemote),
-                    grana_ui::widget::action_button(
-                        &theme,
-                        Icon::Folder,
-                        grana_i18n::shell::project(language),
-                        Role::SurfaceHigh,
-                    )
-                    .shaped(Corners::group_horizontal(
-                        2,
-                        3,
-                        Corners::CAPSULE,
-                        inner,
-                        false,
-                    ))
-                    .width(Length::Fixed(third))
-                    .named("shell.open.project")
-                    .press(Message::Command(Command::OpenProject)),
-                ]),
-            );
+            children.push(open_bento(ctx, &mut popups));
         }
     }
     if shown > 0 {
         children.push(recent_block(ctx, view));
     }
+    let top_pad = if workspace.chrome.leading > 0.0 {
+        PANEL_PADDING + 14.0
+    } else {
+        PANEL_PADDING
+    };
     let panel = grana_ui::column()
-        .padding(Edges::all(PANEL_PADDING))
+        .padding(Edges {
+            left: PANEL_PADDING,
+            top: top_pad,
+            right: PANEL_PADDING,
+            bottom: PANEL_PADDING,
+        })
         .gap(PANEL_GAP)
         .width(Length::Fixed(PANEL_WIDTH))
         .children(children)
@@ -151,7 +93,7 @@ pub(crate) fn view<'a>(
         grana_ui::column()
             .padding(Edges {
                 left: ((full.width() - PANEL_WIDTH) * 0.5).max(0.0),
-                top: crate::chrome::TITLE_HEIGHT,
+                top: 0.0,
                 right: 0.0,
                 bottom: 0.0,
             })
@@ -165,89 +107,108 @@ pub(crate) fn view<'a>(
 
 fn hero_header<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    status: &Status,
     workspace: &Workspace,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let brand = grana_ui::canvas(Length::Fixed(48.0), 48.0)
+    let brand = grana_ui::canvas(Length::Fixed(40.0), 40.0)
         .view_static(|painter, info| {
-            let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(44.0));
+            let badge = Rect::from_center_size(info.rect.center(), Vec2::splat(36.0));
             grana_brand::paint(painter, badge);
         })
         .named("shell.brand");
-    let title_color = if status.error {
-        palette.error
-    } else {
-        palette.on_surface
-    };
-    let mut status_row = Vec::new();
-    if status.busy {
-        status_row.push(crate::view::spinner(ctx, 16.0));
-    }
-    status_row.push(grana_ui::text(
-        status.text.clone(),
-        TextStyle::new(theme.font(Level::Headline), title_color).truncating(),
-    ));
-    let language = ctx.language();
     let close = workspace.chrome.controls && workspace.chrome.close_only;
-    let controls = if close { 2.0 } else { 1.0 };
-    let trail_width = 36.0 * controls + 4.0 * (controls - 1.0);
-    let title_col = grana_ui::column()
-        .width(Length::Fixed(
-            PANEL_WIDTH - 2.0 * PANEL_PADDING - 48.0 - 12.0 - trail_width,
-        ))
-        .gap(2.0)
-        .justify(Align::Center)
-        .children([
-            grana_ui::text(
+    let trail_width = if close { 32.0 } else { 0.0 };
+    let display = theme.font(Level::Display);
+    let title_width = PANEL_WIDTH - 2.0 * PANEL_PADDING - 40.0 - 12.0 - trail_width;
+    let title = grana_ui::canvas(Length::Fixed(title_width), HERO_HEIGHT).view_static(
+        move |painter, info| {
+            painter.text_in(
+                info.rect,
                 "Grana",
-                TextStyle::new(theme.font(Level::Display), palette.on_surface),
-            ),
-            grana_ui::row()
-                .gap(6.0)
-                .align(Align::Center)
-                .children(status_row),
-        ]);
-    let settings = crate::view::icon_button(
-        ctx,
-        "shell.settings",
-        Icon::Sliders,
-        36.0,
-        Role::Standard,
-        grana_i18n::header::settings(language),
-        Message::ToggleSettings(true),
+                TextStyle::new(display, palette.on_surface),
+                Align::Center,
+            );
+        },
     );
-    let mut trail = vec![settings];
+    let mut row = vec![brand, title];
     if close {
-        trail.push(crate::chrome::close_button(ctx, 36.0));
+        row.push(crate::chrome::close_button(ctx, 32.0));
     }
     grana_ui::row()
         .gap(12.0)
         .align(Align::Center)
         .height(Length::Fixed(HERO_HEIGHT))
-        .children([brand, title_col, grana_ui::row().gap(4.0).children(trail)])
+        .children(row)
 }
 
-fn primary_actions<'a>(
+fn status_banner<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let (bg, fg) = if status.error {
+        (palette.error_container, palette.on_error_container)
+    } else {
+        (palette.surface_container, palette.on_surface)
+    };
+    let mut row = Vec::new();
+    if status.busy {
+        row.push(crate::view::spinner(ctx, 16.0));
+    } else if status.error {
+        row.push(grana_ui::widget::icon(
+            Icon::Warning,
+            16.0,
+            fg,
+            IconStyle::REGULAR,
+        ));
+    }
+    row.push(
+        grana_ui::text(
+            status.text.clone(),
+            TextStyle::new(theme.font(Level::Label), fg).truncating(),
+        )
+        .width(Length::Fill),
+    );
+    if let Some(detail) = &status.detail {
+        row.push(grana_ui::text(
+            detail.clone(),
+            TextStyle::new(theme.font(Level::Monospace), fg.with_alpha(0.8)),
+        ));
+    }
+    let mut surface = theme.surface(Role::Card, State::Rest);
+    surface.fill = Fill::Solid(bg);
+    surface.corners = Corners::all(theme.metrics.corner_md);
+    grana_ui::row()
+        .width(Length::Fill)
+        .padding(Edges::symmetric(14.0, 10.0))
+        .gap(8.0)
+        .align(Align::Center)
+        .background(surface)
+        .children(row)
+}
+
+fn open_bento<'a>(
     ctx: &mut BuildContext<'_, Message>,
     popups: &mut Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let language = ctx.language();
+    let outer = theme.metrics.corner_lg;
     let inner = theme.metrics.corner_xs;
+    let gap = theme.metrics.group_gap;
+    let content_width = PANEL_WIDTH - 2.0 * PANEL_PADDING;
     let menu_key = Key::new("shell.open.menu");
     let open = ctx.popup_open(menu_key);
-    let lead_w = PANEL_WIDTH - 2.0 * PANEL_PADDING - 38.0 - theme.metrics.group_gap;
+    let primary_h = 40.0;
+    let lead_w = content_width - primary_h - gap;
     let lead = grana_ui::widget::action_button(
         &theme,
         Icon::Cube,
         grana_i18n::shell::open_image(language),
         Role::Filled,
     )
-    .shaped(Corners::split_leading(inner))
+    .shaped(Corners::new(outer, inner, inner, inner))
     .width(Length::Fixed(lead_w))
-    .height(Length::Fixed(38.0))
+    .height(Length::Fixed(primary_h))
     .named("shell.open.image")
     .press(Message::Command(Command::OpenImage));
     let trail = grana_ui::widget::icon_button(
@@ -256,14 +217,14 @@ fn primary_actions<'a>(
         } else {
             Icon::ChevronDown
         },
-        38.0,
+        primary_h,
         Role::Filled,
         "",
     )
     .shaped(if open {
         Corners::capsule()
     } else {
-        Corners::split_trailing(inner)
+        Corners::new(inner, outer, inner, inner)
     })
     .key(menu_key)
     .press(Message::Noop);
@@ -301,7 +262,7 @@ fn primary_actions<'a>(
                 None,
                 Message::BeginRemote,
             ),
-            grana_ui::spacer(8.0),
+            grana_ui::spacer(6.0),
             crate::view::action_menu_message(
                 ctx,
                 "shell.menu.project",
@@ -327,11 +288,55 @@ fn primary_actions<'a>(
             std::iter::empty(),
         ));
     }
-    grana_ui::row()
-        .gap(theme.metrics.group_gap)
+    let top_row = grana_ui::row()
+        .gap(gap)
         .align(Align::Center)
-        .height(Length::Fixed(38.0))
-        .children([lead, trail])
+        .height(Length::Fixed(primary_h))
+        .children([lead, trail]);
+
+    let secondary_h = 36.0;
+    let third = (content_width - 2.0 * gap) / 3.0;
+    let bottom_row = grana_ui::row()
+        .gap(gap)
+        .align(Align::Center)
+        .height(Length::Fixed(secondary_h))
+        .children([
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Folder,
+                grana_i18n::shell::ome_zarr_folder(language),
+                Role::SurfaceHigh,
+            )
+            .shaped(Corners::new(inner, inner, inner, outer))
+            .width(Length::Fixed(third))
+            .height(Length::Fixed(secondary_h))
+            .named("shell.open.dataset")
+            .press(Message::Command(Command::OpenDataset)),
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Globe,
+                grana_i18n::shell::remote_ome_zarr(language),
+                Role::SurfaceHigh,
+            )
+            .shaped(Corners::all(inner))
+            .width(Length::Fixed(third))
+            .height(Length::Fixed(secondary_h))
+            .named("shell.open.remote")
+            .press(Message::BeginRemote),
+            grana_ui::widget::action_button(
+                &theme,
+                Icon::Folder,
+                grana_i18n::shell::project(language),
+                Role::SurfaceHigh,
+            )
+            .shaped(Corners::new(inner, inner, outer, inner))
+            .width(Length::Fixed(third))
+            .height(Length::Fixed(secondary_h))
+            .named("shell.open.project")
+            .press(Message::Command(Command::OpenProject)),
+        ]);
+
+    grana_ui::column().gap(gap).children([top_row, bottom_row])
 }
 
 fn stitch_block<'a>(
@@ -481,64 +486,48 @@ fn grids(tiles: usize) -> Vec<(usize, usize)> {
     rows
 }
 
-fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Status {
-    if let Some(stitch) = view.stitch.as_ref() {
-        return Status {
-            text: grana_i18n::shell::no_dataset(language).to_string(),
-            detail: stitch.folder.clone(),
-            busy: stitch.running,
-            error: false,
-        };
-    }
+fn status(view: &SessionView<'_>, language: grana_i18n::Language) -> Option<Status> {
     if let Some((label, done, total)) = view.io.document {
-        return Status {
+        return Some(Status {
             text: grana_i18n::common::task(language, label),
-            detail: grana_i18n::shell::steps_complete(language, done, total),
+            detail: (total > 0).then(|| grana_i18n::shell::steps_complete(language, done, total)),
             busy: true,
             error: false,
-        };
+        });
     }
     if let Some(label) = view.io.loading {
-        return Status {
+        return Some(Status {
             text: grana_i18n::shell::opening(language, label),
-            detail: grana_i18n::shell::loading_detail(language).to_string(),
+            detail: None,
             busy: true,
             error: false,
-        };
+        });
     }
     if let Some((label, done, total)) = view.io.label {
-        return Status {
+        return Some(Status {
             text: grana_i18n::common::task(language, label),
-            detail: grana_i18n::shell::steps_stored(language, done, total),
+            detail: (total > 0).then(|| grana_i18n::shell::steps_stored(language, done, total)),
             busy: true,
             error: false,
-        };
+        });
     }
     if let Some(failure) = view.io.failure {
-        return Status {
-            text: grana_i18n::shell::nothing_opened(language).to_string(),
-            detail: failure.to_string(),
+        return Some(Status {
+            text: failure.to_string(),
+            detail: None,
             busy: false,
             error: true,
-        };
+        });
     }
     if let Some(message) = view.io.message {
-        return Status {
-            text: match message.kind() {
-                Kind::Error => grana_i18n::shell::nothing_opened(language).to_string(),
-                Kind::Info => grana_i18n::shell::ready(language).to_string(),
-            },
-            detail: message.text().to_string(),
+        return Some(Status {
+            text: message.text().to_string(),
+            detail: None,
             busy: false,
             error: message.kind() == Kind::Error,
-        };
+        });
     }
-    Status {
-        text: grana_i18n::shell::no_dataset(language).to_string(),
-        detail: grana_i18n::shell::no_dataset_detail(language).to_string(),
-        busy: false,
-        error: false,
-    }
+    None
 }
 
 fn recovery_block<'a>(
@@ -553,32 +542,41 @@ fn recovery_block<'a>(
     let detail = grana_i18n::shell::saved_detail(language, &recovery.detail, &saved);
     let mut surface = theme.surface(Role::Card, State::Rest);
     surface.fill = Fill::Solid(palette.tertiary_container);
+    let inner = theme.metrics.corner_xs;
+    let gap = theme.metrics.group_gap;
     grana_ui::column()
         .padding(Edges::all(12.0))
-        .gap(6.0)
-        .height(Length::Fixed(RECOVERY_HEIGHT))
+        .gap(8.0)
         .background(surface)
         .children([
-            grana_ui::text(
-                headline,
-                TextStyle::new(theme.font(Level::Title), palette.on_tertiary_container)
-                    .truncating(),
-            ),
-            grana_ui::text(
-                detail,
-                TextStyle::new(
-                    theme.font(Level::Caption),
-                    palette.on_tertiary_container.with_alpha(0.82),
-                )
-                .truncating(),
-            ),
-            grana_ui::row().gap(6.0).children([
+            grana_ui::row()
+                .width(Length::Fill)
+                .align(Align::Center)
+                .children([
+                    grana_ui::text(
+                        headline,
+                        TextStyle::new(theme.font(Level::Title), palette.on_tertiary_container)
+                            .truncating(),
+                    )
+                    .width(Length::Fill),
+                    grana_ui::text(
+                        detail,
+                        TextStyle::new(
+                            theme.font(Level::Caption),
+                            palette.on_tertiary_container.with_alpha(0.78),
+                        )
+                        .truncating(),
+                    ),
+                ]),
+            grana_ui::row().gap(gap).children([
                 grana_ui::widget::action_button(
                     &theme,
                     Icon::Undo,
                     grana_i18n::shell::recover(language),
                     Role::Filled,
                 )
+                .shaped(Corners::split_leading(inner))
+                .width(Length::Fill)
                 .named("shell.recover")
                 .press(Message::Command(Command::RecoverAnalysis)),
                 grana_ui::widget::action_button(
@@ -587,6 +585,8 @@ fn recovery_block<'a>(
                     grana_i18n::shell::discard(language),
                     Role::SurfaceHigh,
                 )
+                .shaped(Corners::split_trailing(inner))
+                .width(Length::Fill)
                 .named("shell.discard")
                 .press(Message::Command(Command::DiscardAnalysis)),
             ]),
@@ -683,11 +683,22 @@ fn recent_row<'a>(
                     corners
                 };
                 painter.rect(rect, row_corners, fill);
+                let badge = Rect::from_center_size(
+                    Vec2::new(rect.min.x + 21.0, rect.center().y),
+                    Vec2::splat(26.0),
+                );
+                painter.rect(
+                    badge,
+                    Corners::all(8.0),
+                    palette
+                        .surface_container_high
+                        .lerp(palette.primary.with_alpha(0.18), info.hover),
+                );
                 grana_ui::icon::paint(
                     symbol,
                     painter,
-                    Vec2::new(rect.min.x + 17.0, rect.center().y),
-                    16.0,
+                    badge.center(),
+                    15.0,
                     palette
                         .primary
                         .lerp(palette.on_secondary_container, info.hover),
@@ -695,8 +706,8 @@ fn recent_row<'a>(
                 );
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(rect.min.x + 34.0, rect.min.y + 4.0),
-                        Vec2::new(rect.max.x - 26.0, rect.min.y + 22.0),
+                        Vec2::new(rect.min.x + 42.0, rect.min.y + 4.0),
+                        Vec2::new(rect.max.x - 28.0, rect.min.y + 22.0),
                     ),
                     &title,
                     title_style,
@@ -704,8 +715,8 @@ fn recent_row<'a>(
                 );
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(rect.min.x + 34.0, rect.min.y + 21.0),
-                        Vec2::new(rect.max.x - 26.0, rect.max.y - 4.0),
+                        Vec2::new(rect.min.x + 42.0, rect.min.y + 22.0),
+                        Vec2::new(rect.max.x - 28.0, rect.max.y - 4.0),
                     ),
                     &detail,
                     detail_style,
@@ -714,7 +725,7 @@ fn recent_row<'a>(
                 grana_ui::icon::paint(
                     Icon::ChevronRight,
                     painter,
-                    Vec2::new(rect.max.x - 14.0, rect.center().y),
+                    Vec2::new(rect.max.x - 15.0, rect.center().y),
                     16.0,
                     palette
                         .outline

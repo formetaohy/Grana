@@ -41,8 +41,6 @@ pub fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    let channel = state.scene.selected;
-    let channel_name = state.scene.channel(channel).name().to_string();
     let count = state.scene.objects.len();
     let language = ctx.language();
     let loading = state.io.loading.is_some();
@@ -61,7 +59,6 @@ pub fn view<'a>(
             ctx,
             Icon::Layers,
             grana_i18n::object::no_sets(language),
-            &grana_i18n::object::no_sets_detail(language, &channel_name),
         ));
         return elements;
     }
@@ -328,15 +325,6 @@ fn count_noun(language: Language, kind: ObjectKind) -> &'static str {
     }
 }
 
-fn description(language: Language, kind: ObjectKind) -> &'static str {
-    match kind {
-        ObjectKind::Spots => grana_i18n::object::spots_description(language),
-        ObjectKind::Surfaces => grana_i18n::object::surfaces_description(language),
-        ObjectKind::Filaments => grana_i18n::object::filaments_description(language),
-        ObjectKind::Cells => grana_i18n::object::cells_description(language),
-    }
-}
-
 fn object<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
@@ -387,7 +375,9 @@ fn object<'a>(
             }
             children.push(detect(ctx, state, id, kind, frames));
         }
-        children.push(summary(ctx, kind, current, mean, detected, frames, time));
+        if let Some(element) = summary(ctx, kind, current, mean, detected, frames, time) {
+            children.push(element);
+        }
         if set.localization().is_some() {
             children.push(localization::card(ctx, state, set));
         }

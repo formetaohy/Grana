@@ -14,42 +14,11 @@ pub fn apply(
     frame: &mut Frame,
 ) {
     let commands = &mut frame.commands;
-    let mut queue = std::collections::VecDeque::from(actions);
-    while let Some(action) = queue.pop_front() {
+    let queue = std::collections::VecDeque::from(actions);
+    for action in queue {
         match action {
             Message::Noop => {}
             Message::Copy(text) => ui.copy(&text),
-            Message::OpenPalette => {
-                workspace.palette = match workspace.palette {
-                    Some(_) => None,
-                    None => Some(crate::state::Palette::default()),
-                };
-                workspace.palette_actions.clear();
-            }
-            Message::ClosePalette => {
-                workspace.palette = None;
-                workspace.palette_actions.clear();
-            }
-            Message::RunSelected => {
-                let selected = workspace
-                    .palette
-                    .as_ref()
-                    .map_or(0, |palette| palette.selected);
-                let chosen = workspace.palette_actions.get(selected).cloned();
-                workspace.palette = None;
-                workspace.palette_actions.clear();
-                if let Some(chosen) = chosen {
-                    queue.push_front(chosen);
-                }
-            }
-            Message::RunPaletteIndex(index) => {
-                let chosen = workspace.palette_actions.get(index).cloned();
-                workspace.palette = None;
-                workspace.palette_actions.clear();
-                if let Some(chosen) = chosen {
-                    queue.push_front(chosen);
-                }
-            }
             Message::Command(command) => {
                 let busy = view.io.loading.is_some()
                     && matches!(
@@ -87,11 +56,6 @@ pub fn apply(
             Message::SetLanguage(language) => workspace.language = language,
             Message::ToggleSettings(open) => {
                 workspace.settings.open = open;
-            }
-            Message::SetSettingsSection(index) => {
-                if index < crate::state::Settings::SECTIONS {
-                    workspace.settings.section = index;
-                }
             }
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {

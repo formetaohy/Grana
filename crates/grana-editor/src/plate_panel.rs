@@ -3,8 +3,8 @@ use std::hash::{Hash, Hasher};
 use glam::Vec2;
 use grana_session::{Command, PlateView, Well};
 use grana_ui::{
-    Align, Bitmap, BuildContext, Color, Corners, Element, Fill, Icon, Key, Length, Level, Rect,
-    Role, TextStyle, TypeStyle,
+    Align, Bitmap, BuildContext, Color, Corners, Element, Icon, Key, Length, Level, Rect, Role,
+    TextStyle, TypeStyle,
 };
 
 use crate::message::Message;
@@ -21,15 +21,9 @@ pub fn view<'a>(
 ) -> Element<'a, Message> {
     let language = ctx.language();
     let Some(plate) = state.plate.as_ref() else {
-        return view::empty_state(
-            ctx,
-            Icon::Grid,
-            grana_i18n::plate::no_plate(language),
-            grana_i18n::plate::no_plate_detail(language),
-        );
+        return view::empty_state(ctx, Icon::Grid, grana_i18n::plate::no_plate(language));
     };
-    let mut children = vec![summary(ctx, plate)];
-    children.push(grid(ctx, plate, width));
+    let mut children = vec![grid_card(ctx, plate, width)];
     if let Some(well) = plate.selected_well() {
         children.push(fields(ctx, plate, well));
     }
@@ -39,7 +33,11 @@ pub fn view<'a>(
         .children(children)
 }
 
-fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Element<'a, Message> {
+fn grid_card<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    view: &PlateView<'_>,
+    width: f32,
+) -> Element<'a, Message> {
     let language = ctx.language();
     let plate = view.plate;
     let fields = plate.len();
@@ -60,8 +58,8 @@ fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Ele
             wells,
             &previews,
         )),
-    );
-    let hint = view::weak(ctx, grana_i18n::plate::every_well(language));
+    )
+    .width(Length::Fill);
     let export = view::button(
         ctx,
         grana_i18n::plate::export_montage(language),
@@ -69,15 +67,12 @@ fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Ele
     )
     .named("plate.export")
     .press(Message::Command(Command::ExportPlate));
-    view::card(ctx, 8.0, vec![title, hint, export])
-}
+    let header = grana_ui::row()
+        .width(Length::Fill)
+        .gap(8.0)
+        .align(Align::Center)
+        .children([title, export]);
 
-fn grid<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    view: &PlateView<'_>,
-    width: f32,
-) -> Element<'a, Message> {
-    let plate = view.plate;
     let selected = view.selected_well();
     let side = cell_side(plate.columns(), width);
     let columns = plate.columns();
@@ -101,7 +96,11 @@ fn grid<'a>(
                 .children(cells),
         );
     }
-    view::card(ctx, 8.0, vec![grana_ui::column().gap(GAP).children(rows)])
+    view::card(
+        ctx,
+        10.0,
+        vec![header, grana_ui::column().gap(GAP).children(rows)],
+    )
 }
 
 struct Cell {
@@ -155,12 +154,7 @@ fn cell<'a>(
         .view(props, move |cell, painter, info| {
             let rect = info.rect;
             let engaged = info.hover.max(info.press);
-            let corners = Corners::all(if cell.active { 12.0 } else { 8.0 });
-            let border = if cell.active {
-                palette.primary
-            } else {
-                palette.outline_variant.amplify(0.4 + 0.6 * engaged)
-            };
+            let corners = Corners::all(if cell.active { 14.0 } else { 8.0 });
             if cell.present {
                 let fill = if cell.active {
                     palette.secondary_container
@@ -174,18 +168,8 @@ fn cell<'a>(
                 painter.rect(rect, corners, palette.surface_container_lowest);
             }
             if let Some(bitmap) = &cell.thumbnail {
-                painter.bitmap(rect, corners, bitmap);
-            }
-            if cell.present && cell.active {
-                painter.outlined(
-                    rect,
-                    corners,
-                    Fill::None,
-                    grana_ui::Border {
-                        width: 2.0,
-                        color: border,
-                    },
-                );
+                let inner = if cell.active { rect.shrink(3.0) } else { rect };
+                painter.bitmap(inner, Corners::all(8.0), bitmap);
             }
             if cell.present {
                 let tint = if cell.lit {

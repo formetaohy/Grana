@@ -11,16 +11,15 @@ labels! {
     blur_width => "Blur" / "模糊";
     slice => "Slice" / "层";
     slice_depth => "Slice depth" / "层厚";
-    slice_projection => "0 projects every height" / "0 表示投影全部高度";
     projected => "Project frames" / "投影帧区间";
     precision => "Precision" / "精度";
-    precision_missing => "Needs two frames" / "需要两帧";
+    precision_missing => "—" / "—";
     resolution => "Resolution" / "分辨率";
     groups => "Groups" / "分组";
     ungrouped => "Ungrouped" / "未分组";
     neighbours => "Neighbours" / "最近邻";
     correlation => "Fourier ring correlation" / "傅里叶环相关";
-    resolution_missing => "No ring reaches the 1/7 threshold" / "没有环达到 1/7 阈值";
+    resolution_missing => "—" / "—";
     curve_data => "Measured" / "实测";
     curve_fit => "Fit" / "拟合";
     curve_smooth => "Smoothed" / "平滑";
@@ -32,23 +31,21 @@ labels! {
     minimum => "Min locs" / "最少定位";
     cluster => "Cluster" / "聚类";
     estimate => "Estimate" / "估计";
-    clustered => "Clustered" / "已聚类";
     photons => "Min photons" / "最少光子";
     precision_limit => "Max precision" / "最大精度";
     color_by_group => "Color by group" / "按分组着色";
-    region_scoped => "Correlated inside the region of interest" / "在所选区域内做相关";
 }
 
 messages! {
-    summary(pixel: f32) => "{pixel:.1} nm/px" / "{pixel:.1} nm/像素";
-    span(start: u32, end: u32) => "frames {start}–{end}" / "第 {start}–{end} 帧";
+    summary(pixel: f32) => "{pixel:.1} nm/px" / "{pixel:.1} nm/px";
+    span(start: u32, end: u32) => "F{start}–{end}" / "F{start}–{end}";
     nanometres(value: f32) => "{value:.1} nm" / "{value:.1} nm";
-    neighbour_pairs(pairs: f64) => "{pairs:.0} pairs" / "{pairs:.0} 对";
-    localizations(count: u64) => "{count} localizations" / "{count} 个定位";
-    molecule_count(count: usize) => "{count} molecules" / "{count} 个分子";
-    group_count(count: usize) => "{count} groups" / "{count} 个分组";
-    groups_truncated(shown: usize, total: usize) => "top {shown} of {total} groups" / "{total} 个分组中最大的 {shown} 个";
+    neighbour_pairs(pairs: f64) => "{pairs:.0}" / "{pairs:.0}";
+    localizations(count: u64) => "{count} locs" / "{count} 个定位";
+    molecule_count(count: usize) => "{count}" / "{count}";
+    group_count(count: usize) => "{count}" / "{count}";
+    groups_truncated(shown: usize, total: usize) => "{shown}/{total}" / "{shown}/{total}";
     group(index: u32) => "Group {index}" / "分组 {index}";
-    group_detail(count: u64, precision: f32) => "{count} locs · {precision:.1} nm" / "{count} 个定位 · {precision:.1} nm";
+    group_detail(count: u64, precision: f32) => "{count} · {precision:.1} nm" / "{count} · {precision:.1} nm";
     slice_range(low: f32, high: f32) => "{low:.1}–{high:.1} nm" / "{low:.1}–{high:.1} nm";
 }

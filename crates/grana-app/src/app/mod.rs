@@ -180,6 +180,14 @@ impl App {
     pub(super) fn resume(&mut self, event_loop: &ActiveEventLoop) {
         let icon = winit::window::Icon::from_rgba(grana_brand::icon(256), 256, 256)
             .expect("the brand mark rasterizes to a window icon");
+        let initial = if self.startup.is_some() {
+            EDITOR_SIZE
+        } else {
+            LogicalSize::new(
+                grana_editor::STARTUP_SIZE.x as f64,
+                grana_editor::STARTUP_SIZE.y as f64,
+            )
+        };
         let window = Arc::new(
             event_loop
                 .create_window(window::attributes(
@@ -187,7 +195,7 @@ impl App {
                         .with_title("Grana")
                         .with_window_icon(Some(icon))
                         .with_visible(false)
-                        .with_inner_size(EDITOR_SIZE)
+                        .with_inner_size(initial)
                         .with_min_inner_size(STARTUP_MINIMUM),
                 ))
                 .expect("failed to create the window"),
@@ -399,10 +407,10 @@ impl App {
     }
 
     fn fit_window(&mut self, frame: &Frame) {
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let window = &surface.window;
+        let window = surface.window.clone();
         match self.window_fit {
             WindowFit::Startup => {
                 let Some(size) = frame.startup else {
@@ -415,6 +423,8 @@ impl App {
                 let size = LogicalSize::new(size.x as f64, size.y as f64);
                 window.set_min_inner_size(Some(size));
                 let _ = window.request_inner_size(size);
+                let inner = window.inner_size();
+                surface.gpu.resize([inner.width, inner.height]);
             }
             WindowFit::Editor => {
                 if self.window_fitted {
@@ -428,6 +438,8 @@ impl App {
                         current.width.max(EDITOR_SIZE.width),
                         current.height.max(EDITOR_SIZE.height),
                     ));
+                    let inner = window.inner_size();
+                    surface.gpu.resize([inner.width, inner.height]);
                 }
                 self.window_fitted = true;
             }

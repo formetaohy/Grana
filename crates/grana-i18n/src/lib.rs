@@ -11,7 +11,6 @@ pub mod inspector;
 pub mod localization;
 pub mod measure;
 pub mod object;
-pub mod palette;
 pub mod panel;
 pub mod plate;
 pub mod relation;

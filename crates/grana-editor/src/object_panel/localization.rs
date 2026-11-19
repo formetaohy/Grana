@@ -258,12 +258,6 @@ pub(super) fn card<'a>(
             language,
             report,
         ));
-        if report.frc().scoped() {
-            children.push(view::caption(
-                ctx,
-                grana_i18n::localization::region_scoped(language),
-            ));
-        }
     }
     let molecules = set.tracks().map_or(0, |tracks| tracks.set().len());
     let detail =
@@ -516,12 +510,6 @@ fn fields<'a>(
             precision_row,
         ),
     ];
-    if spec.depth() == 0.0 {
-        rows.push(view::caption(
-            ctx,
-            grana_i18n::localization::slice_projection(language),
-        ));
-    }
     if set
         .localization()
         .is_some_and(grana_scene::LocalizationSource::photons)

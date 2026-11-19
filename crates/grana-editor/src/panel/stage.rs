@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Handle, Label, Legend, Viewport};
 use grana_ui::{
-    BuildContext, Color, Corners, Edges, Element, Icon, IconStyle, Key, Layer, Length, Level, Rect,
-    Role, State, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Edges, Element, Fill, Icon, IconStyle, Key, Layer, Length,
+    Level, Motion, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -119,23 +119,27 @@ fn mask_bar<'a>(
             Message::SetMaskRadius,
         ));
     }
+    let inner = ctx.theme().metrics.corner_xs;
+    let gap = ctx.theme().metrics.group_gap;
     rows.push(
-        grana_ui::row().gap(6.0).children([
-            crate::view::button_with(
+        grana_ui::row().gap(gap).children([
+            crate::view::button_shaped(
                 ctx,
                 grana_i18n::common::clear(language),
                 Role::SurfaceHigh,
                 Length::Fill,
+                Corners::split_leading(inner),
             )
             .named("mask.clear")
             .press(Message::Command(grana_session::Command::ClearMask(
                 brush.set,
             ))),
-            crate::view::button_with(
+            crate::view::button_shaped(
                 ctx,
                 grana_i18n::common::done(language),
                 Role::Filled,
                 Length::Fill,
+                Corners::split_trailing(inner),
             )
             .named("mask.done")
             .press(Message::DisarmMask),
@@ -168,44 +172,88 @@ pub(crate) fn remote<'a>(
     stage: Rect,
     open: bool,
 ) -> Vec<Element<'a, Message>> {
-    if !open {
+    let target = if open { 1.0 } else { 0.0 };
+    let spatial = ctx.animate(
+        Key::new("remote.spatial").id(),
+        target,
+        Motion::spatial_default(),
+    );
+    let effect = ctx.animate(
+        Key::new("remote.effect").id(),
+        target,
+        Motion::effect_default(),
+    );
+    if !open && effect <= 0.005 && spatial <= 0.005 {
         return Vec::new();
     }
-    let palette = ctx.theme().palette;
+    let theme = *ctx.theme();
+    let palette = theme.palette;
     let language = ctx.language();
-    let width = (stage.width() - 40.0).min(520.0);
-    let title = crate::view::card_title(
-        ctx,
-        Icon::Globe,
-        grana_i18n::annotation::open_remote(language),
-        Some(grana_i18n::annotation::http_range(language)),
+    let alpha = effect.clamp(0.0, 1.0);
+    let scale = (0.90 + 0.10 * spatial).max(0.5);
+    let slide = (1.0 - spatial) * -14.0;
+    let width = (stage.width() - 32.0).clamp(260.0, 400.0);
+    let height = 104.0;
+    let rect = Rect::from_center_size(
+        stage.center() + Vec2::new(0.0, slide),
+        Vec2::new(width * scale, height * scale),
     );
-    let tip = crate::view::caption(ctx, grana_i18n::annotation::remote_tip(language));
+    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
+    let backdrop = grana_ui::canvas(Length::Fill, stage.height())
+        .view(alpha.to_bits(), move |_, painter, info| {
+            painter.rect(info.rect, Corners::ZERO, scrim);
+        })
+        .named("remote.scrim")
+        .at(stage)
+        .layer(Layer::Popup);
+    let backdrop = if open {
+        backdrop.press(Message::CancelRemote)
+    } else {
+        backdrop
+    };
+    let head = grana_ui::row()
+        .width(Length::Fill)
+        .align(Align::Center)
+        .children([
+            crate::view::card_title(
+                ctx,
+                Icon::Globe,
+                grana_i18n::annotation::open_remote(language),
+                None,
+            )
+            .width(Length::Fill),
+            crate::view::icon_button(
+                ctx,
+                "remote.close",
+                Icon::Close,
+                28.0,
+                Role::SurfaceHigh,
+                grana_i18n::common::cancel(language),
+                Message::CancelRemote,
+            ),
+        ]);
     let field = grana_ui::widget::text_field(
         "",
-        TextStyle::new(ctx.theme().font(Level::Body), palette.on_surface),
-        width - 36.0,
+        TextStyle::new(theme.font(Level::Body), palette.on_surface),
+        (rect.width() - 32.0).max(160.0),
         false,
     )
     .named("remote.url")
-    .editing(true)
+    .editing(open)
     .on_submit(|text: &str| Message::OpenRemote(text.to_string()))
     .on_cancel(|| Message::CancelRemote);
-    let hint = crate::view::caption(ctx, grana_i18n::annotation::remote_hint(language));
-    let surface = ctx
-        .theme()
-        .surface(Role::Menu, State::Rest)
-        .with_corners(Corners::all(ctx.theme().metrics.corner_xl));
+    let mut surface = theme.surface(Role::Sheet, State::Rest);
+    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
+    surface.corners = Corners::all(theme.metrics.corner_xxl);
     let sheet = grana_ui::column()
-        .padding(Edges::all(18.0))
+        .padding(Edges::all(16.0))
         .gap(10.0)
         .background(surface)
-        .children([title, tip, field, hint]);
-    let rect = Rect::from_min_size(
-        Vec2::new(stage.center().x - width * 0.5, stage.min.y + 92.0),
-        Vec2::new(width, 160.0),
-    );
-    vec![sheet.at(rect).layer(Layer::Popup)]
+        .clipped()
+        .children([head, field])
+        .at(rect)
+        .layer(Layer::Popup);
+    vec![backdrop, sheet]
 }
 
 fn viewport<'a>(

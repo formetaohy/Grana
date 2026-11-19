@@ -43,10 +43,6 @@ pub(super) fn slice<'a>(
                 &readout,
                 Message::SetSliceDepth,
             ));
-            children.push(view::caption(
-                ctx,
-                grana_i18n::inspector::slice_help(language),
-            ));
         }
     }
     view::disclosure_group_card(

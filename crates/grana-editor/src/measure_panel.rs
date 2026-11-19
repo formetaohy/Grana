@@ -31,7 +31,6 @@ pub fn view<'a>(
                 ctx,
                 Icon::Table,
                 grana_i18n::measure::no_measurements(language),
-                grana_i18n::measure::no_measurements_detail(language),
             )
             .at(rect),
         ];
@@ -712,7 +711,6 @@ fn table<'a>(
                 ctx,
                 Icon::Table,
                 grana_i18n::measure::no_set_selected(language),
-                grana_i18n::measure::no_set_selected_detail(language),
             )
             .at(rect),
         ];
@@ -720,37 +718,20 @@ fn table<'a>(
     let Some(table) = state.measure.table() else {
         return vec![
             if state.measuring {
-                view::empty_state(
-                    ctx,
-                    Icon::Table,
-                    grana_i18n::measure::measuring(language),
-                    grana_i18n::measure::measuring_detail(language),
-                )
+                view::empty_state(ctx, Icon::Table, grana_i18n::measure::measuring(language))
             } else {
                 view::empty_state(
                     ctx,
                     Icon::Table,
                     grana_i18n::measure::no_detection(language),
-                    grana_i18n::measure::no_detection_detail(language),
                 )
             }
             .at(rect),
         ];
     };
     if table.rows() == 0 {
-        let detail = match state.measure.group() {
-            Group::Track => grana_i18n::measure::no_rows_track_detail(language),
-            Group::Molecule => grana_i18n::measure::no_rows_molecule_detail(language),
-            Group::Object | Group::Timepoint => grana_i18n::measure::no_rows_detail(language),
-        };
         return vec![
-            view::empty_state(
-                ctx,
-                Icon::Table,
-                grana_i18n::measure::no_rows(language),
-                detail,
-            )
-            .at(rect),
+            view::empty_state(ctx, Icon::Table, grana_i18n::measure::no_rows(language)).at(rect),
         ];
     }
     let visible = state.measure.visible();
@@ -767,7 +748,6 @@ fn table<'a>(
                 ctx,
                 Icon::Columns,
                 grana_i18n::measure::no_visible_columns(language),
-                grana_i18n::measure::no_visible_columns_detail(language),
             )
             .at(rect),
         ];

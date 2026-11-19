@@ -22,22 +22,12 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             ctx,
             Icon::Grid,
             grana_i18n::coloc::two_channels_title(language),
-            grana_i18n::coloc::two_channels_detail(language),
         );
     };
     let running = view::progress(state.jobs, Job::Coloc);
     let header = header(ctx, state, pair, running);
     let content = if state.scene.coloc.result().is_none() {
-        view::empty_state(
-            ctx,
-            Icon::Grid,
-            grana_i18n::coloc::no_coloc_title(language),
-            if running.is_some() {
-                grana_i18n::coloc::no_coloc_streaming(language)
-            } else {
-                grana_i18n::coloc::no_coloc_detail(language)
-            },
-        )
+        view::empty_state(ctx, Icon::Grid, grana_i18n::coloc::no_coloc_title(language))
     } else {
         let thresholds = thresholds(ctx, state);
         let side = diagnostics(ctx, state);

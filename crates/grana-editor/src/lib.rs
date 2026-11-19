@@ -12,7 +12,6 @@ mod measure_panel;
 mod message;
 mod object_panel;
 mod overlay;
-mod palette;
 mod panel;
 mod plate_panel;
 mod plot;
@@ -34,10 +33,11 @@ pub use fitting::slice_step;
 pub use grana_chart::Page as ChartPage;
 pub use message::{Message, PlotEvent};
 pub use panel::{Frame, Panel, apply, build};
+pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
-    AnnotationTool, Disclosures, MaskBrush, MaskBrushTool, Palette, Playback, RelationMetric,
-    Settings, View, Workspace,
+    AnnotationTool, Disclosures, MaskBrush, MaskBrushTool, Playback, RelationMetric, Settings,
+    View, Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;

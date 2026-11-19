@@ -81,22 +81,19 @@ pub fn view_body<'a>(
         elements.push(plate(ctx, state));
     }
     let group_gap = ctx.theme().metrics.group_gap;
-    let camera_card = camera(ctx, state, 0, 4);
-    let slice_card = slice(ctx, state, 1, 4);
-    let clip_card = clip(ctx, state, 2, 4);
-    let render_card = rendering(ctx, state, 3, 4);
-    let optics_group = grana_ui::column().gap(group_gap).children([
-        camera_card,
-        slice_card,
-        clip_card,
-        render_card,
-    ]);
-    elements.extend([
-        channels(ctx, state),
-        display(ctx, state),
-        views(ctx, state),
-        optics_group,
-    ]);
+    let show_views = !state.views.is_empty() || state.access.author();
+    let count = if show_views { 5 } else { 4 };
+    let mut group = vec![
+        camera(ctx, state, 0, count),
+        slice(ctx, state, 1, count),
+        clip(ctx, state, 2, count),
+        rendering(ctx, state, 3, count),
+    ];
+    if show_views {
+        group.push(views(ctx, state, 4, count));
+    }
+    let optics_group = grana_ui::column().gap(group_gap).children(group);
+    elements.extend([channels(ctx, state), display(ctx, state), optics_group]);
     elements
 }
 
@@ -115,12 +112,7 @@ fn camera<'a>(
     if open {
         let modes = grana_display::CameraProjection::ALL
             .map(|projection| projection_label(language, projection));
-        if camera.slice().is_some() {
-            children.push(view::caption(
-                ctx,
-                grana_i18n::inspector::slice_caption(language),
-            ));
-        } else {
+        if camera.slice().is_none() {
             let selector = view::segmented_fill(
                 ctx,
                 "camera.projection",
@@ -130,12 +122,7 @@ fn camera<'a>(
             );
             children.push(selector);
         }
-        if projection.orthographic() {
-            children.push(view::caption(
-                ctx,
-                grana_i18n::inspector::parallel_caption(language),
-            ));
-        } else {
+        if !projection.orthographic() && camera.slice().is_none() {
             let world = state.scene.dataset.world_size();
             let aperture = camera.aperture();
             let limit = (0.08 * world.length()).max(1.0e-3);
@@ -208,55 +195,70 @@ fn projection_label(
     }
 }
 
-fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let count = state.views.len();
+fn views<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    index: usize,
+    count: usize,
+) -> Element<'a, Message> {
+    let saved = state.views.len();
     let language = ctx.language();
-    let detail = (count > 0).then(|| grana_i18n::inspector::saved_views(language, count));
-    let mut children = vec![view::card_title(
-        ctx,
-        Icon::Cube,
-        grana_i18n::inspector::views(language),
-        detail.as_deref(),
-    )];
-    if state.access.author() {
-        children.push(
-            view::button_with(
-                ctx,
-                grana_i18n::inspector::save_current_view(language),
-                Role::SurfaceHigh,
-                Length::Fill,
-            )
-            .named("view.save")
-            .press(Message::Command(Command::SaveView)),
-        );
-    }
-    let authoring = state.access.author();
-    for (index, named) in state.views.iter().enumerate() {
-        let name = named.name.clone();
-        let apply = view::button_with(ctx, &name, Role::Tonal, Length::Fill)
-            .named(&format!("view.apply.{index}"))
-            .press(Message::Command(Command::ApplyView(index)));
-        if !authoring {
-            children.push(apply);
-            continue;
+    let detail = grana_i18n::inspector::saved_views(language, saved);
+    let key = Key::new("views.card");
+    let open = state.workspace.disclosures.is_open(key);
+    let mut children = Vec::new();
+    if open {
+        if state.access.author() {
+            children.push(
+                view::button_with(
+                    ctx,
+                    grana_i18n::inspector::save_current_view(language),
+                    Role::SurfaceHigh,
+                    Length::Fill,
+                )
+                .named("view.save")
+                .press(Message::Command(Command::SaveView)),
+            );
         }
-        let remove = view::icon_button(
-            ctx,
-            &format!("view.remove.{index}"),
-            Icon::Close,
-            28.0,
-            Role::Standard,
-            grana_i18n::inspector::remove_view(language),
-            Message::Command(Command::RemoveView(index)),
-        );
-        children.push(
-            grana_ui::row()
-                .gap(6.0)
-                .align(Align::Center)
-                .children([apply, remove]),
-        );
+        let authoring = state.access.author();
+        for (slot, named) in state.views.iter().enumerate() {
+            let name = named.name.clone();
+            let apply = view::button_with(ctx, &name, Role::Tonal, Length::Fill)
+                .named(&format!("view.apply.{slot}"))
+                .press(Message::Command(Command::ApplyView(slot)));
+            if !authoring {
+                children.push(apply);
+                continue;
+            }
+            let remove = view::icon_button(
+                ctx,
+                &format!("view.remove.{slot}"),
+                Icon::Close,
+                28.0,
+                Role::Standard,
+                grana_i18n::inspector::remove_view(language),
+                Message::Command(Command::RemoveView(slot)),
+            );
+            children.push(
+                grana_ui::row()
+                    .gap(6.0)
+                    .align(Align::Center)
+                    .children([apply, remove]),
+            );
+        }
     }
-    view::card(ctx, 6.0, children)
+    view::disclosure_group_card(
+        ctx,
+        (index, count),
+        key,
+        (
+            Icon::Cube,
+            grana_i18n::inspector::views(language),
+            Some(&detail),
+        ),
+        children,
+        open,
+    )
 }
 
 fn plate<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {

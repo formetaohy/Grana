@@ -37,12 +37,6 @@ pub(super) fn region<'a>(
                 Message::Command(Command::SetRegion(region))
             }),
         );
-        if current.enabled() {
-            children.push(view::weak(
-                ctx,
-                grana_i18n::inspector::region_crops_export(language),
-            ));
-        }
         for (axis_idx, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
             let value = current.center()[axis_idx];
             let readout = format!("{value:.2} µm");
@@ -199,63 +193,50 @@ pub(super) fn drift<'a>(
                     )
                     .press(Message::Command(Command::ComputeDrift)),
                 );
-                let name = state.scene.dataset.channels()[channel].name().to_string();
-                match drift {
-                    None => children.push(view::weak(
+                if let Some(drift) = drift {
+                    let frames = drift.frames();
+                    let reference = drift.reference();
+                    let time = state.scene.time();
+                    children.push(view::caption(
                         ctx,
-                        &grana_i18n::inspector::aligns_channel(language, &name),
-                    )),
-                    Some(drift) => {
-                        let frames = drift.frames();
-                        let reference = drift.reference();
-                        let time = state.scene.time();
-                        children.push(view::caption(
+                        &grana_i18n::inspector::drift_summary(language, frames, drift.magnitude()),
+                    ));
+                    if drift.deformed() {
+                        let deformation = (0..frames)
+                            .map(|frame| drift.deformation(frame))
+                            .fold(0.0, f32::max);
+                        children.push(view::weak(
                             ctx,
-                            &grana_i18n::inspector::drift_summary(
-                                language,
-                                frames,
-                                drift.magnitude(),
-                            ),
+                            &grana_i18n::inspector::drift_deformation(language, deformation),
                         ));
-                        if drift.deformed() {
-                            let deformation = (0..frames)
-                                .map(|frame| drift.deformation(frame))
-                                .fold(0.0, f32::max);
-                            children.push(view::weak(
-                                ctx,
-                                &grana_i18n::inspector::drift_deformation(language, deformation),
-                            ));
-                        }
-                        let reference_field =
-                            grana_ui::widget::drag_value(&theme, reference as f32, 0)
-                                .named("drift.reference")
-                                .on_drag_value(0.2, move |value| {
-                                    Message::Command(Command::SetDriftReference(
-                                        value.round().clamp(0.0, frames.saturating_sub(1) as f32)
-                                            as u32,
-                                    ))
-                                });
-                        let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
-                        let row = grana_ui::row()
-                            .gap(6.0)
-                            .align(Align::Center)
-                            .children([reference_field, unit]);
-                        children.push(view::form_row(
-                            ctx,
-                            grana_i18n::inspector::reference(language),
-                            row,
-                        ));
-                        children.push(frame_table(ctx, time, drift));
-                        children.push(
-                            view::button_with(
-                                ctx,
-                                grana_i18n::inspector::clear_drift(language),
-                                Role::Error,
-                                Length::Fill,
-                            )
-                            .press(Message::Command(Command::ClearDrift)),
-                        );
                     }
+                    let reference_field = grana_ui::widget::drag_value(&theme, reference as f32, 0)
+                        .named("drift.reference")
+                        .on_drag_value(0.2, move |value| {
+                            Message::Command(Command::SetDriftReference(
+                                value.round().clamp(0.0, frames.saturating_sub(1) as f32) as u32,
+                            ))
+                        });
+                    let unit = view::caption(ctx, grana_i18n::inspector::frame_unit(language));
+                    let row = grana_ui::row()
+                        .gap(6.0)
+                        .align(Align::Center)
+                        .children([reference_field, unit]);
+                    children.push(view::form_row(
+                        ctx,
+                        grana_i18n::inspector::reference(language),
+                        row,
+                    ));
+                    children.push(frame_table(ctx, time, drift));
+                    children.push(
+                        view::button_with(
+                            ctx,
+                            grana_i18n::inspector::clear_drift(language),
+                            Role::Error,
+                            Length::Fill,
+                        )
+                        .press(Message::Command(Command::ClearDrift)),
+                    );
                 }
             }
         }
@@ -358,13 +339,7 @@ pub(super) fn registration<'a>(
                         )),
                     );
                 }
-                if registration.is_empty() {
-                    let name = state.scene.dataset.channels()[reference].name().to_string();
-                    children.push(view::weak(
-                        ctx,
-                        &grana_i18n::inspector::registration_hint(language, &name),
-                    ));
-                } else {
+                if !registration.is_empty() {
                     children.push(view::caption(
                         ctx,
                         &grana_i18n::inspector::registration_summary(
@@ -465,12 +440,7 @@ pub(super) fn frame_table<'a>(
         },
     );
     let mut children = vec![list];
-    if time == reference {
-        children.push(view::weak(
-            ctx,
-            grana_i18n::inspector::reference_fixed(language),
-        ));
-    } else {
+    if time != reference {
         let offset = drift.translation(time);
         for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
             let field = grana_ui::widget::drag_value(&theme, offset[axis], 2)
@@ -506,14 +476,14 @@ pub(super) fn mask<'a>(
         .scene
         .objects
         .iter()
-        .map(|set| (set.id(), set.name().to_string(), set.filtered()))
+        .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
     let current = state.scene.mask;
     let summary = current
-        .and_then(|id| sources.iter().find(|(set, _, _)| *set == id))
+        .and_then(|id| sources.iter().find(|(set, _)| *set == id))
         .map_or_else(
             || grana_i18n::common::whole_volume(language).to_string(),
-            |(_, name, _)| name.clone(),
+            |(_, name)| name.clone(),
         );
     let key = Key::new("mask.card");
     let open = state.workspace.disclosures.is_open(key);
@@ -523,11 +493,7 @@ pub(super) fn mask<'a>(
             None,
             grana_i18n::common::whole_volume_title(language).to_string(),
         )];
-        options.extend(
-            sources
-                .iter()
-                .map(|(id, name, _)| (Some(*id), name.clone())),
-        );
+        options.extend(sources.iter().map(|(id, name)| (Some(*id), name.clone())));
         children.push(form_combo(
             ctx,
             "mask",
@@ -670,33 +636,9 @@ pub(super) fn mask<'a>(
                             .children([widget, unit]);
                         children.push(view::form_row(ctx, label, row));
                     }
-                    children.push(view::weak(
-                        ctx,
-                        &grana_i18n::inspector::detects_relation(
-                            language,
-                            &relation_field(language, field),
-                            range[0],
-                            range[1],
-                            suffix,
-                        ),
-                    ));
-                    let target_name = state.scene.objects.get(target).map_or_else(
-                        || grana_i18n::inspector::relation_target(language).to_string(),
-                        |set| set.name().to_string(),
-                    );
-                    children.push(view::weak(
-                        ctx,
-                        &grana_i18n::inspector::target_without_mask(language, &target_name),
-                    ));
                 }
             }
         }
-        let detail = match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
-            Some((_, name, true)) => grana_i18n::inspector::detects_filtered(language, name),
-            Some((_, name, false)) => grana_i18n::inspector::detects_inside(language, name),
-            None => grana_i18n::inspector::detects_all(language).to_string(),
-        };
-        children.push(view::weak(ctx, &detail));
     }
     view::disclosure_group_card(
         ctx,

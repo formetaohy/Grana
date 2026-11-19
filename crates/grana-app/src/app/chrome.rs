@@ -110,8 +110,11 @@ impl App {
         if let Some(surface) = self.surface.as_mut() {
             surface.ui.close_popups();
         }
-        if self.workspace.palette.is_some() {
-            self.dispatch(grana_editor::Message::ClosePalette);
+        if self.workspace.settings.open {
+            self.dispatch(grana_editor::Message::ToggleSettings(false));
+        }
+        if self.workspace.remote_open {
+            self.dispatch(grana_editor::Message::CancelRemote);
         }
     }
 }

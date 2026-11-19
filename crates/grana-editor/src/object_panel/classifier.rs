@@ -25,8 +25,8 @@ pub(super) fn classifier<'a>(
         && (!state.measure.filters().is_empty() || state.measure.lasso().is_some());
     let mut children = Vec::new();
     if open {
-        match current {
-            Some(classifier) => children.push(view::caption(
+        if let Some(classifier) = current {
+            children.push(view::caption(
                 ctx,
                 &grana_i18n::object::classifier_fit(
                     language,
@@ -35,11 +35,7 @@ pub(super) fn classifier<'a>(
                     classifier.negatives(),
                     classifier.accuracy() * 100.0,
                 ),
-            )),
-            None => children.push(view::weak(
-                ctx,
-                grana_i18n::object::classifier_intro(language),
-            )),
+            ));
         }
         children.push(
             view::button_with(
@@ -62,11 +58,6 @@ pub(super) fn classifier<'a>(
                     state.measure.rows().len(),
                     state.measure.total(),
                 ),
-            ));
-        } else {
-            children.push(view::weak(
-                ctx,
-                grana_i18n::object::classifier_gate_hint(language),
             ));
         }
         let label = if current.is_some() {

@@ -39,7 +39,6 @@ pub fn view<'a>(
                 ctx,
                 Icon::Channel,
                 grana_i18n::track::no_trackable_objects(language),
-                grana_i18n::track::no_trackable_objects_detail(language),
             )
             .at(rect),
         ];
@@ -50,7 +49,6 @@ pub fn view<'a>(
                 ctx,
                 Icon::Clock,
                 grana_i18n::track::single_time_frame(language),
-                grana_i18n::track::single_time_frame_detail(language),
             )
             .at(rect),
         ];
@@ -84,7 +82,6 @@ pub fn view<'a>(
                 ctx,
                 Icon::Channel,
                 grana_i18n::track::no_trajectories(language),
-                grana_i18n::track::no_trajectories_detail(language),
             )
             .at(left),
         ),
@@ -541,15 +538,6 @@ fn lineage<'a>(
                 );
                 let clip = painter.clip();
                 painter.push_clip(inner, Corners::ZERO);
-                for part in 1..4 {
-                    let grid = x(span * part / 4);
-                    painter.segment(
-                        Vec2::new(grid, inner.min.y),
-                        Vec2::new(grid, inner.max.y),
-                        0.5,
-                        palette.outline_variant.with_alpha(0.35),
-                    );
-                }
                 painter.segment(
                     Vec2::new(x(time), inner.min.y),
                     Vec2::new(x(time), inner.max.y),
@@ -896,8 +884,7 @@ fn summary<'a>(
             grana_i18n::track::selected_track(language),
             Some(grana_i18n::common::none(language)),
         );
-        let caption = view::caption(ctx, grana_i18n::track::click_track(language));
-        return view::card(ctx, 4.0, vec![title, caption]);
+        return view::card(ctx, 4.0, vec![title]);
     };
     let Some(track) = set.track(index) else {
         return grana_ui::column();

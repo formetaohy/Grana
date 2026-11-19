@@ -186,24 +186,21 @@ fn protocol<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         ),
         row,
     ];
-    match state.batch_protocol() {
-        Some(text) => {
-            let surface = ctx.theme().surface(Role::Field, State::Rest);
-            let style = TextStyle::new(
-                ctx.theme().font(Level::Monospace),
-                ctx.theme().palette.on_surface_variant,
-            )
-            .wrapping();
-            let body = grana_ui::text(text, style);
-            children.push(
-                grana_ui::column()
-                    .padding(Edges::symmetric(10.0, 6.0))
-                    .gap(4.0)
-                    .background(surface)
-                    .children([body]),
-            );
-        }
-        None => children.push(view::weak(ctx, grana_i18n::batch::capture_hint(language))),
+    if let Some(text) = state.batch_protocol() {
+        let surface = ctx.theme().surface(Role::Field, State::Rest);
+        let style = TextStyle::new(
+            ctx.theme().font(Level::Monospace),
+            ctx.theme().palette.on_surface_variant,
+        )
+        .wrapping();
+        let body = grana_ui::text(text, style);
+        children.push(
+            grana_ui::column()
+                .padding(Edges::symmetric(10.0, 6.0))
+                .gap(4.0)
+                .background(surface)
+                .children([body]),
+        );
     }
     view::card(ctx, 6.0, children)
 }
@@ -218,9 +215,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         grana_i18n::batch::datasets(language),
         Some(&grana_i18n::batch::item_count(language, count)),
     )];
-    if state.batch_datasets().is_empty() {
-        children.push(view::weak(ctx, grana_i18n::batch::datasets_hint(language)));
-    } else {
+    if !state.batch_datasets().is_empty() {
         let theme = *ctx.theme();
         let palette = theme.palette;
         let label_font = theme.font(Level::Label);
@@ -359,10 +354,6 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 .align(Align::Center)
                 .children(buttons),
         );
-        children.push(view::weak(
-            ctx,
-            grana_i18n::batch::correction_hint(language),
-        ));
     }
     view::card(ctx, 6.0, children)
 }
@@ -396,8 +387,6 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                 );
             },
         ));
-    } else {
-        children.push(view::weak(ctx, grana_i18n::batch::output_hint(language)));
     }
     if !state.batch_running() {
         let theme = *ctx.theme();
@@ -525,7 +514,6 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             TextStyle::new(ctx.theme().font(Level::Caption), ctx.theme().palette.error).wrapping();
         children.push(grana_ui::text(message, style));
     }
-    children.push(view::weak(ctx, grana_i18n::batch::resume_hint(language)));
     view::card(ctx, 7.0, children)
 }
 
@@ -561,10 +549,7 @@ fn comparison<'a>(
         note.as_deref(),
     )];
     if rows.is_empty() {
-        children.push(view::weak(
-            ctx,
-            grana_i18n::batch::comparison_hint(language),
-        ));
+        children.push(view::weak(ctx, grana_i18n::batch::no_samples(language)));
         return view::card(ctx, 6.0, children);
     }
     let metrics = state.batch_metrics();
@@ -575,10 +560,6 @@ fn comparison<'a>(
         .and_then(|key| metrics.iter().position(|metric| metric.key() == key))
         .unwrap_or(0);
     let Some(metric) = metrics.get(selected) else {
-        children.push(view::weak(
-            ctx,
-            grana_i18n::batch::comparison_hint(language),
-        ));
         return view::card(ctx, 6.0, children);
     };
     let axis = state.workspace.comparison_axis;
@@ -719,10 +700,6 @@ fn comparison<'a>(
     if let Some(row) = open {
         children.extend(detail(ctx, state, row, metric, selected));
     }
-    children.push(view::weak(
-        ctx,
-        grana_i18n::batch::comparison_note(language),
-    ));
     view::card(ctx, 6.0, children)
 }
 

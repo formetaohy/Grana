@@ -526,11 +526,6 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         ),
         view::form_row(ctx, grana_i18n::animation::width(language), width_combo),
         transparent_row,
-        view::labelled(
-            ctx,
-            grana_i18n::animation::sequence(language),
-            &grana_i18n::animation::png_frames(language, frames),
-        ),
     ];
     let idle = running.is_none();
     let save = grana_ui::widget::button_enabled(
@@ -540,7 +535,6 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         Length::Fill,
         idle,
     )
-    .tooltip(grana_i18n::animation::image_detail(language))
     .named("animation.save.image");
     children.push(if idle {
         save.press(Message::Command(Command::SaveSnapshot))
@@ -554,7 +548,6 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         Length::Fill,
         idle,
     )
-    .tooltip(grana_i18n::animation::figure_detail(language))
     .named("animation.save.figure");
     children.push(if idle {
         figure.press(Message::Command(Command::SaveFigure))

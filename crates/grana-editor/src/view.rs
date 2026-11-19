@@ -270,13 +270,8 @@ pub fn tabs<'a>(
     ctx.tabs(options, selected).named(key).on_segment(message)
 }
 
-pub fn empty_state<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    symbol: Icon,
-    title: &str,
-    detail: &str,
-) -> View<'a> {
-    ctx.empty_state(symbol, title, detail)
+pub fn empty_state<'a>(ctx: &mut BuildContext<'_, Message>, symbol: Icon, title: &str) -> View<'a> {
+    ctx.empty_state(symbol, title)
 }
 
 pub fn column_label(language: grana_i18n::Language, column: &grana_measure::Column) -> String {
