@@ -1292,7 +1292,10 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                 );
                 session.poll();
                 let time = session.scene().expect("the series opens").time();
-                if let Some(requests) = engine.poll_requests(gpu.device(), time) {
+                if let Some(requests) = engine
+                    .poll_requests(gpu.device(), time)
+                    .expect("the demand polls")
+                {
                     *streamed += requests.volume.len();
                     session.request(requests.time, &requests.volume, &requests.prefetch);
                 }

@@ -666,6 +666,9 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
     if grana_readout::is_supported(path) {
         return Ok(grana_readout::scene_count(path)?);
     }
+    if is_tiff(path)? {
+        return Ok(grana_tiff::series_count(path)?);
+    }
     Ok(1)
 }
 
@@ -688,6 +691,9 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
             .into_iter()
             .map(|scene| scene.name().map(str::to_string))
             .collect());
+    }
+    if is_tiff(path)? {
+        return Ok(grana_tiff::series_names(path)?);
     }
     Ok(Vec::new())
 }
@@ -847,8 +853,19 @@ impl Inner {
             return Ok((Self::Czi(image), scenes));
         }
         if is_tiff(path)? {
-            let image = grana_tiff::Image::open(path)?;
-            let series = single_series(image.pyramid(), path, series)?;
+            let image = grana_tiff::Image::open(path, series)?;
+            let series = image
+                .series()
+                .iter()
+                .map(|series| {
+                    Series::new(
+                        series.extent(),
+                        series.channels(),
+                        series.frames(),
+                        series.name().map(str::to_string),
+                    )
+                })
+                .collect();
             return Ok((Self::Tiff(image), series));
         }
         if grana_readout::is_supported(path) {

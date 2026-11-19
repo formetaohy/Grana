@@ -184,7 +184,7 @@ fn exports_a_sixteen_bit_ome_tiff() {
     let temp = Temp::new("grana-export-wide");
     let path = temp.path().join("image.ome.tif");
     let size = export_image(&gpu, Destination::Image { path: path.clone() }, false);
-    let image = grana_tiff::Image::open(&path).expect("the wide export reads");
+    let image = grana_tiff::Image::open(&path, 0).expect("the wide export reads");
     assert_eq!(image.name(), "export");
     let bytes = std::fs::read(&path).expect("the wide export reads as bytes");
     let metadata = String::from_utf8_lossy(&bytes);

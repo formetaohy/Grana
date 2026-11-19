@@ -3,6 +3,8 @@ use crate::labels;
 labels! {
     unsaved_analysis => "Unsaved analysis" / "未保存的分析";
     unsaved_detail => "The analysis has unsaved changes. Save them before continuing?" / "分析中有未保存的更改。是否在继续前保存？";
+    device_lost => "Graphics device lost" / "图形设备丢失";
+    device_lost_detail => "The graphics device was lost, so grana stopped. The analysis was written to the recovery store; reopen grana to restore it." / "图形设备已丢失，Grana 已停止。分析已写入恢复存储，重新打开 Grana 即可恢复。";
     open_anything => "Open a dataset, project or image" / "打开数据集、项目或图像";
     open_folder => "Open a folder" / "打开文件夹";
     supported_files => "Datasets, projects and images" / "数据集、项目与图像";

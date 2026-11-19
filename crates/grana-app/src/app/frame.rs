@@ -7,7 +7,7 @@ use super::{App, RETRY_INTERVAL, STREAM_POLL};
 use crate::stream::{Stream, View as StreamView};
 
 impl App {
-    pub(super) fn exchange_bricks(&mut self) {
+    pub(super) fn exchange_bricks(&mut self) -> Result<(), String> {
         let replaced = self.session.replaced() != self.replaced;
         let reloaded = self.session.content() != self.content;
         if replaced || reloaded {
@@ -35,14 +35,14 @@ impl App {
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
-            return;
+            return Ok(());
         };
         let damages = session.take_damage();
         if !damages.is_empty() {
             engine.damage(&damages);
         }
         let time = session.scene().map_or(0, |scene| scene.time());
-        if let Some(requests) = engine.poll_requests(&surface.gpu.device, time) {
+        if let Some(requests) = engine.poll_requests(&surface.gpu.device, time)? {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
@@ -58,6 +58,7 @@ impl App {
         if let Some(view) = view {
             self.apply_view(&view);
         }
+        Ok(())
     }
 
     pub(super) fn sync_dataset(&mut self, replaced: bool) {

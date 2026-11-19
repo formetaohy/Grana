@@ -45,7 +45,11 @@ impl Gpu {
         })
     }
 
-    pub fn restore_batch(&mut self, bank: &KernelBank, jobs: &[Job<'_>]) -> Vec<Vec<f32>> {
+    pub fn restore_batch(
+        &mut self,
+        bank: &KernelBank,
+        jobs: &[Job<'_>],
+    ) -> Result<Vec<Vec<f32>>, String> {
         let kernel = bank.dims();
         let mut results = Vec::with_capacity(jobs.len());
         let mut start = 0;
@@ -65,13 +69,13 @@ impl Gpu {
                 memory += job_memory;
                 end += 1;
             }
-            results.extend(self.run(bank, &jobs[start..end]));
+            results.extend(self.run(bank, &jobs[start..end])?);
             start = end;
         }
-        results
+        Ok(results)
     }
 
-    fn run(&mut self, bank: &KernelBank, jobs: &[Job<'_>]) -> Vec<Vec<f32>> {
+    fn run(&mut self, bank: &KernelBank, jobs: &[Job<'_>]) -> Result<Vec<Vec<f32>>, String> {
         let kernel = bank.dims();
         let mut active = Vec::with_capacity(jobs.len());
         for job in jobs {
@@ -142,18 +146,25 @@ impl Gpu {
             });
             mapped.push((slice, receiver));
         }
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the graphics device failed while restoring");
+        if let Err(error) = self.device.poll(wgpu::PollType::wait_indefinitely()) {
+            return Err(format!(
+                "the graphics device failed while restoring: {error}"
+            ));
+        }
         let mut results = Vec::with_capacity(active.len());
         for (index, (slice, receiver)) in mapped.into_iter().enumerate() {
-            receiver
-                .recv()
-                .expect("the restore mapping callback runs once")
-                .expect("the restore staging buffer is mappable");
-            let range = slice
-                .get_mapped_range()
-                .expect("the mapped restore buffer stays mapped");
+            match receiver.recv() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return Err(format!(
+                        "the graphics device dropped the restore staging buffer: {error}"
+                    ));
+                }
+                Err(_) => return Err("the restore mapping reported no result".to_string()),
+            }
+            let Ok(range) = slice.get_mapped_range() else {
+                return Err("the graphics device dropped the mapped restore buffer".to_string());
+            };
             results.push(bytemuck::cast_slice::<u8, f32>(&range).to_vec());
             drop(range);
             active[index].0.staging.unmap();
@@ -161,7 +172,7 @@ impl Gpu {
         for (workspace, _) in active {
             self.store(workspace);
         }
-        results
+        Ok(results)
     }
 
     fn take(

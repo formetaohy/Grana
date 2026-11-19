@@ -9,7 +9,7 @@ mod stitch;
 pub mod stream;
 mod window;
 
-pub use app::App;
+pub use app::{App, Wake};
 pub use capture::OfflineCapture;
 pub use cli::{batch, clear_cache, gui, render as render_command, viewer};
 pub use stitch::command as stitch_command;

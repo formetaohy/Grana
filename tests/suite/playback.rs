@@ -49,7 +49,9 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
     while start.elapsed().as_secs_f64() < seconds {
         session.poll();
         let current = session.scene().expect("a scene").time();
-        if let Some(requests) = engine.poll_requests(gpu.device(), current)
+        if let Some(requests) = engine
+            .poll_requests(gpu.device(), current)
+            .expect("the demand polls")
             && session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time)

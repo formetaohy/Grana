@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use wgpu::{
     Adapter, Backends, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures,
@@ -35,13 +35,71 @@ pub struct Gpu {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub adapter: String,
+    lost: Lost,
     pipelines: Pipelines,
 }
 
 pub struct Headless {
     pub device: Device,
     pub queue: Queue,
+    lost: Lost,
     pipelines: Pipelines,
+}
+
+#[derive(Clone, Default)]
+pub struct Lost(Arc<Mutex<LostState>>);
+
+#[derive(Default)]
+struct LostState {
+    reason: Option<String>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl Lost {
+    fn watch(device: &Device) -> Self {
+        let lost = Self::default();
+        let held = lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            held.record(format!(
+                "the graphics device was lost ({reason:?}) and cannot be recreated: {message}"
+            ));
+        });
+        let held = lost.clone();
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            if held.reason().is_some() {
+                return;
+            }
+            panic!("the graphics device reported an uncaptured error: {error}");
+        }));
+        lost
+    }
+
+    pub fn wake_with(&self, wake: impl Fn() + Send + Sync + 'static) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        state.wake = Some(Arc::new(wake));
+    }
+
+    fn record(&self, detail: String) {
+        let wake = {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            if state.reason.is_some() {
+                return;
+            }
+            state.reason = Some(detail);
+            state.wake.clone()
+        };
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
+    pub fn reason(&self) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .reason
+            .clone()
+    }
 }
 
 impl Headless {
@@ -52,10 +110,12 @@ impl Headless {
                 let instance = instance(*backends);
                 match acquire(&instance, None, fallback) {
                     Ok((_, device, queue)) => {
+                        let lost = Lost::watch(&device);
                         let pipelines = Pipelines::new(&device);
                         return Ok(Self {
                             device,
                             queue,
+                            lost,
                             pipelines,
                         });
                     }
@@ -77,6 +137,7 @@ impl Headless {
             .map(|headless| Self {
                 device: headless.device.clone(),
                 queue: headless.queue.clone(),
+                lost: headless.lost.clone(),
                 pipelines: headless.pipelines.clone(),
             })
             .map_err(Clone::clone)
@@ -84,6 +145,14 @@ impl Headless {
 
     pub fn format(&self) -> TextureFormat {
         HEADLESS_FORMAT
+    }
+
+    pub fn lost(&self) -> Option<String> {
+        self.lost.reason()
+    }
+
+    pub fn lost_handle(&self) -> &Lost {
+        &self.lost
     }
 
     pub fn pipelines(&self) -> &Pipelines {
@@ -151,6 +220,7 @@ impl Gpu {
             view_formats: vec![],
         };
         surface.configure(&device, &config);
+        let lost = Lost::watch(&device);
         let pipelines = Pipelines::new(&device);
         Self {
             surface,
@@ -158,12 +228,21 @@ impl Gpu {
             queue,
             config,
             adapter: description,
+            lost,
             pipelines,
         }
     }
 
     pub fn format(&self) -> TextureFormat {
         self.config.format
+    }
+
+    pub fn lost(&self) -> Option<String> {
+        self.lost.reason()
+    }
+
+    pub fn lost_handle(&self) -> &Lost {
+        &self.lost
     }
 
     pub fn pipelines(&self) -> &Pipelines {

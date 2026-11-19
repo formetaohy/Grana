@@ -460,8 +460,13 @@ impl App {
         if !engine.pick_pending() {
             return;
         }
-        let Some(picked) = engine.poll_pick(&surface.gpu.device) else {
-            return;
+        let picked = match engine.poll_pick(&surface.gpu.device) {
+            Ok(Some(picked)) => picked,
+            Ok(None) => return,
+            Err(detail) => {
+                self.fail(detail);
+                return;
+            }
         };
         let toggle = self.pick_toggle.take().unwrap_or(false);
         let selection = match picked {

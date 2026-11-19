@@ -183,7 +183,7 @@ impl Offline {
     }
 
     fn pump(&mut self, bricks: &Arc<dyn Bricks>, scene: &Scene) -> Result<(), String> {
-        let Some(requests) = self.renderer.poll_requests(&self.device) else {
+        let Some(requests) = self.renderer.poll_requests(&self.device)? else {
             return Ok(());
         };
         if requests.time != scene.time() {

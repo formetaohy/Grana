@@ -20,8 +20,12 @@ fn graphics_restore_matches_the_processor() {
         first_plane: 4,
         iterations: 4,
     };
-    let expected = Restorer::processor().restore_batch(&bank, std::slice::from_ref(&job));
-    let actual = graphics.restore_batch(&bank, std::slice::from_ref(&job));
+    let expected = Restorer::processor()
+        .restore_batch(&bank, std::slice::from_ref(&job))
+        .expect("the processor restores");
+    let actual = graphics
+        .restore_batch(&bank, std::slice::from_ref(&job))
+        .expect("the graphics restore succeeds");
     let mut maximum = 0.0f32;
     let mut magnitude = 0.0f32;
     for (want, got) in expected[0].iter().zip(&actual[0]) {

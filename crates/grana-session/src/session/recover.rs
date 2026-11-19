@@ -43,12 +43,6 @@ impl Session {
         {
             return false;
         }
-        let Some(fingerprint) = self.fingerprint else {
-            return false;
-        };
-        let Some(source) = self.source_ref() else {
-            return false;
-        };
         let stats = self.store.stats();
         if stats.resident().saturating_add(stats.spilled()) > RECOVERY_LIMIT {
             if !self.recovery.refused() {
@@ -59,14 +53,39 @@ impl Session {
             }
             return false;
         }
+        let Some((project, entry)) = self.recovery_document(view) else {
+            return false;
+        };
+        let Some(task) = self.recovery.start(project, entry) else {
+            return false;
+        };
+        self.tasks.start_autosave(task);
+        true
+    }
+
+    pub fn autosave_now(&mut self, view: ViewState) -> Result<(), String> {
+        if self.access().viewer() || !self.dirty() {
+            return Ok(());
+        }
+        let Some((project, entry)) = self.recovery_document(view) else {
+            return Err("the analysis holds no recoverable document".to_string());
+        };
+        self.tasks.cancel_autosave();
+        self.recovery.write(project, entry)
+    }
+
+    fn recovery_document(&self, view: ViewState) -> Option<(Project, RecoveryEntry)> {
+        if !self.dirty() {
+            return None;
+        }
+        let fingerprint = self.fingerprint?;
+        let source = self.source_ref()?;
         let target = match &source {
             ProjectSource::File { path, .. } => path.display().to_string(),
             ProjectSource::Remote { url, .. } => url.clone(),
             ProjectSource::Synthetic { name } => name.clone(),
         };
-        let Some(scene) = self.scene.as_ref() else {
-            return false;
-        };
+        let scene = self.scene.as_ref()?;
         let name = scene.dataset.name().to_string();
         let project = Project::capture(
             scene,
@@ -77,11 +96,7 @@ impl Session {
             fingerprint,
         );
         let entry = RecoveryEntry::new(&name, &target, self.project.as_deref());
-        let Some(task) = self.recovery.start(project, entry) else {
-            return false;
-        };
-        self.tasks.start_autosave(task);
-        true
+        Some((project, entry))
     }
 
     pub fn recover(&mut self) {

@@ -468,11 +468,11 @@ impl Residence {
         atlas: &mut Atlas,
         time: u32,
         prefetch: bool,
-    ) -> Option<Requests> {
-        while let Some((key, bands)) = self.decode(device, pyramid, planner) {
+    ) -> Result<Option<Requests>, String> {
+        while let Some((key, bands)) = self.decode(device, pyramid, planner)? {
             self.accept(key, bands, pyramid, atlas);
         }
-        self.emit(pyramid, atlas, time, prefetch)
+        Ok(self.emit(pyramid, atlas, time, prefetch))
     }
 
     fn decode(
@@ -480,7 +480,7 @@ impl Residence {
         device: &Device,
         pyramid: &Pyramid,
         planner: &Planner,
-    ) -> Option<(ViewKey, Vec<Demand>)> {
+    ) -> Result<Option<(ViewKey, Vec<Demand>)>, String> {
         let Self {
             feedback,
             frames,
@@ -488,11 +488,15 @@ impl Residence {
             ..
         } = self;
         let words = *words;
-        feedback.as_mut()?.take_with(device, |slot, bytes| {
+        let Some(feedback) = feedback.as_mut() else {
+            return Ok(None);
+        };
+        let decoded = feedback.take_with(device, |slot, bytes| {
             let key = frames[slot].take()?;
             let bands = parse_bands(bytes, words, key.levels.ladder, key.time, pyramid, planner)?;
             Some((key, bands))
-        })?
+        })?;
+        Ok(decoded.flatten())
     }
 
     fn accept(&mut self, key: ViewKey, bands: Vec<Demand>, pyramid: &Pyramid, atlas: &mut Atlas) {

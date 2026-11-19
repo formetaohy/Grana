@@ -172,7 +172,10 @@ fn settle_with<'a, 'b: 'a>(
 
 fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
     for _ in 0..4 {
-        match renderer.poll_requests(gpu.device()) {
+        match renderer
+            .poll_requests(gpu.device())
+            .expect("the demand polls")
+        {
             Some(requests) => return Some(requests),
             None => {
                 gpu.device()
@@ -1055,7 +1058,7 @@ fn ladder_view<'a>(
 }
 
 #[test]
-fn degrades_the_volume_level_to_fit_a_residency_budget() {
+fn fits_the_volume_level_to_the_residency_budget() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -1074,6 +1077,29 @@ fn degrades_the_volume_level_to_fit_a_residency_budget() {
         splats: Splats::empty(),
         overlays: &[],
     };
+    let generous = {
+        let mut renderer = Renderer::new(
+            gpu.device(),
+            gpu.queue(),
+            wgpu::TextureFormat::Rgba8Unorm,
+            16 << 20,
+            gpu.pipelines(),
+        );
+        renderer.set_dataset(gpu.device(), &pyramid);
+        let target = texture(&gpu, SIDE);
+        let view_texture = target.create_view(&Default::default());
+        let view = ladder_view(&view_texture, &camera, &scene);
+        stream_levels(&gpu, &mut renderer, &view, &volumes)
+    };
+    assert!(
+        generous.drawn,
+        "the unconstrained view never resolved a frame"
+    );
+    assert_eq!(
+        generous.view.level, 0,
+        "a static camera stayed at the coarse level {}",
+        generous.view.level
+    );
     let mut renderer = Renderer::new(
         gpu.device(),
         gpu.queue(),
@@ -1268,7 +1294,7 @@ fn picked(gpu: &Gpu, renderer: &mut Renderer) -> PickId {
         gpu.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("failed to wait for the gpu");
-        if let Some(picked) = renderer.poll_pick(gpu.device()) {
+        if let Some(picked) = renderer.poll_pick(gpu.device()).expect("the pick polls") {
             return picked;
         }
     }

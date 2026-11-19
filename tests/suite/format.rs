@@ -79,7 +79,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         written.bytes(),
         "the archive reports the bytes it wrote"
     );
-    let image = grana_tiff::Image::open(&path).expect("the archive opens");
+    let image = grana_tiff::Image::open(&path, 0).expect("the archive opens");
     assert_eq!(image.pyramid().level_count(), 3);
     for (axis, value) in image.pyramid().placement().into_iter().enumerate() {
         let expected = [1.5, -2.0, 3.0][axis];
@@ -156,7 +156,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     .expect("the dataset exports as an archive");
     assert_eq!(summary.channels(), 1);
     assert_eq!(summary.frames(), 1);
-    let exported = grana_tiff::Image::open(summary.path()).expect("the exported archive opens");
+    let exported = grana_tiff::Image::open(summary.path(), 0).expect("the exported archive opens");
     let data = exported
         .read_region(0, 0, 0, 0..24, 0..16, 0..8)
         .expect("the exported channel reads");
@@ -201,7 +201,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         &mut progress,
     )
     .expect("the region exports as an archive");
-    let reopened = grana_tiff::Image::open(summary.path()).expect("the cropped archive opens");
+    let reopened = grana_tiff::Image::open(summary.path(), 0).expect("the cropped archive opens");
     let expected = [0, 1, 2].map(|axis| {
         0.5 * (source.corner([4.0, 2.0, 1.0])[axis] + source.corner([12.0, 10.0, 5.0])[axis])
     });
@@ -288,7 +288,7 @@ fn writes_a_sixteen_bit_ome_tiff() {
         metadata.contains("Type=\"uint16\""),
         "the picture declares its sixteen bit samples"
     );
-    let image = grana_tiff::Image::open(&path).expect("the written picture opens");
+    let image = grana_tiff::Image::open(&path, 0).expect("the written picture opens");
     assert_eq!(image.name(), "figure & frame");
     let pyramid = image.pyramid();
     assert_eq!(pyramid.channel_count(), 3);
@@ -879,7 +879,7 @@ fn exports_a_region_of_the_channels_and_labels() {
 }
 #[test]
 fn reads_ome_tiff_metadata_and_voxels() {
-    let image = grana_tiff::Image::open(&fixture("ome.tif")).expect("the ome tiff opens");
+    let image = grana_tiff::Image::open(&fixture("ome.tif"), 0).expect("the ome tiff opens");
     let pyramid = image.pyramid();
     assert_eq!(pyramid.channel_count(), 1);
     assert_eq!(pyramid.level_count(), 1);
@@ -888,6 +888,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.2, 0.2, 1.0));
     assert_eq!(pyramid.channels()[0].name(), "GFP");
     assert_eq!(pyramid.channels()[0].tint(), [0.0, 1.0, 0.0]);
+    assert_eq!(image.series().len(), 1);
     let data = image
         .read_region(0, 0, 0, 0..32, 0..32, 0..2)
         .expect("the ome volume reads");
@@ -906,6 +907,110 @@ fn reads_ome_tiff_metadata_and_voxels() {
             }
         }
     }
+
+    let temp = Temp::new("suite-ome-tiff-series");
+    let path = temp.path().join("series.ome.tif");
+    write_two_series(&path);
+    assert_eq!(
+        grana_tiff::series_count(&path).expect("the series count reads"),
+        2
+    );
+    assert_eq!(
+        grana_tiff::series_names(&path).expect("the series names read"),
+        vec![Some("Overview".to_string()), Some("Detail".to_string())]
+    );
+    assert_eq!(
+        grana_image::series_count(&path).expect("the image counts its series"),
+        2
+    );
+    let overview = grana_tiff::Image::open(&path, 0).expect("the overview opens");
+    assert_eq!(overview.name(), "Overview");
+    let VoxelData::U8(values) = overview
+        .read_region(0, 0, 0, 0..4, 0..4, 0..1)
+        .expect("the overview reads")
+    else {
+        panic!("the overview stores bytes");
+    };
+    assert_eq!(values, (1..=16).collect::<Vec<u8>>());
+    let detail = grana_tiff::Image::open(&path, 1).expect("the detail opens");
+    assert_eq!(detail.name(), "Detail");
+    assert_eq!(detail.pyramid().level(0).extent(), Extent::new(2, 2, 2));
+    let VoxelData::U8(values) = detail
+        .read_region(0, 0, 0, 0..2, 0..2, 0..2)
+        .expect("the detail reads")
+    else {
+        panic!("the detail stores bytes");
+    };
+    assert_eq!(values, [7u8, 7, 7, 7, 9, 9, 9, 9]);
+    assert!(
+        grana_tiff::Image::open(&path, 2).is_err(),
+        "a series outside the metadata is refused"
+    );
+}
+
+fn write_two_series(path: &std::path::Path) {
+    let xml = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+        " <Image Name=\"Overview\">\n",
+        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"4\" SizeZ=\"1\" SizeC=\"1\" SizeT=\"1\">\n",
+        "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+        "   <TiffData IFD=\"0\" PlaneCount=\"1\"/>\n",
+        "  </Pixels>\n",
+        " </Image>\n",
+        " <Image Name=\"Detail\">\n",
+        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\">\n",
+        "   <Channel ID=\"Channel:0:1\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+        "   <TiffData IFD=\"1\" PlaneCount=\"2\"/>\n",
+        "  </Pixels>\n",
+        " </Image>\n",
+        "</OME>\n"
+    );
+    let entries = 12u32;
+    let record = 2 + entries * 12 + 4;
+    let header = 8u32;
+    let xml_offset = header + 3 * record;
+    let xml_bytes = xml.as_bytes().to_vec();
+    let strips = xml_offset + xml_bytes.len() as u32;
+    let pages = [(4u32, 4u32, 16u32), (2, 2, 4), (2, 2, 4)];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&header.to_le_bytes());
+    let mut strip = strips;
+    for (index, (width, height, length)) in pages.into_iter().enumerate() {
+        let next = if index + 1 == pages.len() {
+            0
+        } else {
+            header + (index as u32 + 1) * record
+        };
+        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
+        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(256, 4, 1, width);
+        entry(257, 4, 1, height);
+        entry(258, 3, 1, 8);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, 1);
+        entry(270, 2, xml_bytes.len() as u32, xml_offset);
+        entry(273, 4, 1, strip);
+        entry(277, 3, 1, 1);
+        entry(278, 4, 1, height);
+        entry(279, 4, 1, length);
+        entry(284, 3, 1, 1);
+        entry(339, 3, 1, 1);
+        bytes.extend_from_slice(&next.to_le_bytes());
+        strip += length;
+    }
+    bytes.extend_from_slice(&xml_bytes);
+    bytes.extend(1..=16u8);
+    bytes.extend([7u8; 4]);
+    bytes.extend([9u8; 4]);
+    std::fs::write(path, &bytes).expect("the series tiff writes");
 }
 
 #[test]
@@ -949,7 +1054,7 @@ fn reads_a_tiff_stack_past_the_page_limit() {
         origin = next;
     }
     std::fs::write(&path, &bytes).expect("the stacked tiff writes");
-    let image = grana_tiff::Image::open(&path).expect("the stacked tiff opens");
+    let image = grana_tiff::Image::open(&path, 0).expect("the stacked tiff opens");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(1, 1, pages));
     let last = image
         .read_region(0, 0, 0, 0..1, 0..1, pages - 1..pages)

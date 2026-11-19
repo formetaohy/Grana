@@ -451,7 +451,7 @@ impl<A: Clone> Ui<A> {
         self.damage = crate::paint::Damage::None;
     }
 
-    pub fn capture(&mut self) -> (Vec<u8>, [u32; 2], wgpu::TextureFormat) {
+    pub fn capture(&mut self) -> Result<(Vec<u8>, [u32; 2], wgpu::TextureFormat), String> {
         let mut encoder =
             self.renderer
                 .device()

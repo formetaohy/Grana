@@ -542,7 +542,7 @@ impl Renderer {
         &self,
         mut encoder: CommandEncoder,
         texture: &Texture,
-    ) -> (Vec<u8>, [u32; 2], TextureFormat) {
+    ) -> Result<(Vec<u8>, [u32; 2], TextureFormat), String> {
         let [width, height] = self.size;
         let padded = (width * 4).div_ceil(READBACK_ALIGNMENT) * READBACK_ALIGNMENT;
         let buffer = self.device.create_buffer(&BufferDescriptor {
@@ -574,13 +574,14 @@ impl Renderer {
         );
         self.queue.submit([encoder.finish()]);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the device finished reading the interface");
-        let data = buffer
-            .slice(..)
-            .get_mapped_range()
-            .expect("the interface readback is mapped");
+        if let Err(error) = self.device.poll(wgpu::PollType::wait_indefinitely()) {
+            return Err(format!(
+                "the graphics device failed while reading the interface: {error}"
+            ));
+        }
+        let Ok(data) = buffer.slice(..).get_mapped_range() else {
+            return Err("the graphics device dropped the interface readback".to_string());
+        };
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
         for row in 0..height {
             let start = (row * padded) as usize;
@@ -588,7 +589,7 @@ impl Renderer {
         }
         drop(data);
         buffer.unmap();
-        (pixels, [width, height], self.format)
+        Ok((pixels, [width, height], self.format))
     }
 
     fn upload(&mut self, layers: &[&LayerBuffer; SLOTS]) -> bool {

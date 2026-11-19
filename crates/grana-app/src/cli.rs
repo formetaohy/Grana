@@ -20,13 +20,19 @@ pub fn viewer(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
 }
 
 fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> ExitCode {
-    let event_loop = EventLoop::new().expect("failed to create the event loop");
+    let event_loop = EventLoop::<crate::app::Wake>::with_user_event()
+        .build()
+        .expect("failed to create the event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new(capture, startup, access);
+    let mut app = App::new(capture, startup, access, event_loop.create_proxy());
     event_loop
         .run_app(&mut app)
         .expect("the event loop terminated abnormally");
-    ExitCode::SUCCESS
+    if app.failed().is_some() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 pub fn clear_cache() -> ExitCode {

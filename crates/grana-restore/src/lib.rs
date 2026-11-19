@@ -50,18 +50,24 @@ impl Restorer {
         bank: &KernelBank,
         first_plane: u32,
         iterations: u32,
-    ) -> Vec<f32> {
+    ) -> Result<Vec<f32>, String> {
         let jobs = [Job {
             dims,
             source,
             first_plane,
             iterations,
         }];
-        let mut restored = self.restore_batch(bank, &jobs);
-        restored.pop().expect("one job restores one volume")
+        let mut restored = self.restore_batch(bank, &jobs)?;
+        restored
+            .pop()
+            .ok_or_else(|| "the deconvolution restored no volume for the single job".to_string())
     }
 
-    pub fn restore_batch(&self, bank: &KernelBank, jobs: &[Job<'_>]) -> Vec<Vec<f32>> {
+    pub fn restore_batch(
+        &self,
+        bank: &KernelBank,
+        jobs: &[Job<'_>],
+    ) -> Result<Vec<Vec<f32>>, String> {
         for job in jobs {
             assert!(
                 job.iterations > 0 && job.iterations <= 1000,
@@ -78,19 +84,19 @@ impl Restorer {
             );
         }
         if jobs.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         match &self.core {
             Core::Graphics(graphics) => graphics
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .restore_batch(bank, jobs),
-            Core::Processor => jobs
+            Core::Processor => Ok(jobs
                 .iter()
                 .map(|job| {
                     cpu::restore(job.dims, job.source, bank, job.first_plane, job.iterations)
                 })
-                .collect(),
+                .collect()),
         }
     }
 }

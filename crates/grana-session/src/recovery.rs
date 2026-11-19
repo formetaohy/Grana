@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -127,29 +128,20 @@ impl Recovery {
 
     pub fn start(&self, project: Project, entry: Entry) -> Option<Progress<Result<Entry, String>>> {
         let root = self.root.clone()?;
-        let target = root.join(SNAPSHOT);
-        let label = entry;
         Some(Progress::spawn(
             grana_exec::Role::Write,
-            move |cancel, _| {
-                std::fs::create_dir_all(&root)
-                    .map_err(|error| format!("failed to create {}: {error}", root.display()))
-                    .and_then(|()| {
-                        project
-                            .write(&target, cancel, &mut |_, _| {})
-                            .map_err(|error| error.to_string())
-                    })
-                    .and_then(|()| {
-                        let text = toml::to_string_pretty(&label)
-                            .map_err(|error| format!("the recovery does not serialize: {error}"))?;
-                        grana_file::write(&root.join(FILE), text.as_bytes()).map_err(|error| {
-                            format!("failed to write the recovery record: {error}")
-                        })
-                    })
-                    .map(|()| label)
-                    .map_err(|error| format!("autosave failed: {error}"))
-            },
+            move |cancel, _| store(&root, project, entry, cancel),
         ))
+    }
+
+    pub fn write(&mut self, project: Project, entry: Entry) -> Result<(), String> {
+        let Some(root) = self.root.clone() else {
+            return Err("the recovery store is not available".to_string());
+        };
+        let held = store(&root, project, entry, &AtomicBool::new(false))?;
+        self.refused = false;
+        self.entry = Some(held);
+        Ok(())
     }
 
     pub fn accept(&mut self, entry: Entry) {
@@ -163,6 +155,30 @@ impl Recovery {
             discard(root);
         }
     }
+}
+
+fn store(
+    root: &Path,
+    project: Project,
+    entry: Entry,
+    cancel: &AtomicBool,
+) -> Result<Entry, String> {
+    let target = root.join(SNAPSHOT);
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("failed to create {}: {error}", root.display()))
+        .and_then(|()| {
+            project
+                .write(&target, cancel, &mut |_, _| {})
+                .map_err(|error| error.to_string())
+        })
+        .and_then(|()| {
+            let text = toml::to_string_pretty(&entry)
+                .map_err(|error| format!("the recovery does not serialize: {error}"))?;
+            grana_file::write(&root.join(FILE), text.as_bytes())
+                .map_err(|error| format!("failed to write the recovery record: {error}"))
+        })
+        .map(|()| entry)
+        .map_err(|error| format!("autosave failed: {error}"))
 }
 
 fn discard(root: &Path) {

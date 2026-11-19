@@ -156,12 +156,18 @@ impl Engine {
         self.renderer.requests_pending()
     }
 
-    pub fn poll_requests(&mut self, device: &Device, time: u32) -> Option<Requests> {
-        let requests = self.renderer.poll_requests(device)?;
+    pub fn poll_requests(
+        &mut self,
+        device: &Device,
+        time: u32,
+    ) -> Result<Option<Requests>, String> {
+        let Some(requests) = self.renderer.poll_requests(device)? else {
+            return Ok(None);
+        };
         if requests.time == time {
             self.info.view = requests.view;
         }
-        Some(requests)
+        Ok(Some(requests))
     }
 
     pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {
@@ -387,9 +393,13 @@ impl Engine {
         true
     }
 
-    pub fn poll_pick(&mut self, device: &Device) -> Option<Picked> {
-        self.pending_pick.as_ref()?;
-        let pick = self.renderer.poll_pick(device)?;
+    pub fn poll_pick(&mut self, device: &Device) -> Result<Option<Picked>, String> {
+        if self.pending_pick.is_none() {
+            return Ok(None);
+        }
+        let Some(pick) = self.renderer.poll_pick(device)? else {
+            return Ok(None);
+        };
         let identities = self.pending_pick.take().expect("the pick was pending");
         let picked = match pick {
             PickId::None => Picked::Miss,
@@ -414,7 +424,7 @@ impl Engine {
                 }
             }
         };
-        Some(picked)
+        Ok(Some(picked))
     }
 
     pub fn pick_pending(&self) -> bool {

@@ -85,7 +85,7 @@ pub fn read<R>(
     texture: &Texture,
     size: [u32; 2],
     read: impl FnOnce(Pixels<'_>) -> R,
-) -> R {
+) -> Result<R, String> {
     let stride = stride(size[0]);
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("grana.image"),
@@ -103,21 +103,27 @@ pub fn read<R>(
     slice.map_async(MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    device
-        .poll(PollType::wait_indefinitely())
-        .expect("the graphics device failed while reading back an image");
-    receiver
-        .recv()
-        .expect("the image mapping callback runs once")
-        .expect("the image staging buffer is mappable");
-    let value = {
-        let mapped = slice
-            .get_mapped_range()
-            .expect("the mapped image buffer stays mapped");
-        read(Pixels::new(&mapped, size, stride as usize))
+    if let Err(error) = device.poll(PollType::wait_indefinitely()) {
+        return Err(format!(
+            "the graphics device failed while reading back an image: {error}"
+        ));
+    }
+    match receiver.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            return Err(format!(
+                "the graphics device dropped the image staging buffer: {error}"
+            ));
+        }
+        Err(_) => return Err("the image mapping callback reported no result".to_string()),
+    }
+    let Ok(mapped) = slice.get_mapped_range() else {
+        return Err("the graphics device dropped the mapped image buffer".to_string());
     };
+    let value = read(Pixels::new(&mapped, size, stride as usize));
+    drop(mapped);
     buffer.unmap();
-    value
+    Ok(value)
 }
 
 pub(crate) fn stage(

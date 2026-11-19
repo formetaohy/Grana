@@ -10,7 +10,7 @@ mod tag;
 
 pub use archive::write_archive;
 pub use error::Error;
-pub use image::{Image, dataset_name};
+pub use image::{Image, Series, dataset_name, series_count, series_names};
 
 pub(crate) type Cache = grana_store::LruCache<(usize, usize, usize, usize), Vec<u8>>;
 

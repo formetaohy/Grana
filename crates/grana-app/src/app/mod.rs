@@ -16,7 +16,7 @@ use grana_ui::Ui;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
@@ -24,6 +24,7 @@ mod chrome;
 mod command;
 mod editor;
 mod export;
+mod fail;
 mod frame;
 mod input;
 mod sync;
@@ -69,9 +70,15 @@ enum WindowFit {
     Editor,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wake {
+    Redraw,
+}
+
 pub struct App {
     surface: Option<Surface>,
     session: Session,
+    wake: EventLoopProxy<Wake>,
     engine: Option<Engine>,
     pending_engine: Option<Receiver<Engine>>,
     start: Instant,
@@ -92,6 +99,7 @@ pub struct App {
     title: Option<String>,
     modifiers: ModifiersState,
     output: Option<String>,
+    fatal: Option<String>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
     stream: Stream,
@@ -116,7 +124,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> Self {
+    pub fn new(
+        capture: Option<PathBuf>,
+        startup: Option<String>,
+        access: Access,
+        wake: EventLoopProxy<Wake>,
+    ) -> Self {
         let mut session = match access {
             Access::Author => Session::new(),
             Access::Viewer => Session::viewer(),
@@ -133,6 +146,7 @@ impl App {
         Self {
             surface: None,
             session,
+            wake,
             engine: None,
             pending_engine: None,
             startup_size: None,
@@ -154,6 +168,7 @@ impl App {
             title: None,
             modifiers: ModifiersState::default(),
             output: None,
+            fatal: None,
             ime: false,
             ime_area: None,
             stream: Stream::new(),
@@ -211,6 +226,10 @@ impl App {
             }
         }
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
+        let wake = self.wake.clone();
+        gpu.lost_handle().wake_with(move || {
+            let _ = wake.send_event(Wake::Redraw);
+        });
         self.pending_engine = Some(spawn_engine(
             gpu.device.clone(),
             gpu.queue.clone(),
@@ -246,18 +265,27 @@ impl App {
     }
 
     pub(super) fn pump(&mut self) -> bool {
+        if !self.guard() {
+            return false;
+        }
         self.session.poll();
         self.sync_engine();
         if self.follow_resume() {
             return false;
         }
-        self.exchange_bricks();
+        if let Err(detail) = self.exchange_bricks() {
+            self.fail(detail);
+            return false;
+        }
         self.poll_pick();
         self.session.sync_measure();
         true
     }
 
     pub(super) fn redraw(&mut self) {
+        if self.fatal.is_some() {
+            return;
+        }
         if !self.pump() {
             return;
         }
@@ -376,7 +404,13 @@ impl App {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let (pixels, size, format) = surface.ui.capture();
+        let (pixels, size, format) = match surface.ui.capture() {
+            Ok(captured) => captured,
+            Err(detail) => {
+                self.fail(detail);
+                return;
+            }
+        };
         let pixels = if format == wgpu::TextureFormat::Bgra8Unorm {
             let mut swapped = pixels;
             for pixel in swapped.chunks_mut(4) {
@@ -487,7 +521,13 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<Wake> for App {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Wake) {
+        match event {
+            Wake::Redraw => self.request_redraw(),
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.surface.is_none() {
             self.resume(event_loop);

@@ -25,11 +25,47 @@ const PAGE_BYTES: u64 = 8 << 20;
 type PageCache = grana_store::LruCache<(usize, usize), Page>;
 type LayoutCache = grana_store::LruCache<(usize, usize), Layout>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Series {
+    extent: Extent,
+    channels: usize,
+    frames: u32,
+    name: Option<String>,
+}
+
+impl Series {
+    fn new(extent: Extent, channels: usize, frames: u32, name: Option<String>) -> Self {
+        Self {
+            extent,
+            channels,
+            frames,
+            name,
+        }
+    }
+
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn frames(&self) -> u32 {
+        self.frames
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+}
+
 pub struct Image {
     path: PathBuf,
     name: String,
     pyramid: Pyramid,
     levels: Vec<LevelPages>,
+    series: Vec<Series>,
     files: Vec<Arc<File>>,
     cache: Cache,
 }
@@ -177,12 +213,9 @@ impl File {
 }
 
 impl Image {
-    pub fn open(path: &Path) -> Result<Self, Error> {
+    pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
         let first = File::open(path)?;
-        let description = first
-            .directory()?
-            .ascii(&first.store, TAG_IMAGE_DESCRIPTION, path)?;
-        let ome = parse_metadata(description.as_deref(), path)?;
+        let images = metadata(&first, path)?;
         let page = first.page(0, 0)?;
         let chunky = !page.planar && page.samples > 1;
         let format = page.format;
@@ -192,9 +225,23 @@ impl Image {
             .iter()
             .take_while(|held| held.width == page.width && held.height == page.height)
             .count();
-        let sizes = counts(&ome, stacked, samples, chunky, path)?;
+        let declared = declared(&images, &page, stacked, chunky);
+        let ome = match images.get(series) {
+            Some(ome) => Some(ome),
+            None if series == 0 => None,
+            None => {
+                return Err(Error::unsupported(
+                    path,
+                    format!(
+                        "the image holds {} series and series {} was requested",
+                        declared.len(),
+                        series + 1
+                    ),
+                ));
+            }
+        };
+        let sizes = counts(ome, stacked, samples, chunky, path)?;
         let order = ome
-            .as_ref()
             .and_then(|ome| ome.dimension_order.clone())
             .unwrap_or_else(|| "XYZCT".to_string());
         let planes = Planes::new(sizes[2], sizes[1], sizes[0], chunky, &order)
@@ -205,7 +252,7 @@ impl Image {
         assign(
             0,
             &files[0],
-            &ome,
+            ome,
             &planes,
             format,
             &mut placed,
@@ -226,7 +273,7 @@ impl Image {
             assign(
                 index,
                 &files[index],
-                &ome,
+                ome,
                 &planes,
                 format,
                 &mut placed,
@@ -258,7 +305,7 @@ impl Image {
             levels.push(deeper);
         }
         let base = levels[0].extent;
-        let spacing = spacing(&ome, &files[0], path)?;
+        let spacing = spacing(ome, &files[0], path)?;
         let pyramid_levels = levels
             .iter()
             .map(|level| {
@@ -276,9 +323,7 @@ impl Image {
         let cache = crate::cache(CACHE_BYTES);
         let mut channels = Vec::with_capacity(sizes[1] as usize);
         for index in 0..sizes[1] {
-            let info = ome
-                .as_ref()
-                .and_then(|ome| ome.channels.get(index as usize));
+            let info = ome.and_then(|ome| ome.channels.get(index as usize));
             let name = info
                 .and_then(|channel| channel.name.clone())
                 .filter(|name| !name.is_empty())
@@ -295,13 +340,12 @@ impl Image {
                 &[sampled],
             ));
         }
-        let interval = ome.as_ref().and_then(|ome| ome.interval).unwrap_or(1.0);
+        let interval = ome.and_then(|ome| ome.interval).unwrap_or(1.0);
         let name = ome
-            .as_ref()
             .and_then(|ome| ome.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
-        let placement = placement(ome.as_ref(), pyramid_levels[0], sizes[2], path)?;
+        let placement = placement(ome, pyramid_levels[0], sizes[2], path)?;
         let stored = pyramid_levels.len();
         Ok(Self {
             path: path.to_path_buf(),
@@ -315,6 +359,7 @@ impl Image {
                 placement,
             ),
             levels,
+            series: declared,
             files,
             cache,
         })
@@ -322,6 +367,10 @@ impl Image {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn series(&self) -> &[Series] {
+        &self.series
     }
 
     pub fn pyramid(&self) -> &Pyramid {
@@ -408,17 +457,14 @@ fn named(path: &Path, file: &str) -> bool {
 fn assign(
     file: usize,
     volume: &File,
-    ome: &Option<Ome>,
+    ome: Option<&Ome>,
     planes: &Planes,
     format: VoxelFormat,
     placed: &mut HashMap<usize, Slot>,
     requested: &mut Vec<String>,
 ) -> Result<(), Error> {
     let path = &volume.path;
-    let blocks = ome
-        .as_ref()
-        .map(|ome| ome.tiff_data.as_slice())
-        .unwrap_or_default();
+    let blocks = ome.map_or(&[][..], |ome| ome.tiff_data.as_slice());
     let mut raster: Vec<(usize, usize)> = Vec::new();
     for block in blocks {
         if let Some(name) = block.file.as_deref()
@@ -530,7 +576,7 @@ fn gather(
 }
 
 fn counts(
-    ome: &Option<Ome>,
+    ome: Option<&Ome>,
     pages: usize,
     samples: u32,
     chunky: bool,
@@ -560,8 +606,8 @@ fn counts(
     Ok([size_t, size_c, ome.size_z.unwrap_or(1)])
 }
 
-fn spacing(ome: &Option<Ome>, volume: &File, path: &Path) -> Result<Spacing, Error> {
-    let physical = ome.as_ref().map(|ome| ome.physical).unwrap_or([None; 3]);
+fn spacing(ome: Option<&Ome>, volume: &File, path: &Path) -> Result<Spacing, Error> {
+    let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
     let x = match physical[0] {
         Some(value) => value,
         None => resolution(volume, TAG_X_RESOLUTION, path)?.unwrap_or(1.0),
@@ -635,14 +681,68 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
     Ok(Some((micrometres / value) as f32))
 }
 
-fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Option<Ome>, Error> {
+fn metadata(volume: &File, path: &Path) -> Result<Vec<Ome>, Error> {
+    let description = volume
+        .directory()?
+        .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?;
+    parse_metadata(description.as_deref(), path)
+}
+
+fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Vec<Ome>, Error> {
     let Some(text) = description else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     if !text.trim_start().starts_with('<') {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     ome::parse(text).map_err(|detail| Error::metadata(path, detail))
+}
+
+pub fn series_count(path: &Path) -> Result<usize, Error> {
+    Ok(series_names(path)?.len().max(1))
+}
+
+pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
+    let store = Store::open(path)?;
+    let header = tag::header(&store, path)?;
+    let directory = Directory::read(&store, &header, header.first, path)?;
+    let description = directory.ascii(&store, TAG_IMAGE_DESCRIPTION, path)?;
+    Ok(parse_metadata(description.as_deref(), path)?
+        .into_iter()
+        .map(|ome| ome.name)
+        .collect())
+}
+
+fn declared(images: &[Ome], page: &Page, stacked: usize, chunky: bool) -> Vec<Series> {
+    if images.is_empty() {
+        let depth = u32::try_from(stacked).unwrap_or(u32::MAX).max(1);
+        let channels = if chunky {
+            usize::try_from(page.samples).unwrap_or(1)
+        } else {
+            1
+        };
+        return vec![Series::new(
+            Extent::new(page.width, page.height, depth),
+            channels,
+            1,
+            None,
+        )];
+    }
+    images
+        .iter()
+        .map(|ome| {
+            Series::new(
+                Extent::new(
+                    ome.size_x.filter(|value| *value > 0).unwrap_or(page.width),
+                    ome.size_y.filter(|value| *value > 0).unwrap_or(page.height),
+                    ome.size_z.filter(|value| *value > 0).unwrap_or(1),
+                ),
+                usize::try_from(ome.size_c.filter(|value| *value > 0).unwrap_or(1)).unwrap_or(1),
+                ome.size_t.filter(|value| *value > 0).unwrap_or(1),
+                ome.name.clone().filter(|name| !name.is_empty()),
+            )
+        })
+        .collect()
 }
 
 fn region(

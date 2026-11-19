@@ -40,10 +40,10 @@ pub(crate) struct Plane {
     pub position: [Option<f32>; 3],
 }
 
-pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
+pub(crate) fn parse(xml: &str) -> Result<Vec<Ome>, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
-    let mut ome = Ome::default();
+    let mut images: Vec<Ome> = Vec::new();
     let mut depth = 0usize;
     let mut image_depth = None;
     let mut pending: Option<TiffData> = None;
@@ -55,44 +55,56 @@ pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
                 if start.name().local_name().as_ref() == b"Image" {
                     if image_depth.is_none() {
                         image_depth = Some(depth);
-                        ome.name = attribute(&start, b"Name")?;
+                        images.push(series(&start)?);
                     }
                 } else if image_depth.is_some() {
-                    element(&start, &mut ome, &mut pending)?;
+                    let series = images.last_mut().expect("an Image element opened a series");
+                    element(&start, series, &mut pending)?;
                 }
             }
             Event::Empty(start) => {
-                if image_depth.is_some() {
-                    element(&start, &mut ome, &mut pending)?;
+                if start.name().local_name().as_ref() == b"Image" {
+                    if image_depth.is_none() {
+                        images.push(series(&start)?);
+                    }
+                } else if image_depth.is_some() {
+                    let series = images.last_mut().expect("an Image element opened a series");
+                    element(&start, series, &mut pending)?;
                     if start.name().local_name().as_ref() == b"TiffData"
                         && let Some(block) = pending.take()
                     {
-                        ome.tiff_data.push(block);
+                        series.tiff_data.push(block);
                     }
                 }
             }
             Event::End(end) => {
-                if image_depth == Some(depth) && end.name().local_name().as_ref() == b"Image" {
-                    break;
+                let name = end.name().local_name();
+                if image_depth.is_some() && name.as_ref() == b"TiffData" {
+                    let series = images.last_mut().expect("an Image element opened a series");
+                    if let Some(block) = pending.take() {
+                        series.tiff_data.push(block);
+                    }
                 }
-                if depth == 0 {
-                    break;
+                if image_depth == Some(depth) && name.as_ref() == b"Image" {
+                    image_depth = None;
                 }
-                if end.name().local_name().as_ref() == b"TiffData"
-                    && let Some(block) = pending.take()
-                {
-                    ome.tiff_data.push(block);
-                }
-                depth -= 1;
+                depth = depth.saturating_sub(1);
             }
             Event::Eof => break,
             _ => {}
         }
     }
-    if let Some(block) = pending {
-        ome.tiff_data.push(block);
+    if let (Some(series), Some(block)) = (images.last_mut(), pending) {
+        series.tiff_data.push(block);
     }
-    Ok(image_depth.map(|_| ome))
+    Ok(images)
+}
+
+fn series(start: &BytesStart) -> Result<Ome, String> {
+    Ok(Ome {
+        name: attribute(start, b"Name")?,
+        ..Ome::default()
+    })
 }
 
 fn element(

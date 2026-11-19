@@ -167,45 +167,53 @@ impl Readback {
         &mut self,
         device: &Device,
         read: impl FnOnce(usize, &[u8]) -> R,
-    ) -> Option<R> {
-        self.ready(device, false).then(|| self.take_ready(read))
+    ) -> Result<Option<R>, String> {
+        Ok(self.ready(device, false)?.then(|| self.take_ready(read)))
     }
 
-    pub fn take_wait<R>(
-        &mut self,
-        device: &Device,
-        read: impl FnOnce(usize, &[u8]) -> R,
-    ) -> Option<R> {
-        self.ready(device, true).then(|| self.take_ready(read))
-    }
-
-    pub fn ready(&mut self, device: &Device, wait: bool) -> bool {
+    pub fn ready(&mut self, device: &Device, wait: bool) -> Result<bool, String> {
         let Some(&slot) = self.pending.front() else {
-            return false;
+            return Ok(false);
         };
         if self.slots[slot].ready {
-            return true;
+            return Ok(true);
         }
-        match device.poll(if wait {
+        if let Err(error) = device.poll(if wait {
             PollType::wait_indefinitely()
         } else {
             PollType::Poll
         }) {
-            Ok(_) => {}
-            Err(error) => panic!("the graphics device failed while reading back a frame: {error}"),
+            return Err(format!(
+                "the graphics device failed while reading back a frame: {error}"
+            ));
         }
         let receiver = self.slots[slot]
             .mapping
             .as_ref()
             .expect("a pending readback slot is registered before it is taken");
         match receiver.try_recv() {
-            Ok(result) => {
-                result.expect("the readback staging buffer is mappable");
+            Ok(Ok(())) => {
+                if self.slots[slot]
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .is_err()
+                {
+                    return Err(
+                        "the graphics device dropped the mapped readback staging buffer"
+                            .to_string(),
+                    );
+                }
                 self.slots[slot].ready = true;
-                true
+                Ok(true)
             }
-            Err(TryRecvError::Empty) => false,
-            Err(TryRecvError::Disconnected) => panic!("the readback callback fires once"),
+            Ok(Err(error)) => Err(format!(
+                "the graphics device dropped the readback staging buffer: {error}"
+            )),
+            Err(TryRecvError::Empty) => Ok(false),
+            Err(TryRecvError::Disconnected) => {
+                Err("the readback callback reported no result".to_string())
+            }
         }
     }
 

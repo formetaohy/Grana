@@ -279,8 +279,10 @@ impl Export {
     fn harvest(&mut self, device: &Device, scene: &Scene, wait: bool) -> Option<Step> {
         let size = *self.staged.front()?;
         let stride = self.stride as usize;
-        if !self.readback.ready(device, wait) {
-            return Some(Step::Running);
+        match self.readback.ready(device, wait) {
+            Ok(true) => {}
+            Ok(false) => return Some(Step::Running),
+            Err(detail) => return Some(self.fail(detail)),
         }
         let pose = self.poses[self.written.min(self.poses.len() - 1)];
         let camera = camera(&pose.camera);
@@ -431,7 +433,7 @@ impl Export {
             drawn.scene.exposure,
             transparent,
             |pixels| crate::quantize::rgba8(pixels, transparent),
-        );
+        )?;
         let size = self.viewport.size;
         let sink = self.sink.take().expect("the export is alive");
         let Sink::Figure { path } = sink else {

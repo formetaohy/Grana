@@ -429,10 +429,12 @@ impl Renderer {
         info
     }
 
-    pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
+    pub fn poll_requests(&mut self, device: &Device) -> Result<Option<Requests>, String> {
         let time = self.time;
         let prefetch = self.prefetch;
-        let resources = self.resources.as_mut()?;
+        let Some(resources) = self.resources.as_mut() else {
+            return Ok(None);
+        };
         let requests = self.residence.poll(
             device,
             &resources.pyramid,
@@ -441,8 +443,11 @@ impl Renderer {
             time,
             prefetch,
         )?;
+        let Some(requests) = requests else {
+            return Ok(None);
+        };
         self.info.view = requests.view;
-        Some(requests)
+        Ok(Some(requests))
     }
 
     pub fn requests_pending(&self) -> bool {
@@ -620,19 +625,23 @@ impl Renderer {
         true
     }
 
-    pub fn poll_pick(&mut self, device: &Device) -> Option<PickId> {
+    pub fn poll_pick(&mut self, device: &Device) -> Result<Option<PickId>, String> {
         if !self.pick_pending {
-            return None;
+            return Ok(None);
         }
         if self.sequence.wrapping_sub(self.pick_issued) > PICK_LIFETIME {
             self.pick_pending = false;
             self.pick_readback = None;
-            return Some(PickId::Expired);
+            return Ok(Some(PickId::Expired));
         }
-        let readback = self.pick_readback.as_mut()?;
-        let raw = readback.take_with(device, |_, bytes| pick::decode(bytes))?;
+        let Some(readback) = self.pick_readback.as_mut() else {
+            return Ok(None);
+        };
+        let Some(raw) = readback.take_with(device, |_, bytes| pick::decode(bytes))? else {
+            return Ok(None);
+        };
         self.pick_pending = false;
-        Some(match raw {
+        Ok(Some(match raw {
             pick::Raw::None => PickId::None,
             pick::Raw::Style(index) => PickId::Style(index),
             pick::Raw::Splat(index) => match self
@@ -643,7 +652,7 @@ impl Renderer {
                 Some((key, level, index)) => PickId::Splat { key, level, index },
                 None => PickId::None,
             },
-        })
+        }))
     }
 
     pub fn pick_pending(&self) -> bool {
@@ -727,7 +736,7 @@ impl Renderer {
         exposure: f32,
         transparent: bool,
         read: impl FnOnce(crate::Pixels<'_>) -> R,
-    ) -> R {
+    ) -> Result<R, String> {
         let size = self
             .targets
             .current()

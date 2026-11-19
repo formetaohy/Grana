@@ -218,7 +218,10 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
 
 fn demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
     for _ in 0..4 {
-        match renderer.poll_requests(gpu.device()) {
+        match renderer
+            .poll_requests(gpu.device())
+            .expect("the demand polls")
+        {
             Some(requests) => return Some(requests),
             None => {
                 gpu.device()
