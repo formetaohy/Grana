@@ -23,17 +23,13 @@ pub(super) fn view<'a>(
     let theme = *ctx.theme();
     let palette = theme.palette;
     let backdrop = palette.surface_dim;
-    let frame = palette.surface_container_lowest;
-    let corners = Corners::all(theme.metrics.corner_xl);
     let stage = state.stage;
     let region = stage.region();
     let quad = stage.quad();
-    let pane = layout.viewport;
     let content = grana_ui::canvas(Length::Fill, full.height())
         .view(region, move |_, painter, info| {
             painter.rect(info.rect, Corners::ZERO, backdrop);
-            painter.rect(pane, corners.resolved(pane.size()), frame);
-            painter.scene(quad, corners.resolved(quad.size()), [0.0, 0.0, 1.0, 1.0]);
+            painter.scene(quad, Corners::ZERO, [0.0, 0.0, 1.0, 1.0]);
         })
         .named("stage.content")
         .at(full)
@@ -57,14 +53,14 @@ fn viewer_chip<'a>(
     if state.access.author() || state.io.exporting.is_some() {
         return Vec::new();
     }
-    let origin = layout.viewport.shrink(STAGE_INSET).min;
+    let origin = layout.safe.shrink(STAGE_INSET).min;
     let tint = ctx.theme().palette.tertiary;
     let language = ctx.language();
     vec![
         chip(
             ctx,
             "figure.readonly",
-            layout.viewport,
+            layout.safe,
             origin,
             Icon::Lock,
             grana_i18n::app::read_only(language),
@@ -147,7 +143,7 @@ fn mask_bar<'a>(
     );
     let width = 264.0;
     let height = 152.0;
-    let safe = layout.viewport.shrink(STAGE_INSET);
+    let safe = layout.safe.shrink(STAGE_INSET);
     let rect = Rect::from_min_size(
         Vec2::new(safe.min.x, (safe.max.y - height).max(safe.min.y)),
         Vec2::new(width, height),
@@ -224,7 +220,7 @@ fn viewport<'a>(
         camera: state.camera,
         world: state.scene.dataset.world_size(),
         rect,
-        safe: layout.viewport.shrink(STAGE_INSET),
+        safe: layout.safe.shrink(STAGE_INSET),
         region: &state.scene.region,
         clip: state.scene.clip,
         legends,
@@ -253,7 +249,7 @@ impl OverlayKey {
             labels: state.workspace.overlay.stamp(),
             camera: camera_digest(state.camera),
             viewport: edges(layout.viewport),
-            safe: edges(layout.viewport.shrink(STAGE_INSET)),
+            safe: edges(layout.safe.shrink(STAGE_INSET)),
             world: state
                 .scene
                 .dataset
@@ -374,12 +370,12 @@ fn recording_chip<'a>(
     let Some((frame, frames)) = state.io.exporting else {
         return Vec::new();
     };
-    let origin = layout.viewport.shrink(STAGE_INSET).min;
+    let origin = layout.safe.shrink(STAGE_INSET).min;
     let title = grana_i18n::annotation::recording(ctx.language(), frame, frames);
     vec![chip(
         ctx,
         "figure.recording",
-        layout.viewport,
+        layout.safe,
         origin,
         Icon::Record,
         &title,
@@ -437,7 +433,7 @@ pub(super) fn toast<'a>(
         (None, None) => return Vec::new(),
     };
     let palette = ctx.theme().palette;
-    let stage = layout.viewport.shrink(STAGE_INSET);
+    let stage = layout.safe.shrink(STAGE_INSET);
     let ceiling = stage.max.y;
     let width = (stage.width() - 32.0).min(420.0);
     let style = TextStyle::new(ctx.theme().font(Level::Body), palette.on_surface).wrapping();

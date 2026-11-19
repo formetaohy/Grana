@@ -28,7 +28,6 @@ pub const TRANSPORT_HEIGHT: f32 = 44.0;
 pub const DOCK_HEADER: f32 = 36.0;
 pub const DOCK_DEFAULT: f32 = 332.0;
 pub const DOCK_MINIMUM: f32 = 210.0;
-pub const TOOLBAR_LEFT: f32 = 336.0;
 pub const TOOLBAR_RIGHT: f32 = 336.0;
 pub const STAGE_INSET: f32 = 12.0;
 
@@ -53,7 +52,7 @@ fn dock_extent(workspace: &Workspace, full: Rect, transport: bool) -> f32 {
     stored.clamp(DOCK_MINIMUM, dock_available(full.size(), transport))
 }
 
-fn stage_rect(workspace: &Workspace, frames: usize, full: Rect) -> Rect {
+fn safe_rect(workspace: &Workspace, frames: usize, full: Rect) -> Rect {
     let transport = frames > 1;
     let left = full.min.x
         + MARGIN
@@ -200,7 +199,7 @@ pub fn build(
     workspace.prepare(view, ui.size());
     let palette = crate::palette::resolve(ui, view, workspace);
     let frames = scene.frame_count() as usize;
-    stage.set_viewport(stage_rect(workspace, frames, full));
+    stage.set_viewport(full);
     let state = View {
         access: view.access,
         revision: view.revision,
@@ -227,7 +226,8 @@ pub fn build(
     };
     let elements = {
         let mut ctx = ui.build();
-        let layout = Layout::new(&mut ctx, workspace, frames, full);
+        let project = header::project(&state, ctx.language());
+        let layout = Layout::new(&mut ctx, workspace, frames, full, &project);
         view_elements(&mut ctx, &layout, &state, full)
     };
     ui.present(grana_ui::place(full, elements));
@@ -255,7 +255,7 @@ fn view_elements<'a>(
     elements.extend(stage::toast(ctx, layout, state));
     elements.extend(crate::panel::remote(
         ctx,
-        layout.viewport,
+        layout.safe,
         state.workspace.remote_open,
     ));
     elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
@@ -271,6 +271,8 @@ pub struct Layout {
     pub toolbar_right: Rect,
     pub sidebar: Rect,
     pub viewport: Rect,
+    pub safe: Rect,
+    pub project_lead: f32,
     pub transport: Option<Rect>,
     pub dock: Option<Rect>,
     pub sidebar_visible: bool,
@@ -282,12 +284,14 @@ impl Layout {
         workspace: &Workspace,
         frames: usize,
         full: Rect,
+        project: &header::Project,
     ) -> Self {
         let chrome = workspace.chrome;
         let top = full.min.y + MARGIN;
+        let navigation = header::navigation_metrics(ctx, project, chrome, full);
         let toolbar_left = Rect::from_min_size(
             Vec2::new(full.min.x + MARGIN + chrome.leading, top),
-            Vec2::new(TOOLBAR_LEFT, TOOLBAR_HEIGHT),
+            Vec2::new(navigation.extent, TOOLBAR_HEIGHT),
         );
         let controls = if chrome.controls {
             crate::chrome::CONTROLS_WIDTH + GAP
@@ -359,7 +363,9 @@ impl Layout {
             toolbar_left,
             toolbar_right,
             sidebar,
-            viewport: stage_rect(workspace, frames, full),
+            viewport: full,
+            safe: safe_rect(workspace, frames, full),
+            project_lead: navigation.lead,
             transport,
             dock,
             sidebar_visible,

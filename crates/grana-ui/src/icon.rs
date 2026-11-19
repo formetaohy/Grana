@@ -12,9 +12,9 @@ mod symbol {
     pub(super) const CHEVRON_LEFT: char = '\u{e5cb}';
     pub(super) const CHEVRON_RIGHT: char = '\u{e5cc}';
     pub(super) const CLOSE: char = '\u{e5cd}';
+    pub(super) const CLOSE_FULLSCREEN: char = '\u{f1cf}';
     pub(super) const CONTENT_COPY: char = '\u{e14d}';
     pub(super) const CONTENT_CUT: char = '\u{e14e}';
-    pub(super) const CROP_SQUARE: char = '\u{e3c6}';
     pub(super) const DELETE: char = '\u{e92e}';
     pub(super) const DEPLOYED_CODE: char = '\u{f720}';
     pub(super) const EDIT: char = '\u{f097}';
@@ -23,7 +23,6 @@ mod symbol {
     pub(super) const FIBER_MANUAL_RECORD: char = '\u{e061}';
     pub(super) const FILE_UPLOAD: char = '\u{f09b}';
     pub(super) const FILTER_ALT: char = '\u{ef4f}';
-    pub(super) const FILTER_NONE: char = '\u{e3e0}';
     pub(super) const FOLDER: char = '\u{e2c7}';
     pub(super) const GRAPHIC_EQ: char = '\u{e1b8}';
     pub(super) const GRID_VIEW: char = '\u{e9b0}';
@@ -33,6 +32,7 @@ mod symbol {
     pub(super) const MORE_HORIZ: char = '\u{e5d3}';
     pub(super) const MOVIE: char = '\u{e404}';
     pub(super) const MY_LOCATION: char = '\u{e55c}';
+    pub(super) const OPEN_IN_FULL: char = '\u{f1ce}';
     pub(super) const PAUSE: char = '\u{e034}';
     pub(super) const PHOTO_CAMERA: char = '\u{e412}';
     pub(super) const PLAY_ARROW: char = '\u{e037}';
@@ -164,8 +164,8 @@ impl Icon {
             Self::Pencil => symbol::EDIT,
             Self::Ruler => symbol::STRAIGHTEN,
             Self::WindowMinimize => symbol::REMOVE,
-            Self::WindowMaximize => symbol::CROP_SQUARE,
-            Self::WindowRestore => symbol::FILTER_NONE,
+            Self::WindowMaximize => symbol::OPEN_IN_FULL,
+            Self::WindowRestore => symbol::CLOSE_FULLSCREEN,
         }
     }
 }

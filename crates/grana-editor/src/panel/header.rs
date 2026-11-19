@@ -5,24 +5,91 @@ use grana_ui::{
     Role, State, TextStyle, icon,
 };
 
+use crate::chrome::{CONTROLS_WIDTH, ChromeView};
 use crate::message::Message;
-use crate::panel::Layout;
+use crate::panel::{GAP, Layout, MARGIN, TOOLBAR_RIGHT};
 use crate::state::View;
 use crate::view::menu;
+
+const PADDING: f32 = 6.0;
+const ITEM_GAP: f32 = 6.0;
+const MINIMUM_LEAD: f32 = 112.0;
+const LEAD_INSET: f32 = 34.0;
+
+pub(super) struct Project {
+    pub name: String,
+    pub dirty: bool,
+    pub read_only: bool,
+    pub author: bool,
+}
+
+pub(super) fn project(state: &View<'_>, language: grana_i18n::Language) -> Project {
+    Project {
+        name: state
+            .io
+            .name
+            .clone()
+            .unwrap_or_else(|| grana_i18n::common::untitled(language).to_string()),
+        dirty: state.io.dirty && state.access.author(),
+        read_only: state.access.viewer(),
+        author: state.access.author(),
+    }
+}
+
+pub(super) struct Navigation {
+    pub extent: f32,
+    pub lead: f32,
+}
+
+pub(super) fn navigation_metrics(
+    ctx: &mut BuildContext<'_, Message>,
+    project: &Project,
+    chrome: ChromeView,
+    full: Rect,
+) -> Navigation {
+    let theme = *ctx.theme();
+    let title = ctx
+        .measure(
+            &project.name,
+            TextStyle::new(theme.font(Level::Label), Color::WHITE),
+        )
+        .x;
+    let controls = if chrome.controls {
+        CONTROLS_WIDTH + GAP
+    } else {
+        0.0
+    };
+    let available = full.width() - 2.0 * MARGIN - chrome.leading - controls - TOOLBAR_RIGHT - GAP;
+    let fixed = 2.0 * PADDING
+        + theme.metrics.control_height
+        + ITEM_GAP
+        + theme.metrics.group_gap
+        + theme.metrics.control_height;
+    let natural = title + LEAD_INSET + if project.dirty { 12.0 } else { 0.0 };
+    let lead = natural
+        .max(MINIMUM_LEAD)
+        .min((available - fixed).max(MINIMUM_LEAD));
+    Navigation {
+        extent: fixed + lead,
+        lead,
+    }
+}
 
 pub(super) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    vec![navigation(ctx, layout, state), actions(ctx, layout, state)]
+    let mut elements = navigation(ctx, layout, state);
+    elements.push(actions(ctx, layout, state));
+    elements
 }
 
 fn navigation<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
     state: &'a View<'a>,
-) -> Element<'a, Message> {
+) -> Vec<Element<'a, Message>> {
     let theme = *ctx.theme();
     let hidden = state.workspace.sidebar_hidden;
     let language = ctx.language();
@@ -45,55 +112,50 @@ fn navigation<'a>(
         Message::ToggleSidebar,
     )
     .shaped(Corners::capsule());
-    let project = project_split(ctx, state);
-    let project_menu = project_menu(ctx, state);
+    let project = project(state, language);
+    let split = project_split(ctx, layout, &project);
     let surface = theme.surface(Role::FloatingToolbar, State::Rest);
-    grana_ui::row()
+    let row = grana_ui::row()
         .at(layout.toolbar_left)
         .named("header.navigation")
-        .padding(Edges::symmetric(6.0, 6.0))
-        .gap(6.0)
+        .padding(Edges::symmetric(PADDING, PADDING))
+        .gap(ITEM_GAP)
         .align(Align::Center)
         .height(Length::Fill)
         .background(surface)
-        .children([toggle, project, project_menu])
+        .children([toggle, split]);
+    vec![row, project_menu(ctx, state)]
 }
 
 fn project_split<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    state: &'a View<'a>,
+    layout: &Layout,
+    project: &Project,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let inner = theme.metrics.corner_xs;
     let project_font = theme.font(Level::Label);
-    let project = state
-        .io
-        .name
-        .as_deref()
-        .unwrap_or(grana_i18n::common::untitled(ctx.language()))
-        .to_string();
-    let dirty = state.io.dirty && state.access.author();
+    let dirty = project.dirty;
     let full = ctx
-        .measure(&project, TextStyle::new(project_font, Color::WHITE))
+        .measure(&project.name, TextStyle::new(project_font, Color::WHITE))
         .x;
-    let trail_span = theme.metrics.control_height + theme.metrics.group_gap;
-    let ceiling =
-        (crate::panel::TOOLBAR_LEFT - 12.0 - theme.metrics.control_height - 12.0 - trail_span)
-            .max(96.0);
-    let lead_width = (full + 34.0 + if dirty { 12.0 } else { 0.0 }).clamp(112.0, ceiling);
-    let measured = (lead_width - 34.0 - if dirty { 12.0 } else { 0.0 }).max(32.0);
+    let lead_width = layout.project_lead;
+    let measured = (lead_width - LEAD_INSET - if dirty { 12.0 } else { 0.0 }).max(32.0);
     let menu_key = Key::new("project.menu");
     let open = ctx.popup_open(menu_key);
-    let title = project.clone();
+    let title = project.name.clone();
     let language = ctx.language();
-    let read_only = state.access.viewer();
-    let tooltip: Option<String> = if read_only {
+    let tooltip: Option<String> = if project.read_only {
         Some(grana_i18n::app::read_only_detail(language).to_string())
     } else {
-        (full > measured).then(|| project.clone())
+        (full > measured).then(|| project.name.clone())
     };
-    let mark = if read_only { Icon::Lock } else { Icon::Cube };
+    let mark = if project.read_only {
+        Icon::Lock
+    } else {
+        Icon::Cube
+    };
     let lead_element = grana_ui::canvas(Length::Fixed(lead_width), theme.metrics.control_height)
         .view((title.clone(), dirty), move |_, painter, info| {
             let frame = info.rect;
@@ -136,7 +198,7 @@ fn project_split<'a>(
         })
         .named("project.save")
         .focus_ring(Corners::capsule());
-    let lead_element = if state.access.author() {
+    let lead_element = if project.author {
         lead_element.press(Message::Command(Command::SaveProject))
     } else {
         lead_element
