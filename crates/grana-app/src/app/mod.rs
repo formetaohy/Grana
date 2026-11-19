@@ -215,6 +215,7 @@ impl App {
             }
         }
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
+        tracing::info!(target: "grana::gpu", adapter = %gpu.adapter, "graphics device ready");
         let wake = self.wake.clone();
         gpu.lost_handle().wake_with(move || {
             let _ = wake.send_event(Wake::Redraw);

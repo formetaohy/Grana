@@ -7,6 +7,7 @@ const USAGE: &str = "usage: grana [<dataset>] | grana --view <project|dataset> |
 
 fn main() -> ExitCode {
     console();
+    let _log = grana_log::start();
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     match run(&arguments) {
         Some(outcome) => outcome,

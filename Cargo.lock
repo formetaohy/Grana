@@ -3383,6 +3383,7 @@ dependencies = [
  "grana-gpu",
  "grana-image",
  "grana-interop",
+ "grana-log",
  "grana-measure",
  "grana-mesh",
  "grana-model",
@@ -3475,6 +3476,7 @@ dependencies = [
  "rfd",
  "serde",
  "toml",
+ "tracing",
  "wgpu",
  "winit",
 ]
@@ -3657,6 +3659,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "zarrs",
+]
+
+[[package]]
+name = "grana-log"
+version = "0.2.0"
+dependencies = [
+ "grana-dir",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

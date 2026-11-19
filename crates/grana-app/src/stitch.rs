@@ -32,11 +32,19 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
     let folder = match grana_stitch::folder(std::path::Path::new(folder)) {
         Ok(folder) => folder,
         Err(detail) => {
+            tracing::error!(target: "grana::stitch", %detail, "failed to read the tiles");
             eprintln!("{detail}");
             return Some(ExitCode::FAILURE);
         }
     };
     if rows * columns != folder.count() {
+        tracing::error!(
+            target: "grana::stitch",
+            rows,
+            columns,
+            tiles = folder.count(),
+            "the grid does not cover the tiles"
+        );
         eprintln!(
             "the {columns} × {rows} grid does not cover {} tiles",
             folder.count()
@@ -44,6 +52,12 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
         return Some(ExitCode::FAILURE);
     }
     if channel >= folder.channels().len() {
+        tracing::error!(
+            target: "grana::stitch",
+            channel,
+            channels = folder.channels().len(),
+            "the channel is not present in the tiles"
+        );
         eprintln!(
             "the tiles name {} channels and channel {channel} was requested",
             folder.channels().len()
@@ -60,6 +74,15 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
     };
     match grana_stitch::stitch(&request, &grana_exec::Cancel::new()) {
         Ok(summary) => {
+            tracing::info!(
+                target: "grana::stitch",
+                output = %request.output.display(),
+                width = summary.width(),
+                height = summary.height(),
+                depth = summary.depth(),
+                tiles = summary.offsets().len(),
+                "the stitched volume was written"
+            );
             println!(
                 "{} × {} × {} · {} channels · {} frames · {} tiles · series {} · {} levels · {:.1} MiB",
                 summary.width(),
@@ -79,6 +102,7 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
             Some(ExitCode::SUCCESS)
         }
         Err(error) => {
+            tracing::error!(target: "grana::stitch", %error, "the stitch failed");
             eprintln!("{error}");
             Some(ExitCode::FAILURE)
         }

@@ -22,6 +22,7 @@ impl App {
         if self.fatal.is_some() {
             return;
         }
+        tracing::error!(target: "grana::app", "{detail}");
         self.cancel_work();
         let kept = if self.session.access().author() {
             self.session.autosave_now(self.view_state())
