@@ -22,6 +22,7 @@ grana-store = { workspace = true }
 grana-i18n = { workspace = true }
 grana-image = { workspace = true }
 grana-interop = { workspace = true }
+grana-log = { workspace = true }
 grana-mesh = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }

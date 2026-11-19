@@ -39,7 +39,17 @@ impl Montage {
     }
 
     pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
-        self.task.poll()
+        let outcome = self.task.poll();
+        match &outcome {
+            Poll::Event(Ok(path)) => {
+                grana_log::info!(target: "grana::session", path = %path.display(), "the plate montage was written");
+            }
+            Poll::Event(Err(detail)) => {
+                grana_log::error!(target: "grana::session", %detail, "the plate montage failed");
+            }
+            Poll::Empty | Poll::Closed => {}
+        }
+        outcome
     }
 }
 

@@ -208,11 +208,13 @@ impl Session {
         };
         match outcome {
             Ok(Ok(path)) => {
+                grana_log::info!(target: "grana::session", path = %path.display(), "the stitched mosaic was written");
                 self.stitch = None;
                 self.begin_load(path);
                 true
             }
             Ok(Err(detail)) => {
+                grana_log::error!(target: "grana::session", %detail, "the stitch failed");
                 if let Some(stitch) = self.stitch.as_mut() {
                     stitch.running = None;
                 }
@@ -221,6 +223,7 @@ impl Session {
             }
             Err(mpsc::TryRecvError::Empty) => false,
             Err(mpsc::TryRecvError::Disconnected) => {
+                grana_log::error!(target: "grana::session", "the stitcher stopped before it wrote the mosaic");
                 if let Some(stitch) = self.stitch.as_mut() {
                     stitch.running = None;
                 }
@@ -266,12 +269,14 @@ impl Session {
                 true
             }
             Poll::Event(Err(detail)) => {
+                grana_log::error!(target: "grana::session", %detail, "the tile folder could not be scanned");
                 self.message = Some(Message::error(detail));
                 self.stitch = None;
                 true
             }
             Poll::Empty => false,
             Poll::Closed => {
+                grana_log::error!(target: "grana::session", "the tile scanner stopped before it finished");
                 self.message = Some(Message::error(
                     "the tile folder could not be scanned".to_string(),
                 ));

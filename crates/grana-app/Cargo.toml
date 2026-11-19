@@ -22,6 +22,7 @@ grana-figure = { workspace = true }
 grana-gpu = { workspace = true }
 grana-i18n = { workspace = true }
 grana-image = { workspace = true }
+grana-log = { workspace = true }
 grana-offline = { workspace = true }
 grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
@@ -36,7 +37,6 @@ grana-volume = { workspace = true }
 rfd = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-tracing = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 

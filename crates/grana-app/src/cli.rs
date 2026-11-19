@@ -20,7 +20,7 @@ pub fn viewer(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
 }
 
 fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> ExitCode {
-    tracing::info!(
+    grana_log::info!(
         target: "grana::app",
         viewer = !access.author(),
         ?capture,
@@ -45,7 +45,7 @@ fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> Ex
 pub fn clear_cache() -> ExitCode {
     match grana_image::clear_cache() {
         Ok(bytes) => {
-            tracing::info!(target: "grana::cache", bytes, "cleared the derived pyramid cache");
+            grana_log::info!(target: "grana::cache", bytes, "cleared the derived pyramid cache");
             println!(
                 "cleared {:.1} MiB of derived pyramid tiles",
                 bytes as f64 / (1024.0 * 1024.0)
@@ -53,7 +53,7 @@ pub fn clear_cache() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(target: "grana::cache", %error, "failed to clear the derived pyramid cache");
+            grana_log::error!(target: "grana::cache", %error, "failed to clear the derived pyramid cache");
             eprintln!("failed to clear the derived pyramid cache: {error}");
             ExitCode::FAILURE
         }
@@ -68,33 +68,23 @@ pub fn batch(
     project: bool,
     channels: bool,
 ) -> ExitCode {
-    tracing::info!(
-        target: "grana::batch",
-        protocol = %protocol.display(),
-        datasets = %datasets.display(),
-        output = %output.display(),
-        jobs,
-        project,
-        channels,
-        "starting the batch"
-    );
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
         Err(error) => {
-            tracing::error!(target: "grana::batch", %error, "failed to read the protocol");
+            grana_log::error!(target: "grana::batch", %error, "failed to read the protocol");
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
     let datasets = match discover(datasets, protocol.stitch().is_some()) {
         Ok(found) if found.is_empty() => {
-            tracing::error!(target: "grana::batch", "the dataset folder is empty");
+            grana_log::error!(target: "grana::batch", "the dataset folder is empty");
             eprintln!("{} holds no dataset", datasets.display());
             return ExitCode::FAILURE;
         }
         Ok(found) => found,
         Err(error) => {
-            tracing::error!(target: "grana::batch", %error, "failed to discover the datasets");
+            grana_log::error!(target: "grana::batch", %error, "failed to discover the datasets");
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -112,26 +102,15 @@ pub fn batch(
     let mut failures = 0;
     while let Some(event) = running.wait() {
         match event {
-            BatchEvent::Started { index, name } => {
-                tracing::info!(target: "grana::batch", index, %name, "a dataset started");
-                println!("{name}");
-            }
+            BatchEvent::Started { name, .. } => println!("{name}"),
             BatchEvent::Step { label, .. } => println!("  {label}"),
             BatchEvent::Progress { .. } => {}
-            BatchEvent::Dataset { index, outcome } => match outcome {
+            BatchEvent::Dataset { outcome, .. } => match outcome {
                 Outcome::Complete {
                     objects,
                     detail,
                     resumed,
                 } => {
-                    tracing::info!(
-                        target: "grana::batch",
-                        index,
-                        objects,
-                        %detail,
-                        resumed,
-                        "a dataset finished"
-                    );
                     if resumed {
                         println!("  {objects} objects · {detail} (resumed)");
                     } else {
@@ -139,13 +118,11 @@ pub fn batch(
                     }
                 }
                 Outcome::Failed { detail } => {
-                    tracing::error!(target: "grana::batch", index, %detail, "a dataset failed");
                     eprintln!("  failed: {detail}");
                     failures += 1;
                 }
             },
             BatchEvent::Failed(detail) => {
-                tracing::error!(target: "grana::batch", %detail, "the batch failed");
                 eprintln!("{detail}");
                 failures += 1;
             }
@@ -179,11 +156,9 @@ pub fn batch(
             }
             BatchEvent::Done { cancelled } => {
                 if cancelled {
-                    tracing::warn!(target: "grana::batch", "the batch was cancelled");
                     eprintln!("the batch was cancelled");
                     failures += 1;
                 }
-                tracing::info!(target: "grana::batch", failures, cancelled, "the batch finished");
                 return if failures == 0 {
                     ExitCode::SUCCESS
                 } else {
@@ -192,7 +167,7 @@ pub fn batch(
             }
         }
     }
-    tracing::error!(target: "grana::batch", "the batch stopped before it finished");
+    grana_log::error!(target: "grana::batch", "the batch stopped before it finished");
     eprintln!("the batch stopped before it finished");
     ExitCode::FAILURE
 }
@@ -254,12 +229,12 @@ pub fn render(arguments: &[String]) -> Option<ExitCode> {
     };
     match crate::render::run(&request) {
         Ok(path) => {
-            tracing::info!(target: "grana::render", output = %path.display(), "the render finished");
+            grana_log::info!(target: "grana::render", output = %path.display(), "the render finished");
             println!("{}", path.display());
             Some(ExitCode::SUCCESS)
         }
         Err(detail) => {
-            tracing::error!(target: "grana::render", %detail, "the render failed");
+            grana_log::error!(target: "grana::render", %detail, "the render failed");
             eprintln!("{detail}");
             Some(ExitCode::FAILURE)
         }

@@ -215,7 +215,6 @@ impl App {
             }
         }
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
-        tracing::info!(target: "grana::gpu", adapter = %gpu.adapter, "graphics device ready");
         let wake = self.wake.clone();
         gpu.lost_handle().wake_with(move || {
             let _ = wake.send_event(Wake::Redraw);
@@ -251,6 +250,7 @@ impl App {
             Err(TryRecvError::Disconnected) => panic!("the renderer failed to initialize"),
         };
         self.engine = Some(engine);
+        grana_log::info!(target: "grana::engine", "the render engine is ready");
         self.sync_dataset(false);
     }
 

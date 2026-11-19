@@ -76,7 +76,24 @@ impl DatasetExport {
     }
 
     pub(super) fn poll(&mut self) -> Poll<Result<Summary, String>> {
-        self.task.poll()
+        let outcome = self.task.poll();
+        match &outcome {
+            Poll::Event(Ok(summary)) => {
+                grana_log::info!(
+                    target: "grana::session",
+                    path = %summary.path().display(),
+                    channels = summary.channels(),
+                    labels = summary.labels(),
+                    frames = summary.frames(),
+                    "the dataset export finished"
+                );
+            }
+            Poll::Event(Err(detail)) => {
+                grana_log::error!(target: "grana::session", %detail, "the dataset export failed");
+            }
+            Poll::Empty | Poll::Closed => {}
+        }
+        outcome
     }
 }
 

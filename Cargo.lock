@@ -3461,6 +3461,7 @@ dependencies = [
  "grana-gpu",
  "grana-i18n",
  "grana-image",
+ "grana-log",
  "grana-offline",
  "grana-pipeline",
  "grana-project",
@@ -3476,7 +3477,6 @@ dependencies = [
  "rfd",
  "serde",
  "toml",
- "tracing",
  "wgpu",
  "winit",
 ]
@@ -3583,6 +3583,9 @@ dependencies = [
 [[package]]
 name = "grana-exec"
 version = "0.2.0"
+dependencies = [
+ "grana-log",
+]
 
 [[package]]
 name = "grana-figure"
@@ -3621,6 +3624,7 @@ version = "0.2.0"
 dependencies = [
  "bytemuck",
  "grana-dir",
+ "grana-log",
  "pollster",
  "wgpu",
 ]
@@ -3800,6 +3804,7 @@ dependencies = [
  "grana-i18n",
  "grana-image",
  "grana-interop",
+ "grana-log",
  "grana-measure",
  "grana-mesh",
  "grana-object",
@@ -4001,6 +4006,7 @@ dependencies = [
  "grana-geometry",
  "grana-image",
  "grana-interop",
+ "grana-log",
  "grana-measure",
  "grana-mesh",
  "grana-object",
@@ -4120,6 +4126,7 @@ version = "0.2.0"
 dependencies = [
  "grana-dir",
  "grana-file",
+ "grana-log",
  "grana-model",
  "sha2",
  "thiserror 2.0.21",

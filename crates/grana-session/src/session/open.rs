@@ -4,6 +4,7 @@ use std::time::Instant;
 
 impl Session {
     pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
+        grana_log::info!(target: "grana::session", dataset = name, "an in-memory series opened");
         self.read_only = false;
         let (source, opened) = Loader::memory(series);
         self.series = opened.series;
@@ -50,6 +51,7 @@ impl Session {
     }
 
     pub fn begin_load_series(&mut self, path: PathBuf, series: usize) {
+        grana_log::info!(target: "grana::session", path = %path.display(), series, "opening an image");
         self.batch_review_pending = None;
         self.stitch = None;
         if self.reject_transfer() {
@@ -77,11 +79,13 @@ impl Session {
             return;
         }
         if !grana_image::is_remote(&url) {
+            grana_log::error!(target: "grana::session", %url, "the remote source is not an http or https url");
             self.message = Some(Message::error(format!(
                 "`{url}` is not an http or https url"
             )));
             return;
         }
+        grana_log::info!(target: "grana::session", url = %endpoint(&url), series, "opening a remote dataset");
         self.read_only = false;
         self.loading = Some(url.clone());
         self.source = Some(Loader::remote_series(url, series));
@@ -113,7 +117,9 @@ impl Session {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        grana_log::info!(target: "grana::session", path = %path.display(), "opening a path");
         if let Err(error) = grana_file::recover(&path) {
+            grana_log::error!(target: "grana::session", path = %path.display(), %error, "failed to recover the path");
             self.message = Some(Message::error(format!(
                 "failed to recover {}: {error}",
                 path.display()
@@ -135,6 +141,7 @@ impl Session {
         if path.is_dir() && self.begin_stitch(path.clone()) {
             return;
         }
+        grana_log::error!(target: "grana::session", path = %path.display(), "the path is neither a supported image nor a project");
         self.message = Some(Message::error(format!(
             "{} is neither a supported image nor a grana project",
             path.display()
@@ -225,6 +232,7 @@ impl Session {
         if self.reject_transfer() {
             return;
         }
+        grana_log::info!(target: "grana::session", path = %path.display(), "opening a project");
         self.plate = None;
         self.field = 0;
         self.fields.clear();
@@ -353,21 +361,25 @@ impl Session {
     ) {
         match outcome {
             document::Outcome::Saved => {
+                grana_log::info!(target: "grana::session", project = %path.display(), "project saved");
                 self.project = Some(path.clone());
                 self.baseline = hash;
                 self.clear_recovery();
                 self.record_recent(RecentEntry::project(&path));
             }
             document::Outcome::Opened(project) => {
+                grana_log::info!(target: "grana::session", project = %path.display(), "project opened");
                 self.read_only = grana_project::in_package(&path);
                 self.open_project(&path, *project);
                 self.record_recent(RecentEntry::project(&path));
             }
             document::Outcome::Failed(detail) => {
+                grana_log::error!(target: "grana::session", project = %path.display(), %detail, "project transfer failed");
                 self.restore = None;
                 self.message = Some(Message::error(detail));
             }
             document::Outcome::Cancelled => {
+                grana_log::warn!(target: "grana::session", project = %path.display(), "project transfer cancelled");
                 self.restore = None;
             }
         }
@@ -537,6 +549,8 @@ impl Session {
                     let opened = *opened;
                     let name = opened.name.clone();
                     let selected = opened.selected;
+                    let remote = opened.remote;
+                    let format = opened.format;
                     let restored = self.pending.is_some();
                     let imported = !restored && !opened.imports.is_empty();
                     let file = current
@@ -561,6 +575,14 @@ impl Session {
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    grana_log::info!(
+                        target: "grana::session",
+                        dataset = %name,
+                        series = selected,
+                        remote,
+                        format = ?format,
+                        "dataset opened"
+                    );
                     if !restored {
                         self.import_scene(opened.imports, &file);
                     }
@@ -631,12 +653,16 @@ impl Session {
                             failure.attempts = RETRY_LIMIT;
                         }
                         failure.retry_at = Instant::now() + Failure::backoff(failure.attempts);
+                        if exhausted {
+                            grana_log::warn!(target: "grana::session", %detail, "a volume region could not be read");
+                        }
                         self.message = Some(Message::error(format!(
                             "a volume region could not be read: {detail}"
                         )));
                     }
                 }
                 LoaderEvent::Failed(detail) => {
+                    grana_log::error!(target: "grana::session", %detail, "dataset opening failed");
                     self.loading = None;
                     self.batch_review_pending = None;
                     self.restore = None;
@@ -675,6 +701,10 @@ impl Session {
 fn frame_duration(scene: &Scene) -> f32 {
     (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
         .clamp(1.0, Timeline::MAX_DURATION)
+}
+
+fn endpoint(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
 }
 
 fn beside_project(project: &Path, data: &Path) -> PathBuf {

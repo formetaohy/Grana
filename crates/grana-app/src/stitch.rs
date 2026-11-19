@@ -32,13 +32,13 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
     let folder = match grana_stitch::folder(std::path::Path::new(folder)) {
         Ok(folder) => folder,
         Err(detail) => {
-            tracing::error!(target: "grana::stitch", %detail, "failed to read the tiles");
+            grana_log::error!(target: "grana::stitch", %detail, "failed to read the tiles");
             eprintln!("{detail}");
             return Some(ExitCode::FAILURE);
         }
     };
     if rows * columns != folder.count() {
-        tracing::error!(
+        grana_log::error!(
             target: "grana::stitch",
             rows,
             columns,
@@ -52,7 +52,7 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
         return Some(ExitCode::FAILURE);
     }
     if channel >= folder.channels().len() {
-        tracing::error!(
+        grana_log::error!(
             target: "grana::stitch",
             channel,
             channels = folder.channels().len(),
@@ -74,7 +74,7 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
     };
     match grana_stitch::stitch(&request, &grana_exec::Cancel::new()) {
         Ok(summary) => {
-            tracing::info!(
+            grana_log::info!(
                 target: "grana::stitch",
                 output = %request.output.display(),
                 width = summary.width(),
@@ -102,7 +102,7 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
             Some(ExitCode::SUCCESS)
         }
         Err(error) => {
-            tracing::error!(target: "grana::stitch", %error, "the stitch failed");
+            grana_log::error!(target: "grana::stitch", %error, "the stitch failed");
             eprintln!("{error}");
             Some(ExitCode::FAILURE)
         }

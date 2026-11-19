@@ -205,7 +205,9 @@ fn serve(inner: &Inner) {
             return;
         };
         if let Err(fault) = crate::fault::contain(move || work(&cancel)) {
-            eprintln!("{}", fault.describe("a background task"));
+            let detail = fault.describe("a background task");
+            grana_log::error!(target: "grana::exec", "{detail}");
+            eprintln!("{detail}");
         }
     }
 }

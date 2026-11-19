@@ -90,7 +90,23 @@ impl Labels {
     }
 
     pub(super) fn poll(&mut self) -> Poll<Result<Written, String>> {
-        self.task.poll()
+        let outcome = self.task.poll();
+        match &outcome {
+            Poll::Event(Ok(written)) => {
+                grana_log::info!(
+                    target: "grana::session",
+                    path = %written.path().display(),
+                    labels = written.labels(),
+                    frames = written.frames(),
+                    "the label export finished"
+                );
+            }
+            Poll::Event(Err(detail)) => {
+                grana_log::error!(target: "grana::session", %detail, "the label export failed");
+            }
+            Poll::Empty | Poll::Closed => {}
+        }
+        outcome
     }
 }
 

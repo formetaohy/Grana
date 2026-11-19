@@ -77,7 +77,17 @@ impl Writer {
     }
 
     pub(super) fn poll(&mut self) -> Poll<Result<PathBuf, String>> {
-        self.task.poll()
+        let outcome = self.task.poll();
+        match &outcome {
+            Poll::Event(Ok(path)) => {
+                grana_log::info!(target: "grana::session", export = %self.label, path = %path.display(), "the export finished");
+            }
+            Poll::Event(Err(detail)) => {
+                grana_log::error!(target: "grana::session", export = %self.label, %detail, "the export failed");
+            }
+            Poll::Empty | Poll::Closed => {}
+        }
+        outcome
     }
 }
 

@@ -85,6 +85,7 @@ impl Lost {
             if state.reason.is_some() {
                 return;
             }
+            grana_log::error!(target: "grana::gpu", %detail, "the graphics device was lost");
             state.reason = Some(detail);
             state.wake.clone()
         };
@@ -109,7 +110,14 @@ impl Headless {
             for backends in BACKEND_ORDER {
                 let instance = instance(*backends);
                 match acquire(&instance, None, fallback) {
-                    Ok((_, device, queue)) => {
+                    Ok((adapter, device, queue)) => {
+                        let info = adapter.get_info();
+                        grana_log::info!(
+                            target: "grana::gpu",
+                            adapter = %info.name,
+                            backend = ?info.backend,
+                            "headless graphics device ready"
+                        );
                         let lost = Lost::watch(&device);
                         let pipelines = Pipelines::new(&device);
                         return Ok(Self {
@@ -195,6 +203,7 @@ impl Gpu {
     ) -> Self {
         let info = adapter.get_info();
         let description = format!("{} · {:?}", info.name, info.backend);
+        grana_log::info!(target: "grana::gpu", adapter = %description, "graphics device ready");
         println!("grana: using {description}");
         let capabilities = surface.get_capabilities(&adapter);
         let Some(format) = capabilities

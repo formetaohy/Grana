@@ -19,8 +19,11 @@ pub fn weights(
     let asset = model::asset(version).ok_or_else(|| Error::unavailable(version.name()))?;
     let path = cache::stored(asset)?;
     if integrity::checked(asset, &path, cancel)? {
+        grana_log::info!(target: "grana::weight", model = version.name(), path = %path.display(), "the model weights are ready");
         return Ok(path);
     }
+    grana_log::info!(target: "grana::weight", model = version.name(), "downloading the model weights");
     download::fetch(asset, &path, cancel, progress)?;
+    grana_log::info!(target: "grana::weight", model = version.name(), path = %path.display(), "the model weights were downloaded");
     Ok(path)
 }

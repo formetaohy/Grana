@@ -148,6 +148,15 @@ impl Control {
 
 impl Batch {
     pub fn start(plan: Plan) -> Self {
+        grana_log::info!(
+            target: "grana::batch",
+            output = %plan.output.display(),
+            datasets = plan.datasets.len(),
+            jobs = plan.jobs,
+            project = plan.project,
+            channels = plan.channels,
+            "starting the batch"
+        );
         let (events, pipe) = Pipe::new(CAPACITY);
         let cancel = Cancel::new();
         let gate = Gate::new();
@@ -173,14 +182,21 @@ impl Batch {
 
     pub fn poll(&self) -> BatchPoll {
         match self.events.poll() {
-            Poll::Event(event) => BatchPoll::Event(event),
+            Poll::Event(event) => {
+                record(&event);
+                BatchPoll::Event(event)
+            }
             Poll::Empty => BatchPoll::Empty,
             Poll::Closed => BatchPoll::Closed,
         }
     }
 
     pub fn wait(&self) -> Option<Event> {
-        self.events.receive()
+        let event = self.events.receive();
+        if let Some(event) = event.as_ref() {
+            record(event);
+        }
+        event
     }
 }
 
@@ -188,6 +204,52 @@ impl Drop for Batch {
     fn drop(&mut self) {
         self.cancel.trigger();
         self.gate.resume();
+    }
+}
+
+fn record(event: &Event) {
+    match event {
+        Event::Started { index, name } => {
+            grana_log::info!(target: "grana::batch", index = *index, name = %name, "a dataset started");
+        }
+        Event::Step { .. } | Event::Progress { .. } => {}
+        Event::Dataset { index, outcome } => match outcome {
+            Outcome::Complete {
+                objects,
+                detail,
+                resumed,
+            } => {
+                grana_log::info!(
+                    target: "grana::batch",
+                    index = *index,
+                    objects = *objects,
+                    detail = %detail,
+                    resumed = *resumed,
+                    "a dataset finished"
+                );
+            }
+            Outcome::Failed { detail } => {
+                grana_log::error!(target: "grana::batch", index = *index, detail = %detail, "a dataset failed");
+            }
+        },
+        Event::Comparison(report) => {
+            grana_log::info!(
+                target: "grana::batch",
+                groups = report.groups.len(),
+                tests = report.tests.len(),
+                "the comparison finished"
+            );
+        }
+        Event::Failed(detail) => {
+            grana_log::error!(target: "grana::batch", detail = %detail, "the batch failed");
+        }
+        Event::Done { cancelled } => {
+            if *cancelled {
+                grana_log::warn!(target: "grana::batch", "the batch was cancelled");
+            } else {
+                grana_log::info!(target: "grana::batch", "the batch finished");
+            }
+        }
     }
 }
 

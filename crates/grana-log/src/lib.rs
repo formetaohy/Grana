@@ -13,6 +13,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod macros;
+
+pub use tracing as __tracing;
+
 const DIRECTORY: &str = "logs";
 const PREFIX: &str = "grana";
 const SUFFIX: &str = "log";
@@ -24,13 +28,14 @@ pub struct Log {
 
 impl Drop for Log {
     fn drop(&mut self) {
-        tracing::info!(target: "grana::log", "grana stopped");
+        crate::info!(target: "grana::log", "grana stopped");
         if let Some(guard) = self.guard.take() {
             drop(guard);
         }
     }
 }
 
+#[must_use]
 pub fn start() -> Log {
     let directory = directory();
     fs::create_dir_all(&directory).unwrap_or_else(|error| {
@@ -62,7 +67,7 @@ pub fn start() -> Log {
         .try_init()
         .expect("the log subscriber installs once per process");
     install_panic_hook();
-    tracing::info!(
+    crate::info!(
         target: "grana::log",
         version = env!("CARGO_PKG_VERSION"),
         os = std::env::consts::OS,
@@ -169,7 +174,7 @@ fn log_names(directory: &Path) -> Vec<String> {
 fn install_panic_hook() {
     let previous = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        tracing::error!(target: "grana::log", "{info}");
+        crate::error!(target: "grana::log", "{info}");
         previous(info);
     }));
 }

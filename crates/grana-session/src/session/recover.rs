@@ -54,6 +54,7 @@ impl Session {
         if stats.resident().saturating_add(stats.spilled()) > RECOVERY_LIMIT {
             if !self.recovery.refused() {
                 self.recovery.refuse();
+                grana_log::warn!(target: "grana::session", "the analysis is too large for an automatic recovery snapshot");
                 self.message = Some(Message::info(
                     "the analysis is too large for an automatic snapshot, so save the project before closing",
                 ));
@@ -78,7 +79,13 @@ impl Session {
             return Err("the analysis holds no recoverable document".to_string());
         };
         self.tasks.cancel_autosave();
-        self.recovery.write(project, entry)
+        match self.recovery.write(project, entry) {
+            Ok(()) => Ok(()),
+            Err(detail) => {
+                grana_log::error!(target: "grana::session", %detail, "the recovery snapshot could not be written");
+                Err(detail)
+            }
+        }
     }
 
     fn recovery_document(&self, view: ViewState) -> Option<(Project, RecoveryEntry)> {
@@ -108,19 +115,23 @@ impl Session {
 
     pub fn recover(&mut self) {
         if self.transferring() {
+            grana_log::warn!(target: "grana::session", "a recovery was requested while a transfer is running");
             self.message = Some(Message::error(
                 "wait for the running transfer before recovering",
             ));
             return;
         }
         let Some(snapshot) = self.recovery.snapshot() else {
+            grana_log::error!(target: "grana::session", "the recovery snapshot is gone");
             self.message = Some(Message::error("the recovery snapshot is gone"));
             return;
         };
         let Some(entry) = self.recovery.entry().cloned() else {
+            grana_log::error!(target: "grana::session", "the recovery record is gone");
             self.message = Some(Message::error("the recovery record is gone"));
             return;
         };
+        grana_log::info!(target: "grana::session", dataset = entry.name(), "recovering an automatic snapshot");
         self.restore = Some(Restore {
             project: entry.project().map(Path::to_path_buf),
         });
@@ -136,7 +147,10 @@ impl Session {
     pub(super) fn finish_autosave(&mut self, outcome: Result<RecoveryEntry, String>) {
         match outcome {
             Ok(entry) => self.recovery.accept(entry),
-            Err(detail) => self.message = Some(Message::error(detail)),
+            Err(detail) => {
+                grana_log::error!(target: "grana::session", %detail, "the recovery snapshot failed");
+                self.message = Some(Message::error(detail));
+            }
         }
     }
 

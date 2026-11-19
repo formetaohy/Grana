@@ -462,6 +462,7 @@ impl Session {
                     }
                 }
                 Update::Done => {
+                    grana_log::info!(target: "grana::analysis", job = ?job, "an analysis job finished");
                     self.progress.retain(|progress| progress.job != job);
                     let mut molecule = Ok(false);
                     if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
@@ -503,6 +504,7 @@ impl Session {
                     }
                 }
                 Update::Failed(detail) => {
+                    grana_log::error!(target: "grana::analysis", job = ?job, %detail, "an analysis job failed");
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
                     if self
