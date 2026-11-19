@@ -439,6 +439,21 @@ fn undoes_and_replays_object_edits() {
         before
     );
     assert!(session.history().undo.is_none());
+    let annotations = session.scene().expect("the series opens").annotations.len();
+    session.execute(Command::AddPoint {
+        at: [1.0, 2.0, 3.0],
+    });
+    session.execute(Command::AddDistance {
+        from: [0.0, 0.0, 0.0],
+        to: [2.0, 0.0, 0.0],
+    });
+    session.execute(Command::RemoveAnnotation(annotations));
+    session.execute(Command::Undo);
+    assert_eq!(
+        session.scene().expect("the series opens").annotations.len(),
+        annotations + 2,
+        "undoing a removal keeps the annotation it restored and the one added beside it"
+    );
 }
 
 #[test]
@@ -979,6 +994,35 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
     }
     assert!(session.dirty(), "an autosave does not pass for a save");
 
+    let tampered_root = temp.path().join("tampered");
+    std::fs::create_dir_all(&tampered_root).expect("the tampered store is created");
+    for name in ["snapshot.grana", "recovery.toml"] {
+        std::fs::copy(root.join(name), tampered_root.join(name)).expect("the recovery copies");
+    }
+    let record = std::fs::read_to_string(tampered_root.join("recovery.toml"))
+        .expect("the recovery record reads");
+    let record = record.replace("imaris-filaments", "another-dataset");
+    std::fs::write(tampered_root.join("recovery.toml"), record)
+        .expect("the recovery record is patched");
+    let mut tampered = Session::new();
+    tampered.attach_recovery_at(tampered_root);
+    assert!(tampered.recovery().is_some(), "the patched record parses");
+    tampered.execute(Command::RecoverAnalysis);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while tampered.message().is_none() {
+        assert!(Instant::now() < deadline, "the mismatch is never reported");
+        tampered.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        tampered.scene().is_none(),
+        "a record that names another dataset recovers nothing"
+    );
+    assert!(
+        tampered.recovery().is_none(),
+        "a mismatched recovery is discarded"
+    );
+
     let mut recovered = Session::new();
     recovered.attach_recovery_at(root);
     let offered = recovered.recovery().expect("the recovery is offered");
@@ -988,6 +1032,10 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
     assert!(
         recovered.dirty(),
         "recovered work is unsaved until it is saved again"
+    );
+    assert!(
+        recovered.project().is_none(),
+        "a recovered analysis carries no project path to overwrite"
     );
     assert_eq!(
         recovered.scene().expect("the fixture opens").channels[0].opacity,

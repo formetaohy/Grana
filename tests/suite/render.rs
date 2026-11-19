@@ -1503,6 +1503,7 @@ fn picks_only_the_objects_of_the_slice_plane() {
     let markers = [
         splat([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
         splat([-1.0, 0.0, -1.0], 0.3, [0.2, 1.0, 0.2], 1.0),
+        splat([0.0, 0.6, 0.1], 0.3, [0.2, 0.2, 1.0], 1.0),
     ];
     let chunks = [SplatChunk::single(0, revision(), markers.to_vec())];
     let scene = SceneFrame {
@@ -1540,6 +1541,50 @@ fn picks_only_the_objects_of_the_slice_plane() {
     let off_plane = project(&camera, [-1.0, 0.0, -1.0]);
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), off_plane));
     assert_eq!(picked(&gpu, &mut renderer), PickId::None);
+    let second = project(&camera, [0.0, 0.6, 0.1]);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), second));
+    assert!(matches!(
+        picked(&gpu, &mut renderer),
+        PickId::Splat {
+            level: 0,
+            index: 2,
+            ..
+        }
+    ));
+    let filler = vec![splat([0.0, 0.0, 0.1], 0.3, [0.0, 0.0, 0.0], 0.0); 256];
+    let shrunk = [
+        SplatChunk::single(0, revision(), vec![markers[0]]),
+        SplatChunk::new(
+            1,
+            0,
+            false,
+            grana_render::SplatLevel::of(revision(), filler),
+        ),
+    ];
+    let shrunk_scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::new(&shrunk),
+        overlays: &[],
+    };
+    let shrunk_view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &shrunk_scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle(&gpu, &mut renderer, &shrunk_view, &volume);
+    assert!(renderer.request_pick(gpu.device(), gpu.queue(), second));
+    assert_eq!(
+        picked(&gpu, &mut renderer),
+        PickId::None,
+        "a shrunk splat slot drops the instances it no longer holds"
+    );
 }
 
 #[test]

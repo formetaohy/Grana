@@ -301,7 +301,9 @@ impl Session {
                 source,
                 target,
                 shift,
-            } => self.add_relation(source, target, shift),
+            } => {
+                self.add_relation(source, target, shift);
+            }
             Command::MoveRelation {
                 source,
                 target,

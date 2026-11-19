@@ -577,7 +577,6 @@ pub fn recut(
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
-    cap: u32,
     limit: u32,
     distance: &'a Distance,
     budget: Budget,
@@ -591,11 +590,9 @@ impl<'a> Pass<'a> {
         distance: &'a Distance,
         budget: Budget,
     ) -> Self {
-        let cap = limit * limit;
         Self {
             plan,
             seeds,
-            cap,
             limit,
             distance,
             budget,

@@ -276,6 +276,8 @@ impl Session {
         let mut recutted = Vec::new();
         let mut finished = Vec::new();
         let mut restarted = Vec::new();
+        let mut restarted_imports = Vec::new();
+        let mut restarted_relations = Vec::new();
         let mut retracked = Vec::new();
         let inputs = self
             .analysis
@@ -290,8 +292,15 @@ impl Session {
                 }
                 Update::Frame(time, frame) => {
                     if let Job::Detect(set) | Job::Import(set) | Job::Recut(set) = job {
-                        let stale = matches!(job, Job::Detect(_))
-                            && self.detect_input(set).as_ref() != inputs[index].as_ref();
+                        let stale = match job {
+                            Job::Detect(_) => {
+                                self.detect_input(set).as_ref() != inputs[index].as_ref()
+                            }
+                            Job::Import(_) => {
+                                self.import_input(set).as_ref() != inputs[index].as_ref()
+                            }
+                            _ => false,
+                        };
                         if !stale && let Some(scene) = self.scene.as_mut() {
                             scene.install(set, time, frame);
                         }
@@ -305,14 +314,19 @@ impl Session {
                     photons,
                     alignment,
                 } => {
-                    if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
-                        let spec = grana_object::LocalizationSpec::cover(scene.frame_count());
-                        scene.set_localization(
-                            set,
-                            grana_scene::LocalizationSource::new(
-                                pixel, width, height, volume, photons, spec, alignment,
-                            ),
-                        );
+                    if let Job::Import(set) = job {
+                        if self.import_input(set).as_ref() != inputs[index].as_ref() {
+                            continue;
+                        }
+                        if let Some(scene) = self.scene.as_mut() {
+                            let spec = grana_object::LocalizationSpec::cover(scene.frame_count());
+                            scene.set_localization(
+                                set,
+                                grana_scene::LocalizationSource::new(
+                                    pixel, width, height, volume, photons, spec, alignment,
+                                ),
+                            );
+                        }
                     }
                 }
                 Update::Tracks(tracks) => {
@@ -326,19 +340,24 @@ impl Session {
                         retracked.push(set);
                         continue;
                     }
+                    if matches!(job, Job::Import(_))
+                        && self.import_input(set).as_ref() != inputs[index].as_ref()
+                    {
+                        continue;
+                    }
                     if let Some(scene) = self.scene.as_mut() {
                         scene.install_tracks(set, tracks);
                     }
                 }
                 Update::Relation(time, frame) => {
-                    if let (
-                        Job::Relation {
-                            source,
-                            target,
-                            shift,
-                        },
-                        Some(scene),
-                    ) = (job, self.scene.as_mut())
+                    if let Job::Relation {
+                        source,
+                        target,
+                        shift,
+                    } = job
+                        && self.relation_input(source, target, shift).as_ref()
+                            == inputs[index].as_ref()
+                        && let Some(scene) = self.scene.as_mut()
                     {
                         scene.install_relation(source, target, shift, time, frame);
                     }
@@ -464,24 +483,10 @@ impl Session {
                 Update::Done => {
                     grana_log::info!(target: "grana::analysis", job = ?job, "an analysis job finished");
                     self.progress.retain(|progress| progress.job != job);
-                    let mut molecule = Ok(false);
-                    if let (Job::Import(set), Some(scene)) = (job, self.scene.as_mut()) {
-                        scene.realign_localization(set);
-                        if scene
-                            .objects
-                            .get(set)
-                            .is_some_and(|object| object.localization().is_some())
-                        {
-                            molecule = scene.rebuild_molecule_tracks(set);
-                        }
-                    }
-                    if let Err(detail) = molecule {
-                        self.message = Some(Message::error(detail));
-                    }
                     removed.push(index);
-                    finished.push(job);
                     match job {
                         Job::Detect(set) => {
+                            finished.push(job);
                             if self.recipe.is_none()
                                 && self.detect_input(set).as_ref() != inputs[index].as_ref()
                             {
@@ -490,17 +495,53 @@ impl Session {
                                 detected.push(set);
                             }
                         }
-                        Job::Import(set) => imported.push(set),
-                        Job::Recut(set) => recutted.push(set),
+                        Job::Import(set) => {
+                            if self.import_input(set).as_ref() != inputs[index].as_ref() {
+                                restarted_imports.push((set, self.analysis[index].take_fallback()));
+                            } else {
+                                finished.push(job);
+                                let mut molecule = Ok(false);
+                                if let Some(scene) = self.scene.as_mut() {
+                                    scene.realign_localization(set);
+                                    if scene
+                                        .objects
+                                        .get(set)
+                                        .is_some_and(|object| object.localization().is_some())
+                                    {
+                                        molecule = scene.rebuild_molecule_tracks(set);
+                                    }
+                                }
+                                if let Err(detail) = molecule {
+                                    self.message = Some(Message::error(detail));
+                                }
+                                imported.push(set);
+                            }
+                        }
+                        Job::Relation {
+                            source,
+                            target,
+                            shift,
+                        } => {
+                            finished.push(job);
+                            if self.relation_input(source, target, shift).as_ref()
+                                != inputs[index].as_ref()
+                                && self.relation_present(source, target, shift)
+                            {
+                                restarted_relations.push((source, target, shift));
+                            }
+                        }
+                        Job::Recut(set) => {
+                            finished.push(job);
+                            recutted.push(set);
+                        }
                         Job::Track(_)
-                        | Job::Relation { .. }
                         | Job::Coloc
                         | Job::ObjectColoc(_)
                         | Job::Localizations(_)
                         | Job::Clusters(_)
                         | Job::Drift
-                        | Job::Register => {}
-                        Job::Calibrate => {}
+                        | Job::Register
+                        | Job::Calibrate => finished.push(job),
                     }
                 }
                 Update::Failed(detail) => {
@@ -540,6 +581,34 @@ impl Session {
         }
         for state in rolled_back {
             self.rollback(state);
+        }
+        for (set, fallback) in restarted_imports {
+            if let Some(state) = fallback {
+                self.rollback(state);
+            }
+            self.start_import(set);
+            if self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Import(set))
+            {
+                self.message = Some(Message::info(
+                    "the import finished after the drift or registration it applied changed, so it restarted",
+                ));
+            } else {
+                self.message = Some(Message::error(
+                    "the import finished after the drift or registration it applied changed, so it was discarded and cannot restart while the dataset is busy",
+                ));
+            }
+        }
+        for (source, target, shift) in restarted_relations {
+            if !self.resume.contains(&(source, target, shift)) {
+                self.resume.push((source, target, shift));
+            }
+            self.resume_relations(source);
+            self.message = Some(Message::info(
+                "the relation finished after the objects it related changed, so its result was discarded",
+            ));
         }
         let startable = self.recut.is_some_and(|(set, _)| {
             !self
@@ -786,10 +855,13 @@ impl Session {
             .collect::<Vec<_>>();
         self.resume.retain(|candidate| !ready.contains(candidate));
         for ((source, target, shift), existing) in ready.into_iter().zip(existing) {
-            if existing {
-                self.start_relation(source, target, shift);
+            let started = if existing {
+                self.start_relation(source, target, shift)
             } else {
-                self.add_relation(source, target, shift);
+                self.add_relation(source, target, shift)
+            };
+            if !started {
+                self.resume.push((source, target, shift));
             }
         }
     }
@@ -806,7 +878,12 @@ impl Session {
         }
     }
 
-    pub(super) fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+    pub(super) fn add_relation(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    ) -> bool {
         let busy = self.analysis.iter().any(|analysis| {
             matches!(
                 analysis.job(),
@@ -817,10 +894,10 @@ impl Session {
             self.message = Some(Message::error(
                 "the object sets are being detected before they relate",
             ));
-            return;
+            return false;
         }
         let Some(scene) = self.scene.as_mut() else {
-            return;
+            return false;
         };
         if scene
             .objects
@@ -830,7 +907,7 @@ impl Session {
             self.message = Some(Message::error(
                 "the object set holds no objects to relate from",
             ));
-            return;
+            return false;
         }
         if scene
             .objects
@@ -840,12 +917,12 @@ impl Session {
             self.message = Some(Message::error(
                 "the target object set holds no objects to relate to",
             ));
-            return;
+            return false;
         }
         if !scene.add_relation(source, target, shift) {
-            return;
+            return false;
         }
-        self.start_relation(source, target, shift);
+        self.start_relation(source, target, shift)
     }
 
     pub(super) fn move_relation(
@@ -882,39 +959,58 @@ impl Session {
         }
     }
 
-    pub(super) fn start_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+    pub(super) fn start_relation(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    ) -> bool {
         let job = Job::Relation {
             source,
             target,
             shift,
         };
-        if self.loading.is_some() || self.analysis.iter().any(|analysis| analysis.job() == job) {
-            return;
+        if self.analysis.iter().any(|analysis| analysis.job() == job) {
+            return true;
+        }
+        if self.loading.is_some() {
+            return false;
         }
         let same = source == target;
         let prepared = {
             let Some(scene) = self.scene.as_ref() else {
-                return;
+                return false;
             };
             let (Some(from), Some(to)) = (scene.objects.get(source), scene.objects.get(target))
             else {
-                return;
+                return false;
             };
             if to.detected() == 0 {
                 self.message = Some(Message::error(
                     "the target object set holds no objects to relate to",
                 ));
-                return;
+                return false;
             }
             let gate = scene.relation_gate(source, target);
             let total = scene.frame_count() as usize;
             (from.source(), to.source(), gate, total)
         };
+        let Some(input) = self.relation_input(source, target, shift) else {
+            return false;
+        };
         let (from, to, gate, total) = prepared;
         self.message = None;
         self.record_progress(job, 0, 0, total);
         self.analysis
-            .push(crate::relation(job, from, to, shift, same, gate, 0));
+            .push(crate::relation(job, from, to, shift, same, gate, 0).keyed(input));
+        true
+    }
+
+    fn relation_present(&self, source: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
+        self.scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(source))
+            .is_some_and(|set| set.relation(target, shift).is_some())
     }
 
     pub(super) fn begin_calibration(&mut self, source: usize, threshold: f32, separation: f32) {

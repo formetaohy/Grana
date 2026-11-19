@@ -14,10 +14,15 @@ struct InstanceArgs {
     first_instance: u32,
 }
 
+struct SlotBase {
+    slot: vec4<u32>,
+}
+
 @group(1) @binding(0) var<storage, read> splats: array<SplatInstance>;
 @group(1) @binding(1) var<storage, read_write> order: array<u32>;
 @group(1) @binding(2) var<storage, read> appearances: array<SplatAppearance>;
 @group(1) @binding(5) var<storage, read_write> args: InstanceArgs;
+@group(1) @binding(6) var<uniform> base: SlotBase;
 
 const SPLAT_REACH: f32 = 3.0;
 
@@ -34,7 +39,7 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
 @compute @workgroup_size(64)
 fn splat_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
-    if (index >= frame.tag.z || index >= arrayLength(&splats)) {
+    if (index >= base.slot.y || index >= arrayLength(&splats)) {
         return;
     }
     let look = appearances[index];

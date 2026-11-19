@@ -122,6 +122,11 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
+        if self.dirty() {
+            self.batch_message =
+                Some("save the analysis before reviewing another dataset".to_string());
+            return;
+        }
         let Some(dataset) = self.batch_datasets.get(index) else {
             return;
         };

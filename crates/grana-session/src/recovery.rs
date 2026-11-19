@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,13 @@ pub struct Entry {
     name: String,
     target: String,
     project: Option<String>,
+    fingerprint: String,
+    snapshot: u64,
     saved: u64,
 }
 
 impl Entry {
-    pub fn new(name: &str, target: &str, project: Option<&Path>) -> Self {
+    pub fn new(name: &str, target: &str, project: Option<&Path>, fingerprint: &str) -> Self {
         assert!(
             !name.trim().is_empty(),
             "a recovery names the dataset it holds"
@@ -33,13 +35,17 @@ impl Entry {
             !target.trim().is_empty(),
             "a recovery names where its dataset lives"
         );
+        assert!(
+            fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "a recovery names the fingerprint of its dataset"
+        );
         Self {
             name: name.trim().to_string(),
             target: target.to_string(),
             project: project.map(|path| path.to_string_lossy().into_owned()),
-            saved: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs()),
+            fingerprint: fingerprint.to_string(),
+            snapshot: 0,
+            saved: now(),
         }
     }
 
@@ -55,11 +61,12 @@ impl Entry {
         self.project.as_deref().map(Path::new)
     }
 
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+
     pub fn age(&self) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs());
-        now.saturating_sub(self.saved)
+        now().saturating_sub(self.saved)
     }
 }
 
@@ -86,14 +93,25 @@ impl Recovery {
         let Some(root) = root else {
             return store;
         };
+        if let Err(error) = grana_file::recover(&root) {
+            grana_log::warn!(target: "grana::session", path = %root.display(), %error, "the recovery unit left an unclearable artifact");
+        }
         let entry = read(&root.join(FILE));
-        if entry
+        let valid = entry
             .as_ref()
-            .is_some_and(|entry| entry.age() > STALE.as_secs() || !root.join(SNAPSHOT).is_file())
-        {
-            discard(&root);
-        } else {
+            .is_some_and(|entry| entry.age() <= STALE.as_secs() && holds(&root, entry));
+        if valid {
             store.entry = entry;
+        } else {
+            if let Some(entry) = entry {
+                grana_log::warn!(
+                    target: "grana::session",
+                    path = %root.display(),
+                    name = entry.name(),
+                    "the recovery record does not describe the snapshot beside it, so the unit was discarded"
+                );
+            }
+            discard(&root);
         }
         store.root = Some(root);
         store
@@ -115,7 +133,7 @@ impl Recovery {
         let root = self.root.as_ref()?;
         let entry = self.entry.as_ref()?;
         let path = root.join(SNAPSHOT);
-        (entry.age() <= STALE.as_secs() && path.is_file()).then_some(path)
+        holds(root, entry).then_some(path)
     }
 
     pub fn refused(&self) -> bool {
@@ -160,39 +178,62 @@ impl Recovery {
 fn store(
     root: &Path,
     project: Project,
-    entry: Entry,
+    mut entry: Entry,
     cancel: &AtomicBool,
 ) -> Result<Entry, String> {
-    let target = root.join(SNAPSHOT);
-    std::fs::create_dir_all(root)
-        .map_err(|error| format!("failed to create {}: {error}", root.display()))
-        .and_then(|()| {
-            project
-                .write(&target, cancel, &mut |_, _| {})
-                .map_err(|error| error.to_string())
-        })
-        .and_then(|()| {
-            let text = toml::to_string_pretty(&entry)
-                .map_err(|error| format!("the recovery does not serialize: {error}"))?;
-            grana_file::write(&root.join(FILE), text.as_bytes())
-                .map_err(|error| format!("failed to write the recovery record: {error}"))
-        })
-        .map(|()| entry)
-        .map_err(|error| format!("autosave failed: {error}"))
+    let atomic = grana_file::Atomic::directory(root)
+        .map_err(|error| format!("failed to prepare {}: {error}", root.display()))?;
+    let snapshot = atomic.staging().join(SNAPSHOT);
+    project
+        .write(&snapshot, cancel, &mut |_, _| {})
+        .map_err(|error| format!("autosave failed: {error}"))?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("autosave cancelled".to_string());
+    }
+    entry.snapshot = std::fs::metadata(&snapshot)
+        .map_err(|error| format!("failed to measure the autosave: {error}"))?
+        .len();
+    let text = toml::to_string_pretty(&entry)
+        .map_err(|error| format!("the recovery does not serialize: {error}"))?;
+    grana_file::write(&atomic.staging().join(FILE), text.as_bytes())
+        .map_err(|error| format!("failed to write the recovery record: {error}"))?;
+    atomic
+        .commit()
+        .map_err(|error| format!("autosave failed: {error}"))?;
+    Ok(entry)
+}
+
+fn holds(root: &Path, entry: &Entry) -> bool {
+    if grana_volume::Fingerprint::from_hex(&entry.fingerprint).is_none() {
+        return false;
+    }
+    std::fs::metadata(root.join(SNAPSHOT))
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == entry.snapshot)
 }
 
 fn discard(root: &Path) {
-    let _ = std::fs::remove_file(root.join(SNAPSHOT));
-    let _ = std::fs::remove_file(root.join(FILE));
+    for name in [SNAPSHOT, FILE] {
+        if let Err(error) = std::fs::remove_file(root.join(name))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            grana_log::warn!(target: "grana::session", path = %root.join(name).display(), %error, "the recovery file cannot be removed");
+        }
+    }
 }
 
 fn read(path: &Path) -> Option<Entry> {
     let text = std::fs::read_to_string(path).ok()?;
     match toml::from_str::<Entry>(&text) {
         Ok(entry) => Some(entry),
-        Err(_) => {
-            let _ = std::fs::remove_file(path);
+        Err(error) => {
+            grana_log::warn!(target: "grana::session", path = %path.display(), %error, "the recovery record cannot be read");
             None
         }
     }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }

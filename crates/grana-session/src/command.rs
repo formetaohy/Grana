@@ -580,7 +580,6 @@ impl Action {
                 | Self::ObjectParameters
                 | Self::ObjectColoring
                 | Self::MaskEdit
-                | Self::Annotation
                 | Self::TrackThickness
                 | Self::TrackColoring
                 | Self::TrackParameters

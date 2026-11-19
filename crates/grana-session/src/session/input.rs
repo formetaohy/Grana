@@ -50,6 +50,54 @@ impl Session {
         ))
     }
 
+    pub(super) fn import_input(&self, set: ObjectSetId) -> Option<Input> {
+        let scene = self.scene.as_ref()?;
+        let object = scene.objects.get(set)?;
+        let source = match object.provenance() {
+            grana_scene::Provenance::Imported { label } => {
+                crate::input::ImportSource::Label(label.clone())
+            }
+            grana_scene::Provenance::Interop { file } => {
+                crate::input::ImportSource::File(file.clone())
+            }
+            grana_scene::Provenance::Detection
+            | grana_scene::Provenance::Segmented { .. }
+            | grana_scene::Provenance::Attached { .. }
+            | grana_scene::Provenance::Filtered { .. }
+            | grana_scene::Provenance::Copied { .. }
+            | grana_scene::Provenance::Edited { .. }
+            | grana_scene::Provenance::Masked { .. }
+            | grana_scene::Provenance::Merged { .. } => return None,
+        };
+        Some(Input::import(
+            set,
+            object.channel(),
+            source,
+            scene.drifts().digest(),
+            scene.registration().digest(),
+        ))
+    }
+
+    pub(super) fn relation_input(
+        &self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    ) -> Option<Input> {
+        let scene = self.scene.as_ref()?;
+        let from = scene.objects.get(source)?;
+        let to = scene.objects.get(target)?;
+        Some(Input::relation(
+            source,
+            target,
+            shift,
+            scene.relation_gate(source, target),
+            (0..scene.frame_count())
+                .map(|time| (from.frame_stamp(time), to.frame_stamp(time)))
+                .collect(),
+        ))
+    }
+
     pub(super) fn track_input(&self, set: ObjectSetId) -> Option<Input> {
         let object = self.scene.as_ref()?.objects.get(set)?;
         let params = object.track_style()?.params();

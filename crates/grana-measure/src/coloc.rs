@@ -914,7 +914,7 @@ fn bin(unit: f32, bins: usize) -> usize {
 }
 
 fn above(sums: &[f64], cut: usize) -> f64 {
-    sums.get(cut + 1..).map_or(0.0, |tail| tail.iter().sum())
+    sums.get(cut..).map_or(0.0, |tail| tail.iter().sum())
 }
 
 fn otsu(counts: &[u64]) -> f32 {

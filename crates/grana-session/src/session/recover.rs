@@ -7,7 +7,28 @@ const RECOVERY_LIMIT: u64 = 1 << 30;
 
 #[derive(Default)]
 pub(super) struct Restore {
-    pub(super) project: Option<PathBuf>,
+    pub(super) entry: Option<RecoveryEntry>,
+}
+
+impl Restore {
+    pub(super) fn matches(&self, project: &Project) -> bool {
+        let Some(entry) = self.entry.as_ref() else {
+            return false;
+        };
+        let name = match &project.source {
+            ProjectSource::Synthetic { name } => name,
+            ProjectSource::File { name, .. } => name,
+            ProjectSource::Remote { name, .. } => name,
+        };
+        let target = match &project.source {
+            ProjectSource::Synthetic { name } => name.clone(),
+            ProjectSource::File { path, .. } => path.display().to_string(),
+            ProjectSource::Remote { url, .. } => url.clone(),
+        };
+        project.fingerprint.hex() == entry.fingerprint()
+            && name == entry.name()
+            && target == entry.target()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +130,7 @@ impl Session {
             self.views.clone(),
             fingerprint,
         );
-        let entry = RecoveryEntry::new(&name, &target, self.project.as_deref());
+        let entry = RecoveryEntry::new(&name, &target, self.project.as_deref(), &fingerprint.hex());
         Some((project, entry))
     }
 
@@ -132,9 +153,7 @@ impl Session {
             return;
         };
         grana_log::info!(target: "grana::session", dataset = entry.name(), "recovering an automatic snapshot");
-        self.restore = Some(Restore {
-            project: entry.project().map(Path::to_path_buf),
-        });
+        self.restore = Some(Restore { entry: Some(entry) });
         self.begin_project(snapshot);
     }
 
@@ -146,7 +165,11 @@ impl Session {
 
     pub(super) fn finish_autosave(&mut self, outcome: Result<RecoveryEntry, String>) {
         match outcome {
-            Ok(entry) => self.recovery.accept(entry),
+            Ok(entry) if self.dirty() => self.recovery.accept(entry),
+            Ok(_) => {
+                grana_log::info!(target: "grana::session", "an autosave finished after the analysis was saved, so it was dropped");
+                self.recovery.discard();
+            }
             Err(detail) => {
                 grana_log::error!(target: "grana::session", %detail, "the recovery snapshot failed");
                 self.message = Some(Message::error(detail));
@@ -160,10 +183,13 @@ impl Session {
             self.baseline = self.document_hash();
             return;
         }
-        if let Some(restore) = self.restore.take() {
-            self.project = restore.project;
+        if self.restore.take().is_some() {
+            self.project = None;
             self.baseline = None;
             self.deferred = false;
+            self.message = Some(Message::info(
+                "the recovered analysis is unsaved and carries no project path",
+            ));
         } else if restored == Restored::Fresh {
             self.baseline = self.document_hash();
         }

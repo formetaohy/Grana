@@ -206,7 +206,9 @@ impl Session {
                     target,
                     shift,
                     ..
-                } => self.start_relation(source, target, shift),
+                } => {
+                    self.start_relation(source, target, shift);
+                }
                 Step::Coloc {
                     pair,
                     mask,

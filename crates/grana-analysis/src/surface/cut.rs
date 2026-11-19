@@ -274,9 +274,8 @@ impl<'a> Merged<'a> {
             self.nodes[left as usize]
                 .reach()
                 .min(self.nodes[right as usize].reach()),
-        )
-        .sqrt();
-        let drop = peak - f64::from(saddle).sqrt();
+        );
+        let drop = peak - f64::from(saddle);
         if drop >= (f64::from(split) * peak).max(SPLIT_FLOOR) {
             return;
         }

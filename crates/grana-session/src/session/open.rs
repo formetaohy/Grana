@@ -15,6 +15,7 @@ impl Session {
         self.timeline = Timeline::new(30, self.frame_duration());
         self.message = None;
         self.loading = None;
+        self.pending = None;
         self.replace();
         self.project = None;
         self.baseline = None;
@@ -24,6 +25,11 @@ impl Session {
         self.recipe = None;
         self.resume.clear();
         self.recut = None;
+        self.view = None;
+        self.views.clear();
+        self.current_view = None;
+        self.coloc_thresholds = None;
+        self.export = Export::NATIVE;
         self.discard_streamed();
         self.measure.reset();
         self.label_images.clear();
@@ -309,6 +315,17 @@ impl Session {
 
     pub(super) fn open_project(&mut self, path: &Path, project: Project) {
         self.message = None;
+        if let Some(restore) = self.restore.as_ref()
+            && !restore.matches(&project)
+        {
+            self.restore = None;
+            self.recovery.discard();
+            grana_log::error!(target: "grana::session", path = %path.display(), "the recovery snapshot holds another dataset, so it was discarded");
+            self.message = Some(Message::error(
+                "the recovery snapshot holds another dataset or shape, so it was discarded",
+            ));
+            return;
+        }
         match &project.source {
             ProjectSource::Synthetic { .. } => {
                 self.message = Some(Message::error(
@@ -449,6 +466,7 @@ impl Session {
         self.discard_streamed();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
+        self.current_view = None;
         self.views.clear();
         self.history.clear();
         self.label_images.clear();
@@ -456,6 +474,8 @@ impl Session {
         self.mask_stamps.clear();
         self.mask_extents.clear();
         self.channels = None;
+        self.coloc_thresholds = None;
+        self.export = Export::NATIVE;
         self.transfer.reset();
     }
 

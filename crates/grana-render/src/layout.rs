@@ -264,6 +264,7 @@ impl Layouts {
                 storage(1, ShaderStages::COMPUTE, false),
                 storage(2, ShaderStages::COMPUTE, true),
                 storage(5, ShaderStages::COMPUTE, false),
+                uniform(6, ShaderStages::COMPUTE),
             ],
         });
         let splat_rows = device.create_bind_group_layout(&BindGroupLayoutDescriptor {

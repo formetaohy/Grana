@@ -138,10 +138,7 @@ impl App {
             .set_buttons(rfd::MessageButtons::YesNoCancel)
             .show();
         match answer {
-            rfd::MessageDialogResult::No => {
-                self.session.discard_recovery();
-                true
-            }
+            rfd::MessageDialogResult::No => true,
             rfd::MessageDialogResult::Yes => {
                 let view = self.view_state();
                 let Some(path) = self.project_path(false) else {

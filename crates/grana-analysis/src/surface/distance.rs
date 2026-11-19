@@ -43,10 +43,11 @@ impl Distance {
         });
         transform(&mut values, padded, weights, workers);
         let metric = f64::from(METRIC_SCALE * METRIC_SCALE);
-        let limit = (0..3).fold(0.0f64, |accumulated, axis| {
+        let diagonal = (0..3).fold(0.0f64, |accumulated, axis| {
             accumulated + weights[axis] * (dims[axis] * dims[axis]) as f64
         }) * metric
             + 1.0;
+        let limit = diagonal.sqrt();
         let reach = values
             .iter()
             .map(|value| f64::from(*value))
@@ -122,8 +123,7 @@ impl Distance {
         }
         let padded = [self.dims[0] + 2, self.dims[1] + 2, self.dims[2] + 2];
         let index = (cell[0] + 1) + padded[0] * ((cell[1] + 1) + padded[1] * (cell[2] + 1));
-        let value =
-            f64::from(self.values[index]) * f64::from(SCALE * SCALE * METRIC_SCALE * METRIC_SCALE);
+        let value = f64::from(self.values[index]).sqrt() * f64::from(SCALE * METRIC_SCALE);
         value.min(self.limit) as u32
     }
 }
@@ -236,4 +236,28 @@ fn planes(
             scope.spawn(move |_| body(chunk, first));
         }
     });
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn reaches_a_deep_distance_without_saturating() {
+        let mut values = vec![0.0f32; 27];
+        values[13] = 250_000.0;
+        let distance = Distance {
+            origin: [0; 3],
+            dims: [1, 1, 1],
+            values,
+            limit: 1.0e9,
+            reach: 0.0,
+            margin: 0.0,
+        };
+        assert_eq!(
+            distance.at([0, 0, 0]),
+            2000 * METRIC_SCALE,
+            "a distance beyond the coarse layer cap keeps its length"
+        );
+    }
 }

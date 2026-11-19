@@ -34,7 +34,7 @@ pub(super) fn trace(mask: &[u8], distance: &[u16], grid: &Grid, min_length: f32)
         .iter()
         .filter_map(|component| {
             let mut graph = Graph::new(&component.members, &component.edges, grid);
-            graph.filament(&radius, min_length)
+            graph.filament(grid, &radius, min_length)
         })
         .collect::<Vec<_>>();
     filaments.sort_by(|left, right| {
@@ -341,7 +341,12 @@ impl Graph {
         }
     }
 
-    fn filament(&mut self, radius: &impl Fn(usize) -> f32, min_length: f32) -> Option<Filament> {
+    fn filament(
+        &mut self,
+        grid: &Grid,
+        radius: &impl Fn(usize) -> f32,
+        min_length: f32,
+    ) -> Option<Filament> {
         self.merge_junctions();
         self.prune(min_length);
         let paths = self.segments();
@@ -382,28 +387,28 @@ impl Graph {
         let mut sum = [0.0f64; 3];
         let mut terminals = 0;
         let mut junctions = 0;
-        let mut clusters = 0u32;
+        let mut voxels = 0u64;
         for node in 0..self.nodes.len() as u32 {
             if !self.nodes[node as usize].alive {
                 continue;
             }
             for voxel in &self.nodes[node as usize].voxels {
                 alive.push(*voxel);
+                let position = grid.position(grid.voxel(*voxel));
+                for axis in 0..3 {
+                    low[axis] = low[axis].min(position[axis]);
+                    high[axis] = high[axis].max(position[axis]);
+                    sum[axis] += f64::from(position[axis]);
+                }
+                voxels += 1;
             }
-            let position = self.nodes[node as usize].position;
-            for axis in 0..3 {
-                low[axis] = low[axis].min(position[axis]);
-                high[axis] = high[axis].max(position[axis]);
-                sum[axis] += f64::from(position[axis]);
-            }
-            clusters += 1;
             match self.degree(node) {
                 1 => terminals += 1,
                 degree if degree >= 3 => junctions += 1,
                 _ => {}
             }
         }
-        let centroid = [0, 1, 2].map(|axis| (sum[axis] / f64::from(clusters)) as f32);
+        let centroid = [0, 1, 2].map(|axis| (sum[axis] / voxels as f64) as f32);
         let statistics = FilamentStatistics::new(
             total_length,
             weighted / total_length,
@@ -460,5 +465,55 @@ fn join(parent: &mut [u32], left: u32, right: u32) {
     let right = find(parent, right);
     if left != right {
         parent[right as usize] = left;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use grana_volume::{Extent, Level, Spacing};
+
+    fn grid() -> Grid {
+        Grid {
+            dims: [8, 1, 1],
+            padded: [10, 3, 3],
+            stride: [1, 10, 30],
+            placement: Level::new(Extent::new(8, 1, 1), Spacing::new(1.0, 1.0, 1.0)),
+            spacing: [1.0, 1.0, 1.0],
+            extent: [8, 1, 1],
+            step: [1, 1, 1],
+        }
+    }
+
+    fn member(x: usize) -> u32 {
+        (x + 11) as u32
+    }
+
+    #[test]
+    fn weighs_a_filament_centroid_by_its_voxels() {
+        let grid = grid();
+        let mut edges = Vec::new();
+        for left in 0..4usize {
+            for right in (left + 1)..4 {
+                edges.push((member(left), member(right)));
+            }
+        }
+        edges.push((member(0), member(6)));
+        let members = [0usize, 1, 2, 3, 6].map(member);
+        let mut graph = Graph::new(&members, &edges, &grid);
+        let filament = graph
+            .filament(&grid, &|_| 1.0, 0.0)
+            .expect("the graph traces a filament");
+        let centroid = filament.statistics.centroid();
+        assert!(
+            (centroid[0] - -1.1).abs() < 1.0e-5,
+            "the centroid weighs the four contracted voxels: {centroid:?}"
+        );
+        let bounds = filament.statistics.bounds();
+        assert!(
+            (bounds.min()[0] - -3.5).abs() < 1.0e-5,
+            "the bounds cover the contracted voxels: {:?}",
+            bounds.min()
+        );
     }
 }

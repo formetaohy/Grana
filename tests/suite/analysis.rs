@@ -928,6 +928,15 @@ fn measures_correlated_channels() {
         significance.p() < 0.05,
         "a perfectly correlated pair tests significant"
     );
+    let zeros = VoxelData::U16(vec![0; extent.voxel_count() as usize]);
+    let unthresholded = coloc_series(extent, &first, &zeros)
+        .statistics(ColocThresholds::new(0.0, 0.0))
+        .manders()[0]
+        .expect("the first channel carries mass");
+    assert!(
+        (unthresholded - 1.0).abs() < 1.0e-9,
+        "a zero threshold keeps the first channel mass {unthresholded}"
+    );
 }
 
 fn ramp(extent: Extent) -> VoxelData {

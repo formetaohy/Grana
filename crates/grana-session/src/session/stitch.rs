@@ -210,7 +210,13 @@ impl Session {
             Ok(Ok(path)) => {
                 grana_log::info!(target: "grana::session", path = %path.display(), "the stitched mosaic was written");
                 self.stitch = None;
-                self.begin_load(path);
+                if self.dirty() {
+                    self.message = Some(Message::info(
+                        "the stitched mosaic is ready, and the unsaved analysis stays open until it is saved",
+                    ));
+                } else {
+                    self.begin_load(path);
+                }
                 true
             }
             Ok(Err(detail)) => {
@@ -255,7 +261,13 @@ impl Session {
                 if grana_image::is_image(&stitch.output) && fresh(&stitch.output, folder.tiles()) {
                     let output = stitch.output.clone();
                     self.stitch = None;
-                    self.begin_load(output);
+                    if self.dirty() {
+                        self.message = Some(Message::info(
+                            "the stitched mosaic is ready, and the unsaved analysis stays open until it is saved",
+                        ));
+                    } else {
+                        self.begin_load(output);
+                    }
                     return true;
                 }
                 stitch.rows = folder.rows();

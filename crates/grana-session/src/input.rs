@@ -9,6 +9,8 @@ pub enum Input {
     Coloc(ColocInput),
     ObjectColoc(ObjectColocInput),
     Detect(DetectInput),
+    Import(ImportInput),
+    Relation(RelationInput),
     Track(TrackInput),
     Drift(DriftInput),
     Register(RegisterInput),
@@ -71,6 +73,38 @@ impl Input {
         })
     }
 
+    pub fn import(
+        set: ObjectSetId,
+        channel: usize,
+        source: ImportSource,
+        drifts: u64,
+        registration: u64,
+    ) -> Self {
+        Self::Import(ImportInput {
+            set,
+            channel,
+            source,
+            drifts,
+            registration,
+        })
+    }
+
+    pub fn relation(
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+        gate: f32,
+        frames: Vec<(Option<Revision>, Option<Revision>)>,
+    ) -> Self {
+        Self::Relation(RelationInput {
+            source,
+            target,
+            shift,
+            gate,
+            frames,
+        })
+    }
+
     pub fn track(frames: Vec<Option<Revision>>, params: TrackParams) -> Self {
         Self::Track(TrackInput { frames, params })
     }
@@ -82,6 +116,30 @@ impl Input {
     pub fn register(input: RegisterInput) -> Self {
         Self::Register(input)
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportSource {
+    Label(String),
+    File(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportInput {
+    pub set: ObjectSetId,
+    pub channel: usize,
+    pub source: ImportSource,
+    pub drifts: u64,
+    pub registration: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelationInput {
+    pub source: ObjectSetId,
+    pub target: ObjectSetId,
+    pub shift: i32,
+    pub gate: f32,
+    pub frames: Vec<(Option<Revision>, Option<Revision>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

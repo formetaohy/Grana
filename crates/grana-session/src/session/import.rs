@@ -55,30 +55,52 @@ impl Session {
             scene.drift(channel).cloned().unwrap_or_default(),
             scene.registration().clone(),
         );
+        let Some(input) = self.import_input(set) else {
+            self.message = Some(Message::error(
+                "only an imported object set reads a label image or a track file",
+            ));
+            return;
+        };
+        let fallback = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.object_state(set));
         self.message = None;
         match provenance {
             Provenance::Imported { label } => {
                 self.record_progress(Job::Import(set), 0, 0, 0);
-                self.analysis.push(crate::import(
-                    Job::Import(set),
-                    channels,
-                    ImportRequest::new(channel, &label, drifts),
-                ));
+                self.analysis.push(
+                    crate::import(
+                        Job::Import(set),
+                        channels,
+                        ImportRequest::new(channel, &label, drifts),
+                    )
+                    .keyed(input)
+                    .with_fallback(fallback),
+                );
             }
             Provenance::Interop { file } => {
                 self.record_progress(Job::Import(set), 0, 0, 0);
                 if localization_table(&file) {
-                    self.analysis.push(crate::localize(
-                        Job::Import(set),
-                        channels,
-                        LocalizationRequest::new(&file, alignment),
-                    ));
+                    self.analysis.push(
+                        crate::localize(
+                            Job::Import(set),
+                            channels,
+                            LocalizationRequest::new(&file, alignment),
+                        )
+                        .keyed(input)
+                        .with_fallback(fallback),
+                    );
                 } else {
-                    self.analysis.push(crate::interop(
-                        Job::Import(set),
-                        channels,
-                        InteropRequest::new(&file, drifts, Arc::clone(&self.store)),
-                    ));
+                    self.analysis.push(
+                        crate::interop(
+                            Job::Import(set),
+                            channels,
+                            InteropRequest::new(&file, drifts, Arc::clone(&self.store)),
+                        )
+                        .keyed(input)
+                        .with_fallback(fallback),
+                    );
                 }
             }
             Provenance::Detection

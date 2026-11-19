@@ -273,6 +273,7 @@ struct SplatSlot {
     style_stamp: u64,
     geometry: Buffer,
     style: Buffer,
+    base_buffer: Buffer,
     args: InstanceCommands,
     rows: BindGroup,
     cull: BindGroup,
@@ -348,6 +349,10 @@ impl SplatSlot {
                     binding: 5,
                     resource: args.buffer().as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: base_buffer.as_entire_binding(),
+                },
             ],
         });
         let pick = device.create_bind_group(&BindGroupDescriptor {
@@ -366,6 +371,7 @@ impl SplatSlot {
             style_stamp: u64::MAX,
             geometry,
             style,
+            base_buffer,
             args,
             rows,
             cull,
@@ -392,6 +398,20 @@ impl SplatSlot {
         if self.style_stamp != data.style_stamp() {
             queue.write_buffer(&self.style, 0, cast_slice(data.style()));
             self.style_stamp = data.style_stamp();
+        }
+        if self.len != data.len() {
+            queue.write_buffer(
+                &self.base_buffer,
+                0,
+                bytes_of(&Base {
+                    slot: [
+                        self.base,
+                        u32::try_from(data.len()).expect("a splat chunk fits the instance space"),
+                        0,
+                        0,
+                    ],
+                }),
+            );
         }
         self.len = data.len();
     }

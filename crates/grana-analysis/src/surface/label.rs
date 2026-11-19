@@ -107,7 +107,7 @@ impl Tile<'_> {
         let dims = self.dims;
         let strides = strides_of(dims);
         let count = dims[0] * dims[1] * dims[2];
-        let cap = self.pass.cap;
+        let limit = self.pass.limit;
         self.chamfer.clear();
         self.chamfer.resize(count, 0);
         let spans = spans(&self.mask, dims, low, high);
@@ -115,14 +115,15 @@ impl Tile<'_> {
             for y in low[1]..high[1] {
                 let base = dims[0] * (y + dims[1] * z);
                 for x in low[0]..high[0] {
-                    self.chamfer[base + x] = if self.mask[base + x] { cap } else { 0 };
+                    self.chamfer[base + x] = if self.mask[base + x] { limit } else { 0 };
                 }
             }
         }
         let anisotropy = [0, 1, 2].map(|axis| plan.metric(axis));
         for axis in 0..3 {
-            let weight = f64::from(anisotropy[axis] * anisotropy[axis]);
-            let reach = (f64::from(cap) / weight).sqrt().ceil() as usize;
+            let metric = f64::from(anisotropy[axis]);
+            let weight = metric * metric;
+            let reach = (f64::from(limit) / metric).ceil() as usize;
             let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
             let spans = &spans[axis];
             let mut line = vec![0.0f64; high[axis] - low[axis]];
@@ -141,13 +142,14 @@ impl Tile<'_> {
                     let base =
                         strides[first] * row + strides[second] * position + strides[axis] * start;
                     for (step, slot) in line[..length].iter_mut().enumerate() {
-                        *slot = f64::from(self.chamfer[base + strides[axis] * step]);
+                        let value = f64::from(self.chamfer[base + strides[axis] * step]);
+                        *slot = value * value;
                     }
                     super::parabola(&mut line[..length], weight, &mut envelope);
                     for (step, value) in line[..length].iter().enumerate() {
                         let index = base + strides[axis] * step;
                         if self.mask[index] {
-                            self.chamfer[index] = value.min(f64::from(cap)) as u32;
+                            self.chamfer[index] = value.sqrt().min(f64::from(limit)) as u32;
                         }
                     }
                 }
@@ -159,7 +161,7 @@ impl Tile<'_> {
                 let base = dims[0] * (y + dims[1] * z);
                 for x in low[0]..high[0] {
                     let index = base + x;
-                    if !self.mask[index] || self.chamfer[index] < cap {
+                    if !self.mask[index] || self.chamfer[index] < limit {
                         continue;
                     }
                     let voxel = [
