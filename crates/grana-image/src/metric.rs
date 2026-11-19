@@ -54,6 +54,7 @@ impl Metric {
                 pyramid.frame_count(),
                 pyramid.frame_interval(),
                 pyramid.placement(),
+                pyramid.axial(),
             ),
         })
     }

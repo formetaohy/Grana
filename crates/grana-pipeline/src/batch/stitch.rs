@@ -26,7 +26,7 @@ pub(super) fn place(
         ));
     }
     let channel = folder
-        .channel(&spec.channel)
+        .channel(dataset.scene(), &spec.channel)
         .map_err(|error| error.to_string())?;
     let tiles = folder.tiles().to_vec();
     let folder = output.join(STITCHED).join(dataset.key());

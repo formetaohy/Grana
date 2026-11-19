@@ -579,6 +579,57 @@ impl Snapshot {
         count
     }
 }
+pub const TIFF_ENTRIES: u32 = 12;
+
+pub fn ome_tiff(path: &Path, xml: &str, pages: &[(u32, u32, &[u8])]) {
+    let record = 2 + TIFF_ENTRIES * 12 + 4;
+    let header = 8u32;
+    let xml_offset = header + pages.len() as u32 * record;
+    let xml_bytes = xml.as_bytes();
+    let mut strip = xml_offset + xml_bytes.len() as u32;
+    let mut offsets = Vec::with_capacity(pages.len());
+    for page in pages {
+        offsets.push(strip);
+        strip += page.2.len() as u32;
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&header.to_le_bytes());
+    for (index, (width, height, _)) in pages.iter().copied().enumerate() {
+        let next = if index + 1 == pages.len() {
+            0
+        } else {
+            header + (index as u32 + 1) * record
+        };
+        bytes.extend_from_slice(&(TIFF_ENTRIES as u16).to_le_bytes());
+        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(256, 4, 1, width);
+        entry(257, 4, 1, height);
+        entry(258, 3, 1, 8);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, 1);
+        entry(270, 2, xml_bytes.len() as u32, xml_offset);
+        entry(273, 4, 1, offsets[index]);
+        entry(277, 3, 1, 1);
+        entry(278, 4, 1, height);
+        entry(279, 4, 1, pages[index].2.len() as u32);
+        entry(284, 3, 1, 1);
+        entry(339, 3, 1, 1);
+        bytes.extend_from_slice(&next.to_le_bytes());
+    }
+    bytes.extend_from_slice(xml_bytes);
+    for page in pages {
+        bytes.extend_from_slice(page.2);
+    }
+    std::fs::write(path, &bytes).expect("the OME-TIFF writes");
+}
+
 pub fn plate(root: &Path) {
     std::fs::create_dir_all(root).expect("the plate directory is created");
     group(

@@ -1,3 +1,4 @@
+mod axial;
 mod axis;
 mod basis;
 mod brick;
@@ -18,6 +19,7 @@ mod spacing;
 mod volume;
 mod voxel;
 
+pub use axial::Axial;
 pub use axis::Axis;
 pub use basis::Basis;
 pub use brick::{

@@ -1124,6 +1124,7 @@ fn ladder_pyramid(volumes: &[Volume]) -> Pyramid {
         1,
         1.0,
         [0.0; 3],
+        base.axial(),
     )
 }
 

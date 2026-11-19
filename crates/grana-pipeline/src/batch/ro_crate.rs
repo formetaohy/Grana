@@ -8,6 +8,7 @@ use sha2::{Digest as _, Sha256};
 use super::Plan;
 use super::Row;
 use super::pipeline::artifacts;
+use super::resume::Evidence;
 
 const FULL: u64 = 8 << 20;
 
@@ -47,7 +48,11 @@ struct Fingerprint {
     coverage: String,
 }
 
-pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
+pub(super) fn write(
+    plan: &Plan,
+    rows: &[Option<Row>],
+    evidence: &[Evidence],
+) -> Result<(), String> {
     let name = plan.output.file_name().map_or_else(
         || "grana-batch".to_string(),
         |name| name.to_string_lossy().into_owned(),
@@ -76,7 +81,14 @@ pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
     }
     for (index, dataset) in plan.datasets.iter().enumerate() {
         let input = format!("#input-{}", index + 1);
-        let source = fingerprint(dataset.path())?;
+        let source = match evidence.get(index) {
+            Some(evidence) if dataset.image_path() == dataset.path() => Fingerprint {
+                sha256: evidence.content.hex(),
+                size: evidence.bytes,
+                coverage: "every byte of the input".to_string(),
+            },
+            _ => fingerprint(dataset.path())?,
+        };
         record.input(
             &input,
             &dataset.title(),

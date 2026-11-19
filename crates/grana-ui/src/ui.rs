@@ -354,7 +354,8 @@ impl<A: Clone> Ui<A> {
         self.scene_seen = false;
         let mut canvases: SecondaryMap<NodeId, CanvasPaint<'a>> = SecondaryMap::new();
         let removed = self.tree.apply(element, &mut canvases);
-        self.prune(&removed);
+        self.prune(&removed.removed);
+        self.actions.extend(removed.committed);
         if self.tree.fields {
             self.sync_fields();
             self.tree.fields = false;

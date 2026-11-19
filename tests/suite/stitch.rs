@@ -94,8 +94,52 @@ fn writes_a_stitched_mosaic() {
             sum / count
         );
     }
+    let series = std::env::temp_dir().join(format!("grana-stitch-series-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&series);
+    std::fs::create_dir_all(&series).expect("the series folder is created");
+    let tile = series.join("tile.ome.tif");
+    crate::support::ome_tiff(
+        &tile,
+        SERIES,
+        &[(4, 4, &[1u8; 16]), (2, 2, &[2u8; 4]), (2, 2, &[3u8; 4])],
+    );
+    let folder = grana_stitch::folder(&tile).expect("the tile scans");
+    assert_eq!(folder.series(), 2);
+    assert_eq!(folder.channels(0).to_vec(), vec!["GFP"]);
+    assert_eq!(folder.channels(1).to_vec(), vec!["GFP", "RFP"]);
+    assert_eq!(
+        folder
+            .channel(1, "RFP")
+            .expect("the second series names RFP"),
+        1
+    );
+    assert!(
+        folder.channel(0, "RFP").is_err(),
+        "a channel of another series does not resolve"
+    );
+    let _ = std::fs::remove_dir_all(&series);
     let _ = std::fs::remove_dir_all(&output);
 }
+
+const SERIES: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+    " <Image Name=\"Coarse\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"4\" SizeZ=\"1\" SizeC=\"1\" SizeT=\"1\">\n",
+    "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"1\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    " <Image Name=\"Fine\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"1\" SizeC=\"2\" SizeT=\"1\">\n",
+    "   <Channel ID=\"Channel:1:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <Channel ID=\"Channel:1:1\" Name=\"RFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"1\" PlaneCount=\"2\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    "</OME>\n"
+);
+
 fn memory_tile(values: &[f32], width: usize, x: usize, y: usize) -> Source {
     let mut data = Vec::with_capacity(TILE * TILE * DEPTH as usize);
     for z in 0..DEPTH as usize {

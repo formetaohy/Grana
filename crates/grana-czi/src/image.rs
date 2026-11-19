@@ -171,6 +171,7 @@ impl Image {
             channels,
             selected.frames,
             document.interval,
+            selected.axial,
         );
         let scenes = document.scenes();
         Ok(Self {

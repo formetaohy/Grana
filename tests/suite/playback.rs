@@ -7,7 +7,7 @@ use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_render::Delivery;
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_session::Session;
-use grana_volume::{ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelFormat};
+use grana_volume::{Axial, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelFormat};
 
 use crate::support::gpu;
 
@@ -112,7 +112,7 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
         intensity,
         VoxelFormat::F32,
     )];
-    let pyramid = Pyramid::new(vec![level], 1, channels, 2, 1.0);
+    let pyramid = Pyramid::new(vec![level], 1, channels, 2, 1.0, Axial::Recorded);
     let mut scene = Scene::new(Dataset::synthetic("proxy", pyramid));
     let set = scene.add_object(ObjectKind::Spots, 0);
     for time in 0..2 {

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    ChannelInfo, Extent, Intensity, Level, Probe, Pyramid, Spacing, VoxelData, VoxelFormat,
+    Axial, ChannelInfo, Extent, Intensity, Level, Probe, Pyramid, Spacing, VoxelData, VoxelFormat,
     name_of, tint_of,
 };
 
@@ -274,7 +274,7 @@ impl Image {
             levels.push(deeper);
         }
         let base = levels[0].extent;
-        let spacing = spacing(ome, &files[0], path)?;
+        let (spacing, axial) = spacing(ome, &files[0], path, sizes[2])?;
         let pyramid_levels = levels
             .iter()
             .map(|level| {
@@ -326,6 +326,7 @@ impl Image {
                 sizes[0],
                 interval,
                 placement,
+                axial,
             ),
             levels,
             series: declared,
@@ -579,7 +580,12 @@ fn counts(
     Ok([size_t, size_c, ome.size_z.unwrap_or(1)])
 }
 
-fn spacing(ome: Option<&OmeImage>, volume: &File, path: &Path) -> Result<Spacing, Error> {
+fn spacing(
+    ome: Option<&OmeImage>,
+    volume: &File,
+    path: &Path,
+    depth: u32,
+) -> Result<(Spacing, Axial), Error> {
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
     let x = match physical[0] {
         Some(value) => value,
@@ -589,8 +595,42 @@ fn spacing(ome: Option<&OmeImage>, volume: &File, path: &Path) -> Result<Spacing
         Some(value) => value,
         None => resolution(volume, TAG_Y_RESOLUTION, path)?.unwrap_or(x),
     };
-    let z = physical[2].unwrap_or(x);
-    Ok(Spacing::new(x, y, z))
+    let Some(z) = physical[2] else {
+        if depth <= 1 {
+            return Ok((Spacing::new(x, y, x), Axial::Recorded));
+        }
+        return Ok(match ome.and_then(axial_step) {
+            Some(z) => (Spacing::new(x, y, z), Axial::Inferred),
+            None => (Spacing::new(x, y, x), Axial::Assumed),
+        });
+    };
+    Ok((Spacing::new(x, y, z), Axial::Recorded))
+}
+
+fn axial_step(ome: &OmeImage) -> Option<f32> {
+    let mut planes = ome
+        .planes
+        .iter()
+        .filter_map(|plane| Some((plane.z, plane.position[2]?)))
+        .collect::<Vec<_>>();
+    planes.sort_by_key(|plane| plane.0);
+    planes.dedup_by_key(|plane| plane.0);
+    let mut step: Option<f32> = None;
+    for pair in planes.windows(2) {
+        if pair[1].0 != pair[0].0 + 1 {
+            return None;
+        }
+        let delta = pair[1].1 - pair[0].1;
+        if !delta.is_finite() || delta <= 0.0 {
+            return None;
+        }
+        match step {
+            Some(step) if (step - delta).abs() > step * 1.0e-3 => return None,
+            Some(_) => {}
+            None => step = Some(delta),
+        }
+    }
+    step
 }
 
 fn placement(

@@ -2,8 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 use slotmap::SlotMap;
 
-use crate::element::{CanvasKind, CanvasPaint, Content, ContentKind, Dirty, Element, Key, Layer};
+use crate::element::{
+    CanvasKind, CanvasPaint, Content, ContentKind, Dirty, Element, Interaction, Key, Layer,
+};
 use crate::node::{Node, NodeId};
+
+pub struct Reconciled<A> {
+    pub removed: Vec<NodeId>,
+    pub committed: Vec<A>,
+}
 
 pub struct Tree<A> {
     pub nodes: SlotMap<NodeId, Node<A>>,
@@ -56,11 +63,14 @@ impl<A> Tree<A> {
         &mut self,
         element: Element<'a, A>,
         canvases: &mut slotmap::SecondaryMap<NodeId, CanvasPaint<'a>>,
-    ) -> Vec<NodeId> {
-        let mut removed = Vec::new();
+    ) -> Reconciled<A> {
+        let mut reconciled = Reconciled {
+            removed: Vec::new(),
+            committed: Vec::new(),
+        };
         #[cfg(debug_assertions)]
         self.seen.clear();
-        self.reconcile_list(self.root, vec![element], canvases, &mut removed);
+        self.reconcile_list(self.root, vec![element], canvases, &mut reconciled);
         for (key, id) in self.created.drain(..) {
             if let Some(existing) = self.anchors.insert(key, id)
                 && existing != id
@@ -78,7 +88,7 @@ impl<A> Tree<A> {
                 );
             }
         }
-        removed
+        reconciled
     }
 
     fn reconcile_list<'a>(
@@ -86,7 +96,7 @@ impl<A> Tree<A> {
         parent: NodeId,
         elements: Vec<Element<'a, A>>,
         canvases: &mut slotmap::SecondaryMap<NodeId, CanvasPaint<'a>>,
-        removed: &mut Vec<NodeId>,
+        reconciled: &mut Reconciled<A>,
     ) {
         let old = std::mem::take(&mut self.nodes[parent].children);
         let positional = old.len() == elements.len()
@@ -107,7 +117,7 @@ impl<A> Tree<A> {
                     self.check_key(element.id);
                 }
                 let id = old[index];
-                self.patch_element(id, element, parent, canvases, removed);
+                self.patch_element(id, element, parent, canvases, reconciled);
                 next.push(id);
             }
         } else {
@@ -138,7 +148,7 @@ impl<A> Tree<A> {
                         if old.get(index) != Some(&id) {
                             self.structure = true;
                         }
-                        self.patch_element(id, element, parent, canvases, removed);
+                        self.patch_element(id, element, parent, canvases, reconciled);
                         next.push(id);
                     }
                     None => {
@@ -174,7 +184,7 @@ impl<A> Tree<A> {
                             self.activate(id);
                         }
                         self.dirty_layout(parent);
-                        self.reconcile_list(id, children, canvases, removed);
+                        self.reconcile_list(id, children, canvases, reconciled);
                         next.push(id);
                     }
                 }
@@ -184,7 +194,7 @@ impl<A> Tree<A> {
             }
             for id in old {
                 if !matched.contains(&id) {
-                    self.remove(id, removed);
+                    self.remove(id, reconciled);
                 }
             }
         }
@@ -197,7 +207,7 @@ impl<A> Tree<A> {
         mut element: Element<'a, A>,
         _parent: NodeId,
         canvases: &mut slotmap::SecondaryMap<NodeId, CanvasPaint<'a>>,
-        removed: &mut Vec<NodeId>,
+        reconciled: &mut Reconciled<A>,
     ) {
         let children = std::mem::take(&mut element.children);
         let canvas = element
@@ -241,7 +251,7 @@ impl<A> Tree<A> {
             .parent
             .map_or(self.nodes[id].layer, |parent| self.nodes[parent].layer);
         self.assign_layer(id, layer, parent_layer);
-        self.reconcile_list(id, children, canvases, removed);
+        self.reconcile_list(id, children, canvases, reconciled);
     }
 
     fn assign_layer(&mut self, id: NodeId, requested: Option<Layer>, inherited: Layer) {
@@ -287,10 +297,20 @@ impl<A> Tree<A> {
         }
     }
 
-    fn remove(&mut self, id: NodeId, removed: &mut Vec<NodeId>) {
+    fn remove(&mut self, id: NodeId, reconciled: &mut Reconciled<A>) {
         let children = std::mem::take(&mut self.nodes[id].children);
         for child in children {
-            self.remove(child, removed);
+            self.remove(child, reconciled);
+        }
+        if let Some(edit) = self.nodes[id].runtime.edit.take() {
+            let interaction = std::mem::replace(&mut self.nodes[id].interaction, Interaction::None);
+            if let Interaction::Field {
+                commit: Some(commit),
+                ..
+            } = interaction
+            {
+                reconciled.committed.push(commit(edit.text()));
+            }
         }
         let node = &self.nodes[id];
         if node.painted {
@@ -311,7 +331,7 @@ impl<A> Tree<A> {
         self.fields = true;
         self.popups = true;
         self.hits = true;
-        removed.push(id);
+        reconciled.removed.push(id);
         self.nodes.remove(id);
     }
 

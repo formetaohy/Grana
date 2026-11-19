@@ -82,7 +82,12 @@ pub fn apply(
             Message::BeginRename(set) => workspace.renaming = Some(set),
             Message::EndRename => workspace.renaming = None,
             Message::RenameObject { set, name } => {
-                commands.push(Command::RenameObject { set, name });
+                if view
+                    .scene
+                    .is_some_and(|scene| scene.objects.get(set).is_some())
+                {
+                    commands.push(Command::RenameObject { set, name });
+                }
                 workspace.renaming = None;
             }
             Message::SetRelation {

@@ -32,7 +32,7 @@ impl Stitch {
         StitchView {
             folder: self.folder.display().to_string(),
             tiles: scan.map_or(0, |folder| folder.count()),
-            channels: scan.map_or_else(Vec::new, |folder| folder.channels().to_vec()),
+            channels: scan.map_or_else(Vec::new, |folder| folder.channels(self.series).to_vec()),
             channel: self.channel,
             series: self.series,
             series_count: scan.map_or(0, |folder| folder.series()),
@@ -127,7 +127,7 @@ impl Session {
             >= stitch
                 .scan
                 .as_ref()
-                .map_or(0, |folder| folder.channels().len())
+                .map_or(0, |folder| folder.channels(stitch.series).len())
         {
             return false;
         }
@@ -147,6 +147,11 @@ impl Session {
             return false;
         }
         stitch.series = series;
+        let channels = stitch
+            .scan
+            .as_ref()
+            .map_or(0, |folder| folder.channels(series).len());
+        stitch.channel = stitch.channel.min(channels.saturating_sub(1));
         true
     }
 
@@ -286,7 +291,7 @@ impl Session {
                 stitch.columns = folder.columns();
                 stitch.channel = stitch
                     .channel
-                    .min(folder.channels().len().saturating_sub(1));
+                    .min(folder.channels(stitch.series).len().saturating_sub(1));
                 stitch.series = stitch.series.min(folder.series().saturating_sub(1));
                 stitch.scan = Some(folder);
                 self.message = None;

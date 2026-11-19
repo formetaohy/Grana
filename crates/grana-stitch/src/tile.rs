@@ -13,7 +13,7 @@ type Entry = (PathBuf, Option<SystemTime>, Arc<Folder>);
 
 pub struct Folder {
     tiles: Vec<Source>,
-    channels: Vec<String>,
+    channels: Vec<Vec<String>>,
     series: usize,
     rows: usize,
     columns: usize,
@@ -24,18 +24,19 @@ impl Folder {
         &self.tiles
     }
 
-    pub fn channels(&self) -> &[String] {
-        &self.channels
+    pub fn channels(&self, series: usize) -> &[String] {
+        self.channels.get(series).map_or(&[], Vec::as_slice)
     }
 
-    pub fn channel(&self, name: &str) -> Result<usize, Error> {
-        self.channels
+    pub fn channel(&self, series: usize, name: &str) -> Result<usize, Error> {
+        let channels = self.channels(series);
+        channels
             .iter()
             .position(|channel| channel == name)
             .ok_or_else(|| {
                 Error::new(format!(
-                    "the tiles name no channel {name}; they hold {}",
-                    self.channels.join(", ")
+                    "the tiles of series {series} name no channel {name}; they hold {}",
+                    channels.join(", ")
                 ))
             })
     }
@@ -84,15 +85,10 @@ pub fn unfold(path: &Path) -> Result<Folder, Error> {
     let first = files
         .first()
         .ok_or_else(|| Error::new(format!("{} holds no image tile", path.display())))?;
-    let image = Image::open(&Source::file(first.clone()))
-        .map_err(|error| Error::new(format!("failed to open {}: {error}", first.display())))?;
-    let channels = image
-        .pyramid()
-        .channels()
-        .iter()
-        .map(|channel| channel.name().to_string())
-        .collect::<Vec<_>>();
     let series = series_of(&files)?;
+    let channels = (0..series)
+        .map(|index| channels_of(first, index))
+        .collect::<Result<Vec<_>, Error>>()?;
     let (rows, columns) = default_grid(files.len());
     Ok(Folder {
         tiles: files.into_iter().map(Source::file).collect(),
@@ -101,6 +97,17 @@ pub fn unfold(path: &Path) -> Result<Folder, Error> {
         rows,
         columns,
     })
+}
+
+fn channels_of(path: &Path, series: usize) -> Result<Vec<String>, Error> {
+    let image = Image::open(&Source::file_series(path.to_path_buf(), series))
+        .map_err(|error| Error::new(format!("failed to open {}: {error}", path.display())))?;
+    Ok(image
+        .pyramid()
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect())
 }
 
 pub fn default_grid(count: usize) -> (usize, usize) {

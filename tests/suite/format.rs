@@ -11,7 +11,7 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
-    Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
+    Axial, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
 };
 use grana_zarr::write_image;
 
@@ -925,6 +925,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
     );
     let overview = grana_tiff::Image::open(&path, 0).expect("the overview opens");
     assert_eq!(overview.name(), "Overview");
+    assert_eq!(overview.pyramid().axial(), Axial::Recorded);
     let VoxelData::U8(values) = overview
         .read_region(0, 0, 0, 0..4, 0..4, 0..1)
         .expect("the overview reads")
@@ -935,6 +936,11 @@ fn reads_ome_tiff_metadata_and_voxels() {
     let detail = grana_tiff::Image::open(&path, 1).expect("the detail opens");
     assert_eq!(detail.name(), "Detail");
     assert_eq!(detail.pyramid().level(0).extent(), Extent::new(2, 2, 2));
+    assert_eq!(
+        detail.pyramid().level(0).spacing(),
+        Spacing::new(0.5, 0.5, 1.5)
+    );
+    assert_eq!(detail.pyramid().axial(), Axial::Inferred);
     let VoxelData::U8(values) = detail
         .read_region(0, 0, 0, 0..2, 0..2, 0..2)
         .expect("the detail reads")
@@ -946,72 +952,62 @@ fn reads_ome_tiff_metadata_and_voxels() {
         grana_tiff::Image::open(&path, 2).is_err(),
         "a series outside the metadata is refused"
     );
+    let unplaced = temp.path().join("unplaced.ome.tif");
+    support::ome_tiff(&unplaced, UNPLACED, &[(2, 2, &[3u8; 4]), (2, 2, &[5u8; 4])]);
+    let stack = grana_tiff::Image::open(&unplaced, 0).expect("the unplaced stack opens");
+    assert_eq!(stack.pyramid().level(0).extent(), Extent::new(2, 2, 2));
+    assert_eq!(
+        stack.pyramid().level(0).spacing(),
+        Spacing::new(0.5, 0.5, 0.5)
+    );
+    assert_eq!(stack.pyramid().axial(), Axial::Assumed);
     reads_a_chunky_series(&temp.path().join("chunky.ome.tif"));
 }
 
+const TWO_SERIES: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+    " <Image Name=\"Overview\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"4\" SizeZ=\"1\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\">\n",
+    "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"1\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    " <Image Name=\"Detail\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\">\n",
+    "   <Channel ID=\"Channel:0:1\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"1\" PlaneCount=\"2\"/>\n",
+    "   <Plane TheZ=\"0\" TheC=\"0\" TheT=\"0\" PositionZ=\"12.5\" PositionZUnit=\"µm\"/>\n",
+    "   <Plane TheZ=\"1\" TheC=\"0\" TheT=\"0\" PositionZ=\"14\" PositionZUnit=\"µm\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    "</OME>\n"
+);
+
+const UNPLACED: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+    " <Image Name=\"Stack\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\">\n",
+    "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"2\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    "</OME>\n"
+);
+
+const OVERVIEW_BYTES: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
 fn write_two_series(path: &std::path::Path) {
-    let xml = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-        "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
-        " <Image Name=\"Overview\">\n",
-        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"4\" SizeZ=\"1\" SizeC=\"1\" SizeT=\"1\">\n",
-        "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
-        "   <TiffData IFD=\"0\" PlaneCount=\"1\"/>\n",
-        "  </Pixels>\n",
-        " </Image>\n",
-        " <Image Name=\"Detail\">\n",
-        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\">\n",
-        "   <Channel ID=\"Channel:0:1\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
-        "   <TiffData IFD=\"1\" PlaneCount=\"2\"/>\n",
-        "  </Pixels>\n",
-        " </Image>\n",
-        "</OME>\n"
+    support::ome_tiff(
+        path,
+        TWO_SERIES,
+        &[
+            (4, 4, &OVERVIEW_BYTES),
+            (2, 2, &[7u8; 4]),
+            (2, 2, &[9u8; 4]),
+        ],
     );
-    let entries = 12u32;
-    let record = 2 + entries * 12 + 4;
-    let header = 8u32;
-    let xml_offset = header + 3 * record;
-    let xml_bytes = xml.as_bytes().to_vec();
-    let strips = xml_offset + xml_bytes.len() as u32;
-    let pages = [(4u32, 4u32, 16u32), (2, 2, 4), (2, 2, 4)];
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"II");
-    bytes.extend_from_slice(&42u16.to_le_bytes());
-    bytes.extend_from_slice(&header.to_le_bytes());
-    let mut strip = strips;
-    for (index, (width, height, length)) in pages.into_iter().enumerate() {
-        let next = if index + 1 == pages.len() {
-            0
-        } else {
-            header + (index as u32 + 1) * record
-        };
-        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
-        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
-            bytes.extend_from_slice(&tag.to_le_bytes());
-            bytes.extend_from_slice(&kind.to_le_bytes());
-            bytes.extend_from_slice(&count.to_le_bytes());
-            bytes.extend_from_slice(&value.to_le_bytes());
-        };
-        entry(256, 4, 1, width);
-        entry(257, 4, 1, height);
-        entry(258, 3, 1, 8);
-        entry(259, 3, 1, 1);
-        entry(262, 3, 1, 1);
-        entry(270, 2, xml_bytes.len() as u32, xml_offset);
-        entry(273, 4, 1, strip);
-        entry(277, 3, 1, 1);
-        entry(278, 4, 1, height);
-        entry(279, 4, 1, length);
-        entry(284, 3, 1, 1);
-        entry(339, 3, 1, 1);
-        bytes.extend_from_slice(&next.to_le_bytes());
-        strip += length;
-    }
-    bytes.extend_from_slice(&xml_bytes);
-    bytes.extend(1..=16u8);
-    bytes.extend([7u8; 4]);
-    bytes.extend([9u8; 4]);
-    std::fs::write(path, &bytes).expect("the series tiff writes");
 }
 
 #[test]

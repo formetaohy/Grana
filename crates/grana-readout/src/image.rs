@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat, name_of,
-    tint_of,
+    Axial, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat,
+    name_of, tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
 use openreadout_core::{ImageInfo, PixelType, Plane, PlaneIndex};
@@ -57,7 +57,8 @@ impl Image {
             Error::unsupported(path, "the image stores a sample type grana cannot read")
         })?;
         let views = views(image, format);
-        let levels = levels(path, image)?;
+        let (unit, axial) = spacing(image);
+        let levels = levels(path, image, unit)?;
         let frames = scene.frames();
         let interval = interval(image);
         let mut dataset = document.dataset;
@@ -69,7 +70,7 @@ impl Image {
             .map(|(index, view)| channel(image, *view, index, probes[index]))
             .collect();
         let stored = levels.len();
-        let pyramid = Pyramid::new(levels, stored, channels, frames, interval);
+        let pyramid = Pyramid::new(levels, stored, channels, frames, interval, axial);
         Ok(Self {
             path: path.to_path_buf(),
             family: document.family,
@@ -264,9 +265,8 @@ impl Image {
     }
 }
 
-fn levels(path: &Path, image: &ImageInfo) -> Result<Vec<Level>, Error> {
+fn levels(path: &Path, image: &ImageInfo, unit: Spacing) -> Result<Vec<Level>, Error> {
     let base = Extent::new(image.size_x, image.size_y, image.size_z);
-    let unit = spacing(image);
     region::levels_of(image)
         .iter()
         .map(|level| {
@@ -349,13 +349,18 @@ fn format_of(pixel: PixelType) -> Option<VoxelFormat> {
     }
 }
 
-fn spacing(image: &ImageInfo) -> Spacing {
+fn spacing(image: &ImageInfo) -> (Spacing, Axial) {
     let x = positive(image.physical_size.x).unwrap_or(1.0);
-    Spacing::new(
-        x,
-        positive(image.physical_size.y).unwrap_or(x),
-        positive(image.physical_size.z).unwrap_or(x),
-    )
+    let y = positive(image.physical_size.y).unwrap_or(x);
+    let Some(z) = positive(image.physical_size.z) else {
+        let axial = if image.size_z > 1 {
+            Axial::Assumed
+        } else {
+            Axial::Recorded
+        };
+        return (Spacing::new(x, y, x), axial);
+    };
+    (Spacing::new(x, y, z), Axial::Recorded)
 }
 
 fn positive(value: Option<f64>) -> Option<f32> {

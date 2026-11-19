@@ -1,4 +1,4 @@
-use crate::{ChannelInfo, Level, Region};
+use crate::{Axial, ChannelInfo, Level, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pyramid {
@@ -8,6 +8,7 @@ pub struct Pyramid {
     frames: u32,
     frame_interval: f32,
     placement: [f32; 3],
+    axial: Axial,
 }
 
 impl Pyramid {
@@ -17,8 +18,17 @@ impl Pyramid {
         channels: Vec<ChannelInfo>,
         frames: u32,
         frame_interval: f32,
+        axial: Axial,
     ) -> Self {
-        Self::placed(levels, stored, channels, frames, frame_interval, [0.0; 3])
+        Self::placed(
+            levels,
+            stored,
+            channels,
+            frames,
+            frame_interval,
+            [0.0; 3],
+            axial,
+        )
     }
 
     pub fn placed(
@@ -28,6 +38,7 @@ impl Pyramid {
         frames: u32,
         frame_interval: f32,
         placement: [f32; 3],
+        axial: Axial,
     ) -> Self {
         assert!(!levels.is_empty(), "a pyramid needs at least one level");
         assert!(
@@ -70,6 +81,7 @@ impl Pyramid {
             frames,
             frame_interval,
             placement,
+            axial,
         }
     }
 
@@ -93,6 +105,10 @@ impl Pyramid {
         self.placement
     }
 
+    pub fn axial(&self) -> Axial {
+        self.axial
+    }
+
     pub fn channels(&self) -> &[ChannelInfo] {
         &self.channels
     }
@@ -110,6 +126,7 @@ impl Pyramid {
             frames: self.frames,
             frame_interval: self.frame_interval,
             placement: self.placement,
+            axial: self.axial,
         }
     }
 

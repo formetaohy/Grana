@@ -305,13 +305,12 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
         let _ = events.send(Event::Done { cancelled: true });
         return;
     }
-    let evidence = match plan
-        .datasets
-        .iter()
-        .map(|dataset| evidence(dataset.image_path()))
-        .collect::<Result<Vec<_>, String>>()
-    {
-        Ok(evidence) => evidence,
+    let evidence = match evidence_of(&plan, &cancel) {
+        Ok(Some(evidence)) => evidence,
+        Ok(None) => {
+            let _ = events.send(Event::Done { cancelled: true });
+            return;
+        }
         Err(detail) => {
             let _ = events.send(Event::Failed(detail));
             let _ = events.send(Event::Done { cancelled: false });
@@ -514,7 +513,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Cancel, gate: Arc<Gate>) {
     if let Err(detail) = sheet::significance(&plan, &report) {
         let _ = events.send(Event::Failed(detail));
     }
-    if let Err(detail) = ro_crate::write(&plan, &rows) {
+    if let Err(detail) = ro_crate::write(&plan, &rows, &evidence) {
         let _ = events.send(Event::Failed(detail));
     }
     let _ = events.send(Event::Comparison(report));
@@ -687,6 +686,65 @@ fn row_line(dataset: &DatasetEntry, row: &Row) -> String {
         &row.objects.to_string(),
         &row.detail,
     ])
+}
+
+fn evidence_of(plan: &Plan, cancel: &Cancel) -> Result<Option<Vec<Evidence>>, String> {
+    let collected = Mutex::new((0..plan.datasets.len()).map(|_| None).collect::<Vec<_>>());
+    let failure: Mutex<Option<String>> = Mutex::new(None);
+    let next = AtomicUsize::new(0);
+    let threads = plan.jobs.clamp(1, MAX_JOBS).min(plan.datasets.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            let collected = &collected;
+            let failure = &failure;
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    if cancel.cancelled()
+                        || failure
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .is_some()
+                    {
+                        return;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= plan.datasets.len() {
+                        return;
+                    }
+                    match evidence(plan.datasets[index].image_path(), cancel) {
+                        Ok(Some(found)) => {
+                            collected.lock().unwrap_or_else(|error| error.into_inner())[index] =
+                                Some(found);
+                        }
+                        Ok(None) => return,
+                        Err(detail) => {
+                            let mut failure =
+                                failure.lock().unwrap_or_else(|error| error.into_inner());
+                            if failure.is_none() {
+                                *failure = Some(detail);
+                            }
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    if let Some(detail) = failure
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+    {
+        return Err(detail);
+    }
+    if cancel.cancelled() {
+        return Ok(None);
+    }
+    Ok(collected
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+        .into_iter()
+        .collect())
 }
 
 fn lock(rows: &Mutex<Vec<Option<Row>>>) -> MutexGuard<'_, Vec<Option<Row>>> {

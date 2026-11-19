@@ -4,6 +4,7 @@ use grana_ui::{
     Align, Axis, BuildContext, Corners, Edges, Element, Icon, Key, Layout as UiLayout, Length,
     Level, Motion, Rect, Role, State, TextStyle,
 };
+use grana_volume::Axial;
 
 use crate::message::Message;
 use crate::stage::Stage;
@@ -412,7 +413,21 @@ fn sidebar<'a>(
         )
     };
     let voxel = dataset.voxel_size();
-    let spacing = format!("{:.2}×{:.2} µm", voxel.x, voxel.z);
+    let spacing = match dataset.pyramid().axial() {
+        Axial::Recorded => format!("{:.2}×{:.2} µm", voxel.x, voxel.z),
+        Axial::Inferred => format!(
+            "{:.2}×{:.2} µm ({})",
+            voxel.x,
+            voxel.z,
+            grana_i18n::panel::depth_inferred(language)
+        ),
+        Axial::Assumed => format!(
+            "{:.2}×{:.2} µm ({})",
+            voxel.x,
+            voxel.z,
+            grana_i18n::panel::depth_assumed(language)
+        ),
+    };
     let mono = theme.font(Level::Monospace);
     let summary = grana_ui::canvas(Length::Fill, 26.0)
         .view((dims.clone(), spacing.clone()), move |_, painter, info| {

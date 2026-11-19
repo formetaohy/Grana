@@ -21,7 +21,7 @@ use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drifts, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_store::SpillStore;
 use grana_volume::{
-    Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
+    Axial, Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
     VolumeSeries, VoxelData, VoxelFormat,
 };
 use grana_zarr::write_image;
@@ -663,6 +663,7 @@ fn pages_localization_frames_beyond_the_resident_budget() {
         )],
         FRAMES,
         1.0,
+        Axial::Recorded,
     );
     let mut scene = Scene::new(Dataset::synthetic("paged", pyramid));
     let set = scene.add_object(ObjectKind::Spots, 0);
@@ -966,7 +967,7 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
             )
         })
         .collect();
-    let pyramid = Pyramid::new(vec![level], 1, channels, 1, 1.0);
+    let pyramid = Pyramid::new(vec![level], 1, channels, 1, 1.0, Axial::Recorded);
     let settings = ColocSettings::new(64, 3);
     let sampling = coloc_sampling(
         &pyramid,

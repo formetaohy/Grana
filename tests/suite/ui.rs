@@ -105,6 +105,25 @@ fn submits_a_field_on_enter_and_commits_it_out_of_view() {
         ["commit"],
         "a field that leaves the viewport commits its text"
     );
+    let element = removable(&ui, true);
+    ui.present(element);
+    let element = removable(&ui, true);
+    ui.present(element);
+    let started = ui.update(SIZE, 1.0, 0.6);
+    assert!(
+        started.is_empty(),
+        "a field that scrolls into view starts editing quietly: {started:?}"
+    );
+    let element = removable(&ui, true);
+    ui.present(element);
+    let element = removable(&ui, false);
+    ui.present(element);
+    let committed = ui.update(SIZE, 1.0, 0.7);
+    assert_eq!(
+        committed,
+        ["removed"],
+        "a field whose node disappears commits its text"
+    );
 }
 
 fn screen() -> Element<'static, &'static str> {
@@ -132,6 +151,21 @@ fn panel(name: &'static str) -> Element<'static, &'static str> {
     })
     .named(name)
     .press(name)
+}
+
+fn removable(ui: &Ui<&'static str>, present: bool) -> Element<'static, &'static str> {
+    let theme = ui.theme();
+    let style = TextStyle::new(theme.font(grana_ui::Level::Body), theme.palette.on_surface);
+    let mut children = Vec::new();
+    if present {
+        children.push(
+            grana_ui::widget::text_field("typed", style, 160.0, false)
+                .named("edit")
+                .editing(true)
+                .on_commit(|_| "removed"),
+        );
+    }
+    Element::column().gap(8.0).children(children)
 }
 
 fn scrolled(ui: &Ui<&'static str>, out: bool) -> Element<'static, &'static str> {

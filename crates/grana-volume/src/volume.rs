@@ -1,6 +1,6 @@
 use crate::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
-    VoxelData, VoxelFormat, brick::pad_brick,
+    Axial, BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid,
+    Spacing, VoxelData, VoxelFormat, brick::pad_brick,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,7 +111,7 @@ impl Volume {
                 )
             })
             .collect();
-        Pyramid::new(vec![level], 1, channels, 1, 1.0)
+        Pyramid::new(vec![level], 1, channels, 1, 1.0, Axial::Recorded)
     }
 
     pub fn brick(&self, grid: &BrickGrid, coord: BrickCoord) -> BrickData {

@@ -20,4 +20,6 @@ labels! {
     show_plate => "Show Plate" / "显示孔板";
     show_batch => "Show Batch" / "显示批处理";
     show_animation => "Show Animation" / "显示动画";
+    depth_inferred => "inferred" / "推算";
+    depth_assumed => "assumed" / "假定";
 }

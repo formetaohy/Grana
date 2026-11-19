@@ -76,10 +76,11 @@ impl<A: Clone> Ui<A> {
             if editing && !active {
                 self.begin_edit(id, false);
             } else if !editing && previous && active {
-                self.tree.nodes[id].runtime.edit = None;
-                if self.edit == Some(id) {
-                    self.edit = None;
-                }
+                assert!(
+                    self.edit == Some(id),
+                    "an editing field owns the edit session"
+                );
+                self.finish_edit(Finish::Write);
             }
         }
     }

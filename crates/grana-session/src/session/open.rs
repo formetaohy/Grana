@@ -625,6 +625,7 @@ impl Session {
                     let format = opened.format;
                     let restored = self.pending.is_some();
                     let imported = !restored && !opened.imports.is_empty();
+                    let axial = opened.pyramid.axial();
                     let file = current
                         .as_ref()
                         .map(Source::label)
@@ -683,6 +684,9 @@ impl Session {
                     }
                     if let Some(detail) = opened.imports_error {
                         self.message = Some(Message::error(detail));
+                    }
+                    if self.message.is_none() {
+                        self.message = axial_notice(axial);
                     }
                     if imported {
                         self.baseline = self.document_hash();
@@ -773,6 +777,18 @@ impl Session {
 fn frame_duration(scene: &Scene) -> f32 {
     (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
         .clamp(1.0, Timeline::MAX_DURATION)
+}
+
+fn axial_notice(axial: Axial) -> Option<Message> {
+    match axial {
+        Axial::Recorded => None,
+        Axial::Inferred => Some(Message::info(
+            "the file records no depth spacing, so it was inferred from the plane positions",
+        )),
+        Axial::Assumed => Some(Message::info(
+            "the file records no depth spacing, so the lateral spacing stands in for it",
+        )),
+    }
 }
 
 fn endpoint(url: &str) -> &str {

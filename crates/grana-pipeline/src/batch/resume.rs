@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use grana_exec::Cancel;
 use grana_report::Quality;
 use grana_volume::Fingerprint;
 
@@ -60,24 +61,32 @@ pub(super) struct Evidence {
     pub(super) modified: Option<u64>,
 }
 
-pub(super) fn evidence(dataset: &Path) -> Result<Evidence, String> {
+pub(super) fn evidence(dataset: &Path, cancel: &Cancel) -> Result<Option<Evidence>, String> {
     match std::fs::metadata(dataset) {
         Err(error) => Err(format!(
             "the batch cannot measure {}: {error}",
             dataset.display()
         )),
-        Ok(metadata) if metadata.is_dir() => directory_evidence(dataset),
-        Ok(metadata) => Ok(Evidence {
-            content: file_content(dataset)?,
-            bytes: metadata.len(),
-            modified: modified(&metadata),
-        }),
+        Ok(metadata) if metadata.is_dir() => directory_evidence(dataset, cancel),
+        Ok(metadata) => {
+            let mut hasher = Sha256::new();
+            if !digest_file(&mut hasher, dataset, cancel)? {
+                return Ok(None);
+            }
+            Ok(Some(Evidence {
+                content: Fingerprint::new(hasher.finalize().into()),
+                bytes: metadata.len(),
+                modified: modified(&metadata),
+            }))
+        }
     }
 }
 
-fn directory_evidence(root: &Path) -> Result<Evidence, String> {
+fn directory_evidence(root: &Path, cancel: &Cancel) -> Result<Option<Evidence>, String> {
     let mut entries = Vec::new();
-    collect(root, root, &mut entries)?;
+    if !collect(root, root, &mut entries, cancel)? {
+        return Ok(None);
+    }
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     let mut hasher = Sha256::new();
     hasher.update((entries.len() as u64).to_le_bytes());
@@ -87,15 +96,17 @@ fn directory_evidence(root: &Path) -> Result<Evidence, String> {
         hasher.update(entry.size.to_le_bytes());
         hasher.update((entry.name.len() as u64).to_le_bytes());
         hasher.update(entry.name.as_bytes());
-        digest_file(&mut hasher, &root.join(&entry.name))?;
+        if !digest_file(&mut hasher, &root.join(&entry.name), cancel)? {
+            return Ok(None);
+        }
         bytes += entry.size;
         modified_at = modified_at.max(entry.modified);
     }
-    Ok(Evidence {
+    Ok(Some(Evidence {
         content: Fingerprint::new(hasher.finalize().into()),
         bytes,
         modified: modified_at,
-    })
+    }))
 }
 
 struct Entry {
@@ -104,7 +115,15 @@ struct Entry {
     modified: Option<u64>,
 }
 
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) -> Result<(), String> {
+fn collect(
+    root: &Path,
+    folder: &Path,
+    entries: &mut Vec<Entry>,
+    cancel: &Cancel,
+) -> Result<bool, String> {
+    if cancel.cancelled() {
+        return Ok(false);
+    }
     let listing = std::fs::read_dir(folder)
         .map_err(|error| format!("the batch cannot list {}: {error}", folder.display()))?;
     for entry in listing {
@@ -119,7 +138,9 @@ fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) -> Result<(), S
             .metadata()
             .map_err(|error| format!("the batch cannot measure {}: {error}", path.display()))?;
         if metadata.is_dir() {
-            collect(root, &path, entries)?;
+            if !collect(root, &path, entries, cancel)? {
+                return Ok(false);
+            }
             continue;
         }
         let name = path
@@ -136,7 +157,7 @@ fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) -> Result<(), S
             name,
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 fn derived(name: &str) -> bool {
@@ -152,13 +173,7 @@ fn modified(metadata: &std::fs::Metadata) -> Option<u64> {
         .map(|elapsed| elapsed.as_secs())
 }
 
-fn file_content(path: &Path) -> Result<Fingerprint, String> {
-    let mut hasher = Sha256::new();
-    digest_file(&mut hasher, path)?;
-    Ok(Fingerprint::new(hasher.finalize().into()))
-}
-
-fn digest_file(hasher: &mut Sha256, path: &Path) -> Result<(), String> {
+fn digest_file(hasher: &mut Sha256, path: &Path, cancel: &Cancel) -> Result<bool, String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|error| {
         format!(
@@ -168,6 +183,9 @@ fn digest_file(hasher: &mut Sha256, path: &Path) -> Result<(), String> {
     })?;
     let mut buffer = vec![0u8; CHUNK];
     loop {
+        if cancel.cancelled() {
+            return Ok(false);
+        }
         let count = file.read(&mut buffer).map_err(|error| {
             format!(
                 "the batch cannot read {} to fingerprint it: {error}",
@@ -175,7 +193,7 @@ fn digest_file(hasher: &mut Sha256, path: &Path) -> Result<(), String> {
             )
         })?;
         if count == 0 {
-            return Ok(());
+            return Ok(true);
         }
         hasher.update(&buffer[..count]);
     }

@@ -51,16 +51,29 @@ pub fn command(arguments: &[String]) -> Option<ExitCode> {
         );
         return Some(ExitCode::FAILURE);
     }
-    if channel >= folder.channels().len() {
+    if series >= folder.series() {
+        grana_log::error!(
+            target: "grana::stitch",
+            series,
+            series_count = folder.series(),
+            "the series is not present in the tiles"
+        );
+        eprintln!(
+            "the tiles hold {} series and series {series} was requested",
+            folder.series()
+        );
+        return Some(ExitCode::FAILURE);
+    }
+    if channel >= folder.channels(series).len() {
         grana_log::error!(
             target: "grana::stitch",
             channel,
-            channels = folder.channels().len(),
+            channels = folder.channels(series).len(),
             "the channel is not present in the tiles"
         );
         eprintln!(
-            "the tiles name {} channels and channel {channel} was requested",
-            folder.channels().len()
+            "the tiles name {} channels in series {series} and channel {channel} was requested",
+            folder.channels(series).len()
         );
         return Some(ExitCode::FAILURE);
     }

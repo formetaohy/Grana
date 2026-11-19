@@ -422,4 +422,5 @@ fn object<'a>(
         }
     }
     view::group_card(ctx, position, sets, expanded, 8.0, children)
+        .key(Key::new("object").with(id.raw()).then("card"))
 }

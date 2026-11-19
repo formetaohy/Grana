@@ -460,6 +460,16 @@ fn facts(
             format!("{} of {}", series.0 + 1, series.1),
         ));
     }
+    if dataset.pyramid().axial() != Axial::Recorded {
+        facts.push((
+            "depth spacing".to_string(),
+            match dataset.pyramid().axial() {
+                Axial::Inferred => "inferred from the plane positions".to_string(),
+                Axial::Assumed => "assumed to equal the lateral spacing".to_string(),
+                Axial::Recorded => unreachable!(),
+            },
+        ));
+    }
     facts.push((
         "source fingerprint".to_string(),
         format!(

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use grana_volume::{
-    ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
+    Axial, ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
 };
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
@@ -168,6 +168,7 @@ impl Image {
                 frames,
                 interval,
                 placement,
+                Axial::Recorded,
             ),
             axes: metadata.axes,
             datasets: metadata.datasets,

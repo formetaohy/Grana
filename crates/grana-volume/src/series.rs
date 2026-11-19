@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use crate::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Intensity, Level, Pyramid, Volume, VoxelData,
+    Axial, BrickCoord, BrickData, BrickGrid, ChannelInfo, Intensity, Level, Pyramid, Volume,
+    VoxelData,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +139,7 @@ impl VolumeSeries {
             channels,
             frames.len() as u32,
             frame_interval,
+            Axial::Recorded,
         )
     }
 }
