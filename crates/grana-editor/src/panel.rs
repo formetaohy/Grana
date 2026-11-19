@@ -226,8 +226,7 @@ pub fn build(
     };
     let elements = {
         let mut ctx = ui.build();
-        let project = header::project(&state, ctx.language());
-        let layout = Layout::new(&mut ctx, workspace, frames, full, &project);
+        let layout = Layout::new(&mut ctx, workspace, frames, full);
         view_elements(&mut ctx, &layout, &state, full)
     };
     ui.present(grana_ui::place(full, elements));
@@ -272,7 +271,6 @@ pub struct Layout {
     pub sidebar: Rect,
     pub viewport: Rect,
     pub safe: Rect,
-    pub project_lead: f32,
     pub transport: Option<Rect>,
     pub dock: Option<Rect>,
     pub sidebar_visible: bool,
@@ -284,14 +282,12 @@ impl Layout {
         workspace: &Workspace,
         frames: usize,
         full: Rect,
-        project: &header::Project,
     ) -> Self {
         let chrome = workspace.chrome;
         let top = full.min.y + MARGIN;
-        let navigation = header::navigation_metrics(ctx, project, chrome, full);
         let toolbar_left = Rect::from_min_size(
             Vec2::new(full.min.x + MARGIN + chrome.leading, top),
-            Vec2::new(navigation.extent, TOOLBAR_HEIGHT),
+            Vec2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT),
         );
         let controls = if chrome.controls {
             crate::chrome::CONTROLS_WIDTH + GAP
@@ -365,7 +361,6 @@ impl Layout {
             sidebar,
             viewport: full,
             safe: safe_rect(workspace, frames, full),
-            project_lead: navigation.lead,
             transport,
             dock,
             sidebar_visible,
