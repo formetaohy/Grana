@@ -421,9 +421,10 @@ impl Session {
                         field.project = Some(path.clone());
                         field.baseline = hash;
                         field.unsaved = false;
+                        let name = field.name.clone();
+                        self.fields.prune();
                         self.message = Some(Message::info(format!(
-                            "saved the analysis of {} to {}",
-                            field.name,
+                            "saved the analysis of {name} to {}",
                             path.display()
                         )));
                     }
@@ -571,10 +572,12 @@ impl Session {
                     restored = Restored::Field;
                 }
             }
-            Recovered::Changed => {
-                self.message = Some(Message::info(
-                    "the well changed since it was last open, so its analysis was reset",
-                ));
+            Recovered::Changed { kept } => {
+                self.message = Some(Message::info(if kept {
+                    "the well changed since it was last open, so its unsaved analysis was set aside to save or discard"
+                } else {
+                    "the well changed since it was last open, so its analysis was reset"
+                }));
             }
             Recovered::Absent => {}
         }

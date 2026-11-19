@@ -841,6 +841,49 @@ fn navigates_a_plate_field_by_field() {
         },
         "the project records the well the field belongs to"
     );
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    assert!(session.dirty(), "the reopened well holds unsaved work");
+    session.execute(Command::SelectField(0));
+    open_field(&mut session, Extent::new(8, 6, 4));
+    rewrite_field(&root.join("A/2/1"), Extent::new(12, 10, 6));
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    let stale = session.held();
+    assert_eq!(
+        stale.len(),
+        1,
+        "the changed well sets its unsaved analysis aside"
+    );
+    assert_eq!(stale[0].series, 1, "the kept work belongs to well A2");
+    assert!(stale[0].savable, "a plate field records into a project");
+    let kept = temp.path().join("A2-stale.grana");
+    assert!(session.save_field(1, kept.clone()));
+    while session.transferring() {
+        assert!(
+            Instant::now() < deadline,
+            "the set aside analysis never finished"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        session.held().is_empty(),
+        "saving the set aside analysis clears it"
+    );
+    let stale = Project::read(
+        &kept,
+        SpillStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the set aside analysis reads back");
+    assert_eq!(
+        stale.scene.sets.len(),
+        2,
+        "the set aside project holds every set of well A2"
+    );
     assert!(
         matches!(session.begin_load(root), grana_session::Transfer::Started),
         "the replacement starts once the cache records every field"
@@ -1576,4 +1619,38 @@ fn open_path(session: &mut Session, path: std::path::PathBuf) {
         matches!(session.open_path(path), grana_session::Transfer::Started),
         "the session starts opening the path"
     );
+}
+
+fn rewrite_field(path: &std::path::Path, extent: Extent) {
+    use grana_archive::{Channel, Fill, ImageSpec, Sample};
+    use grana_volume::Level;
+
+    std::fs::remove_dir_all(path).expect("the field clears");
+    let channels = [Channel {
+        name: "DAPI",
+        tint: [0.0, 0.0, 1.0],
+        range: grana_volume::Intensity::new(0.0, 255.0),
+    }];
+    let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
+    let fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
+        data.fill(80.0);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_image(
+        path,
+        &mut ImageSpec {
+            name: "field",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: Some(1.0),
+            sample: Sample::Float,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the field rewrites");
 }

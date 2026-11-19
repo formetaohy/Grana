@@ -48,7 +48,7 @@ fn a_press_keeps_the_control_it_went_down_on() {
 }
 
 #[test]
-fn a_search_field_submits_only_on_enter() {
+fn submits_a_field_on_enter_and_commits_it_out_of_view() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -88,6 +88,23 @@ fn a_search_field_submits_only_on_enter() {
     });
     let submitted = ui.update(SIZE, 1.0, 0.3);
     assert_eq!(submitted, ["submit"], "enter submits the search field");
+    let element = scrolled(&ui, false);
+    ui.present(element);
+    let started = ui.update(SIZE, 1.0, 0.4);
+    assert!(
+        started.is_empty(),
+        "a field that scrolls into view starts editing quietly: {started:?}"
+    );
+    let element = scrolled(&ui, true);
+    ui.present(element);
+    let element = scrolled(&ui, true);
+    ui.present(element);
+    let committed = ui.update(SIZE, 1.0, 0.5);
+    assert_eq!(
+        committed,
+        ["commit"],
+        "a field that leaves the viewport commits its text"
+    );
 }
 
 fn screen() -> Element<'static, &'static str> {
@@ -115,4 +132,23 @@ fn panel(name: &'static str) -> Element<'static, &'static str> {
     })
     .named(name)
     .press(name)
+}
+
+fn scrolled(ui: &Ui<&'static str>, out: bool) -> Element<'static, &'static str> {
+    let theme = ui.theme();
+    let style = TextStyle::new(theme.font(grana_ui::Level::Body), theme.palette.on_surface);
+    let field = grana_ui::widget::text_field("typed", style, 160.0, false)
+        .named("field")
+        .editing(true)
+        .on_commit(|_| "commit");
+    let filler = Element::new(Layout {
+        size: Size::new(Length::Fill, Length::Fixed(if out { 200.0 } else { 0.0 })),
+        ..Layout::row()
+    });
+    Element::column()
+        .width(Length::Fixed(320.0))
+        .height(Length::Fixed(60.0))
+        .clipped()
+        .scroll(grana_ui::Axis::Column, Length::Fixed(60.0), Some(260.0))
+        .children([filler, field])
 }

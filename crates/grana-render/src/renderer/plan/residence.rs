@@ -713,10 +713,34 @@ fn view_key(meta: &ViewKey) -> u64 {
     meta.eye.map(f32::to_bits).hash(&mut hasher);
     meta.focus.map(f32::to_bits).hash(&mut hasher);
     meta.field_of_view.to_bits().hash(&mut hasher);
+    projection(&meta.projection).hash(&mut hasher);
+    meta.slice.map(slice_key).hash(&mut hasher);
     meta.size.hash(&mut hasher);
     meta.levels.ladder.hash(&mut hasher);
     meta.levels.capacity.hash(&mut hasher);
     hasher.finish()
+}
+
+fn projection(projection: &grana_display::CameraProjection) -> u8 {
+    match projection {
+        grana_display::CameraProjection::Perspective => 0,
+        grana_display::CameraProjection::Orthographic => 1,
+    }
+}
+
+fn slice_key(slice: grana_display::Slice) -> (usize, [u32; 6], u32) {
+    (
+        slice.axis(),
+        [
+            slice.right().x.to_bits(),
+            slice.right().y.to_bits(),
+            slice.right().z.to_bits(),
+            slice.up().x.to_bits(),
+            slice.up().y.to_bits(),
+            slice.up().z.to_bits(),
+        ],
+        slice.step().to_bits(),
+    )
 }
 
 struct Prefetch<'a> {

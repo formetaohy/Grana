@@ -158,6 +158,7 @@ pub enum Phase {
     Down,
     Move,
     Up,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -11,6 +11,24 @@ pub(super) mod hex {
     }
 }
 
+pub(super) mod fingerprint {
+    use grana_volume::Fingerprint;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &Fingerprint, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.hex())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Fingerprint, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Fingerprint::from_hex(&text).ok_or_else(|| {
+            serde::de::Error::custom("a content fingerprint holds 64 hexadecimal digits")
+        })
+    }
+}
+
 pub(super) mod maybe_hex {
     use serde::{Deserialize, Deserializer, Serializer};
 

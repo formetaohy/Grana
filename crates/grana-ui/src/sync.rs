@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::dispatch::Finish;
 use crate::element::{Content, Layer};
 use crate::node::NodeId;
 use crate::ui::Ui;
@@ -58,10 +59,11 @@ impl<A: Clone> Ui<A> {
             let active = self.tree.nodes[id].runtime.edit.is_some();
             if !visible {
                 if active {
-                    self.tree.nodes[id].runtime.edit = None;
-                    if self.edit == Some(id) {
-                        self.edit = None;
-                    }
+                    assert!(
+                        self.edit == Some(id),
+                        "an editing field owns the edit session"
+                    );
+                    self.finish_edit(Finish::Write);
                 }
                 continue;
             }

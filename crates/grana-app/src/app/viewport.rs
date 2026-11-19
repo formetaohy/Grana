@@ -83,6 +83,10 @@ impl App {
             self.camera_touched = true;
         }
         self.push_cursor(cursor);
+        if interaction.cancelled {
+            self.mask_path.clear();
+            self.workspace.annotation_drag = None;
+        }
         if let Some((index, part)) = hovered
             && interaction.grab.is_some()
             && self.workspace.annotation_drag.is_none()

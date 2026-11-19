@@ -23,13 +23,14 @@ pub(super) struct Field {
 
 pub(super) enum Recovered {
     Field(Box<Field>),
-    Changed,
+    Changed { kept: bool },
     Absent,
 }
 
 #[derive(Default)]
 pub(super) struct Fields {
     entries: Vec<Field>,
+    stale: Vec<Field>,
 }
 
 impl Fields {
@@ -38,10 +39,14 @@ impl Fields {
             return Recovered::Absent;
         };
         let field = self.entries.remove(position);
-        if field.fingerprint != fingerprint {
-            return Recovered::Changed;
+        if field.fingerprint == fingerprint {
+            return Recovered::Field(Box::new(field));
         }
-        Recovered::Field(Box::new(field))
+        let kept = field.unsaved;
+        if kept {
+            self.stale.push(field);
+        }
+        Recovered::Changed { kept }
     }
 
     pub(super) fn keep(&mut self, field: Field) -> Result<(), Box<Field>> {
@@ -62,11 +67,13 @@ impl Fields {
 
     pub(super) fn clear(&mut self) {
         self.entries.clear();
+        self.stale.clear();
     }
 
     pub(super) fn held(&self) -> Vec<Held> {
         self.entries
             .iter()
+            .chain(self.stale.iter())
             .filter(|field| field.unsaved)
             .map(|field| Held {
                 name: field.name.clone(),
@@ -78,19 +85,29 @@ impl Fields {
     }
 
     pub(super) fn find(&self, series: usize) -> Option<&Field> {
-        self.entries.iter().find(|field| field.series == series)
+        self.entries
+            .iter()
+            .chain(self.stale.iter())
+            .find(|field| field.series == series)
     }
 
     pub(super) fn find_mut(&mut self, series: usize) -> Option<&mut Field> {
-        self.entries.iter_mut().find(|field| field.series == series)
+        let Self { entries, stale } = self;
+        entries
+            .iter_mut()
+            .find(|field| field.series == series)
+            .or_else(|| stale.iter_mut().find(|field| field.series == series))
     }
 
     pub(super) fn remove(&mut self, series: usize) -> bool {
-        let Some(position) = self.entries.iter().position(|field| field.series == series) else {
-            return false;
-        };
-        self.entries.remove(position);
-        true
+        let before = self.entries.len() + self.stale.len();
+        self.entries.retain(|field| field.series != series);
+        self.stale.retain(|field| field.series != series);
+        self.entries.len() + self.stale.len() != before
+    }
+
+    pub(super) fn prune(&mut self) {
+        self.stale.retain(|field| field.unsaved);
     }
 }
 

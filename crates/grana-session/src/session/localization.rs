@@ -244,32 +244,28 @@ impl Session {
         self.cancel(Job::Localizations(set));
     }
 
-    pub(super) fn start_clusters(&mut self, set: ObjectSetId) {
-        if self.loading.is_some()
-            || self
-                .analysis
-                .iter()
-                .any(|analysis| analysis.job() == Job::Clusters(set))
+    pub(super) fn start_clusters(&mut self, set: ObjectSetId) -> Result<(), String> {
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job() == Job::Clusters(set))
         {
-            return;
+            return Ok(());
         }
-        if !self.analysable() {
-            return;
+        if self.loading.is_some() {
+            return Err("the dataset is still opening".to_string());
         }
-        let prepared = self.prepare_clusters(set);
-        let (revision, clusters, filter, window, grouped) = match prepared {
-            Ok(prepared) => prepared,
-            Err(detail) => {
-                self.message = Some(Message::error(detail));
-                return;
-            }
-        };
+        if self.scene.is_none() {
+            return Err("open a dataset before analysing it".to_string());
+        }
+        let (revision, clusters, filter, window, grouped) = self.prepare_clusters(set)?;
         self.message = None;
         self.record_progress(Job::Clusters(set), 0, 0, window.len());
         self.analysis.push(crate::localization_cluster(
             Job::Clusters(set),
             LocalizationClusterRequest::new(set, revision, window, clusters, filter, grouped),
         ));
+        Ok(())
     }
 
     fn prepare_clusters(&self, set: ObjectSetId) -> Result<PreparedClusters, String> {

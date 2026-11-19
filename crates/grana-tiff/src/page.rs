@@ -324,9 +324,6 @@ impl Page {
             * block.rows as usize
             * self.samples as usize
             * self.bytes_per_sample();
-        if block.count == 0 || block.offset == 0 {
-            return Ok(Arc::new(vec![0; expected]));
-        }
         let length = usize::try_from(block.count)
             .map_err(|_| Error::read(path, "the TIFF block is too large"))?;
         let raw = source.store.read(block.offset, length)?;
@@ -393,12 +390,13 @@ impl Layout {
                     ),
                 ));
             }
-            return Ok(Self::Tiles {
+            return Self::Tiles {
                 width: tile_width,
                 height: tile_length,
                 offsets,
                 counts,
-            });
+            }
+            .require_data(path);
         }
         let rows = directory
             .integer(store, TAG_ROWS_PER_STRIP, path)?
@@ -425,11 +423,32 @@ impl Layout {
                 ),
             ));
         }
-        Ok(Self::Strips {
+        Self::Strips {
             rows,
             offsets,
             counts,
-        })
+        }
+        .require_data(path)
+    }
+
+    fn require_data(self, path: &Path) -> Result<Self, Error> {
+        let (noun, offsets, counts) = match &self {
+            Self::Tiles {
+                offsets, counts, ..
+            } => ("tile", offsets, counts),
+            Self::Strips {
+                offsets, counts, ..
+            } => ("strip", offsets, counts),
+        };
+        for (index, (offset, count)) in offsets.iter().zip(counts).enumerate() {
+            if *offset == 0 || *count == 0 {
+                return Err(Error::read(
+                    path,
+                    format!("the TIFF page leaves {noun} {index} without pixel data"),
+                ));
+            }
+        }
+        Ok(self)
     }
 
     pub(crate) fn bytes(&self) -> u64 {

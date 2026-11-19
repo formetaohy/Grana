@@ -754,6 +754,7 @@ fn histogram_apply(
             workspace.drag.origin = None;
             workspace.drag.moved = false;
         }
+        Phase::Cancel => workspace.drag = PlotDrag::default(),
     }
 }
 
@@ -852,6 +853,7 @@ fn scatter_apply(
             workspace.drag.moved = false;
             workspace.drag.vertices.clear();
         }
+        Phase::Cancel => workspace.drag = PlotDrag::default(),
     }
 }
 
@@ -919,6 +921,7 @@ fn distribution_apply(
             workspace.drag.moved = false;
             workspace.drag.vertices.clear();
         }
+        Phase::Cancel => workspace.drag = PlotDrag::default(),
     }
 }
 
@@ -985,6 +988,7 @@ fn trend_apply(
             workspace.drag.moved = false;
             workspace.drag.vertices.clear();
         }
+        Phase::Cancel => workspace.drag = PlotDrag::default(),
     }
 }
 

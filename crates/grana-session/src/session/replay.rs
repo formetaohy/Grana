@@ -195,7 +195,10 @@ impl Session {
                         scene.set_localization_projected(set, molecules.projected);
                     }
                     if molecules.clustered {
-                        self.start_clusters(set);
+                        if let Err(detail) = self.start_clusters(set) {
+                            self.abort_recipe();
+                            self.message = Some(Message::error(detail));
+                        }
                         return;
                     }
                     self.advance_step();

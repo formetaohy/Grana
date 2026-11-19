@@ -946,6 +946,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
         grana_tiff::Image::open(&path, 2).is_err(),
         "a series outside the metadata is refused"
     );
+    reads_a_chunky_series(&temp.path().join("chunky.ome.tif"));
 }
 
 fn write_two_series(path: &std::path::Path) {
@@ -1592,4 +1593,92 @@ fn reads_picasso_localization_tables() {
         ),
         "a Picasso localization lands on the dataset with its precision and group"
     );
+}
+
+fn reads_a_chunky_series(path: &std::path::Path) {
+    write_chunky_series(path);
+    let mono = grana_tiff::Image::open(path, 0).expect("the mono series opens");
+    assert_eq!(mono.pyramid().channel_count(), 1);
+    let chunky = grana_tiff::Image::open(path, 1).expect("the chunky series opens");
+    assert_eq!(
+        chunky.pyramid().channel_count(),
+        3,
+        "the chunky series carries the samples of its own pages"
+    );
+    assert_eq!(chunky.pyramid().level(0).extent(), Extent::new(2, 2, 1));
+    let VoxelData::U8(values) = chunky
+        .read_region(0, 0, 1, 0..2, 0..2, 0..1)
+        .expect("the green sample reads")
+    else {
+        panic!("the chunky series stores bytes");
+    };
+    assert_eq!(values, [1u8, 2, 3, 4], "the green sample of every pixel");
+}
+
+fn write_chunky_series(path: &std::path::Path) {
+    let xml = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+        " <Image Name=\"Overview\">\n",
+        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"4\" SizeZ=\"1\" SizeC=\"1\" SizeT=\"1\">\n",
+        "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+        "   <TiffData IFD=\"0\" PlaneCount=\"1\"/>\n",
+        "  </Pixels>\n",
+        " </Image>\n",
+        " <Image Name=\"Colour\">\n",
+        "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"1\" SizeC=\"3\" SizeT=\"1\">\n",
+        "   <Channel ID=\"Channel:1:0\" Name=\"Red\" SamplesPerPixel=\"3\"/>\n",
+        "   <Channel ID=\"Channel:1:1\" Name=\"Green\" SamplesPerPixel=\"3\"/>\n",
+        "   <Channel ID=\"Channel:1:2\" Name=\"Blue\" SamplesPerPixel=\"3\"/>\n",
+        "   <TiffData IFD=\"1\" PlaneCount=\"1\"/>\n",
+        "  </Pixels>\n",
+        " </Image>\n",
+        "</OME>\n"
+    );
+    let entries = 12u32;
+    let record = 2 + entries * 12 + 4;
+    let header = 8u32;
+    let xml_offset = header + 2 * record;
+    let xml_bytes = xml.as_bytes().to_vec();
+    let strips = xml_offset + xml_bytes.len() as u32;
+    let pages = [(4u32, 4u32, 16u32, 1u32, 1u32), (2, 2, 12, 3, 2)];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&header.to_le_bytes());
+    let mut strip = strips;
+    for (index, (width, height, length, samples, photometric)) in pages.into_iter().enumerate() {
+        let next = if index + 1 == pages.len() {
+            0
+        } else {
+            header + (index as u32 + 1) * record
+        };
+        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
+        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(256, 4, 1, width);
+        entry(257, 4, 1, height);
+        entry(258, 3, 1, 8);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, photometric);
+        entry(270, 2, xml_bytes.len() as u32, xml_offset);
+        entry(273, 4, 1, strip);
+        entry(277, 3, 1, samples);
+        entry(278, 4, 1, height);
+        entry(279, 4, 1, length);
+        entry(284, 3, 1, 1);
+        entry(339, 3, 1, 1);
+        bytes.extend_from_slice(&next.to_le_bytes());
+        strip += length;
+    }
+    bytes.extend_from_slice(&xml_bytes);
+    bytes.extend(1..=16u8);
+    for (red, green, blue) in [(10u8, 1u8, 20u8), (11, 2, 21), (12, 3, 22), (13, 4, 23)] {
+        bytes.extend([red, green, blue]);
+    }
+    std::fs::write(path, &bytes).expect("the sample tiff writes");
 }

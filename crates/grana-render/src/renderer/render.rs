@@ -187,10 +187,7 @@ impl Renderer {
                 .slice()
                 .map(|slice| slice.plane(frame.camera.pivot())),
         );
-        resources.atlas.prune([
-            frame.time,
-            carried_frame(frame.time, resources.pyramid.frame_count()),
-        ]);
+        resources.atlas.remember(frame.time);
         let outlook = residence.adapt(Adapt {
             pyramid: &resources.pyramid,
             camera: frame.camera,

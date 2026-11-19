@@ -41,6 +41,7 @@ pub struct Interaction {
     pub grab: Option<GrabDrag>,
     pub paint: Option<PaintDrag>,
     pub slice: Option<i32>,
+    pub cancelled: bool,
     pub modifiers: Modifiers,
 }
 
@@ -167,6 +168,7 @@ impl Stage {
             self.drag_button = None;
             self.press = None;
             self.hovered = self.contains(pointer);
+            interaction.cancelled = true;
             return interaction;
         }
 

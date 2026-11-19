@@ -203,30 +203,12 @@ impl File {
     fn page_count(&self) -> usize {
         self.pages.len()
     }
-
-    fn depth(&self) -> usize {
-        self.pages
-            .iter()
-            .map(|page| page.sub_ifds.len())
-            .min()
-            .unwrap_or(0)
-    }
 }
 
 impl Image {
     pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
         let first = File::open(path)?;
         let images = metadata(&first, path)?;
-        let page = first.page(0, 0)?;
-        let chunky = !page.planar && page.samples > 1;
-        let format = page.format;
-        let samples = page.samples;
-        let stacked = first
-            .pages
-            .iter()
-            .take_while(|held| held.width == page.width && held.height == page.height)
-            .count();
-        let declared = declared(&images, &page, stacked, chunky);
         let ome = match images.get(series) {
             Some(ome) => Some(ome),
             None if series == 0 => None,
@@ -235,51 +217,33 @@ impl Image {
                     path,
                     format!(
                         "the image holds {} series and series {} was requested",
-                        declared.len(),
+                        images.len(),
                         series + 1
                     ),
                 ));
             }
         };
+        let mut files = vec![Arc::new(first)];
+        let positions = siblings(&mut files, path, ome)?;
+        let page = selected_page(&files, path, ome, &positions)?;
+        let chunky = !page.planar && page.samples > 1;
+        let format = page.format;
+        let samples = page.samples;
+        let stacked = files[0]
+            .pages
+            .iter()
+            .take_while(|held| held.width == page.width && held.height == page.height)
+            .count();
+        let declared = declared(&images, &page, stacked, chunky);
         let sizes = counts(ome, stacked, samples, chunky, path)?;
         let order = ome
             .and_then(|ome| ome.dimension_order.clone())
             .unwrap_or_else(|| "XYZCT".to_string());
         let planes = Planes::new(sizes[2], sizes[1], sizes[0], chunky, &order)
             .map_err(|detail| Error::metadata(path, detail))?;
-        let mut files = vec![Arc::new(first)];
         let mut placed: HashMap<usize, Slot> = HashMap::new();
-        let mut requested = Vec::new();
-        assign(
-            0,
-            &files[0],
-            ome,
-            &planes,
-            format,
-            &mut placed,
-            &mut requested,
-        )?;
-        let directory = path.parent().unwrap_or_else(|| Path::new("."));
-        for name in requested {
-            let sibling = directory.join(&name);
-            if !sibling.is_file() {
-                return Err(Error::metadata(
-                    path,
-                    format!("the OME-TIFF series names the missing file `{name}`"),
-                ));
-            }
-            let index = files.len();
-            files.push(Arc::new(File::open(&sibling)?));
-            let mut ignored = Vec::new();
-            assign(
-                index,
-                &files[index],
-                ome,
-                &planes,
-                format,
-                &mut placed,
-                &mut ignored,
-            )?;
+        for (index, file) in files.iter().enumerate() {
+            assign(index, file, ome, &planes, format, &mut placed)?;
         }
         if placed.len() != planes.count() as usize {
             return Err(Error::metadata(
@@ -291,8 +255,12 @@ impl Image {
                 ),
             ));
         }
+        let deepest = placed
+            .values()
+            .map(|slot| files[slot.file].pages[slot.page].sub_ifds.len())
+            .min()
+            .unwrap_or(0);
         let mut levels = vec![gather(&files, &planes, &placed, format, 0, path)?];
-        let deepest = files.iter().map(|file| file.depth()).min().unwrap_or(0);
         for level in 1..=deepest {
             let deeper = gather(&files, &planes, &placed, format, level, path)?;
             let previous = levels.last().expect("the base level is present");
@@ -405,6 +373,55 @@ impl Image {
     }
 }
 
+fn siblings(
+    files: &mut Vec<Arc<File>>,
+    path: &Path,
+    ome: Option<&OmeImage>,
+) -> Result<HashMap<String, usize>, Error> {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut positions = HashMap::new();
+    for block in ome.map_or(&[][..], |ome| ome.tiff_data.as_slice()) {
+        let Some(name) = block.file.as_deref() else {
+            continue;
+        };
+        if named(path, name) || positions.contains_key(name) {
+            continue;
+        }
+        let sibling = directory.join(name);
+        if !sibling.is_file() {
+            return Err(Error::metadata(
+                path,
+                format!("the OME-TIFF series names the missing file `{name}`"),
+            ));
+        }
+        positions.insert(name.to_string(), files.len());
+        files.push(Arc::new(File::open(&sibling)?));
+    }
+    Ok(positions)
+}
+
+fn selected_page(
+    files: &[Arc<File>],
+    path: &Path,
+    ome: Option<&OmeImage>,
+    positions: &HashMap<String, usize>,
+) -> Result<Arc<Page>, Error> {
+    let Some(block) = ome.and_then(|ome| ome.tiff_data.first()) else {
+        return files[0].page(0, 0);
+    };
+    let index = match block.file.as_deref() {
+        None => 0,
+        Some(name) if named(path, name) => 0,
+        Some(name) => *positions.get(name).ok_or_else(|| {
+            Error::metadata(
+                path,
+                "the OME-TIFF series names a file that holds no planes",
+            )
+        })?,
+    };
+    files[index].page(block.ifd as usize, 0)
+}
+
 fn named(path: &Path, file: &str) -> bool {
     let held = path.file_name().and_then(|held| held.to_str());
     if held == Some(file) {
@@ -421,7 +438,6 @@ fn assign(
     planes: &Planes,
     format: VoxelFormat,
     placed: &mut HashMap<usize, Slot>,
-    requested: &mut Vec<String>,
 ) -> Result<(), Error> {
     let path = &volume.path;
     let blocks = ome.map_or(&[][..], |ome| ome.tiff_data.as_slice());
@@ -430,9 +446,6 @@ fn assign(
         if let Some(name) = block.file.as_deref()
             && !named(path, name)
         {
-            if !requested.iter().any(|held| held == name) {
-                requested.push(name.to_string());
-            }
             continue;
         }
         place(block, planes, &mut raster, path)?;

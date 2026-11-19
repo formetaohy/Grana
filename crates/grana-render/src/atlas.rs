@@ -11,6 +11,8 @@ use grana_volume::CHANNEL_LIMIT;
 
 use grana_volume::{PACK_LIMIT, components};
 
+const HOLLOW_FRAMES: usize = 8;
+
 pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 4;
@@ -77,7 +79,7 @@ pub(crate) struct Atlas {
     frames: BTreeMap<(u32, usize), Vec<u32>>,
     hollow: HashSet<(u32, usize, usize)>,
     hollowed: BTreeMap<(u32, usize), Vec<usize>>,
-    pruned: Option<[u32; 2]>,
+    remembered: Vec<u32>,
 }
 
 impl Atlas {
@@ -219,7 +221,7 @@ impl Atlas {
             frames: BTreeMap::new(),
             hollow: HashSet::new(),
             hollowed: BTreeMap::new(),
-            pruned: None,
+            remembered: Vec::new(),
         }
     }
 
@@ -274,7 +276,7 @@ impl Atlas {
                 held.push(ResidentBrick { time, level, index });
             }
         }
-        for time in self.pruned.unwrap_or([u32::MAX; 2]) {
+        for time in self.remembered.clone() {
             if self.unhollow(time, level, index) {
                 released.push(time);
             }
@@ -325,21 +327,23 @@ impl Atlas {
     }
 
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
-        if self.pruned.is_some_and(|frames| !frames.contains(&time)) {
+        if !self.hollow.insert((time, level, index)) {
             return;
         }
-        if self.hollow.insert((time, level, index)) {
-            self.hollowed.entry((time, level)).or_default().push(index);
-        }
+        self.hollowed.entry((time, level)).or_default().push(index);
+        self.remember(time);
     }
 
-    pub fn prune(&mut self, frames: [u32; 2]) {
-        if self.pruned == Some(frames) {
+    pub fn remember(&mut self, time: u32) {
+        if self.remembered.contains(&time) {
             return;
         }
-        self.hollow.retain(|(time, _, _)| frames.contains(time));
-        self.hollowed.retain(|(time, _), _| frames.contains(time));
-        self.pruned = Some(frames);
+        self.remembered.push(time);
+        while self.remembered.len() > HOLLOW_FRAMES {
+            let dropped = self.remembered.remove(0);
+            self.hollow.retain(|(held, _, _)| *held != dropped);
+            self.hollowed.retain(|(held, _), _| *held != dropped);
+        }
     }
 
     pub fn reset(&mut self) {
@@ -352,7 +356,7 @@ impl Atlas {
         self.frames.clear();
         self.hollow.clear();
         self.hollowed.clear();
-        self.pruned = None;
+        self.remembered.clear();
     }
 
     pub fn residents(&self, time: u32, level: usize, out: &mut Vec<Resident>) {

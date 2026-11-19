@@ -8,7 +8,7 @@ use crate::node::NodeId;
 use crate::ui::Ui;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Finish {
+pub(crate) enum Finish {
     Submit,
     Write,
     Cancel,
@@ -17,6 +17,9 @@ enum Finish {
 impl<A: Clone> Ui<A> {
     pub(crate) fn dispatch(&mut self) {
         if self.input.cancelled() {
+            if let Some(press) = self.press {
+                self.pointer_events(press, Phase::Cancel);
+            }
             self.press = None;
             self.drag = None;
             self.edit_drag = false;
@@ -258,21 +261,10 @@ impl<A: Clone> Ui<A> {
         if primary.pressed
             && let Some((node, bar, scroll)) = self.bar_at(pointer)
         {
-            let axis = bar.axis;
             let offset = if bar.thumb.contains(pointer) {
                 scroll.offset
             } else {
-                let position = match axis {
-                    Axis::Column => {
-                        (pointer.y - bar.track.min.y - bar.thumb.height() * 0.5)
-                            / bar.track.height().max(1.0)
-                    }
-                    Axis::Row => {
-                        (pointer.x - bar.track.min.x - bar.thumb.width() * 0.5)
-                            / bar.track.width().max(1.0)
-                    }
-                };
-                position.clamp(0.0, 1.0) * scroll.limit()
+                bar.offset(pointer, scroll.limit())
             };
             if primary.down {
                 self.scrollbar = Some((node, pointer, offset));
@@ -473,10 +465,10 @@ impl<A: Clone> Ui<A> {
                         .input
                         .press_position(Button::Primary)
                         .unwrap_or(self.pointer),
-                    Phase::Move | Phase::Up => self.pointer,
+                    Phase::Move | Phase::Up | Phase::Cancel => self.pointer,
                 };
                 let delta = match phase {
-                    Phase::Down => Vec2::ZERO,
+                    Phase::Down | Phase::Cancel => Vec2::ZERO,
                     Phase::Move | Phase::Up => self.input.delta(),
                 };
                 handler(Pointer {
@@ -636,6 +628,9 @@ impl<A: Clone> Ui<A> {
     }
 
     pub(crate) fn begin_edit(&mut self, node: NodeId, at_pointer: bool) {
+        if self.edit != Some(node) {
+            self.finish_edit(Finish::Write);
+        }
         let (value, multiline) = match &self.tree.nodes[node].content {
             Content::Field(field) => (field.value.clone(), field.multiline),
             _ => return,
@@ -772,12 +767,32 @@ impl<A: Clone> Ui<A> {
         let Some(finish) = finish else {
             return;
         };
+        self.finish_edit(finish);
+        if finish == Finish::Write
+            && self
+                .input
+                .keys()
+                .iter()
+                .any(|event| event.pressed && !event.repeat && event.key == Some(InputKey::Tab))
+        {
+            let forward = !self.input.modifiers().shift;
+            if self.advance_focus(forward) {
+                self.focus_visible = true;
+            }
+        }
+    }
+
+    pub(crate) fn finish_edit(&mut self, finish: Finish) {
+        let Some(node) = self.edit else {
+            return;
+        };
         let text = self.tree.nodes[node]
             .runtime
             .edit
             .take()
             .map_or_else(String::new, |edit| edit.text().to_string());
         self.edit = None;
+        self.input.clear_preedit();
         let action = match &self.tree.nodes[node].interaction {
             Interaction::Field {
                 commit,
@@ -795,18 +810,6 @@ impl<A: Clone> Ui<A> {
         };
         if let Some(action) = action {
             self.actions.push(action);
-        }
-        if finish == Finish::Write
-            && self
-                .input
-                .keys()
-                .iter()
-                .any(|event| event.pressed && !event.repeat && event.key == Some(InputKey::Tab))
-        {
-            let forward = !self.input.modifiers().shift;
-            if self.advance_focus(forward) {
-                self.focus_visible = true;
-            }
         }
     }
 

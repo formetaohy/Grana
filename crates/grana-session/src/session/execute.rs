@@ -736,7 +736,11 @@ impl Session {
                     self.message = Some(Message::error(detail));
                 }
             }
-            Command::ClusterLocalizations(set) => self.start_clusters(set),
+            Command::ClusterLocalizations(set) => {
+                if let Err(detail) = self.start_clusters(set) {
+                    self.message = Some(Message::error(detail));
+                }
+            }
             Command::EstimateLocalizationClusters(set) => self.estimate_clusters(set),
             Command::CancelClusters(set) => {
                 self.cancel(Job::Clusters(set));

@@ -185,7 +185,7 @@ fn lineage_button<'a>(
         .on_pointer(move |pointer| match pointer.phase {
             grana_ui::Phase::Down => Some(Message::SetTrackSet(Some(set))),
             grana_ui::Phase::Up => Some(Message::SetPanel(Some(Panel::Tracks))),
-            grana_ui::Phase::Move => None,
+            grana_ui::Phase::Move | grana_ui::Phase::Cancel => None,
         })
 }
 
@@ -834,7 +834,7 @@ fn lineage<'a>(
         .on_pointer(move |pointer| match pointer.phase {
             grana_ui::Phase::Down => down_message.clone(),
             grana_ui::Phase::Up if inner.contains(pointer.position) => up_message.clone(),
-            grana_ui::Phase::Move | grana_ui::Phase::Up => None,
+            grana_ui::Phase::Move | grana_ui::Phase::Up | grana_ui::Phase::Cancel => None,
         });
     let scroller = Element::new(grana_ui::Layout::column())
         .key(key)

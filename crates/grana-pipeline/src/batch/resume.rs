@@ -1,16 +1,14 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use grana_report::Quality;
+use grana_volume::Fingerprint;
 
 use super::{ANALYSIS_REVISION, RESULT};
 
-const CONTENT_SAMPLE: u64 = 1 << 16;
-
-const HASH: u64 = 0xcbf2_9ce4_8422_2325;
-
-const PRIME: u64 = 0x0000_0100_0000_01b3;
+const CHUNK: usize = 1 << 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,8 +16,8 @@ pub(super) struct Record {
     #[serde(with = "super::hash::hex")]
     pub(super) protocol: u64,
     pub(super) build: String,
-    #[serde(with = "super::hash::hex")]
-    pub(super) content: u64,
+    #[serde(with = "super::hash::fingerprint")]
+    pub(super) content: Fingerprint,
     pub(super) artifacts: Vec<String>,
     pub(super) labels: Vec<String>,
     pub(super) objects: usize,
@@ -33,7 +31,7 @@ pub(super) fn completed(
     folder: &Path,
     digest: u64,
     build: &str,
-    content: u64,
+    content: Fingerprint,
     artifacts: &[String],
     modified: Option<u64>,
 ) -> Option<Record> {
@@ -57,7 +55,7 @@ pub(super) fn build() -> String {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Evidence {
-    pub(super) content: u64,
+    pub(super) content: Fingerprint,
     pub(super) bytes: u64,
     pub(super) modified: Option<u64>,
 }
@@ -70,7 +68,7 @@ pub(super) fn evidence(dataset: &Path) -> Result<Evidence, String> {
         )),
         Ok(metadata) if metadata.is_dir() => directory_evidence(dataset),
         Ok(metadata) => Ok(Evidence {
-            content: file_content(dataset, metadata.len())?,
+            content: file_content(dataset)?,
             bytes: metadata.len(),
             modified: modified(&metadata),
         }),
@@ -81,19 +79,20 @@ fn directory_evidence(root: &Path) -> Result<Evidence, String> {
     let mut entries = Vec::new();
     collect(root, root, &mut entries)?;
     entries.sort_by(|left, right| left.name.cmp(&right.name));
-    let mut hash = mix_u64(HASH, entries.len() as u64);
+    let mut hasher = Sha256::new();
+    hasher.update((entries.len() as u64).to_le_bytes());
     let mut bytes = 0;
     let mut modified_at = None;
     for entry in &entries {
-        hash = mix_u64(hash, entry.size);
-        hash = mix_u64(hash, entry.name.len() as u64);
-        hash = mix_bytes(hash, entry.name.as_bytes());
+        hasher.update(entry.size.to_le_bytes());
+        hasher.update((entry.name.len() as u64).to_le_bytes());
+        hasher.update(entry.name.as_bytes());
+        digest_file(&mut hasher, &root.join(&entry.name))?;
         bytes += entry.size;
         modified_at = modified_at.max(entry.modified);
-        hash = file_bytes(hash, &root.join(&entry.name), entry.size)?;
     }
     Ok(Evidence {
-        content: hash,
+        content: Fingerprint::new(hasher.finalize().into()),
         bytes,
         modified: modified_at,
     })
@@ -153,50 +152,31 @@ fn modified(metadata: &std::fs::Metadata) -> Option<u64> {
         .map(|elapsed| elapsed.as_secs())
 }
 
-fn file_content(path: &Path, length: u64) -> Result<u64, String> {
-    file_bytes(HASH, path, length)
+fn file_content(path: &Path) -> Result<Fingerprint, String> {
+    let mut hasher = Sha256::new();
+    digest_file(&mut hasher, path)?;
+    Ok(Fingerprint::new(hasher.finalize().into()))
 }
 
-fn file_bytes(seed: u64, path: &Path, length: u64) -> Result<u64, String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut hash = mix_u64(seed, length);
+fn digest_file(hasher: &mut Sha256, path: &Path) -> Result<(), String> {
+    use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|error| {
         format!(
             "the batch cannot open {} to fingerprint it: {error}",
             path.display()
         )
     })?;
-    let span = CONTENT_SAMPLE.min(length);
-    let mut buffer = vec![0u8; span as usize];
-    for offset in [
-        0,
-        length.saturating_sub(span) / 2,
-        length.saturating_sub(span),
-    ] {
-        file.seek(SeekFrom::Start(offset)).map_err(|error| {
-            format!(
-                "the batch cannot seek {} to fingerprint it: {error}",
-                path.display()
-            )
-        })?;
+    let mut buffer = vec![0u8; CHUNK];
+    loop {
         let count = file.read(&mut buffer).map_err(|error| {
             format!(
                 "the batch cannot read {} to fingerprint it: {error}",
                 path.display()
             )
         })?;
-        hash = mix_bytes(hash, &buffer[..count]);
+        if count == 0 {
+            return Ok(());
+        }
+        hasher.update(&buffer[..count]);
     }
-    Ok(hash)
-}
-
-fn mix_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
-    }
-    hash
-}
-
-fn mix_u64(hash: u64, value: u64) -> u64 {
-    mix_bytes(hash, &value.to_le_bytes())
 }

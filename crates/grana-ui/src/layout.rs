@@ -706,6 +706,9 @@ fn hide<A>(tree: &mut Tree<A>, id: NodeId) {
     tree.nodes[id].visible = false;
     tree.hits = true;
     tree.focus = true;
+    if tree.nodes[id].runtime.edit.is_some() {
+        tree.fields = true;
+    }
     for index in 0..tree.nodes[id].children.len() {
         let child = tree.nodes[id].children[index];
         hide(tree, child);

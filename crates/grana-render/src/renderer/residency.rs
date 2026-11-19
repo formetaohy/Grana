@@ -18,6 +18,8 @@ pub(super) struct ViewKey {
     pub(super) eye: [f32; 3],
     pub(super) focus: [f32; 3],
     pub(super) field_of_view: f32,
+    pub(super) projection: grana_display::CameraProjection,
+    pub(super) slice: Option<grana_display::Slice>,
     pub(super) size: [u32; 2],
     pub(super) levels: Levels,
 }
@@ -53,6 +55,8 @@ impl ViewKey {
             eye: camera.eye().to_array(),
             focus: camera.pivot().to_array(),
             field_of_view: camera.fov_y(),
+            projection: camera.projection(),
+            slice: camera.slice(),
             size,
             levels,
         }

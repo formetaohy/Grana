@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use grana_image::{Format, Image, Source};
+use grana_image::{Image, Source};
 
 use crate::Error;
 
@@ -92,10 +92,7 @@ pub fn unfold(path: &Path) -> Result<Folder, Error> {
         .iter()
         .map(|channel| channel.name().to_string())
         .collect::<Vec<_>>();
-    let series = match image.format() {
-        Some(Format::Tiff) | None => 1,
-        Some(_) => series_of(&files)?,
-    };
+    let series = series_of(&files)?;
     let (rows, columns) = default_grid(files.len());
     Ok(Folder {
         tiles: files.into_iter().map(Source::file).collect(),
@@ -118,9 +115,8 @@ pub fn default_grid(count: usize) -> (usize, usize) {
 fn series_of(files: &[PathBuf]) -> Result<usize, Error> {
     let mut count = None;
     for file in files {
-        let image = Image::open(&Source::file(file.clone()))
+        let scenes = grana_image::series_count(file)
             .map_err(|error| Error::new(format!("failed to open {}: {error}", file.display())))?;
-        let scenes = image.series().len();
         match count {
             None => count = Some(scenes),
             Some(known) if known == scenes => {}

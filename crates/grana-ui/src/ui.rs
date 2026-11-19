@@ -327,7 +327,6 @@ impl<A: Clone> Ui<A> {
         if self.text.begin(scale) {
             self.invalidate();
         }
-        self.actions.clear();
         self.cursor = Cursor::Arrow;
         self.animating = false;
         self.wake_in = None;

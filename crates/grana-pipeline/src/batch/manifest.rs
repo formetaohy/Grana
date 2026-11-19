@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use grana_protocol::Protocol;
 use grana_report::{ComparisonReport, Quality, comparison_of};
+use grana_volume::Fingerprint;
 
 use super::discover::{DatasetEntry, WellKey};
 use super::resume;
@@ -13,7 +14,7 @@ pub(super) const RUN: &str = "run.toml";
 
 const CORRECTION: &str = "correction.toml";
 
-const FORMAT: u32 = 5;
+const FORMAT: u32 = 6;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,8 +46,8 @@ pub struct RunDataset {
     status: String,
     objects: usize,
     detail: String,
-    #[serde(with = "super::hash::hex")]
-    content: u64,
+    #[serde(with = "super::hash::fingerprint")]
+    content: Fingerprint,
     bytes: u64,
     modified: Option<u64>,
     #[serde(with = "super::hash::hex")]
@@ -231,7 +232,7 @@ pub(super) fn write(
             .map(|(index, dataset)| {
                 let row = rows.get(index).and_then(Option::as_ref);
                 let held = evidence.get(index).copied().unwrap_or(resume::Evidence {
-                    content: 0,
+                    content: Fingerprint::new([0; 32]),
                     bytes: 0,
                     modified: None,
                 });

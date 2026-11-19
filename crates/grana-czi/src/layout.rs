@@ -207,9 +207,7 @@ fn assemble(
     };
     let mut levels = vec![assemble_level(&context, &base, 1)?];
     for (scale, entries) in groups.iter() {
-        let Ok(level) = assemble_level(&context, entries, *scale) else {
-            continue;
-        };
+        let level = assemble_level(&context, entries, *scale)?;
         let previous = levels.last().expect("the base level is present");
         if level.extent.x() > previous.extent.x()
             || level.extent.y() > previous.extent.y()
@@ -218,7 +216,10 @@ fn assemble(
             || level.spacing.y() < previous.spacing.y()
             || level.spacing.z() < previous.spacing.z()
         {
-            continue;
+            return Err(Error::metadata(
+                path,
+                format!("the CZI resolution level {scale} does not coarsen the pyramid"),
+            ));
         }
         levels.push(level);
     }

@@ -60,6 +60,18 @@ impl Bar {
             Axis::Row => (self.track.width() - self.thumb.width()).max(0.0),
         }
     }
+
+    pub(crate) fn offset(&self, pointer: Vec2, limit: f32) -> f32 {
+        let travel = self.travel();
+        if travel <= 0.0 {
+            return 0.0;
+        }
+        let (start, thumb, coordinate) = match self.axis {
+            Axis::Column => (self.track.min.y, self.thumb.height(), pointer.y),
+            Axis::Row => (self.track.min.x, self.thumb.width(), pointer.x),
+        };
+        ((coordinate - start - thumb * 0.5) / travel).clamp(0.0, 1.0) * limit
+    }
 }
 
 pub(crate) fn bar(rect: Rect, axis: Axis, scroll: ScrollState) -> Bar {

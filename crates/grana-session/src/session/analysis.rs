@@ -1123,14 +1123,18 @@ impl Session {
         let Some(plan) = self.detect_plan(set) else {
             return;
         };
+        if let Some(state) = self.halt(Job::Recut(set))
+            && let Some(scene) = self.scene.as_mut()
+        {
+            scene.restore_object(state);
+        }
+        if self.recut.is_some_and(|(pending, _)| pending == set) {
+            self.recut = None;
+        }
         let fallback = self
             .scene
             .as_ref()
             .and_then(|scene| scene.object_state(set));
-        let _ = self.halt(Job::Recut(set));
-        if self.recut.is_some_and(|(pending, _)| pending == set) {
-            self.recut = None;
-        }
         let _ = self.halt(Job::Track(set));
         if self.recipe.is_none() {
             self.defer_relations(set);
