@@ -257,12 +257,12 @@ pub(super) struct ShadowFrame<'a> {
     pub(super) scene: &'a SceneFrame<'a>,
     pub(super) pyramid: &'a Pyramid,
     pub(super) ladder: Ladder,
-    pub(super) bricks: &'a [Option<BrickTable>],
-    pub(super) atlas: &'a Atlas,
     pub(super) versions: Versions,
     pub(super) summary: &'a mut Option<SceneSummary>,
     pub(super) channel: u64,
     pub(super) time: u32,
+    pub(super) content: u32,
+    pub(super) awaits: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -272,17 +272,27 @@ pub(super) struct ShadowPlan {
     pub(super) level: usize,
 }
 
+impl ShadowPlan {
+    pub(super) fn volume(self) -> u64 {
+        self.keys.volume()
+    }
+
+    pub(super) fn objects(self) -> u64 {
+        self.keys.objects()
+    }
+}
+
 pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
     let ShadowFrame {
         scene,
         pyramid,
         ladder,
-        bricks,
-        atlas,
         versions,
         summary,
         channel,
         time,
+        content,
+        awaits,
     } = frame;
     let finest = pyramid.level(0);
     let world = Vec3::from(finest.world_extent());
@@ -303,10 +313,6 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         Vec3::new(spacing.x(), spacing.y(), spacing.z()),
     );
     let level = ladder.base + ladder.count - 1;
-    let revision = bricks[level]
-        .as_ref()
-        .expect("the shadow band carries a table")
-        .revision();
     let layers = digest(&[
         versions.topology(),
         versions.classification(),
@@ -315,9 +321,9 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
     let keys = ShadowKeys::of(
         layers,
         ShadowVolume {
-            revision,
-            writes: atlas.level_writes(level),
             time,
+            content,
+            awaits,
             style: channel,
             level,
         },

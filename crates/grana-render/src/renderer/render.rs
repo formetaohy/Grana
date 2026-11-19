@@ -2,7 +2,7 @@ use super::allocate::{self, Needed};
 use super::draw;
 use super::plan::{self, Adapt};
 use super::resolve;
-use super::signature::{ShadowKeys, channel_style};
+use super::signature::channel_style;
 use super::timing::{self, Begin};
 use super::view::View;
 use super::*;
@@ -56,7 +56,7 @@ struct Prepared {
     started: timing::Started,
     reserved: Option<usize>,
     residency: ViewKey,
-    shadow: ShadowKeys,
+    shadow: plan::ShadowPlan,
     replan: bool,
     rebuilt: bool,
     ready: bool,
@@ -266,12 +266,12 @@ impl Renderer {
             scene,
             pyramid: &resources.pyramid,
             ladder: outlook.ladder,
-            bricks: &resources.bricks,
-            atlas: &resources.atlas,
             versions: scene.versions,
             summary: &mut resources.summary,
             channel,
             time: frame.time,
+            content: residence.content(),
+            awaits: shot.awaits,
         });
         let shadow = &mut resources.shadow;
         if scene.shading.shadows > 0.0 && !shot.slice {
@@ -349,7 +349,7 @@ impl Renderer {
         if stale {
             residence.load_passes(scene.versions);
         }
-        if started.restart || started.clamps_history() {
+        if started.recompacts() {
             if let Some(passes) = splats.as_mut() {
                 passes.rewind(queue);
                 passes.cull_volume(encoder, resources.scene.group());
@@ -368,7 +368,7 @@ impl Renderer {
             started,
             reserved,
             residency: outlook.key,
-            shadow: planned.keys,
+            shadow: planned,
             replan: outlook.replan,
             rebuilt: stale,
             ready: outlook.ready,
@@ -483,6 +483,7 @@ impl Renderer {
             },
             shadow: Some(&mut resources.shadow),
             keys: prepared.shadow,
+            bricks: &resources.bricks,
             volume_pass: volume,
             surface: surface_pass,
             oit_resolve,

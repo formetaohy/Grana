@@ -167,31 +167,19 @@ impl Image {
         coord: BrickCoord,
         warps: &Warps,
     ) -> Result<BrickData, Error> {
-        if warps.identity() && level < self.pyramid.stored() {
-            return self.stored_brick(time, level, coord);
-        }
         let extent = self.level_extent(level)?;
         let grid = BrickGrid::new(extent);
         let counts = grid.counts();
         if coord.x() >= counts[0] || coord.y() >= counts[1] || coord.z() >= counts[2] {
             return Err(Error::Resolved {
-                detail: "the brick lies outside the resolved level".to_string(),
+                detail: "the brick lies outside the level".to_string(),
             });
         }
-        let spatial = grid.padded_range(coord);
-        let covered = covered_extent(&spatial);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let bricks = (0..self.pyramid.channel_count())
             .into_par_iter()
             .map(|channel| {
-                let data = self.brick_region(time, level, channel, coord, warps.get(channel))?;
-                Ok(pad_brick(
-                    &data,
-                    origin,
-                    covered,
-                    grid.origin(coord),
-                    extent,
-                ))
+                self.brick_region(time, level, channel, coord, warps.get(channel))
+                    .map(|data| (*data).clone())
             })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(BrickData::new(bricks))
@@ -208,42 +196,33 @@ impl Image {
         let extent = self.level_extent(level)?;
         let grid = BrickGrid::new(extent);
         let spatial = grid.padded_range(coord);
+        let covered = covered_extent(&spatial);
+        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
+        let pad = |data: &VoxelData| pad_brick(data, origin, covered, grid.origin(coord), extent);
         if !warp.identity() {
-            return Ok(Arc::new(
-                self.aligned_region(time, level, channel, &spatial, warp)?,
-            ));
-        }
-        if level < self.pyramid.stored() {
-            return Ok(Arc::new(
-                self.stored_region(time, level, channel, &spatial)?,
-            ));
+            let data = self.aligned_region(time, level, channel, &spatial, warp)?;
+            return Ok(Arc::new(pad(&data)));
         }
         let format = self.channel_format(channel)?;
-        self.resolved_brick(time, level, channel, coord, format)
-    }
-
-    fn resolved_brick(
-        &self,
-        time: u32,
-        level: usize,
-        channel: usize,
-        coord: BrickCoord,
-        format: VoxelFormat,
-    ) -> Result<Arc<VoxelData>, Error> {
-        let extent = self.level_extent(level)?;
-        let grid = BrickGrid::new(extent);
-        let spatial = grid.padded_range(coord);
-        let covered = covered_extent(&spatial);
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
         if let Some(data) = self.bricks.fetch(key) {
             return Ok(data);
         }
-        let stamp = self.source_stamp(time, level, channel, &spatial)?;
-        if let Some(data) = self.held(key, covered, format, stamp) {
-            return Ok(data);
-        }
-        let data = Arc::new(self.compose(time, level, channel, &spatial, format)?);
-        self.hold(key, covered, format, stamp, Arc::clone(&data));
+        let region = if level < self.pyramid.stored() {
+            Arc::new(self.stored_region(time, level, channel, &spatial)?)
+        } else {
+            let stamp = self.source_stamp(time, level, channel, &spatial)?;
+            match self.held(key, covered, format, stamp) {
+                Some(data) => data,
+                None => {
+                    let data = Arc::new(self.compose(time, level, channel, &spatial, format)?);
+                    self.hold(key, covered, format, stamp, Arc::clone(&data));
+                    data
+                }
+            }
+        };
+        let data = Arc::new(pad(&region));
+        self.bricks.insert(key, Arc::clone(&data));
         Ok(data)
     }
 
@@ -340,19 +319,6 @@ impl Image {
         }
     }
 
-    fn stored_brick(&self, time: u32, level: usize, coord: BrickCoord) -> Result<BrickData, Error> {
-        match &self.inner {
-            Inner::Memory(series) => {
-                let grid = BrickGrid::new(series.pyramid().level(level).extent());
-                Ok(series.brick(time, &grid, coord))
-            }
-            Inner::Zarr(image) => Ok(image.read_brick(time, level, coord)?),
-            Inner::Tiff(image) => Ok(image.read_brick(time, level, coord)?),
-            Inner::Czi(image) => Ok(image.read_brick(time, level, coord)?),
-            Inner::Readout(image) => Ok(image.read_brick(time, level, coord)?),
-        }
-    }
-
     fn resolved_region(
         &self,
         time: u32,
@@ -434,9 +400,7 @@ impl Image {
     ) -> Option<Arc<VoxelData>> {
         let store = self.store.as_ref()?;
         let data = store.load(key, Shape { extent, format }, stamp?)?;
-        let data = Arc::new(data);
-        self.bricks.insert(key, Arc::clone(&data));
-        Some(data)
+        Some(Arc::new(data))
     }
 
     fn hold(
@@ -450,7 +414,6 @@ impl Image {
         if let (Some(store), Some(stamp)) = (self.store.as_ref(), stamp) {
             store.save(key, Shape { extent, format }, stamp, &data);
         }
-        self.bricks.insert(key, data);
     }
 
     fn key(&self, time: u32, level: usize, channel: usize, coord: [u32; 3]) -> Key {

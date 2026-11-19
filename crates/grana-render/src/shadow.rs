@@ -1,12 +1,15 @@
+use bytemuck::{Pod, Zeroable, cast_slice};
 use glam::{Mat4, Vec3};
 use grana_gpu::Pipelines;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, CommandEncoder,
-    CompareFunction, ComputePipeline, ComputePipelineDescriptor, Device, Extent3d,
-    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, Texture, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferDescriptor,
+    BufferUsages, CommandEncoder, CompareFunction, ComputePipeline, ComputePipelineDescriptor,
+    Device, Extent3d, Queue, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, Texture,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
+use crate::brick::BrickTable;
 use crate::layout::Layouts;
 
 const OBJECT_SIDE: u32 = 2048;
@@ -148,6 +151,28 @@ pub(crate) struct ShadowGroups<'a> {
     pub occupancy: &'a BindGroup,
 }
 
+pub(crate) struct TauStage<'a> {
+    pub encoder: &'a mut CommandEncoder,
+    pub queue: &'a Queue,
+    pub groups: ShadowGroups<'a>,
+    pub key: u64,
+    pub level: usize,
+    pub table: &'a BrickTable,
+    pub space: &'a ShadowSpace,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct TauHead {
+    count: u32,
+    full: u32,
+    pad: [u32; 2],
+}
+
+const _: () = {
+    assert!(size_of::<TauHead>() == 16);
+};
+
 pub fn extent(space: &ShadowSpace, voxel: f32) -> [u32; 3] {
     assert!(
         voxel.is_finite() && voxel > 0.0,
@@ -165,16 +190,28 @@ pub(crate) struct Shadow {
     objects: TextureView,
     read: BindGroup,
     tau_write: BindGroup,
+    tau_head: Buffer,
+    tau_regions: Buffer,
+    tau_group: BindGroup,
     tau_pipeline: ComputePipeline,
     sampler: wgpu::Sampler,
     compare: wgpu::Sampler,
     dims: [u32; 3],
     tau_key: Option<u64>,
+    dirty: Vec<Vec<u32>>,
+    seen: Vec<Vec<bool>>,
+    whole: Vec<bool>,
+    counts: Vec<usize>,
     object_key: Option<u64>,
 }
 
 impl Shadow {
-    pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
+    pub fn new(
+        device: &Device,
+        layouts: &Layouts,
+        pipelines: &Pipelines,
+        counts: Vec<usize>,
+    ) -> Self {
         let objects = depth(device, "grana.shadow.objects", OBJECT_SIDE);
         let sampler = linear(device);
         let compare = device.create_sampler(&SamplerDescriptor {
@@ -189,6 +226,32 @@ impl Shadow {
         });
         let dims = [1, 1, 1];
         let (read, tau_write) = groups(device, layouts, dims, &sampler, &compare, &objects);
+        let tau_head = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.shadow.tau.head"),
+            size: size_of::<TauHead>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let tau_regions = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.shadow.tau.regions"),
+            size: (crate::tau::REGION_LIMIT * size_of::<[u32; 4]>()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let tau_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.shadow.tau.group"),
+            layout: &layouts.tau,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: tau_head.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: tau_regions.as_entire_binding(),
+                },
+            ],
+        });
         let tau_pipeline = pipeline(
             device,
             layouts,
@@ -201,11 +264,24 @@ impl Shadow {
             objects,
             read,
             tau_write,
+            tau_head,
+            tau_regions,
+            tau_group,
             tau_pipeline,
             sampler,
             compare,
             dims,
             tau_key: None,
+            dirty: counts
+                .iter()
+                .map(|count| Vec::with_capacity(*count))
+                .collect(),
+            seen: counts
+                .iter()
+                .map(|count| vec![false; *count])
+                .collect::<Vec<_>>(),
+            whole: vec![false; counts.len()],
+            counts,
             object_key: None,
         }
     }
@@ -233,7 +309,7 @@ impl Shadow {
         self.read = read;
         self.tau_write = tau_write;
         self.dims = dims;
-        self.tau_key = None;
+        self.forget();
     }
 
     pub fn group(&self) -> &BindGroup {
@@ -260,15 +336,80 @@ impl Shadow {
         });
     }
 
-    pub fn stale(&self, key: u64) -> bool {
-        self.tau_key != Some(key)
+    pub fn mark(&mut self, level: usize, index: usize) {
+        if self.tau_key.is_none() || self.whole[level] {
+            return;
+        }
+        let seen = &mut self.seen[level];
+        if seen[index] {
+            return;
+        }
+        seen[index] = true;
+        let dirty = &mut self.dirty[level];
+        dirty.push(index as u32);
+        if dirty.len() >= self.counts[level] {
+            self.whole[level] = true;
+            self.clear(level);
+        }
     }
 
-    pub fn encode_tau(&mut self, encoder: &mut CommandEncoder, groups: ShadowGroups<'_>, key: u64) {
-        if self.tau_key == Some(key) {
+    pub fn forget(&mut self) {
+        self.tau_key = None;
+        for level in 0..self.dirty.len() {
+            self.whole[level] = false;
+            self.clear(level);
+        }
+    }
+
+    fn clear(&mut self, level: usize) {
+        let (dirty, seen) = (&mut self.dirty[level], &mut self.seen[level]);
+        for index in dirty.drain(..) {
+            seen[index as usize] = false;
+        }
+    }
+
+    pub fn pending(&self, level: usize, key: u64) -> bool {
+        self.tau_key != Some(key) || self.whole[level] || !self.dirty[level].is_empty()
+    }
+
+    pub fn encode_tau(&mut self, stage: TauStage<'_>) {
+        let TauStage {
+            encoder,
+            queue,
+            groups,
+            key,
+            level,
+            table,
+            space,
+        } = stage;
+        let mut rects = Vec::new();
+        let mut full = std::mem::take(&mut self.whole[level]);
+        if self.tau_key != Some(key) {
+            self.forget();
+            full = true;
+        } else if !full {
+            let indices = std::mem::take(&mut self.dirty[level]);
+            for index in &indices {
+                self.seen[level][*index as usize] = false;
+            }
+            rects = crate::tau::regions(table, &indices, space, self.dims);
+            if rects.len() > crate::tau::REGION_LIMIT {
+                full = true;
+            }
+        }
+        if !full && rects.is_empty() {
             return;
         }
         self.tau_key = Some(key);
+        let head = TauHead {
+            count: if full { 0 } else { rects.len() as u32 },
+            full: u32::from(full),
+            pad: [0; 2],
+        };
+        queue.write_buffer(&self.tau_head, 0, bytemuck::bytes_of(&head));
+        if !full {
+            queue.write_buffer(&self.tau_regions, 0, cast_slice(&rects));
+        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("grana.shadow.tau.pass"),
             timestamp_writes: None,
@@ -278,6 +419,7 @@ impl Shadow {
         pass.set_bind_group(1, groups.level, &[]);
         pass.set_bind_group(2, groups.atlas, &[]);
         pass.set_bind_group(3, &self.tau_write, &[]);
+        pass.set_bind_group(4, &self.tau_group, &[]);
         pass.set_bind_group(5, groups.occupancy, &[]);
         pass.dispatch_workgroups(
             self.dims[0].div_ceil(WORKGROUP),

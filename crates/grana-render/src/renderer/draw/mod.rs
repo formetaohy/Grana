@@ -1,5 +1,7 @@
-use super::signature::ShadowKeys;
+use super::plan::ShadowPlan;
+use super::shadow::Shadow;
 use super::*;
+use crate::brick::BrickTable;
 use crate::table::SceneTable;
 
 mod finish;
@@ -32,7 +34,8 @@ pub(super) struct Stage<'a> {
     pub(super) table: &'a SceneTable,
     pub(super) groups: Groups<'a>,
     pub(super) shadow: Option<&'a mut Shadow>,
-    pub(super) keys: ShadowKeys,
+    pub(super) keys: ShadowPlan,
+    pub(super) bricks: &'a [Option<BrickTable>],
     pub(super) volume_pass: &'a VolumePass,
     pub(super) surface: &'a crate::surface::Pipeline,
     pub(super) oit_resolve: &'a OitResolve,
@@ -60,6 +63,7 @@ pub(super) fn encode(stage: Stage<'_>) {
         groups,
         mut shadow,
         keys,
+        bricks,
         volume_pass,
         surface,
         oit_resolve,
@@ -92,6 +96,7 @@ pub(super) fn encode(stage: Stage<'_>) {
         occupancy,
         data,
         features,
+        bricks,
     });
     let shadow_group = shadow.as_deref().map(Shadow::group);
     geometry::encode(geometry::Stage {

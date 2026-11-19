@@ -7,13 +7,14 @@ use grana_render::{
     Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, SplatChunk, Splats, Style,
 };
 use grana_volume::{
-    BrickGrid, BrickRequest, Channel, Clip, Extent, PackedBrick, Pyramid, Region, Spacing, Volume,
-    VoxelData,
+    BrickCoord, BrickGrid, BrickRequest, Channel, ChannelSet, Clip, Damage, Extent, PackedBrick,
+    Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, splat, versions};
 
 const SIDE: u32 = 128;
+const CAP: usize = 0;
 const FRAMES: u32 = 8;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
@@ -29,6 +30,10 @@ struct View<'a> {
 }
 
 fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
+    capped(view, usize::MAX)
+}
+
+fn capped<'a>(view: &View<'a>, level_cap: usize) -> Frame<'a, 'a> {
     Frame {
         target: view.target,
         size: [SIDE, SIDE],
@@ -40,7 +45,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         exposure: 1.0,
         scene: view.scene,
         delivery: view.delivery,
-        level_cap: usize::MAX,
+        level_cap,
     }
 }
 
@@ -88,21 +93,51 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
     renderer
 }
 
-fn two_channel_volume() -> Volume {
-    let extent = Extent::new(64, 64, 32);
-    let spacing = Spacing::new(0.1, 0.1, 0.2);
-    let first = spheres(extent, spacing, &[([24.0, 32.0, 16.0], 10.0)], 60_000);
-    let second = spheres(extent, spacing, &[([44.0, 32.0, 16.0], 9.0)], 60_000);
+fn bricked_volume(block: Option<[u32; 3]>) -> Volume {
+    let extent = Extent::new(128, 128, 64);
+    let spacing = Spacing::new(0.05, 0.05, 0.1);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    let mut second = vec![0u16; extent.voxel_count() as usize];
+    let blobs = [
+        ([40.0f32, 16.0, 32.0], 18.0f32, &mut values),
+        ([88.0f32, 16.0, 32.0], 16.0f32, &mut second),
+    ];
+    for (centre, radius, target) in blobs {
+        for z in 0..extent.z() {
+            for y in 0..extent.y() {
+                for x in 0..extent.x() {
+                    let point = [x as f32, y as f32, z as f32];
+                    let distance = (0..3)
+                        .map(|axis| (point[axis] - centre[axis]).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    if distance <= radius {
+                        let unit = 1.0 - 0.5 * distance / radius;
+                        target[extent.index(x, y, z) as usize] = (unit * 60_000.0) as u16;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(coord) = block {
+        let grid = BrickGrid::new(extent);
+        let cell = BrickCoord::new(coord[0], coord[1], coord[2]);
+        let origin = grid.origin(cell);
+        let size = grid.extent_of(cell);
+        for z in origin[2]..origin[2] + size.z() {
+            for y in origin[1]..origin[1] + size.y() {
+                for x in origin[0]..origin[0] + size.x() {
+                    values[extent.index(x, y, z) as usize] = 60_000;
+                }
+            }
+        }
+    }
     Volume::new(
         extent,
         spacing,
         vec![
-            Channel::new("first", [0.2, 0.4, 1.0], first.channels()[0].data().clone()),
-            Channel::new(
-                "second",
-                [0.2, 1.0, 0.3],
-                second.channels()[0].data().clone(),
-            ),
+            Channel::new("first", [0.2, 0.4, 1.0], VoxelData::U16(values)),
+            Channel::new("second", [0.2, 1.0, 0.3], VoxelData::U16(second)),
         ],
     )
 }
@@ -245,7 +280,7 @@ fn streams_and_shades_two_channels() {
     let Some(gpu) = gpu() else {
         return;
     };
-    let volume = two_channel_volume();
+    let volume = bricked_volume(None);
     let pyramid = volume.pyramid();
     let transfers = pyramid
         .channels()
@@ -258,7 +293,12 @@ fn streams_and_shades_two_channels() {
     let scene = SceneFrame {
         versions: versions(),
         channels: &channels,
-        shading: Shading::default(),
+        shading: Shading {
+            ambient: 0.15,
+            diffuse: 1.0,
+            shadows: 1.0,
+            ..Shading::default()
+        },
         step_scale: 0.5,
         layers: &[],
         splats: Splats::empty(),
@@ -275,7 +315,7 @@ fn streams_and_shades_two_channels() {
         viewport: WHOLE,
         delivery: grana_render::Delivery::Immediate,
     };
-    let requests = settle(&gpu, &mut renderer, &view, &volume);
+    let requests = settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
     assert!(requests.view.visible > 0, "the view sees no brick");
     assert_eq!(
         requests.view.resident, requests.view.demand,
@@ -299,6 +339,88 @@ fn streams_and_shades_two_channels() {
         shot.hue(shot.all(), Hue::Green) > 100,
         "the green channel barely rendered"
     );
+    settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
+    let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
+    let occluder = bricked_volume(Some([1, 1, 0]));
+    let region = voxel_region(&pyramid, 0, [48, 48, 16]);
+    let damage = Damage::new(region, ChannelSet::of(0)).expect("the damage names a channel");
+    renderer.damage(&[damage]);
+    refresh(&gpu, &mut renderer, &view, &occluder, CAP);
+    settle_with(&gpu, &mut renderer, || capped(&view, CAP), &occluder);
+    let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
+    let mut cold = build_renderer(&gpu, &occluder.pyramid());
+    settle_with(&gpu, &mut cold, || capped(&view, CAP), &occluder);
+    let rebuilt = settled_pixels(&gpu, &mut cold, &view, &target, CAP);
+    let moved = mean_difference(&shaded, &streamed);
+    assert!(
+        moved > 2.0,
+        "the streamed brick left the shading unchanged: {moved:.3}"
+    );
+    let stale = max_difference(&streamed, &rebuilt);
+    assert!(
+        stale <= 60,
+        "the streamed shadow departs from a full rebuild by {stale}"
+    );
+}
+
+fn voxel_region(pyramid: &Pyramid, level: usize, voxel: [u32; 3]) -> Region {
+    let source = pyramid.level(level);
+    let basis = source.basis().matrix();
+    let low = Vec3::from(source.origin())
+        + basis * Vec3::new(voxel[0] as f32, voxel[1] as f32, voxel[2] as f32);
+    let high = low + basis * Vec3::new(1.0, 1.0, 1.0);
+    Region::axis_aligned(low, high)
+}
+
+fn refresh(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume, cap: usize) {
+    for _ in 0..8 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(view, cap))
+            .expect("the damaged frame draws");
+        let Some(requests) = next_demand(gpu, renderer) else {
+            return;
+        };
+        let bricks = pack(volume, &requests.volume);
+        if bricks.is_empty() {
+            return;
+        }
+        renderer.upload(&bricks);
+    }
+}
+
+fn settled_pixels(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    target: &wgpu::Texture,
+    cap: usize,
+) -> Vec<[u8; 4]> {
+    for _ in 0..64 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(view, cap))
+            .expect("the converged frame draws");
+    }
+    read_pixels(gpu, target, [SIDE, SIDE])
+}
+
+fn max_difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> u8 {
+    left.iter()
+        .zip(right)
+        .flat_map(|(left, right)| (0..3).map(move |channel| left[channel].abs_diff(right[channel])))
+        .max()
+        .unwrap_or(0)
+}
+fn mean_difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> f32 {
+    let total = left
+        .iter()
+        .zip(right)
+        .map(|(left, right)| {
+            (0..3)
+                .map(|channel| f32::from(left[channel].abs_diff(right[channel])))
+                .sum::<f32>()
+        })
+        .sum::<f32>();
+    total / (left.len() * 3) as f32
 }
 
 fn placed_quads(quads: &[([f32; 2], f32)]) -> Mesh {
@@ -325,7 +447,7 @@ fn around(point: [u32; 2], radius: u32) -> [u32; 4] {
 }
 
 #[test]
-fn restyles_and_hides_objects_without_resetting_the_frame() {
+fn restyles_and_hides_objects_without_rebuilding_the_meshes() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -429,8 +551,12 @@ fn restyles_and_hides_objects_without_resetting_the_frame() {
     );
     assert!(!restyled.rebuilt, "a style change rebuilt the mesh passes");
     assert!(
-        restyled.history,
-        "a style change dropped the converged history"
+        !restyled.history,
+        "a style change kept the converged history"
+    );
+    assert_eq!(
+        restyled.age, 1,
+        "a style change did not restart the temporal accumulation"
     );
     assert!(
         rect_difference(&drawn, &tinted, core(0)) > 10.0,
@@ -449,8 +575,8 @@ fn restyles_and_hides_objects_without_resetting_the_frame() {
         "a visibility change rebuilt the mesh passes"
     );
     assert!(
-        staged.history,
-        "a visibility change dropped the converged history"
+        !staged.history,
+        "a visibility change kept the converged history"
     );
     assert!(
         rect_difference(&tinted, &cleared, core(1)) > 10.0,

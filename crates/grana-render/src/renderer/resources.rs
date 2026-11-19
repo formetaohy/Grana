@@ -98,7 +98,12 @@ impl Resources {
         });
         let mut planner = Planner::new(device, layouts, slots, pipelines);
         planner.bind_arena(device, layouts, &arena);
-        let shadow = Shadow::new(device, layouts, pipelines);
+        let counts = pyramid
+            .levels()
+            .iter()
+            .map(|level| BrickGrid::new(level.extent()).count())
+            .collect();
+        let shadow = Shadow::new(device, layouts, pipelines, counts);
         let scene = crate::table::SceneTable::new(device, layouts, channels);
         Self {
             pyramid: pyramid.clone(),
@@ -133,6 +138,7 @@ impl Resources {
         self.upload.discard();
         self.atlas.reset();
         self.baked.forget();
+        self.shadow.forget();
         self.summary = None;
     }
 
@@ -171,6 +177,7 @@ impl Resources {
             atlas,
             bricks,
             upload,
+            shadow,
             ..
         } = self;
         let refreshes = residence.refreshes();
@@ -178,8 +185,10 @@ impl Resources {
         let mut resident = Vec::new();
         let mut dropped = Vec::new();
         for brick in atlas.evict_other_frames(time) {
-            if let Some(table) = bricks[brick.level].as_mut() {
-                table.drop_record(arena, brick.index, brick.time);
+            if let Some(table) = bricks[brick.level].as_mut()
+                && table.drop_record(arena, brick.index, brick.time)
+            {
+                shadow.mark(brick.level, brick.index);
             }
         }
         for (region, channels) in scopes {
@@ -215,8 +224,10 @@ impl Resources {
             }
         }
         for (brick_time, level, index) in released {
-            if let Some(table) = bricks[level].as_mut() {
-                table.drop_record(arena, index, brick_time);
+            if let Some(table) = bricks[level].as_mut()
+                && table.drop_record(arena, index, brick_time)
+            {
+                shadow.mark(level, index);
             }
         }
         for table in bricks.iter_mut().flatten() {
@@ -240,6 +251,7 @@ impl Resources {
             upload,
             staged,
             occupancy,
+            shadow,
             ..
         } = self;
         let content = residence.content();
@@ -274,6 +286,9 @@ impl Resources {
                 }
                 let grid = BrickGrid::new(extent);
                 let index = grid.index(coord);
+                let bound = tables[level]
+                    .as_ref()
+                    .is_some_and(|table| table.time() == Some(held));
                 if let Some(slot) = atlas.slot(held, level, index) {
                     let refresh = refreshes.remove(request);
                     if refresh || !scope.covers(total) {
@@ -285,6 +300,9 @@ impl Resources {
                         atlas.written(slot);
                         if held == time {
                             generation += 1;
+                        }
+                        if bound || held == time {
+                            shadow.mark(level, index);
                         }
                     }
                     continue;
@@ -303,8 +321,11 @@ impl Resources {
                         .is_some_and(|table| table.time() == Some(held));
                 if maximum <= 0.0 {
                     atlas.assign_hollow(held, level, index);
-                    if publish && let Some(table) = tables[level].as_mut() {
-                        table.set_record(arena, index, BrickRecord::hollow(held, content));
+                    if publish {
+                        if let Some(table) = tables[level].as_mut() {
+                            table.set_record(arena, index, BrickRecord::hollow(held, content));
+                        }
+                        shadow.mark(level, index);
                     }
                     if current {
                         generation += 1;
@@ -317,8 +338,10 @@ impl Resources {
                     continue;
                 };
                 if let Some(brick) = evicted {
-                    if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut) {
-                        other.drop_record(arena, brick.index, brick.time);
+                    if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut)
+                        && other.drop_record(arena, brick.index, brick.time)
+                    {
+                        shadow.mark(brick.level, brick.index);
                     }
                     released.push((brick.time, brick.level, brick.index));
                 }
@@ -338,8 +361,11 @@ impl Resources {
                     pin,
                     demand,
                 );
-                if publish && let Some(table) = tables[level].as_mut() {
-                    table.set_record(arena, index, BrickRecord::new(slot + 1, held, content));
+                if publish {
+                    if let Some(table) = tables[level].as_mut() {
+                        table.set_record(arena, index, BrickRecord::new(slot + 1, held, content));
+                    }
+                    shadow.mark(level, index);
                 }
                 if current {
                     generation += 1;

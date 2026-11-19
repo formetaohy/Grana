@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
-    VoxelData, VoxelFormat, name_of, pad_brick, tint_of,
+    ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat, name_of,
+    tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
 use openreadout_core::{ImageInfo, PixelType, Plane, PlaneIndex};
@@ -188,49 +188,6 @@ impl Image {
             outcome?;
         }
         Ok(())
-    }
-
-    pub fn read_brick(
-        &self,
-        time: u32,
-        level: usize,
-        coord: BrickCoord,
-    ) -> Result<BrickData, Error> {
-        let extent = self.extent(level)?;
-        let grid = BrickGrid::new(extent);
-        let counts = grid.counts();
-        if coord.x() >= counts[0] || coord.y() >= counts[1] || coord.z() >= counts[2] {
-            return Err(Error::region(
-                &self.path,
-                "the requested brick lies outside the image",
-            ));
-        }
-        let spatial = grid.padded_range(coord);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let covered = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
-        let mut bricks = Vec::with_capacity(self.views.len());
-        for channel in 0..self.views.len() {
-            let data = self.read_region(
-                time,
-                level,
-                channel,
-                spatial[0].clone(),
-                spatial[1].clone(),
-                spatial[2].clone(),
-            )?;
-            bricks.push(pad_brick(
-                &data,
-                origin,
-                covered,
-                grid.origin(coord),
-                extent,
-            ));
-        }
-        Ok(BrickData::new(bricks))
     }
 
     fn extent(&self, level: usize) -> Result<Extent, Error> {

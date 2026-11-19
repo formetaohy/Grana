@@ -70,7 +70,7 @@ use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
-use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
+use grana_protocol::{NamedViewSpec, Protocol, Staged, Step, ViewSpec};
 pub use localization::Localizations;
 use recover::{Restore, Restored};
 use stitch::Stitch;

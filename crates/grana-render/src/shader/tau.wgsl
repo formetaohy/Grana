@@ -1,7 +1,23 @@
 @group(3) @binding(0) var tau_output: texture_storage_3d<rgba8unorm, write>;
 
+@group(4) @binding(0) var<uniform> tau_frame: vec4<u32>;
+@group(4) @binding(1) var<storage, read> tau_regions: array<vec4<u32>>;
+
 const COLUMN_EPSILON: f32 = 1.0e-6;
 const COLUMN_REACH: f32 = 1.0e20;
+
+fn tau_covered(texel: vec2<u32>) -> bool {
+    if (tau_frame.y != 0u) {
+        return true;
+    }
+    for (var index = 0u; index < tau_frame.x; index += 1u) {
+        let rect = tau_regions[index];
+        if (texel.x >= rect.x && texel.x < rect.z && texel.y >= rect.y && texel.y < rect.w) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct Column {
     start: vec3<f32>,
@@ -119,6 +135,9 @@ fn source_extinction(packs: u32, texel: vec3<f32>) -> f32 {
 fn tau_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(tau_output);
     if (id.x >= dims.x || id.y >= dims.y) {
+        return;
+    }
+    if (!tau_covered(id.xy)) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims.xy);

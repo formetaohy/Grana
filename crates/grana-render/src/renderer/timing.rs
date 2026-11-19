@@ -30,11 +30,15 @@ pub(super) struct Started {
 
 impl Started {
     pub(super) fn clamps_history(self) -> bool {
-        self.moved || self.restaged || self.restyled
+        self.moved
+    }
+
+    pub(super) fn recompacts(self) -> bool {
+        self.restart || self.restaged || self.restyled || self.moved
     }
 
     pub(super) fn resets_age(self) -> bool {
-        self.refresh || self.restaged || self.restyled || self.changed
+        self.refresh || self.changed
     }
 }
 
@@ -65,9 +69,9 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         && target.camera.is_some();
     target.levels = Some(levels);
     let restart = target.layers != Some(layers);
-    let refresh = restart || target.content != Some(content);
     let restaged = target.classification != Some(classification);
     let restyled = target.appearance != Some(appearance);
+    let refresh = restart || target.content != Some(content) || restaged || restyled;
     target.layers = Some(layers);
     target.content = Some(content);
     target.classification = Some(classification);

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Probe, Pyramid,
-    Spacing, VoxelData, VoxelFormat, name_of, pad_brick, tint_of,
+    ChannelInfo, Extent, Intensity, Level, Probe, Pyramid, Spacing, VoxelData, VoxelFormat,
+    name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -402,47 +402,6 @@ impl Image {
                 z,
             },
         )
-    }
-
-    pub fn read_brick(
-        &self,
-        time: u32,
-        level: usize,
-        coord: BrickCoord,
-    ) -> Result<BrickData, Error> {
-        let Some(pages) = self.levels.get(level) else {
-            return Err(Error::unsupported(
-                &self.path,
-                "the requested resolution level does not exist",
-            ));
-        };
-        let grid = BrickGrid::new(pages.extent);
-        let spatial = grid.padded_range(coord);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let extent = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
-        let mut channels = Vec::with_capacity(self.pyramid.channel_count());
-        for channel in 0..self.pyramid.channel_count() {
-            let data = self.read_region(
-                time,
-                level,
-                channel,
-                spatial[0].clone(),
-                spatial[1].clone(),
-                spatial[2].clone(),
-            )?;
-            channels.push(pad_brick(
-                &data,
-                origin,
-                extent,
-                grid.origin(coord),
-                pages.extent,
-            ));
-        }
-        Ok(BrickData::new(channels))
     }
 }
 

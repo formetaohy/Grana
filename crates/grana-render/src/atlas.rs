@@ -72,7 +72,6 @@ pub(crate) struct Atlas {
     held: Vec<u32>,
     versions: Vec<u32>,
     writes: u64,
-    level_writes: Vec<u64>,
     now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
     frames: BTreeMap<(u32, usize), Vec<u32>>,
@@ -215,7 +214,6 @@ impl Atlas {
             held: Vec::new(),
             versions: vec![0; capacity],
             writes: 0,
-            level_writes: Vec::new(),
             now: 0,
             identity: HashMap::new(),
             frames: BTreeMap::new(),
@@ -256,21 +254,10 @@ impl Atlas {
     pub fn written(&mut self, slot: u32) {
         self.versions[slot as usize] = self.versions[slot as usize].wrapping_add(1);
         self.writes = self.writes.wrapping_add(1);
-        let Some(brick) = self.slots[slot as usize].brick else {
-            return;
-        };
-        if self.level_writes.len() <= brick.level {
-            self.level_writes.resize(brick.level + 1, 0);
-        }
-        self.level_writes[brick.level] = self.level_writes[brick.level].wrapping_add(1);
     }
 
     pub fn writes(&self) -> u64 {
         self.writes
-    }
-
-    pub fn level_writes(&self, level: usize) -> u64 {
-        self.level_writes.get(level).copied().unwrap_or(0)
     }
 
     pub fn affect(
@@ -365,7 +352,6 @@ impl Atlas {
         self.frames.clear();
         self.hollow.clear();
         self.hollowed.clear();
-        self.level_writes.clear();
         self.pruned = None;
     }
 

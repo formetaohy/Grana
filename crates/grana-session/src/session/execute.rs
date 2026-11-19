@@ -939,10 +939,7 @@ impl Session {
 
     pub(super) fn abandon(&mut self, edit: Edit) {
         if edit.action() == Action::ApplyProtocol {
-            self.abort_recipe();
-            self.analysis.clear();
-            self.progress.clear();
-            self.resume.clear();
+            self.discard_analysis();
         }
         if let Some(set) = ObjectSetId::from_raw(edit.target()) {
             match edit.action() {

@@ -27,6 +27,7 @@ mod surface;
 mod taa;
 mod table;
 mod target;
+mod tau;
 mod upload;
 mod volume;
 

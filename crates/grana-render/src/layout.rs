@@ -19,6 +19,7 @@ pub(crate) struct Layouts {
     pub depth: BindGroupLayout,
     pub shadow: BindGroupLayout,
     pub shadow_write: BindGroupLayout,
+    pub tau: BindGroupLayout,
     pub styles: BindGroupLayout,
     pub objects: BindGroupLayout,
     pub pick: BindGroupLayout,
@@ -200,6 +201,13 @@ impl Layouts {
                 },
                 count: None,
             }],
+        });
+        let tau = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.tau.layout"),
+            entries: &[
+                uniform(0, ShaderStages::COMPUTE),
+                storage(1, ShaderStages::COMPUTE, true),
+            ],
         });
         let depth = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.depth.layout"),
@@ -444,7 +452,7 @@ impl Layouts {
                 Some(&level),
                 Some(&atlas),
                 Some(&shadow_write),
-                None,
+                Some(&tau),
                 Some(&occupancy),
             ],
             immediate_size: 0,
@@ -500,6 +508,7 @@ impl Layouts {
             depth,
             shadow,
             shadow_write,
+            tau,
             styles,
             objects,
             pick,

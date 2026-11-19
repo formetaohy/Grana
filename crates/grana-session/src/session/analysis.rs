@@ -685,6 +685,17 @@ impl Session {
         fallback.is_some_and(|state| self.rollback(state))
     }
 
+    pub(super) fn discard_analysis(&mut self) {
+        let jobs = self.analysis.iter().map(Analysis::job).collect::<Vec<_>>();
+        for job in jobs {
+            self.cancel(job);
+        }
+        self.progress.clear();
+        self.resume.clear();
+        self.recut = None;
+        self.abort_recipe();
+    }
+
     pub(super) fn halt(&mut self, job: Job) -> Option<grana_scene::SetState> {
         if self
             .recipe

@@ -114,9 +114,9 @@ pub(super) struct ShadowKeys {
 
 #[derive(Clone, Copy)]
 pub(super) struct ShadowVolume {
-    pub(super) revision: u64,
-    pub(super) writes: u64,
     pub(super) time: u32,
+    pub(super) content: u32,
+    pub(super) awaits: bool,
     pub(super) style: u64,
     pub(super) level: usize,
 }
@@ -124,9 +124,9 @@ pub(super) struct ShadowVolume {
 impl ShadowKeys {
     pub(super) fn of(layers: u64, volume: ShadowVolume, space: &ShadowSpace) -> Self {
         let ShadowVolume {
-            revision,
-            writes,
             time,
+            content,
+            awaits,
             style,
             level,
         } = volume;
@@ -136,8 +136,8 @@ impl ShadowKeys {
                 style,
                 level as u64,
                 u64::from(time),
-                revision,
-                writes,
+                u64::from(content),
+                u64::from(awaits),
                 space,
             ]),
             objects: digest(&[layers, space]),

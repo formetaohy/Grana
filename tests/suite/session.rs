@@ -1374,7 +1374,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
 }
 
 #[test]
-fn keeps_the_analysis_when_an_applied_protocol_does_not_fit() {
+fn keeps_the_replay_when_an_applied_protocol_does_not_fit() {
     let mut session = Session::new();
     session.open_series("protocol", series());
     session.execute(Command::AddObject(ObjectKind::Spots));
@@ -1383,6 +1383,9 @@ fn keeps_the_analysis_when_an_applied_protocol_does_not_fit() {
     let objects = scene.objects.iter().count();
     let protocol = Protocol::capture(scene, &Measure::new(), None, Vec::new(), None)
         .expect("the scene captures");
+    session.set_protocol(protocol.clone());
+    session.execute(Command::ApplyProtocol);
+    assert!(session.replaying(), "the protocol replay starts");
     let mut value: toml::Value =
         toml::from_str(&protocol.to_toml().expect("the protocol serializes"))
             .expect("the protocol is toml");
@@ -1398,6 +1401,10 @@ fn keeps_the_analysis_when_an_applied_protocol_does_not_fit() {
         session.message().map(|message| message.kind()),
         Some(grana_session::Kind::Error),
         "a protocol that does not fit the dataset reports the mismatch"
+    );
+    assert!(
+        session.replaying(),
+        "a rejected protocol keeps the replay it cannot replace"
     );
     let scene = session.scene().expect("the dataset stays open");
     assert_eq!(

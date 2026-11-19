@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
-    VoxelFormat, name_of, pad_brick, tint_of,
+    ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
 };
 
 use crate::Cache;
@@ -226,47 +225,6 @@ impl Image {
         };
         let bytes = region(&self.store, &self.path, &level.plans, &self.cache, &request)?;
         Ok(voxels(format, bytes))
-    }
-
-    pub fn read_brick(
-        &self,
-        time: u32,
-        level: usize,
-        coord: BrickCoord,
-    ) -> Result<BrickData, Error> {
-        let Some(target) = self.levels().get(level) else {
-            return Err(Error::region(
-                &self.path,
-                "the requested resolution level does not exist",
-            ));
-        };
-        let grid = BrickGrid::new(target.extent);
-        let spatial = grid.padded_range(coord);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let extent = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
-        let mut channels = Vec::with_capacity(self.pyramid.channel_count());
-        for channel in 0..self.pyramid.channel_count() {
-            let data = self.read_region(
-                time,
-                level,
-                channel,
-                spatial[0].clone(),
-                spatial[1].clone(),
-                spatial[2].clone(),
-            )?;
-            channels.push(pad_brick(
-                &data,
-                origin,
-                extent,
-                grid.origin(coord),
-                target.extent,
-            ));
-        }
-        Ok(BrickData::new(channels))
     }
 
     fn levels(&self) -> &[LevelLayout] {

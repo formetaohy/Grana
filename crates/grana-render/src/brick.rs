@@ -179,10 +179,6 @@ impl BrickTable {
         self.base
     }
 
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
     pub fn rebase(
         &mut self,
         upload: &mut Upload,
@@ -256,10 +252,12 @@ impl BrickTable {
         self.mark(index);
     }
 
-    pub fn drop_record(&mut self, arena: &BrickArena, index: usize, time: u32) {
-        if self.records[index].time() == time {
-            self.set_record(arena, index, BrickRecord::MISSING);
+    pub fn drop_record(&mut self, arena: &BrickArena, index: usize, time: u32) -> bool {
+        if self.records[index].time() != time {
+            return false;
         }
+        self.set_record(arena, index, BrickRecord::MISSING);
+        true
     }
 
     pub fn time(&self) -> Option<u32> {

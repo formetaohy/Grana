@@ -3,15 +3,12 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Probe, Pyramid, VoxelData,
-    VoxelFormat, name_of, pad_brick, tint_of,
+    ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
 };
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
 use zarrs::group::Group;
 use zarrs::storage::ReadableStorageTraits;
-
-use rayon::prelude::*;
 
 use crate::Error;
 use crate::axes::{self, Layout};
@@ -265,69 +262,6 @@ impl Image {
 
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
-    }
-
-    pub fn read_brick(
-        &self,
-        time: u32,
-        level: usize,
-        coord: BrickCoord,
-    ) -> Result<BrickData, Error> {
-        let channels = (0..self.pyramid.channel_count())
-            .into_par_iter()
-            .map(|channel| self.read_channel_brick(time, level, channel, coord))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(BrickData::new(channels))
-    }
-
-    pub fn read_channel_brick(
-        &self,
-        time: u32,
-        level: usize,
-        channel: usize,
-        coord: BrickCoord,
-    ) -> Result<VoxelData, Error> {
-        let Some(level_array) = self.levels.get(level) else {
-            return Err(Error::Unsupported {
-                path: self.root.tag(&self.group),
-                detail: "the requested resolution level does not exist".to_string(),
-            });
-        };
-        if channel >= self.pyramid.channel_count() {
-            return Err(Error::Unsupported {
-                path: self.root.tag(&self.group),
-                detail: "the requested channel does not exist".to_string(),
-            });
-        }
-        if time >= self.pyramid.frame_count() {
-            return Err(Error::Unsupported {
-                path: self.root.tag(&self.group),
-                detail: "the requested frame does not exist".to_string(),
-            });
-        }
-        let grid = BrickGrid::new(level_array.layout.extent);
-        let spatial = grid.padded_range(coord);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let extent = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
-        let data = self.read_region(
-            time,
-            level,
-            channel,
-            spatial[0].clone(),
-            spatial[1].clone(),
-            spatial[2].clone(),
-        )?;
-        Ok(pad_brick(
-            &data,
-            origin,
-            extent,
-            grid.origin(coord),
-            level_array.layout.extent,
-        ))
     }
 
     pub fn read_region(

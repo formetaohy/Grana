@@ -49,66 +49,17 @@ impl Session {
             self.message = Some(Message::error("open a dataset before applying a protocol"));
             return;
         }
-        self.abort_recipe();
-        self.analysis.clear();
-        self.progress.clear();
-        self.resume.clear();
-        self.recut = None;
-        let staged = {
-            let Some(live) = self.scene.as_ref() else {
-                return;
-            };
-            let base = live.base_channels();
-            let infos = match protocol.derived_infos(&live.dataset.channels()[..base]) {
-                Ok(infos) => infos,
-                Err(error) => {
-                    self.message = Some(Message::error(error.to_string()));
-                    return;
-                }
-            };
-            if base + infos.len() > grana_volume::CHANNEL_LIMIT {
-                self.message = Some(Message::error(format!(
-                    "the protocol derives {} channels over the {base} stored channels of a dataset that displays at most {}",
-                    infos.len(),
-                    grana_volume::CHANNEL_LIMIT
-                )));
-                return;
-            }
-            let mut draft = Scene::new(live.dataset.clone());
-            draft.channels = live.channels.clone();
-            draft.selected = live.selected;
-            draft.shading = live.shading;
-            draft.step_scale = live.step_scale;
-            draft.exposure = live.exposure;
-            draft.region = live.region;
-            draft.clip = live.clip;
-            if let Err(detail) = draft.set_derived_layout(infos) {
+        let (draft, staged) = match self.staged_protocol(&protocol) {
+            Ok(staged) => staged,
+            Err(detail) => {
                 self.message = Some(Message::error(detail));
                 return;
             }
-            let staged = match protocol.stage(&mut draft) {
-                Ok(staged) => staged,
-                Err(error) => {
-                    self.message = Some(Message::error(error.to_string()));
-                    return;
-                }
-            };
-            let derived = match protocol.derived_specs(&draft, &staged) {
-                Ok(derived) => derived,
-                Err(error) => {
-                    self.message = Some(Message::error(error.to_string()));
-                    return;
-                }
-            };
-            if let Err(detail) = draft.bind_derived(derived) {
-                self.message = Some(Message::error(detail));
-                return;
-            }
-            if let Some(scene) = self.scene.as_mut() {
-                *scene = draft;
-            }
-            staged
         };
+        self.discard_analysis();
+        if let Some(scene) = self.scene.as_mut() {
+            *scene = draft;
+        }
         self.history.clear();
         self.install_channels();
         self.mask_stamps.clear();
@@ -136,6 +87,40 @@ impl Session {
         self.recipe = Some(Recipe::new(steps, sets, pairs, settings));
         self.message = None;
         self.drive_recipe();
+    }
+
+    fn staged_protocol(&self, protocol: &Protocol) -> Result<(Scene, Staged), String> {
+        let Some(live) = self.scene.as_ref() else {
+            return Err("open a dataset before applying a protocol".to_string());
+        };
+        let base = live.base_channels();
+        let infos = protocol
+            .derived_infos(&live.dataset.channels()[..base])
+            .map_err(|error| error.to_string())?;
+        if base + infos.len() > grana_volume::CHANNEL_LIMIT {
+            return Err(format!(
+                "the protocol derives {} channels over the {base} stored channels of a dataset that displays at most {}",
+                infos.len(),
+                grana_volume::CHANNEL_LIMIT
+            ));
+        }
+        let mut draft = Scene::new(live.dataset.clone());
+        draft.channels = live.channels.clone();
+        draft.selected = live.selected;
+        draft.shading = live.shading;
+        draft.step_scale = live.step_scale;
+        draft.exposure = live.exposure;
+        draft.region = live.region;
+        draft.clip = live.clip;
+        draft.set_derived_layout(infos)?;
+        let staged = protocol
+            .stage(&mut draft)
+            .map_err(|error| error.to_string())?;
+        let derived = protocol
+            .derived_specs(&draft, &staged)
+            .map_err(|error| error.to_string())?;
+        draft.bind_derived(derived)?;
+        Ok((draft, staged))
     }
 
     pub(super) fn drive_recipe(&mut self) {
