@@ -27,7 +27,7 @@ const HIGH: u16 = 65_535;
 #[test]
 fn detects_surfaces_masks_a_channel_and_captures() {
     let mut session = Session::new();
-    session.open_series("nuclei", series());
+    open_series(&mut session, "nuclei", series());
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let set = last_surfaces(&session);
@@ -102,7 +102,8 @@ fn undoes_a_computed_drift_correction() {
         HIGH,
     );
     let mut session = Session::new();
-    session.open_series(
+    open_series(
+        &mut session,
         "drift",
         VolumeSeries::new(vec![volume.clone(), volume], 1.0),
     );
@@ -161,7 +162,7 @@ fn round_trips_detected_surfaces_through_geff() {
     let temp = Temp::new("session-geff-surfaces");
     let path = temp.path().join("objects.geff");
     let mut session = Session::new();
-    session.open_series("nuclei", series());
+    open_series(&mut session, "nuclei", series());
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let set = last_surfaces(&session);
@@ -234,7 +235,8 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
         HIGH,
     );
     let mut session = Session::new();
-    session.open_series(
+    open_series(
+        &mut session,
         "localizations",
         VolumeSeries::new(vec![volume.clone(), volume], 1.0),
     );
@@ -331,7 +333,7 @@ fn imports_imaris_filaments() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/imaris-filaments.ims");
     let mut session = Session::new();
-    session.begin_load(fixture);
+    load(&mut session, fixture);
     let deadline = Instant::now() + Duration::from_secs(60);
     while session.scene().is_none() {
         assert!(Instant::now() < deadline, "the Imaris fixture never opens");
@@ -380,7 +382,7 @@ fn view_state() -> ViewState {
 #[test]
 fn undoes_and_replays_object_edits() {
     let mut session = Session::new();
-    session.open_series("edits", series());
+    open_series(&mut session, "edits", series());
     let before = session.scene().expect("the series opens").objects.len();
     session.execute(Command::AddObject(ObjectKind::Spots));
     let set = session
@@ -459,7 +461,7 @@ fn undoes_and_replays_object_edits() {
 #[test]
 fn undoes_a_named_view_with_its_timeline() {
     let mut session = Session::new();
-    session.open_series("views", series());
+    open_series(&mut session, "views", series());
     let saved = view_state();
     session.observe_view(saved.clone());
     session.execute(Command::SaveView);
@@ -726,7 +728,7 @@ fn navigates_a_plate_field_by_field() {
     let root = temp.path().join("assay.ome.zarr");
     support::plate(&root);
     let mut session = Session::new();
-    session.begin_load(root.clone());
+    load(&mut session, root.clone());
     open_field(&mut session, Extent::new(8, 6, 4));
     {
         let plate = session.plate().expect("the plate is browsable");
@@ -794,12 +796,61 @@ fn navigates_a_plate_field_by_field() {
         sheet.width() > 2 * 192 && sheet.height() > 144,
         "the montage lays the two wells side by side"
     );
+    match session.begin_load(root.clone()) {
+        grana_session::Transfer::Held(held) => {
+            assert_eq!(held.len(), 1, "one cached field carries unsaved work");
+            assert_eq!(held[0].series, 1, "the held work belongs to well A2");
+            assert!(held[0].savable, "a plate field records into a project");
+        }
+        _ => panic!("the unsaved analysis of the well cache blocks the replacement"),
+    }
+    assert_eq!(
+        session.scene().map(|scene| scene.dataset.extent()),
+        Some(Extent::new(8, 6, 4)),
+        "a blocked replacement keeps the open field"
+    );
+    let project = temp.path().join("A2.grana");
+    assert!(session.save_field(1, project.clone()));
+    while session.transferring() {
+        assert!(
+            Instant::now() < deadline,
+            "the field project never finished"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(session.held().is_empty(), "saving the field clears it");
+    let saved = Project::read(
+        &project,
+        SpillStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the saved field reads back");
+    assert_eq!(
+        saved.scene.sets.len(),
+        1,
+        "the project holds the well A2 set"
+    );
+    assert_eq!(
+        saved.source,
+        Source::File {
+            name: "field".to_string(),
+            path: root.clone(),
+            series: 1,
+        },
+        "the project records the well the field belongs to"
+    );
+    assert!(
+        matches!(session.begin_load(root), grana_session::Transfer::Started),
+        "the replacement starts once the cache records every field"
+    );
 }
 
 #[test]
 fn paints_erases_and_undoes_a_voxel_mask() {
     let mut session = Session::new();
-    session.open_series("masking", series());
+    open_series(&mut session, "masking", series());
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let set = last_surfaces(&session);
@@ -974,7 +1025,7 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         .join("tests/fixtures/imaris-filaments.ims");
     let mut session = Session::new();
     session.attach_recovery_at(root.clone());
-    session.begin_load(fixture);
+    load(&mut session, fixture);
     wait_for_scene(&mut session, 1);
     assert!(
         !session.dirty(),
@@ -1052,7 +1103,7 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
 fn refuses_a_project_written_by_another_schema() {
     let temp = Temp::new("grana-project-schema");
     let mut session = Session::new();
-    session.open_series("nuclei", series());
+    open_series(&mut session, "nuclei", series());
     let scene = session.scene().expect("the series opens");
     let project = Project::capture(
         scene,
@@ -1087,7 +1138,7 @@ fn refuses_a_project_written_by_another_schema() {
 #[test]
 fn a_viewer_keeps_a_recorded_analysis_read_only() {
     let mut session = Session::viewer();
-    session.open_series("neuromast", cells_series());
+    open_series(&mut session, "neuromast", cells_series());
     session.execute(Command::SelectChannel(1));
     session.execute(Command::AddObject(ObjectKind::Spots));
     assert!(
@@ -1121,7 +1172,7 @@ fn exports_a_share_package_that_opens_read_only() {
     let dataset = temp.path().join("sample.ome.tif");
     std::fs::copy(&fixture, &dataset).expect("the fixture copies");
     let mut session = Session::new();
-    session.begin_load(dataset);
+    load(&mut session, dataset);
     let deadline = Instant::now() + Duration::from_secs(60);
     while session.scene().is_none() {
         assert!(Instant::now() < deadline, "the dataset never opens");
@@ -1202,7 +1253,7 @@ fn exports_a_share_package_that_opens_read_only() {
         "the manifest names the report: {detail}"
     );
     let mut viewer = Session::new();
-    viewer.open_path(package);
+    open_path(&mut viewer, package);
     let deadline = Instant::now() + Duration::from_secs(60);
     while viewer.scene().is_none() {
         assert!(Instant::now() < deadline, "the package never opens");
@@ -1302,7 +1353,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         return;
     };
     let mut session = Session::new();
-    session.open_series("nuclei", series());
+    open_series(&mut session, "nuclei", series());
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let set = last_surfaces(&session);
@@ -1424,7 +1475,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
 #[test]
 fn keeps_the_replay_when_an_applied_protocol_does_not_fit() {
     let mut session = Session::new();
-    session.open_series("protocol", series());
+    open_series(&mut session, "protocol", series());
     session.execute(Command::AddObject(ObjectKind::Spots));
     let scene = session.scene().expect("the series opens");
     let channels = scene.channels.len();
@@ -1470,7 +1521,7 @@ fn keeps_the_replay_when_an_applied_protocol_does_not_fit() {
 #[test]
 fn drops_volume_reads_that_predate_a_content_change() {
     let mut session = Session::new();
-    session.open_series("stale bricks", series());
+    open_series(&mut session, "stale bricks", series());
     session.execute(Command::SelectChannel(0));
     session.execute(Command::AddObject(ObjectKind::Surfaces));
     let bricks = (0..64)
@@ -1501,4 +1552,28 @@ fn drops_volume_reads_that_predate_a_content_change() {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+fn open_series(session: &mut Session, name: &str, series: VolumeSeries) {
+    assert!(
+        matches!(
+            session.open_series(name, series),
+            grana_session::Transfer::Started
+        ),
+        "the session opens the in-memory series"
+    );
+}
+
+fn load(session: &mut Session, path: std::path::PathBuf) {
+    assert!(
+        matches!(session.begin_load(path), grana_session::Transfer::Started),
+        "the session starts opening the dataset"
+    );
+}
+
+fn open_path(session: &mut Session, path: std::path::PathBuf) {
+    assert!(
+        matches!(session.open_path(path), grana_session::Transfer::Started),
+        "the session starts opening the path"
+    );
 }

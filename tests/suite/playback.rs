@@ -18,7 +18,7 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/data/zebrafish_neuromast.ome.tif");
     let mut session = Session::new();
-    session.begin_load(path);
+    load(&mut session, path);
     let mut waited = Duration::ZERO;
     while session.scene().is_none() {
         session.poll();
@@ -160,4 +160,11 @@ fn crowd(time: u32) -> SpotSet {
         .collect::<Vec<_>>();
     let statistics = vec![SampleStatistics::new(20.0, 10.0, 30.0, 0.0, 20.0); spots.len()];
     SpotSet::new(0, spots, IntensityTable::new(1, statistics))
+}
+
+fn load(session: &mut Session, path: std::path::PathBuf) {
+    assert!(
+        matches!(session.begin_load(path), grana_session::Transfer::Started),
+        "the session starts opening the dataset"
+    );
 }

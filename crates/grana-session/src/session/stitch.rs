@@ -55,6 +55,18 @@ impl Session {
             .is_some_and(|stitch| stitch.running.is_some())
     }
 
+    fn open_mosaic(&mut self, path: PathBuf) {
+        match self.begin_load(path) {
+            Transfer::Started | Transfer::Refused => {}
+            Transfer::Held(held) => {
+                self.message = Some(Message::info(format!(
+                    "the stitched mosaic is ready, and opening it waits for the unsaved analysis of {}",
+                    held[0].name
+                )));
+            }
+        }
+    }
+
     pub fn begin_stitch(&mut self, folder: PathBuf) -> bool {
         if self.scene.is_some() {
             return false;
@@ -215,7 +227,7 @@ impl Session {
                         "the stitched mosaic is ready, and the unsaved analysis stays open until it is saved",
                     ));
                 } else {
-                    self.begin_load(path);
+                    self.open_mosaic(path);
                 }
                 true
             }
@@ -266,7 +278,7 @@ impl Session {
                             "the stitched mosaic is ready, and the unsaved analysis stays open until it is saved",
                         ));
                     } else {
-                        self.begin_load(output);
+                        self.open_mosaic(output);
                     }
                     return true;
                 }

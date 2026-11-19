@@ -38,6 +38,7 @@ use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
 use crate::stream::Stream;
 use crate::window;
+use command::Release;
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
@@ -57,6 +58,22 @@ const EDITOR_MINIMUM: LogicalSize<f64> = LogicalSize::new(1080.0, 700.0);
 enum Resume {
     Exit,
     Command(Command),
+}
+
+impl Resume {
+    fn replaces_document(&self) -> bool {
+        match self {
+            Self::Exit => true,
+            Self::Command(command) => command.replaces_document(),
+        }
+    }
+
+    fn replaces_dataset(&self) -> bool {
+        match self {
+            Self::Exit => true,
+            Self::Command(command) => command.replaces_dataset(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +114,7 @@ pub struct App {
     plate: Option<(String, usize)>,
     export: Export,
     resume: Option<Resume>,
+    release: Option<Release>,
     autosave_at: Option<Instant>,
     changed_at: Option<Instant>,
     revision: Revision,
@@ -168,6 +186,7 @@ impl App {
             plate: None,
             export: Export::new(),
             resume: None,
+            release: None,
             autosave_at: None,
             changed_at: None,
             revision: Revision::ZERO,
@@ -208,10 +227,13 @@ impl App {
         window.set_ime_allowed(false);
         window.set_theme(Some(winit::window::Theme::Dark));
         if let Some(target) = self.startup.take() {
-            if grana_session::is_remote(&target) {
-                self.session.begin_remote(target);
+            let transfer = if grana_session::is_remote(&target) {
+                self.session.begin_remote(target)
             } else {
-                self.session.open_path(PathBuf::from(target));
+                self.session.open_path(PathBuf::from(target))
+            };
+            if !matches!(transfer, grana_session::Transfer::Started) {
+                grana_log::error!(target: "grana::app", "the startup target could not be opened");
             }
         }
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);

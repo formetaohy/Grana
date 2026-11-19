@@ -155,6 +155,20 @@ fn correction_at(folder: &Path) -> Result<Option<Protocol>, String> {
         .map_err(|error| format!("{} is not a valid correction: {error}", path.display()))
 }
 
+pub(super) fn carry_correction(folder: &Path, staging: &Path) -> Result<(), String> {
+    let path = folder.join(CORRECTION);
+    let text = match std::fs::read(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!("failed to read {}: {error}", path.display()));
+        }
+    };
+    let target = staging.join(CORRECTION);
+    grana_file::write(&target, &text)
+        .map_err(|error| format!("failed to write {}: {error}", target.display()))
+}
+
 pub fn record(run: &Path, dataset: &Path, scene: usize, protocol: &Protocol) -> Result<(), String> {
     let mut record = read(run)?.ok_or_else(|| format!("{} holds no run record", run.display()))?;
     let key = dataset.display().to_string();

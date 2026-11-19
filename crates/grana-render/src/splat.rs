@@ -417,11 +417,13 @@ impl SplatSlot {
     }
 }
 
+pub(crate) type Range = (u32, u32, u64, u8);
+
 pub(crate) struct SplatPasses {
     slots: HashMap<(u64, u8), SplatSlot>,
     active: Vec<(u64, u8)>,
     pickable: Vec<(u64, u8)>,
-    ranges: Vec<(u32, u32, u64, u8)>,
+    ranges: Vec<Range>,
     seen: HashSet<(u64, u8)>,
     count: u32,
     scratch: Vec<SplatGeometry>,
@@ -642,9 +644,12 @@ impl SplatPasses {
         self.ranges.sort_unstable();
     }
 
-    pub fn resolve(&self, index: u32) -> Option<(u64, u8, u32)> {
-        let (start, _, key, level) = self
-            .ranges
+    pub fn ranges(&self) -> Vec<Range> {
+        self.ranges.clone()
+    }
+
+    pub fn resolve(ranges: &[Range], index: u32) -> Option<(u64, u8, u32)> {
+        let (start, _, key, level) = ranges
             .iter()
             .find(|(start, end, ..)| index >= *start && index < *end)?;
         Some((*key, *level, index - start))

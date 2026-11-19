@@ -174,7 +174,7 @@ impl Classifier {
     pub fn aggregate_column(&self, aggregate: crate::table::Aggregate) -> Column {
         Column::new(
             format!("{SCORE_LABEL} {}", aggregate.name()),
-            SCORE_KEY,
+            format!("{SCORE_KEY}_{}", aggregate.key()),
             Unit::Count,
             3,
         )

@@ -79,7 +79,6 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::ColocResult => ("colocalization result", "共定位结果"),
         Action::ComputeColoc => ("colocalization", "共定位计算"),
         Action::ObjectColoc => ("object colocalization", "对象共定位"),
-        Action::ApplyProtocol => ("protocol replay", "重放协议"),
         Action::Drift => ("drift correction", "漂移校正"),
         Action::Registration => ("channel registration", "通道配准"),
         Action::Keyframe => ("keyframes", "关键帧"),

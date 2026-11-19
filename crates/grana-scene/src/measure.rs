@@ -1470,7 +1470,7 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.starts_with(grana_measure::NEIGHBOUR_KEY)
                     || key.ends_with("_inside")
                     || key.ends_with("_count")
-                    || key == grana_measure::SCORE_KEY
+                    || key.starts_with(grana_measure::SCORE_KEY)
             }
         })
         .collect()

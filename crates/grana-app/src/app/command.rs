@@ -1,8 +1,20 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use grana_session::{Command, Effects};
+use grana_session::{Command, Effects, Held, Transfer};
 
 use super::{App, Resume};
+
+pub(super) struct Release {
+    steps: VecDeque<Step>,
+    next: Resume,
+}
+
+enum Step {
+    Save { series: usize, path: PathBuf },
+    Discard { series: usize },
+}
+
 impl App {
     pub(super) fn apply(&mut self, commands: Vec<Command>) -> bool {
         if commands.is_empty() {
@@ -12,12 +24,24 @@ impl App {
         let view = self.view_state();
         self.session.observe_view(view);
         for command in commands {
-            if command.replaces_document()
-                && !self.release_document(Resume::Command(command.clone()))
-            {
+            let resume = Resume::Command(command.clone());
+            if command.replaces_document() && !self.release_document(resume.clone()) {
                 continue;
             }
             let effects = self.session.execute(command);
+            if !effects.held.is_empty() {
+                if let Some(steps) = self.ask_fields(effects.held) {
+                    self.release = Some(Release {
+                        steps,
+                        next: resume,
+                    });
+                    if let Ok(next) = self.drain_release() {
+                        self.resume = Some(next);
+                    }
+                }
+                self.request_redraw();
+                return true;
+            }
             if self.react(effects) {
                 return true;
             }
@@ -33,37 +57,43 @@ impl App {
         if effects.open_any
             && let Some(path) = self.pick_any()
         {
-            self.session.open_path(path);
+            let transfer = self.session.open_path(path);
+            self.absorb(transfer);
             return true;
         }
         if effects.open_dataset
             && let Some(path) = self.pick_folder()
         {
-            self.session.open_path(path);
+            let transfer = self.session.open_path(path);
+            self.absorb(transfer);
             return true;
         }
         if effects.open_image
             && let Some(path) = self.pick_image()
         {
-            self.session.begin_load(path);
+            let transfer = self.session.begin_load(path);
+            self.absorb(transfer);
             return true;
         }
         if effects.open_tiles
             && let Some(path) = self.pick_tiles()
         {
-            self.session.begin_stitch(path);
+            let transfer = self.session.open_path(path);
+            self.absorb(transfer);
             return true;
         }
         if effects.open_project
             && let Some(path) = self.pick_project()
         {
-            self.session.begin_project(path);
+            let transfer = self.session.begin_project(path);
+            self.absorb(transfer);
             return true;
         }
         if effects.open_package
             && let Some(path) = self.pick_package()
         {
-            self.session.begin_package(path);
+            let transfer = self.session.begin_package(path);
+            self.absorb(transfer);
             return true;
         }
         if let Some(choose) = effects.save_project {
@@ -102,6 +132,24 @@ impl App {
         false
     }
 
+    fn absorb(&mut self, transfer: Transfer) {
+        if let Transfer::Held(held) = transfer {
+            self.report_held(held);
+        }
+    }
+
+    fn report_held(&mut self, held: Vec<Held>) {
+        let names = held
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.output = Some(format!(
+            "save or discard the unsaved analysis of {names} before opening another document"
+        ));
+        self.request_redraw();
+    }
+
     pub(super) fn validate_mask(&mut self) {
         let Some(brush) = self.workspace.mask else {
             return;
@@ -120,46 +168,163 @@ impl App {
         if self.session.access().viewer() {
             return true;
         }
-        if self.resume.is_some() {
+        if self.resume.is_some() || self.release.is_some() {
             return false;
         }
         if self.session.transferring() {
             self.resume = Some(next);
             return false;
         }
-        if !self.session.dirty() {
+        if !next.replaces_document() {
             return true;
         }
-        let language = self.workspace.language;
-        let answer = rfd::MessageDialog::new()
-            .set_title(grana_i18n::app::unsaved_analysis(language))
-            .set_description(grana_i18n::app::unsaved_detail(language))
-            .set_level(rfd::MessageLevel::Warning)
-            .set_buttons(rfd::MessageButtons::YesNoCancel)
-            .show();
-        match answer {
-            rfd::MessageDialogResult::No => true,
-            rfd::MessageDialogResult::Yes => {
-                let view = self.view_state();
-                let Some(path) = self.project_path(false) else {
+        if self.session.dirty() {
+            let language = self.workspace.language;
+            let answer = rfd::MessageDialog::new()
+                .set_title(grana_i18n::app::unsaved_analysis(language))
+                .set_description(grana_i18n::app::unsaved_detail(language))
+                .set_level(rfd::MessageLevel::Warning)
+                .set_buttons(rfd::MessageButtons::YesNoCancel)
+                .show();
+            match answer {
+                rfd::MessageDialogResult::No => {}
+                rfd::MessageDialogResult::Yes => {
+                    let view = self.view_state();
+                    let Some(path) = self.project_path(false) else {
+                        return false;
+                    };
+                    self.session.save_project(path, view);
+                    self.resume = Some(next);
                     return false;
-                };
-                self.session.save_project(path, view);
-                self.resume = Some(next);
-                false
+                }
+                _ => return false,
             }
-            _ => false,
         }
+        let held = if next.replaces_dataset() {
+            self.session.held()
+        } else {
+            Vec::new()
+        };
+        if held.is_empty() {
+            return true;
+        }
+        let Some(steps) = self.ask_fields(held) else {
+            return false;
+        };
+        self.release = Some(Release { steps, next });
+        self.drain_release().is_ok()
+    }
+
+    fn ask_fields(&mut self, held: Vec<Held>) -> Option<VecDeque<Step>> {
+        let language = self.workspace.language;
+        let mut steps = VecDeque::new();
+        for field in held {
+            if !field.savable {
+                let answer = rfd::MessageDialog::new()
+                    .set_title(grana_i18n::app::unsaved_analysis(language))
+                    .set_description(grana_i18n::app::unsaved_unsavable(language, &field.name))
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_buttons(rfd::MessageButtons::OkCancel)
+                    .show();
+                if !matches!(answer, rfd::MessageDialogResult::Ok) {
+                    return None;
+                }
+                steps.push_back(Step::Discard {
+                    series: field.series,
+                });
+                continue;
+            }
+            let answer = rfd::MessageDialog::new()
+                .set_title(grana_i18n::app::unsaved_analysis(language))
+                .set_description(grana_i18n::app::unsaved_field(language, &field.name))
+                .set_level(rfd::MessageLevel::Warning)
+                .set_buttons(rfd::MessageButtons::YesNoCancel)
+                .show();
+            match answer {
+                rfd::MessageDialogResult::No => steps.push_back(Step::Discard {
+                    series: field.series,
+                }),
+                rfd::MessageDialogResult::Yes => {
+                    let path = self.field_project(&field)?;
+                    steps.push_back(Step::Save {
+                        series: field.series,
+                        path,
+                    });
+                }
+                _ => return None,
+            }
+        }
+        Some(steps)
+    }
+
+    fn field_project(&self, field: &Held) -> Option<PathBuf> {
+        if let Some(path) = field.project.as_ref() {
+            return Some(path.clone());
+        }
+        let language = self.workspace.language;
+        rfd::FileDialog::new()
+            .set_title(grana_i18n::app::save_grana_project(language))
+            .set_file_name(format!(
+                "{}.{}",
+                grana_session::slug(&field.name),
+                grana_session::PROJECT_EXTENSION
+            ))
+            .add_filter(
+                grana_i18n::app::grana_project(language),
+                &[grana_session::PROJECT_EXTENSION],
+            )
+            .save_file()
+    }
+
+    fn run_step(&mut self, step: Step) -> bool {
+        match step {
+            Step::Discard { series } => {
+                if self.session.discard_field(series) {
+                    return false;
+                }
+            }
+            Step::Save { series, path } => {
+                if self.session.save_field(series, path) {
+                    return true;
+                }
+            }
+        }
+        self.release = None;
+        true
+    }
+
+    fn drain_release(&mut self) -> Result<Resume, ()> {
+        while let Some(step) = self
+            .release
+            .as_mut()
+            .and_then(|release| release.steps.pop_front())
+        {
+            if self.run_step(step) {
+                return Err(());
+            }
+        }
+        let release = self
+            .release
+            .take()
+            .expect("a drained release carries the transfer it defers");
+        Ok(release.next)
     }
 
     pub(super) fn follow_resume(&mut self) -> bool {
         if self.session.transferring() {
             return false;
         }
+        if self.release.is_some() {
+            match self.drain_release() {
+                Ok(next) => self.resume = Some(next),
+                Err(()) => return false,
+            }
+        }
         let Some(next) = self.resume.take() else {
             return false;
         };
         if !self.release_document(next.clone()) {
+            self.request_redraw();
             return false;
         }
         match next {

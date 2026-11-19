@@ -150,6 +150,7 @@ impl Engine {
 
     pub fn damage(&mut self, damages: &[Damage]) {
         self.renderer.damage(damages);
+        self.generation = self.renderer.generation();
     }
 
     pub fn requests_pending(&self) -> bool {

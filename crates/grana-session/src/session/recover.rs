@@ -154,7 +154,19 @@ impl Session {
         };
         grana_log::info!(target: "grana::session", dataset = entry.name(), "recovering an automatic snapshot");
         self.restore = Some(Restore { entry: Some(entry) });
-        self.begin_project(snapshot);
+        match self.begin_project(snapshot) {
+            Transfer::Started => {}
+            Transfer::Held(held) => {
+                self.restore = None;
+                self.message = Some(Message::error(format!(
+                    "save the unsaved analysis of {} before recovering",
+                    held[0].name
+                )));
+            }
+            Transfer::Refused => {
+                self.restore = None;
+            }
+        }
     }
 
     pub fn discard_recovery(&mut self) {
@@ -183,7 +195,8 @@ impl Session {
             self.baseline = self.document_hash();
             return;
         }
-        if self.restore.take().is_some() {
+        let recovered = self.restore.take().is_some();
+        if recovered {
             self.project = None;
             self.baseline = None;
             self.deferred = false;
@@ -193,8 +206,28 @@ impl Session {
         } else if restored == Restored::Fresh {
             self.baseline = self.document_hash();
         }
-        self.recovery.discard();
-        self.tasks.cancel_autosave();
+        if recovered || self.recovery_holds_open_document() {
+            self.recovery.discard();
+            self.tasks.cancel_autosave();
+        }
+    }
+
+    fn recovery_holds_open_document(&self) -> bool {
+        let Some(entry) = self.recovery.entry() else {
+            return false;
+        };
+        let Some(fingerprint) = self.fingerprint else {
+            return false;
+        };
+        let Some(source) = self.source_ref() else {
+            return false;
+        };
+        let target = match &source {
+            ProjectSource::File { path, .. } => path.display().to_string(),
+            ProjectSource::Remote { url, .. } => url.clone(),
+            ProjectSource::Synthetic { name } => name.clone(),
+        };
+        entry.fingerprint() == fingerprint.hex() && entry.target() == target
     }
 
     pub(super) fn clear_recovery(&mut self) {

@@ -42,6 +42,10 @@ pub(super) fn analyse(
     let folder = output.join(dataset.folder());
     let atomic = grana_file::Atomic::directory(&folder)
         .map_err(|error| format!("failed to prepare {}: {error}", folder.display()))?;
+    if let Err(detail) = super::manifest::carry_correction(&folder, atomic.staging()) {
+        drop(atomic);
+        return Err(detail);
+    }
     let report = match write_dataset(task, dataset, atomic.staging()) {
         Ok(report) => report,
         Err(detail) => {

@@ -112,12 +112,12 @@ impl MaskGate {
         let Some(frame) = self.source.frame(time) else {
             return Ok(None);
         };
-        if !self.source.per_object_visibility() && self.filter.is_none() {
+        if !self.source.filtered() && self.filter.is_none() {
             return frame.shape().map(Some).map_err(|error| error.to_string());
         }
         let objects = frame.object_count();
         let mut keep = (0..objects)
-            .map(|object| self.source.filtered_object(time, object))
+            .map(|object| self.source.visible_object(time, object))
             .collect::<Vec<_>>();
         if let Some(filter) = self.filter
             && keep.iter().any(|kept| *kept)

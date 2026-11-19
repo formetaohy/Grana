@@ -556,7 +556,6 @@ pub enum Action {
     ColocResult,
     ComputeColoc,
     ObjectColoc,
-    ApplyProtocol,
     Drift,
     Registration,
     Keyframe,
@@ -599,12 +598,7 @@ impl Action {
     fn asynchronous(self) -> bool {
         matches!(
             self,
-            Self::Detect
-                | Self::Track
-                | Self::ComputeColoc
-                | Self::ObjectColoc
-                | Self::Cluster
-                | Self::ApplyProtocol
+            Self::Detect | Self::Track | Self::ComputeColoc | Self::ObjectColoc | Self::Cluster
         )
     }
 }
@@ -795,7 +789,7 @@ impl Command {
             Self::SetDriftReference(_) => Nature::Edit(Edit::new(Action::Drift)),
             Self::SetDriftOffset { .. } => Nature::Edit(Edit::new(Action::Drift)),
             Self::ClearRegistration => Nature::Edit(Edit::new(Action::Registration)),
-            Self::ApplyProtocol => Nature::Edit(Edit::new(Action::ApplyProtocol)),
+            Self::ApplyProtocol => Nature::DocumentAuthored,
             Self::SaveView => Nature::Edit(Edit::new(Action::NamedView)),
             Self::RemoveView(_) => Nature::Edit(Edit::new(Action::NamedView)),
             Self::ClearKeyframes => Nature::Edit(Edit::new(Action::Keyframe)),
@@ -984,6 +978,10 @@ impl Command {
 
     pub fn replaces_document(&self) -> bool {
         matches!(self.nature(), Nature::Document | Nature::DocumentAuthored)
+    }
+
+    pub fn replaces_dataset(&self) -> bool {
+        self.replaces_document() && !matches!(self, Self::ApplyProtocol)
     }
 
     pub fn authors(&self) -> bool {

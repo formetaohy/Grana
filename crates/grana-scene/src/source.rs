@@ -78,8 +78,8 @@ impl ObjectSource {
         self.restricted || self.localization.active()
     }
 
-    pub fn per_object_visibility(&self) -> bool {
-        !matches!(self.visibility, Visibility::All)
+    pub fn restricted(&self) -> bool {
+        self.restricted
     }
 
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {

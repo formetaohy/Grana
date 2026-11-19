@@ -175,20 +175,18 @@ pub fn build(
         frame.startup = Some(size);
         return frame;
     };
-    if workspace.panel == Some(Panel::Statistics) && view.measure.set().is_none() {
+    if workspace.panel == Some(Panel::Statistics)
+        && view.measure.set().is_none()
+        && view.access.author()
+    {
         let chosen = scene
             .objects
             .iter()
             .find(|set| set.detected() > 0)
             .or_else(|| scene.objects.iter().next());
-        if let Some(set) = chosen
-            && workspace.measure_request != Some(set.id())
-        {
-            workspace.measure_request = Some(set.id());
+        if let Some(set) = chosen {
             frame.commands.push(Command::SetMeasureSet(Some(set.id())));
         }
-    } else if view.measure.set().is_some() {
-        workspace.measure_request = None;
     }
     workspace.prepare(view, ui.size());
     let frames = scene.frame_count() as usize;

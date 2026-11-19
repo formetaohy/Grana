@@ -353,14 +353,29 @@ impl SceneState {
                 {
                     return Err(fault("a seed source names another surface or cell set"));
                 }
-                if !self
+                let Some(mut current) = self
                     .sets
                     .iter()
-                    .any(|candidate| candidate.id == source.raw())
-                {
+                    .find(|candidate| candidate.id == source.raw())
+                else {
                     return Err(fault(
                         "a seed source names an object set the scene does not hold",
                     ));
+                };
+                while let Seeds::Source(next) = &current.seeds {
+                    if next.raw() == set.id {
+                        return Err(fault("a seed source closes a cycle of object sets"));
+                    }
+                    let Some(candidate) = self
+                        .sets
+                        .iter()
+                        .find(|candidate| candidate.id == next.raw())
+                    else {
+                        return Err(fault(
+                            "a seed source names an object set the scene does not hold",
+                        ));
+                    };
+                    current = candidate;
                 }
             }
         }

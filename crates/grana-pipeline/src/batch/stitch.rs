@@ -30,7 +30,14 @@ pub(super) fn place(
         .map_err(|error| error.to_string())?;
     let tiles = folder.tiles().to_vec();
     let folder = output.join(STITCHED).join(dataset.key());
-    let path = folder.join(format!("{}.ome.zarr", grana_scene::slug(&dataset.title())));
+    let path = folder.join(format!(
+        "{}-{}x{}-c{}-s{}.ome.zarr",
+        grana_scene::slug(&dataset.title()),
+        spec.rows,
+        spec.columns,
+        spec.channel,
+        dataset.scene()
+    ));
     if current(&path, &tiles) {
         dataset.set_stitched(path);
         return Ok(());

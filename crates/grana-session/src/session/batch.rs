@@ -134,9 +134,17 @@ impl Session {
         let scene = dataset.scene();
         self.batch_review = None;
         self.batch_message = None;
-        self.begin_load(path.clone());
-        if self.loading.is_some() {
-            self.batch_review_pending = Some((index, path, scene));
+        match self.begin_load(path.clone()) {
+            Transfer::Started => {
+                self.batch_review_pending = Some((index, path, scene));
+            }
+            Transfer::Held(held) => {
+                self.batch_message = Some(format!(
+                    "save the unsaved analysis of {} before reviewing another dataset",
+                    held[0].name
+                ));
+            }
+            Transfer::Refused => {}
         }
     }
 

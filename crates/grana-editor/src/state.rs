@@ -248,7 +248,6 @@ pub struct Workspace {
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
-    pub(crate) measure_request: Option<ObjectSetId>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub settings: Settings,
     pub language: grana_i18n::Language,
@@ -296,7 +295,6 @@ impl Default for Workspace {
             comparison_group: None,
             comparison_key: None,
             comparison_open: None,
-            measure_request: None,
             batch_chart: crate::batch_panel::Chart::default(),
             settings: Settings::default(),
             language: grana_i18n::Language::English,
@@ -372,7 +370,6 @@ impl Workspace {
         self.classifier.clear();
         self.relation = None;
         self.relation_body = RelationBody::default();
-        self.measure_request = None;
         self.drag = PlotDrag::default();
         self.playback = Playback::default();
         self.column_widths.clear();

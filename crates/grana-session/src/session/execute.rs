@@ -11,6 +11,12 @@ pub(super) struct Recording {
     analyses: usize,
 }
 
+fn absorb(transfer: Transfer, effects: &mut Effects) {
+    if let Transfer::Held(held) = transfer {
+        effects.held = held;
+    }
+}
+
 impl Session {
     pub fn execute(&mut self, command: Command) -> Effects {
         if !self.access().permits(&command) {
@@ -35,9 +41,9 @@ impl Session {
             Command::OpenDataset => effects.open_dataset = true,
             Command::OpenImage => effects.open_image = true,
             Command::OpenTiles => effects.open_tiles = true,
-            Command::OpenPath(path) => self.open_path(path),
-            Command::OpenRemote(url) => self.begin_remote(url),
-            Command::OpenRecent(index) => self.open_recent(index),
+            Command::OpenPath(path) => absorb(self.open_path(path), &mut effects),
+            Command::OpenRemote(url) => absorb(self.begin_remote(url), &mut effects),
+            Command::OpenRecent(index) => absorb(self.open_recent(index), &mut effects),
             Command::RecoverAnalysis => self.recover(),
             Command::DiscardAnalysis => {
                 self.discard_recovery();
@@ -53,12 +59,10 @@ impl Session {
             Command::SaveComparison => effects.comparison = true,
             Command::SetTime(time) => self.set_time(time),
             Command::SelectSeries(index) => {
-                if index != self.series_index && !self.select_series(index) {
-                    self.message = Some(Message::error("the dataset does not hold that series"));
-                }
+                absorb(self.select_series(index), &mut effects);
             }
             Command::SelectField(index) => {
-                self.select_field(index);
+                absorb(self.select_field(index), &mut effects);
             }
             Command::Select(selection) => {
                 if let Some(scene) = self.scene.as_mut() {
@@ -940,9 +944,6 @@ impl Session {
     }
 
     pub(super) fn abandon(&mut self, edit: Edit) {
-        if edit.action() == Action::ApplyProtocol {
-            self.discard_analysis();
-        }
         if let Some(set) = ObjectSetId::from_raw(edit.target()) {
             match edit.action() {
                 Action::Detect => {

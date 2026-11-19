@@ -21,6 +21,7 @@ use super::preview::Previews;
 use super::provenance::Export as Provenance;
 use crate::document::Document;
 use crate::document::Outcome as DocumentOutcome;
+use crate::document::Target as DocumentTarget;
 use crate::recovery::Entry as RecoveryEntry;
 use crate::task::{Poll, Progress};
 
@@ -41,6 +42,7 @@ pub(super) enum Completion {
     Document {
         path: PathBuf,
         hash: Option<u64>,
+        target: DocumentTarget,
         outcome: DocumentOutcome,
     },
     Labels {
@@ -232,12 +234,14 @@ impl Tasks {
             stepped |= slot.stepped();
             let path = slot.path().to_path_buf();
             let hash = slot.hash();
+            let target = slot.target();
             match slot.poll() {
                 Poll::Event(outcome) => {
                     self.document = None;
                     completions.push(Completion::Document {
                         path,
                         hash,
+                        target,
                         outcome,
                     });
                 }
@@ -247,6 +251,7 @@ impl Tasks {
                     completions.push(Completion::Document {
                         path,
                         hash,
+                        target,
                         outcome: DocumentOutcome::Failed(
                             "the project worker stopped before it finished".to_string(),
                         ),
@@ -629,9 +634,10 @@ impl Session {
             Completion::Document {
                 path,
                 hash,
+                target,
                 outcome,
             } => {
-                self.finish_document(path, hash, outcome);
+                self.finish_document(path, hash, target, outcome);
             }
             Completion::Labels { set, outcome } => self.finish_labels(set, outcome),
             Completion::Csv { name, outcome } => self.finish_csv(name, outcome),

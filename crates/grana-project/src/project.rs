@@ -120,7 +120,7 @@ pub enum Mismatch {
     Shape,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     Synthetic {
         name: String,

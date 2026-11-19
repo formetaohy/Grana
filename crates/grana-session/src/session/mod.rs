@@ -55,14 +55,14 @@ use crate::document::{self, Document};
 use crate::history::{History, Snapshot, Undo};
 use crate::input::Input;
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::rate::Rate;
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::recovery::Recovery;
 use crate::task::Poll;
-use crate::transfer::Transfer;
 use crate::view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSignificance, BatchView,
-    HistoryView, ImportNote, IoView, Message, PlateView, SeriesView, StoreView,
+    Held, HistoryView, ImportNote, IoView, Message, PlateView, SeriesView, StoreView, Transfer,
 };
 use crate::{Action, Analysis, Command, Series, Source};
 use field::{Fields, Recovered};
@@ -123,6 +123,7 @@ pub struct Effects {
     pub cancel_export: bool,
     pub keyframe: bool,
     pub repaint: bool,
+    pub held: Vec<Held>,
 }
 
 pub struct Session {
@@ -193,7 +194,7 @@ pub struct Session {
     mask_stamps: Vec<u64>,
     mask_extents: Vec<Option<MaskExtent>>,
     damages: Vec<Damage>,
-    transfer: Transfer,
+    transfer: Rate,
     recent: Recent,
     import: Vec<ImportNote>,
     stitch: Option<Stitch>,
@@ -285,7 +286,7 @@ impl Session {
             mask_stamps: Vec::new(),
             mask_extents: Vec::new(),
             damages: Vec::new(),
-            transfer: Transfer::default(),
+            transfer: Rate::default(),
             recent: Recent::default(),
             import: Vec::new(),
             stitch: None,

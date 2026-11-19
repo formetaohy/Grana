@@ -5,13 +5,13 @@ const STALE: Duration = Duration::from_secs(2);
 const SMOOTHING: f32 = 0.5;
 
 #[derive(Default)]
-pub struct Transfer {
+pub struct Rate {
     bytes: u64,
     start: Option<Instant>,
     rate: Option<f32>,
 }
 
-impl Transfer {
+impl Rate {
     pub fn reset(&mut self) {
         *self = Self::default();
     }

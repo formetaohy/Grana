@@ -3,7 +3,10 @@ use super::*;
 use std::time::Instant;
 
 impl Session {
-    pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
+    pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) -> Transfer {
+        if let Some(held) = self.admit() {
+            return held;
+        }
         grana_log::info!(target: "grana::session", dataset = name, "an in-memory series opened");
         self.read_only = false;
         let (source, opened) = Loader::memory(series);
@@ -46,22 +49,26 @@ impl Session {
             self.mask_extents = scene.mask_extents(scene.time());
         }
         self.baseline = self.document_hash();
+        Transfer::Started
     }
 
     pub fn set_capture_factory(&mut self, factory: CaptureFactory) {
         self.capturer = Some(factory);
     }
 
-    pub fn begin_load(&mut self, path: PathBuf) {
-        self.begin_load_series(path, 0);
+    pub fn begin_load(&mut self, path: PathBuf) -> Transfer {
+        self.begin_load_series(path, 0)
     }
 
-    pub fn begin_load_series(&mut self, path: PathBuf, series: usize) {
+    pub fn begin_load_series(&mut self, path: PathBuf, series: usize) -> Transfer {
         grana_log::info!(target: "grana::session", path = %path.display(), series, "opening an image");
         self.batch_review_pending = None;
         self.stitch = None;
         if self.reject_transfer() {
-            return;
+            return Transfer::Refused;
+        }
+        if let Some(held) = self.admit() {
+            return held;
         }
         self.read_only = false;
         self.loading = Some(file_name(&path));
@@ -74,22 +81,26 @@ impl Session {
         self.fields.clear();
         self.clear_plate();
         self.reset();
+        Transfer::Started
     }
 
-    pub fn begin_remote(&mut self, url: String) {
-        self.begin_remote_series(url, 0);
+    pub fn begin_remote(&mut self, url: String) -> Transfer {
+        self.begin_remote_series(url, 0)
     }
 
-    pub fn begin_remote_series(&mut self, url: String, series: usize) {
+    pub fn begin_remote_series(&mut self, url: String, series: usize) -> Transfer {
         if self.reject_transfer() {
-            return;
+            return Transfer::Refused;
         }
         if !grana_image::is_remote(&url) {
             grana_log::error!(target: "grana::session", %url, "the remote source is not an http or https url");
             self.message = Some(Message::error(format!(
                 "`{url}` is not an http or https url"
             )));
-            return;
+            return Transfer::Refused;
+        }
+        if let Some(held) = self.admit() {
+            return held;
         }
         grana_log::info!(target: "grana::session", url = %endpoint(&url), series, "opening a remote dataset");
         self.read_only = false;
@@ -103,26 +114,25 @@ impl Session {
         self.fields.clear();
         self.clear_plate();
         self.reset();
+        Transfer::Started
     }
 
-    pub fn open_recent(&mut self, index: usize) {
+    pub fn open_recent(&mut self, index: usize) -> Transfer {
         let Some(entry) = self.recent.entry(index).cloned() else {
-            return;
+            return Transfer::Refused;
         };
         match entry.kind() {
             crate::recent::Kind::Image => {
-                self.begin_load_series(PathBuf::from(entry.target()), entry.series());
+                self.begin_load_series(PathBuf::from(entry.target()), entry.series())
             }
-            crate::recent::Kind::Project => {
-                self.begin_project(PathBuf::from(entry.target()));
-            }
+            crate::recent::Kind::Project => self.begin_project(PathBuf::from(entry.target())),
             crate::recent::Kind::Remote => {
-                self.begin_remote_series(entry.target().to_string(), entry.series());
+                self.begin_remote_series(entry.target().to_string(), entry.series())
             }
         }
     }
 
-    pub fn open_path(&mut self, path: PathBuf) {
+    pub fn open_path(&mut self, path: PathBuf) -> Transfer {
         grana_log::info!(target: "grana::session", path = %path.display(), "opening a path");
         if let Err(error) = grana_file::recover(&path) {
             grana_log::error!(target: "grana::session", path = %path.display(), %error, "failed to recover the path");
@@ -130,61 +140,68 @@ impl Session {
                 "failed to recover {}: {error}",
                 path.display()
             )));
-            return;
+            return Transfer::Refused;
         }
         if let Some(project) = grana_project::package_project(&path) {
-            self.begin_project(project);
-            return;
+            return self.begin_project(project);
         }
         if grana_project::is_project(&path) {
-            self.begin_project(path);
-            return;
+            return self.begin_project(path);
         }
         if grana_image::is_image(&path) {
-            self.begin_load(path);
-            return;
+            return self.begin_load(path);
         }
         if path.is_dir() && self.begin_stitch(path.clone()) {
-            return;
+            return Transfer::Started;
         }
         grana_log::error!(target: "grana::session", path = %path.display(), "the path is neither a supported image nor a project");
         self.message = Some(Message::error(format!(
             "{} is neither a supported image nor a grana project",
             path.display()
         )));
+        Transfer::Refused
     }
 
-    pub fn begin_package(&mut self, path: PathBuf) {
+    pub fn begin_package(&mut self, path: PathBuf) -> Transfer {
         let Some(project) = grana_project::package_project(&path) else {
             self.message = Some(Message::error(format!(
                 "{} holds no recorded analysis",
                 path.display()
             )));
-            return;
+            return Transfer::Refused;
         };
-        self.begin_project(project);
+        self.begin_project(project)
     }
 
-    pub fn select_series(&mut self, index: usize) -> bool {
-        if index == self.series_index || index >= self.series.len() {
-            return false;
+    pub fn select_series(&mut self, index: usize) -> Transfer {
+        if index == self.series_index {
+            return Transfer::Refused;
+        }
+        if index >= self.series.len() {
+            self.message = Some(Message::error(format!(
+                "the dataset holds {} series of images and series {index} was requested",
+                self.series.len()
+            )));
+            return Transfer::Refused;
         }
         let Some(source) = self.source.as_ref().map(Loader::source) else {
-            return false;
+            return Transfer::Refused;
         };
         let next = match &source {
-            Source::Memory(_) => return false,
+            Source::Memory(_) => return Transfer::Refused,
             Source::File { path, .. } => Loader::file_series(path.clone(), index),
             Source::Remote { url, .. } => Loader::remote_series(url.clone(), index),
         };
         if self.reject_transfer() {
-            return false;
+            return Transfer::Refused;
         }
         if self.switching_wells() {
-            return false;
+            return Transfer::Refused;
+        }
+        if let Err(held) = self.capture_field() {
+            return Transfer::Held(vec![held]);
         }
         self.read_only = false;
-        self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
         self.pending = None;
@@ -192,51 +209,56 @@ impl Session {
         self.baseline = None;
         self.clear_plate();
         self.reset();
-        true
+        Transfer::Started
     }
 
-    pub fn select_field(&mut self, index: usize) -> bool {
+    pub fn select_field(&mut self, index: usize) -> Transfer {
         let Some(plate) = self.plate.as_ref() else {
-            return false;
+            return Transfer::Refused;
         };
         if index >= plate.len() {
             self.message = Some(Message::error(format!(
                 "the plate holds {} fields of view and field {index} was requested",
                 plate.len()
             )));
-            return false;
+            return Transfer::Refused;
         }
         if index == self.field {
-            return false;
+            return Transfer::Refused;
         }
         let Some(source) = self.source.as_ref().map(Loader::source) else {
-            return false;
+            return Transfer::Refused;
         };
         let next = match &source {
-            Source::Memory(_) => return false,
+            Source::Memory(_) => return Transfer::Refused,
             Source::File { path, .. } => Loader::file_series(path.clone(), index),
             Source::Remote { url, .. } => Loader::remote_series(url.clone(), index),
         };
         if self.reject_transfer() {
-            return false;
+            return Transfer::Refused;
         }
         if self.switching_wells() {
-            return false;
+            return Transfer::Refused;
+        }
+        if let Err(held) = self.capture_field() {
+            return Transfer::Held(vec![held]);
         }
         self.read_only = false;
-        self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
         self.pending = None;
         self.project = None;
         self.baseline = None;
         self.reset();
-        true
+        Transfer::Started
     }
 
-    pub fn begin_project(&mut self, path: PathBuf) {
+    pub fn begin_project(&mut self, path: PathBuf) -> Transfer {
         if self.reject_transfer() {
-            return;
+            return Transfer::Refused;
+        }
+        if let Some(held) = self.admit() {
+            return held;
         }
         grana_log::info!(target: "grana::session", path = %path.display(), "opening a project");
         self.plate = None;
@@ -245,6 +267,7 @@ impl Session {
         self.clear_plate();
         self.tasks.document = Some(Document::open(path, Arc::clone(&self.store)));
         self.message = None;
+        Transfer::Started
     }
 
     pub fn save_project(&mut self, path: PathBuf, view: ViewState) {
@@ -374,15 +397,37 @@ impl Session {
         &mut self,
         path: PathBuf,
         hash: Option<u64>,
+        target: document::Target,
         outcome: document::Outcome,
     ) {
         match outcome {
             document::Outcome::Saved => {
                 grana_log::info!(target: "grana::session", project = %path.display(), "project saved");
-                self.project = Some(path.clone());
-                self.baseline = hash;
-                self.clear_recovery();
                 self.record_recent(RecentEntry::project(&path));
+                match target {
+                    document::Target::Document => {
+                        self.project = Some(path);
+                        self.baseline = hash;
+                        self.clear_recovery();
+                    }
+                    document::Target::Field(series) => {
+                        let Some(field) = self.fields.find_mut(series) else {
+                            self.message = Some(Message::error(format!(
+                                "the analysis of series {series} left the well cache before its project was written to {}",
+                                path.display()
+                            )));
+                            return;
+                        };
+                        field.project = Some(path.clone());
+                        field.baseline = hash;
+                        field.unsaved = false;
+                        self.message = Some(Message::info(format!(
+                            "saved the analysis of {} to {}",
+                            field.name,
+                            path.display()
+                        )));
+                    }
+                }
             }
             document::Outcome::Opened(project) => {
                 grana_log::info!(target: "grana::session", project = %path.display(), "project opened");
@@ -392,20 +437,28 @@ impl Session {
             }
             document::Outcome::Failed(detail) => {
                 grana_log::error!(target: "grana::session", project = %path.display(), %detail, "project transfer failed");
-                self.restore = None;
+                if matches!(target, document::Target::Document) {
+                    self.restore = None;
+                }
                 self.message = Some(Message::error(detail));
             }
             document::Outcome::Cancelled => {
                 grana_log::warn!(target: "grana::session", project = %path.display(), "project transfer cancelled");
-                self.restore = None;
+                if matches!(target, document::Target::Document) {
+                    self.restore = None;
+                }
             }
         }
     }
 
     pub(super) fn source_ref(&self) -> Option<ProjectSource> {
         let scene = self.scene.as_ref()?;
-        let name = scene.dataset.name().to_string();
-        match scene.dataset.origin() {
+        self.source_of(&scene.dataset, self.series_index)
+    }
+
+    pub(super) fn source_of(&self, dataset: &Dataset, series: usize) -> Option<ProjectSource> {
+        let name = dataset.name().to_string();
+        match dataset.origin() {
             Origin::Synthetic => None,
             Origin::Zarr
             | Origin::Tiff
@@ -413,15 +466,11 @@ impl Session {
             | Origin::Nikon
             | Origin::Leica
             | Origin::Imaris => match self.source.as_ref()?.source() {
-                Source::File { path, series, .. } => {
-                    Some(ProjectSource::File { name, path, series })
-                }
+                Source::File { path, .. } => Some(ProjectSource::File { name, path, series }),
                 Source::Memory(_) | Source::Remote { .. } => None,
             },
             Origin::Remote => match self.source.as_ref()?.source() {
-                Source::Remote { url, series, .. } => {
-                    Some(ProjectSource::Remote { name, url, series })
-                }
+                Source::Remote { url, .. } => Some(ProjectSource::Remote { name, url, series }),
                 Source::Memory(_) | Source::File { .. } => None,
             },
         }
@@ -614,7 +663,7 @@ impl Session {
                                 "the dataset does not hold the scene the run recorded",
                             ));
                         } else if self.series_index != scene {
-                            if !self.select_series(scene) {
+                            if !matches!(self.select_series(scene), Transfer::Started) {
                                 self.batch_review_pending = None;
                                 self.message =
                                     Some(Message::error("the reviewed scene cannot be opened"));

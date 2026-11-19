@@ -180,6 +180,7 @@ pub struct Renderer {
     pick_readback: Option<Readback>,
     pick_pending: bool,
     pick_issued: u64,
+    pick_ranges: Option<Vec<crate::splat::Range>>,
     sequence: u64,
     info: FrameInfo,
     fragments: u64,
@@ -253,6 +254,7 @@ impl Renderer {
             pick_readback: None,
             pick_pending: false,
             pick_issued: 0,
+            pick_ranges: None,
             sequence: 0,
             info: FrameInfo::default(),
             fragments: FRAGMENT_BUDGET,
@@ -475,6 +477,7 @@ impl Renderer {
             target.taa.invalidate();
         }
         resources.damage(&scopes, &mut self.residence, self.time);
+        self.residence.bump();
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {
@@ -504,6 +507,7 @@ impl Renderer {
             pick_readback,
             pick_pending,
             pick_issued,
+            pick_ranges,
             sequence,
             sliced,
             ..
@@ -620,6 +624,7 @@ impl Renderer {
         readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
         queue.submit([encoder.finish()]);
         readback.register();
+        *pick_ranges = splats.as_ref().map(SplatPasses::ranges);
         *pick_pending = true;
         *pick_issued = *sequence;
         true
@@ -632,6 +637,7 @@ impl Renderer {
         if self.sequence.wrapping_sub(self.pick_issued) > PICK_LIFETIME {
             self.pick_pending = false;
             self.pick_readback = None;
+            self.pick_ranges = None;
             return Ok(Some(PickId::Expired));
         }
         let Some(readback) = self.pick_readback.as_mut() else {
@@ -644,12 +650,11 @@ impl Renderer {
         Ok(Some(match raw {
             pick::Raw::None => PickId::None,
             pick::Raw::Style(index) => PickId::Style(index),
-            pick::Raw::Splat(index) => match self
-                .splats
-                .as_ref()
-                .and_then(|splats| splats.resolve(index))
-            {
-                Some((key, level, index)) => PickId::Splat { key, level, index },
+            pick::Raw::Splat(index) => match self.pick_ranges.take().as_deref() {
+                Some(ranges) => match SplatPasses::resolve(ranges, index) {
+                    Some((key, level, index)) => PickId::Splat { key, level, index },
+                    None => PickId::None,
+                },
                 None => PickId::None,
             },
         }))

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use grana_animation::Timeline;
 use grana_image::{Plate, Series, Well};
@@ -82,6 +83,21 @@ pub struct BatchView<'a> {
 pub struct StoreView {
     pub resident: u64,
     pub spilled: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Held {
+    pub name: String,
+    pub series: usize,
+    pub project: Option<PathBuf>,
+    pub savable: bool,
+}
+
+#[must_use]
+pub enum Transfer {
+    Started,
+    Held(Vec<Held>),
+    Refused,
 }
 
 pub struct IoView<'a> {

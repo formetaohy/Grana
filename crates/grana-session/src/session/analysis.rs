@@ -22,10 +22,6 @@ enum DetectPlan {
 }
 
 impl DetectPlan {
-    fn clears_objects(&self) -> bool {
-        matches!(self, Self::Grow { .. })
-    }
-
     fn into_analysis(self, set: ObjectSetId) -> Analysis {
         let job = Job::Detect(set);
         match self {
@@ -1145,9 +1141,7 @@ impl Session {
         }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
-        if plan.clears_objects()
-            && let Some(scene) = self.scene.as_mut()
-        {
+        if let Some(scene) = self.scene.as_mut() {
             scene.clear_object(set);
         }
         let Some(input) = self.detect_input(set) else {

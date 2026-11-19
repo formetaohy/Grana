@@ -9,7 +9,7 @@ use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::Channels;
 use grana_project::ViewState;
 use grana_scene::Scene;
-use grana_session::{Kind as MessageKind, Session};
+use grana_session::{Kind as MessageKind, Session, Transfer};
 
 use crate::bricks::ImageBricks;
 
@@ -293,7 +293,12 @@ fn open(input: &Path) -> Result<Session, String> {
         return Err(format!("{} does not exist", input.display()));
     }
     let mut session = Session::new();
-    session.open_path(input.to_path_buf());
+    if !matches!(session.open_path(input.to_path_buf()), Transfer::Started) {
+        return Err(match session.message() {
+            Some(message) => message.text().to_string(),
+            None => format!("{} could not be opened", input.display()),
+        });
+    }
     let start = Instant::now();
     loop {
         session.poll();

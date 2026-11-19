@@ -543,6 +543,22 @@ impl Objects {
                 "an object set seeded by the merged object set cannot absorb it".to_string(),
             );
         }
+        for set in &self.sets {
+            if set.seed_source() != Some(source) || set.id() == target {
+                continue;
+            }
+            let mut held = self.sets[target_index].seed_source();
+            while let Some(current) = held {
+                if current == set.id() {
+                    return Err("the merge would close a cycle of seed sources".to_string());
+                }
+                held = self
+                    .sets
+                    .iter()
+                    .find(|candidate| candidate.id() == current)
+                    .and_then(ObjectSet::seed_source);
+            }
+        }
         let stamp = self.revisions.mint();
         let mut merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
         let mut parts = match merged.provenance() {

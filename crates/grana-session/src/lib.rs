@@ -5,12 +5,12 @@ mod history;
 mod input;
 mod job;
 mod loader;
+mod rate;
 mod recent;
 mod recipe;
 mod recovery;
 mod session;
 mod task;
-mod transfer;
 mod view;
 
 pub use access::Access;
@@ -35,6 +35,6 @@ pub use session::{Effects, Localizations, Session};
 pub use task::Poll;
 pub use view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSample, BatchSignificance,
-    BatchView, HistoryView, ImportNote, IoView, Kind, Message, PlateView, RecoveryView, SeriesView,
-    SessionView, StitchView, StoreView,
+    BatchView, Held, HistoryView, ImportNote, IoView, Kind, Message, PlateView, RecoveryView,
+    SeriesView, SessionView, StitchView, StoreView, Transfer,
 };

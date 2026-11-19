@@ -243,6 +243,10 @@ impl Residence {
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.refreshes.clear();
+        self.bump();
+    }
+
+    pub(crate) fn bump(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 

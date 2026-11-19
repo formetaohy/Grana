@@ -97,6 +97,8 @@ impl App {
         }
         if let Some(grab) = interaction.grab {
             self.drag_annotation(grab);
+        } else {
+            self.workspace.annotation_drag = None;
         }
         if let Some(drag) = interaction.paint
             && self.camera.slice().is_none()

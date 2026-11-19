@@ -111,7 +111,6 @@ impl Decode for SpotPage {
                 || mean > maximum
                 || deviation < 0.0
                 || !sum.is_finite()
-                || sum < 0.0
             {
                 return None;
             }
