@@ -1407,6 +1407,70 @@ fn samples_one_unlit_slice_and_rejects_other_planes() {
         0,
         "a plane away from the sphere samples it anyway"
     );
+
+    let plane = pyramid.level(0).slice_center(2, 16);
+    let mut vertices = Vec::new();
+    for (across, down, through) in [
+        (-1.0f32, -1.0, -1.0),
+        (1.0, -1.0, -1.0),
+        (1.0, 1.0, -1.0),
+        (-1.0, 1.0, -1.0),
+        (-1.0, -1.0, 1.0),
+        (1.0, -1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (-1.0, 1.0, 1.0),
+    ] {
+        vertices.push(MeshVertex::new(
+            [
+                plane[0] + 2.6 + across * 0.3,
+                plane[1] - 2.6 + down * 0.3,
+                plane[2] + through * 0.5,
+            ],
+            [0.0, 0.0, 1.0],
+            0,
+        ));
+    }
+    let indices = vec![
+        0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6,
+        1, 3, 5, 3, 7, 5,
+    ];
+    let styles: Arc<[Style]> = Arc::from([Style::new([1.0, 0.1, 0.1], true, false, 1.0)]);
+    let layers = [Layer::new(
+        LayerKey::new(1, 0, 0),
+        1,
+        1,
+        Arc::new(PackedMesh::new(Mesh::new(vertices, indices))),
+        styles,
+        0,
+    )];
+    let sectioned = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &layers,
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let target_section = [plane[0] + 2.6, plane[1] - 2.6, plane[2]];
+    let section = snapshot(
+        &gpu,
+        &mut renderer,
+        &View {
+            target: &view,
+            camera: &camera,
+            region: Region::none(),
+            scene: &sectioned,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Assured,
+        },
+        &target,
+        &volume,
+    );
+    assert!(
+        section.hue(around(project(&camera, target_section), 6), Hue::Red) > 20,
+        "the slice draws the cross-section of a surface that crosses it"
+    );
 }
 fn project(camera: &Camera, point: [f32; 3]) -> [u32; 2] {
     let clip = camera.view_projection(1.0, 1.0) * Vec4::new(point[0], point[1], point[2], 1.0);

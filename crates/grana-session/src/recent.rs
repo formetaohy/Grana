@@ -25,16 +25,17 @@ pub struct Entry {
 impl Entry {
     fn new(kind: Kind, name: &str, target: &str, series: usize) -> Self {
         assert!(
-            !name.trim().is_empty(),
-            "a recent entry names the dataset it holds"
-        );
-        assert!(
             !target.trim().is_empty(),
             "a recent entry names where its dataset lives"
         );
+        let name = if name.trim().is_empty() {
+            target.trim()
+        } else {
+            name.trim()
+        };
         Self {
             kind,
-            name: name.trim().to_string(),
+            name: name.to_string(),
             target: target.to_string(),
             series,
         }
@@ -45,10 +46,16 @@ impl Entry {
     }
 
     pub fn project(path: &Path) -> Self {
-        let name = path.file_stem().map_or_else(
-            || path.to_string_lossy().into_owned(),
-            |stem| stem.to_string_lossy().into_owned(),
-        );
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.trim().is_empty())
+            .or_else(|| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .filter(|name| !name.trim().is_empty())
+            })
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
         Self::new(Kind::Project, &name, &path.to_string_lossy(), 0).located()
     }
 

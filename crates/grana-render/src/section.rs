@@ -315,7 +315,7 @@ impl Sections {
                 origin: origin.extend(0.0).to_array(),
             },
         );
-        let styles = self.style_digest(scene);
+        let styles = self.style_key(scene);
         if self.styles != Some(styles) {
             self.styles = Some(styles);
             let rows = scene
@@ -363,16 +363,12 @@ impl Sections {
         held
     }
 
-    fn style_digest(&mut self, scene: &SceneFrame<'_>) -> (u64, u64) {
+    fn style_key(&self, scene: &SceneFrame<'_>) -> (u64, u64) {
         let version = scene.versions.appearance();
-        if let Some(held) = self.styles
-            && held.0 == version
-        {
-            return held;
+        match self.styles {
+            Some(held) if held.0 == version => held,
+            _ => (version, style_stamp(scene.layers)),
         }
-        let held = (version, style_stamp(scene.layers));
-        self.styles = Some(held);
-        held
     }
 
     fn cut(&mut self, scene: &SceneFrame<'_>, plane: SectionPlane) {

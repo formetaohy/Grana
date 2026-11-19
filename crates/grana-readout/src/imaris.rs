@@ -272,10 +272,9 @@ impl Imported {
 pub fn imported(path: &Path) -> Result<Imported, Error> {
     let file = File::open(path).map_err(|error| Error::open(path, error.to_string()))?;
     let center = center(&file);
-    let statistics = statistics(&file, path).unwrap_or_default();
+    let (statistics, mut diagnostics) = statistics(&file, path);
     let candidates = content(&file, path)?;
     let mut objects = Vec::new();
-    let mut diagnostics = Vec::new();
     for candidate in &candidates {
         let label = candidate.label(&file);
         match read(
@@ -421,7 +420,7 @@ fn table_if_present(
             .map_err(|error| error.to_string()),
         Err(hdf5_pure::Error::Format(hdf5_pure::FormatError::PathNotFound(_))) => Ok(None),
         Err(error) => Err(format!(
-            "the Imaris track table `{dataset}` cannot be opened: {error}"
+            "the Imaris dataset `{dataset}` cannot be opened: {error}"
         )),
     }
 }
@@ -898,13 +897,22 @@ fn spots(
             "the Imaris spot table holds a different number of times than coordinates",
         ));
     }
-    let radii = read_table(file, path, &format!("{geometry}/RadiusYZ"), 2).ok();
+    let radii = table_if_present(file, path, &format!("{geometry}/RadiusYZ"), 2)
+        .map_err(|detail| Error::read(path, detail))?;
+    if let Some(table) = &radii
+        && table.rows != coords.rows
+    {
+        return Err(Error::read(
+            path,
+            "the Imaris spot table holds a different number of radii than coordinates",
+        ));
+    }
     let mut frames: BTreeMap<u32, Vec<Spot>> = BTreeMap::new();
     for row in 0..coords.rows {
         let values = coords.row(row);
         let radius = match radii.as_ref() {
-            Some(table) if table.columns == 2 => (values[3].abs() + table.row(row)[1].abs()) * 0.5,
-            _ => values[3].abs(),
+            Some(table) => (values[3].abs() + table.row(row)[1].abs()) * 0.5,
+            None => values[3].abs(),
         };
         if !values[..3].iter().all(|value| value.is_finite())
             || !radius.is_finite()
@@ -1447,9 +1455,18 @@ impl Statistics {
     }
 }
 
-fn statistics(file: &File, path: &Path) -> Result<BTreeMap<String, Statistics>, Error> {
-    let tables =
-        ims_scene::scene_tables(file).map_err(|error| Error::read(path, error.to_string()))?;
+fn statistics(file: &File, path: &Path) -> (BTreeMap<String, Statistics>, Vec<Diagnostic>) {
+    let mut diagnostics = Vec::new();
+    let tables = match ims_scene::scene_tables(file) {
+        Ok(tables) => tables,
+        Err(error) => {
+            diagnostics.push(Diagnostic::new(
+                &crate::scene::dataset_name(path),
+                &format!("the Imaris statistics cannot be listed: {error}"),
+            ));
+            return (BTreeMap::new(), diagnostics);
+        }
+    };
     let mut held: BTreeMap<String, Statistics> = BTreeMap::new();
     for table in &tables {
         if !matches!(table.kind, SceneTableKind::Statistics { .. }) {
@@ -1464,10 +1481,21 @@ fn statistics(file: &File, path: &Path) -> Result<BTreeMap<String, Statistics>, 
             .map(|(_, _, channel)| channel + 1)
             .max()
             .unwrap_or(0);
-        let Ok(values) = ims_scene::read_scene_table(file, table) else {
-            continue;
+        let values = match ims_scene::read_scene_table(file, table) {
+            Ok(values) => values,
+            Err(error) => {
+                diagnostics.push(Diagnostic::new(
+                    &named(table),
+                    &format!("the Imaris statistics cannot be read: {error}"),
+                ));
+                continue;
+            }
         };
         if values.len() != table.stat_columns.len() || values.len() < 2 {
+            diagnostics.push(Diagnostic::new(
+                &named(table),
+                "the Imaris statistics do not hold the columns they declare",
+            ));
             continue;
         }
         let entry = held
@@ -1501,7 +1529,15 @@ fn statistics(file: &File, path: &Path) -> Result<BTreeMap<String, Statistics>, 
             }
         }
     }
-    Ok(held)
+    (held, diagnostics)
+}
+
+fn named(table: &SceneTable) -> String {
+    table
+        .object_name
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| table.object.clone())
 }
 
 fn metrics(table: &SceneTable) -> Vec<(usize, Metric, usize)> {

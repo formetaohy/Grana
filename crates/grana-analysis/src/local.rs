@@ -521,7 +521,7 @@ fn finish(
     }
     let superseded = window_max(&signal, blocks, workers);
     signal.copy_from_slice(&superseded);
-    fill(&mut background, blocks, intensity.max());
+    fill(&mut background, blocks, intensity.min());
     fill(&mut signal, blocks, intensity.max());
     let padded = blocks.map(|value| value + 2);
     let mut background = pad(&background, padded);

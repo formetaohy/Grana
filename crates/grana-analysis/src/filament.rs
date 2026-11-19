@@ -23,6 +23,34 @@ pub fn filament_level(pyramid: &Pyramid, budget: Budget) -> Option<usize> {
     pyramid.fit_level(Region::none(), budget.filament_voxels())
 }
 
+pub fn filament_fits(info: Level, budget: Budget) -> bool {
+    let (_, dims) = sampling(info);
+    let padded = dims.map(|value| value + 2);
+    dims.iter().all(|value| *value >= 3)
+        && padded
+            .iter()
+            .map(|value| u64::from(*value))
+            .product::<u64>()
+            <= budget.filament_voxels()
+}
+
+fn sampling(info: Level) -> ([u32; 3], [u32; 3]) {
+    let extent = info.extent();
+    let extent = [extent.x(), extent.y(), extent.z()];
+    let spacing = info.spacing();
+    let spacing = [spacing.x(), spacing.y(), spacing.z()];
+    assert!(
+        spacing
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0),
+        "a filament scan needs a positive voxel size"
+    );
+    let maximum = spacing.iter().copied().fold(0.0f32, f32::max);
+    let step = spacing.map(|value| ((maximum / value).round() as u32).clamp(1, MAX_STEP));
+    let dims = [0, 1, 2].map(|axis| extent[axis].div_ceil(step[axis]));
+    (step, dims)
+}
+
 pub(super) struct Grid {
     pub dims: [u32; 3],
     pub padded: [u32; 3],
@@ -85,16 +113,8 @@ impl FilamentScan {
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = info.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
-        assert!(
-            spacing
-                .iter()
-                .all(|value| value.is_finite() && *value > 0.0),
-            "a filament scan needs a positive voxel size"
-        );
-        let maximum = spacing.iter().copied().fold(0.0f32, f32::max);
-        let step = spacing.map(|value| ((maximum / value).round() as u32).clamp(1, MAX_STEP));
+        let (step, dims) = sampling(info);
         let working = [0, 1, 2].map(|axis| spacing[axis] * step[axis] as f32);
-        let dims = [0, 1, 2].map(|axis| extent[axis].div_ceil(step[axis]));
         assert!(
             dims.iter().all(|value| *value >= 3),
             "the dataset is too small to trace filaments"

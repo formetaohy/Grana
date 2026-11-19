@@ -69,4 +69,29 @@ fn reads_an_imaris_scene() {
         second[0].intensities().expect("statistics are attached")[0].mean(),
         24.0
     );
+
+    let radii =
+        grana_readout::imported(&fixture("imaris-radii.ims")).expect("the radii fixture opens");
+    assert_eq!(
+        radii.objects().len(),
+        1,
+        "the mismatched object is reported"
+    );
+    let ImportedFrame::Spots(spots) = &radii.objects()[0].frames()[0].1 else {
+        panic!("the radii fixture holds spots");
+    };
+    assert_eq!(
+        spots.iter().map(|spot| spot.radius()).collect::<Vec<_>>(),
+        [0.8, 0.7],
+        "a lateral radius averages the radii of the coordinates and the ellipsoid"
+    );
+    let diagnostics = radii.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].name(), "Broken");
+    assert!(
+        diagnostics[0]
+            .detail()
+            .contains("different number of radii"),
+        "the mismatched radii are reported instead of cutting the table"
+    );
 }

@@ -714,6 +714,9 @@ fn filaments(
     })?;
     let channels = pyramid.channel_count();
     let info = pyramid.level(level);
+    if !grana_analysis::filament_fits(info, budget) {
+        return Err("the dataset is too small to trace filaments".to_string());
+    }
     let domain = Domain::new(region, info);
     let extent = info.extent();
     let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());

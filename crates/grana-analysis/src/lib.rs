@@ -32,7 +32,7 @@ pub use drift::{
     working_level as drift_level,
 };
 pub use fiducial::{Fiducial, fiducial_registration};
-pub use filament::{FilamentScan, filament_level};
+pub use filament::{FilamentScan, filament_fits, filament_level};
 pub use label::{LabelBuilder, LabelSlab};
 pub use localization_drift::{
     LocalizationDrift, LocalizationFrames, LocalizationPoint, localization_drift,

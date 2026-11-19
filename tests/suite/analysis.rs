@@ -8,15 +8,17 @@ use grana_analysis::{
     SurfaceBuilder, TrackLinker, coloc_sampling,
 };
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
+use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
-    FilamentParams, Link, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet,
-    TrackDetection, TrackEvents, TrackParams, TrackSet,
+    FilamentParams, Link, MaskEdit, MaskMode, ObjectAnchor, Shape, Spot, SpotParams, SurfaceFilter,
+    SurfaceParams, SurfaceSet, SurfaceStatistics, TrackDetection, TrackEvents, TrackParams,
+    TrackSet,
 };
 use grana_object::{IntensityTable, SampleStatistics};
 use grana_pipeline::Channels;
-use grana_scene::{Dataset, ObjectFrame, ObjectKind, ObjectParams, Scene};
+use grana_scene::{Dataset, Drifts, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_store::SpillStore;
 use grana_volume::{
     Basis, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume,
@@ -251,31 +253,164 @@ fn extracts_measured_surfaces_from_two_balls() {
         });
         assert!(placed, "the object centroid {centre:?} is misplaced");
     }
-}
 
-#[test]
-fn keeps_surface_objects_of_a_partial_analysis_mask() {
-    let extent = Extent::new(80, 64, 48);
-    let spacing = Spacing::new(0.2, 0.2, 0.2);
     let level = Level::new(extent, spacing);
-    let volume = support::spheres(extent, spacing, &[([40.0, 32.0, 24.0], 8.0)], HIGH);
-    let region = Region::new(
-        glam::Vec3::ZERO,
-        [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
-        glam::Vec3::new(4.8, 3.2, 1.6),
+    let centre = level.voxel_center([24.0, 32.0, 24.0]);
+    let roi = grana_object::Mask::boxed(
+        Region::new(
+            glam::Vec3::from(centre),
+            [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
+            glam::Vec3::splat(1.7),
+        ),
+        level,
     );
-    let roi = grana_object::Mask::boxed(region, level);
-    let set = extract_surfaces_at(
+    let masked = extract_surfaces_at(
         &volume,
         level,
         SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Some(&roi),
     );
     assert_eq!(
-        set.object_count(),
+        masked.object_count(),
         1,
-        "an analysis mask that covers the ball keeps its surface"
+        "an analysis mask that covers one ball keeps that surface only"
     );
+
+    let tiny = grana_object::Mask::boxed(
+        Region::new(
+            glam::Vec3::from(centre),
+            [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
+            glam::Vec3::splat(0.3),
+        ),
+        level,
+    );
+    let small = extract_surfaces_at(
+        &volume,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        Some(&tiny),
+    );
+    assert_eq!(
+        small.object_count(),
+        1,
+        "a region too small to estimate local background still detects its bright voxels"
+    );
+}
+
+#[test]
+fn floods_a_wand_past_the_high_side_of_its_block() {
+    let extent = Extent::new(512, 32, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let level = Level::new(extent, spacing);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for x in 100..300 {
+        for y in 16..18 {
+            for z in 16..18 {
+                values[extent.index(x, y, z) as usize] = HIGH;
+            }
+        }
+    }
+    let image = Arc::new(
+        grana_image::Image::open(&Source::memory(VolumeSeries::new(
+            vec![Volume::new(
+                extent,
+                spacing,
+                vec![Channel::new(
+                    "signal",
+                    [0.3, 0.6, 1.0],
+                    VoxelData::U16(values),
+                )],
+            )],
+            1.0,
+        )))
+        .expect("the rod opens"),
+    );
+    let mut scene = Scene::new(Dataset::synthetic("rod", image.pyramid().clone()));
+    let set = scene.add_object(ObjectKind::Surfaces, 0);
+    let low = [100u32, 16, 16];
+    let high = [102u32, 18, 18];
+    let centroid = level.voxel_center([101.0, 17.0, 17.0]);
+    let bounds = Bounds::new(
+        level.corner(low.map(|value| value as f32)),
+        level.corner(high.map(|value| value as f32)),
+    );
+    let statistics =
+        SurfaceStatistics::new(8, 8.0 * level.voxel_volume(), 0.24, centroid, bounds, None);
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Surfaces(SurfaceSet::new(
+            0,
+            cube(level, low, high),
+            vec![statistics],
+            IntensityTable::new(
+                1,
+                vec![SampleStatistics::new(
+                    5000.0,
+                    0.0,
+                    f32::from(HIGH),
+                    1.0,
+                    40_000.0,
+                )],
+            ),
+        )),
+    );
+    let object = scene.objects.get(set).expect("the base set installs");
+    let source = object.source();
+    let channels = Channels::render(Arc::clone(&image), &scene);
+    let stroke = MaskEdit::wand(
+        0,
+        ObjectAnchor::new(centroid, bounds),
+        MaskMode::Add,
+        0.1,
+        centroid,
+    )
+    .expect("the wand stroke builds");
+    let drifts = Drifts::new();
+    let edited = grana_pipeline::run::mask(
+        &channels,
+        &source,
+        object.voxel(),
+        &grana_pipeline::run::MaskRequest {
+            channel: 0,
+            strokes: &[stroke],
+            drifts: &drifts,
+        },
+    )
+    .expect("the wand closes on the dim side of its block");
+    assert_eq!(edited.len(), 1, "the wand edits one frame");
+    let Some(frame) = edited[0].1.as_deref() else {
+        panic!("the wand keeps the object");
+    };
+    let ObjectFrame::Surfaces(flooded) = frame else {
+        panic!("the wand keeps a surface");
+    };
+    assert_eq!(
+        flooded.objects()[0].voxel_count(),
+        800,
+        "the wand keeps every voxel of the rod it flooded"
+    );
+}
+
+fn cube(level: Level, low: [u32; 3], high: [u32; 3]) -> Mesh {
+    let point = |bits: u32| {
+        let corner = [0, 1, 2].map(|axis| {
+            if (bits >> axis) & 1 == 0 {
+                low[axis] as f32
+            } else {
+                high[axis] as f32
+            }
+        });
+        level.corner(corner)
+    };
+    let vertices = (0..8u32)
+        .map(|bits| MeshVertex::new(point(bits), [0.0, 0.0, 1.0], 0))
+        .collect();
+    let indices = vec![
+        0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6,
+        1, 3, 5, 3, 7, 5,
+    ];
+    Mesh::new(vertices, indices)
 }
 
 fn extract_surfaces(volume: &grana_volume::Volume, params: SurfaceParams) -> SurfaceSet {

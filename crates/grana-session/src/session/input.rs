@@ -133,7 +133,13 @@ fn seed_digest(scene: &grana_scene::Scene, object: &grana_scene::ObjectSet) -> u
         None => {
             object.frame_count().hash(&mut hasher);
             for time in 0..object.frame_count() {
-                object.seeds(time).len().hash(&mut hasher);
+                let seeds = object.seeds(time);
+                seeds.len().hash(&mut hasher);
+                for seed in seeds {
+                    for coordinate in seed {
+                        coordinate.to_bits().hash(&mut hasher);
+                    }
+                }
             }
         }
     }

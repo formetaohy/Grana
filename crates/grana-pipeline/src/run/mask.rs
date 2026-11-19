@@ -124,27 +124,31 @@ fn edit_object(
     if base.is_empty() {
         return Ok(None);
     }
-    let block = block(inspected, &base, strokes);
-    let mut mask = base.extended(block.origin, block.extent);
+    let window = block(inspected, &base, strokes);
+    let mut regions = Vec::with_capacity(strokes.len());
     for stroke in strokes {
-        match (stroke.tool(), stroke.mode()) {
-            (MaskTool::Brush, MaskMode::Add) => {
+        regions.push(match stroke.tool() {
+            MaskTool::Wand => Some(flood(reader, request, stroke, &window, frame, level)?),
+            MaskTool::Brush => None,
+        });
+    }
+    let cover = cover(inspected, &base, &regions);
+    let mut mask = base.extended(cover.origin, cover.extent);
+    for (stroke, region) in strokes.iter().zip(&regions) {
+        match (stroke.tool(), stroke.mode(), region) {
+            (MaskTool::Brush, MaskMode::Add, _) => {
                 for point in stroke.points() {
                     mask.filled(*point, stroke.radius());
                 }
             }
-            (MaskTool::Brush, MaskMode::Remove) => {
+            (MaskTool::Brush, MaskMode::Remove, _) => {
                 for point in stroke.points() {
                     mask.cleared(*point, stroke.radius());
                 }
             }
-            (MaskTool::Wand, mode) => {
-                let region = flood(reader, request, stroke, &mask, frame, level)?;
-                match mode {
-                    MaskMode::Add => mask.united(&region),
-                    MaskMode::Remove => mask.subtracting(&region),
-                }
-            }
+            (MaskTool::Wand, MaskMode::Add, Some(region)) => mask.united(region),
+            (MaskTool::Wand, MaskMode::Remove, Some(region)) => mask.subtracting(region),
+            (MaskTool::Wand, _, None) => unreachable!("a wand stroke floods a region"),
         }
     }
     if mask.count() == 0 {
@@ -203,11 +207,34 @@ fn block(level: Level, base: &Mask, strokes: &[&MaskEdit]) -> Block {
     }
 }
 
+fn cover(level: Level, base: &Mask, regions: &[Option<Mask>]) -> Block {
+    let limits = level.extent();
+    let limits = [limits.x(), limits.y(), limits.z()];
+    let mut low = base.origin();
+    let mut high = [0, 1, 2].map(|axis| base.origin()[axis] + base.extent()[axis]);
+    for region in regions.iter().flatten() {
+        for cell in region.cells() {
+            for (axis, value) in cell.iter().enumerate() {
+                low[axis] = low[axis].min(*value);
+                high[axis] = high[axis].max(value + 1);
+            }
+        }
+    }
+    for (axis, limit) in limits.iter().enumerate() {
+        low[axis] = low[axis].min(*limit);
+        high[axis] = high[axis].min(*limit).max(low[axis]);
+    }
+    Block {
+        origin: low,
+        extent: [0, 1, 2].map(|axis| high[axis] - low[axis]),
+    }
+}
+
 fn flood(
     reader: &Channels,
     request: &MaskRequest<'_>,
     stroke: &MaskEdit,
-    block: &Mask,
+    window: &Block,
     frame: u32,
     level: usize,
 ) -> Result<Mask, String> {
@@ -215,8 +242,8 @@ fn flood(
     let limits = inspected.extent();
     let limits = [limits.x(), limits.y(), limits.z()];
     let span = channel_span(reader, request.channel)?;
-    let mut origin = block.origin();
-    let mut extent = block.extent();
+    let mut origin = window.origin;
+    let mut extent = window.extent;
     for _ in 0..=WAND_GROWTH {
         let ranges = [
             origin[0]..origin[0] + extent[0],
@@ -248,7 +275,7 @@ fn flood(
         for axis in 0..3 {
             let reach = (extent[axis] / 2).max(1);
             origin[axis] = origin[axis].saturating_sub(reach);
-            grown[axis] = (extent[axis] + reach).min(limits[axis] - origin[axis]);
+            grown[axis] = (extent[axis] + 2 * reach).min(limits[axis] - origin[axis]);
         }
         extent = grown;
     }
