@@ -341,7 +341,7 @@ pub(crate) fn calibration<'a>(
         "{} · {}×{}×{}",
         sheet.name, sheet.extent[0], sheet.extent[1], sheet.extent[2]
     );
-    let diagram_spacing = [0, 1, 2].map(|axis| values[axis].unwrap_or(1.0));
+    let diagram_spacing = [0, 1, 2].map(|axis| values[axis].unwrap_or(sheet.spacing[axis]));
     let font = theme.font(Level::Caption);
     let diagram = grana_ui::canvas(Length::Fixed(120.0), 120.0)
         .view(

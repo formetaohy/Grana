@@ -217,6 +217,7 @@ pub struct CalibrationSheet {
     pub open: bool,
     pub name: String,
     pub extent: [u32; 3],
+    pub spacing: [f32; 3],
     pub reason: Calibration,
     pub fields: [String; 3],
 }
@@ -229,6 +230,7 @@ impl CalibrationSheet {
             open: true,
             name: scene.dataset.name().to_string(),
             extent: [extent.x(), extent.y(), extent.z()],
+            spacing: [spacing.x(), spacing.y(), spacing.z()],
             reason: scene.dataset.pyramid().calibration(),
             fields: [spacing.x(), spacing.y(), spacing.z()].map(voxel_text),
         }
